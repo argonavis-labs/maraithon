@@ -90,6 +90,17 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "one individual todo card per item"
   end
 
+  test "build_prompt instructs the model to answer review questions with the full todo digest" do
+    prompt = LLMJson.build_prompt(payload("What should I review?"))
+
+    assert String.contains?(String.downcase(prompt), "what should i review?")
+    assert String.contains?(String.downcase(prompt), "what should i work on?")
+    assert String.contains?(prompt, "do not offer to send the full list later")
+    assert String.contains?(prompt, "do not stop at a short top-3 or top-5 summary")
+    assert String.contains?(prompt, "full actionable todo digest")
+    assert String.contains?(prompt, "\"todo_digest\"")
+  end
+
   test "build_prompt instructs the model to update briefing schedules in local time" do
     prompt =
       LLMJson.build_prompt(%{

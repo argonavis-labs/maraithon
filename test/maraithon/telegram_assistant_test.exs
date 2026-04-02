@@ -951,6 +951,96 @@ defmodule Maraithon.TelegramAssistantTest do
     assert get_in(Keyword.get(List.last(sends).opts, :reply_markup), ["inline_keyboard"]) != nil
   end
 
+  test "review questions return the full open todo list as individual cards", %{user_id: user_id} do
+    assert {:ok, [_first, _second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Reply to Rippling about employment eligibility",
+                 "summary" => "Rippling needs a user response before onboarding can continue.",
+                 "next_action" => "Reply with the requested eligibility details.",
+                 "priority" => 95,
+                 "dedupe_key" => "telegram-assistant:review:1"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Resolve Google Ads billing issue",
+                 "summary" => "Ads have stopped because billing needs attention.",
+                 "next_action" => "Fix the billing issue and confirm campaigns are active again.",
+                 "priority" => 93,
+                 "dedupe_key" => "telegram-assistant:review:2"
+               }
+             ])
+
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_review_todos,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_review_todos]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_review_todos, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          assert Enum.any?(payload.tools, &(&1["name"] == "list_todos"))
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "list_todos",
+                 "arguments" => %{
+                   "statuses" => ["open"],
+                   "limit" => 20
+                 }
+               }
+             ],
+             "summary" => "Loaded the full open todo list for review."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "list_todos"
+          assert history_entry["result"]["count"] == 2
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => "Here is everything open to review right now.",
+             "message_class" => "todo_digest",
+             "tool_calls" => [],
+             "summary" => "Returned the full actionable review list as todo cards."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9112, text: "What should I review?"}
+      })
+
+    sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert Enum.count(sends) == 3
+    assert Enum.at(sends, 0).text =~ "everything open to review right now"
+    assert Enum.at(sends, 1).text =~ "Reply to Rippling about employment eligibility"
+    assert Enum.at(sends, 2).text =~ "Resolve Google Ads billing issue"
+  end
+
   test "todo item callbacks can close an item directly from Telegram", %{user_id: user_id} do
     assert {:ok, [todo]} =
              Todos.upsert_many(user_id, [
