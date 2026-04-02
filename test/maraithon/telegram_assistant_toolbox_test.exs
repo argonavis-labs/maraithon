@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   alias Maraithon.Agents
   alias Maraithon.Insights
   alias Maraithon.OAuth
+  alias Maraithon.PreferenceMemory
   alias Maraithon.TelegramAssistant.Toolbox
 
   setup do
@@ -216,6 +217,61 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert Agents.get_agent!(chief_of_staff_agent.id).config["morning_brief_hour_local"] == 10
     assert Agents.get_agent!(followthrough_agent.id).config["morning_brief_hour_local"] == 10
+  end
+
+  test "preference tools can remember, inspect, and forget durable operator memory" do
+    user_id = "toolbox-preferences-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, remembered} =
+             Toolbox.execute(
+               "remember_preferences",
+               %{
+                 "rules" => [
+                   %{
+                     "id" => "ignore_receipts",
+                     "kind" => "content_filter",
+                     "label" => "Ignore routine receipts",
+                     "instruction" =>
+                       "Downrank routine receipt and transactional confirmation emails unless they imply unresolved follow-up work.",
+                     "applies_to" => ["gmail", "telegram"],
+                     "confidence" => 0.96,
+                     "filters" => %{"topics" => ["receipts", "transactional_receipts"]},
+                     "evidence" => ["The user called receipts noise."]
+                   }
+                 ]
+               },
+               runtime_context
+             )
+
+    assert remembered.status == "saved"
+    assert remembered.saved_count == 1
+    assert remembered.requires_confirmation == false
+    assert remembered.active_count == 1
+    assert Enum.any?(remembered.active_rules, &(&1["id"] == "ignore_receipts"))
+    assert Enum.any?(PreferenceMemory.active_rules(user_id), &(&1["id"] == "ignore_receipts"))
+
+    assert {:ok, listed} = Toolbox.execute("list_preferences", %{}, runtime_context)
+    assert listed.active_count == 1
+    assert listed.pending_count == 0
+    assert Enum.any?(listed.active_rules, &(&1["label"] == "Ignore routine receipts"))
+    assert is_list(listed.operator_memory)
+    assert is_map(listed.user_memory)
+
+    assert {:ok, forgotten} =
+             Toolbox.execute(
+               "forget_preference",
+               %{"rule_id" => "ignore_receipts"},
+               runtime_context
+             )
+
+    assert forgotten.status == "forgotten"
+    assert forgotten.active_count == 0
+    assert forgotten.pending_count == 0
+    assert forgotten.message =~ "Removed preference"
+    assert PreferenceMemory.active_rules(user_id) == []
   end
 
   defp gmail_todo(thread_id, title, priority) do

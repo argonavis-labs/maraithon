@@ -9,6 +9,7 @@ defmodule Maraithon.TelegramAssistantTest do
   alias Maraithon.InsightNotifications
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.{PreparedAction, PushReceipt, Run, Step}
@@ -218,6 +219,110 @@ defmodule Maraithon.TelegramAssistantTest do
     refute Enum.any?(telegram_events(), &(&1.type == :chat_action))
 
     assert %Profile{} = Repo.get_by(Profile, user_id: user_id)
+  end
+
+  test "assistant can learn a durable preference and confirm it with plain text", %{
+    user_id: user_id
+  } do
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_preferences,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_preferences]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_preferences, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        assert Enum.any?(payload.tools, &(&1["name"] == "remember_preferences"))
+
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{
+               "tool" => "remember_preferences",
+               "arguments" => %{
+                 "rules" => [
+                   %{
+                     "id" => "investors_are_urgent",
+                     "kind" => "urgency_boost",
+                     "label" => "Treat investors as urgent",
+                     "instruction" =>
+                       "Treat investor-related loops as urgent across Gmail, Calendar, Slack, and Telegram.",
+                     "applies_to" => ["gmail", "calendar", "slack", "telegram"],
+                     "confidence" => 0.79,
+                     "filters" => %{"topics" => ["investor"], "priority_bias" => "high"},
+                     "evidence" => ["The user asked to treat investor threads as urgent."]
+                   }
+                 ]
+               }
+             }
+           ],
+           "summary" => "Persist a durable urgency rule."
+         }}
+      else
+        [history_entry] = payload.tool_history
+        assert history_entry["tool"] == "remember_preferences"
+        assert get_in(history_entry, ["result", "status"]) == "awaiting_confirmation"
+
+        {:ok,
+         %{
+           "status" => "final",
+           "assistant_message" =>
+             "I think this should become durable memory. Reply `yes` to save it, or `no` to keep it local only.",
+           "message_class" => "approval_prompt",
+           "tool_calls" => [],
+           "summary" => "Ask for confirmation."
+         }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 91011,
+          text: "Anything from investors like this should be urgent."
+        }
+      })
+
+    assert [%{"id" => "investors_are_urgent", "status" => "pending_confirmation"}] =
+             PreferenceMemory.pending_rules(user_id)
+
+    conversation =
+      Repo.one!(
+        from conversation in Conversation,
+          where: conversation.user_id == ^user_id,
+          order_by: [desc: conversation.inserted_at],
+          limit: 1
+      )
+
+    assert conversation.status == "awaiting_confirmation"
+    assert conversation.metadata["pending_rule_ids"] != []
+
+    prompt_reply = last_telegram_message(:send)
+    assert prompt_reply.text =~ "Reply `yes`"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 91012, text: "Yes"}
+      })
+
+    assert [%{"id" => "investors_are_urgent", "status" => "active"}] =
+             PreferenceMemory.active_rules(user_id)
+
+    assert PreferenceMemory.pending_rules(user_id) == []
+    assert Repo.get!(Conversation, conversation.id).status == "closed"
+
+    confirmation_reply = last_telegram_message(:send)
+    assert confirmation_reply.text =~ "saved that as a durable rule"
   end
 
   test "assistant prepares a destructive agent action and executes it after text confirmation", %{

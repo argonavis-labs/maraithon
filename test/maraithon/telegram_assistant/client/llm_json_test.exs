@@ -103,6 +103,19 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "current local timezone"
   end
 
+  test "build_prompt instructs the model to persist and remove durable preferences" do
+    prompt =
+      LLMJson.build_prompt(
+        payload("Don't surface receipt emails unless they imply follow-up work.")
+      )
+
+    assert prompt =~ "remember_preferences"
+    assert prompt =~ "list_preferences"
+    assert prompt =~ "forget_preference"
+    assert prompt =~ "durable preference"
+    assert prompt =~ "receipt emails"
+  end
+
   test "returns the latest visible email when asked directly" do
     tool_history = [
       %{

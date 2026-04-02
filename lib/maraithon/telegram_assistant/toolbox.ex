@@ -11,13 +11,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
   alias Maraithon.Insights
+  alias Maraithon.OperatorMemory
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Linear, as: LinearOAuth
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
+  alias Maraithon.Repo
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
   alias Maraithon.Tools
+  alias Maraithon.UserMemory
 
   @immediate_agent_actions ~w(start stop restart)
   @gmail_insight_stale_threshold_hours 72
@@ -90,6 +96,60 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
               "maximum" => 14
             },
             "agent_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "list_preferences",
+        "List the linked user's durable preference rules, operator memory summaries, and learned user profile.",
+        %{
+          "type" => "object",
+          "properties" => %{}
+        }
+      ),
+      tool_definition(
+        "remember_preferences",
+        "Persist one or more durable operator preference rules inferred from conversation.",
+        %{
+          "type" => "object",
+          "required" => ["rules"],
+          "properties" => %{
+            "rules" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "required" => [
+                  "id",
+                  "kind",
+                  "label",
+                  "instruction",
+                  "applies_to",
+                  "confidence",
+                  "filters"
+                ],
+                "properties" => %{
+                  "id" => %{"type" => "string"},
+                  "kind" => %{"type" => "string"},
+                  "label" => %{"type" => "string"},
+                  "instruction" => %{"type" => "string"},
+                  "applies_to" => %{"type" => "array", "items" => %{"type" => "string"}},
+                  "confidence" => %{"type" => "number"},
+                  "filters" => %{"type" => "object"},
+                  "evidence" => %{"type" => "array", "items" => %{"type" => "string"}}
+                }
+              }
+            }
+          }
+        }
+      ),
+      tool_definition(
+        "forget_preference",
+        "Forget one saved durable operator preference rule.",
+        %{
+          "type" => "object",
+          "required" => ["rule_id"],
+          "properties" => %{
+            "rule_id" => %{"type" => "string"}
           }
         }
       ),
@@ -355,6 +415,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "update_briefing_schedule" ->
         update_briefing_schedule(runtime_context, args)
 
+      "list_preferences" ->
+        list_preferences(runtime_context)
+
+      "remember_preferences" ->
+        remember_preferences(runtime_context, args)
+
+      "forget_preference" ->
+        forget_preference(runtime_context, args)
+
       "list_todos" ->
         list_todos(runtime_context, args)
 
@@ -514,6 +583,65 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       {:error, reason} ->
         {:error, normalize_error(reason)}
+    end
+  end
+
+  defp list_preferences(runtime_context) do
+    {:ok, preference_snapshot(runtime_context.user_id)}
+  end
+
+  defp remember_preferences(runtime_context, args) do
+    rules = Map.get(args, "rules", [])
+
+    cond do
+      not is_list(rules) ->
+        {:error, "invalid_rules"}
+
+      rules == [] ->
+        {:error, "missing_rules"}
+
+      true ->
+        with {:ok, saved} <-
+               PreferenceMemory.save_interpreted_rules(
+                 runtime_context.user_id,
+                 Enum.filter(rules, &is_map/1),
+                 "explicit_telegram",
+                 conversation_id: Map.get(runtime_context, :conversation_id),
+                 source_delivery_id: linked_delivery_id(runtime_context)
+               ) do
+          active = Enum.filter(saved, &(Map.get(&1, "status") == "active"))
+          pending = Enum.filter(saved, &(Map.get(&1, "status") == "pending_confirmation"))
+
+          _ = maybe_mark_pending_preference_confirmation(runtime_context, pending)
+
+          {:ok,
+           preference_snapshot(runtime_context.user_id)
+           |> Map.merge(%{
+             status: if(pending == [], do: "saved", else: "awaiting_confirmation"),
+             saved_count: length(saved),
+             saved_rules: saved,
+             active_saved_count: length(active),
+             pending_saved_count: length(pending),
+             requires_confirmation: pending != [],
+             message: remember_preferences_message(active, pending, saved)
+           })}
+        end
+    end
+  end
+
+  defp forget_preference(runtime_context, args) do
+    with {:ok, rule_id} <- required_string(args, "rule_id"),
+         {:ok, message} <- PreferenceMemory.forget_rule(runtime_context.user_id, rule_id) do
+      {:ok,
+       preference_snapshot(runtime_context.user_id)
+       |> Map.merge(%{
+         status: "forgotten",
+         forgotten_rule_id: rule_id,
+         message: message
+       })}
+    else
+      {:error, :rule_not_found} -> {:error, "preference_not_found"}
+      {:error, reason} -> {:error, normalize_error(reason)}
     end
   end
 
@@ -1640,6 +1768,90 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp maybe_put_default(args, _key, _value), do: args
+
+  defp preference_snapshot(user_id) when is_binary(user_id) do
+    active_rules = PreferenceMemory.active_rules(user_id)
+    pending_rules = PreferenceMemory.pending_rules(user_id)
+
+    %{
+      active_count: length(active_rules),
+      active_rules: active_rules,
+      pending_count: length(pending_rules),
+      pending_rules: pending_rules,
+      preference_summary: PreferenceMemory.prompt_context(user_id),
+      operator_memory: OperatorMemory.summaries_for_prompt(user_id),
+      user_memory: UserMemory.prompt_context(user_id)
+    }
+  end
+
+  defp preference_snapshot(_user_id) do
+    %{
+      active_count: 0,
+      active_rules: [],
+      pending_count: 0,
+      pending_rules: [],
+      preference_summary: %{},
+      operator_memory: [],
+      user_memory: %{}
+    }
+  end
+
+  defp remember_preferences_message(active, pending, saved) do
+    cond do
+      pending != [] ->
+        "I think this should become durable memory. Reply `yes` to save it, or `no` to keep it local only."
+
+      active != [] ->
+        "Saved durable preference memory for future operator decisions."
+
+      saved != [] ->
+        "Captured the preference update."
+
+      true ->
+        "I couldn't persist a durable preference from that yet."
+    end
+  end
+
+  defp maybe_mark_pending_preference_confirmation(runtime_context, pending_rules)
+       when is_list(pending_rules) do
+    case {pending_rules, conversation_for_runtime(runtime_context)} do
+      {[], _conversation} ->
+        :ok
+
+      {[_ | _], %Conversation{} = conversation} ->
+        pending_rule_ids =
+          pending_rules
+          |> Enum.map(&Map.get(&1, "rule_id"))
+          |> Enum.filter(&is_binary/1)
+
+        TelegramConversations.mark_awaiting_confirmation(conversation, %{
+          "metadata" => %{
+            "mode" => "assistant",
+            "active_run_id" => Map.get(runtime_context, :run_id),
+            "pending_rule_ids" => pending_rule_ids
+          }
+        })
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_mark_pending_preference_confirmation(_runtime_context, _pending_rules), do: :ok
+
+  defp conversation_for_runtime(%{conversation_id: conversation_id})
+       when is_binary(conversation_id) do
+    Repo.get(Conversation, conversation_id)
+  end
+
+  defp conversation_for_runtime(_runtime_context), do: nil
+
+  defp linked_delivery_id(runtime_context) when is_map(runtime_context) do
+    get_in(runtime_context, [:context, :linked_item, :delivery, :id]) ||
+      get_in(runtime_context, [:context, "linked_item", "delivery", "id"])
+  end
 
   defp stringify_map(map) when is_map(map) do
     Enum.reduce(map, %{}, fn {key, value}, acc ->
