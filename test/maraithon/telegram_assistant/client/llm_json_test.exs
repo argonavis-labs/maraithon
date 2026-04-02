@@ -77,6 +77,32 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "\"tool\":\"list_todos\""
   end
 
+  test "build_prompt instructs the model to update briefing schedules in local time" do
+    prompt =
+      LLMJson.build_prompt(%{
+        context: %{
+          "briefing_schedule" => %{
+            "configured" => true,
+            "local_timezone" => "UTC-04:00",
+            "morning" => %{"hour_local" => 9, "time_local" => "09:00"}
+          },
+          "recent_turns" => [
+            %{"role" => "assistant", "text" => "Earlier reply"},
+            %{
+              "role" => "user",
+              "text" => "Can you send my morning briefings at 10 instead of 9?"
+            }
+          ]
+        },
+        tool_history: []
+      })
+
+    assert prompt =~ "update_briefing_schedule"
+    assert prompt =~ "10 instead of 9"
+    assert prompt =~ "10:00 AM"
+    assert prompt =~ "current local timezone"
+  end
+
   test "returns the latest visible email when asked directly" do
     tool_history = [
       %{

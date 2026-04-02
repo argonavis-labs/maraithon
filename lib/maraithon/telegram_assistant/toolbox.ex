@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Admin
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
+  alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
@@ -70,6 +71,25 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "type" => "object",
           "properties" => %{
             "insight_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "update_briefing_schedule",
+        "Update the user's recurring briefing schedule in local time.",
+        %{
+          "type" => "object",
+          "required" => ["briefing_kind", "local_hour"],
+          "properties" => %{
+            "briefing_kind" => %{"type" => "string"},
+            "local_hour" => %{"type" => "integer", "minimum" => 0, "maximum" => 23},
+            "local_day_of_week" => %{"type" => "integer", "minimum" => 1, "maximum" => 7},
+            "timezone_offset_hours" => %{
+              "type" => "integer",
+              "minimum" => -12,
+              "maximum" => 14
+            },
+            "agent_id" => %{"type" => "string"}
           }
         }
       ),
@@ -332,6 +352,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "inspect_open_insight" ->
         inspect_open_insight(runtime_context, args)
 
+      "update_briefing_schedule" ->
+        update_briefing_schedule(runtime_context, args)
+
       "list_todos" ->
         list_todos(runtime_context, args)
 
@@ -467,6 +490,31 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        count: length(todos),
        todos: Enum.map(todos, &serialize_todo_detail/1)
      }}
+  end
+
+  defp update_briefing_schedule(runtime_context, args) do
+    case BriefingSchedules.update_schedule(runtime_context.user_id, args) do
+      {:ok, result} ->
+        {:ok, result}
+
+      {:error, :no_briefing_agents} ->
+        {:error, "no_briefing_agents"}
+
+      {:error, :briefing_agent_not_found} ->
+        {:error, "briefing_agent_not_found"}
+
+      {:error, :invalid_briefing_kind} ->
+        {:error, "invalid_briefing_kind"}
+
+      {:error, :invalid_local_hour} ->
+        {:error, "invalid_local_hour"}
+
+      {:error, :invalid_timezone_offset_hours} ->
+        {:error, "invalid_timezone_offset_hours"}
+
+      {:error, reason} ->
+        {:error, normalize_error(reason)}
+    end
   end
 
   defp upsert_todos(runtime_context, args) do

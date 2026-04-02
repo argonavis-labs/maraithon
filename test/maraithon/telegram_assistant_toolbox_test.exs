@@ -165,6 +165,59 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute remaining_todo.title =~ "Billing"
   end
 
+  test "briefing schedule tool updates morning briefings in the user's local timezone" do
+    user_id = "toolbox-briefings-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, chief_of_staff_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 9,
+          "end_of_day_brief_hour_local" => 18,
+          "weekly_review_day_local" => 5,
+          "weekly_review_hour_local" => 16
+        }
+      })
+
+    {:ok, followthrough_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{
+          "name" => "Inbox Followthrough",
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 9,
+          "end_of_day_brief_hour_local" => 18,
+          "weekly_review_day_local" => 5,
+          "weekly_review_hour_local" => 16
+        }
+      })
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "update_briefing_schedule",
+               %{"briefing_kind" => "morning", "local_hour" => 10},
+               runtime_context
+             )
+
+    assert result.status == "updated"
+    assert result.local_time == "10:00"
+    assert result.display_time_local == "10:00 AM"
+    assert result.local_timezone == "UTC-04:00"
+    assert result.updated_agent_count == 2
+    assert result.current_schedule.morning.hour_local == 10
+    assert result.current_schedule.morning.display_time_local == "10:00 AM"
+
+    assert Agents.get_agent!(chief_of_staff_agent.id).config["morning_brief_hour_local"] == 10
+    assert Agents.get_agent!(followthrough_agent.id).config["morning_brief_hour_local"] == 10
+  end
+
   defp gmail_todo(thread_id, title, priority) do
     %{
       "source" => "gmail",

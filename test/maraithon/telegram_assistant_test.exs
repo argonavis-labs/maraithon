@@ -305,6 +305,90 @@ defmodule Maraithon.TelegramAssistantTest do
     assert result_message.text == "Deleted the agent."
   end
 
+  test "assistant updates morning briefing time from natural language without a command", %{
+    user_id: user_id
+  } do
+    {:ok, chief_of_staff_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 9,
+          "end_of_day_brief_hour_local" => 18,
+          "weekly_review_day_local" => 5,
+          "weekly_review_hour_local" => 16
+        }
+      })
+
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_briefing_update,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_briefing_update]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_briefing_update, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          assert get_in(payload.context, [:briefing_schedule, :configured]) == true
+          assert get_in(payload.context, [:briefing_schedule, :morning, :hour_local]) == 9
+          assert get_in(payload.context, [:briefing_schedule, :local_timezone]) == "UTC-04:00"
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "update_briefing_schedule",
+                 "arguments" => %{"briefing_kind" => "morning", "local_hour" => 10}
+               }
+             ],
+             "summary" => "Update the morning briefing schedule."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "update_briefing_schedule"
+          assert history_entry["result"]["display_time_local"] == "10:00 AM"
+          assert history_entry["result"]["local_timezone"] == "UTC-04:00"
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" =>
+               "Morning briefings now go out at 10:00 AM local time (UTC-04:00).",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Confirmed the updated briefing schedule."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9104,
+          text: "Can you send my morning briefings at 10 instead of 9?"
+        }
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "10:00 AM local time"
+    assert reply.text =~ "UTC-04:00"
+
+    assert Agents.get_agent!(chief_of_staff_agent.id).config["morning_brief_hour_local"] == 10
+  end
+
   test "assistant can prepare and create a project through conversational confirmation", %{
     user_id: user_id
   } do

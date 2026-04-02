@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   import Ecto.Query
 
   alias Maraithon.Agents
+  alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
@@ -39,6 +40,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       user_memory: UserMemory.prompt_context(user_id),
       open_insights: serialize_open_insights(user_id),
       todos: serialize_todos(user_id),
+      briefing_schedule: BriefingSchedules.summarize_for_prompt(user_id),
       connected_accounts: serialize_connected_accounts(user_id),
       projects: serialize_projects(user_id),
       active_agents: serialize_agents(user_id),
