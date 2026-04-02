@@ -295,6 +295,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Move now:"
     assert brief.body =~ "Reply here when one is handled"
     assert brief.body =~ "Send revised pricing to David"
+    assert is_list(brief.metadata["linked_todo_ids"])
+    assert length(brief.metadata["linked_todo_ids"]) == 1
+    assert brief.metadata["timezone_offset_hours"] == -5
   end
 
   test "skips adaptive check-ins when only low-priority work is open", %{

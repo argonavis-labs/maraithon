@@ -10,6 +10,8 @@ defmodule Maraithon.Briefs do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.TodoActions
+  alias Maraithon.Todos
   alias Maraithon.Travel
   alias MaraithonWeb.Endpoint
 
@@ -106,29 +108,9 @@ defmodule Maraithon.Briefs do
             :skip
 
           destination ->
-            payload = telegram_payload(brief)
-
-            case telegram_module().send_message(
-                   destination,
-                   payload.text,
-                   parse_mode: "HTML",
-                   reply_markup: payload.reply_markup
-                 ) do
-              {:ok, result} ->
-                message_id = read_message_id(result)
-
-                {:ok, updated_brief} =
-                  brief
-                  |> Ecto.Changeset.change(%{
-                    status: "sent",
-                    sent_at: DateTime.utc_now(),
-                    provider_message_id: message_id,
-                    error_message: nil
-                  })
-                  |> Repo.update()
-
+            case send_fallback_brief(brief, destination) do
+              {:ok, updated_brief} ->
                 maybe_mark_travel_delivered(updated_brief)
-
                 :ok
 
               {:error, reason} ->
@@ -163,6 +145,65 @@ defmodule Maraithon.Briefs do
       text: render_telegram_text(brief),
       reply_markup: brief_reply_markup(brief)
     }
+  end
+
+  def todo_digest_brief?(%Brief{cadence: "check_in", metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.get("linked_todo_ids", [])
+    |> case do
+      ids when is_list(ids) -> ids != []
+      _ -> false
+    end
+  end
+
+  def todo_digest_brief?(_brief), do: false
+
+  def todo_digest_todos(%Brief{} = brief) do
+    todo_ids =
+      brief.metadata
+      |> Map.get("linked_todo_ids", [])
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    brief.user_id
+    |> Todos.list_by_ids(todo_ids, statuses: ["open", "snoozed"], open_due_only: true)
+    |> order_todo_digest_items(brief)
+  end
+
+  def todo_digest_intro_text(%Brief{} = brief, todos \\ nil) do
+    todos = todos || todo_digest_todos(brief)
+    greeting = greeting_line(brief.user_id)
+    {new_today_count, still_open_count} = todo_digest_counts(brief, todos)
+
+    detail_line =
+      cond do
+        new_today_count > 0 and still_open_count > 0 ->
+          "#{new_today_count} new today. #{still_open_count} still open from earlier."
+
+        new_today_count > 0 ->
+          "#{new_today_count} new today."
+
+        still_open_count > 0 ->
+          "#{still_open_count} still open from earlier."
+
+        true ->
+          "Nothing newly urgent surfaced."
+      end
+
+    """
+    #{greeting}
+
+    #{detail_line}
+    I'm sending them one by one so you can mark them done or say not interested.
+    """
+    |> String.trim()
+  end
+
+  def todo_digest_prefix_text(%Brief{} = brief, todo) do
+    case todo_digest_bucket(brief, todo) do
+      :new_today -> "<b>New Today</b>"
+      _ -> "<b>Still Open</b>"
+    end
   end
 
   defp normalize_attrs(attrs, user_id, agent_id) do
@@ -215,6 +256,70 @@ defmodule Maraithon.Briefs do
       """
       |> String.trim()
     end
+  end
+
+  defp send_fallback_brief(%Brief{} = brief, destination) do
+    todos =
+      if todo_digest_brief?(brief) do
+        todo_digest_todos(brief)
+      else
+        []
+      end
+
+    if todos == [] do
+      payload = telegram_payload(brief)
+
+      case telegram_module().send_message(
+             destination,
+             payload.text,
+             parse_mode: "HTML",
+             reply_markup: payload.reply_markup
+           ) do
+        {:ok, result} ->
+          mark_fallback_sent(brief, read_message_id(result))
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      intro_text = todo_digest_intro_text(brief, todos)
+
+      with {:ok, result} <-
+             telegram_module().send_message(destination, intro_text, parse_mode: "HTML"),
+           :ok <- send_fallback_todo_messages(destination, brief, todos) do
+        mark_fallback_sent(brief, read_message_id(result))
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp mark_fallback_sent(%Brief{} = brief, message_id) do
+    brief
+    |> Ecto.Changeset.change(%{
+      status: "sent",
+      sent_at: DateTime.utc_now(),
+      provider_message_id: message_id,
+      error_message: nil
+    })
+    |> Repo.update()
+  end
+
+  defp send_fallback_todo_messages(destination, brief, todos) do
+    Enum.reduce_while(todos, :ok, fn todo, :ok ->
+      payload =
+        TodoActions.telegram_payload(todo,
+          prefix_text: todo_digest_prefix_text(brief, todo)
+        )
+
+      case telegram_module().send_message(destination, payload.text,
+             parse_mode: "HTML",
+             reply_markup: payload.reply_markup
+           ) do
+        {:ok, _result} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
   end
 
   defp brief_reply_markup(%Brief{} = brief) do
@@ -283,6 +388,145 @@ defmodule Maraithon.Briefs do
 
   defp read_message_id(%{"message_id" => value}) when is_binary(value), do: value
   defp read_message_id(_), do: nil
+
+  defp order_todo_digest_items(todos, brief) do
+    todos
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {todo, index} ->
+      {todo_digest_bucket_rank(brief, todo), index}
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp todo_digest_counts(brief, todos) do
+    Enum.reduce(todos, {0, 0}, fn todo, {new_today, still_open} ->
+      case todo_digest_bucket(brief, todo) do
+        :new_today -> {new_today + 1, still_open}
+        :still_open -> {new_today, still_open + 1}
+      end
+    end)
+  end
+
+  defp todo_digest_bucket_rank(brief, todo) do
+    case todo_digest_bucket(brief, todo) do
+      :new_today -> 0
+      :still_open -> 1
+    end
+  end
+
+  defp todo_digest_bucket(%Brief{} = brief, todo) do
+    reference_date = todo_digest_reference_date(brief)
+
+    occurred_at =
+      case todo do
+        %{source_occurred_at: %DateTime{} = source_occurred_at} ->
+          source_occurred_at
+
+        %{inserted_at: %DateTime{} = inserted_at} ->
+          inserted_at
+
+        _ ->
+          nil
+      end
+
+    if is_struct(occurred_at, DateTime) and
+         Date.compare(local_date(occurred_at, brief), reference_date) == :eq do
+      :new_today
+    else
+      :still_open
+    end
+  end
+
+  defp todo_digest_reference_date(%Brief{} = brief) do
+    (brief.scheduled_for || brief.inserted_at || DateTime.utc_now())
+    |> local_date(brief)
+  end
+
+  defp local_date(datetime, %Brief{} = brief) do
+    offset_hours = timezone_offset_hours(brief.metadata || %{})
+
+    datetime
+    |> DateTime.add(offset_hours * 3600, :second)
+    |> DateTime.to_date()
+  end
+
+  defp timezone_offset_hours(metadata) when is_map(metadata) do
+    case Map.get(metadata, "timezone_offset_hours") do
+      value when is_integer(value) ->
+        value
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {parsed, ""} -> parsed
+          _ -> 0
+        end
+
+      _ ->
+        0
+    end
+  end
+
+  defp greeting_line(user_id) do
+    case greeting_name(user_id) do
+      nil -> "Hey, checking on these today."
+      name -> "Hey #{name}, checking on these today."
+    end
+  end
+
+  defp greeting_name(user_id) when is_binary(user_id) do
+    case ConnectedAccounts.get(user_id, "telegram") do
+      %{metadata: metadata} when is_map(metadata) ->
+        metadata
+        |> greeting_candidates(user_id)
+        |> Enum.find(&present?/1)
+
+      _ ->
+        email_name(user_id)
+    end
+  end
+
+  defp greeting_name(_user_id), do: nil
+
+  defp greeting_candidates(metadata, user_id) do
+    [
+      normalize_name(Map.get(metadata, "first_name")),
+      normalize_name(Map.get(metadata, "name")),
+      normalize_name(Map.get(metadata, "username")),
+      email_name(user_id)
+    ]
+  end
+
+  defp normalize_name(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" ->
+        nil
+
+      trimmed ->
+        trimmed
+        |> String.split(~r/[\s._-]+/u)
+        |> List.first()
+        |> case do
+          nil -> nil
+          part -> String.capitalize(part)
+        end
+    end
+  end
+
+  defp normalize_name(_value), do: nil
+
+  defp email_name(user_id) when is_binary(user_id) do
+    user_id
+    |> String.split("@")
+    |> List.first()
+    |> normalize_name()
+  end
+
+  defp email_name(_user_id), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
 
   defp telegram_module do
     Application.get_env(:maraithon, :briefs, [])

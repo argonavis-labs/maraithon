@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
+  alias Maraithon.Briefs
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications
   alias Maraithon.InsightNotifications.Delivery
@@ -1182,6 +1183,86 @@ defmodule Maraithon.TelegramAssistantTest do
     assert turn.turn_kind == "assistant_push"
     assert turn.origin_type == "insight"
     assert turn.origin_id == delivery.id
+  end
+
+  test "check-in briefs deliver an intro plus one push card per todo", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [new_todo, older_todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_payload("thread-check-in:new", "Reply to Charlie about the budget", 92),
+        gmail_todo_payload("thread-check-in:old", "Confirm the old shipping ETA", 87)
+      ])
+
+    {:ok, older_todo} =
+      older_todo
+      |> Ecto.Changeset.change(%{source_occurred_at: ~U[2026-03-31 14:00:00.000000Z]})
+      |> Repo.update()
+
+    scheduled_for = ~U[2026-04-02 14:30:00Z]
+
+    assert {:ok, brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "check_in",
+               "title" => "Check-in: 2 items still need movement",
+               "summary" => "Two open communication loops still need movement.",
+               "body" => "Superseded by todo delivery.",
+               "scheduled_for" => scheduled_for,
+               "dedupe_key" => "telegram-assistant:check-in:todo-style",
+               "metadata" => %{
+                 "linked_todo_ids" => [new_todo.id, older_todo.id],
+                 "timezone_offset_hours" => "-4"
+               }
+             })
+
+    assert :ok = Briefs.send_brief(brief)
+
+    sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert length(sends) == 3
+    [intro, first_todo_message, second_todo_message] = sends
+
+    assert intro.text ==
+             "Hey Kent, checking on these today.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
+
+    assert first_todo_message.text =~ "New Today"
+    assert first_todo_message.text =~ "Reply to Charlie about the budget"
+    assert second_todo_message.text =~ "Still Open"
+    assert second_todo_message.text =~ "Confirm the old shipping ETA"
+
+    keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Not Interested"))
+
+    updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
+    assert updated_brief.status == "sent"
+    assert updated_brief.provider_message_id == intro.message_id
+
+    conversation =
+      Repo.one!(
+        from conversation in Conversation,
+          where: conversation.user_id == ^user_id,
+          order_by: [desc: conversation.inserted_at],
+          limit: 1
+      )
+
+    turns =
+      Repo.all(
+        from turn in Turn,
+          where: turn.conversation_id == ^conversation.id,
+          order_by: [asc: turn.inserted_at]
+      )
+
+    assert Enum.map(turns, & &1.turn_kind) == [
+             "assistant_push",
+             "assistant_push",
+             "assistant_push"
+           ]
+
+    assert get_in(Enum.at(turns, 1).structured_data, ["linked_todo", "id"]) == new_todo.id
+    assert get_in(Enum.at(turns, 2).structured_data, ["linked_todo", "id"]) == older_todo.id
   end
 
   test "medium runs emit native typing without a progress note" do

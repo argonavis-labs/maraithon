@@ -13,6 +13,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   alias Maraithon.ChiefOfStaff.AttentionArbiter
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
+  alias Maraithon.Todos
 
   @default_timezone_offset_hours -5
   @default_morning_hour 8
@@ -314,6 +315,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     if should_send_check_in?(top_items, state.timezone_offset_hours, plan.scheduled_for) do
       count = length(top_items)
+      check_in_metadata = check_in_delivery_metadata(top_items, state.timezone_offset_hours)
 
       %{
         "cadence" => "check_in",
@@ -337,6 +339,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           ),
         "metadata" =>
           metadata_for(plan, state.assistant_behavior, card_insights(top_items), context)
+          |> Map.merge(check_in_metadata)
       }
     end
   end
@@ -1040,6 +1043,22 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "sources" => insights |> Enum.map(& &1.source) |> Enum.uniq()
     }
     |> AttentionArbiter.merge_artifact_metadata(context)
+  end
+
+  defp check_in_delivery_metadata(cards, offset_hours) do
+    insights = card_insights(cards)
+
+    linked_todo_ids =
+      case Todos.sync_many_from_insights(insights) do
+        {:ok, todos} -> Enum.map(todos, & &1.id)
+        _ -> []
+      end
+
+    %{
+      "linked_todo_ids" => linked_todo_ids,
+      "linked_insight_ids" => Enum.map(insights, & &1.id),
+      "timezone_offset_hours" => offset_hours
+    }
   end
 
   defp generated_period?(state, cadence, period_key) do

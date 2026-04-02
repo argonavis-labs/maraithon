@@ -74,6 +74,33 @@ defmodule Maraithon.Todos do
     |> Repo.all()
   end
 
+  def list_by_ids(user_id, todo_ids, opts \\ [])
+
+  def list_by_ids(user_id, todo_ids, opts)
+      when is_binary(user_id) and is_list(todo_ids) do
+    ids =
+      todo_ids
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    if ids == [] do
+      []
+    else
+      statuses = normalize_status_filters(Keyword.get(opts, :statuses))
+      open_due_only? = Keyword.get(opts, :open_due_only, false)
+      order = Map.new(Enum.with_index(ids))
+
+      Todo
+      |> where([todo], todo.user_id == ^user_id and todo.id in ^ids)
+      |> maybe_filter_statuses(statuses)
+      |> maybe_filter_open_due_only(open_due_only?)
+      |> Repo.all()
+      |> Enum.sort_by(fn todo -> Map.get(order, todo.id, map_size(order)) end)
+    end
+  end
+
+  def list_by_ids(_user_id, _todo_ids, _opts), do: []
+
   def sync_many_from_insights(insights) when is_list(insights) do
     insights
     |> Enum.reduce({:ok, []}, fn

@@ -13,8 +13,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   @feedback_values ~w(helpful not_helpful)
 
   def telegram_payload(todo) when is_map(todo) do
+    telegram_payload(todo, [])
+  end
+
+  def telegram_payload(todo, opts) when is_map(todo) and is_list(opts) do
+    prefix_text = Keyword.get(opts, :prefix_text)
+
     %{
-      text: render_message(todo),
+      text: render_message(todo, prefix_text),
       reply_markup: build_reply_markup(todo)
     }
   end
@@ -111,7 +117,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
           [
             [
               %{"text" => "Mark Done", "callback_data" => callback_data(todo_id, "done")},
-              %{"text" => "Dismiss", "callback_data" => callback_data(todo_id, "dismiss")}
+              %{"text" => "Not Interested", "callback_data" => callback_data(todo_id, "dismiss")}
             ]
           ]
 
@@ -154,13 +160,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     if buttons == [], do: rows, else: rows ++ [buttons]
   end
 
-  defp render_message(todo) when is_map(todo) do
+  defp render_message(todo, prefix_text) when is_map(todo) do
     metadata = todo_metadata(todo)
     account = metadata_account(metadata)
     source = source_label(todo_source(todo))
     feedback = feedback_label(feedback_value(todo))
 
     [
+      prefix_text,
       "<b>Maraithon Todo</b>",
       "<b>#{todo_status_label(todo_status(todo))}:</b> #{safe(todo_title(todo))}",
       "",
@@ -329,7 +336,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp feedback_label(_value), do: nil
 
   defp callback_notice("done"), do: "Marked done"
-  defp callback_notice("dismiss"), do: "Dismissed"
+  defp callback_notice("dismiss"), do: "Marked not interested"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
   defp callback_notice("not_helpful"), do: "Saved not helpful feedback"
 

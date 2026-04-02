@@ -11,8 +11,11 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramConversations
+  alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
+  alias Maraithon.Todos
 
   @default_push_limit_per_hour 3
 
@@ -65,47 +68,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   def deliver_brief(%Brief{} = brief) do
     if TelegramAssistant.unified_push_enabled?() do
-      payload = Briefs.telegram_payload(brief)
-
-      case deliver(%{
-             user_id: brief.user_id,
-             chat_id: telegram_destination(brief.user_id),
-             origin_type: "brief",
-             origin_id: brief.id,
-             dedupe_key: "brief:#{brief.id}",
-             title: brief.title,
-             body: payload.text,
-             urgency: 0.7,
-             interrupt_now: true,
-             why_now: brief.summary,
-             structured_data: brief_structured_data(brief),
-             conversation_metadata: brief_conversation_metadata(brief),
-             telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
-           }) do
-        {:ok, %{decision: "sent_now", message_id: message_id}} ->
-          brief
-          |> Ecto.Changeset.change(%{
-            status: "sent",
-            sent_at: DateTime.utc_now(),
-            provider_message_id: message_id,
-            error_message: nil
-          })
-          |> Repo.update()
-
-          :ok
-
-        {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
-          :ok
-
-        {:error, reason} ->
-          brief
-          |> Ecto.Changeset.change(%{
-            status: "failed",
-            error_message: inspect(reason)
-          })
-          |> Repo.update()
-
-          {:error, reason}
+      if Briefs.todo_digest_brief?(brief) do
+        deliver_todo_digest_brief(brief)
+      else
+        deliver_standard_brief(brief)
       end
     else
       {:fallback, :disabled}
@@ -188,7 +154,13 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
                  decision: "sent_now",
                  conversation_turn_id: turn.id
                }) do
-          {:ok, %{decision: "sent_now", message_id: message_id, turn_id: turn.id}}
+          {:ok,
+           %{
+             decision: "sent_now",
+             message_id: message_id,
+             turn_id: turn.id,
+             conversation_id: conversation.id
+           }}
         else
           {:error, reason} -> {:error, reason}
         end
@@ -313,4 +285,160 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp deliver_standard_brief(%Brief{} = brief) do
+    payload = Briefs.telegram_payload(brief)
+
+    case deliver(%{
+           user_id: brief.user_id,
+           chat_id: telegram_destination(brief.user_id),
+           origin_type: "brief",
+           origin_id: brief.id,
+           dedupe_key: "brief:#{brief.id}",
+           title: brief.title,
+           body: payload.text,
+           urgency: 0.7,
+           interrupt_now: true,
+           why_now: brief.summary,
+           structured_data: brief_structured_data(brief),
+           conversation_metadata: brief_conversation_metadata(brief),
+           telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
+         }) do
+      {:ok, %{decision: "sent_now", message_id: message_id}} ->
+        mark_brief_sent(brief, message_id)
+        :ok
+
+      {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+        :ok
+
+      {:error, reason} ->
+        mark_brief_failed(brief, reason)
+        {:error, reason}
+    end
+  end
+
+  defp deliver_todo_digest_brief(%Brief{} = brief) do
+    todos = Briefs.todo_digest_todos(brief)
+
+    if todos == [] do
+      deliver_standard_brief(brief)
+    else
+      intro_text = Briefs.todo_digest_intro_text(brief, todos)
+
+      case deliver(%{
+             user_id: brief.user_id,
+             chat_id: telegram_destination(brief.user_id),
+             origin_type: "brief",
+             origin_id: brief.id,
+             dedupe_key: "brief:#{brief.id}",
+             title: brief.title,
+             body: intro_text,
+             urgency: 0.7,
+             interrupt_now: true,
+             why_now: brief.summary,
+             structured_data:
+               brief_structured_data(brief)
+               |> Map.put("message_class", "todo_digest")
+               |> Map.put("todo_ids", Enum.map(todos, & &1.id))
+               |> Map.put("todo_count", length(todos)),
+             conversation_metadata:
+               brief_conversation_metadata(brief)
+               |> Map.put("brief_cadence", brief.cadence),
+             telegram_opts: [parse_mode: "HTML"]
+           }) do
+        {:ok, %{decision: "sent_now", message_id: message_id, conversation_id: conversation_id}} ->
+          case load_conversation(conversation_id) do
+            %Conversation{} = conversation ->
+              case send_todo_push_messages(conversation, brief, todos) do
+                :ok ->
+                  mark_brief_sent(brief, message_id)
+                  :ok
+
+                {:error, reason} ->
+                  brief
+                  |> Ecto.Changeset.change(%{
+                    status: "sent",
+                    sent_at: DateTime.utc_now(),
+                    provider_message_id: message_id,
+                    error_message: "partial_todo_delivery_failed: #{inspect(reason)}"
+                  })
+                  |> Repo.update()
+
+                  :ok
+              end
+
+            nil ->
+              mark_brief_sent(brief, message_id)
+              :ok
+          end
+
+        {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+          :ok
+
+        {:error, reason} ->
+          mark_brief_failed(brief, reason)
+          {:error, reason}
+      end
+    end
+  end
+
+  defp send_todo_push_messages(%Conversation{} = conversation, %Brief{} = brief, todos) do
+    Enum.reduce_while(todos, conversation, fn todo, acc_conversation ->
+      payload =
+        TodoActions.telegram_payload(todo,
+          prefix_text: Briefs.todo_digest_prefix_text(brief, todo)
+        )
+
+      case TelegramAssistant.send_turn(
+             acc_conversation,
+             acc_conversation.chat_id,
+             payload.text,
+             send_mode: :send,
+             turn_kind: "assistant_push",
+             origin_type: "brief",
+             origin_id: brief.id,
+             structured_data: %{
+               "message_class" => "todo_item",
+               "brief_cadence" => brief.cadence,
+               "linked_todo" => Todos.serialize_for_prompt(todo)
+             },
+             telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
+           ) do
+        {:ok, updated_conversation, _turn, _telegram_result} ->
+          {:cont, updated_conversation}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      %Conversation{} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp load_conversation(conversation_id) when is_binary(conversation_id),
+    do: Repo.get(Conversation, conversation_id)
+
+  defp load_conversation(_conversation_id), do: nil
+
+  defp mark_brief_sent(%Brief{} = brief, message_id) do
+    brief
+    |> Ecto.Changeset.change(%{
+      status: "sent",
+      sent_at: DateTime.utc_now(),
+      provider_message_id: message_id,
+      error_message: nil
+    })
+    |> Repo.update()
+  end
+
+  defp mark_brief_failed(%Brief{} = brief, reason) do
+    brief
+    |> Ecto.Changeset.change(%{
+      status: "failed",
+      error_message: inspect(reason)
+    })
+    |> Repo.update()
+  end
 end
