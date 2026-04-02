@@ -7,6 +7,7 @@ defmodule Maraithon.TelegramInterpreter do
   alias Maraithon.LLM
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
+  alias Maraithon.UserMemory
   require Logger
 
   @default_result %{
@@ -97,6 +98,9 @@ defmodule Maraithon.TelegramInterpreter do
     Current user memory JSON:
     #{Jason.encode!(PreferenceMemory.prompt_context(user_id))}
 
+    Durable user profile JSON:
+    #{Jason.encode!(UserMemory.prompt_context(user_id))}
+
     Operator summaries JSON:
     #{Jason.encode!(OperatorMemory.summaries_for_prompt(user_id))}
 
@@ -126,6 +130,7 @@ defmodule Maraithon.TelegramInterpreter do
     - If the user is asking why a suggestion mattered, use intent question_about_insight.
     - If the user is asking generally what they owe, use general_chat and answer from open insights.
     - If you infer a durable preference from feedback, assistant_reply should explicitly acknowledge the lesson in plain language and say how Maraithon will treat similar items next time.
+    - Use the durable user profile to adapt suggestions and explanations to this user's established working style.
     - Auto-save safety is enforced by the app, but your confidence must reflect your certainty.
     """
   end

@@ -2107,6 +2107,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     feedback_json = Jason.encode!(feedback_context[:recent_feedback] || [])
     threshold_json = Jason.encode!(feedback_context[:threshold_profile] || %{})
     preference_json = Jason.encode!(feedback_context[:preference_profile] || %{})
+    user_memory_json = Jason.encode!(feedback_context[:user_memory_profile] || %{})
 
     """
     You are a founder accountability assistant for Gmail + Calendar follow-through.
@@ -2120,6 +2121,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     Durable preference memory JSON:
     #{preference_json}
+
+    Durable user memory profile JSON:
+    #{user_memory_json}
 
     Input candidates JSON:
     #{candidates_json}
@@ -2148,6 +2152,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - If a candidate looks like cold outreach and the user has not engaged or committed, it is not actionable.
     - If an item is mostly informational/receipt-like, omit it from output instead of rewording it.
     - Respect the durable preference memory above. Explicit remembered preferences outrank generic priors.
+    - Respect the durable user memory profile above. Adapt your idea of urgency, framing, and interruption tolerance to this user.
     - Treat content-filter topics such as sales_outreach and cold_outreach as suppression signals unless the user already engaged or made a commitment.
     - If the preferences imply after-hours Telegram suppression, reflect that in interrupt_now and telegram_fit_score.
     - If the preferences imply a topic or counterparty class should be urgent, bias toward surfacing it.

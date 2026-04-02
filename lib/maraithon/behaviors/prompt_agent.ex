@@ -216,13 +216,13 @@ defmodule Maraithon.Behaviors.PromptAgent do
     end
   end
 
-  defp handle_tool_result(result, state, _context) do
+  defp handle_tool_result(result, state, context) do
     tool_call = state.pending_tool_call
 
     case result do
       {:ok, tool_result} ->
         # Tool succeeded - ask LLM what to do with the result
-        prompt = build_tool_result_prompt(state, tool_call, tool_result)
+        prompt = build_tool_result_prompt(state, tool_call, tool_result, context)
 
         params = %{
           "messages" => [
@@ -259,9 +259,10 @@ defmodule Maraithon.Behaviors.PromptAgent do
   # Prompt Building
   # ===========================================================================
 
-  defp build_thinking_prompt(state, event, _context) do
+  defp build_thinking_prompt(state, event, context) do
     memory_context = format_memory(state.memory)
     tools_list = format_tools(state.allowed_tools)
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
 
     """
     #{state.prompt}
@@ -271,6 +272,9 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
     ## Recent Events You've Seen
     #{memory_context}
+
+    ## Durable User Memory
+    #{user_memory_text}
 
     ## Current Event
     Type: #{event.type}
@@ -300,12 +304,16 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp build_proactive_prompt(state, context) do
     memory_context = format_memory(state.memory)
     timestamp = Map.get(context, :timestamp) || DateTime.utc_now()
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
 
     """
     #{state.prompt}
 
     ## Recent Events You've Seen
     #{memory_context}
+
+    ## Durable User Memory
+    #{user_memory_text}
 
     ## Current Time
     #{DateTime.to_iso8601(timestamp)}
@@ -319,9 +327,14 @@ defmodule Maraithon.Behaviors.PromptAgent do
     """
   end
 
-  defp build_tool_result_prompt(state, tool_call, result) do
+  defp build_tool_result_prompt(state, tool_call, result, context) do
+    user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+
     """
     #{state.prompt}
+
+    ## Durable User Memory
+    #{user_memory_text}
 
     ## Tool Result
     You called: #{tool_call.tool}
@@ -367,6 +380,37 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp format_tools([]), do: "(No tools available)"
   defp format_tools(tools), do: Enum.join(tools, ", ")
 
+  defp format_user_memory(%{"summary" => summary, "profile" => profile}) do
+    format_user_memory(%{summary: summary, profile: profile})
+  end
+
+  defp format_user_memory(%{summary: summary, profile: profile}) when is_map(profile) do
+    summary_text =
+      case normalize_optional_text(summary) do
+        nil -> "No durable user memory yet."
+        value -> value
+      end
+
+    details =
+      profile
+      |> Enum.map(fn {key, value} ->
+        case normalize_optional_text(value) do
+          nil -> nil
+          normalized -> "- #{key}: #{normalized}"
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    if details == "" do
+      summary_text
+    else
+      summary_text <> "\n" <> details
+    end
+  end
+
+  defp format_user_memory(_memory), do: "No durable user memory yet."
+
   defp format_content(content) when is_binary(content), do: content
   defp format_content(content) when is_map(content), do: Jason.encode!(content, pretty: true)
   defp format_content(content), do: inspect(content)
@@ -377,6 +421,15 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   defp truncate(str, max) when byte_size(str) <= max, do: str
   defp truncate(str, max), do: String.slice(str, 0, max) <> "..."
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_optional_text(_value), do: nil
 
   defp parse_action(content, allowed_tools) do
     content = String.trim(content)

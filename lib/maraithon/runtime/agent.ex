@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
+  alias Maraithon.UserMemory
 
   require Logger
 
@@ -501,6 +502,7 @@ defmodule Maraithon.Runtime.Agent do
       budget: data.budget,
       # TODO: Load recent events
       recent_events: [],
+      user_memory: UserMemory.prompt_context(data.user_id),
       last_message: data.current_message,
       last_message_metadata: data.current_message_metadata || %{},
       last_message_id: data.current_message_id,

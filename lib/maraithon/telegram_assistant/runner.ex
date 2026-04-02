@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.TelegramAssistant.{Context, Run, Toolbox}
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Tools
+  alias Maraithon.UserMemory
 
   require Logger
 
@@ -327,6 +328,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
             summary =
               build_result_summary(message_class, prepared_action_id, state, liveness_summary)
 
+            _ = maybe_refresh_user_memory(attrs)
+
             {:ok, status, summary}
 
           {:error, reason} ->
@@ -518,6 +521,23 @@ defmodule Maraithon.TelegramAssistant.Runner do
       Map.get(attrs, :linked_delivery) -> "reply"
       true -> "inbound_message"
     end
+  end
+
+  defp maybe_refresh_user_memory(attrs) do
+    case Map.get(attrs, :user_id) do
+      user_id when is_binary(user_id) -> UserMemory.refresh_if_stale(user_id)
+      _ -> {:error, :invalid_user}
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning("Telegram assistant user-memory refresh failed",
+        user_id: inspect(Map.get(attrs, :user_id)),
+        reason: Exception.message(error)
+      )
+
+      :ok
   end
 
   defp timed_out?(started_monotonic_ms) do

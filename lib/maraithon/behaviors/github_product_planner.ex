@@ -66,7 +66,13 @@ defmodule Maraithon.Behaviors.GitHubProductPlanner do
               "messages" => [
                 %{
                   "role" => "user",
-                  "content" => build_llm_prompt(snapshot, context.timestamp, state.feature_limit)
+                  "content" =>
+                    build_llm_prompt(
+                      snapshot,
+                      context.timestamp,
+                      state.feature_limit,
+                      Map.get(context, :user_memory, %{})
+                    )
                 }
               ],
               "max_tokens" => 1_800,
@@ -222,13 +228,17 @@ defmodule Maraithon.Behaviors.GitHubProductPlanner do
 
   defp feature_to_insight(_item, _index, _snapshot, _state, _plan_date), do: nil
 
-  defp build_llm_prompt(snapshot, timestamp, feature_limit) do
+  defp build_llm_prompt(snapshot, timestamp, feature_limit, user_memory) do
     snapshot_json = Jason.encode!(snapshot)
+    user_memory_json = Jason.encode!(user_memory || %{})
 
     """
     You are a senior product manager reviewing the current mainline branch of a software repository.
     Current time: #{DateTime.to_iso8601(timestamp)}
     Target feature count: #{feature_limit}
+
+    Durable user memory JSON:
+    #{user_memory_json}
 
     Repository snapshot JSON:
     #{snapshot_json}
@@ -236,6 +246,7 @@ defmodule Maraithon.Behaviors.GitHubProductPlanner do
     Task:
     - Propose the next #{feature_limit} highest-leverage product features this team should build next.
     - Think like a PM, not an implementation planner: prioritize end-user value, marketability, adoption, and workflow impact.
+    - Adapt recommendations to the user's durable working style, current focus, and communication preferences when they are clear.
     - Use the repo description, README, root structure, recent commits, open issues, and open pull requests as evidence.
     - Avoid suggesting pure refactors, chores, or already-in-flight work unless they unlock a real user-facing feature.
     - Make each recommendation concrete enough that a founder or PM could forward it to engineering without rewriting it.

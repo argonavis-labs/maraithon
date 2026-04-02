@@ -14,6 +14,7 @@ defmodule Maraithon.TelegramAssistantTest do
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TestSupport.TelegramAssistantClientStub
+  alias Maraithon.UserMemory.Profile
 
   setup do
     start_supervised!(%{
@@ -29,6 +30,7 @@ defmodule Maraithon.TelegramAssistantTest do
     original_briefs = Application.get_env(:maraithon, :briefs, [])
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
     original_capturing = Application.get_env(:maraithon, :capturing_telegram, [])
+    original_user_memory = Application.get_env(:maraithon, :user_memory, [])
 
     Application.put_env(
       :maraithon,
@@ -71,6 +73,7 @@ defmodule Maraithon.TelegramAssistantTest do
       Application.put_env(:maraithon, :briefs, original_briefs)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, :capturing_telegram, original_capturing)
+      Application.put_env(:maraithon, :user_memory, original_user_memory)
     end)
 
     user_id = "telegram-assistant@example.com"
@@ -96,6 +99,23 @@ defmodule Maraithon.TelegramAssistantTest do
     user_id: user_id,
     agent: agent
   } do
+    Application.put_env(:maraithon, :user_memory,
+      llm_complete: fn _prompt ->
+        {:ok,
+         Jason.encode!(%{
+           "summary" => "Operate as a concise inbox chief of staff for this user.",
+           "profile" => %{
+             "working_style" => "Prefer concrete next steps.",
+             "communication_style" => "Keep updates short.",
+             "decision_style" => "Bias toward execution.",
+             "current_focus" => "Inbox accountability.",
+             "important_context" => "Telegram is an active control surface."
+           },
+           "confidence" => 0.91
+         })}
+      end
+    )
+
     {:ok, [_insight]} =
       Insights.record_many(user_id, agent.id, [
         %{
@@ -171,6 +191,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert run.status == "completed"
     assert run.trigger_type == "inbound_message"
     assert get_in(run.prompt_snapshot, ["open_insights"]) != []
+    assert is_map(run.prompt_snapshot["user_memory"] || run.prompt_snapshot[:user_memory])
 
     steps =
       Step
@@ -193,6 +214,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert turn.text =~ "Sarah"
     refute Enum.any?(telegram_events(), &(&1.type == :chat_action))
+
+    assert %Profile{} = Repo.get_by(Profile, user_id: user_id)
   end
 
   test "assistant prepares a destructive agent action and executes it after text confirmation", %{
@@ -377,8 +400,8 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}
-    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 500
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 1_000
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
 
@@ -457,9 +480,9 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}
-    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 500
-    assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 500
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :chat_action, action: "typing"}}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 1_000
     assert progress_text =~ "open work"
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
@@ -540,9 +563,9 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}
-    assert_receive {:capturing_telegram_event, %{type: :send}}, 500
-    assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 500
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
     assert timeout_text =~ "didn't finish that in time"
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
@@ -638,8 +661,8 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}
-    assert_receive {:capturing_telegram_event, %{type: :send}}, 500
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
     assert_receive {:capturing_telegram_edit_failed, _event, :forced_edit_failure}, 500

@@ -8,6 +8,7 @@ defmodule Maraithon.InsightFeedback do
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.UserMemory
 
   @default_recent_limit 8
 
@@ -19,7 +20,8 @@ defmodule Maraithon.InsightFeedback do
     %{
       threshold_profile: threshold_profile(user_id),
       recent_feedback: recent_feedback(user_id, limit: limit),
-      preference_profile: PreferenceMemory.prompt_context(user_id)
+      preference_profile: PreferenceMemory.prompt_context(user_id),
+      user_memory_profile: UserMemory.prompt_context(user_id)
     }
   end
 
@@ -27,7 +29,8 @@ defmodule Maraithon.InsightFeedback do
     %{
       threshold_profile: nil,
       recent_feedback: [],
-      preference_profile: PreferenceMemory.prompt_context(nil)
+      preference_profile: PreferenceMemory.prompt_context(nil),
+      user_memory_profile: UserMemory.prompt_context(nil)
     }
   end
 

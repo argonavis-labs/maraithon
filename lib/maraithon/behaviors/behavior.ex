@@ -10,6 +10,7 @@ defmodule Maraithon.Behaviors.Behavior do
           timestamp: DateTime.t(),
           budget: map(),
           recent_events: [map()],
+          user_memory: map(),
           last_message: String.t() | nil,
           last_message_metadata: map(),
           last_message_id: String.t() | nil,

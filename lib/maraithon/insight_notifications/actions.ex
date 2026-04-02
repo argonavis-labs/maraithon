@@ -14,6 +14,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.Tools
+  alias Maraithon.UserMemory
 
   require Logger
 
@@ -710,14 +711,16 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp draft_memory_context(user_id) when is_binary(user_id) do
     %{
       preference_memory: PreferenceMemory.prompt_context(user_id),
-      operator_summaries: OperatorMemory.summaries_for_prompt(user_id)
+      operator_summaries: OperatorMemory.summaries_for_prompt(user_id),
+      user_memory_profile: UserMemory.prompt_context(user_id)
     }
   end
 
   defp draft_memory_context(_user_id) do
     %{
       preference_memory: PreferenceMemory.prompt_context(nil),
-      operator_summaries: []
+      operator_summaries: [],
+      user_memory_profile: UserMemory.prompt_context(nil)
     }
   end
 

@@ -17,6 +17,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Travel
+  alias Maraithon.UserMemory
 
   def build(attrs) when is_map(attrs) do
     user_id = fetch_string!(attrs, :user_id)
@@ -33,6 +34,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       recent_turns: serialize_recent_turns(conversation),
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
+      user_memory: UserMemory.prompt_context(user_id),
       open_insights: serialize_open_insights(user_id),
       connected_accounts: serialize_connected_accounts(user_id),
       active_agents: serialize_agents(user_id),

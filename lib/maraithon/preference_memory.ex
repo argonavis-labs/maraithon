@@ -15,6 +15,7 @@ defmodule Maraithon.PreferenceMemory do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory.{Profile, Rule, RuleEvent}
   alias Maraithon.Repo
+  alias Maraithon.UserMemory
 
   require Logger
 
@@ -195,6 +196,7 @@ defmodule Maraithon.PreferenceMemory do
           _ = OperatorMemory.refresh_user_summaries(user_id)
         end)
 
+        _ = UserMemory.refresh_if_stale(user_id, force: true)
         {:ok, "Removed preference `#{normalized_id}`."}
       end
     end
@@ -269,6 +271,7 @@ defmodule Maraithon.PreferenceMemory do
       _ = OperatorMemory.refresh_user_summaries(user_id)
     end)
 
+    _ = UserMemory.refresh_if_stale(user_id, force: true)
     {:ok, Enum.map(rules, &serialize_rule/1)}
   end
 
@@ -308,6 +311,7 @@ defmodule Maraithon.PreferenceMemory do
       _ = OperatorMemory.refresh_user_summaries(user_id)
     end)
 
+    _ = UserMemory.refresh_if_stale(user_id, force: true)
     {:ok, Enum.map(rules, &serialize_rule/1)}
   end
 
@@ -553,6 +557,7 @@ defmodule Maraithon.PreferenceMemory do
       end)
       |> case do
         {:ok, saved} ->
+          _ = UserMemory.refresh_if_stale(user_id, force: true)
           saved
 
         {:error, reason} ->
