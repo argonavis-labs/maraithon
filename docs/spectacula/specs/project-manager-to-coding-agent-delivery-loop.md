@@ -1,6 +1,6 @@
 # Project Manager To Coding Agent Delivery Loop
 
-Status: Draft v1
+Status: Implemented v1
 Purpose: Define how project recommendations turn into accepted plans, explicit repo-access grants, coding-agent runs, branches, pull requests, and user-visible status updates inside Maraithon.
 Depends on:
 - [Project-Oriented Conversational Operator](/Users/kent/bliss/maraithon/docs/spectacula/specs/project-oriented-conversational-operator.md)

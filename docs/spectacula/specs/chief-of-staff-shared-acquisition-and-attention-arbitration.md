@@ -1,6 +1,6 @@
 # Chief of Staff Shared Acquisition and Attention Arbitration
 
-Status: Draft v1
+Status: Implemented v1
 Purpose: Define the next `AI Chief of Staff` slice: one assistant-owned source acquisition layer and one assistant-level attention arbiter that deduplicates provider work, builds bounded source bundles, and merges skill outputs before delivery.
 Depends on:
 - [AI Chief of Staff Skill-Orchestrated Agent Architecture](/Users/kent/bliss/maraithon/docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md)
