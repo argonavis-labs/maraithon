@@ -9,14 +9,16 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "followthrough" => Maraithon.ChiefOfStaff.Skills.Followthrough,
     "travel_logistics" => Maraithon.ChiefOfStaff.Skills.TravelLogistics,
     "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
-    "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment
+    "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment,
+    "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar
   }
 
   @default_enabled_ids [
     "followthrough",
     "travel_logistics",
     "briefing",
-    "project_scope_alignment"
+    "project_scope_alignment",
+    "holiday_radar"
   ]
 
   @doc false

@@ -575,7 +575,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
                "followthrough",
                "travel_logistics",
                "briefing",
-               "project_scope_alignment"
+               "project_scope_alignment",
+               "holiday_radar"
              ]
 
       assert agent.config["source_policy"] == "all_connected"
