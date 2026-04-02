@@ -9,6 +9,7 @@ defmodule Maraithon.Insights do
   alias Maraithon.Insights.Detail
   alias Maraithon.Insights.Insight
   alias Maraithon.Repo
+  alias Maraithon.Todos
 
   @open_statuses ["new", "snoozed"]
   @attention_modes ["act_now", "monitor"]
@@ -97,7 +98,8 @@ defmodule Maraithon.Insights do
          {:ok, updated} <-
            insight
            |> Ecto.Changeset.change(status: "snoozed", snoozed_until: until_datetime)
-           |> Repo.update() do
+           |> Repo.update(),
+         {:ok, _todo} <- Todos.sync_from_insight(updated) do
       {:ok, updated}
     else
       nil -> {:error, :not_found}
@@ -115,8 +117,14 @@ defmodule Maraithon.Insights do
       )
 
       case upsert(attrs, now) do
-        {:ok, insight} -> insight
-        {:error, reason} -> Repo.rollback(reason)
+        {:ok, insight} ->
+          case Todos.sync_from_insight(insight) do
+            {:ok, _todo} -> insight
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
       end
     end)
     |> case do
@@ -189,7 +197,8 @@ defmodule Maraithon.Insights do
          {:ok, updated} <-
            insight
            |> Ecto.Changeset.change(status: status, snoozed_until: nil)
-           |> Repo.update() do
+           |> Repo.update(),
+         {:ok, _todo} <- Todos.sync_from_insight(updated) do
       {:ok, updated}
     else
       nil -> {:error, :not_found}

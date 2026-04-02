@@ -5,9 +5,10 @@ defmodule Maraithon.InsightsTest do
   alias Maraithon.Agents
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.Todos
 
   setup do
-    user_id = "insights-user@example.com"
+    user_id = "insights-user-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, agent} =
@@ -105,6 +106,86 @@ defmodule Maraithon.InsightsTest do
       assert second.attention_mode == "monitor"
       assert second.tracking_key == "thread-1"
       assert Enum.map(Insights.list_open_monitor_for_user(user_id), & &1.id) == [second.id]
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title == "Monitoring investor thread again"
+      assert todo.dedupe_key == "insight:thread-1"
+      assert get_in(todo.metadata, ["source_insight_id"]) == second.id
+      assert Enum.count(Todos.list_recent_for_user(user_id)) == 1
+    end
+
+    test "recorded insights are mirrored into todos and todo resolution closes the insight", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to the billing thread",
+            "summary" => "Billing needs a same-day response with the account owner and ETA.",
+            "recommended_action" => "Reply in-thread now with the payment status.",
+            "priority" => 88,
+            "confidence" => 0.91,
+            "dedupe_key" => "billing-thread:rev-1",
+            "tracking_key" => "billing-thread",
+            "source_id" => "thread-billing",
+            "metadata" => %{
+              "thread_id" => "thread-billing",
+              "subject" => "Billing account past due"
+            }
+          }
+        ])
+
+      [todo] = Todos.list_open_for_user(user_id, kind: "gmail_triage")
+      assert todo.title == "Reply to the billing thread"
+      assert todo.dedupe_key == "insight:billing-thread"
+      assert get_in(todo.metadata, ["source_insight_id"]) == insight.id
+
+      assert {:ok, _done_todo} =
+               Todos.mark_done(user_id, todo.id, note: "Handled with the finance team.")
+
+      updated_insight = Repo.get!(Maraithon.Insights.Insight, insight.id)
+
+      assert updated_insight.status == "acknowledged"
+      assert get_in(updated_insight.metadata, ["todo_resolution", "status"]) == "done"
+
+      assert get_in(updated_insight.metadata, ["todo_resolution", "note"]) ==
+               "Handled with the finance team."
+    end
+
+    test "insight snooze and dismiss propagate to the mirrored todo", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "calendar",
+            "category" => "event_prep_needed",
+            "title" => "Prep for board meeting",
+            "summary" => "Board meeting prep still needs to happen.",
+            "recommended_action" => "Draft the board talk track before tomorrow morning.",
+            "priority" => 73,
+            "confidence" => 0.8,
+            "dedupe_key" => "calendar:board-prep"
+          }
+        ])
+
+      [todo] = Todos.list_open_for_user(user_id, kind: "general")
+      snooze_until = DateTime.add(DateTime.utc_now(), 4, :hour)
+
+      assert {:ok, _insight} = Insights.snooze(user_id, insight.id, snooze_until)
+
+      todo = Repo.get!(Maraithon.Todos.Todo, todo.id)
+      assert todo.status == "snoozed"
+      assert DateTime.compare(todo.snoozed_until, snooze_until) == :eq
+
+      assert {:ok, _insight} = Insights.dismiss(user_id, insight.id)
+
+      todo = Repo.get!(Maraithon.Todos.Todo, todo.id)
+      assert todo.status == "dismissed"
     end
   end
 

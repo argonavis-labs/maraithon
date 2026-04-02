@@ -8,6 +8,9 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   alias Maraithon.LLM
 
   @max_tool_calls_per_step 3
+  @live_inbox_search_max_results 15
+  @live_inbox_lookback_days 14
+  @live_latest_lookback_days 7
   @fallback_response %{
     "status" => "final",
     "assistant_message" =>
@@ -19,21 +22,27 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
   @impl true
   def next_step(payload) when is_map(payload) do
-    prompt = build_prompt(payload)
+    case maybe_handle_live_gmail_request(payload) do
+      {:ok, response} ->
+        {:ok, response}
 
-    params = %{
-      "messages" => [
-        %{"role" => "system", "content" => system_prompt()},
-        %{"role" => "user", "content" => prompt}
-      ],
-      "max_tokens" => 1800,
-      "temperature" => 0.2,
-      "reasoning_effort" => "medium"
-    }
+      :continue ->
+        prompt = build_prompt(payload)
 
-    with {:ok, response} <- LLM.provider().complete(params),
-         {:ok, decoded} <- decode_json(response.content) do
-      {:ok, normalize(decoded)}
+        params = %{
+          "messages" => [
+            %{"role" => "system", "content" => system_prompt()},
+            %{"role" => "user", "content" => prompt}
+          ],
+          "max_tokens" => 1800,
+          "temperature" => 0.2,
+          "reasoning_effort" => "medium"
+        }
+
+        with {:ok, response} <- LLM.provider().complete(params),
+             {:ok, decoded} <- decode_json(response.content) do
+          {:ok, normalize(decoded)}
+        end
     end
   end
 
@@ -58,7 +67,21 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     - If a non-destructive agent control tool already executed, return `action_result`.
     - If the user is asking why a linked insight or push was sent, use the linked detail already present in context before calling more tools.
     - The assistant is a single operator assistant for one linked user. No cross-user access.
+    - For inbox or Gmail questions about "today", "latest", "new", "what should I triage", or "what changed", do not answer from stored open insights alone.
+    - For those recency-sensitive inbox questions, call `get_open_work_summary` first. If `source_health.gmail.insights_stale` is true or the user wants live inbox items, call `gmail_search_messages` before answering.
+    - If `source_health` says Gmail is `not_connected` or `error`, say that plainly instead of pretending you can see the inbox.
+    - Persist actionable work as todos. Use `upsert_todos` to create or refresh durable todos, `list_todos` to inspect them, and `resolve_todo` when the user says they handled or closed something.
+    - Treat todos as the operator's durable object layer. Final replies about work should usually reflect the current todo state, not transient message summaries.
+    - For live inbox triage, once Gmail results are available, decide which threads are real work for the user, persist them as todos, and answer from those todo objects instead of ephemeral message summaries.
+    - For Gmail triage todos, prefer `source: "gmail"`, `kind: "gmail_triage"`, `source_item_id` set to the Gmail thread id, and metadata that keeps the subject, sender, thread_id, and google_account_email.
+    - Exclude obvious FYI, receipts, promos, and machine-only notices from triage todos unless they clearly require a user decision or reply.
+    - When the user says something like they handled an item, do not guess. Resolve the matching todo by `todo_id` from context or recent tool results. If the reference is ambiguous, call `list_todos` with a narrow `query` first and then `resolve_todo`.
+    - When the user asks "what else", use the remaining open todos after resolution instead of resurfacing the item that was just closed.
     - Keep replies concise and operational.
+
+    Examples:
+    - If live Gmail results include a billing thread and an OAuth thread that both need action, your next response should usually be `tool_calls` for `upsert_todos`, not a final prose answer.
+    - If context or `list_todos` shows a todo like `{id:"todo_123", title:"Billing account past due"}` and the user says `Handled the billing, what else?`, your next response should usually be `tool_calls` for `resolve_todo` with `todo_id:"todo_123"` and `include_remaining:true`.
 
     Context snapshot JSON:
     #{Jason.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
@@ -76,7 +99,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
   defp system_prompt do
     """
-    You are Maraithon, a Telegram operator assistant. You can inspect connected systems, inspect and control agents, and prepare safe actions for confirmation.
+    You are Maraithon, a Telegram operator assistant. You can inspect connected systems, inspect and control agents, and prepare safe actions for confirmation. The user's durable work state lives in todos, projects, and memory.
     """
   end
 
@@ -138,4 +161,337 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
   defp normalize_message(value) when is_binary(value), do: String.trim(value)
   defp normalize_message(_value), do: ""
+
+  defp maybe_handle_live_gmail_request(payload) do
+    with {:ok, request_type, message_text} <- live_gmail_request(payload) do
+      handle_live_gmail_request(payload, request_type, message_text)
+    else
+      _ -> :continue
+    end
+  end
+
+  defp live_gmail_request(payload) do
+    case latest_user_message(payload) do
+      message when is_binary(message) ->
+        cond do
+          live_gmail_latest_request?(message) ->
+            {:ok, :latest_visible, message}
+
+          live_gmail_triage_request?(message) ->
+            {:ok, :triage, message}
+
+          true ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp handle_live_gmail_request(payload, request_type, message_text) do
+    tool_history = tool_history(payload)
+
+    cond do
+      is_nil(latest_tool_result(tool_history, "get_open_work_summary")) ->
+        {:ok,
+         tool_call_response(
+           "Need source health before answering a live Gmail question.",
+           "get_open_work_summary",
+           %{"limit" => 5}
+         )}
+
+      true ->
+        open_work = latest_tool_result(tool_history, "get_open_work_summary") || %{}
+        gmail_health = nested_value(open_work, ["source_health", "gmail"]) || %{}
+        gmail_status = string_value(gmail_health, "status")
+
+        case gmail_status do
+          "not_connected" ->
+            {:ok,
+             final_response(
+               "I can't inspect Gmail live right now because Gmail is not connected.",
+               "Live Gmail access unavailable."
+             )}
+
+          "error" ->
+            {:ok,
+             final_response(
+               "I can't inspect Gmail live right now because Google access failed. I flagged that so you can reconnect it.",
+               "Live Gmail access failed."
+             )}
+
+          _ ->
+            continue_live_gmail_request(tool_history, request_type, message_text, gmail_health)
+        end
+    end
+  end
+
+  defp continue_live_gmail_request(tool_history, request_type, message_text, gmail_health) do
+    case latest_tool_result(tool_history, "gmail_search_messages") do
+      nil ->
+        {:ok,
+         tool_call_response(
+           "Need a live Gmail search before answering this inbox question.",
+           "gmail_search_messages",
+           %{
+             "query" => build_live_gmail_query(request_type, message_text),
+             "max_results" => @live_inbox_search_max_results
+           }
+         )}
+
+      %{} = search_result when request_type == :latest_visible ->
+        {:ok, build_live_gmail_final_response(request_type, gmail_health, search_result)}
+
+      %{} when request_type == :triage ->
+        :continue
+    end
+  end
+
+  defp build_live_gmail_final_response(:latest_visible, gmail_health, search_result) do
+    messages = search_messages(search_result)
+
+    case List.first(sort_live_messages(messages)) do
+      nil ->
+        final_response(
+          latest_visible_no_results_text(gmail_health),
+          "Live Gmail search returned no visible messages."
+        )
+
+      message ->
+        final_response(
+          latest_visible_text(gmail_health, message),
+          "Returned the latest visible Gmail message."
+        )
+    end
+  end
+
+  defp latest_user_message(payload) do
+    payload
+    |> context()
+    |> map_value("recent_turns", [])
+    |> Enum.reverse()
+    |> Enum.find_value(fn turn ->
+      if string_value(turn, "role") == "user" do
+        normalize_message(string_value(turn, "text"))
+      end
+    end)
+  end
+
+  defp live_gmail_triage_request?(message) when is_binary(message) do
+    normalized = String.downcase(message)
+
+    contains_any?(normalized, ["email", "emails", "inbox", "gmail"]) and
+      contains_any?(normalized, ["today", "latest", "new", "triage", "changed", "recent"])
+  end
+
+  defp live_gmail_latest_request?(message) when is_binary(message) do
+    normalized = String.downcase(message)
+
+    contains_any?(normalized, ["latest email", "newest email", "latest gmail", "latest inbox"]) or
+      (contains_any?(normalized, ["latest", "newest", "most recent"]) and
+         contains_any?(normalized, ["email", "gmail", "inbox"]))
+  end
+
+  defp build_live_gmail_query(:latest_visible, _message_text),
+    do: "newer_than:#{@live_latest_lookback_days}d"
+
+  defp build_live_gmail_query(:triage, _message_text),
+    do: "in:inbox newer_than:#{@live_inbox_lookback_days}d -category:promotions -category:social"
+
+  defp tool_call_response(summary, tool_name, arguments) do
+    %{
+      "status" => "tool_calls",
+      "assistant_message" => "",
+      "message_class" => "assistant_reply",
+      "tool_calls" => [%{"tool" => tool_name, "arguments" => arguments}],
+      "summary" => summary
+    }
+  end
+
+  defp final_response(message, summary) do
+    %{
+      "status" => "final",
+      "assistant_message" => message,
+      "message_class" => "assistant_reply",
+      "tool_calls" => [],
+      "summary" => summary
+    }
+  end
+
+  defp search_messages(search_result) do
+    search_result
+    |> map_value("messages", [])
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp sort_live_messages(messages) do
+    Enum.sort_by(messages, &live_message_unix/1, :desc)
+  end
+
+  defp latest_visible_text(gmail_health, message) do
+    checked_through = checked_through_text(gmail_health, [message])
+
+    [
+      "I can see live Gmail#{checked_through}.",
+      "The latest visible email is #{live_message_label(message)}."
+    ]
+    |> Enum.join(" ")
+  end
+
+  defp latest_visible_no_results_text(gmail_health) do
+    "I checked live Gmail#{checked_through_text(gmail_health, [])}, but I didn't find a recent visible message to report."
+  end
+
+  defp checked_through_text(gmail_health, messages) do
+    freshest =
+      string_value(gmail_health, "freshest_visible_email_at")
+      |> parse_datetime()
+      |> case do
+        nil ->
+          messages
+          |> sort_live_messages()
+          |> List.first()
+          |> live_message_datetime()
+
+        datetime ->
+          datetime
+      end
+
+    case freshest do
+      %DateTime{} = datetime -> " through #{format_datetime(datetime)}"
+      _ -> ""
+    end
+  end
+
+  defp live_message_label(message) do
+    sender = sender_display_name(string_value(message, "from"))
+    subject = present_or(string_value(message, "subject"), "(no subject)")
+    account = string_value(message, "google_account_email")
+
+    case account do
+      value when is_binary(value) and value != "" ->
+        "#{sender} [#{value}] — #{subject}"
+
+      _ ->
+        "#{sender} — #{subject}"
+    end
+  end
+
+  defp live_message_unix(message) do
+    case live_message_datetime(message) do
+      %DateTime{} = datetime -> DateTime.to_unix(datetime, :second)
+      _ -> 0
+    end
+  end
+
+  defp live_message_datetime(message) do
+    message
+    |> map_value("internal_date")
+    |> parse_datetime()
+  end
+
+  defp parse_datetime(%DateTime{} = datetime), do: datetime
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp parse_datetime(%{"year" => year, "month" => month, "day" => day} = value)
+       when is_integer(year) and is_integer(month) and is_integer(day) do
+    with {:ok, date} <- Date.new(year, month, day),
+         {:ok, time} <-
+           Time.new(
+             Map.get(value, "hour", 0),
+             Map.get(value, "minute", 0),
+             Map.get(value, "second", 0)
+           ),
+         {:ok, datetime} <- DateTime.new(date, time, "Etc/UTC") do
+      datetime
+    else
+      _ -> nil
+    end
+  end
+
+  defp parse_datetime(_value), do: nil
+
+  defp format_datetime(%DateTime{} = datetime) do
+    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  end
+
+  defp sender_display_name(from) when is_binary(from) do
+    case Regex.run(~r/^"?([^"<]+?)"?\s*<[^>]+>$/, from) do
+      [_, name] -> String.trim(name)
+      _ -> String.trim(from)
+    end
+  end
+
+  defp sender_display_name(_from), do: "Unknown sender"
+
+  defp present_or(value, _fallback) when is_binary(value) and value != "", do: value
+  defp present_or(_value, fallback), do: fallback
+
+  defp contains_any?(value, needles) when is_binary(value) and is_list(needles) do
+    Enum.any?(needles, &String.contains?(value, &1))
+  end
+
+  defp tool_history(payload) do
+    Map.get(payload, :tool_history) || Map.get(payload, "tool_history") || []
+  end
+
+  defp context(payload) do
+    Map.get(payload, :context) || Map.get(payload, "context") || %{}
+  end
+
+  defp latest_tool_result(tool_history, tool_name) do
+    tool_history
+    |> Enum.reverse()
+    |> Enum.find_value(fn entry ->
+      if string_value(entry, "tool") == tool_name do
+        map_value(entry, "result")
+      end
+    end)
+  end
+
+  defp map_value(map, key, default \\ nil)
+
+  defp map_value(map, key, default) when is_map(map) do
+    atom_key = existing_atom_key(key)
+
+    cond do
+      Map.has_key?(map, key) ->
+        Map.get(map, key)
+
+      is_atom(atom_key) and Map.has_key?(map, atom_key) ->
+        Map.get(map, atom_key)
+
+      true ->
+        default
+    end
+  end
+
+  defp map_value(_map, _key, default), do: default
+
+  defp nested_value(map, [key]), do: map_value(map, key)
+  defp nested_value(map, [key | rest]), do: map |> map_value(key, %{}) |> nested_value(rest)
+  defp nested_value(_map, _keys), do: nil
+
+  defp string_value(map, key) do
+    case map_value(map, key) do
+      value when is_binary(value) -> String.trim(value)
+      value when is_atom(value) -> Atom.to_string(value)
+      _ -> nil
+    end
+  end
+
+  defp existing_atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp existing_atom_key(_key), do: nil
 end

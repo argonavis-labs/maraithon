@@ -1,0 +1,188 @@
+defmodule Maraithon.TelegramAssistantToolboxTest do
+  use Maraithon.DataCase, async: false
+
+  alias Maraithon.Accounts
+  alias Maraithon.Agents
+  alias Maraithon.Insights
+  alias Maraithon.OAuth
+  alias Maraithon.TelegramAssistant.Toolbox
+
+  setup do
+    original_gmail = Application.get_env(:maraithon, :gmail, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :gmail, original_gmail)
+    end)
+
+    :ok
+  end
+
+  test "get_open_work_summary flags stale Gmail insights when live inbox mail is newer" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    user_id = "toolbox-freshness-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "prompt_agent",
+        config: %{"name" => "Toolbox freshness agent", "prompt" => "Inspect work."}
+      })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:work@example.com", %{
+               access_token: "toolbox-work-token",
+               refresh_token: "toolbox-work-refresh",
+               metadata: %{"account_email" => "work@example.com"}
+             })
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      ["Bearer toolbox-work-token"] = Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "maxResults=1"
+      assert conn.query_string =~ "labelIds=INBOX"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "live-1"}]}))
+    end)
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/live-1", fn conn ->
+      ["Bearer toolbox-work-token"] = Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "id" => "live-1",
+          "threadId" => "thread-live-1",
+          "snippet" => "Fresh inbox item",
+          "labelIds" => ["INBOX"],
+          "internalDate" => "1775091600000",
+          "payload" => %{
+            "headers" => [
+              %{"name" => "From", "value" => "founder@example.com"},
+              %{"name" => "Subject", "value" => "Fresh thread"}
+            ]
+          }
+        })
+      )
+    end)
+
+    assert {:ok, [_insight]} =
+             Insights.record_many(user_id, agent.id, [
+               %{
+                 "source" => "gmail",
+                 "category" => "reply_urgent",
+                 "title" => "Old Gmail insight",
+                 "summary" => "This open insight is old.",
+                 "recommended_action" => "Reply in the old thread.",
+                 "priority" => 90,
+                 "confidence" => 0.9,
+                 "dedupe_key" => "toolbox-freshness:old",
+                 "tracking_key" => "toolbox-freshness:old",
+                 "source_occurred_at" => ~U[2026-03-01 12:00:00Z]
+               }
+             ])
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert get_in(result, [:source_health, :gmail, :status]) == "ok"
+    assert get_in(result, [:source_health, :gmail, :insights_stale]) == true
+
+    assert get_in(result, [:source_health, :gmail, :freshest_visible_email_at]) ==
+             "2026-04-02T01:00:00.000Z"
+
+    assert get_in(result, [:source_health, :gmail, :latest_open_insight_at]) ==
+             "2026-03-01T12:00:00.000000Z"
+
+    assert get_in(result, [:source_health, :gmail, :recommended_next_step]) =~
+             "Use gmail_search_messages"
+  end
+
+  test "todo tools can persist, search, and resolve durable work" do
+    user_id = "toolbox-todos-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, persisted} =
+             Toolbox.execute(
+               "upsert_todos",
+               %{
+                 "todos" => [
+                   gmail_todo("thread-billing", "Billing account past due", 98),
+                   gmail_todo("thread-oauth", "OAuth verification reply owed", 92)
+                 ]
+               },
+               runtime_context
+             )
+
+    assert persisted.count == 2
+
+    assert {:ok, billing_search} =
+             Toolbox.execute(
+               "list_todos",
+               %{
+                 "query" => "billing",
+                 "statuses" => ["open"],
+                 "kind" => "gmail_triage"
+               },
+               runtime_context
+             )
+
+    assert billing_search.count == 1
+    [billing_todo] = billing_search.todos
+    assert billing_todo.title =~ "Billing"
+
+    assert {:ok, resolved} =
+             Toolbox.execute(
+               "resolve_todo",
+               %{
+                 "todo_id" => billing_todo.id,
+                 "status" => "done",
+                 "resolution_note" => "Handled in billing console.",
+                 "include_remaining" => true,
+                 "kind" => "gmail_triage"
+               },
+               runtime_context
+             )
+
+    assert resolved.todo.status == "done"
+    assert resolved.remaining_count == 1
+    [remaining_todo] = resolved.remaining_todos
+    assert remaining_todo.title =~ "OAuth"
+    refute remaining_todo.title =~ "Billing"
+  end
+
+  defp gmail_todo(thread_id, title, priority) do
+    %{
+      "source" => "gmail",
+      "kind" => "gmail_triage",
+      "attention_mode" => "act_now",
+      "title" => title,
+      "summary" => "This Gmail thread still needs a reply.",
+      "next_action" => "Reply in-thread and close the loop.",
+      "priority" => priority,
+      "source_item_id" => thread_id,
+      "source_occurred_at" => "2026-04-02T04:19:00Z",
+      "dedupe_key" => "gmail:gmail_triage:#{thread_id}",
+      "metadata" => %{
+        "thread_id" => thread_id,
+        "subject" => title,
+        "from" => "ops@example.com",
+        "google_account_email" => "kent@voteagora.com"
+      }
+    }
+  end
+end

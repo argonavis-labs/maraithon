@@ -129,6 +129,7 @@ defmodule Maraithon.TelegramInterpreter do
     - If the user is clearly asking to send or rewrite something, use candidate_action.
     - If the user is asking why a suggestion mattered, use intent question_about_insight.
     - If the user is asking generally what they owe, use general_chat and answer from open insights.
+    - If the user is asking about latest, new, or today-specific inbox/email triage, do not confidently answer from open insights alone. Say you need a live inbox inspection.
     - If you infer a durable preference from feedback, assistant_reply should explicitly acknowledge the lesson in plain language and say how Maraithon will treat similar items next time.
     - Use the durable user profile to adapt suggestions and explanations to this user's established working style.
     - Auto-save safety is enforced by the app, but your confidence must reflect your certainty.

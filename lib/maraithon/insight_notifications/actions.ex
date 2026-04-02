@@ -13,6 +13,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.Todos
   alias Maraithon.Tools
   alias Maraithon.UserMemory
 
@@ -462,6 +463,16 @@ defmodule Maraithon.InsightNotifications.Actions do
       metadata: merged_metadata
     )
     |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        case Todos.sync_from_insight(updated) do
+          {:ok, _todo} -> {:ok, updated}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp put_action_state(%Delivery{} = delivery, action_state) when is_map(action_state) do

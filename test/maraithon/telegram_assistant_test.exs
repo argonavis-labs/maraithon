@@ -9,9 +9,11 @@ defmodule Maraithon.TelegramAssistantTest do
   alias Maraithon.InsightNotifications
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
+  alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.{PreparedAction, PushReceipt, Run, Step}
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Todos
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TestSupport.TelegramAssistantClientStub
   alias Maraithon.UserMemory.Profile
@@ -301,6 +303,312 @@ defmodule Maraithon.TelegramAssistantTest do
 
     result_message = last_telegram_message(:send)
     assert result_message.text == "Deleted the agent."
+  end
+
+  test "assistant can prepare and create a project through conversational confirmation", %{
+    user_id: user_id
+  } do
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_project_create,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_project_create]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_project_create, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{
+               "tool" => "prepare_project_action",
+               "arguments" => %{
+                 "action" => "create",
+                 "attrs" => %{
+                   "name" => "Maraithon Product",
+                   "summary" => "Core product work and operator follow-through."
+                 }
+               }
+             }
+           ],
+           "summary" => "Prepare project creation."
+         }}
+      else
+        {:ok,
+         %{
+           "status" => "final",
+           "assistant_message" =>
+             "Create project Maraithon Product. Reply `yes` or use the buttons to create it, or `no` to cancel.",
+           "message_class" => "approval_prompt",
+           "tool_calls" => [],
+           "summary" => "Ask for project confirmation."
+         }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9104, text: "Create a project for Maraithon Product"}
+      })
+
+    approval = last_telegram_message(:send)
+    assert approval.text =~ "Create project Maraithon Product"
+
+    prepared_action =
+      Repo.one!(
+        from prepared_action in PreparedAction,
+          where: prepared_action.user_id == ^user_id,
+          order_by: [desc: prepared_action.inserted_at],
+          limit: 1
+      )
+
+    assert prepared_action.status == "awaiting_confirmation"
+    assert prepared_action.action_type == "project_create"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9105, text: "yes"}
+      })
+
+    project = Projects.get_project_by_slug_for_user("maraithon-product", user_id)
+    assert project.name == "Maraithon Product"
+    assert project.summary =~ "Core product work"
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "executed"
+
+    result_message = last_telegram_message(:send)
+    assert result_message.text == "Created the project."
+  end
+
+  test "assistant can inspect a project by name and return project-manager recommendations", %{
+    user_id: user_id
+  } do
+    {:ok, project} =
+      Projects.create_project(user_id, %{
+        "name" => "Maraithon Product",
+        "summary" => "Roadmap and operator UX"
+      })
+
+    {:ok, planner_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        project_id: project.id,
+        behavior: "github_product_planner",
+        config: %{"name" => "Maraithon PM", "repo_full_name" => "kent/bliss/maraithon"}
+      })
+
+    {:ok, _item} =
+      Projects.create_project_item(project, %{
+        "item_type" => "grant",
+        "title" => "Repo scope",
+        "content" => "Project manager can inspect kent/bliss/maraithon."
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, planner_agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Project workspace",
+          "summary" => "Ship a real project dashboard with local memory and agent attachment.",
+          "recommended_action" => "Start with projects on the dashboard.",
+          "priority" => 97,
+          "confidence" => 0.92,
+          "dedupe_key" => "telegram-assistant:project-inspection:1",
+          "metadata" => %{"why_now" => "The app needs a first-class project surface."}
+        }
+      ])
+
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_project_inspect,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_project_inspect]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_project_inspect, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        assert Enum.any?(payload.tools, &(&1["name"] == "inspect_project"))
+
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{
+               "tool" => "inspect_project",
+               "arguments" => %{"project_name" => "Maraithon Product"}
+             }
+           ],
+           "summary" => "Need the project recommendation context."
+         }}
+      else
+        [history_entry] = payload.tool_history
+        assert history_entry["tool"] == "inspect_project"
+
+        {:ok,
+         %{
+           "status" => "final",
+           "assistant_message" =>
+             "For Maraithon Product, the top next feature is Project workspace. The project manager recommends starting with projects on the dashboard.",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [],
+           "summary" => "Returned the project recommendation."
+         }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9106,
+          text: "What feature should I work on next for Maraithon Product?"
+        }
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "Project workspace"
+    assert reply.text =~ "projects on the dashboard"
+  end
+
+  test "assistant can persist inbox work as todos and resolve one conversationally", %{
+    user_id: user_id
+  } do
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_todos,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_todos]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_todos, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "upsert_todos",
+                 "arguments" => %{
+                   "todos" => [
+                     gmail_todo_payload("thread-billing", "Billing account past due", 98),
+                     gmail_todo_payload("thread-oauth", "OAuth verification reply owed", 92)
+                   ]
+                 }
+               }
+             ],
+             "summary" => "Persisted today's actionable inbox work as todos."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "upsert_todos"
+          assert Enum.count(history_entry["result"]["todos"]) == 2
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" =>
+               "Top inbox todos: 1. Billing account past due. 2. OAuth verification reply owed.",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Returned the persisted todo list."
+           }}
+
+        2 ->
+          assert Enum.count(payload.context.todos) == 2
+
+          billing_todo =
+            Enum.find(payload.context.todos, fn todo ->
+              String.contains?(todo.title, "Billing")
+            end)
+
+          assert billing_todo
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "resolve_todo",
+                 "arguments" => %{
+                   "todo_id" => billing_todo.id,
+                   "status" => "done",
+                   "resolution_note" => "Handled by the user.",
+                   "include_remaining" => true,
+                   "kind" => "gmail_triage"
+                 }
+               }
+             ],
+             "summary" => "Resolved the billing todo and fetched the remaining work."
+           }}
+
+        3 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "resolve_todo"
+          assert history_entry["result"]["remaining_count"] == 1
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" =>
+               "Billing is closed. Remaining inbox todo: OAuth verification reply owed.",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Returned the remaining todo."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9107, text: "What are the emails to triage today?"}
+      })
+
+    first_reply = last_telegram_message(:send)
+    assert first_reply.text =~ "Billing account past due"
+    assert first_reply.text =~ "OAuth verification reply owed"
+
+    open_todos = Todos.list_open_for_user(user_id, kind: "gmail_triage")
+    assert Enum.count(open_todos) == 2
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9108, text: "Handled the billing, what else?"}
+      })
+
+    second_reply = last_telegram_message(:send)
+    assert second_reply.text =~ "Billing is closed"
+    assert second_reply.text =~ "OAuth verification"
+    refute second_reply.text =~ "Billing account past due."
+
+    [remaining_todo] = Todos.list_open_for_user(user_id, kind: "gmail_triage")
+    assert remaining_todo.title =~ "OAuth verification"
   end
 
   test "insight dispatch goes through the unified push broker and records receipts", %{
@@ -684,6 +992,27 @@ defmodule Maraithon.TelegramAssistantTest do
   defp set_assistant(fun) when is_function(fun, 1) do
     config = Application.get_env(:maraithon, :telegram_assistant, [])
     Application.put_env(:maraithon, :telegram_assistant, Keyword.put(config, :next_step, fun))
+  end
+
+  defp gmail_todo_payload(thread_id, title, priority) do
+    %{
+      "source" => "gmail",
+      "kind" => "gmail_triage",
+      "attention_mode" => "act_now",
+      "title" => title,
+      "summary" => "This thread still needs a reply from the user.",
+      "next_action" => "Reply in-thread and close the loop.",
+      "priority" => priority,
+      "source_item_id" => thread_id,
+      "source_occurred_at" => "2026-04-02T04:19:00Z",
+      "dedupe_key" => "gmail:gmail_triage:#{thread_id}",
+      "metadata" => %{
+        "thread_id" => thread_id,
+        "subject" => title,
+        "from" => "ops@example.com",
+        "google_account_email" => "kent@voteagora.com"
+      }
+    }
   end
 
   defp configure_liveness(opts) do

@@ -2,6 +2,7 @@ defmodule Maraithon.Insights.RefreshTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Agents
+  alias Maraithon.Accounts
   alias Maraithon.Insights
   alias Maraithon.Insights.Refresh
 
@@ -18,6 +19,7 @@ defmodule Maraithon.Insights.RefreshTest do
 
   setup do
     user_id = "refresh-user@example.com"
+    Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, founder_agent} =
       Agents.create_agent(%{

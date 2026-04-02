@@ -3,6 +3,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   Bounded multi-step runner for Telegram assistant chat and prepared actions.
   """
 
+  alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.{Context, Run, Toolbox}
@@ -84,6 +85,20 @@ defmodule Maraithon.TelegramAssistant.Runner do
         case Runtime.delete_agent(Map.fetch!(payload, "agent_id")) do
           :ok -> {:ok, %{message: "Deleted the agent."}}
           {:error, reason} -> {:error, reason}
+        end
+
+      "project_create" ->
+        Projects.create_project(Map.fetch!(payload, "user_id"), Map.fetch!(payload, "attrs"))
+        |> map_project_result("Created the project.")
+
+      "project_update" ->
+        case Projects.get_project(Map.fetch!(payload, "project_id")) do
+          nil ->
+            {:error, :project_not_found}
+
+          project ->
+            Projects.update_project(project, Map.fetch!(payload, "attrs"))
+            |> map_project_result("Updated the project.")
         end
 
       action_type ->
@@ -418,6 +433,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
       chat_id: Map.fetch!(attrs, :chat_id),
       conversation_id: conversation_id(Map.get(attrs, :conversation)),
       context: context,
+      default_project_id:
+        Map.get(defaults, :default_project_id) || defaults["default_project_id"],
+      default_project_slug:
+        Map.get(defaults, :default_project_slug) || defaults["default_project_slug"],
       default_slack_team_id:
         Map.get(defaults, :default_slack_team_id) || defaults["default_slack_team_id"]
     }
@@ -609,6 +628,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp map_agent_result({:error, reason}, _success_message), do: {:error, reason}
+
+  defp map_project_result({:ok, result}, success_message) do
+    {:ok, result |> normalize_payload() |> ensure_map() |> Map.put("message", success_message)}
+  end
+
+  defp map_project_result({:error, reason}, _success_message), do: {:error, reason}
 
   defp stringify_map(value), do: value |> normalize_payload() |> ensure_map()
 

@@ -13,9 +13,11 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.OAuth
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
+  alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.Todos
   alias Maraithon.Travel
   alias Maraithon.UserMemory
 
@@ -36,7 +38,9 @@ defmodule Maraithon.TelegramAssistant.Context do
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
       user_memory: UserMemory.prompt_context(user_id),
       open_insights: serialize_open_insights(user_id),
+      todos: serialize_todos(user_id),
       connected_accounts: serialize_connected_accounts(user_id),
+      projects: serialize_projects(user_id),
       active_agents: serialize_agents(user_id),
       defaults: tool_defaults(user_id)
     }
@@ -143,14 +147,20 @@ defmodule Maraithon.TelegramAssistant.Context do
     end)
   end
 
+  defp serialize_todos(user_id) do
+    Todos.summarize_for_prompt(user_id, 8)
+  end
+
   defp serialize_agents(user_id) do
-    Agents.list_agents(user_id: user_id)
+    Agents.list_agents(user_id: user_id, preload: [:project])
     |> Enum.map(fn agent ->
       %{
         id: agent.id,
         behavior: agent.behavior,
         status: agent.status,
         name: get_in(agent.config || %{}, ["name"]),
+        project_id: agent.project_id,
+        project_name: agent.project && agent.project.name,
         subscriptions: get_in(agent.config || %{}, ["subscribe"]) || [],
         tools: get_in(agent.config || %{}, ["tools"]) || [],
         updated_at: agent.updated_at
@@ -158,13 +168,31 @@ defmodule Maraithon.TelegramAssistant.Context do
     end)
   end
 
+  defp serialize_projects(user_id) do
+    Projects.list_projects(user_id: user_id)
+    |> Enum.map(fn project ->
+      %{
+        id: project.id,
+        name: project.name,
+        slug: project.slug,
+        status: project.status,
+        priority: project.priority,
+        summary: project.summary,
+        description: project.description
+      }
+    end)
+  end
+
   defp tool_defaults(user_id) do
     oauth_providers = OAuth.list_user_tokens(user_id) |> Enum.map(& &1.provider)
     slack_team_ids = extract_slack_team_ids(oauth_providers)
+    default_project = Projects.default_project_for_user(user_id)
 
     %{
       default_slack_team_id: List.first(slack_team_ids),
       slack_team_ids: slack_team_ids,
+      default_project_id: default_project && default_project.id,
+      default_project_slug: default_project && default_project.slug,
       linear_connected: Enum.member?(oauth_providers, "linear"),
       provider_ids: oauth_providers
     }

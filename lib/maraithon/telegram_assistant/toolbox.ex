@@ -6,15 +6,20 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Admin
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
+  alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Linear, as: LinearOAuth
+  alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
+  alias Maraithon.Todos
   alias Maraithon.Tools
 
   @immediate_agent_actions ~w(start stop restart)
+  @gmail_insight_stale_threshold_hours 72
   @external_action_tools %{
     "gmail_send" => %{
       tool: "gmail_send_message",
@@ -65,6 +70,71 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "type" => "object",
           "properties" => %{
             "insight_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "list_todos",
+        "List the linked user's persisted todos and their statuses.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "statuses" => %{"type" => "array", "items" => %{"type" => "string"}},
+            "source" => %{"type" => "string"},
+            "kind" => %{"type" => "string"},
+            "attention_mode" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
+          }
+        }
+      ),
+      tool_definition(
+        "upsert_todos",
+        "Create or update persisted todos for the linked user.",
+        %{
+          "type" => "object",
+          "required" => ["todos"],
+          "properties" => %{
+            "todos" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "required" => ["source", "title", "summary", "next_action"],
+                "properties" => %{
+                  "source" => %{"type" => "string"},
+                  "kind" => %{"type" => "string"},
+                  "attention_mode" => %{"type" => "string"},
+                  "title" => %{"type" => "string"},
+                  "summary" => %{"type" => "string"},
+                  "next_action" => %{"type" => "string"},
+                  "priority" => %{"type" => "integer"},
+                  "status" => %{"type" => "string"},
+                  "source_item_id" => %{"type" => "string"},
+                  "source_occurred_at" => %{"type" => "string"},
+                  "dedupe_key" => %{"type" => "string"},
+                  "metadata" => %{"type" => "object"}
+                }
+              }
+            }
+          }
+        }
+      ),
+      tool_definition(
+        "resolve_todo",
+        "Mark one persisted todo done, dismissed, or snoozed.",
+        %{
+          "type" => "object",
+          "required" => ["todo_id"],
+          "properties" => %{
+            "todo_id" => %{"type" => "string"},
+            "status" => %{"type" => "string"},
+            "resolution_note" => %{"type" => "string"},
+            "snooze_until" => %{"type" => "string"},
+            "include_remaining" => %{"type" => "boolean"},
+            "source" => %{"type" => "string"},
+            "kind" => %{"type" => "string"},
+            "attention_mode" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
           }
         }
       ),
@@ -156,6 +226,43 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "list_projects",
+        "List the linked user's projects and their compact operating summaries.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "status" => %{"type" => "string"},
+            "priority" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "inspect_project",
+        "Inspect one project by id, slug, or human name, including local memory, attached agents, and top project-manager recommendations.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "prepare_project_action",
+        "Prepare creation or update of a project for confirmation.",
+        %{
+          "type" => "object",
+          "required" => ["action"],
+          "properties" => %{
+            "action" => %{"type" => "string"},
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "attrs" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
         "list_agents",
         "List the linked user's saved agents and runtime status.",
         %{
@@ -225,6 +332,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "inspect_open_insight" ->
         inspect_open_insight(runtime_context, args)
 
+      "list_todos" ->
+        list_todos(runtime_context, args)
+
+      "upsert_todos" ->
+        upsert_todos(runtime_context, args)
+
+      "resolve_todo" ->
+        resolve_todo(runtime_context, args)
+
       "gmail_search_messages" ->
         inject_user_and_execute("gmail_search", runtime_context, args)
 
@@ -245,6 +361,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "notaui_list_tasks" ->
         inject_user_and_execute("notaui_list_tasks", runtime_context, args)
+
+      "list_projects" ->
+        list_projects(runtime_context, args)
+
+      "inspect_project" ->
+        inspect_project(runtime_context, args)
+
+      "prepare_project_action" ->
+        prepare_project_action(runtime_context, args)
 
       "list_agents" ->
         list_agents(runtime_context, args)
@@ -270,8 +395,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     user_id = runtime_context.user_id
     limit = normalize_limit(Map.get(args, "limit"), 5, 10)
 
+    open_insights = Insights.list_open_for_user(user_id, limit: max(limit, 20))
+
     insights =
-      Insights.list_open_for_user(user_id, limit: limit)
+      open_insights
+      |> Enum.take(limit)
       |> Enum.map(fn insight ->
         %{
           id: insight.id,
@@ -281,6 +409,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           recommended_action: insight.recommended_action
         }
       end)
+
+    source_health = source_health_summary(user_id, open_insights)
+    todos = Todos.list_open_for_user(user_id, limit: limit)
 
     agents =
       Agents.list_agents(user_id: user_id)
@@ -297,9 +428,155 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
      %{
        insight_count: length(insights),
        top_insights: insights,
+       todo_count: length(todos),
+       todos: Enum.map(todos, &serialize_todo_summary/1),
+       source_health: source_health,
        agent_count: length(agents),
-       agents: agents
+       agents: agents,
+       project_count: length(get_in(runtime_context.context, [:projects]) || []),
+       projects: get_in(runtime_context.context, [:projects]) || []
      }}
+  end
+
+  defp list_todos(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 8, 20)
+    statuses = Map.get(args, "statuses")
+
+    todos =
+      if is_list(statuses) or is_binary(statuses) do
+        Todos.list_for_user(runtime_context.user_id,
+          limit: limit,
+          statuses: statuses,
+          source: Map.get(args, "source"),
+          kind: Map.get(args, "kind"),
+          attention_mode: Map.get(args, "attention_mode"),
+          query: Map.get(args, "query")
+        )
+      else
+        Todos.list_open_for_user(runtime_context.user_id,
+          limit: limit,
+          source: Map.get(args, "source"),
+          kind: Map.get(args, "kind"),
+          attention_mode: Map.get(args, "attention_mode"),
+          query: Map.get(args, "query")
+        )
+      end
+
+    {:ok,
+     %{
+       count: length(todos),
+       todos: Enum.map(todos, &serialize_todo_detail/1)
+     }}
+  end
+
+  defp upsert_todos(runtime_context, args) do
+    todos = Map.get(args, "todos", [])
+
+    if is_list(todos) do
+      with {:ok, persisted} <-
+             Todos.upsert_many(runtime_context.user_id, Enum.filter(todos, &is_map/1)) do
+        {:ok,
+         %{
+           count: length(persisted),
+           todos: Enum.map(persisted, &serialize_todo_detail/1)
+         }}
+      end
+    else
+      {:error, "invalid_todos"}
+    end
+  end
+
+  defp resolve_todo(runtime_context, args) do
+    with {:ok, todo_id} <- required_string(args, "todo_id") do
+      resolution_note = Map.get(args, "resolution_note")
+      include_remaining = Map.get(args, "include_remaining") == true
+      limit = normalize_limit(Map.get(args, "limit"), 5, 20)
+
+      result =
+        case Map.get(args, "status", "done") do
+          "done" ->
+            Todos.mark_done(runtime_context.user_id, todo_id, note: resolution_note)
+
+          "dismissed" ->
+            Todos.dismiss(runtime_context.user_id, todo_id, note: resolution_note)
+
+          "snoozed" ->
+            with {:ok, snooze_until} <- resolve_snooze_until(args) do
+              Todos.snooze(runtime_context.user_id, todo_id, snooze_until, note: resolution_note)
+            end
+
+          _ ->
+            {:error, "unsupported_todo_status"}
+        end
+
+      with {:ok, todo} <- result do
+        remaining =
+          if include_remaining do
+            Todos.list_open_for_user(runtime_context.user_id,
+              limit: limit,
+              source: Map.get(args, "source"),
+              kind: Map.get(args, "kind"),
+              attention_mode: Map.get(args, "attention_mode")
+            )
+          else
+            []
+          end
+
+        {:ok,
+         %{
+           todo: serialize_todo_detail(todo),
+           remaining_count: length(remaining),
+           remaining_todos: Enum.map(remaining, &serialize_todo_detail/1)
+         }}
+      end
+    end
+  end
+
+  defp list_projects(runtime_context, args) do
+    Projects.list_projects(user_id: runtime_context.user_id)
+    |> Enum.filter(&matches_project_filter?(&1, args))
+    |> Enum.map(&serialize_project_summary/1)
+    |> then(&{:ok, %{count: length(&1), projects: &1}})
+  end
+
+  defp inspect_project(runtime_context, args) do
+    with %{} = project <- resolve_project(runtime_context, args) do
+      agents =
+        Agents.list_agents(user_id: runtime_context.user_id, project_id: project.id)
+        |> Enum.map(fn agent ->
+          %{
+            id: agent.id,
+            name: get_in(agent.config || %{}, ["name"]),
+            behavior: agent.behavior,
+            status: agent.status,
+            updated_at: agent.updated_at
+          }
+        end)
+
+      items =
+        Projects.list_project_items(
+          user_id: runtime_context.user_id,
+          project_id: project.id,
+          limit: 6
+        )
+        |> Enum.map(&serialize_project_item/1)
+
+      recommendations =
+        Projects.list_project_recommendations(project.id, runtime_context.user_id, limit: 3)
+
+      {:ok,
+       %{
+         project: serialize_project_detail(project),
+         item_count: length(items),
+         items: items,
+         agent_count: length(agents),
+         agents: agents,
+         recommendation_count: length(recommendations),
+         recommendations: recommendations
+       }}
+    else
+      nil -> {:error, "project_not_found"}
+    end
   end
 
   defp inspect_open_insight(runtime_context, args) do
@@ -371,7 +648,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp list_agents(runtime_context, args) do
-    Agents.list_agents(user_id: runtime_context.user_id)
+    Agents.list_agents(user_id: runtime_context.user_id, preload: [:project])
     |> Enum.filter(&matches_agent_filter?(&1, args))
     |> Enum.map(fn agent ->
       %{
@@ -379,6 +656,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         name: get_in(agent.config || %{}, ["name"]),
         behavior: agent.behavior,
         status: agent.status,
+        project_id: agent.project_id,
+        project_name: agent.project && agent.project.name,
         started_at: agent.started_at,
         updated_at: agent.updated_at
       }
@@ -503,7 +782,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     launch = stringify_map(Map.get(args, "launch", %{}))
 
     with {:ok, start_params} <- AgentBuilder.build_start_params(launch, runtime_context.user_id) do
-      preview_text = create_agent_preview(start_params)
+      preview_text = create_agent_preview(runtime_context, start_params)
 
       expires_at =
         DateTime.add(DateTime.utc_now(), TelegramAssistant.confirmation_window_seconds(), :second)
@@ -548,7 +827,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       with {:ok, update_params} <-
              AgentBuilder.build_start_params(launch, runtime_context.user_id) do
-        preview_text = update_agent_preview(agent, update_params)
+        preview_text = update_agent_preview(runtime_context, agent, update_params)
 
         expires_at =
           DateTime.add(
@@ -567,7 +846,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           target_id: agent.id,
           payload: %{
             "agent_id" => agent.id,
-            "update_params" => Map.take(update_params, ["behavior", "config", "budget"]),
+            "update_params" =>
+              Map.take(update_params, ["behavior", "config", "budget", "project_id"]),
             "launch" => launch
           },
           preview_text: preview_text,
@@ -675,6 +955,116 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp prepare_project_action(runtime_context, args) do
+    with true <- TelegramAssistant.write_tools_enabled?() || {:error, "write_tools_disabled"},
+         {:ok, action} <- required_string(args, "action") do
+      case action do
+        "create" ->
+          prepare_project_create(runtime_context, args)
+
+        "update" ->
+          prepare_project_update(runtime_context, args)
+
+        _ ->
+          {:error, "unsupported_project_action"}
+      end
+    else
+      false -> {:error, "write_tools_disabled"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp prepare_project_create(runtime_context, args) do
+    attrs = stringify_map(Map.get(args, "attrs", %{}))
+
+    case validate_project_attrs(attrs) do
+      {:ok, validated_attrs} ->
+        preview_text = create_project_preview(validated_attrs)
+
+        expires_at =
+          DateTime.add(
+            DateTime.utc_now(),
+            TelegramAssistant.confirmation_window_seconds(),
+            :second
+          )
+
+        TelegramAssistant.create_prepared_action(%{
+          user_id: runtime_context.user_id,
+          chat_id: runtime_context.chat_id,
+          conversation_id: runtime_context.conversation_id,
+          run_id: runtime_context.run_id,
+          action_type: "project_create",
+          target_type: "project",
+          payload: %{"user_id" => runtime_context.user_id, "attrs" => validated_attrs},
+          preview_text: preview_text,
+          status: "awaiting_confirmation",
+          expires_at: expires_at
+        })
+        |> case do
+          {:ok, prepared_action} ->
+            {:ok,
+             %{
+               status: "awaiting_confirmation",
+               prepared_action_id: prepared_action.id,
+               preview_text: preview_text,
+               requires_confirmation: true,
+               message:
+                 "#{preview_text} Reply `yes` or use the buttons to create it, or `no` to cancel."
+             }}
+
+          {:error, reason} ->
+            {:error, inspect(reason)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp prepare_project_update(runtime_context, args) do
+    attrs = stringify_map(Map.get(args, "attrs", %{}))
+
+    with %{} = project <- resolve_project(runtime_context, args) || {:error, "project_not_found"},
+         {:ok, validated_attrs} <- validate_project_attrs(attrs, allow_empty?: false) do
+      preview_text = update_project_preview(project, validated_attrs)
+
+      expires_at =
+        DateTime.add(DateTime.utc_now(), TelegramAssistant.confirmation_window_seconds(), :second)
+
+      TelegramAssistant.create_prepared_action(%{
+        user_id: runtime_context.user_id,
+        chat_id: runtime_context.chat_id,
+        conversation_id: runtime_context.conversation_id,
+        run_id: runtime_context.run_id,
+        action_type: "project_update",
+        target_type: "project",
+        target_id: project.id,
+        payload: %{"project_id" => project.id, "attrs" => validated_attrs},
+        preview_text: preview_text,
+        status: "awaiting_confirmation",
+        expires_at: expires_at
+      })
+      |> case do
+        {:ok, prepared_action} ->
+          {:ok,
+           %{
+             status: "awaiting_confirmation",
+             prepared_action_id: prepared_action.id,
+             preview_text: preview_text,
+             requires_confirmation: true,
+             message:
+               "#{preview_text} Reply `yes` or use the buttons to apply the update, or `no` to cancel."
+           }}
+
+        {:error, reason} ->
+          {:error, inspect(reason)}
+      end
+    else
+      nil -> {:error, "project_not_found"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp inject_user_and_execute(tool_name, runtime_context, args) do
     tool_name
     |> Tools.execute(Map.put(args, "user_id", runtime_context.user_id))
@@ -729,6 +1119,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
     (is_nil(status) or agent.status == status) and
       (is_nil(behavior) or agent.behavior == behavior)
+  end
+
+  defp matches_project_filter?(project, args) do
+    status = Map.get(args, "status")
+    priority = Map.get(args, "priority")
+
+    (is_nil(status) or project.status == status) and
+      (is_nil(priority) or project.priority == priority)
   end
 
   defp perform_agent_action("start", agent_id), do: Runtime.start_existing_agent(agent_id)
@@ -787,16 +1185,30 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp external_target_id(_action_type, payload),
     do: Map.get(payload, "issue_id") || Map.get(payload, "state_id")
 
-  defp create_agent_preview(start_params) do
+  defp create_agent_preview(runtime_context, start_params) do
     config = Map.get(start_params, "config", %{})
     name = Map.get(config, "name") || start_params["behavior"]
-    "Create agent #{name} using behavior #{start_params["behavior"]}."
+
+    project_suffix =
+      case project_name(runtime_context, Map.get(start_params, "project_id")) do
+        nil -> ""
+        project_name -> " and attach it to project #{project_name}"
+      end
+
+    "Create agent #{name} using behavior #{start_params["behavior"]}#{project_suffix}."
   end
 
-  defp update_agent_preview(agent, update_params) do
+  defp update_agent_preview(runtime_context, agent, update_params) do
     name = get_in(agent.config || %{}, ["name"]) || agent.behavior
     behavior = Map.get(update_params, "behavior", agent.behavior)
-    "Update agent #{name} with behavior #{behavior} and apply the new configuration."
+
+    project_suffix =
+      case project_name(runtime_context, Map.get(update_params, "project_id", agent.project_id)) do
+        nil -> ""
+        project_name -> " Attach it to project #{project_name}."
+      end
+
+    "Update agent #{name} with behavior #{behavior} and apply the new configuration.#{project_suffix}"
   end
 
   defp delete_agent_preview(agent) do
@@ -829,6 +1241,273 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     get_in(agent.config || %{}, ["name"]) || agent.behavior
   end
 
+  defp create_project_preview(attrs) do
+    "Create project #{Map.get(attrs, "name")}."
+  end
+
+  defp update_project_preview(project, attrs) do
+    case Map.get(attrs, "name") do
+      value when is_binary(value) and value != "" ->
+        "Update project #{project.name} and rename it to #{value}."
+
+      _ ->
+        "Update project #{project.name}."
+    end
+  end
+
+  defp validate_project_attrs(attrs, opts \\ []) when is_map(attrs) do
+    allow_empty? = Keyword.get(opts, :allow_empty?, true)
+    permitted = Map.take(attrs, ["name", "slug", "status", "priority", "description", "summary"])
+
+    cond do
+      map_size(permitted) == 0 and not allow_empty? ->
+        {:error, "missing_project_attrs"}
+
+      Map.get(permitted, "name") in [nil, ""] and allow_empty? ->
+        {:error, "missing_project_name"}
+
+      true ->
+        {:ok, permitted}
+    end
+  end
+
+  defp resolve_project(runtime_context, args) do
+    case optional_string_arg(args, "project_id") do
+      {:ok, project_id} ->
+        Projects.get_project_for_user(project_id, runtime_context.user_id)
+
+      :missing ->
+        case optional_string_arg(args, "project_slug") do
+          {:ok, slug} ->
+            Projects.get_project_by_slug_for_user(slug, runtime_context.user_id)
+
+          :missing ->
+            case optional_string_arg(args, "project_name") do
+              {:ok, name} -> Projects.get_project_by_name_for_user(name, runtime_context.user_id)
+              :missing -> default_project(runtime_context)
+              {:error, _reason} -> nil
+            end
+
+          {:error, _reason} ->
+            nil
+        end
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
+  defp default_project(runtime_context) do
+    case runtime_context.default_project_id do
+      value when is_binary(value) and value != "" ->
+        Projects.get_project_for_user(value, runtime_context.user_id)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp serialize_project_summary(project) do
+    %{
+      id: project.id,
+      name: project.name,
+      slug: project.slug,
+      status: project.status,
+      priority: project.priority,
+      summary: project.summary
+    }
+  end
+
+  defp serialize_project_detail(project) do
+    %{
+      id: project.id,
+      name: project.name,
+      slug: project.slug,
+      status: project.status,
+      priority: project.priority,
+      description: project.description,
+      summary: project.summary,
+      metadata: project.metadata || %{},
+      updated_at: project.updated_at
+    }
+  end
+
+  defp serialize_project_item(item) do
+    %{
+      id: item.id,
+      item_type: item.item_type,
+      title: item.title,
+      content: item.content,
+      status: item.status,
+      inserted_at: item.inserted_at
+    }
+  end
+
+  defp project_name(_runtime_context, nil), do: nil
+  defp project_name(_runtime_context, ""), do: nil
+
+  defp project_name(runtime_context, project_id) when is_binary(project_id) do
+    case Projects.get_project_for_user(project_id, runtime_context.user_id) do
+      %{} = project -> project.name
+      nil -> nil
+    end
+  end
+
+  defp source_health_summary(user_id, open_insights)
+       when is_binary(user_id) and is_list(open_insights) do
+    gmail_accounts =
+      ConnectedAccounts.list_for_user(user_id)
+      |> Enum.filter(&gmail_account?/1)
+      |> Enum.map(&gmail_account_health(user_id, &1))
+
+    freshest_visible_email_at =
+      gmail_accounts
+      |> Enum.map(&parse_iso8601_datetime(&1.latest_visible_email_at))
+      |> most_recent_datetime()
+
+    latest_gmail_insight_at =
+      open_insights
+      |> Enum.filter(&(normalize_source(&1.source) == "gmail"))
+      |> Enum.map(&latest_gmail_insight_datetime/1)
+      |> most_recent_datetime()
+
+    insights_stale =
+      gmail_insights_stale?(freshest_visible_email_at, latest_gmail_insight_at)
+
+    gmail_status =
+      cond do
+        gmail_accounts == [] -> "not_connected"
+        Enum.any?(gmail_accounts, &(&1.status == "ok")) -> "ok"
+        true -> "error"
+      end
+
+    %{
+      gmail: %{
+        status: gmail_status,
+        freshest_visible_email_at: datetime_to_iso8601(freshest_visible_email_at),
+        latest_open_insight_at: datetime_to_iso8601(latest_gmail_insight_at),
+        insights_stale: insights_stale,
+        recommended_next_step:
+          gmail_recommended_next_step(gmail_status, insights_stale, freshest_visible_email_at),
+        accounts: gmail_accounts
+      }
+    }
+  end
+
+  defp gmail_account_health(user_id, account) do
+    provider = account.provider
+    account_email = account_email(account)
+
+    case Gmail.fetch_recent_emails(user_id, 1, provider: provider) do
+      {:ok, [message | _]} ->
+        %{
+          provider: provider,
+          account_email: account_email,
+          connection_status: account.status,
+          status: "ok",
+          latest_visible_email_at: datetime_to_iso8601(Map.get(message, :internal_date)),
+          latest_visible_email_subject: Map.get(message, :subject),
+          latest_visible_email_from: Map.get(message, :from),
+          last_error: nil
+        }
+
+      {:ok, []} ->
+        %{
+          provider: provider,
+          account_email: account_email,
+          connection_status: account.status,
+          status: "empty",
+          latest_visible_email_at: nil,
+          latest_visible_email_subject: nil,
+          latest_visible_email_from: nil,
+          last_error: nil
+        }
+
+      {:error, reason} ->
+        ConnectedAccounts.report_access_issue(user_id, provider, reason)
+
+        %{
+          provider: provider,
+          account_email: account_email,
+          connection_status: account.status,
+          status: "error",
+          latest_visible_email_at: nil,
+          latest_visible_email_subject: nil,
+          latest_visible_email_from: nil,
+          last_error: normalize_error(reason)
+        }
+    end
+  end
+
+  defp gmail_account?(account) do
+    is_binary(account.provider) and String.starts_with?(account.provider, "google:")
+  end
+
+  defp account_email(account) do
+    metadata = account.metadata || %{}
+
+    metadata["account_email"] || metadata["email"] ||
+      case account.provider do
+        "google:" <> account_email -> account_email
+        _ -> nil
+      end
+  end
+
+  defp latest_gmail_insight_datetime(insight) do
+    insight.source_occurred_at || insight.inserted_at
+  end
+
+  defp gmail_insights_stale?(%DateTime{} = _freshest_visible_email_at, nil), do: true
+
+  defp gmail_insights_stale?(
+         %DateTime{} = freshest_visible_email_at,
+         %DateTime{} = latest_insight_at
+       ) do
+    DateTime.diff(freshest_visible_email_at, latest_insight_at, :hour) >
+      @gmail_insight_stale_threshold_hours
+  end
+
+  defp gmail_insights_stale?(_freshest_visible_email_at, _latest_insight_at), do: false
+
+  defp gmail_recommended_next_step("not_connected", _insights_stale, _freshest_visible_email_at) do
+    "Tell the user Gmail is not connected, or that Maraithon cannot currently inspect inbox state."
+  end
+
+  defp gmail_recommended_next_step("error", _insights_stale, _freshest_visible_email_at) do
+    "Tell the user Gmail access failed and that Maraithon should notify them to reconnect."
+  end
+
+  defp gmail_recommended_next_step("ok", true, %DateTime{} = _freshest_visible_email_at) do
+    "Open Gmail insights look stale relative to live inbox mail. Use gmail_search_messages before answering latest or today inbox questions."
+  end
+
+  defp gmail_recommended_next_step("ok", _insights_stale, _freshest_visible_email_at), do: nil
+
+  defp normalize_source("gmail:" <> _rest), do: "gmail"
+  defp normalize_source("gmail"), do: "gmail"
+  defp normalize_source(source) when is_binary(source), do: source
+  defp normalize_source(_source), do: nil
+
+  defp datetime_to_iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp datetime_to_iso8601(_value), do: nil
+
+  defp parse_iso8601_datetime(%DateTime{} = value), do: value
+
+  defp parse_iso8601_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp parse_iso8601_datetime(_value), do: nil
+
+  defp most_recent_datetime(datetimes) when is_list(datetimes) do
+    datetimes
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(&DateTime.to_unix(&1, :microsecond), fn -> nil end)
+  end
+
   defp normalize_limit(value, _default, max_limit) when is_integer(value),
     do: value |> max(1) |> min(max_limit)
 
@@ -842,6 +1521,62 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       value when is_binary(value) and value != "" -> {:ok, value}
       _ -> {:error, "missing_#{key}"}
     end
+  end
+
+  defp optional_string_arg(args, key) do
+    case Map.get(args, key) do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      nil -> :missing
+      "" -> :missing
+      _ -> {:error, "invalid_#{key}"}
+    end
+  end
+
+  defp resolve_snooze_until(args) do
+    case Map.get(args, "snooze_until") do
+      %DateTime{} = value ->
+        {:ok, value}
+
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(String.trim(value)) do
+          {:ok, datetime, _offset} -> {:ok, datetime}
+          _ -> {:error, "invalid_snooze_until"}
+        end
+
+      _ ->
+        {:error, "missing_snooze_until"}
+    end
+  end
+
+  defp serialize_todo_summary(todo) do
+    %{
+      id: todo.id,
+      source: todo.source,
+      kind: todo.kind,
+      attention_mode: todo.attention_mode,
+      status: todo.status,
+      title: todo.title,
+      next_action: todo.next_action,
+      priority: todo.priority
+    }
+  end
+
+  defp serialize_todo_detail(todo) do
+    %{
+      id: todo.id,
+      source: todo.source,
+      kind: todo.kind,
+      attention_mode: todo.attention_mode,
+      status: todo.status,
+      title: todo.title,
+      summary: todo.summary,
+      next_action: todo.next_action,
+      priority: todo.priority,
+      source_item_id: todo.source_item_id,
+      source_occurred_at: todo.source_occurred_at,
+      metadata: todo.metadata || %{},
+      updated_at: todo.updated_at
+    }
   end
 
   defp tool_definition(name, description, parameters) do
@@ -866,6 +1601,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp stringify_map(_map), do: %{}
 
+  defp stringify_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp stringify_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp stringify_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp stringify_value(%Time{} = value), do: Time.to_iso8601(value)
   defp stringify_value(value) when is_map(value), do: stringify_map(value)
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
