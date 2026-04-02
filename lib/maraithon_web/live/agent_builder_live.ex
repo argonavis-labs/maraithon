@@ -3,6 +3,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   alias Maraithon.AgentBuilder
   alias Maraithon.Connections
+  alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.Runtime.Config, as: RuntimeConfig
 
@@ -41,6 +42,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     user_id = current_user_id(socket)
     {providers, connection_errors} = load_providers(user_id)
     launch = AgentBuilder.default_launch_params()
+    projects = Projects.list_projects(user_id: user_id)
 
     socket =
       socket
@@ -51,6 +53,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         cost_profile_options: AgentBuilder.cost_profile_options(),
         provider_map: providers,
         connection_errors: connection_errors,
+        projects: projects,
         tool_allowed_paths: RuntimeConfig.tool_allowed_paths(),
         builder_error: nil,
         builder_mode: "simple"
@@ -63,6 +66,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
   @impl true
   def handle_params(params, uri, socket) do
     behavior = Map.get(params, "behavior")
+    requested_project_id = Map.get(params, "project_id")
     current_behavior = socket.assigns.launch["behavior"]
     builder_mode = socket.assigns[:builder_mode] || "simple"
 
@@ -76,6 +80,12 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
         true ->
           socket.assigns.launch
+      end
+
+    launch =
+      case requested_project_id do
+        value when is_binary(value) and value != "" -> Map.put(launch, "project_id", value)
+        _ -> launch
       end
 
     {:noreply,
@@ -306,6 +316,44 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <p class="mt-1 text-sm text-slate-600"><%= @selected_spec.summary %></p>
                   </div>
                 </div>
+
+                <%= if @projects != [] do %>
+                  <div class="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                      <div>
+                        <label for="launch_project_id" class="block text-sm font-medium text-slate-700">
+                          Attach to project
+                        </label>
+                        <select
+                          id="launch_project_id"
+                          name="launch[project_id]"
+                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                        >
+                          <option value="">No project</option>
+                          <option
+                            :for={project <- @projects}
+                            value={project.id}
+                            selected={@launch["project_id"] == project.id}
+                          >
+                            <%= project.name %>
+                          </option>
+                        </select>
+                        <p class="mt-2 text-xs text-slate-500">
+                          Attach this agent to a project so Maraithon can use its output when you ask about that project in chat.
+                        </p>
+                      </div>
+
+                      <div class="rounded-2xl border border-white/70 bg-white px-4 py-3">
+                        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
+                          Why this matters
+                        </p>
+                        <p class="mt-2 text-sm text-slate-700">
+                          Project-scoped agents feed local project state instead of disappearing into global noise. This is especially important for the project manager and coding agent flows.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                <% end %>
 
                 <%= if field_visible?(@selected_spec, "cost_profile") do %>
                   <div class="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">

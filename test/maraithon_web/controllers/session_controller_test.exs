@@ -25,7 +25,7 @@ defmodule MaraithonWeb.SessionControllerTest do
 
     conn = get(conn, "/auth/magic/#{token}")
 
-    assert redirected_to(conn) == "/connectors"
+    assert redirected_to(conn) == "/dashboard"
     assert get_session(conn, "user_session_token")
     assert Repo.aggregate(UserSession, :count) == 1
   end

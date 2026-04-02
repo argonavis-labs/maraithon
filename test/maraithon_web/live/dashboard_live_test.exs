@@ -5,6 +5,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
   alias Maraithon.Agents
   alias Maraithon.Insights
+  alias Maraithon.Projects
 
   @user_email "dashboard@example.com"
 
@@ -17,6 +18,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
 
     assert has_element?(view, "h1", "Agent Fleet Operations")
+    assert has_element?(view, "h2", "Connected Apps")
+    assert has_element?(view, "h2", "Global State")
+    assert has_element?(view, "h2", "Add Project")
+    assert has_element?(view, "h2", "Project Memory")
+    assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Actionable Insights")
     assert has_element?(view, "h2", "Health & Monitoring")
     assert has_element?(view, "h3", "Operational Logs")
@@ -28,6 +34,88 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "a[href='/agents/new']", "New Agent")
     refute html =~ "Agent Registry"
     refute html =~ "Agent Details"
+  end
+
+  test "creates a project and project memory from the dashboard", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    _html =
+      view
+      |> form("#project-form",
+        project: %{
+          name: "Operator OS",
+          summary: "Founder system work",
+          description: "Everything related to the operator layer.",
+          priority: "high"
+        }
+      )
+      |> render_submit()
+
+    project = Projects.get_project_by_slug_for_user("operator-os", @user_email)
+    assert project.name == "Operator OS"
+
+    html =
+      view
+      |> form("#project-item-form",
+        project_item: %{
+          project_id: project.id,
+          item_type: "todo",
+          title: "Ship dashboard",
+          content: "Launch the first project workspace slice."
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Operator OS"
+    assert html =~ "Ship dashboard"
+    assert html =~ "Launch the first project workspace slice."
+  end
+
+  test "renders project manager recommendations on the dashboard", %{conn: conn} do
+    {:ok, project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Maraithon Product",
+        "summary" => "Product roadmap and operator UX"
+      })
+
+    assert {:ok, _item} =
+             Projects.create_project_item(project, %{
+               "item_type" => "grant",
+               "title" => "GitHub scope",
+               "content" => "Planner can inspect kent/bliss/maraithon."
+             })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "github_product_planner",
+        project_id: project.id,
+        config: %{"name" => "Maraithon PM", "repo_full_name" => "kent/bliss/maraithon"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Project workspace",
+          "summary" => "Ship an app-facing project workspace with project-local state.",
+          "recommended_action" => "Launch projects on the dashboard first.",
+          "priority" => 96,
+          "confidence" => 0.91,
+          "dedupe_key" => "dashboard:project-recommendation:1",
+          "metadata" => %{"why_now" => "Users need project context in the app today."}
+        }
+      ])
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Maraithon Product"
+    assert html =~ "GitHub scope"
+    assert html =~ "Project workspace"
+    assert html =~ "Launch projects on the dashboard first."
+    assert html =~ "Attach Project Manager"
   end
 
   test "renders enriched insight context and ideas", %{conn: conn} do

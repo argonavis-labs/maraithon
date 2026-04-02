@@ -7,6 +7,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Projects
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentSupervisor
 
@@ -34,6 +35,15 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Prompt Agent"
       assert html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
+    end
+
+    test "shows a project attachment field when projects exist", %{conn: conn} do
+      {:ok, _project} = Projects.create_project(@user_email, %{"name" => "Operator OS"})
+
+      {:ok, _view, html} = live(conn, "/agents/new")
+
+      assert html =~ "Attach to project"
+      assert html =~ "Operator OS"
     end
 
     test "shows blockers when inbox advisor permissions are missing", %{conn: conn} do
@@ -313,6 +323,46 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["budget"]["llm_calls"] == 40
       assert agent.config["budget"]["tool_calls"] == 10
 
+      assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
+      assert redirect_id == agent.id
+
+      case Registry.lookup(AgentRegistry, agent.id) do
+        [{pid, _value}] -> assert :ok = AgentSupervisor.stop_agent(pid)
+        [] -> :ok
+      end
+    end
+
+    test "creates an agent attached to a project", %{conn: conn} do
+      {:ok, project} = Projects.create_project(@user_email, %{"name" => "Maraithon Product"})
+
+      {:ok, view, _html} = live(conn, "/agents/new?project_id=#{project.id}")
+
+      _html =
+        view
+        |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
+        |> render_click()
+
+      result =
+        view
+        |> form("#agent-builder-form",
+          launch: %{
+            behavior: "prompt_agent",
+            project_id: project.id,
+            name: "project-agent",
+            prompt: "Watch project work and summarize changes.",
+            subscriptions: "github:acme/repo",
+            tools: "read_file,search_files",
+            memory_limit: "25",
+            budget_llm_calls: "120",
+            budget_tool_calls: "240",
+            config_json: ""
+          }
+        )
+        |> render_submit()
+
+      [agent] = Agents.list_agents(user_id: @user_email)
+
+      assert agent.project_id == project.id
       assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id
 

@@ -17,6 +17,7 @@ defmodule Maraithon.AgentBuilder do
     "behavior" => "prompt_agent",
     "builder_mode" => "simple",
     "cost_profile" => "balanced",
+    "project_id" => "",
     "name" => "",
     "prompt" => @default_prompt,
     "subscriptions" => "",
@@ -863,6 +864,7 @@ defmodule Maraithon.AgentBuilder do
     |> Map.merge(%{
       "behavior" => behavior,
       "builder_mode" => "advanced",
+      "project_id" => agent.project_id || "",
       "name" => config["name"] || "",
       "prompt" => config["prompt"] || "",
       "subscriptions" => Enum.join(config["subscribe"] || [], ","),
@@ -927,6 +929,7 @@ defmodule Maraithon.AgentBuilder do
           {:ok,
            %{
              "user_id" => user_id,
+             "project_id" => empty_to_nil(launch["project_id"]),
              "behavior" => behavior,
              "config" => Map.merge(config, extra_config),
              "budget" => %{"llm_calls" => llm_calls, "tool_calls" => tool_calls}

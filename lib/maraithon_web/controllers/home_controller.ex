@@ -1,8 +1,6 @@
 defmodule MaraithonWeb.HomeController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.Accounts
-
   def index(conn, _params) do
     case conn.assigns[:current_user] do
       %{id: user_id} ->
@@ -17,6 +15,6 @@ defmodule MaraithonWeb.HomeController do
   end
 
   defp post_sign_in_path(user_id) do
-    if Accounts.connected_accounts?(user_id), do: "/dashboard", else: "/connectors"
+    if is_binary(user_id), do: "/dashboard", else: "/"
   end
 end

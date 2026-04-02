@@ -9,6 +9,9 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Insights.Detail
   alias Maraithon.Insights
   alias Maraithon.OnboardingProof
+  alias Maraithon.OperatorMemory
+  alias Maraithon.Projects
+  alias Maraithon.Projects.ProjectItem
   alias Maraithon.Runtime
 
   @refresh_interval 5_000
@@ -57,11 +60,17 @@ defmodule MaraithonWeb.DashboardLive do
         connection_user_id: user_id,
         connection_return_to: "/dashboard",
         current_path: "/dashboard",
+        connected_provider_count: 0,
         connections: [],
         raw_connections: [],
         connection_errors: [],
         dashboard_errors: [],
         inspection_errors: [],
+        global_memory_summaries: [],
+        projects: [],
+        project_form: to_form(default_project_form_params(), as: :project),
+        project_item_form: to_form(default_project_item_form_params(), as: :project_item),
+        project_item_types: ProjectItem.item_types(),
         insights: [],
         act_now_insights: [],
         monitor_insights: [],
@@ -203,6 +212,99 @@ defmodule MaraithonWeb.DashboardLive do
            :error,
            "Failed to disconnect #{provider_label(provider)}: #{inspect(reason)}"
          )}
+    end
+  end
+
+  def handle_event("update_project_form", %{"project" => params}, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :project_form,
+       to_form(Map.merge(default_project_form_params(), params), as: :project)
+     )}
+  end
+
+  def handle_event("create_project", %{"project" => params}, socket) do
+    attrs = Map.take(params, ["name", "summary", "description", "priority"])
+
+    case Projects.create_project(current_user_id(socket), attrs) do
+      {:ok, project} ->
+        {:noreply,
+         socket
+         |> assign(:project_form, to_form(default_project_form_params(), as: :project))
+         |> assign(
+           :project_item_form,
+           to_form(
+             default_project_item_form_params()
+             |> Map.put("project_id", project.id),
+             as: :project_item
+           )
+         )
+         |> refresh_dashboard()
+         |> put_flash(:info, "Project created")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         socket
+         |> assign(
+           :project_form,
+           to_form(Map.merge(default_project_form_params(), params), as: :project)
+         )
+         |> put_flash(:error, "Failed to create project: #{changeset_errors(changeset)}")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to create project: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("update_project_item_form", %{"project_item" => params}, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :project_item_form,
+       to_form(Map.merge(default_project_item_form_params(), params), as: :project_item)
+     )}
+  end
+
+  def handle_event("create_project_item", %{"project_item" => params}, socket) do
+    project_id = Map.get(params, "project_id")
+    attrs = Map.take(params, ["item_type", "title", "content"])
+
+    case Projects.create_project_item(project_id, current_user_id(socket), attrs) do
+      {:ok, _item} ->
+        {:noreply,
+         socket
+         |> assign(
+           :project_item_form,
+           to_form(
+             default_project_item_form_params()
+             |> Map.put("project_id", project_id || ""),
+             as: :project_item
+           )
+         )
+         |> refresh_dashboard()
+         |> put_flash(:info, "Project memory saved")}
+
+      {:error, :project_not_found} ->
+        {:noreply,
+         socket
+         |> assign(
+           :project_item_form,
+           to_form(Map.merge(default_project_item_form_params(), params), as: :project_item)
+         )
+         |> put_flash(:error, "Choose a valid project first")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         socket
+         |> assign(
+           :project_item_form,
+           to_form(Map.merge(default_project_item_form_params(), params), as: :project_item)
+         )
+         |> put_flash(:error, "Failed to save project memory: #{changeset_errors(changeset)}")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to save project memory: #{inspect(reason)}")}
     end
   end
 
@@ -550,6 +652,388 @@ defmodule MaraithonWeb.DashboardLive do
           >
             Open Connectors
           </.link>
+        </div>
+      </section>
+
+      <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div class="overflow-hidden rounded-xl bg-white shadow">
+          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+            <h2 class="text-lg font-medium text-slate-900">Connected Apps</h2>
+            <p class="mt-1 text-sm text-slate-500">
+              Your linked accounts form the shared operator context across all projects.
+            </p>
+          </div>
+          <div class="space-y-4 px-4 py-4 sm:px-6">
+            <div class="flex items-end justify-between gap-3">
+              <div>
+                <p class="text-3xl font-semibold text-slate-900"><%= @connected_provider_count %></p>
+                <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Connected providers</p>
+              </div>
+              <.link
+                navigate={"/connectors"}
+                class="inline-flex items-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Manage
+              </.link>
+            </div>
+
+            <div class="space-y-2">
+              <%= for provider <- @connections do %>
+                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3">
+                  <div>
+                    <p class="text-sm font-medium text-slate-900"><%= provider.label %></p>
+                    <p class="mt-1 text-xs text-slate-500"><%= provider.description %></p>
+                  </div>
+                  <span class={provider_status_class(provider.status)}>
+                    <%= provider_status_label(provider.status) %>
+                  </span>
+                </div>
+              <% end %>
+            </div>
+          </div>
+        </div>
+
+        <div class="overflow-hidden rounded-xl bg-white shadow">
+          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+            <h2 class="text-lg font-medium text-slate-900">Global State</h2>
+            <p class="mt-1 text-sm text-slate-500">
+              Shared operator memory that spans every project and conversation.
+            </p>
+          </div>
+          <div class="space-y-3 px-4 py-4 sm:px-6">
+            <%= if @global_memory_summaries == [] do %>
+              <p class="text-sm text-slate-500">
+                No durable global memory summary yet. Maraithon will fill this in as the assistant learns your preferences and operating style.
+              </p>
+            <% else %>
+              <div
+                :for={summary <- @global_memory_summaries}
+                class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    <%= memory_summary_label(summary.type) %>
+                  </p>
+                  <span class="text-[11px] text-slate-400">
+                    confidence <%= format_confidence(summary.confidence) %>
+                  </span>
+                </div>
+                <p class="mt-2 text-sm text-slate-700"><%= summary.content %></p>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
+        <div class="overflow-hidden rounded-xl bg-white shadow">
+          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+            <h2 class="text-lg font-medium text-slate-900">Add Project</h2>
+            <p class="mt-1 text-sm text-slate-500">
+              Projects hold local state, attached agents, and project-manager recommendations.
+            </p>
+          </div>
+          <.form
+            for={@project_form}
+            id="project-form"
+            phx-change="update_project_form"
+            phx-submit="create_project"
+            class="space-y-4 px-4 py-4 sm:px-6"
+          >
+            <div>
+              <label for="project_name" class="block text-sm font-medium text-slate-700">
+                Project name
+              </label>
+              <input
+                id="project_name"
+                type="text"
+                name="project[name]"
+                value={@project_form[:name].value}
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+            </div>
+
+            <div>
+              <label for="project_summary" class="block text-sm font-medium text-slate-700">
+                Summary
+              </label>
+              <input
+                id="project_summary"
+                type="text"
+                name="project[summary]"
+                value={@project_form[:summary].value}
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              />
+            </div>
+
+            <div>
+              <label for="project_description" class="block text-sm font-medium text-slate-700">
+                Description
+              </label>
+              <textarea
+                id="project_description"
+                name="project[description]"
+                rows="4"
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              ><%= @project_form[:description].value %></textarea>
+            </div>
+
+            <div>
+              <label for="project_priority" class="block text-sm font-medium text-slate-700">
+                Priority
+              </label>
+              <select
+                id="project_priority"
+                name="project[priority]"
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+              >
+                <option value="low" selected={@project_form[:priority].value == "low"}>Low</option>
+                <option value="normal" selected={@project_form[:priority].value == "normal"}>Normal</option>
+                <option value="high" selected={@project_form[:priority].value == "high"}>High</option>
+                <option value="critical" selected={@project_form[:priority].value == "critical"}>Critical</option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              phx-disable-with="Creating..."
+              class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              Create project
+            </button>
+          </.form>
+        </div>
+      </section>
+
+      <section class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+          <h2 class="text-lg font-medium text-slate-900">Project Memory</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            Add notes, todos, decisions, resources, or grants to a project so the operator can use them later.
+          </p>
+        </div>
+        <.form
+          for={@project_item_form}
+          id="project-item-form"
+          phx-change="update_project_item_form"
+          phx-submit="create_project_item"
+          class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
+        >
+          <div class="space-y-4">
+            <div>
+              <label for="project_item_project_id" class="block text-sm font-medium text-slate-700">
+                Project
+              </label>
+              <select
+                id="project_item_project_id"
+                name="project_item[project_id]"
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+              >
+                <option value="">Choose a project</option>
+                <option
+                  :for={{label, value} <- project_options(@projects)}
+                  value={value}
+                  selected={@project_item_form[:project_id].value == value}
+                >
+                  <%= label %>
+                </option>
+              </select>
+            </div>
+            <div>
+              <label for="project_item_item_type" class="block text-sm font-medium text-slate-700">
+                Item type
+              </label>
+              <select
+                id="project_item_item_type"
+                name="project_item[item_type]"
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+              >
+                <option
+                  :for={{label, value} <- project_item_type_options(@project_item_types)}
+                  value={value}
+                  selected={@project_item_form[:item_type].value == value}
+                >
+                  <%= label %>
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <label for="project_item_title" class="block text-sm font-medium text-slate-700">
+                Title
+              </label>
+              <input
+                id="project_item_title"
+                type="text"
+                name="project_item[title]"
+                value={@project_item_form[:title].value}
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+              />
+            </div>
+            <p class="text-xs text-slate-500">
+              Use this for concise labels like “Q2 launch goal” or “Ship project dashboard”.
+            </p>
+          </div>
+
+          <div class="space-y-4">
+            <div>
+              <label for="project_item_content" class="block text-sm font-medium text-slate-700">
+                Content
+              </label>
+              <textarea
+                id="project_item_content"
+                name="project_item[content]"
+                rows="4"
+                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+              ><%= @project_item_form[:content].value %></textarea>
+            </div>
+            <button
+              type="submit"
+              phx-disable-with="Saving..."
+              disabled={@projects == []}
+              class="inline-flex items-center rounded-md bg-cyan-700 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              Save project memory
+            </button>
+          </div>
+        </.form>
+      </section>
+
+      <section class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-medium text-slate-900">Projects</h2>
+              <p class="mt-1 text-sm text-slate-500">
+                Each project keeps its own local memory and can host specialist agents like the project manager.
+              </p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+              <%= length(@projects) %> total
+            </span>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-2">
+          <%= for project_card <- @projects do %>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h3 class="text-lg font-semibold text-slate-900"><%= project_card.project.name %></h3>
+                    <span class={project_status_class(project_card.project.status)}>
+                      <%= project_card.project.status %>
+                    </span>
+                    <span class={project_priority_class(project_card.project.priority)}>
+                      <%= project_card.project.priority %>
+                    </span>
+                  </div>
+                  <p class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
+                    <%= project_card.project.slug %>
+                  </p>
+                  <p class="mt-3 text-sm text-slate-600">
+                    <%= project_summary(project_card.project) %>
+                  </p>
+                </div>
+
+                <.link
+                  navigate={"/agents/new?behavior=github_product_planner&project_id=#{project_card.project.id}"}
+                  class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Attach Project Manager
+                </.link>
+              </div>
+
+              <div class="mt-4 flex flex-wrap gap-2">
+                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                  <%= length(project_card.agents) %> agents
+                </span>
+                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                  <%= length(project_card.items) %> recent items
+                </span>
+                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                  <%= length(project_card.recommendations) %> PM recommendations
+                </span>
+              </div>
+
+              <%= if project_card.agents != [] do %>
+                <div class="mt-4">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Attached agents</p>
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    <span
+                      :for={agent <- project_card.agents}
+                      class="rounded-full bg-slate-900 px-2.5 py-1 text-xs font-medium text-white"
+                    >
+                      <%= get_in(agent.config || %{}, ["name"]) || agent.behavior %>
+                    </span>
+                  </div>
+                </div>
+              <% end %>
+
+              <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div class="space-y-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Project memory
+                    </p>
+                  </div>
+                  <%= if project_card.items == [] do %>
+                    <p class="text-sm text-slate-500">
+                      No project memory yet. Add a note, todo, or grant above so the agent has local context.
+                    </p>
+                  <% else %>
+                    <div
+                      :for={item <- project_card.items}
+                      class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                    >
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-sm font-medium text-slate-900"><%= item.title || item_type_label(item.item_type) %></p>
+                        <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                          <%= item_type_label(item.item_type) %>
+                        </span>
+                      </div>
+                      <p class="mt-2 text-sm text-slate-600"><%= item.content %></p>
+                    </div>
+                  <% end %>
+                </div>
+
+                <div class="space-y-3">
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Project manager recommendations
+                  </p>
+                  <%= if project_card.recommendations == [] do %>
+                    <p class="text-sm text-slate-500">
+                      No project-manager output yet. Attach a GitHub Product Planner to this project and let it run.
+                    </p>
+                  <% else %>
+                    <div
+                      :for={recommendation <- project_card.recommendations}
+                      class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3"
+                    >
+                      <div class="flex items-center justify-between gap-3">
+                        <p class="text-sm font-medium text-slate-900"><%= recommendation.title %></p>
+                        <span class="text-xs font-semibold text-emerald-700">
+                          p<%= recommendation.priority %>
+                        </span>
+                      </div>
+                      <p class="mt-2 text-sm text-slate-600"><%= recommendation.summary %></p>
+                      <p class="mt-2 text-sm text-emerald-900">
+                        <span class="font-medium">Next step:</span> <%= recommendation.recommended_action %>
+                      </p>
+                      <%= if recommendation.why_now do %>
+                        <p class="mt-2 text-xs text-emerald-800"><%= recommendation.why_now %></p>
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+          <% end %>
+
+          <%= if @projects == [] do %>
+            <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center text-sm text-slate-500 xl:col-span-2">
+              No projects yet. Create one above, attach a specialist agent, and start building project-local state.
+            </div>
+          <% end %>
         </div>
       </section>
 
@@ -1042,6 +1526,9 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp refresh_dashboard(socket, opts \\ []) do
     socket = refresh_insights(socket)
+    socket = refresh_connections(socket)
+    socket = refresh_projects(socket)
+    socket = refresh_global_memory(socket)
 
     user_id = current_user_id(socket)
 
@@ -1237,6 +1724,14 @@ defmodule MaraithonWeb.DashboardLive do
     AgentBuilder.default_launch_params()
   end
 
+  defp default_project_form_params do
+    %{"name" => "", "summary" => "", "description" => "", "priority" => "normal"}
+  end
+
+  defp default_project_item_form_params do
+    %{"project_id" => "", "item_type" => "note", "title" => "", "content" => ""}
+  end
+
   defp launch_params_from_agent(agent), do: AgentBuilder.launch_params_from_agent(agent)
 
   defp normalize_launch_params(params), do: AgentBuilder.normalize_launch_params(params)
@@ -1324,6 +1819,7 @@ defmodule MaraithonWeb.DashboardLive do
          ) do
       {:ok, snapshot} ->
         assign(socket,
+          connected_provider_count: snapshot.connected_count,
           connections: snapshot.providers,
           raw_connections: snapshot.raw_tokens,
           connection_errors: snapshot.errors
@@ -1331,11 +1827,37 @@ defmodule MaraithonWeb.DashboardLive do
 
       {:degraded, snapshot} ->
         assign(socket,
+          connected_provider_count: snapshot.connected_count,
           connections: snapshot.providers,
           raw_connections: snapshot.raw_tokens,
           connection_errors: snapshot.errors
         )
     end
+  end
+
+  defp refresh_projects(socket) do
+    user_id = current_user_id(socket)
+
+    projects =
+      Projects.list_projects(user_id: user_id, preload: [:agents])
+      |> Enum.map(fn project ->
+        %{
+          project: project,
+          agents: project.agents,
+          items: Projects.list_project_items(user_id: user_id, project_id: project.id, limit: 4),
+          recommendations: Projects.list_project_recommendations(project.id, user_id, limit: 3)
+        }
+      end)
+
+    assign(socket, :projects, projects)
+  end
+
+  defp refresh_global_memory(socket) do
+    assign(
+      socket,
+      :global_memory_summaries,
+      OperatorMemory.summaries_for_prompt(current_user_id(socket))
+    )
   end
 
   defp maybe_start_onboarding_preview(socket, opts) do
@@ -1467,6 +1989,86 @@ defmodule MaraithonWeb.DashboardLive do
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
+
+  defp provider_status_label(:connected), do: "Connected"
+  defp provider_status_label(:partial), do: "Partial"
+  defp provider_status_label(:needs_refresh), do: "Needs refresh"
+  defp provider_status_label(:disconnected), do: "Disconnected"
+  defp provider_status_label(:not_configured), do: "Not configured"
+  defp provider_status_label(status) when is_binary(status), do: status
+  defp provider_status_label(status), do: status |> to_string() |> String.replace("_", " ")
+
+  defp provider_status_class(:connected),
+    do:
+      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+
+  defp provider_status_class(:partial),
+    do:
+      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+
+  defp provider_status_class(:needs_refresh),
+    do:
+      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200"
+
+  defp provider_status_class(_status),
+    do:
+      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+
+  defp memory_summary_label("content_preferences"), do: "Content Preferences"
+  defp memory_summary_label("telegram_behavior"), do: "Conversation Style"
+  defp memory_summary_label("action_style"), do: "Action Style"
+  defp memory_summary_label("interrupt_policy"), do: "Interrupt Policy"
+  defp memory_summary_label(label), do: label
+
+  defp project_options(projects) when is_list(projects) do
+    Enum.map(projects, fn %{project: project} -> {project.name, project.id} end)
+  end
+
+  defp project_options(_projects), do: []
+
+  defp project_item_type_options(item_types) when is_list(item_types) do
+    Enum.map(item_types, fn item_type -> {item_type_label(item_type), item_type} end)
+  end
+
+  defp project_item_type_options(_item_types), do: []
+
+  defp project_status_class("active"),
+    do:
+      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+
+  defp project_status_class("paused"),
+    do:
+      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+
+  defp project_status_class(_status),
+    do:
+      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+
+  defp project_priority_class("critical"),
+    do:
+      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200"
+
+  defp project_priority_class("high"),
+    do:
+      "rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 ring-1 ring-orange-200"
+
+  defp project_priority_class("normal"),
+    do: "rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 ring-1 ring-sky-200"
+
+  defp project_priority_class(_priority),
+    do:
+      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+
+  defp project_summary(project) do
+    project.summary || project.description || "No project summary yet."
+  end
+
+  defp item_type_label("todo"), do: "Todo"
+  defp item_type_label("note"), do: "Note"
+  defp item_type_label("decision"), do: "Decision"
+  defp item_type_label("resource"), do: "Resource"
+  defp item_type_label("grant"), do: "Grant"
+  defp item_type_label(value), do: value
 
   defp preview_source_label(source), do: provider_label(source)
 

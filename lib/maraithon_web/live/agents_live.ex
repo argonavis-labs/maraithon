@@ -379,6 +379,11 @@ defmodule MaraithonWeb.AgentsLive do
                     <td class="px-4 py-4 align-top">
                       <div class="font-semibold text-slate-900"><%= agent_name(agent.config) %></div>
                       <div class="text-xs text-slate-500"><%= agent.behavior %></div>
+                      <%= if agent.project do %>
+                        <div class="mt-1 text-xs font-medium text-emerald-700">
+                          Project: <%= agent.project.name %>
+                        </div>
+                      <% end %>
                       <div class="mt-1 font-mono text-[11px] text-slate-400"><%= agent.id %></div>
                     </td>
                     <td class="px-4 py-4 align-top">
@@ -1073,7 +1078,7 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp refresh_registry(socket) do
-    agents = Agents.list_agents(user_id: current_user_id(socket))
+    agents = Agents.list_agents(user_id: current_user_id(socket), preload: [:project])
     filtered_agents = filter_agents(agents, socket.assigns.filters)
 
     assign(socket, all_agents: agents, agents: filtered_agents)
