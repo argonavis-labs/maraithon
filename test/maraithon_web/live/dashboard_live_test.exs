@@ -6,6 +6,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
   alias Maraithon.Agents
   alias Maraithon.Insights
   alias Maraithon.Projects
+  alias Maraithon.Todos
 
   @user_email "dashboard@example.com"
 
@@ -19,17 +20,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     assert has_element?(view, "h1", "Agent Fleet Operations")
     assert has_element?(view, "h2", "Connected Apps")
-    assert has_element?(view, "h2", "Global State")
+    assert has_element?(view, "h2", "Memory")
+    assert html =~ "Todos"
     assert has_element?(view, "h2", "Add Project")
     assert has_element?(view, "h2", "Project Memory")
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Actionable Insights")
+    assert has_element?(view, "h2", "Agent Activity")
     assert has_element?(view, "h2", "Health & Monitoring")
     assert has_element?(view, "h3", "Operational Logs")
     assert has_element?(view, "h3", "Failures & Stale Work")
     assert has_element?(view, "h3", "Raw Logs")
     assert has_element?(view, "h3", "Fly.io Platform Logs")
-    assert has_element?(view, "h2", "Agents moved into their own workspace")
     assert has_element?(view, "a[href='/agents']", "Manage Agents")
     assert has_element?(view, "a[href='/agents/new']", "New Agent")
     refute html =~ "Agent Registry"
@@ -221,13 +223,46 @@ defmodule MaraithonWeb.DashboardLiveTest do
         started_at: DateTime.utc_now()
       })
 
-    {:ok, _view, html} = live(conn, "/dashboard")
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
 
     assert html =~ "Total Agents"
     assert html =~ "Running"
     assert html =~ "Degraded"
     assert html =~ "LLM Calls"
     assert html =~ "Total Spend"
+    assert html =~ "Agent Activity"
+    assert html =~ "Prompt agent"
+    assert html =~ "No recent logs captured."
+  end
+
+  test "shows todos and lets the user complete them from the dashboard", %{conn: conn} do
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to billing thread",
+                 "summary" => "Stripe needs a confirmation about the invoice owner.",
+                 "next_action" => "Reply with owner, ETA, and billing contact.",
+                 "priority" => 88,
+                 "dedupe_key" => "dashboard:todo:billing"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    assert render(view) =~ "Reply to billing thread"
+
+    todo = List.first(Todos.list_open_for_user(@user_email))
+
+    _html =
+      view
+      |> element("button[phx-click='complete_todo'][phx-value-id='#{todo.id}']")
+      |> render_click()
+
+    refute has_element?(view, "#todo-#{todo.id}")
+    assert Todos.list_open_for_user(@user_email) == []
   end
 
   test "redirects legacy selected-agent dashboard URLs to the agents workspace", %{conn: conn} do

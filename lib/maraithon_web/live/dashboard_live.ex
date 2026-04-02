@@ -10,9 +10,12 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Insights
   alias Maraithon.OnboardingProof
   alias Maraithon.OperatorMemory
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.Projects.ProjectItem
   alias Maraithon.Runtime
+  alias Maraithon.Todos
+  alias Maraithon.UserMemory
 
   @refresh_interval 5_000
   @event_limit 50
@@ -67,7 +70,12 @@ defmodule MaraithonWeb.DashboardLive do
         dashboard_errors: [],
         inspection_errors: [],
         global_memory_summaries: [],
+        memory_profile: empty_memory_profile(),
+        memory_rules: [],
+        todos: [],
+        open_todo_count: 0,
         projects: [],
+        agent_overviews: [],
         project_form: to_form(default_project_form_params(), as: :project),
         project_item_form: to_form(default_project_item_form_params(), as: :project_item),
         project_item_types: ProjectItem.item_types(),
@@ -305,6 +313,38 @@ defmodule MaraithonWeb.DashboardLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to save project memory: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("complete_todo", %{"id" => todo_id}, socket) do
+    case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from dashboard.") do
+      {:ok, _todo} ->
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:info, "Todo completed")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to complete todo: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
+    case Todos.dismiss(current_user_id(socket), todo_id, note: "Dismissed from dashboard.") do
+      {:ok, _todo} ->
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:info, "Todo dismissed")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to dismiss todo: #{inspect(reason)}")}
     end
   end
 
@@ -638,25 +678,25 @@ defmodule MaraithonWeb.DashboardLive do
         <.stat_card title="Pending Effects" value={@queue_metrics.effects.pending} />
       </section>
 
-      <section class="rounded-xl border border-indigo-100 bg-indigo-50/50 px-4 py-4 shadow-sm sm:px-6">
+      <section class="rounded-3xl border border-sky-100 bg-gradient-to-r from-sky-50 via-white to-emerald-50 px-4 py-4 shadow-sm sm:px-6">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="text-lg font-medium text-indigo-950">Connectors</h2>
-            <p class="mt-1 text-sm text-indigo-900/80">
-              Connected Accounts and OAuth configuration now live in the dedicated Connectors tab.
+            <h2 class="text-lg font-medium text-slate-950">Operator Workspace</h2>
+            <p class="mt-1 text-sm text-slate-700">
+              Todos, memory, connected systems, and projects all feed the same conversational operator.
             </p>
           </div>
           <.link
             navigate={"/connectors"}
-            class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
+            class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
           >
-            Open Connectors
+            Manage Connectors
           </.link>
         </div>
       </section>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div class="overflow-hidden rounded-xl bg-white shadow">
+      <section class="grid grid-cols-1 gap-6 xl:grid-cols-4">
+        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
           <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
             <h2 class="text-lg font-medium text-slate-900">Connected Apps</h2>
             <p class="mt-1 text-sm text-slate-500">
@@ -677,54 +717,224 @@ defmodule MaraithonWeb.DashboardLive do
               </.link>
             </div>
 
-            <div class="space-y-2">
+            <div class="space-y-3">
               <%= for provider <- @connections do %>
-                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3 py-3">
-                  <div>
-                    <p class="text-sm font-medium text-slate-900"><%= provider.label %></p>
-                    <p class="mt-1 text-xs text-slate-500"><%= provider.description %></p>
+                <div class="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="text-sm font-medium text-slate-900"><%= provider.label %></p>
+                      <p class="mt-1 text-xs text-slate-500"><%= provider.description %></p>
+                    </div>
+                    <span class={provider_status_class(provider.status)}>
+                      <%= provider_status_label(provider.status) %>
+                    </span>
                   </div>
-                  <span class={provider_status_class(provider.status)}>
-                    <%= provider_status_label(provider.status) %>
-                  </span>
+
+                  <div :if={Map.get(provider, :details, []) != []} class="mt-3 space-y-1">
+                    <p
+                      :for={detail <- Enum.take(Map.get(provider, :details, []), 2)}
+                      class="text-xs leading-5 text-slate-600"
+                    >
+                      <%= detail %>
+                    </p>
+                  </div>
+
+                  <div :if={Map.get(provider, :accounts, []) != []} class="mt-3 space-y-2">
+                    <div
+                      :for={account <- Enum.take(Map.get(provider, :accounts, []), 2)}
+                      class="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                    >
+                      <div class="flex items-center justify-between gap-2">
+                        <p class="truncate text-xs font-medium text-slate-900"><%= account.account %></p>
+                        <span class={provider_status_class(account.status)}>
+                          <%= provider_status_label(account.status) %>
+                        </span>
+                      </div>
+                      <p class="mt-1 text-[11px] text-slate-500"><%= account.status_note %></p>
+                    </div>
+                  </div>
+
+                  <div :if={Map.get(provider, :services, []) != []} class="mt-3 flex flex-wrap gap-2">
+                    <span
+                      :for={service <- Map.get(provider, :services, [])}
+                      class="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200"
+                    >
+                      <%= service.label %>: <%= provider_status_label(service.status) %>
+                    </span>
+                  </div>
+
+                  <div class="mt-3 flex flex-wrap gap-2">
+                    <a
+                      href={provider.connect_url}
+                      class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      <%= if provider.status in [:connected, :partial], do: "Reconnect", else: "Connect" %>
+                    </a>
+                  </div>
                 </div>
               <% end %>
             </div>
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
           <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-slate-900">Global State</h2>
+            <h2 class="text-lg font-medium text-slate-900">Memory</h2>
             <p class="mt-1 text-sm text-slate-500">
-              Shared operator memory that spans every project and conversation.
+              Maraithon is building a reusable operating profile that all installed agents share.
             </p>
           </div>
-          <div class="space-y-3 px-4 py-4 sm:px-6">
-            <%= if @global_memory_summaries == [] do %>
-              <p class="text-sm text-slate-500">
-                No durable global memory summary yet. Maraithon will fill this in as the assistant learns your preferences and operating style.
-              </p>
-            <% else %>
+          <div class="space-y-4 px-4 py-4 sm:px-6">
+            <div class="rounded-2xl bg-slate-950 px-4 py-4 text-white">
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200">
+                  Learned profile
+                </p>
+                <span class="text-[11px] text-sky-100/80">
+                  confidence <%= format_confidence(@memory_profile.confidence) %>
+                </span>
+              </div>
+              <p class="mt-3 text-sm leading-6 text-slate-100"><%= @memory_profile.summary %></p>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3">
               <div
-                :for={summary <- @global_memory_summaries}
-                class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+                :for={field <- memory_profile_fields(@memory_profile)}
+                class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+              >
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <%= field.label %>
+                </p>
+                <p class="mt-2 text-sm text-slate-700"><%= field.value %></p>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between gap-3">
+                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  Saved preferences
+                </p>
+                <span class="text-[11px] text-slate-400"><%= length(@memory_rules) %> rules</span>
+              </div>
+              <%= if @memory_rules == [] do %>
+                <p class="mt-2 text-sm text-slate-500">
+                  No durable preferences yet. Maraithon will learn these from conversation and feedback.
+                </p>
+              <% else %>
+                <div class="mt-2 space-y-2">
+                  <div
+                    :for={rule <- Enum.take(@memory_rules, 3)}
+                    class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                  >
+                    <div class="flex items-center justify-between gap-3">
+                      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <%= memory_rule_kind_label(rule["kind"]) %>
+                      </p>
+                      <span class="text-[11px] text-slate-400">
+                        <%= format_confidence(rule["confidence"]) %>
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm text-slate-700"><%= rule["instruction"] || rule["label"] %></p>
+                  </div>
+                </div>
+              <% end %>
+            </div>
+
+            <div :if={@global_memory_summaries != []} class="space-y-2">
+              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                Global State
+              </p>
+              <div
+                :for={summary <- Enum.take(@global_memory_summaries, 3)}
+                class="rounded-xl border border-slate-200 bg-white px-4 py-3"
               >
                 <div class="flex items-center justify-between gap-3">
                   <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                     <%= memory_summary_label(summary.type) %>
                   </p>
                   <span class="text-[11px] text-slate-400">
-                    confidence <%= format_confidence(summary.confidence) %>
+                    <%= format_confidence(summary.confidence) %>
                   </span>
                 </div>
                 <p class="mt-2 text-sm text-slate-700"><%= summary.content %></p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
+          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h2 class="text-lg font-medium text-slate-900">Todos</h2>
+                <p class="mt-1 text-sm text-slate-500">
+                  Active work objects the operator is tracking for you across inbox, projects, and follow-through.
+                </p>
+              </div>
+              <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
+                <%= @open_todo_count %> open
+              </span>
+            </div>
+          </div>
+          <div class="space-y-3 px-4 py-4 sm:px-6">
+            <%= if @todos == [] do %>
+              <p class="text-sm text-slate-500">
+                No open todos yet. As agents surface work and you chat with Maraithon, tasks will accumulate here.
+              </p>
+            <% else %>
+              <div
+                :for={todo <- @todos}
+                id={"todo-#{todo.id}"}
+                class="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-4"
+              >
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class={todo_status_class(todo.status)}>
+                        <%= todo_status_label(todo.status) %>
+                      </span>
+                      <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                        <%= todo_source_label(todo.source) %>
+                      </span>
+                      <span class="text-xs text-slate-500">
+                        priority <%= todo.priority %>
+                      </span>
+                    </div>
+                    <p class="mt-2 text-sm font-semibold text-slate-900"><%= todo.title %></p>
+                    <p class="mt-1 text-sm text-slate-600"><%= todo.summary %></p>
+                    <p class="mt-2 text-sm text-emerald-800">
+                      <span class="font-medium">Next:</span> <%= todo.next_action %>
+                    </p>
+                    <p class="mt-2 text-xs text-slate-500">
+                      <%= todo_context_line(todo) %>
+                    </p>
+                  </div>
+
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      phx-click="complete_todo"
+                      phx-value-id={todo.id}
+                      class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                    >
+                      Mark done
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="dismiss_todo"
+                      phx-value-id={todo.id}
+                      class="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
               </div>
             <% end %>
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
           <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
             <h2 class="text-lg font-medium text-slate-900">Add Project</h2>
             <p class="mt-1 text-sm text-slate-500">
@@ -1177,28 +1387,152 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </section>
 
-      <section class="rounded-xl border border-cyan-100 bg-cyan-50/70 px-4 py-4 shadow-sm sm:px-6">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 class="text-lg font-medium text-cyan-950">Agents moved into their own workspace</h2>
-            <p class="mt-1 text-sm text-cyan-900/80">
-              CRUD, lifecycle controls, logs, and deep inspection now live in the dedicated Agents tab.
-            </p>
+      <section class="overflow-hidden rounded-xl bg-white shadow">
+        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-medium text-slate-900">Agent Activity</h2>
+              <p class="mt-1 text-sm text-slate-500">
+                Each installed specialist keeps its own runtime, logs, and recent work, while the full control surface still lives in the Agents workspace.
+              </p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <.link
+                navigate={"/agents"}
+                class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+              >
+                Manage Agents
+              </.link>
+              <.link
+                navigate={"/agents/new"}
+                class="inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                New Agent
+              </.link>
+            </div>
           </div>
-          <div class="flex flex-wrap gap-2">
-            <.link
-              navigate={"/agents"}
-              class="inline-flex items-center rounded-md bg-cyan-700 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-600"
-            >
-              Manage Agents
-            </.link>
-            <.link
-              navigate={"/agents/new"}
-              class="inline-flex items-center rounded-md border border-cyan-200 bg-white px-3 py-2 text-sm font-medium text-cyan-900 hover:bg-cyan-50"
-            >
-              New Agent
-            </.link>
-          </div>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-2">
+          <%= for overview <- @agent_overviews do %>
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h3 class="text-lg font-semibold text-slate-900">
+                      <%= agent_display_name(overview.agent) %>
+                    </h3>
+                    <span class={agent_status_class(overview.agent.status)}>
+                      <%= overview.agent.status %>
+                    </span>
+                  </div>
+                  <p class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
+                    <%= humanize_text_token(overview.agent.behavior) %>
+                  </p>
+                  <p :if={overview.project_name} class="mt-2 text-sm text-slate-600">
+                    Project: <span class="font-medium text-slate-900"><%= overview.project_name %></span>
+                  </p>
+                </div>
+
+                <.link
+                  navigate={"/agents?id=#{overview.agent.id}"}
+                  class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Open
+                </.link>
+              </div>
+
+              <div class="mt-4 grid grid-cols-3 gap-3">
+                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Events
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                    <%= overview.inspection.event_count %>
+                  </p>
+                </div>
+                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Effects
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                    <%= overview.inspection.effect_counts.pending %>
+                  </p>
+                </div>
+                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
+                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Jobs
+                  </p>
+                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                    <%= overview.inspection.job_counts.pending %>
+                  </p>
+                </div>
+              </div>
+
+              <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Recent events
+                  </p>
+                  <%= if overview.recent_activity == [] do %>
+                    <p class="mt-2 text-sm text-slate-500">No recent events recorded.</p>
+                  <% else %>
+                    <div class="mt-2 space-y-2">
+                      <div
+                        :for={activity <- overview.recent_activity}
+                        class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                      >
+                        <div class="flex items-center justify-between gap-3">
+                          <p class="text-sm font-medium text-slate-900"><%= activity.event_type %></p>
+                          <span class="text-xs text-slate-400"><%= format_time(activity.inserted_at) %></span>
+                        </div>
+                        <p class="mt-2 text-xs text-slate-500"><%= payload_preview(activity.payload) %></p>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    Recent logs
+                  </p>
+                  <%= if overview.inspection.recent_logs == [] do %>
+                    <p class="mt-2 text-sm text-slate-500">No recent logs captured.</p>
+                  <% else %>
+                    <div class="mt-2 space-y-2">
+                      <div
+                        :for={log <- overview.inspection.recent_logs}
+                        class="rounded-xl border border-slate-200 bg-slate-950 px-3 py-3"
+                      >
+                        <div class="flex items-center justify-between gap-3">
+                          <span class={["text-xs font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+                            <%= log.level %>
+                          </span>
+                          <span class="text-[11px] text-slate-500">
+                            <%= format_log_timestamp(log.timestamp) %>
+                          </span>
+                        </div>
+                        <p class="mt-2 text-xs leading-5 text-slate-100"><%= log.message %></p>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
+              </div>
+
+              <%= if overview.errors != [] do %>
+                <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                  <p class="text-sm font-medium text-amber-900"><%= List.first(overview.errors).message %></p>
+                  <p class="mt-1 text-xs text-amber-800"><%= List.first(overview.errors).details %></p>
+                </div>
+              <% end %>
+            </div>
+          <% end %>
+
+          <%= if @agent_overviews == [] do %>
+            <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center text-sm text-slate-500 xl:col-span-2">
+              No agents yet. Install a chief of staff, project manager, or coding agent to start building the operator system.
+            </div>
+          <% end %>
         </div>
       </section>
 
@@ -1529,6 +1863,7 @@ defmodule MaraithonWeb.DashboardLive do
     socket = refresh_connections(socket)
     socket = refresh_projects(socket)
     socket = refresh_global_memory(socket)
+    socket = refresh_todos(socket)
 
     user_id = current_user_id(socket)
 
@@ -1576,6 +1911,8 @@ defmodule MaraithonWeb.DashboardLive do
       else
         socket
       end
+
+    socket = refresh_agent_overviews(socket)
 
     maybe_start_onboarding_preview(socket, opts)
   end
@@ -1784,6 +2121,17 @@ defmodule MaraithonWeb.DashboardLive do
     }
   end
 
+  defp empty_memory_profile do
+    %{
+      summary: "Maraithon is still learning how this user prefers to work.",
+      profile: %{},
+      confidence: 0.0,
+      source_window_start: nil,
+      source_window_end: nil,
+      updated_at: nil
+    }
+  end
+
   defp empty_fly_logs do
     %{
       available: false,
@@ -1853,11 +2201,73 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_global_memory(socket) do
+    user_id = current_user_id(socket)
+
     assign(
       socket,
-      :global_memory_summaries,
-      OperatorMemory.summaries_for_prompt(current_user_id(socket))
+      global_memory_summaries: OperatorMemory.summaries_for_prompt(user_id),
+      memory_profile: UserMemory.prompt_context(user_id),
+      memory_rules: PreferenceMemory.active_rules(user_id)
     )
+  end
+
+  defp refresh_todos(socket) do
+    user_id = current_user_id(socket)
+    todos = Todos.list_for_user(user_id, limit: 50, statuses: ["open", "snoozed"])
+
+    assign(socket,
+      todos: Enum.take(todos, 6),
+      open_todo_count: length(todos)
+    )
+  end
+
+  defp refresh_agent_overviews(socket) do
+    projects_by_id =
+      Map.new(socket.assigns.projects, fn %{project: project} -> {project.id, project.name} end)
+
+    recent_activity_by_agent = Enum.group_by(socket.assigns.recent_activity, & &1.agent_id)
+    user_id = current_user_id(socket)
+    max_concurrency = max(1, min(length(socket.assigns.agents), 4))
+
+    overviews =
+      socket.assigns.agents
+      |> Task.async_stream(
+        fn agent ->
+          snapshot =
+            case Admin.safe_agent_snapshot(
+                   agent.id,
+                   user_id: user_id,
+                   event_limit: 4,
+                   effect_limit: 3,
+                   job_limit: 3,
+                   log_limit: 4,
+                   health: socket.assigns.health
+                 ) do
+              {:ok, snapshot} ->
+                %{inspection: snapshot.inspection, errors: []}
+
+              {:degraded, snapshot} ->
+                %{inspection: snapshot.inspection, errors: snapshot.errors}
+
+              {:error, :not_found} ->
+                %{inspection: empty_inspection(), errors: []}
+            end
+
+          %{
+            agent: agent,
+            project_name: Map.get(projects_by_id, agent.project_id),
+            recent_activity: Map.get(recent_activity_by_agent, agent.id, []) |> Enum.take(3),
+            inspection: snapshot.inspection,
+            errors: snapshot.errors
+          }
+        end,
+        ordered: true,
+        timeout: :infinity,
+        max_concurrency: max_concurrency
+      )
+      |> Enum.map(fn {:ok, overview} -> overview end)
+
+    assign(socket, :agent_overviews, overviews)
   end
 
   defp maybe_start_onboarding_preview(socket, opts) do
@@ -2020,6 +2430,31 @@ defmodule MaraithonWeb.DashboardLive do
   defp memory_summary_label("interrupt_policy"), do: "Interrupt Policy"
   defp memory_summary_label(label), do: label
 
+  defp memory_profile_fields(memory_profile) when is_map(memory_profile) do
+    profile = Map.get(memory_profile, :profile, %{})
+
+    [
+      {"Current Focus", Map.get(profile, "current_focus")},
+      {"Working Style", Map.get(profile, "working_style")},
+      {"Communication", Map.get(profile, "communication_style")},
+      {"Decision Style", Map.get(profile, "decision_style")},
+      {"Important Context", Map.get(profile, "important_context")}
+    ]
+    |> Enum.map(fn {label, value} -> %{label: label, value: value} end)
+    |> Enum.reject(fn field -> is_nil(normalized_text(field.value)) end)
+    |> Enum.take(3)
+  end
+
+  defp memory_profile_fields(_memory_profile), do: []
+
+  defp memory_rule_kind_label("content_filter"), do: "Filter"
+  defp memory_rule_kind_label("urgency_boost"), do: "Urgency"
+  defp memory_rule_kind_label("quiet_hours"), do: "Quiet Hours"
+  defp memory_rule_kind_label("routing_preference"), do: "Routing"
+  defp memory_rule_kind_label("action_preference"), do: "Action"
+  defp memory_rule_kind_label("style_preference"), do: "Style"
+  defp memory_rule_kind_label(kind), do: humanize_text_token(kind) || "Preference"
+
   defp project_options(projects) when is_list(projects) do
     Enum.map(projects, fn %{project: project} -> {project.name, project.id} end)
   end
@@ -2071,6 +2506,77 @@ defmodule MaraithonWeb.DashboardLive do
   defp item_type_label(value), do: value
 
   defp preview_source_label(source), do: provider_label(source)
+
+  defp todo_status_label("open"), do: "Open"
+  defp todo_status_label("snoozed"), do: "Snoozed"
+  defp todo_status_label("done"), do: "Done"
+  defp todo_status_label("dismissed"), do: "Dismissed"
+  defp todo_status_label(value), do: humanize_text_token(value) || "Todo"
+
+  defp todo_status_class("open"),
+    do:
+      "rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200"
+
+  defp todo_status_class("snoozed"),
+    do:
+      "rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200"
+
+  defp todo_status_class("done"),
+    do:
+      "rounded-full bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200"
+
+  defp todo_status_class(_status),
+    do:
+      "rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200"
+
+  defp todo_source_label(source), do: insight_source_label(source)
+
+  defp todo_context_line(todo) do
+    [
+      todo_source_account_label(todo),
+      todo.snoozed_until && "snoozed until #{format_datetime(todo.snoozed_until)}",
+      "updated #{format_datetime(todo.updated_at)}"
+    ]
+    |> Enum.reject(&blank_metadata?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp todo_source_account_label(todo) do
+    metadata = todo.metadata || %{}
+
+    metadata_account =
+      fetch_map_value(metadata, "account") ||
+        fetch_map_value(metadata, "account_email") ||
+        fetch_map_value(metadata, "mailbox") ||
+        fetch_map_value(metadata, "workspace_name")
+
+    case normalized_text(metadata_account) do
+      nil -> nil
+      value -> "account #{value}"
+    end
+  end
+
+  defp agent_display_name(agent) do
+    get_in(agent.config || %{}, ["name"]) ||
+      get_in(agent.config || %{}, [:name]) ||
+      humanize_text_token(agent.behavior) ||
+      "Agent"
+  end
+
+  defp agent_status_class("running"),
+    do:
+      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+
+  defp agent_status_class("degraded"),
+    do:
+      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+
+  defp agent_status_class("stopped"),
+    do:
+      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+
+  defp agent_status_class(_status),
+    do: "rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 ring-1 ring-sky-200"
 
   defp preview_source_class("gmail"),
     do:
@@ -2231,6 +2737,24 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp insight_metadata_value(_insight, _key), do: nil
+
+  defp fetch_map_value(map, key) when is_map(map) and is_binary(key) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        Enum.find_value(map, fn
+          {map_key, value} when is_atom(map_key) ->
+            if Atom.to_string(map_key) == key, do: value
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp fetch_map_value(_map, _key), do: nil
 
   defp normalized_text(value) when is_binary(value) do
     case String.trim(value) do
