@@ -204,7 +204,6 @@ defmodule Maraithon.Briefs do
       safe(brief.body)
     else
       cadence_label = cadence_label(brief.cadence)
-      scheduled_at = Calendar.strftime(brief.scheduled_for, "%Y-%m-%d %H:%M UTC")
 
       """
       <b>#{safe(cadence_label)}</b>
@@ -213,8 +212,6 @@ defmodule Maraithon.Briefs do
       #{safe(brief.summary)}
 
       #{safe(brief.body)}
-
-      <i>Scheduled for #{safe(scheduled_at)}</i>
       """
       |> String.trim()
     end

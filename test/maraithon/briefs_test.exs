@@ -65,6 +65,7 @@ defmodule Maraithon.BriefsTest do
     assert message.type == :send
     assert message.chat_id == "777123"
     assert message.text =~ "Morning brief"
+    refute message.text =~ "Scheduled for"
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 end

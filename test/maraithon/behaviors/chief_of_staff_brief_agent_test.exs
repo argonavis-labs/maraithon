@@ -76,10 +76,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "morning"
     assert brief.title =~ "Morning brief"
+    assert brief.summary =~ "Most urgent"
+    assert brief.body =~ "Best use of today:"
     assert brief.body =~ "Send the investor deck"
   end
 
-  test "renders end-of-day briefs as concrete next actions with why-now context", %{
+  test "renders end-of-day briefs as concrete operator guidance with structured context", %{
     user_id: user_id,
     agent: agent
   } do
@@ -101,7 +103,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
           "due_at" => DateTime.add(scheduled_at, -2, :hour),
           "metadata" => %{
             "why_now" =>
-              "A blocked or restricted account can stop important work until someone resolves it."
+              "A blocked or restricted account can stop important work until someone resolves it.",
+            "record" => %{
+              "commitment" => "Resolve the Meta ad account restriction",
+              "person" => "Growth team",
+              "status" => "unresolved",
+              "evidence" => ["Restriction notice is still active in the account inbox."],
+              "next_action" =>
+                "Open the notice now, confirm the exact restriction, and coordinate the unblock owner today."
+            }
           }
         }
       ])
@@ -134,9 +144,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "end_of_day"
-    assert brief.body =~ "Tonight's top actions"
-    assert brief.body =~ "Next: Open the notice now"
-    assert brief.body =~ "Why now: Overdue since"
+    assert brief.summary =~ "Most urgent"
+    assert brief.body =~ "Tonight's move:"
+    assert brief.body =~ "Close or reset:"
+    assert brief.body =~ "Waiting on: Growth team"
+    assert brief.body =~ "Do: Open the notice now"
+    assert brief.body =~ "Why: A blocked or restricted account can stop important work"
+    assert brief.body =~ "Checked: Restriction notice is still active"
   end
 
   test "keeps monitor items out of top actions and includes them in Watching", %{
@@ -204,10 +218,71 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
 
-    assert brief.body =~ "Tonight's top actions:"
+    assert brief.body =~ "Close or reset:"
     assert brief.body =~ "[Gmail] Send the investor deck"
-    assert brief.body =~ "Watching:"
+    assert brief.body =~ "Watching, not blocking right now:"
     assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
-    assert brief.body =~ "important threads are being watched"
+    assert brief.body =~ "Watch: Watch for a blocker"
+    assert brief.body =~ "threads are still being watched"
+  end
+
+  test "prefers structured commitments over generic reply-owed titles in briefs", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 23:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply owed: Re: Cowrie Agora Update - Week 10",
+          "summary" => "The project update thread still needs a final owner and ETA.",
+          "recommended_action" => "Reply now with the owner, current status, and a concrete ETA.",
+          "priority" => 91,
+          "confidence" => 0.9,
+          "dedupe_key" => "brief-test:generic-title",
+          "due_at" => DateTime.add(scheduled_at, -2, :hour),
+          "metadata" => %{
+            "record" => %{
+              "commitment" => "Reply to David with the owner, status, and ETA for Week 10.",
+              "person" => "David",
+              "status" => "unresolved",
+              "evidence" => ["The thread still has no final owner or ETA response."],
+              "next_action" => "Reply now with the owner, current status, and a concrete ETA."
+            }
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, _payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert brief.body =~ "Reply to David with the owner, status, and ETA for Week 10."
+    refute brief.body =~ "Reply owed: Re: Cowrie Agora Update - Week 10"
   end
 end

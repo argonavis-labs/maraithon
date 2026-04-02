@@ -11,6 +11,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @behaviour Maraithon.Behaviors.Behavior
 
   alias Maraithon.ChiefOfStaff.SourceScope
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.GoogleCalendar
   alias Maraithon.Followthrough.ConversationContext
@@ -495,6 +496,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           annotate_google_items(value, account)
 
         {:error, reason} ->
+          ConnectedAccounts.report_access_issue(state.user_id, provider, reason)
+
           Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
             provider: provider,
             reason: inspect(reason)
@@ -567,6 +570,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         )
 
       {:error, reason} ->
+        if is_binary(provider) do
+          ConnectedAccounts.report_access_issue(state.user_id, provider, reason)
+        end
+
         trigger_message
         |> List.wrap()
         |> ConversationContext.from_gmail(trigger_message,

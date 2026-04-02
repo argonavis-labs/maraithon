@@ -11,6 +11,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   alias Maraithon.Briefs
   alias Maraithon.Insights
+  alias Maraithon.Insights.Detail
 
   @default_timezone_offset_hours -5
   @default_morning_hour 8
@@ -112,8 +113,25 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          now
        ) do
     due_today = Enum.filter(act_now_insights, &due_today?(&1, state.timezone_offset_hours, now))
-    top_items = Enum.take(act_now_insights, state.max_items)
-    watching_items = recent_monitor_items(monitor_insights, now, state.max_items)
+
+    top_items =
+      select_brief_items(
+        act_now_insights,
+        now,
+        state.timezone_offset_hours,
+        state.max_items,
+        cadence: "morning"
+      )
+
+    watching_items =
+      monitor_insights
+      |> recent_monitor_items(now)
+      |> select_brief_items(
+        now,
+        state.timezone_offset_hours,
+        state.max_items,
+        cadence: "monitor"
+      )
 
     {title, summary} =
       cond do
@@ -129,7 +147,14 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           count = length(top_items)
 
           {"Morning brief: #{count} items worth watching",
-           "#{length(due_today)} due today, #{overdue_count(act_now_insights, state.timezone_offset_hours, now)} overdue, #{length(monitor_insights)} in watching, and #{count_by_source(act_now_insights, "slack")} from Slack."}
+           morning_summary(
+             top_items,
+             due_today,
+             act_now_insights,
+             monitor_insights,
+             state.timezone_offset_hours,
+             now
+           )}
       end
 
     %{
@@ -148,7 +173,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           now
         ),
       "metadata" =>
-        metadata_for(plan, state.assistant_behavior, act_now_insights ++ watching_items)
+        metadata_for(
+          plan,
+          state.assistant_behavior,
+          act_now_insights ++ card_insights(watching_items)
+        )
     }
   end
 
@@ -160,15 +189,31 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          _recent_insights,
          _now
        ) do
-    debt_items =
+    debt_candidates =
       act_now_insights
       |> Enum.filter(
         &(due_today?(&1, state.timezone_offset_hours, plan.scheduled_for) or
             overdue?(&1, state.timezone_offset_hours, plan.scheduled_for))
       )
-      |> Enum.take(state.max_items)
 
-    watching_items = recent_monitor_items(monitor_insights, plan.scheduled_for, state.max_items)
+    debt_items =
+      select_brief_items(
+        debt_candidates,
+        plan.scheduled_for,
+        state.timezone_offset_hours,
+        state.max_items,
+        cadence: "end_of_day"
+      )
+
+    watching_items =
+      monitor_insights
+      |> recent_monitor_items(plan.scheduled_for)
+      |> select_brief_items(
+        plan.scheduled_for,
+        state.timezone_offset_hours,
+        state.max_items,
+        cadence: "monitor"
+      )
 
     {title, summary} =
       cond do
@@ -184,7 +229,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           count = length(debt_items)
 
           {"End-of-day debt: #{count} items still open",
-           "#{overdue_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} overdue and #{due_today_count(debt_items, state.timezone_offset_hours, plan.scheduled_for)} still due today."}
+           end_of_day_summary(
+             debt_items,
+             debt_candidates,
+             monitor_insights,
+             state.timezone_offset_hours,
+             plan.scheduled_for
+           )}
       end
 
     %{
@@ -202,7 +253,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           state.timezone_offset_hours,
           plan.scheduled_for
         ),
-      "metadata" => metadata_for(plan, state.assistant_behavior, debt_items ++ watching_items)
+      "metadata" =>
+        metadata_for(
+          plan,
+          state.assistant_behavior,
+          card_insights(debt_items ++ watching_items)
+        )
     }
   end
 
@@ -222,7 +278,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         DateTime.compare(insight.inserted_at, week_cutoff) in [:eq, :gt]
       end)
 
-    top_open = Enum.take(act_now_insights ++ monitor_insights, state.max_items)
+    top_open =
+      select_brief_items(
+        act_now_insights ++ monitor_insights,
+        plan.scheduled_for,
+        state.timezone_offset_hours,
+        state.max_items,
+        cadence: "weekly_review"
+      )
+
     open_count = Enum.count(act_now_insights) + Enum.count(monitor_insights)
     closed_count = Enum.count(weekly_items, &(&1.status in ["acknowledged", "dismissed"]))
 
@@ -348,16 +412,19 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          now
        ) do
     """
-    Focus today:
+    Best use of today:
+    #{morning_guidance(top_items)}
+
+    Focus now:
     #{format_items(top_items, offset_hours, now, "1. Nothing needs direct action right now.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
-    Snapshot:
+    Pressure:
     - #{length(act_now_insights)} items need direct action across Gmail, Calendar, and Slack
-    - #{length(monitor_insights)} important threads are in Watching
     - #{overdue_count(act_now_insights, offset_hours, now)} already overdue
     - #{due_today_count(act_now_insights, offset_hours, now)} due today
+    - #{length(monitor_insights)} threads are still in Watching
     """
     |> String.trim()
   end
@@ -371,15 +438,18 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          now
        ) do
     """
-    Tonight's top actions:
+    Tonight's move:
+    #{end_of_day_guidance(debt_items)}
+
+    Close or reset:
     #{format_items(debt_items, offset_hours, now, "1. Nothing needs direct action tonight.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
-    Why it matters:
-    - #{overdue_count(act_now_insights, offset_hours, now)} items are already overdue
+    Pressure:
+    - #{overdue_count(act_now_insights, offset_hours, now)} items are already overdue across the full backlog
     - #{due_today_count(act_now_insights, offset_hours, now)} were due today and still unresolved
-    - #{length(monitor_insights)} important threads are being watched
+    - #{length(monitor_insights)} threads are still being watched
     """
     |> String.trim()
   end
@@ -409,8 +479,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp format_items(items, offset_hours, reference_at, _empty_text) do
     items
     |> Enum.with_index(1)
-    |> Enum.map(fn insight ->
-      format_item_block(insight, offset_hours, reference_at)
+    |> Enum.map(fn card ->
+      format_item_block(card, offset_hours, reference_at)
     end)
     |> Enum.join("\n")
   end
@@ -419,33 +489,367 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp watching_section(items, offset_hours, reference_at) do
     """
-    Watching:
+    Watching, not blocking right now:
     #{format_items(items, offset_hours, reference_at, "1. Nothing newly changed is being watched.")}
     """
     |> String.trim()
   end
 
-  defp format_item_block({insight, index}, offset_hours, reference_at) do
+  defp format_item_block({card, index}, offset_hours, reference_at) do
+    insight = card.insight
     source = source_label(insight.source)
-    why_now = item_why_now(insight, offset_hours, reference_at)
 
-    """
-    #{index}. [#{source}] #{insight.title}
-    Next: #{insight.recommended_action}
-    Why now: #{why_now}
-    """
+    [
+      "#{index}. [#{source}] #{item_heading(card)}",
+      maybe_line("Waiting on", card.requested_by),
+      maybe_line(action_label(insight), truncate_text(card.primary_action, 180)),
+      maybe_line("Why", item_why_now(card, offset_hours, reference_at)),
+      maybe_line("Checked", item_checked(card))
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
     |> String.trim()
   end
 
-  defp item_why_now(insight, offset_hours, reference_at) do
+  defp morning_summary(
+         top_items,
+         due_today,
+         act_now_insights,
+         monitor_insights,
+         offset_hours,
+         now
+       ) do
+    top_items
+    |> lead_summary(offset_hours, now)
+    |> append_sentence(extra_open_item_summary(top_items))
+    |> append_sentence("#{length(due_today)} due today")
+    |> append_sentence(
+      "#{overdue_count(act_now_insights, offset_hours, now)} overdue across the backlog"
+    )
+    |> append_sentence("#{length(monitor_insights)} being watched")
+  end
+
+  defp end_of_day_summary(
+         debt_items,
+         debt_candidates,
+         monitor_insights,
+         offset_hours,
+         reference_at
+       ) do
+    debt_items
+    |> lead_summary(offset_hours, reference_at)
+    |> append_sentence(extra_open_item_summary(debt_items))
+    |> append_sentence(
+      "#{overdue_count(debt_candidates, offset_hours, reference_at)} overdue tonight"
+    )
+    |> append_sentence("#{length(monitor_insights)} being watched")
+  end
+
+  defp lead_summary([], _offset_hours, _reference_at), do: nil
+
+  defp lead_summary([card | _], offset_hours, reference_at) do
+    [
+      "Most urgent: #{item_heading(card)}",
+      card.requested_by && "#{card.requested_by} is waiting",
+      due_context(card.insight, offset_hours, reference_at)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&strip_terminal_period/1)
+    |> Enum.join(". ")
+  end
+
+  defp extra_open_item_summary(items) do
+    case length(items) - 1 do
+      count when count > 0 -> "#{count} more high-signal loop#{if(count == 1, do: "", else: "s")}"
+      _ -> nil
+    end
+  end
+
+  defp append_sentence(nil, nil), do: nil
+  defp append_sentence(nil, extra), do: sentence_case(extra)
+  defp append_sentence(text, nil), do: text
+  defp append_sentence(text, extra), do: text <> ". " <> sentence_case(extra)
+
+  defp morning_guidance([]), do: "Nothing needs direct action right now."
+
+  defp morning_guidance(items) do
+    if mostly_reply_loops?(items) do
+      "Start with the human threads that need an owner, a concrete ETA, or a short reset in the same thread."
+    else
+      "Start with the items where a person is waiting on you or the deadline lands today."
+    end
+  end
+
+  defp end_of_day_guidance([]), do: "Nothing needs direct action tonight."
+
+  defp end_of_day_guidance(items) do
+    if mostly_reply_loops?(items) do
+      "These are mostly reply loops. If the work is not finished, send a short owner + exact ETA tonight instead of waiting for the perfect answer."
+    else
+      "Close the promises with a human waiting on you, or explicitly reset timing before you sign off."
+    end
+  end
+
+  defp item_why_now(card, offset_hours, reference_at) do
+    [
+      truncate_text(card.open_loop_reason, 180),
+      due_context(card.insight, offset_hours, reference_at)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.join(" ")
+    |> normalize_string()
+  end
+
+  defp item_checked(%{evidence: nil}), do: nil
+  defp item_checked(%{evidence: evidence}), do: truncate_text(evidence, 160)
+
+  defp item_heading(card) do
+    title = normalize_string(card.insight.title)
+
+    cond do
+      is_nil(title) and is_nil(card.promise_text) ->
+        "Open loop"
+
+      generic_heading?(title) and not is_nil(card.promise_text) ->
+        card.promise_text
+
+      true ->
+        title || card.promise_text
+    end
+    |> prepend_requester(card.requested_by)
+    |> truncate_text(120)
+  end
+
+  defp prepend_requester(title, nil), do: title
+  defp prepend_requester(nil, requester), do: requester
+
+  defp prepend_requester(title, requester) do
+    if contains_text?(title, requester) do
+      title
+    else
+      "#{requester}: #{title}"
+    end
+  end
+
+  defp maybe_line(_label, nil), do: nil
+  defp maybe_line(label, value), do: "#{label}: #{value}"
+
+  defp action_label(%{attention_mode: "monitor"}), do: "Watch"
+  defp action_label(_insight), do: "Do"
+
+  defp select_brief_items([], _reference_at, _offset_hours, _limit, _opts), do: []
+
+  defp select_brief_items(insights, reference_at, offset_hours, limit, opts) do
+    cadence = Keyword.get(opts, :cadence, "general")
+
+    insights
+    |> Enum.map(&build_item_card(&1, reference_at, offset_hours, cadence))
+    |> Enum.sort_by(
+      fn card ->
+        {
+          card.score,
+          urgency_score(card.insight, offset_hours, reference_at),
+          datetime_sort_value(card.insight.updated_at || card.insight.inserted_at)
+        }
+      end,
+      :desc
+    )
+    |> take_diverse_cards(limit)
+  end
+
+  defp build_item_card(insight, reference_at, offset_hours, cadence) do
     metadata = insight.metadata || %{}
+    record = read_map(metadata, "record")
+    detail = Detail.build(insight, [])
 
-    case read_string(metadata, "why_now") do
-      nil ->
-        due_context(insight, offset_hours, reference_at) || insight.summary
+    %{
+      insight: insight,
+      promise_text: detail_text(detail.promise_text) || read_string(record, "commitment"),
+      requested_by:
+        detail_text(detail.requested_by) ||
+          read_string(record, "person") ||
+          read_string(metadata, "person") ||
+          read_string(metadata, "from"),
+      primary_action:
+        read_string(record, "next_action") ||
+          read_string(metadata, "next_action") ||
+          insight.recommended_action,
+      open_loop_reason:
+        read_string(metadata, "why_now") ||
+          read_string(metadata, "reasoning_summary") ||
+          detail_reason_text(detail.open_loop_reason) ||
+          insight.summary,
+      evidence: best_evidence_text(detail.evidence_checked),
+      group_key: item_group_key(insight, detail, metadata, record),
+      score: item_score(insight, detail, metadata, offset_hours, reference_at, cadence)
+    }
+  end
 
-      why_now ->
-        due_context(insight, offset_hours, reference_at) || why_now
+  defp item_score(insight, detail, metadata, offset_hours, reference_at, cadence) do
+    base = insight.priority * 10 + urgency_score(insight, offset_hours, reference_at)
+
+    richness =
+      0
+      |> maybe_add(detail_text(detail.promise_text), 70)
+      |> maybe_add(detail_text(detail.requested_by), 60)
+      |> maybe_add(best_evidence_text(detail.evidence_checked), 50)
+      |> maybe_add(detail_reason_text(detail.open_loop_reason), 30)
+      |> maybe_add(read_string_list(metadata, "follow_up_ideas"), 20)
+      |> maybe_add(read_boolean(metadata, "human_counterparty"), 30)
+      |> maybe_add(read_boolean(metadata, "reply_obligation"), 30)
+
+    cadence_bonus =
+      case cadence do
+        "end_of_day" -> if(overdue?(insight, offset_hours, reference_at), do: 50, else: 0)
+        "monitor" -> 20
+        _ -> 0
+      end
+
+    risk_penalty = round(read_float(metadata, "false_positive_risk", 0.0) * 100)
+
+    base + richness + cadence_bonus - risk_penalty
+  end
+
+  defp urgency_score(insight, offset_hours, reference_at) do
+    cond do
+      overdue?(insight, offset_hours, reference_at) -> 400
+      due_today?(insight, offset_hours, reference_at) -> 250
+      due_tomorrow?(insight, offset_hours, reference_at) -> 120
+      true -> 0
+    end
+  end
+
+  defp maybe_add(score, nil, _bonus), do: score
+  defp maybe_add(score, false, _bonus), do: score
+  defp maybe_add(score, [], _bonus), do: score
+  defp maybe_add(score, _value, bonus), do: score + bonus
+
+  defp take_diverse_cards(cards, limit) do
+    {selected, deferred, _seen} =
+      Enum.reduce(cards, {[], [], MapSet.new()}, fn card, {selected, deferred, seen} ->
+        key = card.group_key || "idx:#{length(selected)}:#{length(deferred)}"
+
+        cond do
+          length(selected) < limit and not MapSet.member?(seen, key) ->
+            {[card | selected], deferred, MapSet.put(seen, key)}
+
+          true ->
+            {selected, [card | deferred], seen}
+        end
+      end)
+
+    selected = Enum.reverse(selected)
+    remaining = max(limit - length(selected), 0)
+
+    selected ++
+      (deferred
+       |> Enum.reverse()
+       |> Enum.take(remaining))
+  end
+
+  defp item_group_key(insight, detail, metadata, record) do
+    normalize_group_key(
+      detail_text(detail.requested_by) ||
+        read_string(record, "person") ||
+        read_string(metadata, "thread_id") ||
+        read_string(record, "source") ||
+        insight.source_id ||
+        insight.title
+    )
+  end
+
+  defp normalize_group_key(nil), do: nil
+
+  defp normalize_group_key(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/u, "-")
+  end
+
+  defp mostly_reply_loops?(items) do
+    Enum.all?(items, fn card ->
+      card.insight.source == "gmail" and
+        card.insight.category in ["reply_urgent", "commitment_unresolved", "meeting_follow_up"]
+    end)
+  end
+
+  defp card_insights(cards), do: Enum.map(cards, & &1.insight)
+
+  defp detail_text(%{text: text}) when is_binary(text), do: normalize_string(text)
+  defp detail_text(_), do: nil
+
+  defp detail_reason_text(%{text: text}) when is_binary(text), do: normalize_string(text)
+  defp detail_reason_text(_), do: nil
+
+  defp best_evidence_text(items) when is_list(items) do
+    items
+    |> Enum.find_value(fn
+      %{kind: :source_evidence} = item -> evidence_text(item)
+      _ -> nil
+    end)
+  end
+
+  defp best_evidence_text(_items), do: nil
+
+  defp evidence_text(%{label: label, detail: detail}) do
+    cond do
+      normalize_string(label) && normalize_string(detail) -> "#{label}: #{detail}"
+      normalize_string(label) -> label
+      normalize_string(detail) -> detail
+      true -> nil
+    end
+  end
+
+  defp evidence_text(_item), do: nil
+
+  defp generic_heading?(nil), do: false
+
+  defp generic_heading?(title) do
+    normalized = String.downcase(title)
+
+    Enum.any?(
+      [
+        "reply owed",
+        "overdue promise",
+        "action needed",
+        "follow up",
+        "possible follow-up",
+        "monitoring:"
+      ],
+      &String.starts_with?(normalized, &1)
+    )
+  end
+
+  defp contains_text?(nil, _needle), do: false
+  defp contains_text?(_haystack, nil), do: false
+
+  defp contains_text?(haystack, needle) do
+    String.contains?(String.downcase(haystack), String.downcase(needle))
+  end
+
+  defp truncate_text(nil, _max), do: nil
+
+  defp truncate_text(text, max) when is_binary(text) and is_integer(max) and max > 3 do
+    if String.length(text) > max do
+      String.slice(text, 0, max - 3) <> "..."
+    else
+      text
+    end
+  end
+
+  defp strip_terminal_period(text) when is_binary(text) do
+    String.trim_trailing(text, ".")
+  end
+
+  defp sentence_case(nil), do: nil
+
+  defp sentence_case(text) do
+    text
+    |> normalize_string()
+    |> case do
+      nil -> nil
+      normalized -> String.capitalize(normalized)
     end
   end
 
@@ -504,14 +908,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     Enum.count(insights, fn insight -> normalize_source(insight.source) == source end)
   end
 
-  defp recent_monitor_items(insights, reference_at, limit) do
+  defp recent_monitor_items(insights, reference_at) do
     cutoff = DateTime.add(reference_at, -36, :hour)
 
     insights
     |> Enum.filter(fn insight ->
       DateTime.compare(insight.updated_at || insight.inserted_at, cutoff) in [:eq, :gt]
     end)
-    |> Enum.take(limit)
   end
 
   defp due_today?(insight, offset_hours, reference_at) do
@@ -532,6 +935,18 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         due_local = shift_local(due_at, offset_hours)
         now_local = shift_local(reference_at, offset_hours)
         DateTime.compare(due_local, now_local) == :lt
+
+      _ ->
+        false
+    end
+  end
+
+  defp due_tomorrow?(insight, offset_hours, reference_at) do
+    case insight.due_at do
+      %DateTime{} = due_at ->
+        due_local_date = due_at |> shift_local(offset_hours) |> DateTime.to_date()
+        now_local_date = reference_at |> shift_local(offset_hours) |> DateTime.to_date()
+        Date.compare(due_local_date, Date.add(now_local_date, 1)) == :eq
 
       _ ->
         false
@@ -589,4 +1004,53 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp read_string(_attrs, _key), do: nil
+
+  defp read_map(attrs, key) when is_map(attrs) and is_binary(key) do
+    case Map.get(attrs, key) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp read_boolean(attrs, key) when is_map(attrs) and is_binary(key) do
+    case Map.get(attrs, key) do
+      true -> true
+      "true" -> true
+      _ -> false
+    end
+  end
+
+  defp read_float(attrs, key, default) when is_map(attrs) and is_binary(key) do
+    case Map.get(attrs, key) do
+      value when is_float(value) ->
+        value
+
+      value when is_integer(value) ->
+        value / 1
+
+      value when is_binary(value) ->
+        case Float.parse(value) do
+          {parsed, ""} -> parsed
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp read_string_list(attrs, key) when is_map(attrs) and is_binary(key) do
+    case Map.get(attrs, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.map(&normalize_string/1)
+        |> Enum.reject(&is_nil/1)
+
+      _ ->
+        []
+    end
+  end
+
+  defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :second)
+  defp datetime_sort_value(_datetime), do: 0
 end

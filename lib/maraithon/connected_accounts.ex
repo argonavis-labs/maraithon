@@ -182,6 +182,21 @@ defmodule Maraithon.ConnectedAccounts do
     end
   end
 
+  def report_access_issue(user_id, provider, reason)
+      when is_binary(user_id) and is_binary(provider) do
+    case normalize_access_issue_reason(reason) do
+      nil ->
+        :ok
+
+      normalized_reason ->
+        case mark_error(user_id, provider, normalized_reason) do
+          {:ok, _account} -> :ok
+          :ok -> :ok
+          _ -> :ok
+        end
+    end
+  end
+
   def sync_from_oauth_tokens(user_id) when is_binary(user_id) do
     OAuth.list_user_tokens(user_id)
     |> Enum.map(&sync_token/1)
@@ -207,6 +222,52 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp normalize_error_reason(reason) when is_binary(reason), do: reason
   defp normalize_error_reason(reason), do: inspect(reason)
+
+  defp normalize_access_issue_reason(:reauth_required), do: "oauth_reauth_required"
+  defp normalize_access_issue_reason(:no_refresh_token), do: "oauth_missing_refresh_token"
+  defp normalize_access_issue_reason(:no_token), do: "oauth_reauth_required"
+
+  defp normalize_access_issue_reason({:http_status, status, _body}) when status in [401, 403],
+    do: "oauth_reauth_required"
+
+  defp normalize_access_issue_reason({:token_refresh_failed, nested_reason}),
+    do: normalize_access_issue_reason(nested_reason)
+
+  defp normalize_access_issue_reason(reason) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    cond do
+      String.contains?(normalized, "oauth_reauth_required") ->
+        "oauth_reauth_required"
+
+      String.contains?(normalized, "oauth_missing_refresh_token") ->
+        "oauth_missing_refresh_token"
+
+      String.contains?(normalized, "invalid_grant") ->
+        "oauth_reauth_required"
+
+      String.contains?(normalized, "expired or revoked") ->
+        "oauth_reauth_required"
+
+      String.contains?(normalized, "has been revoked") ->
+        "oauth_reauth_required"
+
+      String.contains?(normalized, "invalid_refresh_token") ->
+        "oauth_reauth_required"
+
+      String.contains?(normalized, "token_revoked") ->
+        "oauth_reauth_required"
+
+      true ->
+        nil
+    end
+  end
+
+  defp normalize_access_issue_reason(reason) do
+    reason
+    |> inspect()
+    |> normalize_access_issue_reason()
+  end
 
   defp metadata_external_account_id(metadata) when is_map(metadata) do
     metadata["id"] || metadata[:id] || metadata["github_id"] || metadata[:github_id] ||

@@ -1,6 +1,7 @@
 defmodule Maraithon.Tools.GmailHelpers do
   @moduledoc false
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
@@ -11,30 +12,133 @@ defmodule Maraithon.Tools.GmailHelpers do
     max_results = Keyword.get(opts, :max_results, 10)
     query = Keyword.get(opts, :query)
     label_ids = Keyword.get(opts, :label_ids, ["INBOX"])
-    provider = Keyword.get(opts, :provider, "google")
+    provider = Keyword.get(opts, :provider)
 
+    providers =
+      user_id
+      |> providers_for_search(provider)
+      |> Enum.uniq()
+
+    fetch_messages_from_providers(user_id, providers, max_results, query, label_ids)
+  end
+
+  def get_message(user_id, message_id) when is_binary(user_id) and is_binary(message_id) do
+    providers = providers_for_search(user_id, nil)
+
+    providers
+    |> Enum.reduce_while({:error, :no_token}, fn provider, _acc ->
+      case Gmail.fetch_message(user_id, message_id, provider: provider) do
+        {:ok, message} ->
+          {:halt,
+           {:ok,
+            message
+            |> Map.put(:google_provider, provider)
+            |> Map.put(:google_account_email, provider_account_email(provider))}}
+
+        {:error, reason} ->
+          ConnectedAccounts.report_access_issue(user_id, provider, reason)
+          {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
+  def normalize_error(:reauth_required), do: {:error, "google_reauth_required"}
+
+  def normalize_error({:http_status, status, _body}) when status in [401, 403],
+    do: {:error, "google_reauth_required"}
+
+  def normalize_error({:http_status, status, body}),
+    do: {:error, "gmail_api_failed: #{status} #{body}"}
+
+  def normalize_error(reason), do: {:error, "gmail_tool_failed: #{inspect(reason)}"}
+
+  defp fetch_messages_from_providers(_user_id, [], _max_results, _query, _label_ids),
+    do: {:error, :no_token}
+
+  defp fetch_messages_from_providers(user_id, providers, max_results, query, label_ids) do
+    {messages, errors} =
+      Enum.reduce(providers, {[], []}, fn provider, {message_acc, error_acc} ->
+        case fetch_messages_from_provider(user_id, provider, max_results, query, label_ids) do
+          {:ok, provider_messages} ->
+            {provider_messages ++ message_acc, error_acc}
+
+          {:error, reason} ->
+            ConnectedAccounts.report_access_issue(user_id, provider, reason)
+            {message_acc, [{provider, reason} | error_acc]}
+        end
+      end)
+
+    case Enum.sort_by(messages, &message_sort_value/1, :desc) |> Enum.take(max_results) do
+      [] ->
+        case List.first(errors) do
+          {_provider, reason} -> {:error, reason}
+          nil -> {:ok, []}
+        end
+
+      sorted_messages ->
+        {:ok, sorted_messages}
+    end
+  end
+
+  defp fetch_messages_from_provider(user_id, provider, max_results, query, label_ids)
+       when is_binary(user_id) and is_binary(provider) do
     with {:ok, access_token} <- OAuth.get_valid_access_token(user_id, provider),
          {:ok, message_ids} <- fetch_message_ids(access_token, max_results, query, label_ids) do
       messages =
         message_ids
         |> Enum.map(&Gmail.fetch_message(access_token, &1, access_token: true))
         |> Enum.filter(&match?({:ok, _}, &1))
-        |> Enum.map(fn {:ok, message} -> message end)
+        |> Enum.map(fn {:ok, message} ->
+          message
+          |> Map.put(:google_provider, provider)
+          |> Map.put(:google_account_email, provider_account_email(provider))
+        end)
 
       {:ok, messages}
     end
   end
 
-  def get_message(user_id, message_id) when is_binary(user_id) and is_binary(message_id) do
-    Gmail.fetch_message(user_id, message_id)
+  defp providers_for_search(user_id, provider) when provider in [nil, "", "google"] do
+    connected_google_providers(user_id)
+    |> case do
+      [] -> ["google"]
+      providers -> providers
+    end
   end
 
-  def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
+  defp providers_for_search(_user_id, provider) when is_binary(provider), do: [provider]
+  defp providers_for_search(_user_id, _provider), do: ["google"]
 
-  def normalize_error({:http_status, status, body}),
-    do: {:error, "gmail_api_failed: #{status} #{body}"}
+  defp connected_google_providers(user_id) when is_binary(user_id) do
+    account_providers =
+      user_id
+      |> ConnectedAccounts.list_for_user()
+      |> Enum.filter(fn account ->
+        account.status == "connected" and String.starts_with?(account.provider, "google:")
+      end)
+      |> Enum.map(& &1.provider)
 
-  def normalize_error(reason), do: {:error, "gmail_tool_failed: #{inspect(reason)}"}
+    token_providers =
+      user_id
+      |> OAuth.list_user_tokens()
+      |> Enum.map(& &1.provider)
+      |> Enum.filter(&String.starts_with?(&1, "google:"))
+
+    (account_providers ++ token_providers)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp connected_google_providers(_user_id), do: []
+
+  defp provider_account_email("google:" <> account_email), do: account_email
+  defp provider_account_email(_provider), do: nil
+
+  defp message_sort_value(%{internal_date: %DateTime{} = internal_date}),
+    do: DateTime.to_unix(internal_date, :microsecond)
+
+  defp message_sort_value(_message), do: 0
 
   defp fetch_message_ids(access_token, max_results, query, label_ids) do
     params =

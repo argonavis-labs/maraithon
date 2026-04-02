@@ -138,6 +138,101 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert hd(result.messages).message_id == "m-9"
   end
 
+  test "GmailSearch fans out across connected Google accounts and sorts by latest message" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-2b", "google:work@example.com", %{
+               access_token: "work-token",
+               refresh_token: "work-refresh",
+               metadata: %{"account_email" => "work@example.com"}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-2b", "google:personal@example.com", %{
+               access_token: "personal-token",
+               refresh_token: "personal-refresh",
+               metadata: %{"account_email" => "personal@example.com"}
+             })
+
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      assert conn.query_string =~ "q=newer_than%3A2d"
+      assert conn.query_string =~ "maxResults=4"
+
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer personal-token"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "personal-1"}]}))
+
+        ["Bearer work-token"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => [%{"id" => "work-1"}]}))
+      end
+    end)
+
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/personal-1", fn conn ->
+      ["Bearer personal-token"] = Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "id" => "personal-1",
+          "threadId" => "thread-personal-1",
+          "snippet" => "Newest personal note",
+          "labelIds" => ["INBOX"],
+          "internalDate" => "1775091600000",
+          "payload" => %{
+            "headers" => [%{"name" => "Subject", "value" => "Personal thread"}]
+          }
+        })
+      )
+    end)
+
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/work-1", fn conn ->
+      ["Bearer work-token"] = Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "id" => "work-1",
+          "threadId" => "thread-work-1",
+          "snippet" => "Reply to partner",
+          "labelIds" => ["INBOX"],
+          "internalDate" => "1775088000000",
+          "payload" => %{
+            "headers" => [%{"name" => "Subject", "value" => "Work thread"}]
+          }
+        })
+      )
+    end)
+
+    assert {:ok, result} =
+             GmailSearch.execute(%{
+               "user_id" => "google-tool-user-2b",
+               "query" => "newer_than:2d",
+               "max_results" => 4
+             })
+
+    assert result.count == 2
+
+    assert Enum.map(result.messages, & &1.google_provider) == [
+             "google:personal@example.com",
+             "google:work@example.com"
+           ]
+
+    assert Enum.map(result.messages, & &1.message_id) == ["personal-1", "work-1"]
+  end
+
   test "GmailGetMessage fetches one message by id" do
     bypass = Bypass.open()
 
@@ -173,6 +268,63 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert result.message_id == "m-42"
     assert result.message.message_id == "m-42"
     assert result.message.subject == "One"
+  end
+
+  test "GmailGetMessage can find a message across connected Google accounts" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-3b", "google:work@example.com", %{
+               access_token: "work-token-3b",
+               refresh_token: "work-refresh-3b",
+               metadata: %{"account_email" => "work@example.com"}
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-3b", "google:personal@example.com", %{
+               access_token: "personal-token-3b",
+               refresh_token: "personal-refresh-3b",
+               metadata: %{"account_email" => "personal@example.com"}
+             })
+
+    Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/m-42", fn conn ->
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer personal-token-3b"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(404, Jason.encode!(%{"error" => %{"message" => "Not found"}}))
+
+        ["Bearer work-token-3b"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "id" => "m-42",
+              "threadId" => "t-42",
+              "snippet" => "One message",
+              "labelIds" => ["INBOX"],
+              "payload" => %{
+                "headers" => [%{"name" => "Subject", "value" => "Cross-account"}]
+              }
+            })
+          )
+      end
+    end)
+
+    assert {:ok, result} =
+             GmailGetMessage.execute(%{
+               "user_id" => "google-tool-user-3b",
+               "message_id" => "m-42"
+             })
+
+    assert result.message.message_id == "m-42"
+    assert result.message.google_provider == "google:work@example.com"
+    assert result.message.subject == "Cross-account"
   end
 
   test "GoogleCalendarListEvents returns parsed events for connected user" do
