@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.Agent do
   use GenStateMachine, callback_mode: [:state_functions, :state_enter]
 
   alias Maraithon.Events
+  alias Maraithon.AgentSubscriptions
   alias Maraithon.Behaviors
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Runtime.Dispatch
@@ -106,7 +107,10 @@ defmodule Maraithon.Runtime.Agent do
     :ok = Dispatch.subscribe(agent.id)
 
     # Subscribe to PubSub topics from config
-    subscriptions = agent.config["subscribe"] || []
+    subscriptions =
+      (agent.config["subscribe"] || [])
+      |> Kernel.++(AgentSubscriptions.list_topics_for_agent(agent.id))
+      |> Enum.uniq()
 
     Enum.each(subscriptions, fn topic ->
       Phoenix.PubSub.subscribe(Maraithon.PubSub, topic)

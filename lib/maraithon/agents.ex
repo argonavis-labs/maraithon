@@ -4,6 +4,8 @@ defmodule Maraithon.Agents do
   """
 
   import Ecto.Query
+
+  alias Maraithon.AgentSubscriptions
   alias Maraithon.Repo
   alias Maraithon.Agents.Agent
 
@@ -47,18 +49,42 @@ defmodule Maraithon.Agents do
   Create a new agent record.
   """
   def create_agent(attrs \\ %{}) do
-    %Agent{}
-    |> Agent.changeset(attrs)
-    |> Repo.insert()
+    Repo.transaction(fn ->
+      with {:ok, agent} <-
+             %Agent{}
+             |> Agent.changeset(attrs)
+             |> Repo.insert(),
+           {:ok, _subscriptions} <- AgentSubscriptions.sync_for_agent(agent) do
+        agent
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, agent} -> {:ok, agent}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """
   Update an agent record.
   """
   def update_agent(%Agent{} = agent, attrs) do
-    agent
-    |> Agent.changeset(attrs)
-    |> Repo.update()
+    Repo.transaction(fn ->
+      with {:ok, updated_agent} <-
+             agent
+             |> Agent.changeset(attrs)
+             |> Repo.update(),
+           {:ok, _subscriptions} <- AgentSubscriptions.sync_for_agent(updated_agent) do
+        updated_agent
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, updated_agent} -> {:ok, updated_agent}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @doc """

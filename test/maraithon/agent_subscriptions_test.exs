@@ -1,5 +1,5 @@
 defmodule Maraithon.AgentSubscriptionsTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.AgentSubscriptions

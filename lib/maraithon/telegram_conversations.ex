@@ -6,6 +6,8 @@ defmodule Maraithon.TelegramConversations do
   import Ecto.Query
 
   alias Maraithon.InsightNotifications.Delivery
+  alias Maraithon.OperatorBus
+  alias Maraithon.OperatorEvents
   alias Maraithon.Repo
   alias Maraithon.TelegramConversations.{Conversation, Turn}
 
@@ -84,10 +86,16 @@ defmodule Maraithon.TelegramConversations do
         })
         |> Repo.update!()
 
-      {updated_conversation, turn}
+      {:ok, operator_event} =
+        OperatorEvents.record(turn_operator_event_attrs(updated_conversation, turn, now))
+
+      {updated_conversation, turn, operator_event}
     end)
     |> case do
-      {:ok, {conversation, turn}} -> {:ok, {conversation, turn}}
+      {:ok, {conversation, turn, operator_event}} ->
+        :ok = OperatorBus.broadcast(operator_event)
+        {:ok, {conversation, turn}}
+
       {:error, reason} -> {:error, reason}
     end
   end
@@ -285,6 +293,35 @@ defmodule Maraithon.TelegramConversations do
     |> Enum.map_join("\n", fn turn ->
       "#{turn.role}: #{String.slice(turn.text || "", 0, 160)}"
     end)
+  end
+
+  defp turn_operator_event_attrs(conversation, turn, occurred_at) do
+    %{
+      user_id: conversation.user_id,
+      source: "telegram",
+      event_type: "conversation_turn.recorded",
+      source_item_id: turn.id,
+      dedupe_key: "telegram:conversation_turn.recorded:#{turn.id}",
+      occurred_at: occurred_at,
+      payload: %{
+        "conversation_id" => conversation.id,
+        "chat_id" => conversation.chat_id,
+        "role" => turn.role,
+        "text" => turn.text,
+        "turn_kind" => turn.turn_kind,
+        "origin_type" => turn.origin_type,
+        "telegram_message_id" => turn.telegram_message_id,
+        "reply_to_message_id" => turn.reply_to_message_id,
+        "intent" => turn.intent,
+        "confidence" => turn.confidence
+      },
+      metadata: %{
+        "conversation_status" => conversation.status,
+        "root_message_id" => conversation.root_message_id,
+        "linked_delivery_id" => conversation.linked_delivery_id,
+        "linked_insight_id" => conversation.linked_insight_id
+      }
+    }
   end
 
   defp active_reply_conversation(%Conversation{} = conversation) do

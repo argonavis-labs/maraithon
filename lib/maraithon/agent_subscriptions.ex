@@ -33,7 +33,7 @@ defmodule Maraithon.AgentSubscriptions do
 
   def sync_for_agent(%Agent{} = agent) do
     desired_topics = normalized_topics(get_in(agent.config || %{}, ["subscribe"]))
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    now = DateTime.utc_now()
     metadata = %{"source" => "agent_config", "synced_from" => "config.subscribe"}
 
     Repo.transaction(fn ->
@@ -61,12 +61,17 @@ defmodule Maraithon.AgentSubscriptions do
         )
       end)
 
-      stale_query =
-        AgentSubscription
-        |> where([subscription], subscription.agent_id == ^agent.id)
-        |> exclude_desired_topics(desired_topics)
-
-      Repo.update_all(stale_query, set: [status: "inactive", updated_at: now])
+      agent.id
+      |> list_for_agent(status: nil)
+      |> Enum.each(fn subscription ->
+        if subscription.topic in desired_topics do
+          :ok
+        else
+          subscription
+          |> Ecto.Changeset.change(status: "inactive", updated_at: now)
+          |> Repo.update!()
+        end
+      end)
 
       list_for_agent(agent.id, status: nil)
     end)
@@ -82,12 +87,6 @@ defmodule Maraithon.AgentSubscriptions do
 
   defp maybe_filter_status(query, status) when is_binary(status) do
     where(query, [subscription], subscription.status == ^status)
-  end
-
-  defp exclude_desired_topics(query, []), do: query
-
-  defp exclude_desired_topics(query, desired_topics) when is_list(desired_topics) do
-    where(query, [subscription], subscription.topic not in ^desired_topics)
   end
 
   defp normalized_topics(topics) when is_list(topics) do
