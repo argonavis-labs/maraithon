@@ -1,0 +1,97 @@
+{
+  "spec_id": "ai-chief-of-staff-skill-orchestration",
+  "slug": "ai-chief-of-staff-skill-orchestration",
+  "title": "AI Chief of Staff Skill-Orchestrated Agent Architecture",
+  "stage": "done",
+  "spec_path": "../specs/ai-chief-of-staff-skill-orchestration.md",
+  "created_at": "2026-03-15T15:59:14Z",
+  "started_at": "2026-03-16T00:36:57Z",
+  "completed_at": "2026-04-02T09:52:05Z",
+  "updated_at": "2026-04-02T09:52:05Z",
+  "summary": "Completed the shipped `AI Chief of Staff` root slice: one builder-facing assistant template, one internal skill contract and registry, follow-through/travel/briefing skill adapters, trigger-aware routing for scheduled/message/PubSub wakeups, and runtime cleanup of transient trigger context after each cycle.",
+  "next_action": "Implement the explicit follow-on spec for shared source-bundle acquisition and assistant-level attention arbitration.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/conversation-context-aware-followthrough-insights.md",
+    "docs/spectacula/specs/personal-assistant-travel-prep.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "The implementation slice matched the re-scoped canonical spec and the repo passed `mix precommit` with `987 tests, 0 failures` on 2026-04-02. Shared acquisition and assistant-level arbitration were intentionally split into a dedicated follow-on spec instead of being left as vague unfinished checklist items."
+  },
+  "resume_context": {
+    "last_completed_step": "Closed the v1 orchestration-root slice and split the remaining acquisition/arbitration work into an explicit follow-on spec.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "5. Proposed Architecture",
+      "7. Backend Changes By Area",
+      "10. Test Plan and Validation Matrix",
+      "11. Implementation Checklist For The Shipped Slice",
+      "12. Resolved Decisions and Follow-On Scope"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md",
+      "docs/spectacula/specs/chief-of-staff-shared-acquisition-and-attention-arbitration.md",
+      "lib/maraithon/behaviors/ai_chief_of_staff.ex",
+      "lib/maraithon/chief_of_staff/skill.ex",
+      "lib/maraithon/chief_of_staff/skills.ex",
+      "lib/maraithon/chief_of_staff/skills/followthrough.ex",
+      "lib/maraithon/chief_of_staff/skills/travel_logistics.ex",
+      "lib/maraithon/chief_of_staff/skills/briefing.ex",
+      "lib/maraithon/runtime/agent.ex",
+      "lib/maraithon/agent_builder.ex"
+    ],
+    "notes": "The user-facing decision for this slice is clear: one primary Chief of Staff assistant, Slack remains bundled into `followthrough`, and deeper acquisition/arbitration work now lives in its own ready spec."
+  },
+  "history": [
+    {
+      "at": "2026-03-15T15:59:14Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial draft created for a skill-oriented `AI Chief of Staff` architecture that consolidates travel, follow-through, and briefing under one user-facing assistant."
+    },
+    {
+      "at": "2026-03-16T00:36:57Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "Implementation began for the new `ai_chief_of_staff` behavior, the Chief of Staff skill registry/contract, adapter-based orchestration of the current travel and follow-through modules, and builder support for launching the unified assistant."
+    },
+    {
+      "at": "2026-03-16T00:55:54Z",
+      "event": "phase_1_and_2_completed",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Completed the first architecture milestone: the `ai_chief_of_staff` behavior, Chief of Staff skill registry/contract, skill adapters for follow-through/travel/briefing, builder integration, and passing `mix precommit` verification."
+    },
+    {
+      "at": "2026-04-02T06:30:07Z",
+      "event": "trigger_routing_completed",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Added trigger-aware skill routing for scheduled/message/PubSub cycles and cleared transient runtime trigger context after each behavior cycle so reactive work does not leak into later scheduled wakeups."
+    },
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "spec_upgraded",
+      "from_stage": "inprogress",
+      "to_stage": "inprogress",
+      "note": "Re-scoped the canonical spec to the actually shipped orchestration-root slice, resolved the previously open design questions explicitly, and moved shared acquisition plus assistant-level arbitration into a dedicated follow-on spec."
+    },
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Closed the v1 `AI Chief of Staff` orchestration-root implementation after final review against the updated canonical spec and a green `mix precommit` gate."
+    }
+  ]
+}

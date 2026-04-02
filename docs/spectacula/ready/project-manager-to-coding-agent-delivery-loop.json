@@ -1,0 +1,56 @@
+{
+  "spec_id": "project-manager-to-coding-agent-delivery-loop",
+  "slug": "project-manager-to-coding-agent-delivery-loop",
+  "title": "Project Manager To Coding Agent Delivery Loop",
+  "stage": "ready",
+  "spec_path": "../specs/project-manager-to-coding-agent-delivery-loop.md",
+  "created_at": "2026-04-02T09:52:05Z",
+  "approved_at": "2026-04-02T09:52:05Z",
+  "updated_at": "2026-04-02T09:52:05Z",
+  "summary": "Ready follow-on spec for turning project recommendations into accepted plans, repo-access grants, tracked coding runs, branches, pull requests, and user-visible status.",
+  "next_action": "Implement recommendation decisions, repo grants, implementation runs, and the corresponding assistant/dashboard flows.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/project-oriented-conversational-operator.md",
+    "docs/spectacula/specs/unified-telegram-operator-chat.md"
+  ],
+  "verification": {
+    "format": "pending",
+    "lint": "pending",
+    "typecheck": "pending",
+    "build": "pending",
+    "tests": "pending",
+    "spec_review": "passed",
+    "notes": "Spec approved immediately after splitting the recommendation-to-PR loop out of the broader operator foundation spec."
+  },
+  "resume_context": {
+    "last_completed_step": "Wrote and approved the dedicated delivery-loop spec covering recommendation acceptance through PR status.",
+    "pending_steps": [
+      "Add durable recommendation-decision records",
+      "Add repo-access grants",
+      "Add implementation-run lifecycle records",
+      "Wire assistant and dashboard flows",
+      "Run `mix precommit` after implementation"
+    ],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "4. Product Workflow",
+      "5. Data Model",
+      "6. Backend and Assistant Changes",
+      "9. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/project-manager-to-coding-agent-delivery-loop.md"
+    ],
+    "notes": "This is the explicit next product loop after the shipped operator foundation."
+  },
+  "history": [
+    {
+      "at": "2026-04-02T09:52:05Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "ready",
+      "note": "Created and immediately approved the follow-on spec for recommendation acceptance, repo grants, coding runs, and PR lifecycle."
+    }
+  ]
+}

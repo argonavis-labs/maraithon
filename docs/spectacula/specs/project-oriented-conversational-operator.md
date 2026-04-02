@@ -1,12 +1,33 @@
 # Project-Oriented Conversational Operator
 
-Status: Draft v2
-Purpose: Define Maraithon as an event-driven LLM harness for connected work. Users connect accounts, enable specialist agents, create projects, and talk naturally to one assistant that watches subscribed systems, maintains durable state, learns from user feedback, proactively flags important work, and can coordinate specialist agents to plan, build, and ship changes.
+Status: Implemented foundation v1
+Purpose: Define and record the shipped foundation for Maraithon as a project-oriented conversational operator: connected accounts, project-scoped state, operator events, subscriptions, durable todos, user memory, natural-language assistant flows, and a user-facing dashboard that exposes the resulting state cleanly.
 Depends on:
 - [AI Chief of Staff Skill-Orchestrated Agent Architecture](/Users/kent/bliss/maraithon/docs/spectacula/specs/ai-chief-of-staff-skill-orchestration.md)
 - [Unified Telegram Operator Chat](/Users/kent/bliss/maraithon/docs/spectacula/specs/unified-telegram-operator-chat.md)
 
 ## 1. Overview and Product Direction
+
+### 1.0 Implementation Note
+
+This broad v2 draft has now been split into a completed foundation spec plus explicit follow-on specs.
+
+Delivered here:
+
+- user-owned projects and project items
+- optional `project_id` association on agents
+- operator events and agent subscriptions
+- durable todos as the assistant's work object layer
+- user memory and operator memory surfaced into runtime and chat
+- dashboard surfaces for projects, todos, memories, connected accounts, and agent logs
+- natural-language assistant flows for todo creation, resolution, and itemized Telegram delivery
+- project recommendation retrieval from the existing `github_product_planner`
+
+Deferred into the next explicit spec:
+
+- recommendation acceptance and plan approval as a first-class workflow
+- repo-access requests and grants
+- coding-agent execution records, branch management, and PR creation
 
 ### 1.1 Problem Statement
 
@@ -655,22 +676,20 @@ Deliver:
 - end-of-day summary
 - learned importance from user feedback
 
-### 9.4 Phase 4: Project Recommendation Loop
+### 9.4 Follow-On: Recommendation To Delivery Loop
 
-Deliver:
+The original Phase 4 and Phase 5 scope proved to be a separate product slice rather than unfinished residue inside this foundation spec.
 
-- periodic repo scans
-- persisted project recommendations
-- user acceptance flow
-- coding-agent handoff
+That work is now carried by:
 
-### 9.5 Phase 5: Build and PR Loop
+- [Project Manager To Coding Agent Delivery Loop](/Users/kent/bliss/maraithon/docs/spectacula/specs/project-manager-to-coding-agent-delivery-loop.md)
 
-Deliver:
+It covers:
 
+- recommendation acceptance
 - repo-access requests
-- higher-power coding runs
-- branch and PR creation
+- coding-agent execution
+- branch and PR lifecycle
 - progress reporting and blocker surfacing
 
 ## 10. Risks and Failure Handling
@@ -727,16 +746,16 @@ Deliver:
 - Project Manager and Coding Agent remain behavior-backed specialist agents rather than a separate plugin platform in v1.
 - Web/news context for morning briefings can be pulled through a dedicated retrieval surface rather than embedded hardcoded feeds.
 
-## 13. Definition of Done
+## 13. Definition of Done For This Foundation Slice
 
-The operator model is considered achieved when:
+This foundation slice is considered achieved when:
 
-- connected systems publish normalized events into Maraithon
+- connected systems and conversation turns publish normalized operator events into Maraithon
 - installed agents subscribe to event and schedule triggers through a first-class contract
 - the assistant answers both general and specific connected-account questions from durable operator state plus live retrieval when needed
-- the system proactively surfaces only high-scoring attention candidates through model-backed reasoning
-- user natural-language feedback changes later prioritization and interruption behavior
-- Chief of Staff continuously triages Gmail, Slack, and Calendar, and delivers morning and end-of-day briefings
-- Project Manager periodically inspects code and suggests improvements
-- accepted improvements can be handed off to Coding Agent runs that request repo access when needed and can eventually produce PRs
+- user natural-language feedback updates durable memory and later assistant behavior
+- projects are stored per user, support attached agents, and expose project-local items and recommendation retrieval
+- durable todos act as the assistant's persistent work layer across dashboard and Telegram surfaces
+- Telegram can render actionable work as one message per todo item so the user can resolve or react item-by-item
+- the dashboard gives the user direct visibility into projects, todos, memories, connected accounts, and agent activity
 - the implementation is covered by tests and passes `mix precommit`

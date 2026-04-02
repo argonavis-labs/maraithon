@@ -1,7 +1,7 @@
 # AI Chief of Staff Skill-Orchestrated Agent Architecture
 
-Status: Draft v1
-Purpose: Define how Maraithon should expose one user-facing `AI Chief of Staff` agent that composes inbox triage, follow-through, travel logistics, and recurring briefing as built-in skills rather than separate standalone agents.
+Status: Implemented v1
+Purpose: Define and record the shipped `AI Chief of Staff` orchestration slice: one user-facing assistant, internal skills for follow-through, travel logistics, and briefing, builder integration, and trigger-aware routing across scheduled, message, and PubSub wakeups.
 
 ## 1. Overview and Goals
 
@@ -42,6 +42,24 @@ The desired architecture is one user-facing `AI Chief of Staff` agent with inter
 - Shared inputs, specialized reasoning. Fetch provider data once when possible, then let specialized skills evaluate the same normalized bundle.
 - Skill isolation with assistant coherence. A failing skill must not take down the whole assistant, but the operator should still experience one coherent product.
 - Migrate by composition first. v1 should reuse the existing travel and follow-through modules before attempting deeper rewrites.
+
+### 1.4 Implementation Note
+
+This spec is now the completed v1 composition-root slice.
+
+Delivered here:
+
+- the `ai_chief_of_staff` behavior and builder template
+- the Chief of Staff skill contract and registry
+- the `followthrough`, `travel_logistics`, and `briefing` skill adapters
+- trigger-aware routing so scheduled, direct-message, and PubSub wakeups only run interested skills
+- runtime cleanup of transient trigger context after each behavior cycle
+
+Deferred into the next explicit spec:
+
+- shared provider acquisition and normalized source bundles
+- assistant-level attention arbitration before delivery staging
+- broader assistant-origin metadata normalization across every persisted output
 
 ## 2. Current State and Constraints
 
@@ -637,20 +655,24 @@ Safeguard:
 - targeted builder UI tests for the new assistant template
 - final implementation review against this spec
 
-## 11. Implementation Checklist
+## 11. Implementation Checklist For The Shipped Slice
 
-- [ ] Add `ai_chief_of_staff` to the behavior registry and builder catalog
-- [ ] Introduce the Chief of Staff skill contract and skill registry
-- [ ] Implement `followthrough`, `travel_logistics`, and `briefing` skill adapters
-- [ ] Build the top-level orchestrator behavior and assistant state model
-- [ ] Add builder support for `enabled_skills`, `skill_configs`, and requirement unioning
-- [ ] Add assistant-level origin-skill metadata to persisted insights and briefs
-- [ ] Add assistant-level priority and interruption arbitration
-- [ ] Add tests for config parsing, skill orchestration, effect routing, and backward compatibility
-- [ ] Run `mix precommit`
-- [ ] Review the implementation against this spec before marking it done
+- [x] Add `ai_chief_of_staff` to the behavior registry and builder catalog
+- [x] Introduce the Chief of Staff skill contract and skill registry
+- [x] Implement `followthrough`, `travel_logistics`, and `briefing` skill adapters
+- [x] Build the top-level orchestrator behavior and assistant state model
+- [x] Add builder support for `enabled_skills`, `skill_configs`, and connector requirement unioning
+- [x] Add tests for config parsing, skill orchestration, trigger-aware routing, and backward compatibility
+- [x] Run `mix precommit`
+- [x] Review the implementation against this spec before marking it done
 
-## 12. Open Questions and Assumptions
+Moved to the next spec rather than left half-finished here:
+
+- shared acquisition and normalized source-bundle modules
+- assistant-level priority and interruption arbitration
+- broader assistant-origin metadata normalization across persisted assistant artifacts
+
+## 12. Resolved Decisions and Follow-On Scope
 
 ### 12.1 Assumptions
 
@@ -659,8 +681,14 @@ Safeguard:
 - Existing persistence tables for insights and briefs are sufficient for v1, with additive metadata rather than new storage abstractions.
 - Shared acquisition can be phased in after the first composition-root release if adapter-based reuse is materially faster and lower risk.
 
-### 12.2 Open Questions
+### 12.2 Resolved Decisions
 
-- Whether Slack should remain bundled into the initial `followthrough` skill or be modeled as a separate `slack_loops` skill in a later iteration.
-- Whether the builder should expose skill toggles by default or keep them behind an advanced panel for the first release.
-- Whether assistant-level prioritization should eventually own Telegram staging directly rather than relying on downstream score thresholds alone.
+- Slack remains bundled inside the initial `followthrough` skill. That keeps the first assistant surface simple and matches the current code structure.
+- The builder keeps skill selection implicit for the primary `AI Chief of Staff` path in v1. End-user skill toggles are an advanced concern, not part of the first operator-facing flow.
+- Assistant-level prioritization remains additive in the shipped slice. The existing insight and brief pipelines continue to stage delivery while the assistant root owns orchestration and trigger-aware skill routing.
+
+### 12.3 Follow-On Work
+
+- Shared Gmail, Calendar, Slack, and web/news acquisition should be implemented through one assistant-owned bundle pipeline so adjacent skills stop re-fetching overlapping data.
+- Assistant-level attention arbitration should sort, cap, and merge same-cycle outputs before delivery staging.
+- If Slack eventually needs materially different freshness or ownership semantics from Gmail/Calendar follow-through, it can be split into its own skill in a later spec rather than forced early.
