@@ -820,6 +820,136 @@ defmodule Maraithon.TelegramAssistantTest do
     assert remaining_todo.title =~ "OAuth verification"
   end
 
+  test "assistant can keep a manual todo list and return it as individual todo cards", %{
+    user_id: user_id
+  } do
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_manual_todos,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_manual_todos]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_manual_todos, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          assert Enum.any?(payload.tools, &(&1["name"] == "upsert_todos"))
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "upsert_todos",
+                 "arguments" => %{
+                   "todos" => [
+                     %{
+                       "source" => "telegram",
+                       "kind" => "general",
+                       "attention_mode" => "act_now",
+                       "title" => "Renew the domain this week",
+                       "summary" => "The user wants this tracked as an ongoing todo.",
+                       "next_action" => "Renew the domain and confirm it is done.",
+                       "priority" => 76,
+                       "metadata" => %{
+                         "captured_from" => "telegram_message",
+                         "request_text" => "Add renew the domain this week to my todo list."
+                       }
+                     }
+                   ]
+                 }
+               }
+             ],
+             "summary" => "Persisted a manual todo from the conversation."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "upsert_todos"
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => "Added that to your todo list.",
+             "message_class" => "action_result",
+             "tool_calls" => [],
+             "summary" => "Confirmed the manual todo was saved."
+           }}
+
+        2 ->
+          assert Enum.any?(payload.tools, &(&1["name"] == "list_todos"))
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "list_todos",
+                 "arguments" => %{
+                   "statuses" => ["open"],
+                   "limit" => 20
+                 }
+               }
+             ],
+             "summary" => "Loaded the full open todo list."
+           }}
+
+        3 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "list_todos"
+          assert history_entry["result"]["count"] == 1
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => "Here is the full open todo list.",
+             "message_class" => "todo_digest",
+             "tool_calls" => [],
+             "summary" => "Returned the open todo list as itemized todo cards."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9110,
+          text: "Add renew the domain this week to my todo list."
+        }
+      })
+
+    assert last_telegram_message(:send).text =~ "Added that to your todo list"
+
+    [saved_todo] = Todos.list_open_for_user(user_id, kind: "general")
+    assert saved_todo.title == "Renew the domain this week"
+    assert saved_todo.source == "telegram"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9111, text: "What's on my todo list?"}
+      })
+
+    sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert Enum.count(sends) == 3
+    assert Enum.at(sends, 1).text =~ "Here is the full open todo list"
+    assert List.last(sends).text =~ "Renew the domain this week"
+    assert get_in(Keyword.get(List.last(sends).opts, :reply_markup), ["inline_keyboard"]) != nil
+  end
+
   test "todo item callbacks can close an item directly from Telegram", %{user_id: user_id} do
     assert {:ok, [todo]} =
              Todos.upsert_many(user_id, [
@@ -874,6 +1004,123 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Todos.get_for_user(user_id, todo.id).status == "done"
     assert last_telegram_message(:edit).text =~ "Done"
     assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
+  end
+
+  test "assistant can update a linked project scope from a reply thread", %{user_id: user_id} do
+    {:ok, project} =
+      Projects.create_project(user_id, %{
+        "name" => "Garage Renovation",
+        "summary" => "Shelving and paint at home."
+      })
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "telegram",
+          "kind" => "general",
+          "title" => "Buy shelves for the garage",
+          "summary" => "Need to finish the garage shelving.",
+          "next_action" => "Order the remaining shelves.",
+          "priority" => 72,
+          "dedupe_key" => "telegram-project-scope:garage:shelves",
+          "metadata" => %{
+            "suggested_project_id" => project.id,
+            "suggested_project_name" => project.name,
+            "suggested_life_domain" => "home"
+          }
+        }
+      ])
+
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{})
+
+    assert {:ok, {_conversation, turn}} =
+             Maraithon.TelegramConversations.append_turn(conversation, %{
+               "role" => "assistant",
+               "telegram_message_id" => "9300",
+               "text" =>
+                 "Weekend project check: I currently think Garage Renovation is home. Is that right?",
+               "turn_kind" => "assistant_push",
+               "origin_type" => "brief",
+               "origin_id" => Ecto.UUID.generate(),
+               "structured_data" => %{
+                 "linked_project" => %{
+                   "id" => project.id,
+                   "name" => project.name,
+                   "slug" => project.slug,
+                   "summary" => project.summary
+                 }
+               }
+             })
+
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_project_scope,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_sequence_project_scope]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_project_scope, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          assert payload.context.linked_item.project.id == project.id
+          assert payload.context.linked_item.project.name == "Garage Renovation"
+          assert Enum.any?(payload.tools, &(&1["name"] == "update_project_scope"))
+
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "update_project_scope",
+                 "arguments" => %{
+                   "life_domain" => "home",
+                   "confidence" => 0.95,
+                   "reasoning" => "This is a household renovation project."
+                 }
+               }
+             ],
+             "summary" => "Updated the linked project scope."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "update_project_scope"
+          assert get_in(history_entry, ["result", "project", "id"]) == project.id
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => "Marked Garage Renovation as a home project.",
+             "message_class" => "action_result",
+             "tool_calls" => [],
+             "summary" => "Confirmed the project scope update."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9301,
+          text: "It's home.",
+          reply_to: %{message_id: turn.telegram_message_id}
+        }
+      })
+
+    assert last_telegram_message(:send).text =~ "home project"
+    assert Projects.get_project_for_user(project.id, user_id).metadata["life_domain"] == "home"
+
+    assert Todos.get_for_user(user_id, todo.id).metadata["scope_source"] ==
+             "project_scope_confirmation"
   end
 
   test "insight dispatch goes through the unified push broker and records receipts", %{

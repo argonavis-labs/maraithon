@@ -143,6 +143,18 @@ defmodule Maraithon.Projects do
     |> Repo.update()
   end
 
+  def classify_life_domain(%Project{} = project, attrs \\ %{}) when is_map(attrs) do
+    attrs =
+      attrs
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+
+    metadata =
+      project.metadata
+      |> project_life_domain_metadata(attrs)
+
+    update_project(project, %{"metadata" => metadata})
+  end
+
   def delete_project(%Project{} = project), do: Repo.delete(project)
 
   def list_project_items(opts \\ []) do
@@ -1093,4 +1105,73 @@ defmodule Maraithon.Projects do
   end
 
   defp normalize_project_name(_value), do: nil
+
+  defp project_life_domain_metadata(metadata, attrs) do
+    metadata = metadata || %{}
+
+    life_domain_attrs =
+      %{
+        "life_domain" => normalize_life_domain(Map.get(attrs, "life_domain")),
+        "life_domain_confidence" => normalize_confidence(Map.get(attrs, "confidence")),
+        "life_domain_reasoning" => normalize_text(Map.get(attrs, "reasoning")),
+        "life_domain_needs_confirmation" =>
+          normalize_boolean(Map.get(attrs, "needs_confirmation")),
+        "life_domain_source" =>
+          normalize_text(Map.get(attrs, "source")) || "chief_of_staff_weekend",
+        "life_domain_reviewed_at" => normalize_reviewed_at(Map.get(attrs, "reviewed_at"))
+      }
+      |> compact_map()
+
+    Map.merge(metadata, life_domain_attrs)
+  end
+
+  defp normalize_life_domain(value) when value in ["home", "work"], do: value
+
+  defp normalize_life_domain(value) when is_atom(value) do
+    value
+    |> Atom.to_string()
+    |> normalize_life_domain()
+  end
+
+  defp normalize_life_domain(_value), do: nil
+
+  defp normalize_confidence(value) when is_float(value),
+    do: value |> max(0.0) |> min(1.0)
+
+  defp normalize_confidence(value) when is_integer(value), do: normalize_confidence(value / 1)
+
+  defp normalize_confidence(value) when is_binary(value) do
+    case Float.parse(value) do
+      {parsed, ""} -> normalize_confidence(parsed)
+      _ -> nil
+    end
+  end
+
+  defp normalize_confidence(_value), do: nil
+
+  defp normalize_boolean(value) when value in [true, false], do: value
+  defp normalize_boolean("true"), do: true
+  defp normalize_boolean("false"), do: false
+  defp normalize_boolean(_value), do: nil
+
+  defp normalize_reviewed_at(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp normalize_reviewed_at(value) when is_binary(value), do: normalize_text(value)
+  defp normalize_reviewed_at(_value), do: DateTime.utc_now() |> DateTime.to_iso8601()
+
+  defp normalize_text(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_text(_value), do: nil
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp compact_map(_map), do: %{}
 end

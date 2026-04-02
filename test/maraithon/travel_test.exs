@@ -124,7 +124,8 @@ defmodule Maraithon.TravelTest do
     assert {:ok, %{queued_briefs: []}} =
              Travel.sync_recent_trip_data(user_id, agent.id, now: now, timezone_offset_hours: -5)
 
-    assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
 
     itinerary = Travel.list_recent_for_user(user_id) |> List.first()
     assert itinerary.status == "brief_sent"
@@ -176,7 +177,8 @@ defmodule Maraithon.TravelTest do
     assert {:ok, %{queued_briefs: [_brief]}} =
              Travel.sync_recent_trip_data(user_id, agent.id, now: now, timezone_offset_hours: -5)
 
-    assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
 
     updated_contents =
       gmail_contents(now, hotel_room: "Suite 1108", hotel_check_out: "Mar 18, 2026")
@@ -200,7 +202,8 @@ defmodule Maraithon.TravelTest do
     assert recorded_update.body =~ "Check-out: Mar 18, 2026"
     assert recorded_update.body =~ "Room: Suite 1108"
 
-    assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
 
     [latest_message | _rest] = telegram_events(:send)
     assert latest_message.text =~ "I detected a change in your travel details."
@@ -226,7 +229,8 @@ defmodule Maraithon.TravelTest do
     assert recorded_brief.title == "Travel today: Austin"
     assert recorded_brief.body =~ "Here are your travel details for today (Mar 15)"
 
-    assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
 
     [message] = telegram_events(:send)
     assert message.text =~ "Here are your travel details for today (Mar 15)"

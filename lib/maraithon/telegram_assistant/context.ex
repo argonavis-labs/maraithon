@@ -29,13 +29,20 @@ defmodule Maraithon.TelegramAssistant.Context do
     linked_insight = Map.get(attrs, :linked_insight)
     linked_travel = linked_travel_itinerary(conversation, user_id)
     linked_todo = linked_todo(attrs, user_id)
+    linked_project = linked_project(attrs, user_id)
 
     %{
       user: %{id: user_id},
       chat: %{id: fetch_string!(attrs, :chat_id)},
       conversation: serialize_conversation(conversation),
       linked_item:
-        serialize_linked_item(linked_delivery, linked_insight, linked_travel, linked_todo),
+        serialize_linked_item(
+          linked_delivery,
+          linked_insight,
+          linked_travel,
+          linked_todo,
+          linked_project
+        ),
       recent_turns: serialize_recent_turns(conversation),
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
@@ -84,7 +91,13 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_recent_turns(_conversation), do: []
 
-  defp serialize_linked_item(%Delivery{} = delivery, linked_insight, linked_travel, linked_todo) do
+  defp serialize_linked_item(
+         %Delivery{} = delivery,
+         linked_insight,
+         linked_travel,
+         linked_todo,
+         linked_project
+       ) do
     insight = linked_insight || Repo.preload(delivery, :insight).insight
     deliveries = insight_deliveries(insight, delivery.user_id)
     detail = insight && Detail.build(insight, deliveries)
@@ -94,23 +107,25 @@ defmodule Maraithon.TelegramAssistant.Context do
       insight: serialize_insight(insight),
       detail: detail && serialize_detail(detail),
       travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
-      todo: serialize_todo(linked_todo)
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
     }
   end
 
-  defp serialize_linked_item(_delivery, nil, nil, nil), do: %{}
+  defp serialize_linked_item(_delivery, nil, nil, nil, nil), do: %{}
 
-  defp serialize_linked_item(_delivery, nil, linked_travel, linked_todo) do
+  defp serialize_linked_item(_delivery, nil, linked_travel, linked_todo, linked_project) do
     %{
       delivery: nil,
       insight: nil,
       detail: nil,
       travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
-      todo: serialize_todo(linked_todo)
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
     }
   end
 
-  defp serialize_linked_item(_delivery, insight, linked_travel, linked_todo) do
+  defp serialize_linked_item(_delivery, insight, linked_travel, linked_todo, linked_project) do
     deliveries = insight_deliveries(insight, insight.user_id)
     detail = Detail.build(insight, deliveries)
 
@@ -119,7 +134,8 @@ defmodule Maraithon.TelegramAssistant.Context do
       insight: serialize_insight(insight),
       detail: serialize_detail(detail),
       travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
-      todo: serialize_todo(linked_todo)
+      todo: serialize_todo(linked_todo),
+      project: serialize_project(linked_project)
     }
   end
 
@@ -155,7 +171,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp serialize_todos(user_id) do
-    Todos.summarize_for_prompt(user_id, 8)
+    Todos.summarize_for_prompt(user_id, 20)
   end
 
   defp serialize_agents(user_id) do
@@ -185,7 +201,15 @@ defmodule Maraithon.TelegramAssistant.Context do
         status: project.status,
         priority: project.priority,
         summary: project.summary,
-        description: project.description
+        description: project.description,
+        metadata:
+          (project.metadata || %{})
+          |> Map.take([
+            "life_domain",
+            "life_domain_confidence",
+            "life_domain_reasoning",
+            "life_domain_needs_confirmation"
+          ])
       }
     end)
   end
@@ -253,6 +277,28 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp serialize_todo(nil), do: nil
   defp serialize_todo(todo), do: Todos.serialize_for_prompt(todo)
 
+  defp serialize_project(nil), do: nil
+
+  defp serialize_project(project) do
+    %{
+      id: project.id,
+      name: project.name,
+      slug: project.slug,
+      status: project.status,
+      priority: project.priority,
+      summary: project.summary,
+      description: project.description,
+      metadata:
+        (project.metadata || %{})
+        |> Map.take([
+          "life_domain",
+          "life_domain_confidence",
+          "life_domain_reasoning",
+          "life_domain_needs_confirmation"
+        ])
+    }
+  end
+
   defp insight_deliveries(nil, _user_id), do: []
 
   defp insight_deliveries(insight, user_id)
@@ -277,6 +323,26 @@ defmodule Maraithon.TelegramAssistant.Context do
          todo_id when is_binary(todo_id) <- Map.get(todo_data, "id") || Map.get(todo_data, :id),
          todo when not is_nil(todo) <- Todos.get_for_user(user_id, todo_id) do
       todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp linked_project(attrs, user_id) do
+    chat_id = Map.get(attrs, :chat_id)
+    reply_to_message_id = Map.get(attrs, :reply_to_message_id)
+
+    with chat_id when is_binary(chat_id) <- normalize_id(chat_id),
+         reply_to when is_binary(reply_to) <- normalize_id(reply_to_message_id),
+         turn when not is_nil(turn) <-
+           TelegramConversations.find_turn_by_message(chat_id, reply_to),
+         %{} = project_data <-
+           Map.get(turn.structured_data || %{}, "linked_project") ||
+             Map.get(turn.structured_data || %{}, :linked_project),
+         project_id when is_binary(project_id) <-
+           Map.get(project_data, "id") || Map.get(project_data, :id),
+         project when not is_nil(project) <- Projects.get_project_for_user(project_id, user_id) do
+      project
     else
       _ -> nil
     end

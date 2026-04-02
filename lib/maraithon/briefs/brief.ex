@@ -12,7 +12,15 @@ defmodule Maraithon.Briefs.Brief do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @cadences ["morning", "end_of_day", "weekly_review", "travel_prep", "travel_update"]
+  @cadences [
+    "morning",
+    "check_in",
+    "end_of_day",
+    "weekly_review",
+    "weekend_scope",
+    "travel_prep",
+    "travel_update"
+  ]
   @statuses ["pending", "sent", "failed"]
 
   schema "briefs" do

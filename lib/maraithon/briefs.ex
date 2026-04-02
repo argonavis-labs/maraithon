@@ -250,8 +250,10 @@ defmodule Maraithon.Briefs do
   end
 
   defp cadence_label("morning"), do: "Morning brief"
+  defp cadence_label("check_in"), do: "Chief of staff check-in"
   defp cadence_label("end_of_day"), do: "End-of-day debt"
   defp cadence_label("weekly_review"), do: "Weekly review"
+  defp cadence_label("weekend_scope"), do: "Weekend project check"
   defp cadence_label("travel_prep"), do: "Travel prep"
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other

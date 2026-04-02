@@ -79,6 +79,17 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "\"tool\":\"list_todos\""
   end
 
+  test "build_prompt instructs the model to capture manual todos and return itemized todo lists" do
+    prompt =
+      LLMJson.build_prompt(payload("Add renew the domain this week to my todo list."))
+
+    assert prompt =~ "store it as a durable todo"
+    assert prompt =~ "source: \"telegram\""
+    assert prompt =~ "kind: \"general\""
+    assert prompt =~ "what's on my todo list?"
+    assert prompt =~ "one individual todo card per item"
+  end
+
   test "build_prompt instructs the model to update briefing schedules in local time" do
     prompt =
       LLMJson.build_prompt(%{

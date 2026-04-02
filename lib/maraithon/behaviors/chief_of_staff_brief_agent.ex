@@ -20,6 +20,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   @default_weekly_day 5
   @default_weekly_hour 16
   @default_max_items 3
+  @default_check_in_slots_per_day 3
+  @default_check_in_max_items 2
 
   @impl true
   def init(config) do
@@ -37,6 +39,21 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       weekly_hour:
         integer_in_range(config["weekly_review_hour_local"], @default_weekly_hour, 0, 23),
       max_items: integer_in_range(config["brief_max_items"], @default_max_items, 1, 5),
+      adaptive_check_ins_enabled: boolean_value(config["adaptive_check_ins_enabled"], true),
+      check_in_slots_per_day:
+        integer_in_range(
+          config["adaptive_check_in_slots_per_day"],
+          @default_check_in_slots_per_day,
+          1,
+          4
+        ),
+      check_in_max_items:
+        integer_in_range(
+          config["adaptive_check_in_max_items"],
+          @default_check_in_max_items,
+          1,
+          3
+        ),
       last_generated_keys: %{}
     }
   end
@@ -50,7 +67,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       state
       |> due_cadences(now)
       |> Enum.reject(fn %{cadence: cadence, period_key: period_key} ->
-        Map.get(state.last_generated_keys, cadence) == period_key
+        generated_period?(state, cadence, period_key)
       end)
 
     if due == [] or is_nil(user_id) do
@@ -83,6 +100,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     [
       next_occurrence("morning", state, now),
+      next_occurrence("check_in", state, now),
       next_occurrence("end_of_day", state, now),
       next_occurrence("weekly_review", state, now)
     ]
@@ -110,6 +128,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         context
       )
     )
+    |> Enum.reject(&is_nil/1)
     |> then(&Briefs.record_many(user_id, agent_id, &1))
   end
 
@@ -276,6 +295,53 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp build_brief_attrs(
+         %{cadence: "check_in"} = plan,
+         state,
+         act_now_insights,
+         _monitor_insights,
+         _recent_insights,
+         _now,
+         context
+       ) do
+    top_items =
+      select_brief_items(
+        act_now_insights,
+        plan.scheduled_for,
+        state.timezone_offset_hours,
+        state.check_in_max_items,
+        cadence: "check_in"
+      )
+
+    if should_send_check_in?(top_items, state.timezone_offset_hours, plan.scheduled_for) do
+      count = length(top_items)
+
+      %{
+        "cadence" => "check_in",
+        "scheduled_for" => plan.scheduled_for,
+        "dedupe_key" => dedupe_key("check_in", plan.period_key),
+        "title" =>
+          "Check-in: #{count} item#{if(count == 1, do: "", else: "s")} still need movement",
+        "summary" =>
+          check_in_summary(
+            top_items,
+            act_now_insights,
+            state.timezone_offset_hours,
+            plan.scheduled_for
+          ),
+        "body" =>
+          check_in_body(
+            top_items,
+            act_now_insights,
+            state.timezone_offset_hours,
+            plan.scheduled_for
+          ),
+        "metadata" =>
+          metadata_for(plan, state.assistant_behavior, card_insights(top_items), context)
+      }
+    end
+  end
+
+  defp build_brief_attrs(
          %{cadence: "weekly_review"} = plan,
          state,
          act_now_insights,
@@ -320,12 +386,23 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp due_cadences(state, now) do
     local_now = shift_local(now, state.timezone_offset_hours)
 
-    [
-      due_plan("morning", state, now, local_now),
-      due_plan("end_of_day", state, now, local_now),
-      due_plan("weekly_review", state, now, local_now)
-    ]
-    |> Enum.reject(&is_nil/1)
+    due =
+      [
+        due_plan("morning", state, now, local_now),
+        due_plan("check_in", state, now, local_now),
+        due_plan("end_of_day", state, now, local_now),
+        due_plan("weekly_review", state, now, local_now)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if Enum.any?(due, fn %{cadence: cadence, period_key: period_key} ->
+         cadence in ["morning", "end_of_day", "weekly_review"] and
+           not generated_period?(state, cadence, period_key)
+       end) do
+      Enum.reject(due, &(&1.cadence == "check_in"))
+    else
+      due
+    end
   end
 
   defp due_plan("morning", state, utc_now, local_now) do
@@ -354,6 +431,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
+  defp due_plan("check_in", state, utc_now, local_now) do
+    if state.adaptive_check_ins_enabled do
+      local_now
+      |> DateTime.to_date()
+      |> check_in_candidates(state)
+      |> Enum.filter(&(DateTime.compare(utc_now, &1.scheduled_for) != :lt))
+      |> Enum.max_by(&DateTime.to_unix(&1.scheduled_for, :second), fn -> nil end)
+    end
+  end
+
   defp due_plan("weekly_review", state, utc_now, local_now) do
     local_date = DateTime.to_date(local_now)
 
@@ -377,6 +464,19 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp next_occurrence("end_of_day", state, now) do
     next_daily_occurrence(now, state.timezone_offset_hours, state.end_of_day_hour)
+  end
+
+  defp next_occurrence("check_in", state, now) do
+    if state.adaptive_check_ins_enabled do
+      local_now = shift_local(now, state.timezone_offset_hours)
+      local_date = DateTime.to_date(local_now)
+
+      [local_date, Date.add(local_date, 1)]
+      |> Enum.flat_map(&check_in_candidates(&1, state))
+      |> Enum.map(& &1.scheduled_for)
+      |> Enum.filter(&(DateTime.compare(&1, now) == :gt))
+      |> Enum.min_by(&DateTime.to_unix(&1, :second), fn -> nil end)
+    end
   end
 
   defp next_occurrence("weekly_review", state, now) do
@@ -464,6 +564,24 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     - #{overdue_count(act_now_insights, offset_hours, now)} items are already overdue across the full backlog
     - #{due_today_count(act_now_insights, offset_hours, now)} were due today and still unresolved
     - #{length(monitor_insights)} threads are still being watched
+    """
+    |> String.trim()
+  end
+
+  defp check_in_body(top_items, act_now_insights, offset_hours, reference_at) do
+    """
+    Why I'm checking in:
+    #{check_in_guidance(top_items)}
+
+    Move now:
+    #{format_items(top_items, offset_hours, reference_at, "1. Nothing high-signal still needs movement.")}
+
+    Pressure:
+    - #{length(act_now_insights)} act-now loops still score as open
+    - #{overdue_count(act_now_insights, offset_hours, reference_at)} are already overdue
+    - #{due_today_count(act_now_insights, offset_hours, reference_at)} still land today
+
+    Reply here when one is handled and I'll refresh the rest.
     """
     |> String.trim()
   end
@@ -559,6 +677,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> append_sentence("#{length(monitor_insights)} being watched")
   end
 
+  defp check_in_summary(top_items, act_now_insights, offset_hours, reference_at) do
+    top_items
+    |> lead_summary(offset_hours, reference_at)
+    |> append_sentence(extra_open_item_summary(top_items))
+    |> append_sentence("#{overdue_count(act_now_insights, offset_hours, reference_at)} overdue")
+    |> append_sentence(
+      "#{due_today_count(act_now_insights, offset_hours, reference_at)} still due today"
+    )
+  end
+
   defp lead_summary([], _offset_hours, _reference_at), do: nil
 
   defp lead_summary([card | _], offset_hours, reference_at) do
@@ -601,6 +729,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "These are mostly reply loops. If the work is not finished, send a short owner + exact ETA tonight instead of waiting for the perfect answer."
     else
       "Close the promises with a human waiting on you, or explicitly reset timing before you sign off."
+    end
+  end
+
+  defp check_in_guidance([]), do: "Nothing high-signal still warrants an interruption."
+
+  defp check_in_guidance(items) do
+    if mostly_reply_loops?(items) do
+      "The highest-signal work is still in human threads. Send the short owner, status, or ETA reset now instead of waiting."
+    else
+      "The open work still scores high enough to interrupt you. Move the item with a person or deadline attached, then tell me it is handled."
     end
   end
 
@@ -904,6 +1042,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> AttentionArbiter.merge_artifact_metadata(context)
   end
 
+  defp generated_period?(state, cadence, period_key) do
+    Map.get(state.last_generated_keys, cadence) == period_key
+  end
+
   defp update_generated_keys(state, due) do
     Enum.reduce(due, state.last_generated_keys, fn %{cadence: cadence, period_key: period_key},
                                                    acc ->
@@ -968,6 +1110,78 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
+  defp should_send_check_in?([], _offset_hours, _reference_at), do: false
+
+  defp should_send_check_in?(top_items, offset_hours, reference_at) do
+    top_two_priority_sum =
+      top_items
+      |> Enum.take(2)
+      |> Enum.reduce(0, fn card, acc -> acc + (card.insight.priority || 0) end)
+
+    [top_item | _] = top_items
+
+    overdue?(top_item.insight, offset_hours, reference_at) or
+      due_today?(top_item.insight, offset_hours, reference_at) or
+      (top_item.insight.priority || 0) >= 88 or
+      top_two_priority_sum >= 165
+  end
+
+  defp check_in_candidates(local_date, state) do
+    with true <- state.adaptive_check_ins_enabled,
+         {:ok, start_local, end_local, span_minutes} <- check_in_window(local_date, state) do
+      0..(state.check_in_slots_per_day - 1)
+      |> Enum.map(
+        &check_in_candidate_for_slot(state, local_date, &1, start_local, end_local, span_minutes)
+      )
+      |> Enum.uniq_by(&DateTime.to_unix(&1.scheduled_for, :second))
+      |> Enum.sort_by(&DateTime.to_unix(&1.scheduled_for, :second))
+    else
+      _ -> []
+    end
+  end
+
+  defp check_in_window(local_date, state) do
+    start_hour = min(state.end_of_day_hour - 1, state.morning_hour + 2)
+    end_hour = max(start_hour + 2, state.end_of_day_hour - 1)
+
+    if end_hour <= start_hour do
+      :error
+    else
+      start_local = local_datetime(local_date, start_hour)
+      end_local = local_datetime(local_date, end_hour)
+      span_minutes = max(div(DateTime.diff(end_local, start_local, :second), 60), 120)
+      {:ok, start_local, end_local, span_minutes}
+    end
+  end
+
+  defp check_in_candidate_for_slot(
+         state,
+         local_date,
+         slot_index,
+         start_local,
+         end_local,
+         span_minutes
+       ) do
+    segments = state.check_in_slots_per_day + 1
+    base_minutes = div(span_minutes * (slot_index + 1), segments)
+    jitter_range = min(35, max(div(span_minutes, max(segments * 3, 1)), 10))
+    jitter_seed = :erlang.phash2({state.user_id, local_date, slot_index}, jitter_range * 2 + 1)
+    jitter_minutes = jitter_seed - jitter_range
+    offset_minutes = clamp_integer(base_minutes + jitter_minutes, 0, span_minutes)
+    scheduled_local = DateTime.add(start_local, offset_minutes * 60, :second)
+
+    %{
+      cadence: "check_in",
+      period_key: "#{Date.to_iso8601(local_date)}:slot:#{slot_index + 1}",
+      scheduled_for:
+        if(DateTime.compare(scheduled_local, end_local) == :gt,
+          do: end_local,
+          else: scheduled_local
+        )
+        |> shift_utc(state.timezone_offset_hours)
+    }
+  end
+
   defp source_label(source),
     do: source |> normalize_source() |> to_string() |> String.capitalize()
 
@@ -1000,6 +1214,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
       _ ->
         default
+    end
+  end
+
+  defp boolean_value(value, default) do
+    case value do
+      true -> true
+      false -> false
+      "true" -> true
+      "false" -> false
+      _ -> default
     end
   end
 
@@ -1068,4 +1292,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp datetime_sort_value(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :second)
   defp datetime_sort_value(_datetime), do: 0
+
+  defp clamp_integer(value, min, _max) when is_integer(value) and value < min, do: min
+  defp clamp_integer(value, _min, max) when is_integer(value) and value > max, do: max
+  defp clamp_integer(value, _min, _max), do: value
 end

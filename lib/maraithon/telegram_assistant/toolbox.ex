@@ -164,7 +164,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "source" => %{"type" => "string"},
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
-            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
       ),
@@ -214,7 +214,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "source" => %{"type" => "string"},
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
-            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
       ),
@@ -325,6 +325,22 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "project_id" => %{"type" => "string"},
             "project_slug" => %{"type" => "string"},
             "project_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "update_project_scope",
+        "Set whether a project is primarily work or home, using explicit project arguments or the linked project in context.",
+        %{
+          "type" => "object",
+          "required" => ["life_domain"],
+          "properties" => %{
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"},
+            "life_domain" => %{"type" => "string"},
+            "confidence" => %{"type" => "number"},
+            "reasoning" => %{"type" => "string"}
           }
         }
       ),
@@ -538,6 +554,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "inspect_project" ->
         inspect_project(runtime_context, args)
 
+      "update_project_scope" ->
+        update_project_scope(runtime_context, args)
+
       "decide_project_recommendation" ->
         decide_project_recommendation(runtime_context, args)
 
@@ -624,7 +643,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp list_todos(runtime_context, args) do
-    limit = normalize_limit(Map.get(args, "limit"), 8, 20)
+    limit = normalize_limit(Map.get(args, "limit"), 50, 50)
     statuses = Map.get(args, "statuses")
 
     todos =
@@ -759,7 +778,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     with {:ok, todo_id} <- required_string(args, "todo_id") do
       resolution_note = Map.get(args, "resolution_note")
       include_remaining = Map.get(args, "include_remaining") == true
-      limit = normalize_limit(Map.get(args, "limit"), 5, 20)
+      limit = normalize_limit(Map.get(args, "limit"), 5, 50)
 
       result =
         case Map.get(args, "status", "done") do
@@ -870,6 +889,42 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        }}
     else
       nil -> {:error, "project_not_found"}
+    end
+  end
+
+  defp update_project_scope(runtime_context, args) do
+    reviewed_at = DateTime.utc_now()
+
+    with %{} = project <- resolve_project_for_scope_update(runtime_context, args),
+         life_domain when life_domain in ["work", "home"] <- Map.get(args, "life_domain"),
+         {:ok, updated} <-
+           Projects.classify_life_domain(project, %{
+             "life_domain" => life_domain,
+             "confidence" => Map.get(args, "confidence"),
+             "reasoning" => Map.get(args, "reasoning"),
+             "needs_confirmation" => false,
+             "source" => "telegram_assistant",
+             "reviewed_at" => reviewed_at
+           }),
+         {:ok, aligned_todos} <-
+           Todos.align_scope_for_project(runtime_context.user_id, project.id, %{
+             "project_name" => project.name,
+             "life_domain" => life_domain,
+             "confidence" => Map.get(args, "confidence"),
+             "reasoning" => Map.get(args, "reasoning"),
+             "source" => "project_scope_confirmation",
+             "reviewed_at" => reviewed_at
+           }) do
+      {:ok,
+       %{
+         status: "updated",
+         project: serialize_project_detail(updated),
+         life_domain: life_domain,
+         aligned_todo_count: length(aligned_todos)
+       }}
+    else
+      nil -> {:error, "project_not_found"}
+      _ -> {:error, "invalid_life_domain"}
     end
   end
 
@@ -1739,6 +1794,44 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp resolve_project_for_scope_update(runtime_context, args) do
+    case optional_string_arg(args, "project_id") do
+      {:ok, project_id} ->
+        Projects.get_project_for_user(project_id, runtime_context.user_id)
+
+      :missing ->
+        case optional_string_arg(args, "project_slug") do
+          {:ok, slug} ->
+            Projects.get_project_by_slug_for_user(slug, runtime_context.user_id)
+
+          :missing ->
+            case optional_string_arg(args, "project_name") do
+              {:ok, name} ->
+                Projects.get_project_by_name_for_user(name, runtime_context.user_id)
+
+              :missing ->
+                get_in(runtime_context, [:context, :linked_item, :project, :id])
+                |> case do
+                  value when is_binary(value) ->
+                    Projects.get_project_for_user(value, runtime_context.user_id)
+
+                  _ ->
+                    nil
+                end
+
+              {:error, _reason} ->
+                nil
+            end
+
+          {:error, _reason} ->
+            nil
+        end
+
+      {:error, _reason} ->
+        nil
+    end
+  end
+
   defp default_project(runtime_context) do
     case Map.get(runtime_context, :default_project_id) do
       value when is_binary(value) and value != "" ->
@@ -1756,7 +1849,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       slug: project.slug,
       status: project.status,
       priority: project.priority,
-      summary: project.summary
+      summary: project.summary,
+      metadata:
+        (project.metadata || %{})
+        |> Map.take([
+          "life_domain",
+          "life_domain_confidence",
+          "life_domain_reasoning",
+          "life_domain_needs_confirmation"
+        ])
     }
   end
 

@@ -202,6 +202,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
         "weekly_review_hour_local" => "16",
         "brief_max_items" => "3"
       })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-11"})
 
     context = %{
       agent_id: agent.id,
@@ -224,6 +225,125 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
     assert brief.body =~ "Watch: Watch for a blocker"
     assert brief.body =~ "threads are still being watched"
+  end
+
+  test "records an adaptive daytime check-in when high-signal work is still open", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 20:30:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send revised pricing to David",
+          "summary" => "David is still waiting on the revised pricing and exact timing.",
+          "recommended_action" =>
+            "Reply in-thread with the revised pricing, owner, and exact send timing.",
+          "priority" => 92,
+          "confidence" => 0.93,
+          "dedupe_key" => "brief-test:check-in-pricing",
+          "due_at" => DateTime.add(scheduled_at, -3, :hour),
+          "metadata" => %{
+            "record" => %{
+              "commitment" => "Send revised pricing and timing to David.",
+              "person" => "David",
+              "status" => "unresolved",
+              "evidence" => ["The thread still has no revised pricing or final timing update."],
+              "next_action" =>
+                "Reply in-thread with the revised pricing, owner, and exact send timing."
+            }
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-11"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["check_in"]
+    assert next_state.last_generated_keys["check_in"] =~ "2026-03-11:slot:"
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.cadence == "check_in"
+    assert brief.title =~ "Check-in"
+    assert brief.summary =~ "Most urgent"
+    assert brief.body =~ "Why I'm checking in:"
+    assert brief.body =~ "Move now:"
+    assert brief.body =~ "Reply here when one is handled"
+    assert brief.body =~ "Send revised pricing to David"
+  end
+
+  test "skips adaptive check-ins when only low-priority work is open", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 20:30:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_owed",
+          "title" => "Low-priority follow-up",
+          "summary" => "This can wait a bit.",
+          "recommended_action" => "Reply later with a short follow-up.",
+          "priority" => 52,
+          "confidence" => 0.58,
+          "dedupe_key" => "brief-test:check-in-low-priority",
+          "due_at" => DateTime.add(scheduled_at, 2, :day),
+          "metadata" => %{"why_now" => "This is still open, but not urgent."}
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-11"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:idle, next_state} = ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+    assert next_state.last_generated_keys["check_in"] =~ "2026-03-11:slot:"
+    assert Briefs.list_recent_for_user(user_id, limit: 5) == []
   end
 
   test "prefers structured commitments over generic reply-owed titles in briefs", %{

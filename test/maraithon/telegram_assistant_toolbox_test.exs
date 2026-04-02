@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.TelegramAssistant.Toolbox
+  alias Maraithon.Todos
 
   setup do
     original_gmail = Application.get_env(:maraithon, :gmail, [])
@@ -220,6 +221,72 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert Agents.get_agent!(chief_of_staff_agent.id).config["morning_brief_hour_local"] == 10
     assert Agents.get_agent!(followthrough_agent.id).config["morning_brief_hour_local"] == 10
+  end
+
+  test "project scope tool can update the linked project from reply context" do
+    user_id = "toolbox-project-scope-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, project} =
+      Projects.create_project(user_id, %{
+        "name" => "Garage Renovation",
+        "summary" => "Shelving and paint at home."
+      })
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "telegram",
+          "kind" => "general",
+          "title" => "Buy shelves for the garage",
+          "summary" => "Need to finish the garage shelving.",
+          "next_action" => "Order the remaining shelves.",
+          "priority" => 72,
+          "dedupe_key" => "project-scope:garage:shelves",
+          "metadata" => %{
+            "suggested_project_id" => project.id,
+            "suggested_project_name" => project.name,
+            "suggested_life_domain" => "home"
+          }
+        }
+      ])
+
+    runtime_context = %{
+      user_id: user_id,
+      context: %{
+        linked_item: %{
+          project: %{
+            id: project.id,
+            name: project.name,
+            slug: project.slug
+          }
+        }
+      }
+    }
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "update_project_scope",
+               %{
+                 "life_domain" => "home",
+                 "confidence" => 0.93,
+                 "reasoning" => "This is a household renovation project."
+               },
+               runtime_context
+             )
+
+    assert result.status == "updated"
+    assert result.life_domain == "home"
+    assert result.project.id == project.id
+    assert result.aligned_todo_count == 1
+
+    refreshed = Projects.get_project_for_user(project.id, user_id)
+    assert refreshed.metadata["life_domain"] == "home"
+    assert refreshed.metadata["life_domain_reasoning"] =~ "household renovation"
+
+    refreshed_todo = Todos.get_for_user(user_id, todo.id)
+    assert refreshed_todo.metadata["suggested_life_domain"] == "home"
+    assert refreshed_todo.metadata["scope_source"] == "project_scope_confirmation"
   end
 
   test "preference tools can remember, inspect, and forget durable operator memory" do

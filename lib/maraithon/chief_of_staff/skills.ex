@@ -8,10 +8,16 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   @default_skill_modules %{
     "followthrough" => Maraithon.ChiefOfStaff.Skills.Followthrough,
     "travel_logistics" => Maraithon.ChiefOfStaff.Skills.TravelLogistics,
-    "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing
+    "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
+    "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment
   }
 
-  @default_enabled_ids ["followthrough", "travel_logistics", "briefing"]
+  @default_enabled_ids [
+    "followthrough",
+    "travel_logistics",
+    "briefing",
+    "project_scope_alignment"
+  ]
 
   @doc false
   def put_process_override(config) when is_list(config) do

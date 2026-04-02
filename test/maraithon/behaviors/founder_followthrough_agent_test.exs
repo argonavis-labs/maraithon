@@ -81,9 +81,10 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgentTest do
         "morning_brief_hour_local" => "9"
       })
 
-    assert state.enabled_skill_ids == ["followthrough", "briefing"]
+    assert state.enabled_skill_ids == ["followthrough", "briefing", "project_scope_alignment"]
     assert Map.has_key?(state.skill_states, "followthrough")
     assert Map.has_key?(state.skill_states, "briefing")
+    assert Map.has_key?(state.skill_states, "project_scope_alignment")
     refute Map.has_key?(state.skill_states, "travel_logistics")
     assert get_in(state, [:skill_configs, "followthrough", "email_scan_limit"]) == 21
     assert get_in(state, [:skill_configs, "followthrough", "channel_scan_limit"]) == 45

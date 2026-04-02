@@ -202,6 +202,66 @@ defmodule Maraithon.Todos do
 
   def record_feedback(_user_id, _todo_id, _feedback, _opts), do: {:error, :not_found}
 
+  def annotate_scope(user_id, todo_id, attrs \\ [])
+
+  def annotate_scope(user_id, todo_id, attrs)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) do
+    attrs =
+      attrs
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+
+    Repo.transaction(fn ->
+      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+           {:ok, updated} <-
+             todo
+             |> Todo.changeset(%{metadata: put_scope_metadata(todo.metadata || %{}, attrs)})
+             |> Repo.update() do
+        updated
+      else
+        nil -> Repo.rollback(:not_found)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def annotate_scope(_user_id, _todo_id, _attrs), do: {:error, :not_found}
+
+  def align_scope_for_project(user_id, project_id, attrs \\ %{})
+
+  def align_scope_for_project(user_id, project_id, attrs)
+      when is_binary(user_id) and is_binary(project_id) and is_map(attrs) do
+    attrs =
+      attrs
+      |> Map.new(fn {key, value} -> {to_string(key), value} end)
+      |> Map.put("project_id", project_id)
+
+    Todo
+    |> where([todo], todo.user_id == ^user_id)
+    |> where([todo], todo.status in ^@open_statuses)
+    |> where(
+      [todo],
+      fragment("coalesce(?->>'suggested_project_id', '') = ?", todo.metadata, ^project_id)
+    )
+    |> Repo.all()
+    |> Enum.reduce({:ok, []}, fn %Todo{} = todo, {:ok, acc} ->
+      case annotate_scope(user_id, todo.id, attrs) do
+        {:ok, updated} -> {:ok, [updated | acc]}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+    |> case do
+      {:ok, todos} -> {:ok, Enum.reverse(todos)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def align_scope_for_project(_user_id, _project_id, _attrs), do: {:error, :not_found}
+
   def summarize_for_prompt(user_id, limit \\ 8)
 
   def summarize_for_prompt(user_id, limit) when is_binary(user_id) do
@@ -573,16 +633,43 @@ defmodule Maraithon.Todos do
     })
   end
 
+  defp put_scope_metadata(metadata, attrs) when is_map(metadata) and is_map(attrs) do
+    metadata
+    |> Map.merge(scope_metadata_attrs(attrs))
+  end
+
+  defp put_scope_metadata(metadata, _attrs), do: metadata
+
+  defp scope_metadata_attrs(attrs) when is_map(attrs) do
+    %{
+      "suggested_project_id" => normalize_optional_string(fetch_attr(attrs, "project_id")),
+      "suggested_project_name" => normalize_optional_string(fetch_attr(attrs, "project_name")),
+      "suggested_life_domain" => normalize_life_domain(fetch_attr(attrs, "life_domain")),
+      "scope_confidence" => normalize_confidence(fetch_attr(attrs, "confidence")),
+      "scope_reasoning" => normalize_optional_string(fetch_attr(attrs, "reasoning")),
+      "scope_source" =>
+        normalize_optional_string(fetch_attr(attrs, "source")) || "chief_of_staff_weekend",
+      "scope_updated_at" => normalize_datetime(fetch_attr(attrs, "reviewed_at"))
+    }
+    |> compact_map()
+  end
+
   defp summarize_metadata(metadata) when is_map(metadata) do
     Map.take(metadata, [
       "thread_id",
       "google_account_email",
       "from",
       "subject",
+      "life_domain",
       "resolution_note",
       "assistant_feedback",
       "source_insight_id",
-      "source_insight_status"
+      "source_insight_status",
+      "suggested_project_id",
+      "suggested_project_name",
+      "suggested_life_domain",
+      "scope_confidence",
+      "scope_reasoning"
     ])
   end
 
@@ -632,6 +719,25 @@ defmodule Maraithon.Todos do
   end
 
   defp normalize_optional_string(_value), do: nil
+
+  defp normalize_life_domain(value) when value in ~w(home work), do: value
+  defp normalize_life_domain(_value), do: nil
+
+  defp normalize_confidence(value) when is_float(value), do: value |> max(0.0) |> min(1.0)
+  defp normalize_confidence(value) when is_integer(value), do: normalize_confidence(value / 1)
+
+  defp normalize_confidence(value) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {parsed, ""} -> normalize_confidence(parsed)
+      _ -> nil
+    end
+  end
+
+  defp normalize_confidence(_value), do: nil
+
+  defp normalize_datetime(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp normalize_datetime(value) when is_binary(value), do: normalize_optional_string(value)
+  defp normalize_datetime(_value), do: DateTime.utc_now() |> DateTime.to_iso8601()
 
   defp normalize_required_text(value, default) when is_binary(value) do
     case String.trim(value) do

@@ -570,7 +570,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent
       assert agent.config["name"] == "chief-of-staff"
       assert agent.config["user_id"] == @user_email
-      assert agent.config["enabled_skills"] == ["followthrough", "travel_logistics", "briefing"]
+
+      assert agent.config["enabled_skills"] == [
+               "followthrough",
+               "travel_logistics",
+               "briefing",
+               "project_scope_alignment"
+             ]
+
       assert agent.config["source_policy"] == "all_connected"
       assert agent.config["include_future_sources"] == true
       assert agent.config["team_id"] == "T12345"

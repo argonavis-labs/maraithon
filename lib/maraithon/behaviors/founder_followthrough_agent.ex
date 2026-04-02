@@ -12,7 +12,7 @@ defmodule Maraithon.Behaviors.FounderFollowthroughAgent do
 
   alias Maraithon.Behaviors.AIChiefOfStaff
 
-  @chief_of_staff_skill_ids ["followthrough", "briefing"]
+  @chief_of_staff_skill_ids ["followthrough", "briefing", "project_scope_alignment"]
 
   @impl true
   def init(config) do

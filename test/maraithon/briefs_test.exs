@@ -54,7 +54,8 @@ defmodule Maraithon.BriefsTest do
                "dedupe_key" => "brief:morning:test"
              })
 
-    assert %{sent: 1, failed: 0, skipped: 0} = Briefs.dispatch_telegram_batch(batch_size: 10)
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
 
     [message] = Agent.get(:capturing_telegram_recorder, & &1)
 

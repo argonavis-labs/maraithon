@@ -285,6 +285,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     }
   end
 
+  defp brief_structured_data(%Brief{metadata: metadata}) when is_map(metadata) do
+    %{}
+    |> maybe_put("brief_type", metadata["brief_type"])
+    |> maybe_put("linked_project", normalize_linked_project(metadata["linked_project"]))
+  end
+
   defp brief_structured_data(_brief), do: %{}
 
   defp brief_conversation_metadata(%Brief{metadata: %{"travel_itinerary_id" => itinerary_id}})
@@ -293,4 +299,18 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp brief_conversation_metadata(_brief), do: %{}
+
+  defp normalize_linked_project(%{} = project) do
+    %{
+      "id" => project["id"] || project[:id],
+      "name" => project["name"] || project[:name],
+      "slug" => project["slug"] || project[:slug],
+      "summary" => project["summary"] || project[:summary]
+    }
+  end
+
+  defp normalize_linked_project(_project), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end
