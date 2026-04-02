@@ -89,6 +89,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
   def subscriptions(_config, _user_id), do: []
 
   @impl true
+  def interested_in?(_config, context) do
+    case get_in(context, [:trigger, :type]) do
+      :pubsub_event ->
+        pubsub_topic_matches?(get_in(context, [:event, :topic]), ["email:", "calendar:", "slack:"])
+
+      _ ->
+        true
+    end
+  end
+
+  @impl true
   def init(config) do
     %{
       inbox_state: InboxCalendarAdvisor.init(config),
@@ -247,6 +258,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
     do: merge_wakeup({:absolute, absolute}, {:relative, ms})
 
   defp merge_wakeup(_left, right), do: right
+
+  defp pubsub_topic_matches?(topic, prefixes) when is_binary(topic) and is_list(prefixes) do
+    Enum.any?(prefixes, &String.starts_with?(topic, &1))
+  end
+
+  defp pubsub_topic_matches?(_topic, _prefixes), do: false
 
   defp payload_value(payload, key) when is_map(payload) do
     Map.get(payload, key) || Map.get(payload, Atom.to_string(key))

@@ -26,6 +26,8 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
       wakeup_mode: read_string(config, "wakeup_mode", "idle"),
       wakeup_emit_type: read_string(config, "wakeup_emit_type", nil),
       wakeup_payload: read_map(config, "wakeup_payload"),
+      interest_mode: read_string(config, "interest_mode", "always"),
+      interest_topic_prefixes: read_list(config, "interest_topic_prefixes"),
       effect_kind: read_string(config, "effect_kind", "llm_call"),
       effect_params: read_map(config, "effect_params"),
       effect_result_mode: read_string(config, "effect_result_mode", "idle"),
@@ -37,6 +39,30 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
           ms -> {:relative, ms}
         end
     }
+  end
+
+  @impl true
+  def interested_in?(config, context) do
+    interest_mode = read_string(config, "interest_mode", "always")
+    interest_topic_prefixes = read_list(config, "interest_topic_prefixes")
+
+    case interest_mode do
+      "scheduled_only" ->
+        get_in(context, [:trigger, :type]) not in [:message, :pubsub_event]
+
+      "message_only" ->
+        get_in(context, [:trigger, :type]) == :message
+
+      "pubsub_only" ->
+        get_in(context, [:trigger, :type]) == :pubsub_event
+
+      "pubsub_topic_prefixes" ->
+        topic = get_in(context, [:event, :topic])
+        Enum.any?(interest_topic_prefixes, &String.starts_with?(topic || "", &1))
+
+      _ ->
+        true
+    end
   end
 
   @impl true
@@ -115,6 +141,13 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
 
       _ ->
         nil
+    end
+  end
+
+  defp read_list(payload, key) when is_map(payload) do
+    case Map.get(payload, key) do
+      values when is_list(values) -> Enum.filter(values, &is_binary/1)
+      _ -> []
     end
   end
 end

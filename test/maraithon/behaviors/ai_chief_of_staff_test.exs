@@ -25,6 +25,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
       budget: %{llm_calls: 10, tool_calls: 10},
       recent_events: [],
       last_message: nil,
+      last_message_metadata: %{},
+      last_message_id: nil,
+      trigger: nil,
       event: nil
     }
 
@@ -131,5 +134,84 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert [%{"count" => 1, "cadences" => ["weekly_review"]}] = payload["briefs"]
     assert next_state.pending_effect_skill_id == nil
     assert next_state.resume_index == 0
+  end
+
+  test "runs only the skills interested in a pubsub trigger", %{context: context} do
+    event_context = %{
+      context
+      | trigger: %{type: :pubsub_event, topic: "email:chief@example.com"},
+        event: %{topic: "email:chief@example.com", payload: %{"history_id" => "123"}}
+    }
+
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "alpha" => %{
+            "interest_mode" => "always",
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "insights_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "categories" => ["reply_urgent"]
+            }
+          },
+          "beta" => %{
+            "interest_mode" => "scheduled_only",
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "briefs_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "cadences" => ["morning"]
+            }
+          }
+        }
+      })
+
+    assert {:emit, {:insights_recorded, payload}, next_state} =
+             AIChiefOfStaff.handle_wakeup(state, event_context)
+
+    assert payload["categories"] == ["reply_urgent"]
+    refute Map.has_key?(payload, "briefs")
+    assert next_state.cycle_skill_ids == nil
+  end
+
+  test "scheduled wakeups still run the full enabled skill pack", %{context: context} do
+    scheduled_context = %{context | trigger: %{type: :wakeup, job_type: "wakeup"}}
+
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "alpha" => %{
+            "interest_mode" => "always",
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "insights_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "categories" => ["reply_urgent"]
+            }
+          },
+          "beta" => %{
+            "interest_mode" => "scheduled_only",
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "briefs_recorded",
+            "wakeup_payload" => %{
+              "count" => 1,
+              "user_id" => context.user_id,
+              "cadences" => ["morning"]
+            }
+          }
+        }
+      })
+
+    assert {:emit, {:insights_recorded, payload}, _next_state} =
+             AIChiefOfStaff.handle_wakeup(state, scheduled_context)
+
+    assert payload["categories"] == ["reply_urgent"]
+    assert [%{"count" => 1, "cadences" => ["morning"]}] = payload["briefs"]
   end
 end

@@ -111,6 +111,18 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     |> Enum.uniq()
   end
 
+  def interested_in?(skill_id, skill_configs, context)
+      when is_binary(skill_id) and is_map(skill_configs) and is_map(context) do
+    module = get!(skill_id)
+    config = Map.get(skill_configs, skill_id, %{})
+
+    if function_exported?(module, :interested_in?, 2) do
+      module.interested_in?(config, context)
+    else
+      true
+    end
+  end
+
   defp normalize_id(id) when is_binary(id), do: String.trim(id)
   defp normalize_id(id) when is_atom(id), do: id |> Atom.to_string() |> normalize_id()
   defp normalize_id(id), do: id |> to_string() |> normalize_id()

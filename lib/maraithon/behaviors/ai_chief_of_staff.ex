@@ -27,6 +27,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       enabled_skill_ids: enabled_skill_ids,
       skill_configs: skill_configs,
       skill_states: skill_states,
+      cycle_skill_ids: nil,
       pending_emit: nil,
       pending_effect_skill_id: nil,
       resume_index: 0
@@ -40,6 +41,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         nil -> %{state | user_id: normalize_string(context[:user_id])}
         _ -> state
       end
+      |> ensure_cycle_skill_ids(context)
 
     run_from_index(state.resume_index || 0, state, context)
   end
@@ -93,10 +95,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp run_from_index(index, state, context) when index < 0, do: run_from_index(0, state, context)
 
   defp run_from_index(index, state, context) do
-    if index >= length(state.enabled_skill_ids) do
+    skill_ids = cycle_skill_ids(state)
+
+    if index >= length(skill_ids) do
       finalize_cycle(%{state | resume_index: 0})
     else
-      skill_id = Enum.at(state.enabled_skill_ids, index)
+      skill_id = Enum.at(skill_ids, index)
       module = Skills.get!(skill_id)
       skill_state = Map.fetch!(state.skill_states, skill_id)
 
@@ -133,6 +137,13 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp finalize_cycle(state) do
+    state = %{
+      state
+      | cycle_skill_ids: nil,
+        pending_effect_skill_id: nil,
+        resume_index: 0
+    }
+
     case state.pending_emit do
       nil ->
         {:idle, state}
@@ -141,6 +152,21 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         {:emit, emit, %{state | pending_emit: nil}}
     end
   end
+
+  defp ensure_cycle_skill_ids(%{cycle_skill_ids: nil} = state, context) do
+    %{state | cycle_skill_ids: selected_skill_ids(state, context)}
+  end
+
+  defp ensure_cycle_skill_ids(state, _context), do: state
+
+  defp selected_skill_ids(state, context) do
+    Enum.filter(state.enabled_skill_ids, fn skill_id ->
+      Skills.interested_in?(skill_id, state.skill_configs, context)
+    end)
+  end
+
+  defp cycle_skill_ids(%{cycle_skill_ids: skill_ids}) when is_list(skill_ids), do: skill_ids
+  defp cycle_skill_ids(state), do: state.enabled_skill_ids
 
   defp put_skill_state(state, skill_id, next_skill_state) do
     put_in(state, [:skill_states, skill_id], next_skill_state)

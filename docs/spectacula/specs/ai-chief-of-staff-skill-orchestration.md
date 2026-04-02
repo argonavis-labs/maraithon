@@ -304,10 +304,18 @@ Reasoning:
 The orchestrator should:
 
 - call enabled skills in deterministic order
+- select the active skill subset per cycle based on the trigger context, so scheduled wakeups can run the full pack while PubSub wakeups only run interested skills
 - isolate failures so one broken skill does not abort the whole cycle
 - collect outputs into one merged result
 - record skill-level telemetry and errors
 - decide whether the top-level runtime returns `:idle`, `:emit`, or `:effect`
+
+Trigger rules for the current implementation slice:
+
+- scheduled wakeups should carry an explicit trigger object and default to the full enabled skill pack
+- message-triggered wakeups should carry explicit message metadata and allow conversational skills to opt in without forcing briefing runs
+- PubSub wakeups should carry the normalized event topic and payload and only run skills that declare interest in that topic class
+- transient trigger context must be cleared after the cycle completes so later scheduled wakeups do not inherit stale messages or events
 
 ### 5.6 Output Merge Contract
 

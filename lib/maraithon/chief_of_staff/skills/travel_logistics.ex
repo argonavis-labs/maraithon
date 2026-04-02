@@ -65,6 +65,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
   def subscriptions(_config, _user_id), do: []
 
   @impl true
+  def interested_in?(_config, context) do
+    case get_in(context, [:trigger, :type]) do
+      :pubsub_event ->
+        pubsub_topic_matches?(get_in(context, [:event, :topic]), ["email:", "calendar:"])
+
+      _ ->
+        true
+    end
+  end
+
+  @impl true
   def init(config), do: PersonalAssistantAgent.init(config)
 
   @impl true
@@ -76,4 +87,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
 
   @impl true
   def next_wakeup(state), do: PersonalAssistantAgent.next_wakeup(state)
+
+  defp pubsub_topic_matches?(topic, prefixes) when is_binary(topic) and is_list(prefixes) do
+    Enum.any?(prefixes, &String.starts_with?(topic, &1))
+  end
+
+  defp pubsub_topic_matches?(_topic, _prefixes), do: false
 end

@@ -14,6 +14,7 @@ defmodule Maraithon.ChiefOfStaff.Skill do
   @callback requirements() :: [map()]
   @callback subscriptions(config :: map(), user_id :: String.t()) :: [String.t()]
   @callback init(config :: map()) :: Behavior.state()
+  @callback interested_in?(config :: map(), Behavior.context()) :: boolean()
 
   @callback handle_wakeup(Behavior.state(), Behavior.context()) ::
               {:effect, Behavior.effect(), Behavior.state()}
@@ -31,4 +32,6 @@ defmodule Maraithon.ChiefOfStaff.Skill do
               | {:idle, Behavior.state()}
 
   @callback next_wakeup(Behavior.state()) :: Behavior.wakeup_schedule()
+
+  @optional_callbacks interested_in?: 2
 end

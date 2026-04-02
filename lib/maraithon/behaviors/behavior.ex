@@ -11,6 +11,9 @@ defmodule Maraithon.Behaviors.Behavior do
           budget: map(),
           recent_events: [map()],
           last_message: String.t() | nil,
+          last_message_metadata: map(),
+          last_message_id: String.t() | nil,
+          trigger: map() | nil,
           event: map() | nil
         }
 

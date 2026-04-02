@@ -613,6 +613,93 @@ defmodule Maraithon.Runtime.AgentTest do
     end
   end
 
+  describe "transient trigger context" do
+    test "clears pubsub event context after the effect cycle completes", %{
+      scheduler_pid: _scheduler_pid
+    } do
+      topic = "test:topic:#{System.unique_integer()}"
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "trigger_cleanup_agent",
+            "prompt" => "Observe quietly.",
+            "subscribe" => [topic],
+            "tools" => []
+          },
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:idle, _data} = :sys.get_state(pid)
+
+      send(pid, {:pubsub_event, topic, %{data: "test"}})
+
+      {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      assert waiting_data.current_trigger.type == :pubsub_event
+      assert waiting_data.current_event.topic == topic
+
+      [effect_id] = Map.keys(waiting_data.pending_effects)
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "OBSERVE"}}})
+
+      {:idle, idle_data} = :sys.get_state(pid)
+      assert idle_data.current_trigger == nil
+      assert idle_data.current_event == nil
+      assert idle_data.current_message == nil
+
+      job_id = Ecto.UUID.generate()
+      send(pid, {:wakeup, "wakeup", job_id, %{}})
+
+      {:waiting_effect, wakeup_data} = :sys.get_state(pid)
+      assert wakeup_data.current_trigger.type == :wakeup
+      assert wakeup_data.current_event == nil
+      assert wakeup_data.behavior_state.processing_event == nil
+    end
+
+    test "clears direct-message context after the effect cycle completes", %{
+      scheduler_pid: _scheduler_pid
+    } do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "message_cleanup_agent",
+            "prompt" => "Observe quietly.",
+            "subscribe" => [],
+            "tools" => []
+          },
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:idle, _data} = :sys.get_state(pid)
+
+      message_id = Ecto.UUID.generate()
+      send(pid, {:message, "Hello agent!", %{"source" => "test"}, message_id})
+
+      {:waiting_effect, waiting_data} = :sys.get_state(pid)
+      assert waiting_data.current_trigger.type == :message
+      assert waiting_data.current_message == "Hello agent!"
+      assert waiting_data.current_message_id == message_id
+
+      [effect_id] = Map.keys(waiting_data.pending_effects)
+      send(pid, {:effect_result, effect_id, {:ok, %{content: "OBSERVE"}}})
+
+      {:idle, idle_data} = :sys.get_state(pid)
+      assert idle_data.current_trigger == nil
+      assert idle_data.current_message == nil
+      assert idle_data.current_message_metadata == %{}
+      assert idle_data.current_message_id == nil
+    end
+  end
+
   # ============================================================================
   # WORKING STATE TESTS
   # ============================================================================

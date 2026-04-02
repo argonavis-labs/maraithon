@@ -47,6 +47,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.Briefing do
   def subscriptions(_config, _user_id), do: []
 
   @impl true
+  def interested_in?(_config, context) do
+    case get_in(context, [:trigger, :type]) do
+      :message -> false
+      :pubsub_event -> false
+      _ -> true
+    end
+  end
+
+  @impl true
   def init(config), do: ChiefOfStaffBriefAgent.init(config)
 
   @impl true

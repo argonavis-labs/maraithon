@@ -29,7 +29,11 @@ defmodule Maraithon.Runtime.Agent do
     :last_checkpoint_at,
     :started_at,
     :subscriptions,
+    :current_trigger,
     :current_event,
+    :current_message,
+    :current_message_metadata,
+    :current_message_id,
     :deferred_messages
   ]
 
@@ -125,7 +129,11 @@ defmodule Maraithon.Runtime.Agent do
         budget: budget,
         sequence_num: Events.latest_sequence_num(agent.id),
         subscriptions: subscriptions,
-        current_event: nil
+        current_trigger: nil,
+        current_event: nil,
+        current_message: nil,
+        current_message_metadata: %{},
+        current_message_id: nil
     }
 
     # Emit started event (capture updated data with new sequence_num)
@@ -172,7 +180,7 @@ defmodule Maraithon.Runtime.Agent do
     idle(:info, msg, data)
   end
 
-  def idle(:info, {:wakeup, job_type, job_id, _payload}, data) do
+  def idle(:info, {:wakeup, job_type, job_id, payload}, data) do
     acknowledge_wakeup(job_id)
 
     if MapSet.member?(data.handled_jobs, job_id) do
@@ -196,6 +204,7 @@ defmodule Maraithon.Runtime.Agent do
           data = emit_event(data, "wakeup_received", %{job_id: job_id})
 
           if has_budget?(data) do
+            data = put_wakeup_trigger(data, job_type, job_id, payload)
             {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
           else
             Logger.warning("No budget, staying idle")
@@ -221,13 +230,7 @@ defmodule Maraithon.Runtime.Agent do
       })
 
     if has_budget?(data) do
-      config =
-        data.config
-        |> Map.put("_last_message", message)
-        |> Map.put("_last_message_metadata", metadata)
-        |> Map.put("_last_message_id", message_id)
-
-      data = %{data | config: config}
+      data = put_message_trigger(data, message, metadata, message_id)
       {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
     else
       Logger.warning("No budget, cannot process message")
@@ -247,7 +250,7 @@ defmodule Maraithon.Runtime.Agent do
         })
 
       if has_budget?(data) do
-        data = %{data | current_event: %{topic: topic, payload: payload}}
+        data = put_pubsub_trigger(data, topic, payload)
         {:next_state, :working, data, [{:next_event, :internal, :execute_behavior}]}
       else
         Logger.warning("No budget, cannot process PubSub event")
@@ -287,6 +290,7 @@ defmodule Maraithon.Runtime.Agent do
       {:emit, {event_type, payload}, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
         data = emit_event(data, to_string(event_type), payload)
+        data = clear_transient_context(data)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
 
@@ -296,6 +300,7 @@ defmodule Maraithon.Runtime.Agent do
 
       {:idle, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
+        data = clear_transient_context(data)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
     end
@@ -359,11 +364,13 @@ defmodule Maraithon.Runtime.Agent do
               {:emit, {event_type, payload}, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
                 data = emit_event(data, to_string(event_type), payload)
+                data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
               {:idle, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
+                data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
@@ -379,6 +386,7 @@ defmodule Maraithon.Runtime.Agent do
                 error: inspect(reason)
               })
 
+            data = clear_transient_context(data)
             schedule_next_wakeup(data)
             {:next_state, :idle, data}
         end
@@ -387,6 +395,7 @@ defmodule Maraithon.Runtime.Agent do
 
   def waiting_effect(:state_timeout, :effect_timeout, data) do
     Logger.warning("Effect timeout")
+    data = clear_transient_context(data)
     schedule_next_wakeup(data)
     {:next_state, :idle, data}
   end
@@ -492,10 +501,67 @@ defmodule Maraithon.Runtime.Agent do
       budget: data.budget,
       # TODO: Load recent events
       recent_events: [],
-      last_message: Map.get(data.config, "_last_message"),
-      last_message_metadata: Map.get(data.config, "_last_message_metadata"),
-      last_message_id: Map.get(data.config, "_last_message_id"),
+      last_message: data.current_message,
+      last_message_metadata: data.current_message_metadata || %{},
+      last_message_id: data.current_message_id,
+      trigger: data.current_trigger,
       event: data.current_event
+    }
+  end
+
+  defp put_wakeup_trigger(data, job_type, job_id, payload) do
+    %{
+      data
+      | current_trigger: %{
+          type: :wakeup,
+          job_type: job_type,
+          job_id: job_id,
+          payload: payload
+        },
+        current_event: nil,
+        current_message: nil,
+        current_message_metadata: %{},
+        current_message_id: nil
+    }
+  end
+
+  defp put_message_trigger(data, message, metadata, message_id) do
+    %{
+      data
+      | current_trigger: %{
+          type: :message,
+          message_id: message_id,
+          metadata: metadata
+        },
+        current_event: nil,
+        current_message: message,
+        current_message_metadata: metadata,
+        current_message_id: message_id
+    }
+  end
+
+  defp put_pubsub_trigger(data, topic, payload) do
+    %{
+      data
+      | current_trigger: %{
+          type: :pubsub_event,
+          topic: topic
+        },
+        current_event: %{topic: topic, payload: payload},
+        current_message: nil,
+        current_message_metadata: %{},
+        current_message_id: nil
+    }
+  end
+
+  defp clear_transient_context(data) do
+    %{
+      data
+      | current_trigger: nil,
+        current_event: nil,
+        current_message: nil,
+        current_message_metadata: %{},
+        current_message_id: nil
     }
   end
 
