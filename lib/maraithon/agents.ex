@@ -14,11 +14,15 @@ defmodule Maraithon.Agents do
   """
   def list_agents(opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
+    project_id = Keyword.get(opts, :project_id)
+    preload = Keyword.get(opts, :preload, [])
 
     Agent
     |> maybe_filter_user(user_id)
+    |> maybe_filter_project(project_id)
     |> order_by([agent], desc: agent.updated_at, desc: agent.inserted_at)
     |> Repo.all()
+    |> Repo.preload(preload)
   end
 
   @doc """
@@ -26,10 +30,12 @@ defmodule Maraithon.Agents do
   """
   def get_agent(id, opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
+    preload = Keyword.get(opts, :preload, [])
 
     Agent
     |> maybe_filter_user(user_id)
     |> Repo.get(id)
+    |> Repo.preload(preload)
   end
 
   @doc """
@@ -39,10 +45,13 @@ defmodule Maraithon.Agents do
     Repo.get!(Agent, id)
   end
 
-  def get_agent_for_user(id, user_id) when is_binary(user_id) do
+  def get_agent_for_user(id, user_id, opts \\ []) when is_binary(user_id) do
+    preload = Keyword.get(opts, :preload, [])
+
     Agent
     |> where([agent], agent.id == ^id and agent.user_id == ^user_id)
     |> Repo.one()
+    |> Repo.preload(preload)
   end
 
   @doc """
@@ -107,10 +116,14 @@ defmodule Maraithon.Agents do
   """
   def list_resumable_agents(opts \\ []) do
     user_id = Keyword.get(opts, :user_id)
+    project_id = Keyword.get(opts, :project_id)
+    preload = Keyword.get(opts, :preload, [])
 
     from(a in Agent, where: a.status in ["running", "degraded"])
     |> maybe_filter_user(user_id)
+    |> maybe_filter_project(project_id)
     |> Repo.all()
+    |> Repo.preload(preload)
   end
 
   @doc """
@@ -139,5 +152,12 @@ defmodule Maraithon.Agents do
 
   defp maybe_filter_user(query, user_id) when is_binary(user_id) do
     where(query, [agent], agent.user_id == ^user_id)
+  end
+
+  defp maybe_filter_project(query, nil), do: query
+  defp maybe_filter_project(query, ""), do: query
+
+  defp maybe_filter_project(query, project_id) when is_binary(project_id) do
+    where(query, [agent], agent.project_id == ^project_id)
   end
 end

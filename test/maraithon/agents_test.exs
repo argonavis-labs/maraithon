@@ -3,6 +3,8 @@ defmodule Maraithon.AgentsTest do
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Accounts
+  alias Maraithon.Projects
   alias Maraithon.Repo
 
   @valid_attrs %{behavior: "prompt_agent", config: %{prompt: "test"}}
@@ -23,6 +25,20 @@ defmodule Maraithon.AgentsTest do
 
       assert length(agents) == 1
       assert hd(agents).id == agent.id
+    end
+
+    test "filters agents by project" do
+      user_id = "agents-projects@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      {:ok, project} = Projects.create_project(user_id, %{"name" => "Maraithon Product"})
+
+      {:ok, attached} =
+        Agents.create_agent(Map.merge(@valid_attrs, %{user_id: user_id, project_id: project.id}))
+
+      {:ok, _global} = Agents.create_agent(Map.merge(@valid_attrs, %{user_id: user_id}))
+
+      assert [%Agent{id: id}] = Agents.list_agents(user_id: user_id, project_id: project.id)
+      assert id == attached.id
     end
   end
 

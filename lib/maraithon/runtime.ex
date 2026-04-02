@@ -18,6 +18,7 @@ defmodule Maraithon.Runtime do
   def start_agent(params) do
     attrs = %{
       user_id: params["user_id"] || params[:user_id],
+      project_id: normalize_optional_string(params["project_id"] || params[:project_id]),
       behavior: params["behavior"] || params[:behavior],
       config: params["config"] || params[:config] || %{},
       status: "running",
@@ -269,6 +270,7 @@ defmodule Maraithon.Runtime do
   defp build_status(agent) do
     base = %{
       id: agent.id,
+      project_id: agent.project_id,
       status: agent.status,
       behavior: agent.behavior,
       started_at: agent.started_at,
@@ -333,6 +335,12 @@ defmodule Maraithon.Runtime do
       behavior: behavior,
       config: config
     }
+
+    attrs =
+      case fetch_optional_param(params, "project_id") do
+        :missing -> attrs
+        value -> Map.put(attrs, :project_id, normalize_optional_string(value))
+      end
 
     budget = params["budget"] || params[:budget] || Map.get(existing_config, "budget")
 
@@ -455,4 +463,17 @@ defmodule Maraithon.Runtime do
   end
 
   defp put_correlation_id(_metadata, correlation_id), do: %{"correlation_id" => correlation_id}
+
+  defp fetch_optional_param(params, key) when is_map(params) do
+    cond do
+      Map.has_key?(params, key) -> Map.get(params, key)
+      key == "project_id" and Map.has_key?(params, :project_id) -> Map.get(params, :project_id)
+      true -> :missing
+    end
+  end
+
+  defp normalize_optional_string(nil), do: nil
+  defp normalize_optional_string(""), do: nil
+  defp normalize_optional_string(value) when is_binary(value), do: String.trim(value)
+  defp normalize_optional_string(value), do: value
 end
