@@ -52,7 +52,7 @@ end
 
 port = String.to_integer(System.get_env("PORT", "4000"))
 
-config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0, 0, 0, 0, 0}, port: port]
+config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0}, port: port]
 
 # =============================================================================
 # Maraithon Runtime Configuration
