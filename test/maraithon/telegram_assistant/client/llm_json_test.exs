@@ -72,6 +72,8 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
       )
 
     assert prompt =~ "Persist actionable work as todos."
+    assert prompt =~ "\"todo_digest\""
+    assert prompt =~ "one Telegram message per todo"
     assert prompt =~ "call `list_todos` with a narrow `query` first"
     assert prompt =~ "Handled the billing, what else?"
     assert prompt =~ "\"tool\":\"list_todos\""

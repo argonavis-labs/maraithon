@@ -6,10 +6,19 @@ defmodule Maraithon.Todos do
   import Ecto.Query
 
   alias Maraithon.Insights.Insight
+  alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
+  @feedback_values ~w(helpful not_helpful)
+
+  def get_for_user(user_id, todo_id)
+      when is_binary(user_id) and is_binary(todo_id) do
+    Repo.get_by(Todo, id: todo_id, user_id: user_id)
+  end
+
+  def get_for_user(_user_id, _todo_id), do: nil
 
   def list_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)
@@ -158,6 +167,41 @@ defmodule Maraithon.Todos do
 
   def snooze(_user_id, _todo_id, _until_datetime, _opts), do: {:error, :not_found}
 
+  def record_feedback(user_id, todo_id, feedback, opts \\ [])
+
+  def record_feedback(user_id, todo_id, feedback, opts)
+      when is_binary(user_id) and is_binary(todo_id) and feedback in @feedback_values do
+    source = Keyword.get(opts, :source)
+
+    Repo.transaction(fn ->
+      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+           {:ok, updated} <-
+             todo
+             |> Todo.changeset(%{
+               metadata: put_feedback(todo.metadata || %{}, feedback, source)
+             })
+             |> Repo.update() do
+        updated
+      else
+        nil -> Repo.rollback(:not_found)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} ->
+        _ = maybe_learn_from_feedback(todo, feedback)
+        {:ok, todo}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def record_feedback(_user_id, _todo_id, _feedback, _opts), do: {:error, :not_found}
+
   def summarize_for_prompt(user_id, limit \\ 8)
 
   def summarize_for_prompt(user_id, limit) when is_binary(user_id) do
@@ -263,6 +307,23 @@ defmodule Maraithon.Todos do
         nil
     end
   end
+
+  defp maybe_learn_from_feedback(%Todo{} = todo, feedback) when feedback in @feedback_values do
+    case linked_insight(todo) do
+      %Insight{} = insight ->
+        PreferenceMemory.learn_from_feedback(todo.user_id, insight, feedback,
+          allow_fallback?: false
+        )
+
+      nil ->
+        {:ok, %{reply: nil, learned: []}}
+    end
+  rescue
+    _error ->
+      {:ok, %{reply: nil, learned: []}}
+  end
+
+  defp maybe_learn_from_feedback(_todo, _feedback), do: {:ok, %{reply: nil, learned: []}}
 
   defp linked_insight_changes(%Insight{} = insight, %Todo{} = todo) do
     changes =
@@ -504,6 +565,14 @@ defmodule Maraithon.Todos do
     Map.put(metadata, "resolution_note", String.trim(note))
   end
 
+  defp put_feedback(metadata, feedback, source) when feedback in @feedback_values do
+    Map.put(metadata, "assistant_feedback", %{
+      "value" => feedback,
+      "source" => source,
+      "recorded_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    })
+  end
+
   defp summarize_metadata(metadata) when is_map(metadata) do
     Map.take(metadata, [
       "thread_id",
@@ -511,6 +580,7 @@ defmodule Maraithon.Todos do
       "from",
       "subject",
       "resolution_note",
+      "assistant_feedback",
       "source_insight_id",
       "source_insight_status"
     ])

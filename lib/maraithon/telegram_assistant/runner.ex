@@ -6,8 +6,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Context, Run, Toolbox}
+  alias Maraithon.TelegramAssistant.{Context, Run, TodoActions, Toolbox}
   alias Maraithon.TelegramConversations.Conversation
+  alias Maraithon.Todos
   alias Maraithon.Tools
   alias Maraithon.UserMemory
 
@@ -291,26 +292,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
        ) do
     message_class = Map.get(response, "message_class", "assistant_reply")
     prepared_action_id = latest_prepared_action_id(state.tool_history)
-    text = final_text(response, prepared_action_id)
 
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
       TelegramAssistant.prepare_final_delivery(run.id)
-
-    turn_opts =
-      [
-        reply_to_message_id: Map.get(attrs, :source_message_id),
-        turn_kind: turn_kind_for_message_class(message_class),
-        origin_type: if(prepared_action_id, do: "prepared_action", else: "chat"),
-        origin_id: prepared_action_id,
-        structured_data: %{
-          "run_id" => run.id,
-          "tool_history" => state.tool_history,
-          "summary" => Map.get(response, "summary"),
-          "message_class" => message_class
-        }
-      ]
-      |> apply_delivery_mode(delivery)
-      |> maybe_put_approval_markup(prepared_action_id, message_class)
 
     case delivery.mode do
       :suppress_after_timeout ->
@@ -318,38 +302,17 @@ defmodule Maraithon.TelegramAssistant.Runner do
          build_result_summary(message_class, prepared_action_id, state, liveness_summary)}
 
       _ ->
-        case TelegramAssistant.send_turn(
-               conversation,
-               Map.fetch!(attrs, :chat_id),
-               text,
-               turn_opts
-             ) do
-          {:ok, updated_conversation, _turn, _telegram_result} ->
-            status =
-              if message_class == "approval_prompt" and is_binary(prepared_action_id) do
-                prepared_action = TelegramAssistant.get_prepared_action(prepared_action_id)
-
-                {:ok, _conversation} =
-                  TelegramAssistant.mark_conversation_awaiting_action(
-                    updated_conversation,
-                    prepared_action
-                  )
-
-                "waiting_confirmation"
-              else
-                "completed"
-              end
-
-            summary =
-              build_result_summary(message_class, prepared_action_id, state, liveness_summary)
-
-            _ = maybe_refresh_user_memory(attrs)
-
-            {:ok, status, summary}
-
-          {:error, reason} ->
-            {:error, run, reason, state}
-        end
+        deliver_response_by_class(
+          conversation,
+          run,
+          response,
+          state,
+          attrs,
+          message_class,
+          prepared_action_id,
+          delivery,
+          liveness_summary
+        )
     end
   end
 
@@ -510,6 +473,266 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp latest_prepared_action_id(_tool_history), do: nil
+
+  defp deliver_response_by_class(
+         conversation,
+         run,
+         response,
+         state,
+         attrs,
+         "todo_digest",
+         prepared_action_id,
+         delivery,
+         liveness_summary
+       ) do
+    todos = latest_todo_items(state.tool_history)
+
+    if todos == [] do
+      deliver_standard_response(
+        conversation,
+        run,
+        response,
+        state,
+        attrs,
+        "assistant_reply",
+        prepared_action_id,
+        delivery,
+        liveness_summary
+      )
+    else
+      intro_text = todo_digest_intro_text(response, prepared_action_id)
+
+      with {:ok, updated_conversation, _turn, _telegram_result} <-
+             TelegramAssistant.send_turn(
+               conversation,
+               Map.fetch!(attrs, :chat_id),
+               intro_text,
+               standard_turn_opts(
+                 attrs,
+                 run,
+                 state,
+                 "assistant_reply",
+                 prepared_action_id,
+                 delivery,
+                 Map.get(response, "summary")
+               )
+             ),
+           {:ok, final_conversation} <-
+             send_todo_messages(updated_conversation, attrs, run, todos) do
+        summary =
+          build_result_summary("todo_digest", prepared_action_id, state, liveness_summary)
+          |> Map.put(:todo_items_sent, length(todos))
+          |> Map.put(:todo_ids, Enum.map(todos, &Map.get(&1, "id")))
+
+        _ = maybe_refresh_user_memory(attrs)
+
+        {:ok, todo_digest_status(final_conversation, prepared_action_id), summary}
+      else
+        {:error, reason} ->
+          {:error, run, reason, state}
+      end
+    end
+  end
+
+  defp deliver_response_by_class(
+         conversation,
+         run,
+         response,
+         state,
+         attrs,
+         message_class,
+         prepared_action_id,
+         delivery,
+         liveness_summary
+       ) do
+    deliver_standard_response(
+      conversation,
+      run,
+      response,
+      state,
+      attrs,
+      message_class,
+      prepared_action_id,
+      delivery,
+      liveness_summary
+    )
+  end
+
+  defp deliver_standard_response(
+         conversation,
+         run,
+         response,
+         state,
+         attrs,
+         message_class,
+         prepared_action_id,
+         delivery,
+         liveness_summary
+       ) do
+    text = final_text(response, prepared_action_id)
+
+    case TelegramAssistant.send_turn(
+           conversation,
+           Map.fetch!(attrs, :chat_id),
+           text,
+           standard_turn_opts(
+             attrs,
+             run,
+             state,
+             message_class,
+             prepared_action_id,
+             delivery,
+             Map.get(response, "summary")
+           )
+         ) do
+      {:ok, updated_conversation, _turn, _telegram_result} ->
+        summary = build_result_summary(message_class, prepared_action_id, state, liveness_summary)
+        _ = maybe_refresh_user_memory(attrs)
+
+        {:ok, todo_digest_status(updated_conversation, prepared_action_id, message_class),
+         summary}
+
+      {:error, reason} ->
+        {:error, run, reason, state}
+    end
+  end
+
+  defp standard_turn_opts(
+         attrs,
+         run,
+         state,
+         message_class,
+         prepared_action_id,
+         delivery,
+         response_summary
+       ) do
+    [
+      reply_to_message_id: Map.get(attrs, :source_message_id),
+      turn_kind: turn_kind_for_message_class(message_class),
+      origin_type: if(prepared_action_id, do: "prepared_action", else: "chat"),
+      origin_id: prepared_action_id,
+      structured_data: %{
+        "run_id" => run.id,
+        "tool_history" => state.tool_history,
+        "summary" => response_summary,
+        "message_class" => message_class
+      }
+    ]
+    |> apply_delivery_mode(delivery)
+    |> maybe_put_approval_markup(prepared_action_id, message_class)
+  end
+
+  defp send_todo_messages(conversation, attrs, run, todos) do
+    Enum.reduce_while(todos, {:ok, conversation}, fn todo, {:ok, acc_conversation} ->
+      todo_record = hydrate_todo_for_delivery(attrs, todo)
+      payload = TodoActions.telegram_payload(todo_record)
+
+      turn_opts = [
+        send_mode: :send,
+        turn_kind: "assistant_reply",
+        origin_type: "chat",
+        structured_data: %{
+          "run_id" => run.id,
+          "message_class" => "todo_item",
+          "summary" => "Delivered one actionable todo item.",
+          "linked_todo" => serialize_linked_todo(todo_record)
+        },
+        telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
+      ]
+
+      case TelegramAssistant.send_turn(
+             acc_conversation,
+             Map.fetch!(attrs, :chat_id),
+             payload.text,
+             turn_opts
+           ) do
+        {:ok, updated_conversation, _turn, _telegram_result} ->
+          {:cont, {:ok, updated_conversation}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp latest_todo_items(tool_history) when is_list(tool_history) do
+    tool_history
+    |> Enum.reverse()
+    |> Enum.find_value([], fn entry ->
+      case {Map.get(entry, "tool"), Map.get(entry, "result")} do
+        {"resolve_todo", %{"remaining_todos" => todos}} when is_list(todos) and todos != [] ->
+          todos
+
+        {"resolve_todo", %{"remaining_todos" => []}} ->
+          []
+
+        {tool, %{"todos" => todos}}
+        when tool in ["upsert_todos", "list_todos"] and is_list(todos) and todos != [] ->
+          todos
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp latest_todo_items(_tool_history), do: []
+
+  defp hydrate_todo_for_delivery(attrs, %{"id" => todo_id} = todo) when is_binary(todo_id) do
+    case Todos.get_for_user(Map.fetch!(attrs, :user_id), todo_id) do
+      nil -> todo
+      record -> record
+    end
+  end
+
+  defp hydrate_todo_for_delivery(_attrs, todo), do: todo
+
+  defp serialize_linked_todo(%{"id" => _id} = todo), do: todo
+
+  defp serialize_linked_todo(todo) when is_map(todo) do
+    case Map.fetch(todo, :id) do
+      {:ok, _id} -> Todos.serialize_for_prompt(todo)
+      :error -> %{}
+    end
+  end
+
+  defp serialize_linked_todo(_todo), do: %{}
+
+  defp todo_digest_intro_text(response, prepared_action_id) do
+    case Map.get(response, "assistant_message", "") do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        case final_text(response, prepared_action_id) do
+          "I finished that step." ->
+            "I refreshed the current work list. I'm sending the actionable items one by one."
+
+          value ->
+            value
+        end
+    end
+  end
+
+  defp todo_digest_status(
+         updated_conversation,
+         prepared_action_id,
+         message_class \\ "assistant_reply"
+       ) do
+    if message_class == "approval_prompt" and is_binary(prepared_action_id) do
+      prepared_action = TelegramAssistant.get_prepared_action(prepared_action_id)
+
+      {:ok, _conversation} =
+        TelegramAssistant.mark_conversation_awaiting_action(
+          updated_conversation,
+          prepared_action
+        )
+
+      "waiting_confirmation"
+    else
+      "completed"
+    end
+  end
 
   defp final_text(response, prepared_action_id) do
     assistant_message = Map.get(response, "assistant_message", "")

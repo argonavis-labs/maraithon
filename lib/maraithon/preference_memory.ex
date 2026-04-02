@@ -208,9 +208,11 @@ defmodule Maraithon.PreferenceMemory do
 
   def learn_from_feedback(user_id, %Insight{} = insight, feedback, opts)
       when is_binary(user_id) and feedback in ["helpful", "not_helpful"] do
+    allow_fallback? = Keyword.get(opts, :allow_fallback?, true)
+
     result =
       infer_rules_from_feedback(user_id, insight, feedback, opts) ||
-        fallback_infer_from_feedback(user_id, insight, feedback)
+        if(allow_fallback?, do: fallback_infer_from_feedback(user_id, insight, feedback))
 
     case result do
       %{"rules" => rules} = parsed ->

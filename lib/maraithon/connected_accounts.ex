@@ -36,7 +36,9 @@ defmodule Maraithon.ConnectedAccounts do
   def has_any?(_), do: false
 
   def get(user_id, provider) when is_binary(user_id) and is_binary(provider) do
-    Repo.get_by(ConnectedAccount, user_id: user_id, provider: provider)
+    ConnectedAccount
+    |> where([account], account.user_id == ^user_id and account.provider == ^provider)
+    |> latest_account()
   end
 
   def get_connected_by_external_account(provider, external_account_id)
@@ -308,14 +310,25 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp find_connected_by_external_id(provider, external_account_id)
        when is_binary(provider) and is_binary(external_account_id) do
-    Repo.get_by(ConnectedAccount,
-      provider: provider,
-      external_account_id: external_account_id,
-      status: "connected"
+    ConnectedAccount
+    |> where(
+      [account],
+      account.provider == ^provider and
+        account.external_account_id == ^external_account_id and
+        account.status == "connected"
     )
+    |> latest_account()
   end
 
   defp find_connected_by_external_id(_provider, _external_account_id), do: nil
+
+  defp latest_account(queryable) do
+    queryable
+    |> order_by([account], desc: account.updated_at, desc: account.inserted_at, desc: account.id)
+    |> limit(1)
+    |> Repo.all()
+    |> List.first()
+  end
 
   defp metadata_identifiers(metadata) when is_map(metadata) do
     metadata

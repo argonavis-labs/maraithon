@@ -52,7 +52,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     {
       "status":"tool_calls|final",
       "assistant_message":"short Telegram-ready text or empty string if requesting tools",
-      "message_class":"assistant_reply|approval_prompt|action_result|system_notice",
+      "message_class":"assistant_reply|approval_prompt|action_result|system_notice|todo_digest",
       "tool_calls":[
         {"tool":"tool_name","arguments":{}}
       ],
@@ -73,9 +73,11 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     - Persist actionable work as todos. Use `upsert_todos` to create or refresh durable todos, `list_todos` to inspect them, and `resolve_todo` when the user says they handled or closed something.
     - Treat todos as the operator's durable object layer. Final replies about work should usually reflect the current todo state, not transient message summaries.
     - For live inbox triage, once Gmail results are available, decide which threads are real work for the user, persist them as todos, and answer from those todo objects instead of ephemeral message summaries.
+    - When you want Maraithon to deliver current actionable todos as separate Telegram messages, return `message_class:"todo_digest"`. The runtime will send your `assistant_message` as a short intro and then send one Telegram message per todo from the latest todo tool result.
     - For Gmail triage todos, prefer `source: "gmail"`, `kind: "gmail_triage"`, `source_item_id` set to the Gmail thread id, and metadata that keeps the subject, sender, thread_id, and google_account_email.
     - Exclude obvious FYI, receipts, promos, and machine-only notices from triage todos unless they clearly require a user decision or reply.
     - When the user says something like they handled an item, do not guess. Resolve the matching todo by `todo_id` from context or recent tool results. If the reference is ambiguous, call `list_todos` with a narrow `query` first and then `resolve_todo`.
+    - If `linked_item.todo` is present because the user replied to a specific todo message, prefer that exact todo id for follow-up actions like done, dismiss, snooze, or "what else?".
     - When the user asks "what else", use the remaining open todos after resolution instead of resurfacing the item that was just closed.
     - If the user asks to change when recurring morning briefings, end-of-day summaries, or weekly reviews are sent, use `update_briefing_schedule`.
     - Interpret plain-hour schedule changes like `10 instead of 9` as `10:00 AM` in the user's current local timezone unless the user explicitly says PM, specifies a different timezone, or uses clear 24-hour time.
@@ -87,6 +89,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
     Examples:
     - If live Gmail results include a billing thread and an OAuth thread that both need action, your next response should usually be `tool_calls` for `upsert_todos`, not a final prose answer.
+    - After `upsert_todos` or `resolve_todo` returns the actionable todo objects you want surfaced separately, your next response should usually be `final` with `message_class:"todo_digest"` so Maraithon sends one message per item.
     - If context or `list_todos` shows a todo like `{id:"todo_123", title:"Billing account past due"}` and the user says `Handled the billing, what else?`, your next response should usually be `tool_calls` for `resolve_todo` with `todo_id:"todo_123"` and `include_remaining:true`.
     - If `briefing_schedule` shows morning briefs at `09:00` local and the user says `send my morning briefings at 10 instead of 9`, your next response should usually be `tool_calls` for `update_briefing_schedule` with `briefing_kind:"morning"` and `local_hour:10`.
     - If the user says `Don't surface receipt emails unless they imply follow-up work`, your next response should usually be `tool_calls` for `remember_preferences` with a `content_filter` rule.
@@ -146,7 +149,13 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   defp normalize(_parsed), do: @fallback_response
 
   defp normalize_message_class(value)
-       when value in ["assistant_reply", "approval_prompt", "action_result", "system_notice"],
+       when value in [
+              "assistant_reply",
+              "approval_prompt",
+              "action_result",
+              "system_notice",
+              "todo_digest"
+            ],
        do: value
 
   defp normalize_message_class(_value), do: "assistant_reply"

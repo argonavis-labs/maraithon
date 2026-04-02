@@ -128,6 +128,21 @@ defmodule Maraithon.TelegramConversations do
     |> Repo.one()
   end
 
+  def find_turn_by_message(chat_id, telegram_message_id)
+      when is_binary(chat_id) and is_binary(telegram_message_id) do
+    Turn
+    |> join(:inner, [turn], conversation in assoc(turn, :conversation))
+    |> where(
+      [turn, conversation],
+      conversation.chat_id == ^chat_id and turn.telegram_message_id == ^telegram_message_id
+    )
+    |> order_by([turn, _conversation], desc: turn.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_turn_by_message(_chat_id, _telegram_message_id), do: nil
+
   def find_by_reply(chat_id, reply_to_message_id)
       when is_binary(chat_id) and is_binary(reply_to_message_id) do
     chat_id

@@ -16,7 +16,8 @@ defmodule Maraithon.TelegramAssistant do
     PushReceipt,
     Run,
     Runner,
-    Step
+    Step,
+    TodoActions
   }
 
   alias Maraithon.TelegramConversations
@@ -83,20 +84,7 @@ defmodule Maraithon.TelegramAssistant do
   def handle_callback_query(data) when is_map(data) do
     with true <- enabled?(),
          callback_data when is_binary(callback_data) <- read_string(data, "data"),
-         {:ok, prepared_action_id, decision} <-
-           TelegramResponder.parse_action_callback(callback_data),
-         chat_id when is_binary(chat_id) <- read_id_string(data, "chat_id"),
-         message_id when is_binary(message_id) <- read_id_string(data, "message_id") do
-      callback_id = read_string(data, "callback_id")
-
-      handle_prepared_action_decision(
-        prepared_action_id,
-        decision,
-        chat_id,
-        message_id,
-        callback_id
-      )
-
+         :ok <- handle_assistant_callback(data, callback_data) do
       :ok
     else
       false -> :ignored
@@ -159,6 +147,28 @@ defmodule Maraithon.TelegramAssistant do
 
   def fail_run(%Run{} = run, error, status \\ "failed") do
     complete_run(run, %{status: status, error: normalize_error(error)})
+  end
+
+  defp handle_assistant_callback(data, callback_data) do
+    case TelegramResponder.parse_action_callback(callback_data) do
+      {:ok, prepared_action_id, decision} ->
+        chat_id = read_id_string(data, "chat_id")
+        message_id = read_id_string(data, "message_id")
+        callback_id = read_string(data, "callback_id")
+
+        handle_prepared_action_decision(
+          prepared_action_id,
+          decision,
+          chat_id,
+          message_id,
+          callback_id
+        )
+
+        :ok
+
+      {:error, :invalid_callback} ->
+        TodoActions.handle_callback(data)
+    end
   end
 
   def create_step(attrs) when is_map(attrs) do

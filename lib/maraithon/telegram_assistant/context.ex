@@ -28,12 +28,14 @@ defmodule Maraithon.TelegramAssistant.Context do
     linked_delivery = Map.get(attrs, :linked_delivery)
     linked_insight = Map.get(attrs, :linked_insight)
     linked_travel = linked_travel_itinerary(conversation, user_id)
+    linked_todo = linked_todo(attrs, user_id)
 
     %{
       user: %{id: user_id},
       chat: %{id: fetch_string!(attrs, :chat_id)},
       conversation: serialize_conversation(conversation),
-      linked_item: serialize_linked_item(linked_delivery, linked_insight, linked_travel),
+      linked_item:
+        serialize_linked_item(linked_delivery, linked_insight, linked_travel, linked_todo),
       recent_turns: serialize_recent_turns(conversation),
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
@@ -82,7 +84,7 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_recent_turns(_conversation), do: []
 
-  defp serialize_linked_item(%Delivery{} = delivery, linked_insight, linked_travel) do
+  defp serialize_linked_item(%Delivery{} = delivery, linked_insight, linked_travel, linked_todo) do
     insight = linked_insight || Repo.preload(delivery, :insight).insight
     deliveries = insight_deliveries(insight, delivery.user_id)
     detail = insight && Detail.build(insight, deliveries)
@@ -91,22 +93,24 @@ defmodule Maraithon.TelegramAssistant.Context do
       delivery: serialize_delivery(delivery),
       insight: serialize_insight(insight),
       detail: detail && serialize_detail(detail),
-      travel: linked_travel && Travel.serialize_for_prompt(linked_travel)
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo)
     }
   end
 
-  defp serialize_linked_item(_delivery, nil, nil), do: %{}
+  defp serialize_linked_item(_delivery, nil, nil, nil), do: %{}
 
-  defp serialize_linked_item(_delivery, nil, linked_travel) do
+  defp serialize_linked_item(_delivery, nil, linked_travel, linked_todo) do
     %{
       delivery: nil,
       insight: nil,
       detail: nil,
-      travel: Travel.serialize_for_prompt(linked_travel)
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo)
     }
   end
 
-  defp serialize_linked_item(_delivery, insight, linked_travel) do
+  defp serialize_linked_item(_delivery, insight, linked_travel, linked_todo) do
     deliveries = insight_deliveries(insight, insight.user_id)
     detail = Detail.build(insight, deliveries)
 
@@ -114,7 +118,8 @@ defmodule Maraithon.TelegramAssistant.Context do
       delivery: nil,
       insight: serialize_insight(insight),
       detail: serialize_detail(detail),
-      travel: linked_travel && Travel.serialize_for_prompt(linked_travel)
+      travel: linked_travel && Travel.serialize_for_prompt(linked_travel),
+      todo: serialize_todo(linked_todo)
     }
   end
 
@@ -245,6 +250,9 @@ defmodule Maraithon.TelegramAssistant.Context do
     }
   end
 
+  defp serialize_todo(nil), do: nil
+  defp serialize_todo(todo), do: Todos.serialize_for_prompt(todo)
+
   defp insight_deliveries(nil, _user_id), do: []
 
   defp insight_deliveries(insight, user_id)
@@ -254,6 +262,29 @@ defmodule Maraithon.TelegramAssistant.Context do
     |> order_by([delivery], desc_nulls_last: delivery.sent_at, desc: delivery.inserted_at)
     |> Repo.all()
   end
+
+  defp linked_todo(attrs, user_id) do
+    chat_id = Map.get(attrs, :chat_id)
+    reply_to_message_id = Map.get(attrs, :reply_to_message_id)
+
+    with chat_id when is_binary(chat_id) <- normalize_id(chat_id),
+         reply_to when is_binary(reply_to) <- normalize_id(reply_to_message_id),
+         turn when not is_nil(turn) <-
+           TelegramConversations.find_turn_by_message(chat_id, reply_to),
+         %{} = todo_data <-
+           Map.get(turn.structured_data || %{}, "linked_todo") ||
+             Map.get(turn.structured_data || %{}, :linked_todo),
+         todo_id when is_binary(todo_id) <- Map.get(todo_data, "id") || Map.get(todo_data, :id),
+         todo when not is_nil(todo) <- Todos.get_for_user(user_id, todo_id) do
+      todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp normalize_id(value) when is_binary(value), do: value
+  defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_id(_value), do: nil
 
   defp redact_account_metadata(metadata) when is_map(metadata) do
     metadata

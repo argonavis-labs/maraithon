@@ -719,21 +719,15 @@ defmodule Maraithon.TelegramAssistantTest do
            %{
              "status" => "final",
              "assistant_message" =>
-               "Top inbox todos: 1. Billing account past due. 2. OAuth verification reply owed.",
-             "message_class" => "assistant_reply",
+               "I refreshed today's inbox triage. I'm sending the actionable items one by one.",
+             "message_class" => "todo_digest",
              "tool_calls" => [],
-             "summary" => "Returned the persisted todo list."
+             "summary" => "Returned the persisted todo list as itemized Telegram todos."
            }}
 
         2 ->
           assert Enum.count(payload.context.todos) == 2
-
-          billing_todo =
-            Enum.find(payload.context.todos, fn todo ->
-              String.contains?(todo.title, "Billing")
-            end)
-
-          assert billing_todo
+          assert payload.context.linked_item.todo.title == "Billing account past due"
 
           {:ok,
            %{
@@ -744,7 +738,7 @@ defmodule Maraithon.TelegramAssistantTest do
                %{
                  "tool" => "resolve_todo",
                  "arguments" => %{
-                   "todo_id" => billing_todo.id,
+                   "todo_id" => payload.context.linked_item.todo.id,
                    "status" => "done",
                    "resolution_note" => "Handled by the user.",
                    "include_remaining" => true,
@@ -763,11 +757,10 @@ defmodule Maraithon.TelegramAssistantTest do
           {:ok,
            %{
              "status" => "final",
-             "assistant_message" =>
-               "Billing is closed. Remaining inbox todo: OAuth verification reply owed.",
-             "message_class" => "assistant_reply",
+             "assistant_message" => "Billing is closed. Here's what is still open.",
+             "message_class" => "todo_digest",
              "tool_calls" => [],
-             "summary" => "Returned the remaining todo."
+             "summary" => "Returned the remaining todo as itemized Telegram output."
            }}
       end
     end)
@@ -778,9 +771,27 @@ defmodule Maraithon.TelegramAssistantTest do
         data: %{chat_id: 12345, message_id: 9107, text: "What are the emails to triage today?"}
       })
 
-    first_reply = last_telegram_message(:send)
-    assert first_reply.text =~ "Billing account past due"
-    assert first_reply.text =~ "OAuth verification reply owed"
+    initial_sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert Enum.count(initial_sends) == 3
+    assert Enum.at(initial_sends, 0).text =~ "sending the actionable items one by one"
+
+    billing_message =
+      Enum.find(initial_sends, fn message ->
+        String.contains?(message.text, "Billing account past due")
+      end)
+
+    oauth_message =
+      Enum.find(initial_sends, fn message ->
+        String.contains?(message.text, "OAuth verification reply owed")
+      end)
+
+    assert billing_message
+    assert oauth_message
+    assert get_in(Keyword.get(billing_message.opts, :reply_markup), ["inline_keyboard"]) != nil
+    assert get_in(Keyword.get(oauth_message.opts, :reply_markup), ["inline_keyboard"]) != nil
 
     open_todos = Todos.list_open_for_user(user_id, kind: "gmail_triage")
     assert Enum.count(open_todos) == 2
@@ -788,16 +799,81 @@ defmodule Maraithon.TelegramAssistantTest do
     :ok =
       InsightNotifications.handle_telegram_event(%{
         type: "message",
-        data: %{chat_id: 12345, message_id: 9108, text: "Handled the billing, what else?"}
+        data: %{
+          chat_id: 12345,
+          message_id: 9108,
+          text: "Handled this, what else?",
+          reply_to: %{message_id: billing_message.message_id}
+        }
       })
 
-    second_reply = last_telegram_message(:send)
-    assert second_reply.text =~ "Billing is closed"
-    assert second_reply.text =~ "OAuth verification"
-    refute second_reply.text =~ "Billing account past due."
+    sends_after_resolution =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert Enum.count(sends_after_resolution) == 5
+    assert Enum.at(sends_after_resolution, 3).text =~ "Billing is closed"
+    assert List.last(sends_after_resolution).text =~ "OAuth verification"
+    refute List.last(sends_after_resolution).text =~ "Billing account past due"
 
     [remaining_todo] = Todos.list_open_for_user(user_id, kind: "gmail_triage")
     assert remaining_todo.title =~ "OAuth verification"
+  end
+
+  test "todo item callbacks can close an item directly from Telegram", %{user_id: user_id} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to the billing owner",
+                 "summary" => "Finance needs an owner confirmation for the invoice thread.",
+                 "next_action" => "Reply with the owner and the exact billing contact.",
+                 "priority" => 89,
+                 "dedupe_key" => "telegram-assistant:todo-callback:1",
+                 "metadata" => %{
+                   "source_ref" => %{"url" => "https://mail.google.com/mail/u/0/#inbox/thread-1"}
+                 }
+               }
+             ])
+
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{})
+
+    payload = Maraithon.TelegramAssistant.TodoActions.telegram_payload(todo)
+
+    serialized_payload =
+      Maraithon.TelegramAssistant.TodoActions.telegram_payload(Todos.serialize_for_prompt(todo))
+
+    keyboard = get_in(payload.reply_markup, ["inline_keyboard"])
+    assert keyboard != nil
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Source"))
+    assert serialized_payload.text =~ "Reply to the billing owner"
+
+    assert {:ok, _conversation, turn, _telegram_result} =
+             Maraithon.TelegramAssistant.send_turn(
+               conversation,
+               "12345",
+               payload.text,
+               telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup],
+               structured_data: %{"linked_todo" => Todos.serialize_for_prompt(todo)}
+             )
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: turn.telegram_message_id,
+          callback_id: "todo-callback-1",
+          data: "tgtodo:#{todo.id}:done"
+        }
+      })
+
+    assert Todos.get_for_user(user_id, todo.id).status == "done"
+    assert last_telegram_message(:edit).text =~ "Done"
+    assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
   end
 
   test "insight dispatch goes through the unified push broker and records receipts", %{
