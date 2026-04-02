@@ -316,6 +316,81 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  def handle_event("decide_project_recommendation", params, socket) do
+    user_id = current_user_id(socket)
+
+    case Projects.decide_project_recommendation(
+           params["project_id"],
+           user_id,
+           params["recommendation_id"],
+           %{"decision" => params["decision"]}
+         ) do
+      {:ok, _record} ->
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:info, "Recommendation #{decision_label(params["decision"])}")}
+
+      {:error, :project_not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Project not found")}
+
+      {:error, :recommendation_not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Recommendation not found")}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Failed to save recommendation decision: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("grant_project_repo_access", params, socket) do
+    user_id = current_user_id(socket)
+
+    case Projects.grant_project_repo_access(params["project_id"], user_id, %{
+           "repo_full_name" => params["repo_full_name"],
+           "scope" => params["scope"]
+         }) do
+      {:ok, grant} ->
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(
+           :info,
+           "Granted #{repo_scope_label(grant.scope)} access for #{grant.repo_full_name}"
+         )}
+
+      {:error, :project_not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Project not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to grant repo access: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("start_project_implementation_run", params, socket) do
+    user_id = current_user_id(socket)
+
+    case Projects.start_implementation_run(params["project_id"], user_id, %{
+           "recommendation_id" => params["recommendation_id"]
+         }) do
+      {:ok, run} ->
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:info, run.result_summary || "Implementation run started")}
+
+      {:error, :project_not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Project not found")}
+
+      {:error, :recommendation_not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Recommendation not found")}
+
+      {:error, reason} ->
+        {:noreply,
+         put_flash(socket, :error, "Failed to start implementation run: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
     case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from dashboard.") do
       {:ok, _todo} ->
@@ -1220,10 +1295,29 @@ defmodule MaraithonWeb.DashboardLive do
                       class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3"
                     >
                       <div class="flex items-center justify-between gap-3">
-                        <p class="text-sm font-medium text-slate-900"><%= recommendation.title %></p>
-                        <span class="text-xs font-semibold text-emerald-700">
-                          p<%= recommendation.priority %>
-                        </span>
+                        <div>
+                          <p class="text-sm font-medium text-slate-900"><%= recommendation.title %></p>
+                          <div class="mt-2 flex flex-wrap gap-2">
+                            <span class="text-xs font-semibold text-emerald-700">
+                              p<%= recommendation.priority %>
+                            </span>
+                            <%= if recommendation.decision do %>
+                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                                <%= recommendation_decision_label(recommendation.decision.decision) %>
+                              </span>
+                            <% end %>
+                            <%= if recommendation.repo_grant do %>
+                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                                <%= repo_scope_label(recommendation.repo_grant.scope) %>
+                              </span>
+                            <% end %>
+                            <%= if recommendation.latest_run do %>
+                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                                <%= implementation_run_status_label(recommendation.latest_run.status) %>
+                              </span>
+                            <% end %>
+                          </div>
+                        </div>
                       </div>
                       <p class="mt-2 text-sm text-slate-600"><%= recommendation.summary %></p>
                       <p class="mt-2 text-sm text-emerald-900">
@@ -1232,8 +1326,147 @@ defmodule MaraithonWeb.DashboardLive do
                       <%= if recommendation.why_now do %>
                         <p class="mt-2 text-xs text-emerald-800"><%= recommendation.why_now %></p>
                       <% end %>
+                      <%= if recommendation.latest_run do %>
+                        <p class="mt-2 text-xs text-slate-600"><%= recommendation.latest_run.result_summary %></p>
+                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                          <%= if recommendation.latest_run.branch_name do %>
+                            <span>Branch: <code><%= recommendation.latest_run.branch_name %></code></span>
+                          <% end %>
+                          <%= if recommendation.latest_run.pull_request_url do %>
+                            <a
+                              href={recommendation.latest_run.pull_request_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              class="font-medium text-emerald-700 hover:text-emerald-800"
+                            >
+                              Open PR
+                            </a>
+                          <% end %>
+                        </div>
+                      <% end %>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          phx-click="decide_project_recommendation"
+                          phx-value-project_id={project_card.project.id}
+                          phx-value-recommendation_id={recommendation.id}
+                          phx-value-decision="accepted"
+                          class="inline-flex items-center rounded-md border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                        >
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="decide_project_recommendation"
+                          phx-value-project_id={project_card.project.id}
+                          phx-value-recommendation_id={recommendation.id}
+                          phx-value-decision="deferred"
+                          class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                        >
+                          Defer
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="decide_project_recommendation"
+                          phx-value-project_id={project_card.project.id}
+                          phx-value-recommendation_id={recommendation.id}
+                          phx-value-decision="rejected"
+                          class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                        >
+                          Reject
+                        </button>
+                        <%= if recommendation.repo_full_name do %>
+                          <button
+                            type="button"
+                            phx-click="grant_project_repo_access"
+                            phx-value-project_id={project_card.project.id}
+                            phx-value-repo_full_name={recommendation.repo_full_name}
+                            phx-value-scope="read_only"
+                            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          >
+                            Grant Read Access
+                          </button>
+                          <button
+                            type="button"
+                            phx-click="grant_project_repo_access"
+                            phx-value-project_id={project_card.project.id}
+                            phx-value-repo_full_name={recommendation.repo_full_name}
+                            phx-value-scope="branch_write"
+                            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          >
+                            Grant Branch Access
+                          </button>
+                        <% end %>
+                        <button
+                          type="button"
+                          phx-click="start_project_implementation_run"
+                          phx-value-project_id={project_card.project.id}
+                          phx-value-recommendation_id={recommendation.id}
+                          class="inline-flex items-center rounded-md border border-slate-900 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                        >
+                          Start Delivery
+                        </button>
+                      </div>
                     </div>
                   <% end %>
+
+                  <div class="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Repo Access
+                    </p>
+                    <%= if project_card.repo_grants == [] do %>
+                      <p class="mt-2 text-sm text-slate-500">
+                        No explicit repo grants yet.
+                      </p>
+                    <% else %>
+                      <div :for={grant <- project_card.repo_grants} class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                        <div class="min-w-0">
+                          <p class="truncate text-sm font-medium text-slate-900"><%= grant.repo_full_name %></p>
+                          <p class="text-xs text-slate-500"><%= repo_scope_label(grant.scope) %></p>
+                        </div>
+                        <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                          <%= String.capitalize(grant.status) %>
+                        </span>
+                      </div>
+                    <% end %>
+                  </div>
+
+                  <div class="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Delivery Runs
+                    </p>
+                    <%= if project_card.implementation_runs == [] do %>
+                      <p class="mt-2 text-sm text-slate-500">
+                        No implementation runs yet.
+                      </p>
+                    <% else %>
+                      <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-slate-200 px-3 py-2">
+                        <div class="flex items-center justify-between gap-3">
+                          <p class="text-sm font-medium text-slate-900"><%= implementation_run_status_label(run.status) %></p>
+                          <span class="text-xs text-slate-500"><%= run.repo_full_name || "repo pending" %></span>
+                        </div>
+                        <p class="mt-2 text-sm text-slate-600"><%= run.result_summary %></p>
+                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                          <%= if run.branch_name do %>
+                            <span>Branch: <code><%= run.branch_name %></code></span>
+                          <% end %>
+                          <%= if run.pull_request_url do %>
+                            <a
+                              href={run.pull_request_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              class="font-medium text-emerald-700 hover:text-emerald-800"
+                            >
+                              Open PR
+                            </a>
+                          <% end %>
+                          <%= if plan_file_path = get_in(run.metadata || %{}, ["plan_file_path"]) do %>
+                            <span>Plan: <%= plan_file_path %></span>
+                          <% end %>
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2193,7 +2426,11 @@ defmodule MaraithonWeb.DashboardLive do
           project: project,
           agents: project.agents,
           items: Projects.list_project_items(user_id: user_id, project_id: project.id, limit: 4),
-          recommendations: Projects.list_project_recommendations(project.id, user_id, limit: 3)
+          recommendations: Projects.list_project_recommendations(project.id, user_id, limit: 3),
+          repo_grants:
+            Projects.list_repo_grants(project_id: project.id, user_id: user_id, limit: 3),
+          implementation_runs:
+            Projects.list_implementation_runs(project_id: project.id, user_id: user_id, limit: 3)
         }
       end)
 
@@ -2504,6 +2741,31 @@ defmodule MaraithonWeb.DashboardLive do
   defp item_type_label("resource"), do: "Resource"
   defp item_type_label("grant"), do: "Grant"
   defp item_type_label(value), do: value
+
+  defp recommendation_decision_label("accepted"), do: "Accepted"
+  defp recommendation_decision_label("deferred"), do: "Deferred"
+  defp recommendation_decision_label("rejected"), do: "Rejected"
+  defp recommendation_decision_label(value), do: humanize_text_token(value) || "Decision"
+
+  defp decision_label("accepted"), do: "accepted"
+  defp decision_label("deferred"), do: "deferred"
+  defp decision_label("rejected"), do: "rejected"
+  defp decision_label(value), do: humanize_text_token(value) || "saved"
+
+  defp repo_scope_label("read_only"), do: "Read only"
+  defp repo_scope_label("branch_write"), do: "Branch write"
+  defp repo_scope_label("pr_open"), do: "PR open"
+  defp repo_scope_label(value), do: humanize_text_token(value) || "Repo scope"
+
+  defp implementation_run_status_label("pending_plan"), do: "Planning"
+  defp implementation_run_status_label("awaiting_repo_access"), do: "Awaiting Repo Access"
+  defp implementation_run_status_label("queued"), do: "Queued"
+  defp implementation_run_status_label("running"), do: "Running"
+  defp implementation_run_status_label("blocked"), do: "Blocked"
+  defp implementation_run_status_label("awaiting_review"), do: "Awaiting Review"
+  defp implementation_run_status_label("completed"), do: "Completed"
+  defp implementation_run_status_label("failed"), do: "Failed"
+  defp implementation_run_status_label(value), do: humanize_text_token(value) || "Run"
 
   defp preview_source_label(source), do: provider_label(source)
 

@@ -120,6 +120,108 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Attach Project Manager"
   end
 
+  test "lets the user accept a recommendation, grant repo access, and start delivery", %{
+    conn: conn
+  } do
+    original_projects = Application.get_env(:maraithon, Maraithon.Projects, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Projects, original_projects)
+    end)
+
+    Application.put_env(:maraithon, Maraithon.Projects,
+      delivery_launcher: fn _project, _recommendation, _decision, _agent, _run ->
+        {:ok,
+         %{
+           status: "pending_plan",
+           result_summary: "Queued with the project repo planner.",
+           metadata: %{"launcher" => "stub"}
+         }}
+      end
+    )
+
+    {:ok, project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Operator Delivery",
+        "summary" => "Project delivery workflow"
+      })
+
+    {:ok, _repo_planner} =
+      create_agent(%{
+        behavior: "repo_planner",
+        project_id: project.id,
+        config: %{"name" => "Project Builder", "codebase_path" => File.cwd!()}
+      })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "github_product_planner",
+        project_id: project.id,
+        config: %{"name" => "PM", "repo_full_name" => "kent/bliss/maraithon"},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, [recommendation]} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Delivery loop",
+          "summary" => "Track accepted recommendations and repo grants.",
+          "recommended_action" => "Ship the first delivery workflow slice.",
+          "priority" => 94,
+          "confidence" => 0.9,
+          "dedupe_key" => "dashboard:delivery-loop:1",
+          "metadata" => %{"repo_full_name" => "kent/bliss/maraithon"}
+        }
+      ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    view
+    |> element(
+      "button[phx-click='decide_project_recommendation'][phx-value-project_id='#{project.id}'][phx-value-recommendation_id='#{recommendation.id}'][phx-value-decision='accepted']"
+    )
+    |> render_click()
+
+    assert render(view) =~ "Accepted"
+
+    view
+    |> element(
+      "button[phx-click='grant_project_repo_access'][phx-value-project_id='#{project.id}'][phx-value-repo_full_name='kent/bliss/maraithon'][phx-value-scope='read_only']"
+    )
+    |> render_click()
+
+    assert render(view) =~ "Read only"
+
+    view
+    |> element(
+      "button[phx-click='start_project_implementation_run'][phx-value-project_id='#{project.id}'][phx-value-recommendation_id='#{recommendation.id}']"
+    )
+    |> render_click()
+
+    html = render(view)
+    assert html =~ "Planning"
+    assert html =~ "Queued with the project repo planner."
+
+    [run] = Projects.list_implementation_runs(project_id: project.id, user_id: @user_email)
+
+    assert {:ok, _updated_run} =
+             Projects.update_implementation_run(run.id, @user_email, %{
+               "status" => "awaiting_review",
+               "branch_name" => "feature/operator-delivery",
+               "pull_request_url" => "https://github.com/kent/bliss/maraithon/pull/51",
+               "result_summary" => "PR is ready for review.",
+               "metadata" => %{"plan_file_path" => "PLANS/operator_delivery.md"}
+             })
+
+    {:ok, _reloaded_view, reloaded_html} = live(conn, "/dashboard")
+    assert reloaded_html =~ "feature/operator-delivery"
+    assert reloaded_html =~ "Open PR"
+    assert reloaded_html =~ "PLANS/operator_delivery.md"
+  end
+
   test "renders enriched insight context and ideas", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{

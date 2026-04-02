@@ -6,13 +6,16 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
+  alias Maraithon.Projects
   alias Maraithon.TelegramAssistant.Toolbox
 
   setup do
     original_gmail = Application.get_env(:maraithon, :gmail, [])
+    original_projects = Application.get_env(:maraithon, Maraithon.Projects, [])
 
     on_exit(fn ->
       Application.put_env(:maraithon, :gmail, original_gmail)
+      Application.put_env(:maraithon, Maraithon.Projects, original_projects)
     end)
 
     :ok
@@ -272,6 +275,118 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert forgotten.pending_count == 0
     assert forgotten.message =~ "Removed preference"
     assert PreferenceMemory.active_rules(user_id) == []
+  end
+
+  test "project delivery tools can accept a recommendation, grant access, and start a run" do
+    user_id = "toolbox-projects-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, Maraithon.Projects,
+      delivery_launcher: fn _project, _recommendation, _decision, _agent ->
+        {:ok,
+         %{
+           status: "pending_plan",
+           result_summary: "Queued with the project repo planner.",
+           metadata: %{"launcher" => "stub"}
+         }}
+      end
+    )
+
+    {:ok, project} =
+      Projects.create_project(user_id, %{
+        "name" => "Maraithon Product",
+        "summary" => "Delivery loop"
+      })
+
+    {:ok, _repo_planner} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        project_id: project.id,
+        behavior: "repo_planner",
+        config: %{"name" => "Project Builder", "codebase_path" => File.cwd!()}
+      })
+
+    {:ok, planner_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        project_id: project.id,
+        behavior: "github_product_planner",
+        config: %{"name" => "PM", "repo_full_name" => "kent/bliss/maraithon"}
+      })
+
+    {:ok, [recommendation]} =
+      Insights.record_many(user_id, planner_agent.id, [
+        %{
+          "source" => "github",
+          "category" => "product_opportunity",
+          "title" => "Delivery loop",
+          "summary" => "Make accepted project work durable.",
+          "recommended_action" => "Track repo grants and implementation runs.",
+          "priority" => 96,
+          "confidence" => 0.92,
+          "dedupe_key" => "toolbox-project-delivery:1",
+          "metadata" => %{"repo_full_name" => "kent/bliss/maraithon"}
+        }
+      ])
+
+    runtime_context = %{
+      user_id: user_id,
+      default_project_id: project.id,
+      context: %{projects: []}
+    }
+
+    assert {:ok, decision_result} =
+             Toolbox.execute(
+               "decide_project_recommendation",
+               %{
+                 "project_id" => project.id,
+                 "recommendation_id" => recommendation.id,
+                 "decision" => "accepted"
+               },
+               runtime_context
+             )
+
+    assert decision_result.decision.decision == "accepted"
+
+    assert {:ok, grant_result} =
+             Toolbox.execute(
+               "grant_project_repo_access",
+               %{
+                 "project_id" => project.id,
+                 "repo_full_name" => "kent/bliss/maraithon",
+                 "scope" => "read_only"
+               },
+               runtime_context
+             )
+
+    assert grant_result.repo_grant.scope == "read_only"
+
+    assert {:ok, run_result} =
+             Toolbox.execute(
+               "start_implementation_run",
+               %{"project_id" => project.id, "recommendation_id" => recommendation.id},
+               runtime_context
+             )
+
+    assert run_result.implementation_run.status == "pending_plan"
+    assert run_result.message =~ "Queued with the project repo planner."
+
+    assert {:ok, updated_run_result} =
+             Toolbox.execute(
+               "update_implementation_run",
+               %{
+                 "implementation_run_id" => run_result.implementation_run.id,
+                 "status" => "awaiting_review",
+                 "branch_name" => "feature/delivery-loop",
+                 "pull_request_url" => "https://github.com/kent/bliss/maraithon/pull/44",
+                 "result_summary" => "PR is ready for review."
+               },
+               runtime_context
+             )
+
+    assert updated_run_result.implementation_run.status == "awaiting_review"
+    assert updated_run_result.implementation_run.branch_name == "feature/delivery-loop"
+    assert updated_run_result.implementation_run.pull_request_url =~ "/pull/44"
   end
 
   defp gmail_todo(thread_id, title, priority) do

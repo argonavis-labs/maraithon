@@ -329,6 +329,84 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "decide_project_recommendation",
+        "Accept, defer, or reject one project-manager recommendation as a durable workflow decision.",
+        %{
+          "type" => "object",
+          "required" => ["recommendation_id", "decision"],
+          "properties" => %{
+            "recommendation_id" => %{"type" => "string"},
+            "decision" => %{"type" => "string"},
+            "decision_note" => %{"type" => "string"},
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "grant_project_repo_access",
+        "Record an explicit GitHub repo access grant for one project.",
+        %{
+          "type" => "object",
+          "required" => ["repo_full_name", "scope"],
+          "properties" => %{
+            "repo_full_name" => %{"type" => "string"},
+            "scope" => %{"type" => "string"},
+            "provider" => %{"type" => "string"},
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "start_implementation_run",
+        "Start a tracked implementation run for one accepted project recommendation.",
+        %{
+          "type" => "object",
+          "required" => ["recommendation_id"],
+          "properties" => %{
+            "recommendation_id" => %{"type" => "string"},
+            "decision_note" => %{"type" => "string"},
+            "repo_full_name" => %{"type" => "string"},
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "list_implementation_runs",
+        "List tracked implementation runs for one project or for all projects.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "project_id" => %{"type" => "string"},
+            "project_slug" => %{"type" => "string"},
+            "project_name" => %{"type" => "string"},
+            "statuses" => %{"type" => "array", "items" => %{"type" => "string"}},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 20}
+          }
+        }
+      ),
+      tool_definition(
+        "update_implementation_run",
+        "Record progress, blockers, branch details, or PR links for one tracked implementation run.",
+        %{
+          "type" => "object",
+          "required" => ["implementation_run_id"],
+          "properties" => %{
+            "implementation_run_id" => %{"type" => "string"},
+            "status" => %{"type" => "string"},
+            "branch_name" => %{"type" => "string"},
+            "pull_request_url" => %{"type" => "string"},
+            "result_summary" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
         "prepare_project_action",
         "Prepare creation or update of a project for confirmation.",
         %{
@@ -459,6 +537,21 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "inspect_project" ->
         inspect_project(runtime_context, args)
+
+      "decide_project_recommendation" ->
+        decide_project_recommendation(runtime_context, args)
+
+      "grant_project_repo_access" ->
+        grant_project_repo_access(runtime_context, args)
+
+      "start_implementation_run" ->
+        start_implementation_run(runtime_context, args)
+
+      "list_implementation_runs" ->
+        list_implementation_runs(runtime_context, args)
+
+      "update_implementation_run" ->
+        update_implementation_run(runtime_context, args)
 
       "prepare_project_action" ->
         prepare_project_action(runtime_context, args)
@@ -747,11 +840,184 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
          items: items,
          agent_count: length(agents),
          agents: agents,
+         repo_grant_count:
+           length(
+             Projects.list_repo_grants(project_id: project.id, user_id: runtime_context.user_id)
+           ),
+         repo_grants:
+           Projects.list_repo_grants(
+             project_id: project.id,
+             user_id: runtime_context.user_id,
+             limit: 3
+           )
+           |> Enum.map(&serialize_project_repo_grant/1),
+         implementation_run_count:
+           length(
+             Projects.list_implementation_runs(
+               project_id: project.id,
+               user_id: runtime_context.user_id
+             )
+           ),
+         implementation_runs:
+           Projects.list_implementation_runs(
+             project_id: project.id,
+             user_id: runtime_context.user_id,
+             limit: 3
+           )
+           |> Enum.map(&serialize_project_implementation_run/1),
          recommendation_count: length(recommendations),
          recommendations: recommendations
        }}
     else
       nil -> {:error, "project_not_found"}
+    end
+  end
+
+  defp decide_project_recommendation(runtime_context, args) do
+    with %{} = project <- resolve_project(runtime_context, args) || {:error, "project_not_found"},
+         {:ok, recommendation_id} <- required_string(args, "recommendation_id"),
+         {:ok, decision} <-
+           Projects.decide_project_recommendation(
+             project.id,
+             runtime_context.user_id,
+             recommendation_id,
+             %{
+               "decision" => Map.get(args, "decision"),
+               "decision_note" => Map.get(args, "decision_note")
+             }
+           ),
+         %{} = recommendation <-
+           Projects.get_project_recommendation(
+             project.id,
+             runtime_context.user_id,
+             recommendation_id
+           ) ||
+             {:error, "recommendation_not_found"} do
+      {:ok,
+       %{
+         project: serialize_project_detail(project),
+         recommendation: recommendation,
+         decision: serialize_project_recommendation_decision(decision),
+         message:
+           "#{String.capitalize(decision.decision)} #{recommendation.title} for #{project.name}."
+       }}
+    else
+      nil ->
+        {:error, "project_not_found"}
+
+      {:error, :project_not_found} ->
+        {:error, "project_not_found"}
+
+      {:error, :recommendation_not_found} ->
+        {:error, "recommendation_not_found"}
+
+      {:error, :invalid_recommendation_decision} ->
+        {:error, "invalid_recommendation_decision"}
+
+      {:error, :invalid_recommendation_decision_note} ->
+        {:error, "invalid_recommendation_decision_note"}
+
+      {:error, reason} ->
+        {:error, normalize_error(reason)}
+    end
+  end
+
+  defp grant_project_repo_access(runtime_context, args) do
+    with %{} = project <- resolve_project(runtime_context, args) || {:error, "project_not_found"},
+         {:ok, grant} <-
+           Projects.grant_project_repo_access(project.id, runtime_context.user_id, args) do
+      {:ok,
+       %{
+         project: serialize_project_detail(project),
+         repo_grant: serialize_project_repo_grant(grant),
+         message:
+           "Granted #{human_repo_scope(grant.scope)} GitHub access for #{grant.repo_full_name} on #{project.name}."
+       }}
+    else
+      nil -> {:error, "project_not_found"}
+      {:error, :project_not_found} -> {:error, "project_not_found"}
+      {:error, :missing_repo_full_name} -> {:error, "missing_repo_full_name"}
+      {:error, :invalid_repo_scope} -> {:error, "invalid_repo_scope"}
+      {:error, :invalid_repo_provider} -> {:error, "invalid_repo_provider"}
+      {:error, :invalid_repo_grant_status} -> {:error, "invalid_repo_grant_status"}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp start_implementation_run(runtime_context, args) do
+    with %{} = project <- resolve_project(runtime_context, args) || {:error, "project_not_found"},
+         {:ok, run} <-
+           Projects.start_implementation_run(project.id, runtime_context.user_id, args) do
+      {:ok,
+       %{
+         project: serialize_project_detail(project),
+         implementation_run: serialize_project_implementation_run(run),
+         message: run.result_summary || "Started an implementation run for #{project.name}."
+       }}
+    else
+      nil -> {:error, "project_not_found"}
+      {:error, :project_not_found} -> {:error, "project_not_found"}
+      {:error, :missing_recommendation_id} -> {:error, "missing_recommendation_id"}
+      {:error, :recommendation_not_found} -> {:error, "recommendation_not_found"}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp list_implementation_runs(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 6, 20)
+
+    runs =
+      case resolve_project(runtime_context, args) do
+        %{} = project ->
+          Projects.list_implementation_runs(
+            project_id: project.id,
+            user_id: runtime_context.user_id,
+            statuses: Map.get(args, "statuses"),
+            limit: limit
+          )
+
+        nil ->
+          Projects.list_implementation_runs(
+            user_id: runtime_context.user_id,
+            statuses: Map.get(args, "statuses"),
+            limit: limit
+          )
+      end
+
+    {:ok,
+     %{
+       count: length(runs),
+       implementation_runs: Enum.map(runs, &serialize_project_implementation_run/1)
+     }}
+  end
+
+  defp update_implementation_run(runtime_context, args) do
+    with {:ok, run_id} <- required_string(args, "implementation_run_id"),
+         {:ok, update_attrs} <- implementation_run_update_attrs(args),
+         {:ok, run} <-
+           Projects.update_implementation_run(run_id, runtime_context.user_id, update_attrs) do
+      {:ok,
+       %{
+         implementation_run: serialize_project_implementation_run(run),
+         message:
+           run.result_summary ||
+             "Updated implementation run #{run.id}."
+       }}
+    else
+      {:error, :implementation_run_not_found} ->
+        {:error, "implementation_run_not_found"}
+
+      {:error, :invalid_implementation_run_status} ->
+        {:error, "invalid_implementation_run_status"}
+
+      {:error, :invalid_implementation_run_metadata} ->
+        {:error, "invalid_implementation_run_metadata"}
+
+      {:error, "missing_implementation_run_update"} ->
+        {:error, "missing_implementation_run_update"}
+
+      {:error, reason} ->
+        {:error, normalize_error(reason)}
     end
   end
 
@@ -1474,7 +1740,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp default_project(runtime_context) do
-    case runtime_context.default_project_id do
+    case Map.get(runtime_context, :default_project_id) do
       value when is_binary(value) and value != "" ->
         Projects.get_project_for_user(value, runtime_context.user_id)
 
@@ -1518,6 +1784,67 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       inserted_at: item.inserted_at
     }
   end
+
+  defp serialize_project_recommendation_decision(decision) when is_map(decision) do
+    %{
+      id: decision.id,
+      decision: decision.decision,
+      decision_note: decision.decision_note,
+      accepted_plan:
+        Map.get(decision, :accepted_plan) || Map.get(decision, "accepted_plan") || %{},
+      updated_at: decision.updated_at
+    }
+  end
+
+  defp serialize_project_recommendation_decision(_decision), do: nil
+
+  defp serialize_project_repo_grant(grant) do
+    %{
+      id: grant.id,
+      provider: grant.provider,
+      repo_full_name: grant.repo_full_name,
+      scope: grant.scope,
+      status: grant.status,
+      granted_at: grant.granted_at
+    }
+  end
+
+  defp serialize_project_implementation_run(run) do
+    %{
+      id: run.id,
+      agent_id: run.agent_id,
+      repo_full_name: run.repo_full_name,
+      status: run.status,
+      branch_name: run.branch_name,
+      pull_request_url: run.pull_request_url,
+      result_summary: run.result_summary,
+      queued_at: run.queued_at,
+      started_at: run.started_at,
+      completed_at: run.completed_at,
+      metadata: run.metadata || %{}
+    }
+  end
+
+  defp implementation_run_update_attrs(args) when is_map(args) do
+    attrs =
+      Map.take(args, ["status", "branch_name", "pull_request_url", "result_summary", "metadata"])
+      |> Enum.reject(fn
+        {"metadata", value} -> is_nil(value)
+        {_key, value} -> value in [nil, ""]
+      end)
+      |> Map.new()
+
+    if map_size(attrs) == 0 do
+      {:error, "missing_implementation_run_update"}
+    else
+      {:ok, attrs}
+    end
+  end
+
+  defp human_repo_scope("read_only"), do: "read-only"
+  defp human_repo_scope("branch_write"), do: "branch-write"
+  defp human_repo_scope("pr_open"), do: "PR-open"
+  defp human_repo_scope(scope), do: scope
 
   defp project_name(_runtime_context, nil), do: nil
   defp project_name(_runtime_context, ""), do: nil
