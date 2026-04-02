@@ -69,8 +69,11 @@ defmodule Maraithon.ConnectedAccountsTest do
     assert text =~ "https://maraithon.test/connectors/google"
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
-    assert get_in(account.metadata, ["reauth_notification", "reason"]) == "oauth_reauth_required"
-    assert is_binary(get_in(account.metadata, ["reauth_notification", "sent_at"]))
+
+    assert get_in(account.metadata, ["reconnect_notification", "reason"]) ==
+             "oauth_reauth_required"
+
+    assert is_binary(get_in(account.metadata, ["reconnect_notification", "sent_at"]))
   end
 
   test "report_access_issue/3 sends one reconnect alert when Gmail access is unavailable" do
@@ -107,7 +110,83 @@ defmodule Maraithon.ConnectedAccountsTest do
 
     account = ConnectedAccounts.get(user_id, "google:founder@example.com")
     assert account.status == "error"
-    assert get_in(account.metadata, ["reauth_notification", "reason"]) == "oauth_reauth_required"
+
+    assert get_in(account.metadata, ["reconnect_notification", "reason"]) ==
+             "oauth_reauth_required"
+  end
+
+  test "mark_disconnected/3 sends one reconnect alert for unexpected disconnects" do
+    user_id = "disconnect-alert-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_disconnected(user_id, "google:founder@example.com")
+
+    assert {:ok, _account} =
+             ConnectedAccounts.mark_disconnected(user_id, "google:founder@example.com")
+
+    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    assert [
+             %{
+               chat_id: "6114124042",
+               text: text
+             }
+           ] = messages
+
+    assert text =~ "founder@example.com"
+    assert text =~ "was disconnected"
+    assert text =~ "https://maraithon.test/connectors/google"
+
+    account = ConnectedAccounts.get(user_id, "google:founder@example.com")
+    assert account.status == "disconnected"
+    assert get_in(account.metadata, ["reconnect_notification", "reason"]) == "disconnected"
+  end
+
+  test "mark_disconnected/3 can suppress reconnect alerts for intentional disconnects" do
+    user_id = "manual-disconnect-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram_account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042"}
+      })
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, _account} =
+             apply(ConnectedAccounts, :mark_disconnected, [
+               user_id,
+               "google:founder@example.com",
+               [notify?: false]
+             ])
+
+    messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+
+    assert messages == []
+
+    account = ConnectedAccounts.get(user_id, "google:founder@example.com")
+    assert account.status == "disconnected"
+    assert get_in(account.metadata, ["reconnect_notification"]) == nil
   end
 
   test "get_connected_by_external_account/2 falls back to Telegram metadata chat_id" do

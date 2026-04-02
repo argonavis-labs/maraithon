@@ -170,7 +170,7 @@ defmodule Maraithon.OAuth do
         # Delete from database
         case Repo.delete(token) do
           {:ok, _deleted} = ok ->
-            _ = ConnectedAccounts.mark_disconnected(user_id, provider)
+            _ = ConnectedAccounts.mark_disconnected(user_id, provider, notify?: false)
             ok
 
           error ->

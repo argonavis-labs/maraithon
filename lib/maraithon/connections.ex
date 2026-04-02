@@ -133,7 +133,7 @@ defmodule Maraithon.Connections do
   end
 
   def disconnect(user_id, "telegram") when is_binary(user_id) do
-    ConnectedAccounts.mark_disconnected(user_id, "telegram")
+    ConnectedAccounts.mark_disconnected(user_id, "telegram", notify?: false)
   end
 
   def disconnect(user_id, provider)

@@ -128,20 +128,35 @@ defmodule Maraithon.ConnectedAccounts do
   end
 
   def mark_disconnected(user_id, provider) when is_binary(user_id) and is_binary(provider) do
+    mark_disconnected(user_id, provider, [])
+  end
+
+  def mark_disconnected(user_id, provider, opts)
+      when is_binary(user_id) and is_binary(provider) do
     case get(user_id, provider) do
       nil ->
         :ok
 
       account ->
-        account
-        |> ConnectedAccount.changeset(%{
-          status: "disconnected",
-          access_token: nil,
-          refresh_token: nil,
-          expires_at: nil,
-          last_refreshed_at: DateTime.utc_now()
-        })
-        |> Repo.update()
+        result =
+          account
+          |> ConnectedAccount.changeset(%{
+            status: "disconnected",
+            access_token: nil,
+            refresh_token: nil,
+            expires_at: nil,
+            last_refreshed_at: DateTime.utc_now()
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated_account} = ok ->
+            maybe_send_reconnect_notification(updated_account, "disconnected", opts)
+            ok
+
+          error ->
+            error
+        end
     end
   end
 
@@ -173,7 +188,7 @@ defmodule Maraithon.ConnectedAccounts do
 
         case result do
           {:ok, updated_account} = ok ->
-            maybe_send_reauth_notification(updated_account, normalized_reason)
+            maybe_send_reconnect_notification(updated_account, normalized_reason)
             ok
 
           error ->
@@ -345,34 +360,37 @@ defmodule Maraithon.ConnectedAccounts do
     }
   end
 
-  defp maybe_send_reauth_notification(%ConnectedAccount{} = account, reason)
+  defp maybe_send_reconnect_notification(account, reason, opts \\ [])
+
+  defp maybe_send_reconnect_notification(%ConnectedAccount{} = account, reason, opts)
        when is_binary(reason) do
-    if reauth_required_reason?(reason) and reauth_notification_pending?(account.metadata, reason) do
+    if reconnect_notification_enabled?(opts) and reconnect_notification_reason?(reason) and
+         reconnect_notification_pending?(account.metadata, reason) do
       case telegram_destination(account.user_id) do
         nil ->
           :ok
 
         destination ->
-          send_reauth_notification(account, destination, reason)
+          send_reconnect_notification(account, destination, reason)
       end
     else
       :ok
     end
   end
 
-  defp maybe_send_reauth_notification(_account, _reason), do: :ok
+  defp maybe_send_reconnect_notification(_account, _reason, _opts), do: :ok
 
-  defp send_reauth_notification(%ConnectedAccount{} = account, destination, reason) do
+  defp send_reconnect_notification(%ConnectedAccount{} = account, destination, reason) do
     module = telegram_module()
     reconnect_url = reconnect_url(account.provider)
-    message = reauth_notification_message(account, reconnect_url)
+    message = reconnect_notification_message(account, reconnect_url, reason)
 
     case module.send_message(destination, message, parse_mode: "HTML") do
       {:ok, _result} ->
-        mark_reauth_notification_sent(account, destination, reason)
+        mark_reconnect_notification_sent(account, destination, reason)
 
       {:error, notification_error} ->
-        Logger.warning("Failed to send reauth Telegram notification",
+        Logger.warning("Failed to send reconnect Telegram notification",
           user_id: account.user_id,
           provider: account.provider,
           reason: inspect(notification_error)
@@ -382,7 +400,7 @@ defmodule Maraithon.ConnectedAccounts do
     end
   rescue
     notification_error ->
-      Logger.warning("Reauth Telegram notification crashed",
+      Logger.warning("Reconnect Telegram notification crashed",
         user_id: account.user_id,
         provider: account.provider,
         reason: Exception.message(notification_error)
@@ -391,15 +409,19 @@ defmodule Maraithon.ConnectedAccounts do
       :ok
   end
 
-  defp reauth_required_reason?("oauth_reauth_required"), do: true
-  defp reauth_required_reason?("oauth_missing_refresh_token"), do: true
-  defp reauth_required_reason?(_reason), do: false
+  defp reconnect_notification_reason?("oauth_reauth_required"), do: true
+  defp reconnect_notification_reason?("oauth_missing_refresh_token"), do: true
+  defp reconnect_notification_reason?("disconnected"), do: true
+  defp reconnect_notification_reason?(_reason), do: false
 
-  defp reauth_notification_pending?(metadata, reason) do
+  defp reconnect_notification_pending?(metadata, reason) do
     notification =
       metadata
       |> normalize_metadata()
-      |> fetch_map_value("reauth_notification")
+      |> then(fn value ->
+        fetch_map_value(value, "reconnect_notification") ||
+          fetch_map_value(value, "reauth_notification")
+      end)
 
     sent_at = is_map(notification) && fetch_map_value(notification, "sent_at")
     sent_reason = is_map(notification) && fetch_map_value(notification, "reason")
@@ -469,17 +491,27 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp provider_root(_provider), do: ""
 
-  defp reauth_notification_message(%ConnectedAccount{} = account, reconnect_url) do
+  defp reconnect_notification_enabled?(opts) when is_list(opts) do
+    Keyword.get(opts, :notify?, true)
+  end
+
+  defp reconnect_notification_enabled?(_opts), do: true
+
+  defp reconnect_notification_message(%ConnectedAccount{} = account, reconnect_url, reason) do
     provider_label = provider_label(account.provider)
     account_label = account_label(account)
+    action_text = reconnect_action_text(reason)
 
     """
     <b>Maraithon action required</b>
-    #{html_escape(provider_label)} account #{html_escape(account_label)} needs re-authentication.
+    #{html_escape(provider_label)} account #{html_escape(account_label)} #{html_escape(action_text)}.
     <a href="#{html_escape(reconnect_url)}">Reconnect in Maraithon</a>
     """
     |> String.trim()
   end
+
+  defp reconnect_action_text("disconnected"), do: "was disconnected"
+  defp reconnect_action_text(_reason), do: "needs re-authentication"
 
   defp provider_label("google"), do: "Google"
   defp provider_label("google:" <> _), do: "Google"
@@ -511,11 +543,11 @@ defmodule Maraithon.ConnectedAccounts do
 
   defp provider_suffix(_provider), do: nil
 
-  defp mark_reauth_notification_sent(%ConnectedAccount{} = account, destination, reason) do
+  defp mark_reconnect_notification_sent(%ConnectedAccount{} = account, destination, reason) do
     metadata =
       account.metadata
       |> normalize_metadata()
-      |> Map.put("reauth_notification", %{
+      |> Map.put("reconnect_notification", %{
         "reason" => reason,
         "sent_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
         "destination" => to_string(destination)
