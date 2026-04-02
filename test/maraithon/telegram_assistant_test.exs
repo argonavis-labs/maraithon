@@ -1355,6 +1355,59 @@ defmodule Maraithon.TelegramAssistantTest do
     assert get_in(Enum.at(turns, 2).structured_data, ["linked_todo", "id"]) == older_todo.id
   end
 
+  test "end-of-day briefs deliver an intro plus one push card per todo", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [today_todo, carryover_todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_payload("thread-end-of-day:new", "Reply to David about the laptop", 96),
+        gmail_todo_payload("thread-end-of-day:old", "Close the Cowrie status loop", 91)
+      ])
+
+    {:ok, carryover_todo} =
+      carryover_todo
+      |> Ecto.Changeset.change(%{source_occurred_at: ~U[2026-03-31 14:00:00.000000Z]})
+      |> Repo.update()
+
+    scheduled_for = ~U[2026-04-02 22:30:00Z]
+
+    assert {:ok, brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "end_of_day",
+               "title" => "End-of-day debt: 2 items still open",
+               "summary" => "Two items still need movement before the day closes.",
+               "body" => "Superseded by todo delivery.",
+               "scheduled_for" => scheduled_for,
+               "dedupe_key" => "telegram-assistant:end-of-day:todo-style",
+               "metadata" => %{
+                 "linked_todo_ids" => [today_todo.id, carryover_todo.id],
+                 "timezone_offset_hours" => "-4"
+               }
+             })
+
+    assert :ok = Briefs.send_brief(brief)
+
+    sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert length(sends) == 3
+    [intro, first_todo_message, second_todo_message] = sends
+
+    assert intro.text ==
+             "Hey Kent, these still need movement tonight.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
+
+    assert first_todo_message.text =~ "Opened Today"
+    assert first_todo_message.text =~ "Reply to David about the laptop"
+    assert second_todo_message.text =~ "Still Open Tonight"
+    assert second_todo_message.text =~ "Close the Cowrie status loop"
+
+    keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Mark Done"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Not Interested"))
+  end
+
   test "medium runs emit native typing without a progress note" do
     parent = self()
 

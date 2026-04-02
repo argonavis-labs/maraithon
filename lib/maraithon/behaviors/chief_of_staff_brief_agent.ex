@@ -187,6 +187,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
            )}
       end
 
+    delivery_insights = card_insights(top_items ++ watching_items)
+
     %{
       "cadence" => "morning",
       "scheduled_for" => plan.scheduled_for,
@@ -206,9 +208,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         metadata_for(
           plan,
           state.assistant_behavior,
-          act_now_insights ++ card_insights(watching_items),
+          delivery_insights,
           context
         )
+        |> Map.merge(brief_delivery_metadata(delivery_insights, state.timezone_offset_hours))
     }
   end
 
@@ -270,6 +273,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
            )}
       end
 
+    delivery_insights = card_insights(debt_items ++ watching_items)
+
     %{
       "cadence" => "end_of_day",
       "scheduled_for" => plan.scheduled_for,
@@ -289,9 +294,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         metadata_for(
           plan,
           state.assistant_behavior,
-          card_insights(debt_items ++ watching_items),
+          delivery_insights,
           context
         )
+        |> Map.merge(brief_delivery_metadata(delivery_insights, state.timezone_offset_hours))
     }
   end
 
@@ -315,7 +321,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     if should_send_check_in?(top_items, state.timezone_offset_hours, plan.scheduled_for) do
       count = length(top_items)
-      check_in_metadata = check_in_delivery_metadata(top_items, state.timezone_offset_hours)
+
+      check_in_metadata =
+        brief_delivery_metadata(card_insights(top_items), state.timezone_offset_hours)
 
       %{
         "cadence" => "check_in",
@@ -1045,9 +1053,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> AttentionArbiter.merge_artifact_metadata(context)
   end
 
-  defp check_in_delivery_metadata(cards, offset_hours) do
-    insights = card_insights(cards)
-
+  defp brief_delivery_metadata(insights, offset_hours) when is_list(insights) do
     linked_todo_ids =
       case Todos.sync_many_from_insights(insights) do
         {:ok, todos} -> Enum.map(todos, & &1.id)

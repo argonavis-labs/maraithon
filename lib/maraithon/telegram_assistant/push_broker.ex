@@ -68,8 +68,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   def deliver_brief(%Brief{} = brief) do
     if TelegramAssistant.unified_push_enabled?() do
-      if Briefs.todo_digest_brief?(brief) do
-        deliver_todo_digest_brief(brief)
+      todos = Briefs.todo_digest_todos(brief)
+
+      if todos != [] do
+        deliver_todo_digest_brief(brief, todos)
       else
         deliver_standard_brief(brief)
       end
@@ -317,9 +319,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     end
   end
 
-  defp deliver_todo_digest_brief(%Brief{} = brief) do
-    todos = Briefs.todo_digest_todos(brief)
-
+  defp deliver_todo_digest_brief(%Brief{} = brief, todos) when is_list(todos) do
     if todos == [] do
       deliver_standard_brief(brief)
     else

@@ -79,6 +79,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.summary =~ "Most urgent"
     assert brief.body =~ "Best use of today:"
     assert brief.body =~ "Send the investor deck"
+    assert is_list(brief.metadata["linked_todo_ids"])
+    assert length(brief.metadata["linked_todo_ids"]) == 1
+    assert brief.metadata["timezone_offset_hours"] == -5
   end
 
   test "renders end-of-day briefs as concrete operator guidance with structured context", %{
@@ -151,6 +154,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Do: Open the notice now"
     assert brief.body =~ "Why: A blocked or restricted account can stop important work"
     assert brief.body =~ "Checked: Restriction notice is still active"
+    assert is_list(brief.metadata["linked_todo_ids"])
+    assert length(brief.metadata["linked_todo_ids"]) == 1
+    assert brief.metadata["timezone_offset_hours"] == -5
   end
 
   test "keeps monitor items out of top actions and includes them in Watching", %{

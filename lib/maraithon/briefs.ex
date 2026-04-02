@@ -147,9 +147,10 @@ defmodule Maraithon.Briefs do
     }
   end
 
-  def todo_digest_brief?(%Brief{cadence: "check_in", metadata: metadata}) when is_map(metadata) do
+  def todo_digest_brief?(%Brief{metadata: metadata}) when is_map(metadata) do
     metadata
-    |> Map.get("linked_todo_ids", [])
+    |> fetch_attr("linked_todo_ids")
+    |> Kernel.||([])
     |> case do
       ids when is_list(ids) -> ids != []
       _ -> false
@@ -161,7 +162,8 @@ defmodule Maraithon.Briefs do
   def todo_digest_todos(%Brief{} = brief) do
     todo_ids =
       brief.metadata
-      |> Map.get("linked_todo_ids", [])
+      |> fetch_attr("linked_todo_ids")
+      |> Kernel.||([])
       |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
       |> Enum.uniq()
 
@@ -172,7 +174,7 @@ defmodule Maraithon.Briefs do
 
   def todo_digest_intro_text(%Brief{} = brief, todos \\ nil) do
     todos = todos || todo_digest_todos(brief)
-    greeting = greeting_line(brief.user_id)
+    greeting = greeting_line(brief)
     {new_today_count, still_open_count} = todo_digest_counts(brief, todos)
 
     detail_line =
@@ -200,8 +202,12 @@ defmodule Maraithon.Briefs do
   end
 
   def todo_digest_prefix_text(%Brief{} = brief, todo) do
-    case todo_digest_bucket(brief, todo) do
-      :new_today -> "<b>New Today</b>"
+    case {normalize_cadence(brief.cadence), todo_digest_bucket(brief, todo)} do
+      {"end_of_day", :new_today} -> "<b>Opened Today</b>"
+      {"end_of_day", _} -> "<b>Still Open Tonight</b>"
+      {"morning", :new_today} -> "<b>For Today</b>"
+      {"morning", _} -> "<b>Carried Over</b>"
+      {_, :new_today} -> "<b>New Today</b>"
       _ -> "<b>Still Open</b>"
     end
   end
@@ -466,10 +472,18 @@ defmodule Maraithon.Briefs do
     end
   end
 
-  defp greeting_line(user_id) do
-    case greeting_name(user_id) do
-      nil -> "Hey, checking on these today."
-      name -> "Hey #{name}, checking on these today."
+  defp greeting_line(%Brief{} = brief) do
+    body =
+      case normalize_cadence(brief.cadence) do
+        "end_of_day" -> "these still need movement tonight."
+        "morning" -> "here's the full list for today."
+        "weekly_review" -> "here's everything still open this week."
+        _ -> "checking on these today."
+      end
+
+    case greeting_name(brief.user_id) do
+      nil -> "Hey, #{body}"
+      name -> "Hey #{name}, #{body}"
     end
   end
 
@@ -524,6 +538,10 @@ defmodule Maraithon.Briefs do
   end
 
   defp email_name(_user_id), do: nil
+
+  defp normalize_cadence(value) when is_binary(value), do: value
+  defp normalize_cadence(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_cadence(_value), do: nil
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
