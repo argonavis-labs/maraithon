@@ -349,10 +349,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             user_id: state.user_id,
             categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
           }}, %{state | pending_candidates: [], pending_direct_insights: []}}
-
-      {:error, reason} ->
-        {:emit, {:insight_error, %{reason: inspect(reason), attempted_count: length(insights)}},
-         %{state | pending_candidates: [], pending_direct_insights: []}}
     end
   end
 
@@ -1651,14 +1647,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp persist_insights([], _state, _context), do: {:ok, []}
 
   defp persist_insights(insights, state, context) do
-    case Insights.record_many(state.user_id, context.agent_id, insights) do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} ->
-        Logger.warning("InboxCalendarAdvisor failed to persist insights", reason: inspect(reason))
-        {:error, reason}
-    end
+    Insights.record_many(state.user_id, context.agent_id, insights)
   end
 
   defp persist_and_reply(insights, state, context) do
@@ -1674,15 +1663,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             user_id: state.user_id,
             categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
           }},
-         %{
-           state
-           | pending_candidates: [],
-             pending_direct_insights: [],
-             last_scan_at: context.timestamp
-         }}
-
-      {:error, reason} ->
-        {:emit, {:insight_error, %{reason: inspect(reason), attempted_count: length(insights)}},
          %{
            state
            | pending_candidates: [],

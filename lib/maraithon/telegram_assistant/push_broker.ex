@@ -275,7 +275,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   defp normalize_id(value) when is_binary(value), do: value
   defp normalize_id(value), do: to_string(value)
 
-  defp brief_structured_data(%Brief{metadata: %{"travel_itinerary_id" => itinerary_id} = metadata})
+  defp brief_structured_data(%Brief{
+         metadata: %{"travel_itinerary_id" => itinerary_id} = metadata
+       })
        when is_binary(itinerary_id) do
     %{
       "brief_type" => metadata["brief_type"] || "travel_prep",

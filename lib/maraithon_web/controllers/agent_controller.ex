@@ -76,11 +76,6 @@ defmodule MaraithonWeb.AgentController do
         conn
         |> put_status(:conflict)
         |> json(%{error: "agent_stopped", message: "Agent is not running"})
-
-      {:error, :mailbox_full} ->
-        conn
-        |> put_status(:too_many_requests)
-        |> json(%{error: "mailbox_full", message: "Agent is overloaded"})
     end
   end
 

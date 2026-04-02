@@ -1035,9 +1035,6 @@ defmodule MaraithonWeb.DashboardLive do
       {:error, :agent_stopped} ->
         {:noreply, put_flash(socket, :error, "Agent is not running")}
 
-      {:error, :mailbox_full} ->
-        {:noreply, put_flash(socket, :error, "Agent mailbox is full")}
-
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to send message: #{inspect(reason)}")}
     end

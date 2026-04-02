@@ -96,7 +96,8 @@ defmodule Maraithon.TelegramConversations do
         :ok = OperatorBus.broadcast(operator_event)
         {:ok, {conversation, turn}}
 
-      {:error, reason} -> {:error, reason}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

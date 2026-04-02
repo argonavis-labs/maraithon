@@ -73,7 +73,7 @@ defmodule Maraithon.OAuthTest do
 
       {:ok, token} = OAuth.store_tokens(user_id, "google", token_data)
 
-      assert DateTime.diff(token.expires_at, expires_at) == 0
+      assert token.expires_at == DateTime.truncate(expires_at, :second)
     end
 
     test "stores token without expiration" do

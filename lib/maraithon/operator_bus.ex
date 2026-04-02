@@ -54,7 +54,11 @@ defmodule Maraithon.OperatorBus do
 
   defp maybe_add_project_topics(topics, %OperatorEvent{project_id: nil}), do: topics
 
-  defp maybe_add_project_topics(topics, %OperatorEvent{project_id: project_id, source: source, event_type: event_type}) do
+  defp maybe_add_project_topics(topics, %OperatorEvent{
+         project_id: project_id,
+         source: source,
+         event_type: event_type
+       }) do
     topics ++
       [
         "operator:project:#{project_id}",

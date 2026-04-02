@@ -102,9 +102,6 @@ defmodule Maraithon.Connectors.GitHub do
 
         {:ignore, reason} ->
           {:ignore, reason}
-
-        {:error, reason} ->
-          {:error, reason}
       end
     end
   end

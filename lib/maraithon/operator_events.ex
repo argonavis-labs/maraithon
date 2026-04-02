@@ -111,7 +111,8 @@ defmodule Maraithon.OperatorEvents do
       event_type: event_type,
       scope: inferred_scope(read_string(attrs, "scope"), project_id),
       source_item_id: source_item_id,
-      dedupe_key: read_string(attrs, "dedupe_key", default_dedupe_key(source, event_type, source_item_id)),
+      dedupe_key:
+        read_string(attrs, "dedupe_key", default_dedupe_key(source, event_type, source_item_id)),
       occurred_at: read_datetime(attrs, "occurred_at"),
       payload: payload,
       metadata: read_map(attrs, "metadata")

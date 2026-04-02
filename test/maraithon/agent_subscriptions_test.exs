@@ -17,6 +17,7 @@ defmodule Maraithon.AgentSubscriptionsTest do
       })
 
     assert {:ok, subscriptions} = AgentSubscriptions.sync_for_agent(agent)
+
     assert Enum.map(subscriptions, &{&1.topic, &1.status}) == [
              {"github:acme/repo", "active"},
              {"operator:user:#{user_id}", "active"}

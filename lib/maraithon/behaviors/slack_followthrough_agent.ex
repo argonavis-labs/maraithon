@@ -178,11 +178,6 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                   categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
                 }}, %{state | last_scan_at: context.timestamp}}
             end
-
-          {:error, reason} ->
-            {:emit,
-             {:insight_error, %{reason: inspect(reason), attempted_count: length(insights)}},
-             %{state | last_scan_at: context.timestamp}}
         end
     end
   end
@@ -571,17 +566,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp persist_insights([], _state, _context), do: {:ok, []}
 
   defp persist_insights(insights, state, context) do
-    case Insights.record_many(state.user_id, context.agent_id, insights) do
-      {:ok, stored} ->
-        {:ok, stored}
-
-      {:error, reason} ->
-        Logger.warning("SlackFollowthroughAgent failed to persist insights",
-          reason: inspect(reason)
-        )
-
-        {:error, reason}
-    end
+    Insights.record_many(state.user_id, context.agent_id, insights)
   end
 
   defp high_signal_unresolved?(candidate, state) do

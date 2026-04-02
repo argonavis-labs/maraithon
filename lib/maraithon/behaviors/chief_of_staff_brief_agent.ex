@@ -68,10 +68,6 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
               cadences: Enum.map(briefs, & &1.cadence)
             }},
            %{state | user_id: user_id, last_generated_keys: update_generated_keys(state, due)}}
-
-        {:error, reason} ->
-          {:emit, {:brief_error, %{reason: inspect(reason), attempted_count: length(due)}},
-           %{state | user_id: user_id}}
       end
     end
   end

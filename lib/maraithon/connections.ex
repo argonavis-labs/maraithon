@@ -870,7 +870,10 @@ defmodule Maraithon.Connections do
 
   defp token_expired_without_refresh?(%Token{expires_at: nil}), do: false
 
-  defp token_expired_without_refresh?(%Token{expires_at: expires_at, refresh_token: refresh_token})
+  defp token_expired_without_refresh?(%Token{
+         expires_at: expires_at,
+         refresh_token: refresh_token
+       })
        when not is_nil(expires_at) do
     DateTime.compare(expires_at, DateTime.utc_now()) != :gt and not present?(refresh_token)
   rescue

@@ -711,10 +711,6 @@ defmodule Maraithon.TelegramAssistant do
     {:ok, result}
   end
 
-  defp normalize_liveness_delivery(%{delivery: _delivery, summary: _summary} = result) do
-    {:ok, result}
-  end
-
   defp normalize_liveness_delivery(_result) do
     {:ok, default_liveness_delivery()}
   end

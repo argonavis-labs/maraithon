@@ -100,26 +100,15 @@ defmodule Maraithon.Behaviors.GitHubProductPlanner do
       parse_llm_response(response.content, snapshot, state, plan_date)
       |> Enum.take(state.feature_limit)
 
-    case Insights.record_many(state.user_id, context.agent_id, insights) do
-      {:ok, stored} ->
-        {:emit,
-         {:insights_recorded,
-          %{
-            count: length(stored),
-            user_id: state.user_id,
-            categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
-          }}, %{state | pending_snapshot: nil, pending_plan_date: nil}}
+    {:ok, stored} = Insights.record_many(state.user_id, context.agent_id, insights)
 
-      {:error, reason} ->
-        Logger.warning("GitHubProductPlanner failed to persist insights", reason: inspect(reason))
-
-        {:emit,
-         {:planning_error,
-          %{
-            repo_full_name: state.repo_full_name,
-            reason: inspect(reason)
-          }}, %{state | pending_snapshot: nil, pending_plan_date: nil}}
-    end
+    {:emit,
+     {:insights_recorded,
+      %{
+        count: length(stored),
+        user_id: state.user_id,
+        categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
+      }}, %{state | pending_snapshot: nil, pending_plan_date: nil}}
   end
 
   def handle_effect_result({:tool_call, _result}, state, _context), do: {:idle, state}
