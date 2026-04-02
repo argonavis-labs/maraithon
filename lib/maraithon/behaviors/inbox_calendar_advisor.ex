@@ -10,7 +10,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   @behaviour Maraithon.Behaviors.Behavior
 
-  alias Maraithon.ChiefOfStaff.SourceScope
+  alias Maraithon.ChiefOfStaff.{AttentionArbiter, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.GoogleCalendar
@@ -249,6 +249,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       source_scope: SourceScope.normalize(read_map(config, "source_scope")),
       google_account: nil,
       google_accounts: [],
+      source_bundle: nil,
       pending_candidates: [],
       pending_direct_insights: [],
       last_scan_at: nil
@@ -261,6 +262,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       state
       |> ensure_user_id(context)
       |> hydrate_google_accounts()
+      |> Map.put(:source_bundle, context[:source_bundle])
 
     cond do
       is_nil(state.user_id) ->
@@ -487,75 +489,95 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp extract_calendar_batch(_), do: []
 
   defp fetch_recent_inbox_messages(state) do
-    google_accounts_for_service(state, "gmail")
-    |> Enum.flat_map(fn account ->
-      provider = account_provider(account)
+    case SourceBundle.gmail_inbox_messages(state.source_bundle) do
+      [] ->
+        google_accounts_for_service(state, "gmail")
+        |> Enum.flat_map(fn account ->
+          provider = account_provider(account)
 
-      case Gmail.fetch_recent_emails(state.user_id, state.email_scan_limit, provider: provider) do
-        {:ok, value} ->
-          annotate_google_items(value, account)
+          case Gmail.fetch_recent_emails(state.user_id, state.email_scan_limit,
+                 provider: provider
+               ) do
+            {:ok, value} ->
+              annotate_google_items(value, account)
 
-        {:error, reason} ->
-          ConnectedAccounts.report_access_issue(state.user_id, provider, reason)
+            {:error, reason} ->
+              ConnectedAccounts.report_access_issue(state.user_id, provider, reason)
 
-          Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
-            provider: provider,
-            reason: inspect(reason)
-          )
+              Logger.warning("InboxCalendarAdvisor failed to fetch inbox email",
+                provider: provider,
+                reason: inspect(reason)
+              )
 
-          []
-      end
-    end)
+              []
+          end
+        end)
+
+      messages ->
+        Enum.take(messages, state.email_scan_limit)
+    end
   end
 
   defp fetch_recent_sent_messages(state) do
     sent_limit = max(state.email_scan_limit * 2, 12)
     query = "in:sent newer_than:#{@sent_query_lookback_days}d"
 
-    google_accounts_for_service(state, "gmail")
-    |> Enum.flat_map(fn account ->
-      provider = account_provider(account)
+    case SourceBundle.gmail_sent_messages(state.source_bundle) do
+      [] ->
+        google_accounts_for_service(state, "gmail")
+        |> Enum.flat_map(fn account ->
+          provider = account_provider(account)
 
-      case GmailHelpers.list_messages(state.user_id,
-             max_results: sent_limit,
-             query: query,
-             label_ids: [],
-             provider: provider
-           ) do
-        {:ok, value} ->
-          annotate_google_items(value, account)
+          case GmailHelpers.list_messages(state.user_id,
+                 max_results: sent_limit,
+                 query: query,
+                 label_ids: [],
+                 provider: provider
+               ) do
+            {:ok, value} ->
+              annotate_google_items(value, account)
 
-        {:error, reason} ->
-          Logger.warning("InboxCalendarAdvisor failed to fetch sent email",
-            provider: provider,
-            reason: inspect(reason)
-          )
+            {:error, reason} ->
+              Logger.warning("InboxCalendarAdvisor failed to fetch sent email",
+                provider: provider,
+                reason: inspect(reason)
+              )
 
-          []
-      end
-    end)
+              []
+          end
+        end)
+
+      messages ->
+        Enum.take(messages, sent_limit)
+    end
   end
 
   defp fetch_recent_calendar_events(state) do
-    google_accounts_for_service(state, "calendar")
-    |> Enum.flat_map(fn account ->
-      provider = account_provider(account)
+    case SourceBundle.calendar_events(state.source_bundle) do
+      [] ->
+        google_accounts_for_service(state, "calendar")
+        |> Enum.flat_map(fn account ->
+          provider = account_provider(account)
 
-      case GoogleCalendar.sync_calendar_events(state.user_id, provider: provider) do
-        {:ok, value} ->
-          value
-          |> annotate_google_items(account)
-          |> Enum.take(state.event_scan_limit)
+          case GoogleCalendar.sync_calendar_events(state.user_id, provider: provider) do
+            {:ok, value} ->
+              value
+              |> annotate_google_items(account)
+              |> Enum.take(state.event_scan_limit)
 
-        {:error, reason} ->
-          Logger.warning("InboxCalendarAdvisor failed to fetch calendar",
-            provider: provider,
-            reason: inspect(reason)
-          )
+            {:error, reason} ->
+              Logger.warning("InboxCalendarAdvisor failed to fetch calendar",
+                provider: provider,
+                reason: inspect(reason)
+              )
 
-          []
-      end
-    end)
+              []
+          end
+        end)
+
+      events ->
+        Enum.take(events, state.event_scan_limit)
+    end
   end
 
   defp build_gmail_conversation_context(state, thread_id, trigger_message) do
@@ -1654,7 +1676,19 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp persist_insights([], _state, _context), do: {:ok, []}
 
   defp persist_insights(insights, state, context) do
-    Insights.record_many(state.user_id, context.agent_id, insights)
+    enriched =
+      Enum.map(insights, fn insight ->
+        metadata =
+          insight
+          |> read_map("metadata")
+          |> AttentionArbiter.merge_artifact_metadata(context)
+
+        insight
+        |> stringify_keys()
+        |> Map.put("metadata", metadata)
+      end)
+
+    Insights.record_many(state.user_id, context.agent_id, enriched)
   end
 
   defp persist_and_reply(insights, state, context) do

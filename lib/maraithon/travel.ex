@@ -7,7 +7,7 @@ defmodule Maraithon.Travel do
 
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
-  alias Maraithon.ChiefOfStaff.SourceScope
+  alias Maraithon.ChiefOfStaff.{AttentionArbiter, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
@@ -31,12 +31,29 @@ defmodule Maraithon.Travel do
     timezone_offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
     min_confidence = Keyword.get(opts, :min_confidence, @default_min_confidence)
     source_scope = Keyword.get(opts, :source_scope, %{})
+    source_bundle = Keyword.get(opts, :source_bundle, %{})
+    assistant_context = Keyword.get(opts, :assistant_context, %{})
 
     with :ok <- ensure_runtime_prereqs(user_id, source_scope),
          {:ok, messages} <-
-           candidate_messages(user_id, email_scan_limit, lookback_hours, event, source_scope),
+           candidate_messages(
+             user_id,
+             email_scan_limit,
+             lookback_hours,
+             event,
+             source_scope,
+             source_bundle
+           ),
          {:ok, events} <-
-           calendar_events(user_id, event_scan_limit, lookback_hours, now, event, source_scope),
+           calendar_events(
+             user_id,
+             event_scan_limit,
+             lookback_hours,
+             now,
+             event,
+             source_scope,
+             source_bundle
+           ),
          itineraries <-
            Reconciler.ingest(
              user_id,
@@ -53,7 +70,8 @@ defmodule Maraithon.Travel do
       queued =
         queue_due_briefs(user_id, agent_id, now,
           timezone_offset_hours: timezone_offset_hours,
-          min_confidence: min_confidence
+          min_confidence: min_confidence,
+          assistant_context: assistant_context
         )
 
       {:ok,
@@ -171,9 +189,23 @@ defmodule Maraithon.Travel do
     }
   end
 
-  defp candidate_messages(user_id, email_scan_limit, lookback_hours, event, source_scope) do
+  defp candidate_messages(
+         user_id,
+         email_scan_limit,
+         lookback_hours,
+         event,
+         source_scope,
+         source_bundle
+       ) do
     with {:ok, messages} <-
-           message_candidates(user_id, email_scan_limit, lookback_hours, event, source_scope) do
+           message_candidates(
+             user_id,
+             email_scan_limit,
+             lookback_hours,
+             event,
+             source_scope,
+             source_bundle
+           ) do
       full_messages =
         messages
         |> Enum.filter(&Extractor.candidate?/1)
@@ -185,54 +217,69 @@ defmodule Maraithon.Travel do
     end
   end
 
-  defp calendar_events(user_id, event_scan_limit, lookback_hours, now, event, source_scope) do
-    case calendar_events_from_event(event, event_scan_limit) do
+  defp calendar_events(
+         user_id,
+         event_scan_limit,
+         lookback_hours,
+         now,
+         event,
+         source_scope,
+         source_bundle
+       ) do
+    case calendar_events_from_bundle(source_bundle, event_scan_limit) do
       {:ok, events} ->
         {:ok, events}
 
       :fallback ->
-        time_min =
-          now
-          |> DateTime.add(-lookback_hours, :hour)
-          |> DateTime.to_iso8601()
+        case calendar_events_from_event(event, event_scan_limit) do
+          {:ok, events} ->
+            {:ok, events}
 
-        time_max =
-          now
-          |> DateTime.add(14, :day)
-          |> DateTime.to_iso8601()
+          :fallback ->
+            time_min =
+              now
+              |> DateTime.add(-lookback_hours, :hour)
+              |> DateTime.to_iso8601()
 
-        calendar_events_from_sources(user_id, source_scope,
-          max_results: event_scan_limit,
-          time_min: time_min,
-          time_max: time_max
-        )
+            time_max =
+              now
+              |> DateTime.add(14, :day)
+              |> DateTime.to_iso8601()
+
+            calendar_events_from_sources(user_id, source_scope,
+              max_results: event_scan_limit,
+              time_min: time_min,
+              time_max: time_max
+            )
+        end
     end
   end
 
   defp queue_due_briefs(user_id, agent_id, now, opts) do
     timezone_offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
+    assistant_context = Keyword.get(opts, :assistant_context, %{})
 
     list_recent_for_user(user_id, limit: 20)
-    |> Enum.map(&queue_due_brief(&1, agent_id, timezone_offset_hours, now))
+    |> Enum.map(&queue_due_brief(&1, agent_id, timezone_offset_hours, now, assistant_context))
     |> Enum.reject(&is_nil/1)
   end
 
-  defp queue_due_brief(itinerary, agent_id, timezone_offset_hours, now) do
+  defp queue_due_brief(itinerary, agent_id, timezone_offset_hours, now, assistant_context) do
     itinerary = Repo.preload(itinerary, :items)
 
     cond do
       due_for_initial_brief?(itinerary, now, timezone_offset_hours) ->
-        queue_initial_brief(itinerary, agent_id, timezone_offset_hours, now)
+        queue_initial_brief(itinerary, agent_id, timezone_offset_hours, now, assistant_context)
 
       itinerary.status == "changed_after_send" ->
-        queue_update_brief(itinerary, agent_id, timezone_offset_hours, now)
+        queue_update_brief(itinerary, agent_id, timezone_offset_hours, now, assistant_context)
 
       true ->
         nil
     end
   end
 
-  defp queue_initial_brief(itinerary, agent_id, timezone_offset_hours, now) do
+  defp queue_initial_brief(itinerary, agent_id, timezone_offset_hours, now, assistant_context) do
     rendered =
       BriefRenderer.render(itinerary, :travel_prep,
         timezone_offset_hours: timezone_offset_hours,
@@ -243,7 +290,15 @@ defmodule Maraithon.Travel do
 
     case Repo.get_by(Brief, user_id: itinerary.user_id, dedupe_key: dedupe_key) do
       nil ->
-        record_travel_brief(itinerary, agent_id, "travel_prep", rendered, dedupe_key, now)
+        record_travel_brief(
+          itinerary,
+          agent_id,
+          "travel_prep",
+          rendered,
+          dedupe_key,
+          now,
+          assistant_context
+        )
 
       %Brief{status: status} = brief when status in ["pending", "failed"] ->
         maybe_refresh_brief(
@@ -253,7 +308,8 @@ defmodule Maraithon.Travel do
           "travel_prep",
           rendered,
           dedupe_key,
-          now
+          now,
+          assistant_context
         )
 
       _ ->
@@ -261,7 +317,7 @@ defmodule Maraithon.Travel do
     end
   end
 
-  defp queue_update_brief(itinerary, agent_id, timezone_offset_hours, now) do
+  defp queue_update_brief(itinerary, agent_id, timezone_offset_hours, now, assistant_context) do
     rendered =
       BriefRenderer.render(itinerary, :travel_update,
         timezone_offset_hours: timezone_offset_hours,
@@ -279,7 +335,8 @@ defmodule Maraithon.Travel do
           "travel_prep",
           rendered,
           initial_key,
-          now
+          now,
+          assistant_context
         )
 
       _ ->
@@ -293,7 +350,8 @@ defmodule Maraithon.Travel do
               "travel_update",
               rendered,
               update_key,
-              now
+              now,
+              assistant_context
             )
 
           %Brief{} ->
@@ -340,7 +398,15 @@ defmodule Maraithon.Travel do
     Enum.any?(items, &(&1.status not in ["cancelled", "superseded"]))
   end
 
-  defp record_travel_brief(itinerary, agent_id, cadence, rendered, dedupe_key, now) do
+  defp record_travel_brief(
+         itinerary,
+         agent_id,
+         cadence,
+         rendered,
+         dedupe_key,
+         now,
+         assistant_context
+       ) do
     case Briefs.record(itinerary.user_id, agent_id, %{
            "cadence" => cadence,
            "title" => rendered.title,
@@ -348,7 +414,8 @@ defmodule Maraithon.Travel do
            "body" => rendered.body,
            "scheduled_for" => now,
            "dedupe_key" => dedupe_key,
-           "metadata" => travel_brief_metadata(itinerary, cadence, rendered.digest_hash)
+           "metadata" =>
+             travel_brief_metadata(itinerary, cadence, rendered.digest_hash, assistant_context)
          }) do
       {:ok, %Brief{} = brief} -> brief
       _ -> nil
@@ -362,10 +429,19 @@ defmodule Maraithon.Travel do
          cadence,
          rendered,
          dedupe_key,
-         now
+         now,
+         assistant_context
        ) do
     if travel_brief_refresh_needed?(existing, rendered) do
-      record_travel_brief(itinerary, agent_id, cadence, rendered, dedupe_key, now)
+      record_travel_brief(
+        itinerary,
+        agent_id,
+        cadence,
+        rendered,
+        dedupe_key,
+        now,
+        assistant_context
+      )
     else
       nil
     end
@@ -379,12 +455,13 @@ defmodule Maraithon.Travel do
       existing.body != rendered.body
   end
 
-  defp travel_brief_metadata(itinerary, cadence, digest_hash) do
+  defp travel_brief_metadata(itinerary, cadence, digest_hash, assistant_context) do
     %{
       "brief_type" => cadence,
       "travel_digest_hash" => digest_hash,
       "travel_itinerary_id" => itinerary.id
     }
+    |> AttentionArbiter.merge_artifact_metadata(assistant_context)
   end
 
   defp initial_dedupe_key(itinerary, timezone_offset_hours) do
@@ -447,19 +524,32 @@ defmodule Maraithon.Travel do
 
   defp google_scope_matches?(_scope, _service), do: false
 
-  defp message_candidates(user_id, email_scan_limit, lookback_hours, event, source_scope) do
-    case messages_from_event(event, email_scan_limit * 2, source_scope) do
+  defp message_candidates(
+         user_id,
+         email_scan_limit,
+         lookback_hours,
+         event,
+         source_scope,
+         source_bundle
+       ) do
+    case messages_from_bundle(source_bundle, email_scan_limit * 2) do
       {:ok, messages} ->
         {:ok, messages}
 
       :fallback ->
-        query = "newer_than:#{max(div(lookback_hours, 24), 1)}d"
+        case messages_from_event(event, email_scan_limit * 2, source_scope) do
+          {:ok, messages} ->
+            {:ok, messages}
 
-        message_candidates_from_sources(user_id, source_scope,
-          max_results: email_scan_limit * 2,
-          label_ids: [],
-          query: query
-        )
+          :fallback ->
+            query = "newer_than:#{max(div(lookback_hours, 24), 1)}d"
+
+            message_candidates_from_sources(user_id, source_scope,
+              max_results: email_scan_limit * 2,
+              label_ids: [],
+              query: query
+            )
+        end
     end
   end
 
@@ -494,6 +584,13 @@ defmodule Maraithon.Travel do
 
   defp messages_from_event(_event, _limit, _source_scope), do: :fallback
 
+  defp messages_from_bundle(source_bundle, limit) do
+    case SourceBundle.gmail_messages(source_bundle) do
+      [] -> :fallback
+      messages -> {:ok, Enum.take(messages, limit)}
+    end
+  end
+
   defp message_candidates_from_sources(user_id, source_scope, opts) do
     providers = google_source_providers(user_id, source_scope, "gmail")
 
@@ -521,6 +618,13 @@ defmodule Maraithon.Travel do
   end
 
   defp calendar_events_from_event(_event, _limit), do: :fallback
+
+  defp calendar_events_from_bundle(source_bundle, limit) do
+    case SourceBundle.calendar_events(source_bundle) do
+      [] -> :fallback
+      events -> {:ok, Enum.take(events, limit)}
+    end
+  end
 
   defp calendar_events_from_sources(user_id, source_scope, opts) do
     providers = google_source_providers(user_id, source_scope, "calendar")

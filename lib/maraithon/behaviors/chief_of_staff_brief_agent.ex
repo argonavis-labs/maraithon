@@ -10,6 +10,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   @behaviour Maraithon.Behaviors.Behavior
 
   alias Maraithon.Briefs
+  alias Maraithon.ChiefOfStaff.AttentionArbiter
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
 
@@ -55,7 +56,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     if due == [] or is_nil(user_id) do
       {:idle, %{state | user_id: user_id}}
     else
-      case build_briefs(user_id, context.agent_id, state, due, now) do
+      case build_briefs(user_id, context.agent_id, state, due, now, context) do
         {:ok, []} ->
           {:idle,
            %{state | user_id: user_id, last_generated_keys: update_generated_keys(state, due)}}
@@ -92,14 +93,22 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> then(&{:absolute, &1})
   end
 
-  defp build_briefs(user_id, agent_id, state, due, now) do
+  defp build_briefs(user_id, agent_id, state, due, now, context) do
     act_now_insights = Insights.list_open_act_now_for_user(user_id, limit: 30)
     monitor_insights = Insights.list_open_monitor_for_user(user_id, limit: 30)
     recent_insights = Insights.list_recent_for_user(user_id, limit: 60)
 
     due
     |> Enum.map(
-      &build_brief_attrs(&1, state, act_now_insights, monitor_insights, recent_insights, now)
+      &build_brief_attrs(
+        &1,
+        state,
+        act_now_insights,
+        monitor_insights,
+        recent_insights,
+        now,
+        context
+      )
     )
     |> then(&Briefs.record_many(user_id, agent_id, &1))
   end
@@ -110,7 +119,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          act_now_insights,
          monitor_insights,
          _recent_insights,
-         now
+         now,
+         context
        ) do
     due_today = Enum.filter(act_now_insights, &due_today?(&1, state.timezone_offset_hours, now))
 
@@ -176,7 +186,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         metadata_for(
           plan,
           state.assistant_behavior,
-          act_now_insights ++ card_insights(watching_items)
+          act_now_insights ++ card_insights(watching_items),
+          context
         )
     }
   end
@@ -187,7 +198,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          act_now_insights,
          monitor_insights,
          _recent_insights,
-         _now
+         _now,
+         context
        ) do
     debt_candidates =
       act_now_insights
@@ -257,7 +269,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         metadata_for(
           plan,
           state.assistant_behavior,
-          card_insights(debt_items ++ watching_items)
+          card_insights(debt_items ++ watching_items),
+          context
         )
     }
   end
@@ -268,7 +281,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          act_now_insights,
          monitor_insights,
          recent_insights,
-         _now
+         _now,
+         context
        ) do
     week_cutoff = DateTime.add(plan.scheduled_for, -7, :day)
 
@@ -299,7 +313,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "#{length(weekly_items)} items surfaced this week, #{closed_count} were resolved or triaged, and #{open_count} remain open.",
       "body" =>
         weekly_body(top_open, weekly_items, state.timezone_offset_hours, plan.scheduled_for),
-      "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items)
+      "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items, context)
     }
   end
 
@@ -880,13 +894,14 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp metadata_for(plan, behavior, insights) do
+  defp metadata_for(plan, behavior, insights, context) do
     %{
       "period_key" => plan.period_key,
       "agent_behavior" => behavior,
       "insight_count" => length(insights),
       "sources" => insights |> Enum.map(& &1.source) |> Enum.uniq()
     }
+    |> AttentionArbiter.merge_artifact_metadata(context)
   end
 
   defp update_generated_keys(state, due) do

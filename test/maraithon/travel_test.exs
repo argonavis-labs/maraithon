@@ -232,6 +232,40 @@ defmodule Maraithon.TravelTest do
     assert message.text =~ "Here are your travel details for today (Mar 15)"
   end
 
+  test "consumes a shared chief-of-staff source bundle and stamps assistant metadata", %{
+    agent: agent,
+    now: now,
+    user_id: user_id
+  } do
+    TravelGmailStub.configure(messages: [], contents: gmail_contents(now))
+    TravelCalendarStub.configure(events: [])
+
+    source_bundle = %{
+      "gmail" => %{"messages" => gmail_messages(now)},
+      "calendar" => %{"events" => calendar_events()}
+    }
+
+    assistant_context = %{
+      assistant_cycle_id: "cycle-123",
+      assistant_origin_skill_id: "travel_logistics",
+      assistant_origin_skill_rank: 2,
+      assistant_fetch_telemetry: %{"sources" => %{"gmail" => %{"status" => "ready"}}}
+    }
+
+    assert {:ok, %{queued_briefs: [queued_brief]}} =
+             Travel.sync_recent_trip_data(user_id, agent.id,
+               now: now,
+               timezone_offset_hours: -5,
+               source_bundle: source_bundle,
+               assistant_context: assistant_context
+             )
+
+    recorded_brief = Repo.get!(Brief, queued_brief.id)
+    assert recorded_brief.metadata["assistant_cycle_id"] == "cycle-123"
+    assert recorded_brief.metadata["origin_skill_id"] == "travel_logistics"
+    assert recorded_brief.metadata["arbitration_rank"] == 2
+  end
+
   test "requires calendar access at runtime", %{agent: agent, now: now, user_id: user_id} do
     {:ok, _google_token} =
       OAuth.store_tokens(user_id, "google", %{

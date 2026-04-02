@@ -33,6 +33,7 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
       effect_result_mode: read_string(config, "effect_result_mode", "idle"),
       effect_emit_type: read_string(config, "effect_emit_type", nil),
       effect_payload: read_map(config, "effect_payload"),
+      include_context_keys: read_list(config, "include_context_keys"),
       next_wakeup:
         case read_integer(config, "next_wakeup_ms") do
           nil -> :none
@@ -66,10 +67,12 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
   end
 
   @impl true
-  def handle_wakeup(state, _context) do
+  def handle_wakeup(state, context) do
     case state.wakeup_mode do
       "emit" ->
-        {:emit, {emit_type(state.wakeup_emit_type), state.wakeup_payload}, state}
+        {:emit,
+         {emit_type(state.wakeup_emit_type),
+          merge_context_payload(state.wakeup_payload, context, state)}, state}
 
       "effect" ->
         {:effect, {effect_kind(state.effect_kind), state.effect_params}, state}
@@ -150,4 +153,30 @@ defmodule Maraithon.TestSupport.ChiefOfStaffTestSkill do
       _ -> []
     end
   end
+
+  defp merge_context_payload(payload, context, state) do
+    Enum.reduce(state.include_context_keys || [], payload, fn key, acc ->
+      case context_value(key, context) do
+        nil -> acc
+        value -> Map.put(acc, key, value)
+      end
+    end)
+  end
+
+  defp context_value("assistant_cycle_id", context), do: context[:assistant_cycle_id]
+
+  defp context_value("assistant_origin_skill_id", context),
+    do: context[:assistant_origin_skill_id]
+
+  defp context_value("assistant_origin_skill_rank", context),
+    do: context[:assistant_origin_skill_rank]
+
+  defp context_value("assistant_fetch_telemetry", context),
+    do: context[:assistant_fetch_telemetry]
+
+  defp context_value("source_bundle_present", context) do
+    if is_map(context[:source_bundle]), do: true, else: false
+  end
+
+  defp context_value(_key, _context), do: nil
 end

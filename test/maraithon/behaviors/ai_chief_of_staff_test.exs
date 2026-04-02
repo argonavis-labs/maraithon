@@ -1,5 +1,5 @@
 defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
-  use ExUnit.Case, async: false
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Behaviors.AIChiefOfStaff
   alias Maraithon.ChiefOfStaff.Skills
@@ -213,5 +213,40 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
 
     assert payload["categories"] == ["reply_urgent"]
     assert [%{"count" => 1, "cadences" => ["morning"]}] = payload["briefs"]
+  end
+
+  test "builds one shared acquisition bundle and threads cycle metadata into skill context", %{
+    context: context
+  } do
+    state =
+      AIChiefOfStaff.init(%{
+        "user_id" => context.user_id,
+        "skill_configs" => %{
+          "alpha" => %{
+            "wakeup_mode" => "emit",
+            "wakeup_emit_type" => "insights_recorded",
+            "wakeup_payload" => %{"count" => 1, "user_id" => context.user_id, "categories" => []},
+            "include_context_keys" => [
+              "assistant_cycle_id",
+              "assistant_origin_skill_id",
+              "assistant_origin_skill_rank",
+              "source_bundle_present",
+              "assistant_fetch_telemetry"
+            ]
+          },
+          "beta" => %{
+            "wakeup_mode" => "idle"
+          }
+        }
+      })
+
+    assert {:emit, {:insights_recorded, payload}, _next_state} =
+             AIChiefOfStaff.handle_wakeup(state, context)
+
+    assert is_binary(payload["assistant_cycle_id"])
+    assert payload["assistant_origin_skill_id"] == "alpha"
+    assert payload["assistant_origin_skill_rank"] == 1
+    assert payload["source_bundle_present"] == true
+    assert is_map(payload["assistant_fetch_telemetry"])
   end
 end

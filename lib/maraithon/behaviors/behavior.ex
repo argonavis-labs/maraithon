@@ -15,7 +15,12 @@ defmodule Maraithon.Behaviors.Behavior do
           last_message_metadata: map(),
           last_message_id: String.t() | nil,
           trigger: map() | nil,
-          event: map() | nil
+          event: map() | nil,
+          source_bundle: map() | nil,
+          assistant_cycle_id: String.t() | nil,
+          assistant_fetch_telemetry: map() | nil,
+          assistant_origin_skill_id: String.t() | nil,
+          assistant_origin_skill_rank: pos_integer() | nil
         }
 
   @type effect ::

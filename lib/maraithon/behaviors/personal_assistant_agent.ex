@@ -46,6 +46,8 @@ defmodule Maraithon.Behaviors.PersonalAssistantAgent do
       case Travel.sync_recent_trip_data(user_id, context.agent_id,
              now: context.timestamp || DateTime.utc_now(),
              event: context.event,
+             source_bundle: context[:source_bundle],
+             assistant_context: context,
              email_scan_limit: state.email_scan_limit,
              event_scan_limit: state.event_scan_limit,
              lookback_hours: state.lookback_hours,

@@ -8,6 +8,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   @behaviour Maraithon.Behaviors.Behavior
 
+  alias Maraithon.ChiefOfStaff.AttentionArbiter
   alias Maraithon.Connectors.Slack
   alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.Insights
@@ -566,7 +567,19 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp persist_insights([], _state, _context), do: {:ok, []}
 
   defp persist_insights(insights, state, context) do
-    Insights.record_many(state.user_id, context.agent_id, insights)
+    enriched =
+      Enum.map(insights, fn insight ->
+        metadata =
+          insight
+          |> read_map("metadata")
+          |> AttentionArbiter.merge_artifact_metadata(context)
+
+        insight
+        |> stringify_keys()
+        |> Map.put("metadata", metadata)
+      end)
+
+    Insights.record_many(state.user_id, context.agent_id, enriched)
   end
 
   defp high_signal_unresolved?(candidate, state) do
@@ -1133,6 +1146,18 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp stringify_keys(%_{} = struct), do: struct
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {key, value} when is_map(value) -> {to_string(key), stringify_keys(value)}
+      {key, value} when is_list(value) -> {to_string(key), Enum.map(value, &stringify_keys/1)}
+      {key, value} -> {to_string(key), value}
+    end)
+  end
+
+  defp stringify_keys(value), do: value
 
   defp read_string(attrs, key, default) when is_map(attrs) do
     value = fetch_attr(attrs, key)

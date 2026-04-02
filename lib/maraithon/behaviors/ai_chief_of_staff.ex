@@ -8,7 +8,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @behaviour Maraithon.Behaviors.Behavior
 
-  alias Maraithon.ChiefOfStaff.Skills
+  alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
 
   @impl true
   def init(config) do
@@ -28,7 +28,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       skill_configs: skill_configs,
       skill_states: skill_states,
       cycle_skill_ids: nil,
+      assistant_cycle_id: nil,
+      source_bundle: nil,
+      assistant_fetch_telemetry: nil,
       pending_emit: nil,
+      pending_emits: [],
       pending_effect_skill_id: nil,
       resume_index: 0
     }
@@ -41,7 +45,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         nil -> %{state | user_id: normalize_string(context[:user_id])}
         _ -> state
       end
-      |> ensure_cycle_skill_ids(context)
+      |> ensure_cycle(context)
 
     run_from_index(state.resume_index || 0, state, context)
   end
@@ -55,8 +59,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       skill_id ->
         module = Skills.get!(skill_id)
         skill_state = Map.fetch!(state.skill_states, skill_id)
+        index = skill_index(state, skill_id)
+        skill_context = skill_context(state, context, skill_id, index)
 
-        case module.handle_effect_result(effect_result, skill_state, context) do
+        case module.handle_effect_result(effect_result, skill_state, skill_context) do
           {:effect, effect, next_skill_state} ->
             {:effect, effect, put_skill_state(state, skill_id, next_skill_state)}
 
@@ -65,7 +71,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
               state
               |> put_skill_state(skill_id, next_skill_state)
               |> Map.put(:pending_effect_skill_id, nil)
-              |> stash_emit(emit)
+              |> stash_emit(emit, skill_id, index)
 
             run_from_index(state.resume_index || 0, state, context)
 
@@ -103,8 +109,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       skill_id = Enum.at(skill_ids, index)
       module = Skills.get!(skill_id)
       skill_state = Map.fetch!(state.skill_states, skill_id)
+      skill_context = skill_context(state, context, skill_id, index)
 
-      case module.handle_wakeup(skill_state, context) do
+      case module.handle_wakeup(skill_state, skill_context) do
         {:effect, effect, next_skill_state} ->
           {:effect, effect,
            state
@@ -116,7 +123,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
           state =
             state
             |> put_skill_state(skill_id, next_skill_state)
-            |> stash_emit(emit)
+            |> stash_emit(emit, skill_id, index)
 
           run_from_index(index + 1, state, context)
 
@@ -137,27 +144,55 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   defp finalize_cycle(state) do
+    emit =
+      AttentionArbiter.finalize_emit(
+        state.pending_emit,
+        state.pending_emits,
+        state.assistant_cycle_id,
+        state.assistant_fetch_telemetry
+      )
+
     state = %{
       state
       | cycle_skill_ids: nil,
+        assistant_cycle_id: nil,
+        source_bundle: nil,
+        assistant_fetch_telemetry: nil,
         pending_effect_skill_id: nil,
+        pending_emits: [],
         resume_index: 0
     }
 
-    case state.pending_emit do
+    case emit do
       nil ->
         {:idle, state}
 
-      emit ->
-        {:emit, emit, %{state | pending_emit: nil}}
+      finalized_emit ->
+        {:emit, finalized_emit, %{state | pending_emit: nil}}
     end
   end
 
-  defp ensure_cycle_skill_ids(%{cycle_skill_ids: nil} = state, context) do
-    %{state | cycle_skill_ids: selected_skill_ids(state, context)}
+  defp ensure_cycle(%{cycle_skill_ids: nil} = state, context) do
+    cycle_skill_ids = selected_skill_ids(state, context)
+
+    {source_bundle, assistant_fetch_telemetry} =
+      acquisition_module().build(
+        state.user_id || normalize_string(context[:user_id]),
+        cycle_skill_ids,
+        state.skill_configs,
+        context
+      )
+
+    %{
+      state
+      | cycle_skill_ids: cycle_skill_ids,
+        assistant_cycle_id: Ecto.UUID.generate(),
+        source_bundle: source_bundle,
+        assistant_fetch_telemetry: assistant_fetch_telemetry
+    }
   end
 
-  defp ensure_cycle_skill_ids(state, _context), do: state
+  defp ensure_cycle(state, _context), do: state
 
   defp selected_skill_ids(state, context) do
     Enum.filter(state.enabled_skill_ids, fn skill_id ->
@@ -168,12 +203,43 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   defp cycle_skill_ids(%{cycle_skill_ids: skill_ids}) when is_list(skill_ids), do: skill_ids
   defp cycle_skill_ids(state), do: state.enabled_skill_ids
 
+  defp skill_index(state, skill_id) do
+    state
+    |> cycle_skill_ids()
+    |> Enum.find_index(&(&1 == skill_id))
+    |> case do
+      nil -> 0
+      index -> index
+    end
+  end
+
   defp put_skill_state(state, skill_id, next_skill_state) do
     put_in(state, [:skill_states, skill_id], next_skill_state)
   end
 
-  defp stash_emit(state, emit) do
-    %{state | pending_emit: merge_emit(state.pending_emit, emit)}
+  defp stash_emit(state, emit, skill_id, index) do
+    %{
+      state
+      | pending_emit: merge_emit(state.pending_emit, emit),
+        pending_emits:
+          state.pending_emits ++
+            [
+              %{
+                skill_id: skill_id,
+                event_type: elem(emit, 0),
+                rank: index + 1
+              }
+            ]
+    }
+  end
+
+  defp skill_context(state, context, skill_id, index) do
+    context
+    |> Map.put(:source_bundle, state.source_bundle)
+    |> Map.put(:assistant_cycle_id, state.assistant_cycle_id)
+    |> Map.put(:assistant_fetch_telemetry, state.assistant_fetch_telemetry)
+    |> Map.put(:assistant_origin_skill_id, skill_id)
+    |> Map.put(:assistant_origin_skill_rank, index + 1)
   end
 
   defp build_skill_configs(config, user_id, enabled_skill_ids) do
@@ -350,6 +416,11 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     do: merge_wakeup({:absolute, absolute}, {:relative, ms})
 
   defp merge_wakeup(_left, right), do: right
+
+  defp acquisition_module do
+    Application.get_env(:maraithon, __MODULE__, [])
+    |> Keyword.get(:acquisition_module, Acquisition)
+  end
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
