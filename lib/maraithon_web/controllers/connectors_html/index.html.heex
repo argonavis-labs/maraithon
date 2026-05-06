@@ -8,7 +8,7 @@
           </p>
           <h1 class="mt-2 text-3xl font-semibold tracking-tight">Connectors</h1>
           <p class="mt-2 text-sm text-slate-200">
-            Manage app connections in one list. Click any connector row to inspect details, setup, scopes, and actions.
+            Link Telegram first, then connect the apps your agents should watch for work, travel, and follow-through.
           </p>
         </div>
         <div class="rounded-full bg-white/10 px-3 py-2 text-sm font-medium text-indigo-100">
@@ -26,18 +26,27 @@
       </section>
     <% end %>
 
+    <%= if not telegram_connected?(@providers) do %>
+      <section class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-4 text-sky-950 shadow-sm">
+        <p class="text-sm font-semibold">Telegram is required before other connectors.</p>
+        <p class="mt-1 text-sm text-sky-800">
+          Maraithon is delivered as a Telegram bot, so Telegram gives the app a place to message you while the rest of your online connectors are being linked.
+        </p>
+      </section>
+    <% end %>
+
     <section class="overflow-hidden rounded-xl bg-white shadow">
       <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
         <h2 class="text-lg font-semibold text-slate-900">Apps</h2>
         <p class="mt-1 text-sm text-slate-500">
-          Similar to Zapier-style app connections: one big row per provider with quick status and entry into details.
+          Each connector shows whether it is connected and whether its refresh token can keep access alive.
         </p>
       </div>
 
       <div class="divide-y divide-slate-200">
         <%= for provider <- @providers do %>
           <div class="grid grid-cols-1 gap-4 px-4 py-5 sm:px-6 lg:grid-cols-12 lg:items-center">
-            <div class="lg:col-span-5">
+            <div class="lg:col-span-4">
               <a href={provider_detail_path(provider)}>
                 <div class="flex items-start gap-4">
                   <.oauth_logo provider={provider.logo} />
@@ -68,7 +77,9 @@
                         <% end %>
                       </div>
                       <div class="flex flex-wrap items-center gap-2">
-                        <%= if account[:needs_reconnect?] and account[:reconnect_url] do %>
+                        <%= if account[:needs_reconnect?] && account[:reconnect_url] &&
+                                  (provider.provider == "telegram" || telegram_connected?(@providers)) &&
+                                  provider[:connect_blocked?] != true do %>
                           <a
                             href={account.reconnect_url}
                             class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100"
@@ -96,6 +107,7 @@
             </div>
 
             <div class="lg:col-span-2">
+              <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Connected</p>
               <span class={connection_status_badge_class(provider.status)}>
                 <%= connection_status_label(provider.status) %>
               </span>
@@ -104,7 +116,14 @@
               </p>
             </div>
 
-            <div class="lg:col-span-3">
+            <div class="lg:col-span-2">
+              <p class="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Refresh token</p>
+              <span class={refresh_token_badge_class(provider[:refresh_token_status])}>
+                <%= refresh_token_status_label(provider[:refresh_token_status]) %>
+              </span>
+            </div>
+
+            <div class="lg:col-span-2">
               <%= if provider.services == [] do %>
                 <p class="text-sm text-slate-400">No service splits</p>
               <% else %>
@@ -129,14 +148,31 @@
                 View
               </a>
 
-              <%= if provider.configured? do %>
+              <%= cond do %>
+                <% provider.provider != "telegram" and not telegram_connected?(@providers) -> %>
+                  <button
+                    type="button"
+                    disabled
+                    class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
+                  >
+                    Connect Telegram first
+                  </button>
+                <% provider[:connect_blocked?] -> %>
+                  <button
+                    type="button"
+                    disabled
+                    class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
+                  >
+                    <%= provider[:connect_block_reason] %>
+                  </button>
+                <% connection_action_enabled?(provider) -> %>
                 <a
                   href={provider.connect_url}
                   class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-500"
                 >
                   <%= connection_primary_action(provider) %>
                 </a>
-              <% else %>
+                <% true -> %>
                 <button
                   type="button"
                   disabled

@@ -236,6 +236,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     - state: Encoded user_id for callback validation
     """
     test "redirects to Google with valid params", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar"})
 
       assert redirected_to(conn) =~ "https://accounts.google.com/o/oauth2/v2/auth"
@@ -248,6 +249,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Users can request access to both calendar and gmail at once.
     """
     test "redirects with multiple scopes", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar,gmail"})
 
       redirect_url = redirected_to(conn)
@@ -364,6 +366,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Verifies successful redirect to Slack OAuth consent.
     """
     test "redirects to Slack with valid params", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/slack", %{user_id: "user_123"})
 
       assert redirected_to(conn) =~ "https://slack.com/oauth/v2/authorize"
@@ -451,6 +454,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Verifies successful redirect to Linear OAuth consent.
     """
     test "redirects to Linear with valid params", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/linear", %{user_id: "user_123"})
 
       assert redirected_to(conn) =~ "https://linear.app/oauth/authorize"
@@ -513,6 +517,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
   describe "GET /auth/github" do
     test "redirects to GitHub with PKCE challenge", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/github", %{user_id: "user_123"})
 
       redirect_url = redirected_to(conn)
@@ -589,6 +594,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
   describe "GET /auth/notion" do
     test "redirects to Notion with the expected owner and client id", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/notion", %{user_id: "user_123"})
 
       redirect_url = redirected_to(conn)
@@ -603,6 +609,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
   describe "GET /auth/notaui" do
     test "redirects to Notaui with PKCE challenge", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/notaui", %{user_id: "user_123"})
 
       redirect_url = redirected_to(conn)
@@ -628,6 +635,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Verifies that gmail scope is handled correctly.
     """
     test "handles gmail scope", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "gmail"})
 
       redirect_url = redirected_to(conn)
@@ -639,6 +647,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Verifies that multiple scopes (calendar + gmail) are handled.
     """
     test "handles both calendar and gmail scopes", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: "calendar,gmail"})
 
       redirect_url = redirected_to(conn)
@@ -650,6 +659,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
     Users might accidentally include spaces in the scopes parameter.
     """
     test "handles scopes with extra whitespace", %{conn: conn} do
+      connect_telegram("user_123")
       conn = get(conn, "/auth/google", %{user_id: "user_123", scopes: " calendar , gmail "})
 
       redirect_url = redirected_to(conn)
@@ -1139,5 +1149,37 @@ defmodule MaraithonWeb.OAuthControllerTest do
   defp signed_state(payload) do
     payload = Map.put(payload, "nonce", Ecto.UUID.generate())
     Phoenix.Token.sign(MaraithonWeb.Endpoint, "oauth_state", payload)
+  end
+
+  defp connect_telegram(user_id) do
+    :ok = ensure_user_id(user_id)
+
+    {:ok, _account} =
+      Maraithon.ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "telegram-chat-#{System.unique_integer([:positive])}",
+        metadata: %{"username" => "oauth-test"}
+      })
+
+    :ok
+  end
+
+  defp ensure_user_id(user_id) do
+    if String.contains?(user_id, "@") do
+      {:ok, _user} = Maraithon.Accounts.get_or_create_user_by_email(user_id)
+    else
+      changeset =
+        Maraithon.Accounts.User.changeset(%Maraithon.Accounts.User{}, %{
+          id: user_id,
+          email: "#{user_id}@example.com"
+        })
+
+      {:ok, _user} =
+        Maraithon.Repo.insert(changeset,
+          on_conflict: :nothing,
+          conflict_target: :id
+        )
+    end
+
+    :ok
   end
 end

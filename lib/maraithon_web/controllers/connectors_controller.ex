@@ -25,6 +25,7 @@ defmodule MaraithonWeb.ConnectorsController do
       connection_user_id: user_id,
       providers: snapshot.providers,
       connected_count: snapshot.connected_count,
+      telegram_connected: Map.get(snapshot, :telegram_connected?, false),
       connection_errors: snapshot.errors
     )
   end
@@ -57,6 +58,7 @@ defmodule MaraithonWeb.ConnectorsController do
           current_user: conn.assigns.current_user,
           provider: provider_card,
           token: token_for_provider(snapshot.raw_tokens, provider),
+          telegram_connected: Map.get(snapshot, :telegram_connected?, false),
           connection_errors: snapshot.errors
         )
     end

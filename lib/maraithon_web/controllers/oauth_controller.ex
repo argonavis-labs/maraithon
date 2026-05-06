@@ -7,6 +7,7 @@ defmodule MaraithonWeb.OAuthController do
 
   use MaraithonWeb, :controller
 
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.{Gmail, GoogleCalendar}
   alias Maraithon.Connectors.Linear, as: LinearConnector
   alias Maraithon.Connectors.Notaui, as: NotauiConnector
@@ -27,12 +28,14 @@ defmodule MaraithonWeb.OAuthController do
   def google(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
          {:ok, services} <- google_services(params["scopes"]),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       state = encode_google_state(user_id, services, return_to)
       auth_url = Google.authorize_url(google_authorize_scopes(services), state)
 
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -75,7 +78,8 @@ defmodule MaraithonWeb.OAuthController do
   """
   def github(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       {code_verifier, code_challenge} = pkce_pair()
 
       state =
@@ -93,6 +97,7 @@ defmodule MaraithonWeb.OAuthController do
 
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -126,7 +131,8 @@ defmodule MaraithonWeb.OAuthController do
   """
   def slack(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       state = encode_provider_state("slack", user_id, %{"return_to" => return_to})
 
       auth_url =
@@ -138,6 +144,7 @@ defmodule MaraithonWeb.OAuthController do
 
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -171,11 +178,13 @@ defmodule MaraithonWeb.OAuthController do
   """
   def linear(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       state = encode_provider_state("linear", user_id, %{"return_to" => return_to})
       auth_url = Linear.authorize_url(Linear.default_scopes(), state)
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -209,12 +218,14 @@ defmodule MaraithonWeb.OAuthController do
   """
   def notion(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       state = encode_provider_state("notion", user_id, %{"return_to" => return_to})
       auth_url = Notion.authorize_url(state)
 
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -248,7 +259,8 @@ defmodule MaraithonWeb.OAuthController do
   """
   def notaui(conn, params) do
     with {:ok, user_id} <- resolve_user_id(conn, params),
-         {:ok, return_to} <- optional_return_to(params) do
+         {:ok, return_to} <- optional_return_to(params),
+         :ok <- require_telegram_first(conn, user_id, return_to) do
       {code_verifier, code_challenge} = pkce_pair()
 
       state =
@@ -266,6 +278,7 @@ defmodule MaraithonWeb.OAuthController do
 
       redirect(conn, external: auth_url)
     else
+      {:redirect, conn} -> conn
       {:error, reason} -> bad_request(conn, reason)
     end
   end
@@ -846,6 +859,26 @@ defmodule MaraithonWeb.OAuthController do
     else
       {:error, "Authentication required"}
     end
+  end
+
+  defp require_telegram_first(conn, user_id, return_to) when is_binary(user_id) do
+    case ConnectedAccounts.get(user_id, "telegram") do
+      %{status: "connected"} ->
+        :ok
+
+      _account ->
+        {:redirect,
+         conn
+         |> put_flash(:error, "Connect Telegram before linking other connectors.")
+         |> redirect(to: return_to || ~p"/connectors")}
+    end
+  end
+
+  defp require_telegram_first(conn, _user_id, _return_to) do
+    {:redirect,
+     conn
+     |> put_flash(:error, "Connect Telegram before linking other connectors.")
+     |> redirect(to: ~p"/connectors")}
   end
 
   defp optional_return_to(params) do

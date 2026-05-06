@@ -34,6 +34,24 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "No agent selected."
   end
 
+  test "registry rows describe what agents do and which connectors they inspect", %{conn: conn} do
+    {:ok, _agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{"name" => "chief", "subscribe" => ["gmail:inbox"]},
+        status: "stopped"
+      })
+
+    {:ok, _view, html} = live(conn, "/agents")
+
+    assert html =~ "What it does for you"
+    assert html =~ "Connectors it looks at"
+    assert html =~ "Runs the focused Chief of Staff stack"
+    assert html =~ "Google Gmail"
+    assert html =~ "Slack Channels"
+    assert html =~ "Telegram"
+  end
+
   test "selecting an agent opens inspect mode", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{

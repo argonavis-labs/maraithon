@@ -16,6 +16,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Notaui"
       assert html =~ "Slack"
       assert html =~ "View"
+      assert html =~ "Telegram is required before other connectors."
+      assert html =~ "Connect Telegram first"
     end
 
     test "GET /connectors renders with connected Slack tokens", %{conn: conn} do
@@ -80,6 +82,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     test "GET /connectors shows refresh-required state for errored Google account", %{conn: conn} do
       user_id = "google-refresh-needed@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      connect_telegram(user_id)
 
       {:ok, _token} =
         OAuth.store_tokens(user_id, "google:founder@example.com", %{
@@ -133,6 +136,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     test "GET /connectors/github shows account-level reconnect/disconnect controls", %{conn: conn} do
       user_id = "github-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      connect_telegram(user_id)
 
       {:ok, _token} =
         OAuth.store_tokens(user_id, "github", %{
@@ -153,6 +157,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     test "GET /connectors/linear shows account-level reconnect/disconnect controls", %{conn: conn} do
       user_id = "linear-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      connect_telegram(user_id)
 
       {:ok, _token} =
         OAuth.store_tokens(user_id, "linear", %{
@@ -173,6 +178,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     test "GET /connectors/notion shows account-level reconnect/disconnect controls", %{conn: conn} do
       user_id = "notion-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      connect_telegram(user_id)
 
       {:ok, _token} =
         OAuth.store_tokens(user_id, "notion", %{
@@ -193,6 +199,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
     test "GET /connectors/notaui shows account-level reconnect/disconnect controls", %{conn: conn} do
       user_id = "notaui-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      connect_telegram(user_id)
 
       {:ok, _token} =
         OAuth.store_tokens(user_id, "notaui", %{
@@ -266,6 +273,25 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user() |> get("/conenctors")
       assert redirected_to(conn) == "/connectors"
     end
+
+    test "GET /auth/google requires telegram before starting OAuth", %{conn: conn} do
+      user_id = "oauth-telegram-required-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      conn =
+        conn
+        |> log_in_test_user(user_id)
+        |> get("/auth/google", %{
+          "user_id" => user_id,
+          "scopes" => "gmail",
+          "return_to" => "/connectors"
+        })
+
+      assert redirected_to(conn) == "/connectors"
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
+               "Connect Telegram before linking other connectors."
+    end
   end
 
   describe "connector actions" do
@@ -315,5 +341,15 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert OAuth.get_token(user_id, "google:ops@example.com") == nil
       assert OAuth.get_token(user_id, "google:founder@example.com")
     end
+  end
+
+  defp connect_telegram(user_id) do
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "telegram-chat-#{System.unique_integer([:positive])}",
+        metadata: %{"username" => "test-user"}
+      })
+
+    :ok
   end
 end

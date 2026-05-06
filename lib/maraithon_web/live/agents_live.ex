@@ -367,8 +367,9 @@ defmodule MaraithonWeb.AgentsLive do
               <thead class="bg-slate-50">
                 <tr>
                   <th class="px-4 py-3 text-left font-medium text-slate-500">Agent</th>
+                  <th class="px-4 py-3 text-left font-medium text-slate-500">What it does for you</th>
+                  <th class="px-4 py-3 text-left font-medium text-slate-500">Connectors it looks at</th>
                   <th class="px-4 py-3 text-left font-medium text-slate-500">Status</th>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">Subscriptions</th>
                   <th class="px-4 py-3 text-left font-medium text-slate-500">Updated</th>
                   <th class="px-4 py-3 text-right font-medium text-slate-500">Actions</th>
                 </tr>
@@ -387,10 +388,27 @@ defmodule MaraithonWeb.AgentsLive do
                       <div class="mt-1 font-mono text-[11px] text-slate-400"><%= agent.id %></div>
                     </td>
                     <td class="px-4 py-4 align-top">
-                      <.status_badge status={agent.status} />
+                      <p class="max-w-md text-sm text-slate-700"><%= agent_job_summary(agent) %></p>
+                      <div class="mt-2 text-xs text-slate-500">
+                        <%= subscriptions_preview(agent.config) %>
+                      </div>
                     </td>
-                    <td class="px-4 py-4 align-top text-xs text-slate-600">
-                      <%= subscriptions_preview(agent.config) %>
+                    <td class="px-4 py-4 align-top">
+                      <div class="flex max-w-xs flex-wrap gap-2">
+                        <%= for connector <- agent_connector_requirements(agent) do %>
+                          <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                            <img
+                              src={connector_logo_src(connector.provider)}
+                              alt={connector.label}
+                              class="h-4 w-4 object-contain"
+                            />
+                            <%= connector.label %>
+                          </span>
+                        <% end %>
+                      </div>
+                    </td>
+                    <td class="px-4 py-4 align-top">
+                      <.status_badge status={agent.status} />
                     </td>
                     <td class="px-4 py-4 align-top text-xs text-slate-500">
                       <%= format_datetime(agent.updated_at) %>
@@ -450,7 +468,7 @@ defmodule MaraithonWeb.AgentsLive do
 
                 <%= if @all_agents == [] do %>
                   <tr>
-                    <td colspan="5" class="px-4 py-12">
+                    <td colspan="6" class="px-4 py-12">
                       <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
                         <p class="text-base font-semibold text-slate-900">No agents exist yet.</p>
                         <p class="mt-2 text-sm text-slate-600">
@@ -469,7 +487,7 @@ defmodule MaraithonWeb.AgentsLive do
 
                 <%= if @all_agents != [] and @agents == [] do %>
                   <tr>
-                    <td colspan="5" class="px-4 py-12">
+                    <td colspan="6" class="px-4 py-12">
                       <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
                         <p class="text-base font-semibold text-slate-900">No agents match the current filters.</p>
                         <p class="mt-2 text-sm text-slate-600">
@@ -1394,6 +1412,99 @@ defmodule MaraithonWeb.AgentsLive do
       values -> values |> Enum.join(", ") |> truncate(70)
     end
   end
+
+  defp agent_job_summary(agent) do
+    agent
+    |> behavior_spec()
+    |> Map.get(:summary, "Runs the saved agent behavior for this operator.")
+  end
+
+  defp agent_connector_requirements(agent) do
+    requirements =
+      agent
+      |> behavior_spec()
+      |> Map.get(:requirements, [])
+      |> Enum.filter(&connector_requirement?/1)
+      |> Enum.map(&connector_requirement_summary/1)
+
+    case Enum.uniq_by(requirements, &{&1.provider, &1.label}) do
+      [] -> inferred_subscription_connectors(agent.config)
+      values -> values
+    end
+  end
+
+  defp behavior_spec(agent), do: AgentBuilder.behavior_spec(agent.behavior)
+
+  defp connector_requirement?(%{kind: kind, provider: provider})
+       when kind in [:provider, :provider_service] and is_binary(provider),
+       do: true
+
+  defp connector_requirement?(_requirement), do: false
+
+  defp connector_requirement_summary(%{provider: provider, label: label}) do
+    %{
+      provider: connector_logo_provider(provider),
+      label: label
+    }
+  end
+
+  defp inferred_subscription_connectors(config) when is_map(config) do
+    (config["subscribe"] || [])
+    |> Enum.map(&subscription_provider/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.map(fn provider ->
+      %{
+        provider: connector_logo_provider(provider),
+        label: connector_label(provider)
+      }
+    end)
+    |> case do
+      [] -> [%{provider: "generic", label: "No connector dependency"}]
+      values -> values
+    end
+  end
+
+  defp inferred_subscription_connectors(_config),
+    do: [%{provider: "generic", label: "No connector dependency"}]
+
+  defp subscription_provider(topic) when is_binary(topic) do
+    topic
+    |> String.split(":", parts: 2)
+    |> List.first()
+    |> case do
+      provider
+      when provider in ["google", "gmail", "calendar", "slack", "github", "linear", "telegram"] ->
+        provider
+
+      _provider ->
+        nil
+    end
+  end
+
+  defp subscription_provider(_topic), do: nil
+
+  defp connector_logo_provider(provider) when provider in ["gmail", "calendar"], do: "google"
+  defp connector_logo_provider(provider) when is_binary(provider), do: provider
+  defp connector_logo_provider(_provider), do: "generic"
+
+  defp connector_label("google"), do: "Google"
+  defp connector_label("gmail"), do: "Gmail"
+  defp connector_label("calendar"), do: "Calendar"
+  defp connector_label("github"), do: "GitHub"
+  defp connector_label("slack"), do: "Slack"
+  defp connector_label("linear"), do: "Linear"
+  defp connector_label("telegram"), do: "Telegram"
+  defp connector_label(provider), do: provider
+
+  defp connector_logo_src("google"), do: "/images/connector-logos/google.svg"
+  defp connector_logo_src("github"), do: "/images/connector-logos/github.svg"
+  defp connector_logo_src("slack"), do: "/images/connector-logos/slack.svg"
+  defp connector_logo_src("linear"), do: "/images/connector-logos/linear.svg"
+  defp connector_logo_src("notion"), do: "/images/connector-logos/notion.png"
+  defp connector_logo_src("notaui"), do: "/images/connector-logos/notaui.png"
+  defp connector_logo_src("telegram"), do: "/images/connector-logos/telegram.png"
+  defp connector_logo_src(_provider), do: "/favicon.ico"
 
   defp effect_preview(effect) do
     cond do

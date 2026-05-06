@@ -14,6 +14,15 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_subtitle(_provider), do: "No details yet."
 
+  def telegram_connected?(providers) when is_list(providers) do
+    Enum.any?(providers, fn provider ->
+      provider.provider == "telegram" and
+        (provider.status == :connected or provider[:disconnectable?] == true)
+    end)
+  end
+
+  def telegram_connected?(_providers), do: false
+
   def setup_completion_text(%{setup_status: :configured}), do: "Connector configured"
   def setup_completion_text(_provider), do: "Connector setup required"
 
@@ -36,6 +45,10 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_primary_action(%{status: :connected}), do: "Reconnect"
   def connection_primary_action(_provider), do: "Connect"
 
+  def connection_action_enabled?(%{connect_blocked?: true}), do: false
+  def connection_action_enabled?(%{configured?: true}), do: true
+  def connection_action_enabled?(_provider), do: false
+
   def connection_status_label(:connected), do: "connected"
   def connection_status_label(:partial), do: "partial"
   def connection_status_label(:missing_scope), do: "needs scope"
@@ -43,6 +56,38 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_label(:not_configured), do: "not configured"
   def connection_status_label(:unknown), do: "unknown"
   def connection_status_label(_status), do: "disconnected"
+
+  def refresh_token_status_label(:active), do: "refresh active"
+  def refresh_token_status_label(:inactive), do: "refresh inactive"
+  def refresh_token_status_label(:missing), do: "no refresh token"
+  def refresh_token_status_label(:not_required), do: "not required"
+  def refresh_token_status_label(:not_applicable), do: "not applicable"
+  def refresh_token_status_label(:unknown), do: "unknown"
+  def refresh_token_status_label(_status), do: "unknown"
+
+  def refresh_token_badge_class(:active),
+    do:
+      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+
+  def refresh_token_badge_class(:inactive),
+    do:
+      "inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
+
+  def refresh_token_badge_class(:missing),
+    do:
+      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+
+  def refresh_token_badge_class(:not_required),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+
+  def refresh_token_badge_class(:not_applicable),
+    do:
+      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+
+  def refresh_token_badge_class(_status),
+    do:
+      "inline-flex items-center rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700"
 
   def connection_status_badge_class(:connected),
     do:
@@ -149,67 +194,33 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   attr :provider, :atom, required: true
 
-  def oauth_logo(%{provider: :google} = assigns) do
-    ~H"""
-    <div class="h-10 w-10 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
-      <img src="https://www.google.com/favicon.ico" alt="Google" class="h-full w-full object-contain" />
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :github} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-xs font-semibold text-white shadow-sm">
-      GH
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :linear} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-xs font-semibold text-white shadow-sm">
-      LN
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :notion} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-900 shadow-sm">
-      N
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :notaui} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-600 text-xs font-semibold text-white shadow-sm">
-      NA
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :telegram} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500 text-xs font-semibold text-white shadow-sm">
-      TG
-    </div>
-    """
-  end
-
-  def oauth_logo(%{provider: :slack} = assigns) do
-    ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-[#4A154B] text-xs font-semibold text-white shadow-sm">
-      SL
-    </div>
-    """
-  end
-
   def oauth_logo(assigns) do
     ~H"""
-    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200 text-xs font-semibold text-slate-700">
-      ?
+    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+      <img
+        src={connector_logo_src(@provider)}
+        alt={connector_logo_alt(@provider)}
+        class="h-full w-full object-contain"
+      />
     </div>
     """
   end
+
+  defp connector_logo_src(:google), do: "/images/connector-logos/google.svg"
+  defp connector_logo_src(:github), do: "/images/connector-logos/github.svg"
+  defp connector_logo_src(:slack), do: "/images/connector-logos/slack.svg"
+  defp connector_logo_src(:linear), do: "/images/connector-logos/linear.svg"
+  defp connector_logo_src(:notion), do: "/images/connector-logos/notion.png"
+  defp connector_logo_src(:notaui), do: "/images/connector-logos/notaui.png"
+  defp connector_logo_src(:telegram), do: "/images/connector-logos/telegram.png"
+  defp connector_logo_src(_provider), do: "/favicon.ico"
+
+  defp connector_logo_alt(provider) when is_atom(provider) do
+    provider
+    |> Atom.to_string()
+    |> String.replace("_", " ")
+    |> String.capitalize()
+  end
+
+  defp connector_logo_alt(_provider), do: "Connector"
 end

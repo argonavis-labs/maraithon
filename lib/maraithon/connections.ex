@@ -73,21 +73,46 @@ defmodule Maraithon.Connections do
     slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
     telegram_account = ConnectedAccounts.get(user_id, "telegram")
 
-    providers = [
-      google_card(user_id, google_tokens, account_by_provider, return_to),
-      github_card(user_id, token_by_provider["github"], account_by_provider["github"], return_to),
-      slack_card(user_id, slack_tokens, account_by_provider, return_to),
-      linear_card(user_id, token_by_provider["linear"], account_by_provider["linear"], return_to),
-      notion_card(user_id, token_by_provider["notion"], account_by_provider["notion"], return_to),
-      notaui_card(user_id, token_by_provider["notaui"], account_by_provider["notaui"], return_to),
-      telegram_card(user_id, telegram_account, return_to)
-    ]
+    telegram_connected? = connected_account?(telegram_account)
+
+    providers =
+      [
+        telegram_card(user_id, telegram_account, return_to),
+        google_card(user_id, google_tokens, account_by_provider, return_to),
+        github_card(
+          user_id,
+          token_by_provider["github"],
+          account_by_provider["github"],
+          return_to
+        ),
+        slack_card(user_id, slack_tokens, account_by_provider, return_to),
+        linear_card(
+          user_id,
+          token_by_provider["linear"],
+          account_by_provider["linear"],
+          return_to
+        ),
+        notion_card(
+          user_id,
+          token_by_provider["notion"],
+          account_by_provider["notion"],
+          return_to
+        ),
+        notaui_card(
+          user_id,
+          token_by_provider["notaui"],
+          account_by_provider["notaui"],
+          return_to
+        )
+      ]
+      |> Enum.map(&enforce_telegram_first(&1, telegram_connected?))
 
     %{
       user_id: user_id,
       providers: providers,
       raw_tokens: Enum.map(tokens, &serialize_token/1),
       connected_count: Enum.count(providers, &(&1.status in [:connected, :partial])),
+      telegram_connected?: telegram_connected?,
       degraded: false,
       errors: []
     }
@@ -163,14 +188,15 @@ defmodule Maraithon.Connections do
   defp fallback_snapshot(user_id, return_to, reason) do
     providers =
       [
+        telegram_card(user_id, nil, return_to),
         google_card(user_id, [], %{}, return_to),
         github_card(user_id, nil, nil, return_to),
         slack_card(user_id, [], %{}, return_to),
         linear_card(user_id, nil, nil, return_to),
         notion_card(user_id, nil, nil, return_to),
-        notaui_card(user_id, nil, nil, return_to),
-        telegram_card(user_id, nil, return_to)
+        notaui_card(user_id, nil, nil, return_to)
       ]
+      |> Enum.map(&enforce_telegram_first(&1, false))
       |> Enum.map(&mark_unavailable/1)
 
     %{
@@ -178,6 +204,7 @@ defmodule Maraithon.Connections do
       providers: providers,
       raw_tokens: [],
       connected_count: 0,
+      telegram_connected?: false,
       degraded: true,
       errors: [
         %{
@@ -236,6 +263,7 @@ defmodule Maraithon.Connections do
       connect_url:
         auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts"),
       disconnect_label: "Disconnect Google",
+      refresh_token_status: refresh_token_status(tokens, account_entries),
       details:
         google_details(primary_token, [
           if(account_entries != [],
@@ -274,6 +302,7 @@ defmodule Maraithon.Connections do
       disconnectable?: not is_nil(token),
       connect_url: auth_url("/auth/github", user_id, return_to),
       disconnect_label: "Disconnect GitHub",
+      refresh_token_status: refresh_token_status(token, account_entry),
       details:
         provider_details(token, [
           metadata_value(token, ["login"]) && "@#{metadata_value(token, ["login"])}",
@@ -359,6 +388,7 @@ defmodule Maraithon.Connections do
       disconnectable?: tokens != [],
       connect_url: auth_url("/auth/slack", user_id, return_to),
       disconnect_label: "Disconnect Slack",
+      refresh_token_status: refresh_token_status(tokens, account_entries),
       details: details,
       services: services,
       accounts: account_entries
@@ -406,6 +436,7 @@ defmodule Maraithon.Connections do
       disconnectable?: not is_nil(token),
       connect_url: auth_url("/auth/linear", user_id, return_to),
       disconnect_label: "Disconnect Linear",
+      refresh_token_status: refresh_token_status(token, account_entry),
       details:
         provider_details(token, [
           if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
@@ -441,6 +472,7 @@ defmodule Maraithon.Connections do
       disconnectable?: account && account.status == "connected",
       connect_url: auth_url("/connectors/telegram", user_id, return_to),
       disconnect_label: "Disconnect Telegram",
+      refresh_token_status: :not_applicable,
       details:
         if account && account.status == "connected" do
           [
@@ -481,6 +513,7 @@ defmodule Maraithon.Connections do
       disconnectable?: not is_nil(token),
       connect_url: auth_url("/auth/notion", user_id, return_to),
       disconnect_label: "Disconnect Notion",
+      refresh_token_status: refresh_token_status(token, account_entry),
       details:
         provider_details(token, [
           metadata_value(token, ["workspace_name"]),
@@ -518,6 +551,7 @@ defmodule Maraithon.Connections do
       disconnectable?: not is_nil(token),
       connect_url: auth_url("/auth/notaui", user_id, return_to),
       disconnect_label: "Disconnect Notaui",
+      refresh_token_status: refresh_token_status(token, account_entry),
       details: provider_details(token, notaui_details(token, account)),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
@@ -550,6 +584,30 @@ defmodule Maraithon.Connections do
 
   defp provider_status(true, _token, account) do
     if reauth_required_account?(account), do: :needs_refresh, else: :connected
+  end
+
+  defp connected_account?(%ConnectedAccount{status: "connected"}), do: true
+  defp connected_account?(_account), do: false
+
+  defp enforce_telegram_first(%{provider: "telegram"} = provider, _telegram_connected?) do
+    provider
+    |> Map.put(:requires_telegram?, false)
+    |> Map.put(:connect_blocked?, false)
+    |> Map.put(:connect_block_reason, nil)
+  end
+
+  defp enforce_telegram_first(provider, true) do
+    provider
+    |> Map.put(:requires_telegram?, true)
+    |> Map.put(:connect_blocked?, false)
+    |> Map.put(:connect_block_reason, nil)
+  end
+
+  defp enforce_telegram_first(provider, false) do
+    provider
+    |> Map.put(:requires_telegram?, true)
+    |> Map.put(:connect_blocked?, true)
+    |> Map.put(:connect_block_reason, "Connect Telegram first")
   end
 
   defp google_details(nil, items), do: provider_details(nil, items)
@@ -882,6 +940,36 @@ defmodule Maraithon.Connections do
 
   defp token_expired_without_refresh?(_token), do: false
 
+  defp refresh_token_status(tokens, account_entries) when is_list(tokens) do
+    cond do
+      tokens == [] ->
+        :missing
+
+      Enum.any?(account_entries, &(&1.status == :needs_refresh)) ->
+        :inactive
+
+      Enum.any?(tokens, &token_expired_without_refresh?/1) ->
+        :inactive
+
+      Enum.any?(tokens, &(present?(&1.refresh_token) and not token_expired_without_refresh?(&1))) ->
+        :active
+
+      Enum.all?(tokens, &is_nil(&1.expires_at)) ->
+        :not_required
+
+      true ->
+        :missing
+    end
+  end
+
+  defp refresh_token_status(%Token{} = token, nil),
+    do: refresh_token_status([token], [])
+
+  defp refresh_token_status(%Token{} = token, account_entry),
+    do: refresh_token_status([token], [account_entry])
+
+  defp refresh_token_status(_token, _account_entry), do: :missing
+
   defp slack_account_label(%Token{} = token) do
     team = normalize_text(metadata_value(token, ["team_name"])) || "Slack workspace"
 
@@ -1055,6 +1143,7 @@ defmodule Maraithon.Connections do
   defp mark_unavailable(provider) do
     provider
     |> Map.put(:status, :unknown)
+    |> Map.put(:refresh_token_status, :unknown)
     |> Map.update!(:details, fn details ->
       ["Token store temporarily unavailable." | details]
     end)

@@ -11,6 +11,9 @@
           <span class={connection_status_badge_class(@provider.status)}>
             <%= connection_status_label(@provider.status) %>
           </span>
+          <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
+            <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
+          </span>
           <a href={~p"/connectors"} class="rounded-md border border-white/20 px-3 py-2 text-xs font-medium text-white hover:bg-white/10">
             Back to connectors
           </a>
@@ -55,7 +58,9 @@
                     <% end %>
                   </div>
                   <div class="flex flex-wrap items-center gap-2">
-                    <%= if account[:reconnect_url] do %>
+                    <%= if account[:reconnect_url] &&
+                              (@provider.provider == "telegram" || @telegram_connected) &&
+                              @provider[:connect_blocked?] != true do %>
                       <a
                         href={account.reconnect_url}
                         class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
@@ -84,6 +89,12 @@
 
         <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Stored Grant</p>
+          <p class="mt-2 text-sm text-slate-700">
+            Refresh token:
+            <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
+              <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
+            </span>
+          </p>
           <%= if @token do %>
             <p class="mt-2 text-sm text-slate-700"><%= connection_token_summary(@token) %></p>
             <p class="mt-2 text-xs text-slate-500">Updated <%= format_datetime(@token.updated_at) %></p>
@@ -96,14 +107,31 @@
       <div class="rounded-xl bg-white p-5 shadow">
         <h2 class="text-lg font-semibold text-slate-900">Actions</h2>
         <div class="mt-4 space-y-3">
-          <%= if @provider.configured? do %>
+          <%= cond do %>
+            <% @provider.provider != "telegram" and not @telegram_connected -> %>
+              <button
+                type="button"
+                disabled
+                class="inline-flex w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-500"
+              >
+                Connect Telegram first
+              </button>
+            <% @provider[:connect_blocked?] -> %>
+              <button
+                type="button"
+                disabled
+                class="inline-flex w-full items-center justify-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm font-medium text-slate-500"
+              >
+                <%= @provider[:connect_block_reason] %>
+              </button>
+            <% connection_action_enabled?(@provider) -> %>
             <a
               href={@provider.connect_url}
               class="inline-flex w-full items-center justify-center rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500"
             >
               <%= connection_primary_action(@provider) %>
             </a>
-          <% else %>
+            <% true -> %>
             <button
               type="button"
               disabled
