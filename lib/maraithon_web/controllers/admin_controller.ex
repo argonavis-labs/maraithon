@@ -4,6 +4,8 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Admin
   alias Maraithon.Connections
   alias Maraithon.Insights.Refresh, as: InsightRefresh
+  alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
 
   def dashboard(conn, params) do
     with {:ok, activity_limit} <-
@@ -102,6 +104,90 @@ defmodule MaraithonWeb.AdminController do
     json(conn, serialize_connections_snapshot(snapshot))
   end
 
+  def todos(conn, params) do
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 40, "limit"),
+         {:ok, statuses} <- parse_todo_statuses(params["status"] || params["statuses"]) do
+      user_id = parse_user_id(params["user_id"])
+
+      todos =
+        Todos.list_for_user(user_id,
+          limit: limit,
+          statuses: statuses,
+          query: blank_to_nil(params["query"]),
+          source: blank_to_nil(params["source"]),
+          kind: blank_to_nil(params["kind"]),
+          attention_mode: blank_to_nil(params["attention_mode"])
+        )
+
+      json(conn, %{
+        user_id: user_id,
+        count: length(todos),
+        todos: Enum.map(todos, &serialize_todo/1)
+      })
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
+  def dismiss_todos(conn, params) do
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 40, "limit"),
+         {:ok, statuses} <- parse_todo_statuses(params["status"] || params["statuses"]),
+         {:ok, selector} <- parse_todo_selector(params) do
+      user_id = parse_user_id(params["user_id"])
+      note = blank_to_nil(params["reason"]) || "Dismissed from admin API."
+
+      todos =
+        case selector do
+          {:ids, ids} ->
+            Todos.list_by_ids(user_id, ids, statuses: statuses)
+
+          {:query, query} ->
+            Todos.list_for_user(user_id,
+              limit: limit,
+              statuses: statuses,
+              query: query,
+              source: blank_to_nil(params["source"]),
+              kind: blank_to_nil(params["kind"]),
+              attention_mode: blank_to_nil(params["attention_mode"])
+            )
+
+          :all_open ->
+            Todos.list_for_user(user_id,
+              limit: limit,
+              statuses: statuses,
+              source: blank_to_nil(params["source"]),
+              kind: blank_to_nil(params["kind"]),
+              attention_mode: blank_to_nil(params["attention_mode"])
+            )
+        end
+
+      {dismissed, failed} =
+        Enum.reduce(todos, {[], []}, fn todo, {dismissed, failed} ->
+          case Todos.dismiss(user_id, todo.id, note: note) do
+            {:ok, updated} -> {[updated | dismissed], failed}
+            {:error, reason} -> {dismissed, [%{id: todo.id, reason: inspect(reason)} | failed]}
+          end
+        end)
+
+      json(conn, %{
+        user_id: user_id,
+        matched_count: length(todos),
+        dismissed_count: length(dismissed),
+        failed_count: length(failed),
+        dismissed: dismissed |> Enum.reverse() |> Enum.map(&serialize_todo/1),
+        failed: Enum.reverse(failed)
+      })
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
   def refresh_insights(conn, params) do
     user_id = parse_user_id(params["user_id"])
 
@@ -147,6 +233,53 @@ defmodule MaraithonWeb.AdminController do
       _ -> {:error, "#{field_name} must be a positive integer"}
     end
   end
+
+  defp parse_todo_statuses(nil), do: {:ok, ["open", "snoozed"]}
+  defp parse_todo_statuses(""), do: {:ok, ["open", "snoozed"]}
+
+  defp parse_todo_statuses(value) when is_binary(value) do
+    statuses =
+      value
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    allowed = ~w(open snoozed done dismissed)
+
+    if statuses != [] and Enum.all?(statuses, &(&1 in allowed)) do
+      {:ok, statuses}
+    else
+      {:error, "status must include one or more of: #{Enum.join(allowed, ", ")}"}
+    end
+  end
+
+  defp parse_todo_selector(params) do
+    ids = parse_id_list(params["todo_ids"] || params["ids"])
+    query = blank_to_nil(params["query"])
+    dismiss_all_open? = truthy_param?(params["dismiss_all_open"])
+
+    cond do
+      ids != [] -> {:ok, {:ids, ids}}
+      is_binary(query) -> {:ok, {:query, query}}
+      dismiss_all_open? -> {:ok, :all_open}
+      true -> {:error, "provide todo_ids, query, or dismiss_all_open=true"}
+    end
+  end
+
+  defp parse_id_list(value) when is_list(value) do
+    value
+    |> Enum.filter(&is_binary/1)
+    |> Enum.flat_map(&String.split(&1, ",", trim: true))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp parse_id_list(value) when is_binary(value), do: parse_id_list([value])
+  defp parse_id_list(_value), do: []
+
+  defp truthy_param?(value) when value in [true, "true", "1", 1, "yes", "on"], do: true
+  defp truthy_param?(_value), do: false
 
   defp parse_apps_param(nil), do: {:ok, []}
   defp parse_apps_param(""), do: {:ok, []}
@@ -199,6 +332,30 @@ defmodule MaraithonWeb.AdminController do
 
   defp serialize_connections_snapshot(snapshot) do
     normalize_json(snapshot)
+  end
+
+  defp serialize_todo(%Todo{} = todo) do
+    %{
+      id: todo.id,
+      user_id: todo.user_id,
+      source: todo.source,
+      kind: todo.kind,
+      attention_mode: todo.attention_mode,
+      title: todo.title,
+      summary: todo.summary,
+      next_action: todo.next_action,
+      priority: todo.priority,
+      status: todo.status,
+      source_item_id: todo.source_item_id,
+      source_occurred_at: todo.source_occurred_at,
+      snoozed_until: todo.snoozed_until,
+      closed_at: todo.closed_at,
+      dedupe_key: todo.dedupe_key,
+      metadata: todo.metadata || %{},
+      inserted_at: todo.inserted_at,
+      updated_at: todo.updated_at
+    }
+    |> normalize_json()
   end
 
   defp serialize_agent(agent) when is_map(agent) do

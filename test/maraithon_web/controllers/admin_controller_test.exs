@@ -1,13 +1,16 @@
 defmodule MaraithonWeb.AdminControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
+  alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.Effects.Effect
   alias Maraithon.Events
+  alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.Repo
   alias Maraithon.Runtime.ScheduledJob
+  alias Maraithon.Todos
 
   defmodule RefreshRuntimeStub do
     def send_message(agent_id, "refresh_insights", metadata) do
@@ -378,6 +381,73 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert response["status"] == "disconnected"
       assert response["provider"] == "github"
       assert OAuth.get_token("kent", "github") == nil
+    end
+  end
+
+  describe "admin todo cleanup" do
+    test "lists and dismisses matching todos while syncing linked insights", %{conn: conn} do
+      user_id = "kent@runner.now"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "inbox_calendar_advisor",
+          config: %{},
+          status: "running"
+        })
+
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply owed: stale thread",
+            "summary" => "This looked urgent but is not relevant anymore.",
+            "recommended_action" => "Ignore this stale thread.",
+            "priority" => 96,
+            "confidence" => 0.9,
+            "dedupe_key" => "gmail:stale-thread",
+            "tracking_key" => "gmail:thread:stale-thread"
+          }
+        ])
+
+      [todo] = Todos.list_for_user(user_id, query: "stale thread")
+
+      list_conn =
+        get(conn, "/api/v1/admin/todos?user_id=#{URI.encode_www_form(user_id)}&query=stale")
+
+      list_response = json_response(list_conn, 200)
+
+      assert list_response["count"] == 1
+      assert [%{"id" => todo_id, "status" => "open"}] = list_response["todos"]
+      assert todo_id == todo.id
+
+      dismiss_conn =
+        post(conn, "/api/v1/admin/todos/dismiss", %{
+          "user_id" => user_id,
+          "query" => "stale thread",
+          "reason" => "Dismissed as irrelevant."
+        })
+
+      dismiss_response = json_response(dismiss_conn, 200)
+      assert dismiss_response["matched_count"] == 1
+      assert dismiss_response["dismissed_count"] == 1
+      assert [%{"id" => ^todo_id, "status" => "dismissed"}] = dismiss_response["dismissed"]
+
+      assert Repo.reload!(todo).status == "dismissed"
+      assert Repo.reload!(insight).status == "dismissed"
+    end
+
+    test "requires an explicit selector before dismissing todos", %{conn: conn} do
+      conn =
+        post(conn, "/api/v1/admin/todos/dismiss", %{
+          "user_id" => "kent@runner.now"
+        })
+
+      response = json_response(conn, 400)
+      assert response["error"] == "invalid_params"
+      assert response["message"] =~ "provide todo_ids"
     end
   end
 

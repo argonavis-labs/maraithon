@@ -109,6 +109,8 @@ defmodule MaraithonWeb.Router do
     get "/admin/agents/:id/inspection", AdminController, :agent_inspection
     get "/admin/fly/logs", AdminController, :fly_logs
     get "/admin/connections", AdminController, :connections
+    get "/admin/todos", AdminController, :todos
+    post "/admin/todos/dismiss", AdminController, :dismiss_todos
     post "/admin/insights/refresh", AdminController, :refresh_insights
     delete "/admin/connections/:provider", AdminController, :disconnect_connection
 
