@@ -111,6 +111,7 @@ defmodule MaraithonWeb.Router do
     get "/admin/connections", AdminController, :connections
     get "/admin/todos", AdminController, :todos
     post "/admin/todos/dismiss", AdminController, :dismiss_todos
+    post "/admin/telegram/push", AdminController, :push_telegram
     post "/admin/insights/refresh", AdminController, :refresh_insights
     delete "/admin/connections/:provider", AdminController, :disconnect_connection
 

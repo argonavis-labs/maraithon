@@ -2,8 +2,10 @@ defmodule MaraithonWeb.AdminController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Admin
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
   alias Maraithon.Insights.Refresh, as: InsightRefresh
+  alias Maraithon.TelegramAssistant.PushBroker
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
@@ -188,6 +190,53 @@ defmodule MaraithonWeb.AdminController do
     end
   end
 
+  def push_telegram(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+    message = blank_to_nil(params["message"] || params["body"])
+    title = blank_to_nil(params["title"]) || "Admin notice"
+
+    dedupe_key =
+      blank_to_nil(params["dedupe_key"]) || "admin_telegram_push:#{Ecto.UUID.generate()}"
+
+    with body when is_binary(body) <- message,
+         chat_id when is_binary(chat_id) <-
+           blank_to_nil(params["chat_id"]) || telegram_chat_id(user_id),
+         {:ok, result} <-
+           PushBroker.deliver(%{
+             user_id: user_id,
+             chat_id: chat_id,
+             origin_type: "admin_notice",
+             origin_id: dedupe_key,
+             dedupe_key: dedupe_key,
+             title: title,
+             body: body,
+             urgency: 1.0,
+             interrupt_now: true,
+             why_now: "Admin-triggered operational update.",
+             telegram_opts: [parse_mode: "HTML"]
+           }) do
+      json(conn, Map.put(result, :chat_id, chat_id))
+    else
+      nil ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{
+          error: "invalid_params",
+          message: "message and connected Telegram chat are required"
+        })
+
+      {:fallback, :disabled} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{error: "telegram_disabled", message: "Unified Telegram push is disabled"})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(%{error: "telegram_push_failed", message: inspect(reason)})
+    end
+  end
+
   def refresh_insights(conn, params) do
     user_id = parse_user_id(params["user_id"])
 
@@ -280,6 +329,21 @@ defmodule MaraithonWeb.AdminController do
 
   defp truthy_param?(value) when value in [true, "true", "1", 1, "yes", "on"], do: true
   defp truthy_param?(_value), do: false
+
+  defp telegram_chat_id(user_id) when is_binary(user_id) do
+    case ConnectedAccounts.get(user_id, "telegram") do
+      %{status: "connected", external_account_id: value} when is_binary(value) ->
+        blank_to_nil(value)
+
+      %{status: "connected", metadata: metadata} when is_map(metadata) ->
+        blank_to_nil(metadata["chat_id"])
+
+      _ ->
+        nil
+    end
+  end
+
+  defp telegram_chat_id(_user_id), do: nil
 
   defp parse_apps_param(nil), do: {:ok, []}
   defp parse_apps_param(""), do: {:ok, []}
