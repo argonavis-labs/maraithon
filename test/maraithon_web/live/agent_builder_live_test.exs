@@ -574,7 +574,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["enabled_skills"] == [
                "followthrough",
                "travel_logistics",
-               "briefing",
+               "morning_briefing",
                "project_scope_alignment",
                "holiday_radar"
              ]
@@ -606,8 +606,22 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
                }
              ]
 
-      assert get_in(agent.config, ["skill_configs", "briefing", "assistant_behavior"]) ==
+      assert get_in(agent.config, ["skill_configs", "morning_briefing", "assistant_behavior"]) ==
                "ai_chief_of_staff"
+
+      assert get_in(agent.config, [
+               "skill_configs",
+               "morning_briefing",
+               "slack_channel_scan_limit"
+             ]) ==
+               80
+
+      assert get_in(agent.config, [
+               "skill_configs",
+               "morning_briefing",
+               "slack_message_scan_limit"
+             ]) ==
+               50
 
       assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id

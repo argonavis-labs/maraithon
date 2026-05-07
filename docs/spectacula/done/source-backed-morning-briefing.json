@@ -1,0 +1,26 @@
+{
+  "slug": "source-backed-morning-briefing",
+  "title": "Source-Backed Morning Briefing",
+  "stage": "done",
+  "spec_path": "docs/spectacula/specs/source-backed-morning-briefing.md",
+  "summary": "Build a Runner-quality Chief of Staff morning briefing skill backed by raw Calendar, Gmail, Slack, commitments, insights, and todos rather than only existing insights.",
+  "next_action": "Deploy the source-backed Morning Briefing and enable it for Kent's AI Chief of Staff agent.",
+  "resume_context": "Implemented durable commitments, Slack SourceBundle acquisition, and the new morning_briefing Chief of Staff skill. mix precommit passed with 1023 tests.",
+  "history": [
+    {
+      "at": "2026-05-07T14:48:13Z",
+      "event": "spec_created",
+      "note": "Created implementation spec from Runner Morning Briefing reference and current Maraithon Chief of Staff architecture."
+    },
+    {
+      "at": "2026-05-07T14:48:13Z",
+      "event": "implementation_started",
+      "note": "User asked to build all of it and explicitly include Slack."
+    },
+    {
+      "at": "2026-05-07T15:01:02Z",
+      "event": "implementation_verified",
+      "note": "Added source-backed MorningBriefing, Slack acquisition, commitments persistence, builder defaults, and coverage. mix precommit passed."
+    }
+  ]
+}

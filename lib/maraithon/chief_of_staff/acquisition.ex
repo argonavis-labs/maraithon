@@ -5,13 +5,30 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.OAuth
+  alias Maraithon.Tools.SlackHelpers
 
   require Logger
 
   @default_gmail_message_limit 60
   @default_calendar_limit 24
+  @default_slack_channel_limit 12
+  @default_slack_message_limit 8
   @default_lookback_hours 24 * 14
   @default_forward_days 14
+  @default_slack_key_channels [
+    "runner-general",
+    "runner-leads",
+    "runner-gtm",
+    "runner-user-feedback",
+    "gtm-leads",
+    "general",
+    "eng-general",
+    "exec-agora-gov-mgmt-w-dash",
+    "jeff",
+    "charlie",
+    "yitong"
+  ]
 
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
@@ -23,6 +40,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {%{"fetches" => [], "sources" => %{}, "plan" => plan}, bundle}
       |> maybe_fetch_gmail(user_id, source_scope, plan, context)
       |> maybe_fetch_calendar(user_id, source_scope, plan, context)
+      |> maybe_fetch_slack(user_id, source_scope, plan, context)
       |> then(fn {telemetry, bundle} -> {bundle, telemetry} end)
 
     {bundle, telemetry}
@@ -105,6 +123,232 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       :fallback ->
         fetch_calendar_from_sources(telemetry, bundle, user_id, source_scope, plan, context)
     end
+  end
+
+  defp maybe_fetch_slack({telemetry, bundle}, _user_id, _source_scope, %{slack: false}, _context),
+    do: {telemetry, bundle}
+
+  defp maybe_fetch_slack({telemetry, bundle}, user_id, source_scope, plan, context) do
+    team_ids = SourceScope.slack_team_ids(source_scope)
+
+    if team_ids == [] do
+      bundle = SourceBundle.mark_unavailable(bundle, "slack", "slack_workspace_not_connected")
+      {put_source_summary(telemetry, "slack", %{"status" => "unavailable"}), bundle}
+    else
+      oldest =
+        (context[:timestamp] || DateTime.utc_now())
+        |> DateTime.add(-min(plan.lookback_hours, 24), :hour)
+        |> DateTime.to_unix(:second)
+        |> Integer.to_string()
+
+      {workspaces, fetches} =
+        Enum.reduce(team_ids, {[], telemetry["fetches"]}, fn team_id,
+                                                             {workspace_acc, fetch_acc} ->
+          case fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
+            {:ok, workspace, workspace_fetches} ->
+              {[workspace | workspace_acc], workspace_fetches ++ fetch_acc}
+
+            {:error, reason, workspace_fetches} ->
+              ConnectedAccounts.report_access_issue(user_id, "slack:#{team_id}", reason)
+
+              Logger.warning("ChiefOfStaff acquisition failed to fetch Slack",
+                user_id: user_id,
+                team_id: team_id,
+                reason: inspect(reason)
+              )
+
+              {workspace_acc,
+               [
+                 %{
+                   "source" => "slack",
+                   "team_id" => team_id,
+                   "mode" => "connector",
+                   "status" => "error",
+                   "reason" => inspect(reason)
+                 }
+                 | workspace_fetches ++ fetch_acc
+               ]}
+          end
+        end)
+
+      messages =
+        workspaces
+        |> Enum.flat_map(&slack_workspace_messages/1)
+
+      status = if workspaces == [], do: "partial", else: "ready"
+
+      bundle =
+        SourceBundle.put_slack(bundle, %{
+          "workspaces" => Enum.reverse(workspaces),
+          "mentions" => slack_mentions_from_workspaces(workspaces),
+          "providers" => team_ids,
+          "metadata" => %{"mode" => "connector", "oldest" => oldest},
+          "status" => status,
+          "fetched_at" => context[:timestamp] || DateTime.utc_now()
+        })
+
+      telemetry =
+        telemetry
+        |> Map.put("fetches", fetches)
+        |> put_source_summary("slack", %{
+          "mode" => "connector",
+          "status" => status,
+          "teams" => team_ids,
+          "workspace_count" => length(workspaces),
+          "message_count" => length(messages)
+        })
+
+      {telemetry, bundle}
+    end
+  end
+
+  defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
+    with {:ok, token} <-
+           SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "auto"),
+         {:ok, response} <-
+           slack_module().list_conversations(token.access_token,
+             types: ["public_channel", "private_channel", "mpim", "im"],
+             limit: plan.slack_channel_limit,
+             exclude_archived: true
+           ) do
+      workspace = SourceScope.slack_workspace_for_team(source_scope, team_id) || %{}
+
+      key_channels =
+        response
+        |> Map.get("channels", [])
+        |> normalize_list()
+        |> Enum.filter(&key_slack_channel?(&1, plan.slack_key_channels))
+        |> Enum.take(plan.slack_channel_limit)
+
+      {channels, fetches} =
+        Enum.reduce(key_channels, {[], []}, fn channel, {channel_acc, fetch_acc} ->
+          channel_id = channel["id"]
+
+          case slack_module().get_conversation_history(token.access_token, channel_id,
+                 limit: plan.slack_message_limit,
+                 oldest: oldest
+               ) do
+            {:ok, history} ->
+              messages =
+                history
+                |> Map.get("messages", [])
+                |> normalize_list()
+                |> Enum.map(&serialize_slack_message(&1, channel, team_id, workspace))
+
+              channel_payload =
+                channel
+                |> serialize_slack_channel()
+                |> Map.put("messages", messages)
+
+              {
+                [channel_payload | channel_acc],
+                [
+                  %{
+                    "source" => "slack",
+                    "team_id" => team_id,
+                    "channel_id" => channel_id,
+                    "mode" => "connector",
+                    "status" => "ok",
+                    "count" => length(messages)
+                  }
+                  | fetch_acc
+                ]
+              }
+
+            {:error, reason} ->
+              {
+                channel_acc,
+                [
+                  %{
+                    "source" => "slack",
+                    "team_id" => team_id,
+                    "channel_id" => channel_id,
+                    "mode" => "connector",
+                    "status" => "error",
+                    "reason" => inspect(reason)
+                  }
+                  | fetch_acc
+                ]
+              }
+          end
+        end)
+
+      {mentions, mention_fetches} =
+        fetch_slack_mentions(user_id, team_id, workspace, plan, oldest)
+
+      workspace_payload = %{
+        "team_id" => team_id,
+        "team_name" => Map.get(workspace, "team_name"),
+        "key_channels" => Enum.reverse(channels),
+        "mentions" => mentions,
+        "metadata" => %{"token_provider" => token.provider}
+      }
+
+      {:ok, workspace_payload, mention_fetches ++ fetches}
+    else
+      {:error, reason} -> {:error, reason, []}
+    end
+  end
+
+  defp fetch_slack_mentions(user_id, team_id, workspace, plan, oldest) do
+    user_ids = slack_user_ids_for_team(user_id, team_id)
+    oldest_date = slack_search_after_date(oldest)
+
+    user_ids
+    |> Enum.take(3)
+    |> Enum.reduce({[], []}, fn slack_user_id, {mention_acc, fetch_acc} ->
+      query = "<@#{slack_user_id}> after:#{oldest_date}"
+
+      with {:ok, token} <-
+             SlackHelpers.resolve_access_token(user_id, team_id,
+               token_preference: "user",
+               slack_user_id: slack_user_id
+             ),
+           {:ok, response} <-
+             slack_module().search_messages(token.access_token, query,
+               count: plan.slack_message_limit,
+               sort: "timestamp",
+               sort_dir: "desc"
+             ) do
+        matches =
+          response
+          |> get_in(["messages", "matches"])
+          |> normalize_list()
+          |> Enum.map(&serialize_slack_match(&1, team_id, workspace))
+
+        {
+          mention_acc ++ matches,
+          [
+            %{
+              "source" => "slack",
+              "team_id" => team_id,
+              "mode" => "mention_search",
+              "status" => "ok",
+              "slack_user_id" => slack_user_id,
+              "count" => length(matches)
+            }
+            | fetch_acc
+          ]
+        }
+      else
+        {:error, :no_user_token} ->
+          {mention_acc, fetch_acc}
+
+        {:error, reason} ->
+          {mention_acc,
+           [
+             %{
+               "source" => "slack",
+               "team_id" => team_id,
+               "mode" => "mention_search",
+               "status" => "error",
+               "slack_user_id" => slack_user_id,
+               "reason" => inspect(reason)
+             }
+             | fetch_acc
+           ]}
+      end
+    end)
   end
 
   defp fetch_gmail_from_sources(telemetry, bundle, user_id, source_scope, plan, context) do
@@ -317,6 +561,22 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     max_event_scan_limit =
       max_skill_integer(skill_ids, skill_configs, "event_scan_limit", 12)
 
+    max_slack_channel_limit =
+      max_skill_integer(
+        skill_ids,
+        skill_configs,
+        "slack_channel_scan_limit",
+        @default_slack_channel_limit
+      )
+
+    max_slack_message_limit =
+      max_skill_integer(
+        skill_ids,
+        skill_configs,
+        "slack_message_scan_limit",
+        @default_slack_message_limit
+      )
+
     max_lookback_hours =
       max_skill_integer(skill_ids, skill_configs, "lookback_hours", @default_lookback_hours)
 
@@ -333,6 +593,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       sent_limit: max(max_email_scan_limit * 2, 12),
       gmail_message_limit: max(max_email_scan_limit * 4, @default_gmail_message_limit),
       calendar_limit: max(max_event_scan_limit * 2, @default_calendar_limit),
+      slack_channel_limit: max_slack_channel_limit,
+      slack_message_limit: max_slack_message_limit,
+      slack_key_channels: slack_key_channels(skill_ids, skill_configs),
       lookback_hours: max(max_lookback_hours, 24),
       forward_days: @default_forward_days
     }
@@ -445,9 +708,27 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp morning_brief_trigger?(skill_ids, context) do
-    "briefing" in skill_ids and
+    ("briefing" in skill_ids or "morning_briefing" in skill_ids) and
       get_in(context, [:trigger, :type]) == :wakeup and
       is_nil(get_in(context, [:event, :payload]))
+  end
+
+  defp slack_key_channels(skill_ids, skill_configs) do
+    configured =
+      skill_ids
+      |> Enum.flat_map(fn skill_id ->
+        skill_configs
+        |> Map.get(skill_id, %{})
+        |> Map.get("slack_key_channels", [])
+        |> List.wrap()
+      end)
+      |> Enum.map(&normalize_channel_name/1)
+      |> Enum.reject(&is_nil/1)
+
+    (@default_slack_key_channels ++ configured)
+    |> Enum.map(&normalize_channel_name/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
   end
 
   defp service_required?(requirements, provider, service) do
@@ -512,6 +793,119 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp filter_messages_by_label(_messages, _label, _limit), do: []
 
+  defp key_slack_channel?(channel, key_channels) when is_map(channel) and is_list(key_channels) do
+    name = normalize_channel_name(channel["name"])
+
+    cond do
+      is_nil(name) -> false
+      name in key_channels -> true
+      String.starts_with?(name, "exec-") -> true
+      String.starts_with?(name, "founders-") -> true
+      channel["is_im"] == true -> true
+      channel["is_mpim"] == true -> true
+      true -> false
+    end
+  end
+
+  defp key_slack_channel?(_channel, _key_channels), do: false
+
+  defp serialize_slack_channel(channel) when is_map(channel) do
+    %{
+      "id" => channel["id"],
+      "name" => channel["name"],
+      "is_private" => channel["is_private"] || false,
+      "is_im" => channel["is_im"] || false,
+      "is_mpim" => channel["is_mpim"] || false,
+      "is_member" => channel["is_member"] || false
+    }
+  end
+
+  defp serialize_slack_message(message, channel, team_id, workspace) when is_map(message) do
+    %{
+      "team_id" => team_id,
+      "team_name" => Map.get(workspace, "team_name"),
+      "channel_id" => channel["id"],
+      "channel_name" => channel["name"],
+      "ts" => message["ts"],
+      "thread_ts" => message["thread_ts"],
+      "user" => message["user"],
+      "bot_id" => message["bot_id"],
+      "subtype" => message["subtype"],
+      "text" => message["text"],
+      "reply_count" => message["reply_count"],
+      "latest_reply" => message["latest_reply"],
+      "reactions" => normalize_list(message["reactions"])
+    }
+  end
+
+  defp serialize_slack_match(match, team_id, workspace) when is_map(match) do
+    %{
+      "team_id" => team_id,
+      "team_name" => Map.get(workspace, "team_name"),
+      "channel_id" => get_in(match, ["channel", "id"]),
+      "channel_name" => get_in(match, ["channel", "name"]),
+      "ts" => match["ts"],
+      "thread_ts" => match["thread_ts"],
+      "user" => match["user"],
+      "text" => match["text"],
+      "permalink" => match["permalink"]
+    }
+  end
+
+  defp slack_user_ids_for_team(user_id, team_id) do
+    pattern = ~r/^slack:#{Regex.escape(team_id)}:user:([^:]+)$/
+
+    user_id
+    |> OAuth.list_user_tokens()
+    |> Enum.map(& &1.provider)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.flat_map(fn provider ->
+      case Regex.run(pattern, provider, capture: :all_but_first) do
+        [slack_user_id] -> [slack_user_id]
+        _ -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp slack_search_after_date(oldest) when is_binary(oldest) do
+    with {seconds, _rest} <- Integer.parse(oldest),
+         {:ok, datetime} <- DateTime.from_unix(seconds, :second) do
+      datetime
+      |> DateTime.to_date()
+      |> Date.to_iso8601()
+    else
+      _ -> Date.utc_today() |> Date.to_iso8601()
+    end
+  end
+
+  defp slack_search_after_date(_oldest), do: Date.utc_today() |> Date.to_iso8601()
+
+  defp slack_workspace_messages(workspace) when is_map(workspace) do
+    workspace
+    |> Map.get("key_channels", [])
+    |> normalize_list()
+    |> Enum.flat_map(fn channel ->
+      channel
+      |> Map.get("messages", [])
+      |> normalize_list()
+    end)
+  end
+
+  defp slack_workspace_messages(_workspace), do: []
+
+  defp slack_mentions_from_workspaces(workspaces) when is_list(workspaces) do
+    workspaces
+    |> Enum.flat_map(fn workspace ->
+      workspace
+      |> Map.get("mentions", [])
+      |> normalize_list()
+    end)
+  end
+
+  defp normalize_list(values) when is_list(values), do: values
+  defp normalize_list(_values), do: []
+
   defp event_calendar_providers(events) when is_list(events) do
     events
     |> Enum.map(&Map.get(&1, "google_provider"))
@@ -526,6 +920,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp sort_events(events) when is_list(events) do
     Enum.sort_by(events, &event_sort_key/1, :asc)
   end
+
+  defp normalize_channel_name(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.trim_leading("#")
+    |> String.downcase()
+    |> case do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_channel_name(_value), do: nil
 
   defp message_sort_key(%{"internal_date" => %DateTime{} = value}),
     do: DateTime.to_unix(value, :microsecond)
@@ -577,6 +984,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp calendar_module do
     Application.get_env(:maraithon, __MODULE__, [])
     |> Keyword.get(:calendar_module, Maraithon.Tools.GoogleCalendarHelpers)
+  end
+
+  defp slack_module do
+    Application.get_env(:maraithon, __MODULE__, [])
+    |> Keyword.get(:slack_module, Maraithon.Connectors.Slack)
   end
 
   defp account_provider(%{"provider" => provider}) when is_binary(provider), do: provider

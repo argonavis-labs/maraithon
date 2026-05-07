@@ -8,6 +8,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   @default_skill_modules %{
     "followthrough" => Maraithon.ChiefOfStaff.Skills.Followthrough,
     "travel_logistics" => Maraithon.ChiefOfStaff.Skills.TravelLogistics,
+    "morning_briefing" => Maraithon.ChiefOfStaff.Skills.MorningBriefing,
     "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
     "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment,
     "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar
@@ -16,7 +17,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   @default_enabled_ids [
     "followthrough",
     "travel_logistics",
-    "briefing",
+    "morning_briefing",
     "project_scope_alignment",
     "holiday_radar"
   ]

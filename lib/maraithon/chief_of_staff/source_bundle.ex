@@ -75,6 +75,27 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
     |> put_freshness("calendar", freshness)
   end
 
+  def put_slack(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    workspaces = normalize_items(read_list(attrs, "workspaces"))
+    messages = workspaces |> Enum.flat_map(&read_workspace_messages/1)
+    mentions = normalize_items(read_list(attrs, "mentions"))
+
+    freshness =
+      build_freshness("slack", attrs, %{
+        "workspace_count" => length(workspaces),
+        "message_count" => length(messages),
+        "mention_count" => length(mentions)
+      })
+
+    bundle
+    |> Map.put("slack", %{
+      "workspaces" => workspaces,
+      "messages" => messages,
+      "mentions" => mentions
+    })
+    |> put_freshness("slack", freshness)
+  end
+
   def mark_unavailable(bundle, source, reason, metadata \\ %{})
       when is_map(bundle) and is_binary(source) do
     put_freshness(bundle, source, %{
@@ -89,6 +110,9 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def gmail_inbox_messages(bundle), do: bundle |> read_map("gmail") |> read_list("inbox_messages")
   def gmail_sent_messages(bundle), do: bundle |> read_map("gmail") |> read_list("sent_messages")
   def calendar_events(bundle), do: bundle |> read_map("calendar") |> read_list("events")
+  def slack_workspaces(bundle), do: bundle |> read_map("slack") |> read_list("workspaces")
+  def slack_messages(bundle), do: bundle |> read_map("slack") |> read_list("messages")
+  def slack_mentions(bundle), do: bundle |> read_map("slack") |> read_list("mentions")
   def freshness(bundle), do: read_map(bundle, "freshness")
   def source_scope(bundle), do: bundle |> read_map("source_scope") |> SourceScope.normalize()
 
@@ -143,6 +167,25 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   end
 
   defp normalize_items(_items), do: []
+
+  defp read_workspace_messages(workspace) when is_map(workspace) do
+    workspace
+    |> read_list("key_channels")
+    |> Enum.flat_map(fn channel ->
+      channel
+      |> read_list("messages")
+      |> Enum.map(fn message ->
+        message
+        |> stringify_keys()
+        |> Map.put_new("team_id", Map.get(workspace, "team_id"))
+        |> Map.put_new("team_name", Map.get(workspace, "team_name"))
+        |> Map.put_new("channel_id", Map.get(channel, "id"))
+        |> Map.put_new("channel_name", Map.get(channel, "name"))
+      end)
+    end)
+  end
+
+  defp read_workspace_messages(_workspace), do: []
 
   defp stringify_keys(%_{} = struct), do: struct
 

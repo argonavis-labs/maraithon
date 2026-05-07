@@ -1141,6 +1141,18 @@ defmodule Maraithon.AgentBuilder do
           "timezone_offset_hours" => timezone_offset_hours,
           "wakeup_interval_ms" => travel_wakeup_interval_ms
         },
+        "morning_briefing" => %{
+          "user_id" => user_id,
+          "assistant_behavior" => "ai_chief_of_staff",
+          "source_policy" => "all_connected",
+          "source_scope" => source_scope,
+          "timezone_offset_hours" => timezone_offset_hours,
+          "morning_brief_hour_local" => morning_brief_hour_local,
+          "email_scan_limit" => follow_email_scan_limit,
+          "slack_channel_scan_limit" => follow_channel_scan_limit,
+          "slack_message_scan_limit" => follow_dm_scan_limit,
+          "lookback_hours" => 18
+        },
         "briefing" => %{
           "user_id" => user_id,
           "assistant_behavior" => "ai_chief_of_staff",

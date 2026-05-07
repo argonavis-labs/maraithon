@@ -105,6 +105,14 @@ defmodule Maraithon.ChiefOfStaff.SourceScope do
     |> Enum.uniq()
   end
 
+  def slack_workspace_for_team(scope, team_id) when is_binary(team_id) do
+    scope
+    |> slack_workspaces()
+    |> Enum.find(&(Map.get(&1, "team_id") == team_id))
+  end
+
+  def slack_workspace_for_team(_scope, _team_id), do: nil
+
   def subscriptions(scope, user_id) when is_binary(user_id) do
     google_topics =
       google_account_emails(scope, "gmail")

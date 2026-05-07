@@ -234,7 +234,7 @@ defmodule Maraithon.BriefingSchedules do
     config
     |> stringify_keys()
     |> Skills.enabled_ids()
-    |> Enum.member?("briefing")
+    |> Enum.any?(&(&1 in ["briefing", "morning_briefing"]))
   end
 
   defp briefing_agent?(%Agent{behavior: behavior}), do: behavior in @briefing_behaviors
