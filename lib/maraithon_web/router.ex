@@ -137,7 +137,7 @@ defmodule MaraithonWeb.Router do
   scope "/", MaraithonWeb do
     pipe_through [:api, :api_auth]
 
-    post "/mcp", McpController, :call
+    post "/mcp", McpController, :handle
   end
 
   # Webhooks from external services (connectors)

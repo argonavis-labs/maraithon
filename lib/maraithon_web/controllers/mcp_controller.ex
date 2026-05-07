@@ -5,7 +5,7 @@ defmodule MaraithonWeb.McpController do
 
   @protocol_version "2025-03-26"
 
-  def call(conn, %{"jsonrpc" => "2.0", "method" => method} = request) do
+  def handle(conn, %{"jsonrpc" => "2.0", "method" => method} = request) do
     id = Map.get(request, "id")
 
     case dispatch(method, Map.get(request, "params", %{})) do
@@ -21,7 +21,7 @@ defmodule MaraithonWeb.McpController do
     end
   end
 
-  def call(conn, _params) do
+  def handle(conn, _params) do
     conn
     |> put_status(:bad_request)
     |> json(%{
