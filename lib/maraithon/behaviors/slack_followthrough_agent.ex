@@ -462,6 +462,12 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                 "channel_name" => message.channel_name,
                 "thread_ts" => message.thread_ts,
                 "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
+                "missing_inputs" =>
+                  slack_missing_inputs("commitment_unresolved", artifact, due_at),
+                "suggested_reply_points" =>
+                  slack_suggested_reply_points("commitment_unresolved", person, due_at, artifact),
+                "draft_plan" =>
+                  slack_draft_plan("commitment_unresolved", person, conversation_context),
                 "record" => record
               }
             }
@@ -552,6 +558,10 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                 "channel_name" => message.channel_name,
                 "thread_ts" => message.thread_ts,
                 "signals" => reply_matches,
+                "missing_inputs" => slack_missing_inputs("reply_urgent", nil, due_at),
+                "suggested_reply_points" =>
+                  slack_suggested_reply_points("reply_urgent", person, due_at, nil),
+                "draft_plan" => slack_draft_plan("reply_urgent", person, conversation_context),
                 "record" => record
               }
             }
@@ -572,6 +582,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
         metadata =
           insight
           |> read_map("metadata")
+          |> ensure_slack_draft_context(insight)
           |> AttentionArbiter.merge_artifact_metadata(context)
 
         insight
@@ -1094,6 +1105,93 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     }
   end
 
+  defp slack_missing_inputs(category, artifact, due_at) do
+    []
+    |> maybe_append(
+      "Concrete artifact or answer to post in Slack",
+      category == "commitment_unresolved" and is_nil(artifact)
+    )
+    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(due_at))
+    |> Enum.take(3)
+  end
+
+  defp slack_suggested_reply_points("reply_urgent", person, due_at, _artifact) do
+    [
+      "Acknowledge #{person || "the sender"} in-thread.",
+      "Answer the ask or name the current owner.",
+      "Give a concrete timing commitment: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp slack_suggested_reply_points("commitment_unresolved", person, due_at, artifact) do
+    artifact_text = artifact || "the promised artifact or update"
+
+    [
+      "Acknowledge the open loop with #{person || "the thread"}.",
+      "State whether #{artifact_text} is ready or still in progress.",
+      "Give a concrete delivery timing commitment: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp slack_suggested_reply_points(_category, person, due_at, _artifact) do
+    [
+      "Acknowledge #{person || "the thread"}.",
+      "Name owner, next step, and timing: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp slack_draft_plan(category, person, conversation_context) do
+    case read_string(conversation_context, "notification_posture", "interrupt_now") do
+      "heads_up" ->
+        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+
+      "insufficient_context" ->
+        "Draft as Kent: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full Slack thread was checked."
+
+      _ ->
+        case category do
+          "reply_urgent" ->
+            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, owner, next step, and ETA."
+
+          "commitment_unresolved" ->
+            "Draft as Kent: close the Slack loop with #{person || "the thread"} by confirming artifact status and a concrete ETA."
+
+          _ ->
+            "Draft as Kent: be direct, useful, and grounded in the source evidence."
+        end
+    end
+  end
+
+  defp ensure_slack_draft_context(metadata, insight) when is_map(metadata) and is_map(insight) do
+    category = read_string(insight, "category", "commitment_unresolved")
+    record = read_map(metadata, "record")
+    person = read_string(record, "person", read_string(metadata, "person", nil))
+    due_at = read_datetime(insight, "due_at") || read_datetime(record, "deadline")
+
+    artifact =
+      if category == "commitment_unresolved" do
+        record
+        |> read_string("commitment", "")
+        |> String.downcase()
+        |> artifact_hint()
+      end
+
+    conversation_context = read_map(metadata, "conversation_context")
+
+    metadata
+    |> maybe_put_new_list("missing_inputs", slack_missing_inputs(category, artifact, due_at))
+    |> maybe_put_new_list(
+      "suggested_reply_points",
+      slack_suggested_reply_points(category, person, due_at, artifact)
+    )
+    |> maybe_put_new_string(
+      "draft_plan",
+      slack_draft_plan(category, person, conversation_context)
+    )
+  end
+
+  defp ensure_slack_draft_context(metadata, _insight), do: metadata
+
   defp to_iso8601(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp to_iso8601(_), do: nil
 
@@ -1109,6 +1207,20 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   defp maybe_append(list, _value, false), do: list
   defp maybe_append(list, value, true), do: list ++ [value]
+
+  defp maybe_put_new_list(map, key, value) when is_list(value) do
+    case Map.get(map, key) do
+      existing when is_list(existing) and existing != [] -> map
+      _ -> if value == [], do: map, else: Map.put(map, key, value)
+    end
+  end
+
+  defp maybe_put_new_string(map, key, value) when is_binary(value) do
+    case Map.get(map, key) do
+      existing when is_binary(existing) and existing != "" -> map
+      _ -> Map.put(map, key, value)
+    end
+  end
 
   defp maybe_add_float(value, amount, true), do: value + amount
   defp maybe_add_float(value, _amount, false), do: value
@@ -1207,6 +1319,25 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     case fetch_attr(attrs, key) do
       value when is_map(value) -> value
       _ -> %{}
+    end
+  end
+
+  defp read_datetime(attrs, key) when is_map(attrs) do
+    case fetch_attr(attrs, key) do
+      %DateTime{} = value ->
+        value
+
+      %NaiveDateTime{} = value ->
+        DateTime.from_naive!(value, "Etc/UTC")
+
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(value) do
+          {:ok, datetime, _offset} -> datetime
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   end
 

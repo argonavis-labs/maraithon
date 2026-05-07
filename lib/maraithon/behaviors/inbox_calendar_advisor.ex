@@ -1409,6 +1409,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                       "labels" => labels,
                       "signals" => reply_matches,
                       "context_brief" => "Incoming request from #{person}.",
+                      "missing_inputs" =>
+                        gmail_missing_inputs("reply_urgent", nil, inferred_deadline, person),
+                      "suggested_reply_points" =>
+                        gmail_suggested_reply_points("reply_urgent", person, due_at, nil),
+                      "draft_plan" =>
+                        gmail_draft_plan("reply_urgent", person, conversation_context),
                       "record" => record
                     })
                     |> Map.merge(triage)
@@ -1544,6 +1550,22 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "subject" => subject,
                   "signals" => Enum.uniq(promise_matches ++ action_matches),
                   "context_brief" => "Explicit promise made to #{person}.",
+                  "missing_inputs" =>
+                    gmail_missing_inputs(
+                      "commitment_unresolved",
+                      artifact_hint,
+                      inferred_deadline,
+                      person
+                    ),
+                  "suggested_reply_points" =>
+                    gmail_suggested_reply_points(
+                      "commitment_unresolved",
+                      person,
+                      due_at,
+                      artifact_hint
+                    ),
+                  "draft_plan" =>
+                    gmail_draft_plan("commitment_unresolved", person, conversation_context),
                   "record" => record
                 })
             }
@@ -1804,6 +1826,22 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         follow_up_ideas = read_string_list(item, "follow_up_ideas", @max_follow_up_ideas)
         merged_record = resolve_record(item, base)
         base_metadata = read_map(base, "metadata")
+
+        missing_inputs =
+          resolve_string_list_flag(item, base_metadata, "missing_inputs", "missing_inputs", 3)
+
+        suggested_reply_points =
+          resolve_string_list_flag(
+            item,
+            base_metadata,
+            "suggested_reply_points",
+            "suggested_reply_points",
+            5
+          )
+
+        draft_plan =
+          read_string(item, "draft_plan", read_string(base_metadata, "draft_plan", nil))
+
         reply_debt_candidate? = gmail_reply_candidate?(base)
         thread_type = resolve_thread_type(item, base_metadata)
 
@@ -1916,6 +1954,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             )
             |> maybe_put("decision_reason", if(reply_debt_candidate?, do: decision_reason))
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
+            |> maybe_put_list("missing_inputs", missing_inputs)
+            |> maybe_put_list("suggested_reply_points", suggested_reply_points)
+            |> maybe_put("draft_plan", draft_plan)
             |> maybe_put_map("conversation_context", conversation_context)
             |> sync_attention_metadata(attention_mode, conversation_context, why_now, base)
             |> Map.put("record", merged_record)
@@ -2229,6 +2270,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Keep confidence between 0 and 1.
     - Estimate telegram_fit_score between 0 and 1, where 1 means "send to Telegram now".
     - Write concise nudge language that is concrete and actionable.
+    - Include draft-ready context for founder response actions:
+      missing_inputs, suggested_reply_points, draft_plan
+    - Write draft_plan as an instruction for drafting in Kent's first-person voice.
     - Keep or refine each item's structured record fields:
       commitment, person, source, deadline, status, evidence, next_action
     - Status must remain unresolved for every returned item.
@@ -2236,6 +2280,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     Return ONLY valid JSON array. Each item must include:
     dedupe_key, title, summary, recommended_action, priority, confidence,
     telegram_fit_score, telegram_fit_reason, why_now, follow_up_ideas,
+    missing_inputs, suggested_reply_points, draft_plan,
     commitment, person, source, deadline, status, evidence, next_action,
     actionability, obligation_type, human_counterparty, missing_followthrough_evidence,
     interrupt_now, attention_mode, notification_posture, false_positive_risk, reasoning_summary,
@@ -2785,6 +2830,63 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       "evidence" => Enum.take(evidence, @max_evidence_points),
       "next_action" => next_action
     })
+  end
+
+  defp gmail_missing_inputs(category, artifact_hint, inferred_deadline, person) do
+    []
+    |> maybe_append(
+      "Concrete artifact or answer to send to #{person || "the recipient"}",
+      category == "commitment_unresolved" and is_nil(artifact_hint)
+    )
+    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(inferred_deadline))
+    |> Enum.take(3)
+  end
+
+  defp gmail_suggested_reply_points("reply_urgent", person, due_at, _artifact_hint) do
+    [
+      "Acknowledge #{person || "the sender"} directly.",
+      "Answer the ask or name the owner.",
+      "Give a concrete timing commitment: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp gmail_suggested_reply_points("commitment_unresolved", person, due_at, artifact_hint) do
+    artifact_text = artifact_hint || "the promised artifact or update"
+
+    [
+      "Acknowledge the open loop with #{person || "the recipient"}.",
+      "State whether #{artifact_text} is ready or still in progress.",
+      "Give a concrete delivery timing commitment: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp gmail_suggested_reply_points(_category, person, due_at, _artifact_hint) do
+    [
+      "Acknowledge #{person || "the recipient"}.",
+      "Name owner, next step, and timing: #{deadline_phrase(due_at)}."
+    ]
+  end
+
+  defp gmail_draft_plan(category, person, conversation_context) do
+    case read_string(conversation_context, "notification_posture", "interrupt_now") do
+      "heads_up" ->
+        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+
+      "insufficient_context" ->
+        "Draft as Kent: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full thread was checked."
+
+      _ ->
+        case category do
+          "reply_urgent" ->
+            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, owner, next step, and ETA."
+
+          "commitment_unresolved" ->
+            "Draft as Kent: close the loop with #{person || "the recipient"} by confirming artifact status and a concrete ETA."
+
+          _ ->
+            "Draft as Kent: be direct, useful, and grounded in the source evidence."
+        end
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

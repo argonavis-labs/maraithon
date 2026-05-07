@@ -350,9 +350,11 @@ defmodule Maraithon.Insights do
 
   defp normalize_metadata_attention(metadata, attention_mode) when is_map(metadata) do
     mode = normalize_attention_mode(attention_mode)
+    metadata = stringify_keys(metadata)
     attention = Map.get(metadata, "attention", %{}) |> stringify_keys()
 
-    Map.put(metadata, "attention", %{
+    metadata
+    |> Map.put("attention", %{
       "mode" => read_string(attention, "mode", mode),
       "importance_band" => read_string(attention, "importance_band", "high"),
       "founder_action_required" =>
@@ -364,11 +366,98 @@ defmodule Maraithon.Insights do
       "revision_key" => read_string(attention, "revision_key", nil),
       "re_notify_eligible" => read_boolean(attention, "re_notify_eligible", true)
     })
+    |> ensure_action_draft_metadata()
   end
 
   defp normalize_metadata_attention(_metadata, attention_mode) do
     normalize_metadata_attention(%{}, attention_mode)
   end
+
+  defp ensure_action_draft_metadata(metadata) when is_map(metadata) do
+    record = read_map(metadata, "record")
+
+    if record == %{} do
+      metadata
+    else
+      person = read_string(record, "person", read_string(metadata, "person", "the recipient"))
+      source = read_string(record, "source", read_string(metadata, "source", "thread"))
+      deadline = read_string(record, "deadline", read_string(metadata, "deadline", nil))
+      context = read_map(metadata, "conversation_context")
+
+      metadata
+      |> maybe_put_new_list(
+        "missing_inputs",
+        missing_inputs_for_action(metadata, record, deadline)
+      )
+      |> maybe_put_new_list(
+        "suggested_reply_points",
+        suggested_reply_points_for_action(person, source, deadline)
+      )
+      |> maybe_put_new_string("draft_plan", draft_plan_for_action(person, source, context))
+    end
+  end
+
+  defp missing_inputs_for_action(metadata, record, deadline) do
+    status = read_string(record, "status", read_string(metadata, "status", nil))
+
+    []
+    |> maybe_append("Concrete artifact, answer, or owner to send", status == "unresolved")
+    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(deadline))
+    |> Enum.take(3)
+  end
+
+  defp suggested_reply_points_for_action(person, source, deadline) do
+    [
+      "Acknowledge #{person}.",
+      suggested_middle_reply_point(source),
+      "Give a concrete timing commitment#{deadline_suffix(deadline)}."
+    ]
+  end
+
+  defp suggested_middle_reply_point(source) do
+    if String.contains?(source || "", "slack") do
+      "State whether the promised artifact or update is ready or still in progress."
+    else
+      "Answer the ask or name the owner."
+    end
+  end
+
+  defp deadline_suffix(nil), do: ""
+  defp deadline_suffix(deadline), do: ": #{deadline}"
+
+  defp draft_plan_for_action(person, source, context) do
+    case read_string(context, "notification_posture", "interrupt_now") do
+      "heads_up" ->
+        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+
+      "insufficient_context" ->
+        "Draft as Kent: avoid strong claims, provide the minimum safe next step, and do not imply the full thread was checked."
+
+      _ ->
+        if String.contains?(source || "", "slack") do
+          "Draft as Kent: close the Slack loop with #{person} by confirming status, owner, next step, and ETA."
+        else
+          "Draft as Kent: reply to #{person} with the direct answer, owner, next step, and ETA."
+        end
+    end
+  end
+
+  defp maybe_put_new_list(map, key, value) when is_list(value) do
+    case Map.get(map, key) do
+      existing when is_list(existing) and existing != [] -> map
+      _ -> if value == [], do: map, else: Map.put(map, key, value)
+    end
+  end
+
+  defp maybe_put_new_string(map, key, value) when is_binary(value) do
+    case Map.get(map, key) do
+      existing when is_binary(existing) and existing != "" -> map
+      _ -> Map.put(map, key, value)
+    end
+  end
+
+  defp maybe_append(list, value, true), do: list ++ [value]
+  defp maybe_append(list, _value, false), do: list
 
   defp fetch_attr(attrs, key) when is_map(attrs) and is_binary(key) do
     case Map.fetch(attrs, key) do
