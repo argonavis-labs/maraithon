@@ -245,6 +245,19 @@ defmodule Maraithon.Connectors.Slack do
   end
 
   @doc """
+  Opens or resumes a DM/MPIM conversation with one or more Slack users.
+  """
+  def open_conversation(access_token, user_ids, opts \\ []) when is_list(user_ids) do
+    body =
+      %{
+        users: Enum.join(user_ids, ",")
+      }
+      |> maybe_put_body(:return_im, opts[:return_im])
+
+    SlackOAuth.api_request(:post, "conversations.open", access_token, body)
+  end
+
+  @doc """
   Gets channel info.
   """
   def get_channel_info(access_token, channel_id) do
@@ -363,6 +376,10 @@ defmodule Maraithon.Connectors.Slack do
       }
     end)
   end
+
+  defp maybe_put_body(body, _key, nil), do: body
+  defp maybe_put_body(body, _key, ""), do: body
+  defp maybe_put_body(body, key, value), do: Map.put(body, key, value)
 
   defp maybe_put_query(params, _key, nil), do: params
   defp maybe_put_query(params, _key, ""), do: params

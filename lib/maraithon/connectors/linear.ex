@@ -432,9 +432,267 @@ defmodule Maraithon.Connectors.Linear do
     end
   end
 
+  @doc """
+  Lists issues visible to the authenticated Linear user.
+  """
+  def list_issues(access_token, opts \\ []) do
+    query = """
+    query Issues($first: Int!, $after: String, $filter: IssueFilter) {
+      issues(first: $first, after: $after, filter: $filter) {
+        nodes {
+          id
+          identifier
+          title
+          description
+          priority
+          priorityLabel
+          url
+          dueDate
+          createdAt
+          updatedAt
+          team {
+            id
+            key
+            name
+          }
+          state {
+            id
+            name
+            type
+          }
+          assignee {
+            id
+            name
+            email
+          }
+          creator {
+            id
+            name
+            email
+          }
+          project {
+            id
+            name
+            slugId
+          }
+          labels {
+            nodes {
+              id
+              name
+              color
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+    """
+
+    variables = %{
+      first: opts[:first] || 25,
+      after: opts[:after],
+      filter: build_issue_filter(opts)
+    }
+
+    case LinearOAuth.graphql(access_token, query, compact(variables)) do
+      {:ok, %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}} ->
+        {:ok, %{issues: issues, page_info: page_info}}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Gets one issue by Linear UUID or issue identifier.
+  """
+  def get_issue(access_token, issue_id_or_identifier) when is_binary(issue_id_or_identifier) do
+    query = """
+    query Issue($id: String!) {
+      issue(id: $id) {
+        id
+        identifier
+        title
+        description
+        priority
+        priorityLabel
+        url
+        dueDate
+        createdAt
+        updatedAt
+        team {
+          id
+          key
+          name
+        }
+        state {
+          id
+          name
+          type
+        }
+        assignee {
+          id
+          name
+          email
+        }
+        creator {
+          id
+          name
+          email
+        }
+        project {
+          id
+          name
+          slugId
+        }
+        labels {
+          nodes {
+            id
+            name
+            color
+          }
+        }
+        comments(first: 20) {
+          nodes {
+            id
+            body
+            url
+            createdAt
+            user {
+              id
+              name
+              email
+            }
+          }
+        }
+      }
+    }
+    """
+
+    case LinearOAuth.graphql(access_token, query, %{id: issue_id_or_identifier}) do
+      {:ok, %{"issue" => nil}} -> {:error, :not_found}
+      {:ok, %{"issue" => issue}} -> {:ok, issue}
+      error -> error
+    end
+  end
+
+  @doc """
+  Updates editable fields on a Linear issue.
+  """
+  def update_issue(access_token, issue_id, opts) when is_binary(issue_id) and is_list(opts) do
+    query = """
+    mutation UpdateIssue($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) {
+        success
+        issue {
+          id
+          identifier
+          title
+          description
+          priority
+          priorityLabel
+          url
+          dueDate
+          updatedAt
+          state {
+            id
+            name
+            type
+          }
+          assignee {
+            id
+            name
+            email
+          }
+          project {
+            id
+            name
+            slugId
+          }
+          labels {
+            nodes {
+              id
+              name
+              color
+            }
+          }
+        }
+      }
+    }
+    """
+
+    input =
+      %{}
+      |> maybe_put(:title, opts[:title])
+      |> maybe_put(:description, opts[:description])
+      |> maybe_put(:priority, opts[:priority])
+      |> maybe_put(:assigneeId, opts[:assignee_id])
+      |> maybe_put(:projectId, opts[:project_id])
+      |> maybe_put(:stateId, opts[:state_id])
+      |> maybe_put(:labelIds, opts[:label_ids])
+      |> maybe_put(:dueDate, opts[:due_date])
+
+    case map_size(input) do
+      0 ->
+        {:error, :empty_update}
+
+      _ ->
+        case LinearOAuth.graphql(access_token, query, %{id: issue_id, input: input}) do
+          {:ok, %{"issueUpdate" => %{"success" => true, "issue" => issue}}} ->
+            {:ok, issue}
+
+          {:ok, %{"issueUpdate" => %{"success" => false}}} ->
+            {:error, :update_failed}
+
+          error ->
+            error
+        end
+    end
+  end
+
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
+
+  defp build_issue_filter(opts) do
+    %{}
+    |> maybe_put_nested_filter([:team, :id], opts[:team_id])
+    |> maybe_put_nested_filter([:assignee, :id], opts[:assignee_id])
+    |> maybe_put_nested_filter([:state, :id], opts[:state_id])
+    |> maybe_put_nested_filter([:project, :id], opts[:project_id])
+    |> maybe_put_nested_filter([:labels, :id], opts[:label_id])
+    |> maybe_put(:title, string_contains_filter(opts[:query]))
+    |> maybe_put(:updatedAt, date_time_filter(opts[:updated_after], :gte))
+    |> maybe_put(:createdAt, date_time_filter(opts[:created_after], :gte))
+    |> empty_to_nil()
+  end
+
+  defp maybe_put_nested_filter(filter, _path, nil), do: filter
+  defp maybe_put_nested_filter(filter, _path, ""), do: filter
+
+  defp maybe_put_nested_filter(filter, [outer, inner], value) do
+    Map.put(filter, outer, %{inner => %{eq: value}})
+  end
+
+  defp string_contains_filter(nil), do: nil
+  defp string_contains_filter(""), do: nil
+  defp string_contains_filter(value) when is_binary(value), do: %{containsIgnoreCase: value}
+
+  defp date_time_filter(nil, _operator), do: nil
+  defp date_time_filter("", _operator), do: nil
+  defp date_time_filter(value, operator) when is_binary(value), do: %{operator => value}
+
+  defp empty_to_nil(map) when map == %{}, do: nil
+  defp empty_to_nil(map), do: map
+
+  defp compact(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
 
   defp extract_team_key(data) do
     # Try to get team key from various places in the payload

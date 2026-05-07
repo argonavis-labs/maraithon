@@ -133,6 +133,13 @@ defmodule MaraithonWeb.Router do
     post "/integrations/notaui/sync", NotauiController, :sync
   end
 
+  # Hosted MCP endpoint for tool-capable clients.
+  scope "/", MaraithonWeb do
+    pipe_through [:api, :api_auth]
+
+    post "/mcp", McpController, :call
+  end
+
   # Webhooks from external services (connectors)
   scope "/webhooks", MaraithonWeb do
     pipe_through :api

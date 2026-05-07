@@ -115,7 +115,8 @@ defmodule Maraithon.OAuth.Notion do
   Makes an authenticated request to the Notion API.
   """
   def api_request(method, path, access_token, body \\ nil)
-      when method in [:get, :post] and is_binary(path) and is_binary(access_token) do
+      when method in [:get, :post, :patch, :delete] and is_binary(path) and
+             is_binary(access_token) do
     url = "#{api_base_url()}#{path}"
 
     headers = [
@@ -127,6 +128,8 @@ defmodule Maraithon.OAuth.Notion do
     case method do
       :get -> HTTP.get(url, headers)
       :post -> HTTP.post_json(url, body || %{}, headers)
+      :patch -> HTTP.patch_json(url, body || %{}, headers)
+      :delete -> HTTP.delete(url, headers)
     end
   end
 

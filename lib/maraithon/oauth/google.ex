@@ -14,7 +14,7 @@ defmodule Maraithon.OAuth.Google do
   ## Supported Scopes
 
   - Calendar: `https://www.googleapis.com/auth/calendar.readonly`
-  - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
+  - Gmail: read, modify, send, compose, and basic settings scopes
   - Contacts: `https://www.googleapis.com/auth/contacts.readonly`
   """
 
@@ -26,7 +26,11 @@ defmodule Maraithon.OAuth.Google do
   @default_userinfo_url "https://www.googleapis.com/oauth2/v3/userinfo"
 
   @scope_calendar "https://www.googleapis.com/auth/calendar.readonly"
-  @scope_gmail "https://www.googleapis.com/auth/gmail.readonly"
+  @scope_gmail_readonly "https://www.googleapis.com/auth/gmail.readonly"
+  @scope_gmail_modify "https://www.googleapis.com/auth/gmail.modify"
+  @scope_gmail_send "https://www.googleapis.com/auth/gmail.send"
+  @scope_gmail_compose "https://www.googleapis.com/auth/gmail.compose"
+  @scope_gmail_settings_basic "https://www.googleapis.com/auth/gmail.settings.basic"
   @scope_contacts "https://www.googleapis.com/auth/contacts.readonly"
   @scope_userinfo_email "https://www.googleapis.com/auth/userinfo.email"
 
@@ -43,8 +47,7 @@ defmodule Maraithon.OAuth.Google do
   """
   def scopes_for(services) when is_list(services) do
     services
-    |> Enum.map(&scope_for/1)
-    |> Enum.reject(&is_nil/1)
+    |> Enum.flat_map(&scope_for/1)
     |> Enum.uniq()
   end
 
@@ -56,9 +59,19 @@ defmodule Maraithon.OAuth.Google do
   end
 
   defp scope_for("calendar"), do: @scope_calendar
-  defp scope_for("gmail"), do: @scope_gmail
+
+  defp scope_for("gmail") do
+    [
+      @scope_gmail_readonly,
+      @scope_gmail_modify,
+      @scope_gmail_send,
+      @scope_gmail_compose,
+      @scope_gmail_settings_basic
+    ]
+  end
+
   defp scope_for("contacts"), do: @scope_contacts
-  defp scope_for(_), do: nil
+  defp scope_for(_), do: []
 
   @doc """
   Generates the Google OAuth authorization URL.
