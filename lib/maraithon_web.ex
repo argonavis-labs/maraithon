@@ -53,6 +53,7 @@ defmodule MaraithonWeb do
       use Phoenix.LiveView
 
       import MaraithonWeb.CoreComponents
+      import MaraithonWeb.AgentArchitectureComponents
       unquote(html_helpers())
     end
   end
@@ -62,6 +63,7 @@ defmodule MaraithonWeb do
       use Phoenix.LiveComponent
 
       import MaraithonWeb.CoreComponents
+      import MaraithonWeb.AgentArchitectureComponents
       unquote(html_helpers())
     end
   end
@@ -81,6 +83,7 @@ defmodule MaraithonWeb do
     quote do
       import Phoenix.HTML
       import MaraithonWeb.CoreComponents
+      import MaraithonWeb.AgentArchitectureComponents
       alias MaraithonWeb.Layouts
 
       use Gettext, backend: MaraithonWeb.Gettext

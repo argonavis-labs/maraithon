@@ -2,6 +2,7 @@ defmodule MaraithonWeb.AgentsLive do
   use MaraithonWeb, :live_view
 
   alias Maraithon.Admin
+  alias Maraithon.AgentArchitecture
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
   alias Maraithon.Runtime
@@ -22,6 +23,7 @@ defmodule MaraithonWeb.AgentsLive do
         agents: [],
         selected_agent_id: nil,
         selected_agent: nil,
+        selected_architecture: nil,
         selected_panel: nil,
         events: [],
         inspection: empty_inspection(),
@@ -793,6 +795,10 @@ defmodule MaraithonWeb.AgentsLive do
                       <.summary_card title="Agent Spend" value={"$#{Float.round(@agent_spend.total_cost, 4)}"} value_class="text-amber-700" />
                     </div>
 
+                    <%= if @selected_architecture do %>
+                      <.architecture_card architecture={@selected_architecture} mode="full" />
+                    <% end %>
+
                     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <div class="rounded-2xl bg-amber-50 p-4">
                         <div class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
@@ -1051,6 +1057,7 @@ defmodule MaraithonWeb.AgentsLive do
          assign(socket,
            selected_agent_id: agent.id,
            selected_agent: snapshot.agent,
+           selected_architecture: architecture_for_agent(snapshot.agent),
            selected_panel: panel,
            events: snapshot.events,
            agent_spend: snapshot.spend,
@@ -1076,6 +1083,7 @@ defmodule MaraithonWeb.AgentsLive do
                do: socket.assigns.selected_agent || agent,
                else: agent
              ),
+           selected_architecture: architecture_for_agent(agent),
            selected_panel: panel,
            events:
              if(socket.assigns.selected_agent_id == agent.id, do: socket.assigns.events, else: []),
@@ -1143,6 +1151,7 @@ defmodule MaraithonWeb.AgentsLive do
     assign(socket,
       selected_agent_id: nil,
       selected_agent: nil,
+      selected_architecture: nil,
       selected_panel: nil,
       events: [],
       inspection: empty_inspection(),
@@ -1410,6 +1419,13 @@ defmodule MaraithonWeb.AgentsLive do
     case config["tools"] || [] do
       [] -> "No tools"
       values -> values |> Enum.join(", ") |> truncate(70)
+    end
+  end
+
+  defp architecture_for_agent(agent) do
+    case AgentArchitecture.for_agent(agent) do
+      {:ok, architecture} -> architecture
+      {:error, _reason} -> nil
     end
   end
 

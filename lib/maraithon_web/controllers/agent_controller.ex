@@ -3,6 +3,7 @@ defmodule MaraithonWeb.AgentController do
 
   alias Maraithon.Runtime
   alias Maraithon.Agents
+  alias Maraithon.AgentArchitecture
   alias Maraithon.Spend
 
   require Logger
@@ -26,6 +27,39 @@ defmodule MaraithonWeb.AgentController do
   def index(conn, _params) do
     agents = Agents.list_agents()
     json(conn, %{agents: Enum.map(agents, &agent_summary/1)})
+  end
+
+  def architectures(conn, %{"agent_id" => agent_id}) do
+    case Agents.get_agent(agent_id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Agent not found"})
+
+      agent ->
+        {:ok, architecture} = AgentArchitecture.for_agent(agent)
+        json(conn, %{architecture: json_safe(architecture)})
+    end
+  end
+
+  def architectures(conn, %{"behavior" => behavior}) do
+    case AgentArchitecture.get(behavior) do
+      {:ok, architecture} ->
+        json(conn, %{architecture: json_safe(architecture)})
+
+      {:error, :unknown_behavior} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Agent architecture not found"})
+    end
+  end
+
+  def architectures(conn, _params) do
+    architectures =
+      AgentArchitecture.list()
+      |> Enum.map(&json_safe/1)
+
+    json(conn, %{architectures: architectures})
   end
 
   def show(conn, %{"id" => id}) do
@@ -221,6 +255,14 @@ defmodule MaraithonWeb.AgentController do
       stopped_at: agent.stopped_at
     }
   end
+
+  defp json_safe(value) when is_map(value) do
+    Map.new(value, fn {key, nested_value} -> {key, json_safe(nested_value)} end)
+  end
+
+  defp json_safe(value) when is_list(value), do: Enum.map(value, &json_safe/1)
+  defp json_safe(value) when is_atom(value), do: Atom.to_string(value)
+  defp json_safe(value), do: value
 
   defp parse_positive_integer_param(nil, default, _field_name), do: {:ok, default}
   defp parse_positive_integer_param("", default, _field_name), do: {:ok, default}

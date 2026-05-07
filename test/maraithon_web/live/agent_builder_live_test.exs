@@ -31,10 +31,29 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Create an agent with a clear contract"
       assert html =~ "What goes in"
       assert html =~ "What comes out"
+      assert html =~ "Architecture"
+      assert html =~ "OTP Agent Runtime"
       assert html =~ "Permission readiness"
       assert html =~ "Prompt Agent"
       assert html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
+    end
+
+    test "updates the architecture preview for modular chief of staff agents", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new")
+
+      _html =
+        view
+        |> element("button[phx-click=choose_behavior][phx-value-behavior=\"ai_chief_of_staff\"]")
+        |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Architecture"
+      assert html =~ "AI Chief of Staff"
+      assert html =~ "Followthrough"
+      assert html =~ "Travel Logistics"
+      assert html =~ "Morning Briefing"
     end
 
     test "shows a project attachment field when projects exist", %{conn: conn} do

@@ -229,6 +229,9 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Spend Summary"
     assert html =~ "Config Snapshot"
     assert html =~ "agent inspection log"
+    assert html =~ "Architecture"
+    assert html =~ "Runtime contract"
+    assert html =~ "OTP Agent Runtime"
   end
 
   test "unauthorized ids clear the selection safely", %{conn: conn} do

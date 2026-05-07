@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.AgentBuilderLive do
   use MaraithonWeb, :live_view
 
+  alias Maraithon.AgentArchitecture
   alias Maraithon.AgentBuilder
   alias Maraithon.Connections
   alias Maraithon.Projects
@@ -1014,6 +1015,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
               </div>
             </section>
 
+            <.architecture_card architecture={@architecture} mode="compact" />
+
             <section class="rounded-2xl bg-white p-5 shadow">
               <div class="flex items-center justify-between gap-3">
                 <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Permission readiness</p>
@@ -1079,6 +1082,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       blockers: Enum.filter(readiness_items, &(&1.required? and not &1.ready?)),
       input_preview: input_preview(selected_spec_full, launch),
       output_preview: output_preview(selected_spec_full, launch),
+      architecture: AgentArchitecture.for_launch(launch),
       starter_values: starter_values(selected_spec_full, launch)
     )
   end

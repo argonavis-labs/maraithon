@@ -95,6 +95,7 @@ defmodule MaraithonWeb.Router do
     pipe_through [:api, :api_auth]
 
     # Agent management
+    get "/agent-architecture", AgentController, :architectures
     post "/agents", AgentController, :create
     get "/agents", AgentController, :index
     get "/agents/:id", AgentController, :show

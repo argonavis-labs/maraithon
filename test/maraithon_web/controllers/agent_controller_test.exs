@@ -99,6 +99,7 @@ defmodule MaraithonWeb.AgentControllerTest do
   alias Maraithon.Agents.Agent
   alias Maraithon.AgentSubscriptions
   alias Maraithon.Accounts
+  alias Maraithon.Projects
   alias Maraithon.Repo
 
   # ----------------------------------------------------------------------------
@@ -170,6 +171,40 @@ defmodule MaraithonWeb.AgentControllerTest do
     end
   end
 
+  describe "GET /api/v1/agent-architecture" do
+    test "returns available agent architecture manifests", %{conn: conn} do
+      conn = get(conn, "/api/v1/agent-architecture")
+
+      response = json_response(conn, 200)
+      architectures = response["architectures"]
+
+      assert Enum.any?(architectures, &(&1["id"] == "prompt_agent"))
+      assert Enum.any?(architectures, &(&1["id"] == "ai_chief_of_staff"))
+
+      prompt = Enum.find(architectures, &(&1["id"] == "prompt_agent"))
+      assert prompt["runtime"]["process_module"] == "Maraithon.Runtime.Agent"
+      assert prompt["contract"]["behaviour"] == "Maraithon.Behaviors.Behavior"
+    end
+  end
+
+  describe "GET /api/v1/agent-architecture?behavior=:behavior" do
+    test "returns a single behavior architecture manifest", %{conn: conn} do
+      conn = get(conn, "/api/v1/agent-architecture", %{behavior: "ai_chief_of_staff"})
+
+      architecture = json_response(conn, 200)["architecture"]
+
+      assert architecture["id"] == "ai_chief_of_staff"
+      assert "followthrough" in architecture["capabilities"]["skills"]
+      assert Enum.any?(architecture["components"], &(&1["kind"] == "skill"))
+    end
+
+    test "returns 404 for unknown behavior", %{conn: conn} do
+      conn = get(conn, "/api/v1/agent-architecture", %{behavior: "not_real"})
+
+      assert json_response(conn, 404)["error"] == "not_found"
+    end
+  end
+
   # ============================================================================
   # GET AGENT TESTS
   # ============================================================================
@@ -183,6 +218,43 @@ defmodule MaraithonWeb.AgentControllerTest do
     """
     test "returns 404 for non-existent agent", %{conn: conn} do
       conn = get(conn, "/api/v1/agents/#{Ecto.UUID.generate()}")
+
+      assert json_response(conn, 404)["error"] == "not_found"
+    end
+  end
+
+  describe "GET /api/v1/agent-architecture?agent_id=:id" do
+    test "returns architecture for a persisted agent with binding metadata", %{conn: conn} do
+      {:ok, _user} = Accounts.get_or_create_user_by_email("operator@example.com")
+
+      {:ok, project} =
+        Projects.create_project("operator@example.com", %{"name" => "Maraithon App"})
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          user_id: "operator@example.com",
+          project_id: project.id,
+          status: "running",
+          config: %{
+            "tools" => ["read_file"],
+            "subscribe" => ["notaui:tasks"]
+          }
+        })
+
+      conn = get(conn, "/api/v1/agent-architecture", %{agent_id: agent.id})
+
+      architecture = json_response(conn, 200)["architecture"]
+
+      assert architecture["id"] == "prompt_agent"
+      assert architecture["binding"]["agent_id"] == agent.id
+      assert architecture["binding"]["project_id"] == agent.project_id
+      assert "read_file" in architecture["capabilities"]["tools"]
+      assert "notaui:tasks" in architecture["capabilities"]["subscriptions"]
+    end
+
+    test "returns 404 for a missing agent", %{conn: conn} do
+      conn = get(conn, "/api/v1/agent-architecture", %{agent_id: Ecto.UUID.generate()})
 
       assert json_response(conn, 404)["error"] == "not_found"
     end

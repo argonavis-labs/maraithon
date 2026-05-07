@@ -58,9 +58,11 @@ defmodule Maraithon.OAuth.Google do
     [@scope_userinfo_email]
   end
 
-  defp scope_for("calendar"), do: @scope_calendar
+  defp scope_for("calendar"), do: [@scope_calendar]
 
-  defp scope_for("gmail") do
+  defp scope_for("gmail"), do: [@scope_gmail_readonly]
+
+  defp scope_for("gmail_full") do
     [
       @scope_gmail_readonly,
       @scope_gmail_modify,
@@ -70,7 +72,9 @@ defmodule Maraithon.OAuth.Google do
     ]
   end
 
-  defp scope_for("contacts"), do: @scope_contacts
+  defp scope_for("gmail_send"), do: [@scope_gmail_send]
+
+  defp scope_for("contacts"), do: [@scope_contacts]
   defp scope_for(_), do: []
 
   @doc """
