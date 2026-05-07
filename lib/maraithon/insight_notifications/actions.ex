@@ -91,6 +91,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     action_state = action_state(delivery)
     why_now = read_string(metadata, "why_now")
     follow_up_ideas = read_string_list(metadata, "follow_up_ideas")
+    operator_needs = operator_needs(insight, metadata)
+    draft_plan = draft_plan(insight, metadata)
     change_summary = metadata |> read_map("attention") |> read_string("change_summary")
 
     due_text =
@@ -124,6 +126,25 @@ defmodule Maraithon.InsightNotifications.Actions do
           "\n\n<b>Ideas:</b>\n#{rendered}"
       end
 
+    needs_text =
+      case operator_needs do
+        [] ->
+          ""
+
+        needs ->
+          rendered =
+            needs
+            |> Enum.map_join("\n", fn need -> "- #{safe(need)}" end)
+
+          "\n\n<b>Need from Kent:</b>\n#{rendered}"
+      end
+
+    draft_plan_text =
+      case draft_plan do
+        nil -> ""
+        value -> "\n\n<b>Draft plan:</b> #{safe(value)}"
+      end
+
     action_state_text = render_action_state(action_state)
     header = if monitor_insight?(insight), do: "Maraithon Watching", else: "Maraithon Insight"
     action_label = if monitor_insight?(insight), do: "Watch", else: "Action"
@@ -140,7 +161,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
     #{safe(insight.summary)}
 
-    <b>#{action_label}:</b> #{safe(insight.recommended_action)}#{due_text}#{source_line}#{why_now_text}#{change_summary_text}#{ideas_text}#{action_state_text}
+    <b>#{action_label}:</b> #{safe(insight.recommended_action)}#{due_text}#{source_line}#{why_now_text}#{change_summary_text}#{ideas_text}#{needs_text}#{draft_plan_text}#{action_state_text}
 
     score=#{Float.round(delivery.score || 0.0, 2)} threshold=#{Float.round(delivery.threshold || 0.0, 2)}
     """
@@ -340,7 +361,10 @@ defmodule Maraithon.InsightNotifications.Actions do
              "thread_id" => read_string(metadata, "thread_id"),
              "reply_to_message_id" => insight.source_id,
              "person" => record_value(metadata, "person"),
-             "context" => build_context(insight, metadata)
+             "context" => build_context(insight, metadata),
+             "operator_needs" => operator_needs(insight, metadata),
+             "draft_plan" => draft_plan(insight, metadata),
+             "voice_guidance" => operator_voice_guidance(insight.user_id)
            }}
         end
 
@@ -360,7 +384,10 @@ defmodule Maraithon.InsightNotifications.Actions do
              "channel" => channel_id,
              "thread_ts" => thread_ts,
              "person" => record_value(metadata, "person"),
-             "context" => build_context(insight, metadata)
+             "context" => build_context(insight, metadata),
+             "operator_needs" => operator_needs(insight, metadata),
+             "draft_plan" => draft_plan(insight, metadata),
+             "voice_guidance" => operator_voice_guidance(insight.user_id)
            }}
         end
 
@@ -674,22 +701,29 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp email_prompt(spec, insight) do
     memory = draft_memory_context(insight.user_id)
+    voice_guidance = operator_voice_guidance(insight.user_id)
 
     """
-    Write a concise email reply for a founder follow-through assistant.
+    Write a concise email reply as Kent.
 
     Return ONLY valid JSON:
     {"subject":"...","body":"..."}
 
     Constraints:
-    - Be concrete, professional, and brief.
+    - Write in Kent's first-person voice, not as Maraithon or an assistant.
+    - Be concrete, direct, calm, and brief.
+    - Avoid corporate filler, over-apologizing, and vague "circling back" phrasing.
+    - Include only the next step, owner, and ETA that the source evidence supports.
     - Do not claim attachments, delivery, or completed work unless explicitly proven.
     - If the promised artifact is not clearly available, send an honest progress update plus a firm ETA.
     - Close the loop in one message.
     - Follow durable operator style and action preferences when they are relevant.
 
     Insight JSON:
-    #{Jason.encode!(%{title: insight.title, summary: insight.summary, recommended_action: insight.recommended_action, person: spec["person"], context: spec["context"], to: spec["to"], subject: spec["subject"]})}
+    #{Jason.encode!(draft_prompt_payload(spec, insight))}
+
+    Kent voice guidance JSON:
+    #{Jason.encode!(voice_guidance)}
 
     Draft memory JSON:
     #{Jason.encode!(memory)}
@@ -698,21 +732,27 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp slack_prompt(spec, insight) do
     memory = draft_memory_context(insight.user_id)
+    voice_guidance = operator_voice_guidance(insight.user_id)
 
     """
-    Write a concise Slack reply for an unresolved follow-through item.
+    Write a concise Slack reply as Kent for an unresolved follow-through item.
 
     Return ONLY valid JSON:
     {"text":"..."}
 
     Constraints:
-    - Be direct and short.
+    - Write in Kent's first-person voice, not as Maraithon or an assistant.
+    - Be direct, short, calm, and useful.
+    - Avoid corporate filler, over-apologizing, and vague status language.
     - Include owner / next step / ETA when appropriate.
     - Do not claim work is already done unless proven.
     - Follow durable operator style and action preferences when they are relevant.
 
     Insight JSON:
-    #{Jason.encode!(%{title: insight.title, summary: insight.summary, recommended_action: insight.recommended_action, person: spec["person"], context: spec["context"]})}
+    #{Jason.encode!(draft_prompt_payload(spec, insight))}
+
+    Kent voice guidance JSON:
+    #{Jason.encode!(voice_guidance)}
 
     Draft memory JSON:
     #{Jason.encode!(memory)}
@@ -737,22 +777,34 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp fallback_email_body(spec, insight) do
     greeting = email_greeting(spec["person"], spec["to"])
+    needs_line = fallback_needs_line(read_string_list(spec, "operator_needs"))
+    draft_plan_line = read_string(spec, "draft_plan")
 
     """
     #{greeting}
 
-    Following up here on this now. #{insight.summary}
+    Thanks for the nudge. #{fallback_context_sentence(draft_plan_line, insight)}
 
-    I don't want to leave this open. If the full artifact isn't ready yet, I'll send the remaining detail and exact ETA shortly.
+    #{needs_line}
+
+    I don't want to leave this open. I'll send the remaining detail and a concrete ETA shortly.
 
     Best,
-    #{sender_name()}
+    #{sender_name(insight.user_id)}
     """
     |> String.trim()
   end
 
-  defp fallback_slack_text(_spec, insight) do
-    "Following up on this now. #{insight.summary} I'll close the loop with owner, next step, and exact ETA shortly."
+  defp fallback_slack_text(spec, insight) do
+    plan = read_string(spec, "draft_plan")
+
+    [
+      "On it.",
+      fallback_context_sentence(plan, insight),
+      "I'll close the loop with owner, next step, and exact ETA shortly."
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
   end
 
   defp execution_notice(%{"kind" => "gmail_reply"}), do: "Email sent"
@@ -806,12 +858,151 @@ defmodule Maraithon.InsightNotifications.Actions do
       "context_brief" => read_string(metadata, "context_brief"),
       "signals" => read_string_list(metadata, "signals"),
       "evidence" => record_value_list(metadata, "evidence"),
+      "coverage_evidence" =>
+        conversation_context(metadata) |> read_string_list("coverage_evidence"),
+      "completion_evidence" =>
+        conversation_context(metadata) |> read_string_list("completion_evidence"),
+      "conversation_context" => conversation_context(metadata),
       "person" => record_value(metadata, "person"),
       "commitment" => record_value(metadata, "commitment"),
       "next_action" => record_value(metadata, "next_action"),
       "account" => read_string(metadata, "account"),
-      "channel_name" => read_string(metadata, "channel_name")
+      "channel_name" => read_string(metadata, "channel_name"),
+      "missing_inputs" => read_string_list(metadata, "missing_inputs"),
+      "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
+      "draft_plan" => read_string(metadata, "draft_plan")
     })
+  end
+
+  defp draft_prompt_payload(spec, %Insight{} = insight) do
+    compact_map(%{
+      "title" => insight.title,
+      "summary" => insight.summary,
+      "recommended_action" => insight.recommended_action,
+      "source" => insight.source,
+      "category" => insight.category,
+      "priority" => insight.priority,
+      "confidence" => insight.confidence,
+      "attention_mode" => insight.attention_mode,
+      "person" => spec["person"],
+      "context" => spec["context"],
+      "to" => spec["to"],
+      "subject" => spec["subject"],
+      "operator_needs" => read_string_list(spec, "operator_needs"),
+      "draft_plan" => read_string(spec, "draft_plan")
+    })
+  end
+
+  defp operator_needs(%Insight{} = insight, metadata) do
+    explicit = read_string_list(metadata, "missing_inputs")
+    record = read_map(metadata, "record")
+    context = conversation_context(metadata)
+
+    inferred =
+      []
+      |> maybe_append(
+        "ETA or delivery timing to give #{record_value(metadata, "person") || "them"}",
+        eta_needed?(insight, metadata, record)
+      )
+      |> maybe_append(
+        "Final owner if the thread is moving but ownership is unclear",
+        read_string(context, "ownership_state") in ["shared_owner", "unknown"]
+      )
+      |> maybe_append(
+        "Artifact or concrete answer if the source evidence does not prove it is ready",
+        artifact_needed?(insight, metadata, record)
+      )
+
+    (explicit ++ inferred)
+    |> Enum.uniq()
+    |> Enum.take(3)
+  end
+
+  defp draft_plan(%Insight{} = insight, metadata) do
+    explicit = read_string(metadata, "draft_plan")
+    record = read_map(metadata, "record")
+    context = conversation_context(metadata)
+
+    explicit ||
+      cond do
+        read_string(context, "notification_posture") == "heads_up" ->
+          "Acknowledge the thread is moving, confirm whether Kent still owns the final loop, and avoid implying nobody responded."
+
+        insight.source == "gmail" and read_string(record, "commitment") != nil ->
+          "Reply in-thread as Kent with the concrete next step, owner, and ETA."
+
+        insight.source == "slack" ->
+          "Reply in the Slack thread as Kent with the shortest useful status, owner, and ETA."
+
+        true ->
+          nil
+      end
+  end
+
+  defp conversation_context(metadata) when is_map(metadata) do
+    read_map(metadata, "conversation_context")
+  end
+
+  defp conversation_context(_metadata), do: %{}
+
+  defp eta_needed?(%Insight{} = insight, metadata, record) do
+    text =
+      [
+        insight.recommended_action,
+        insight.summary,
+        read_string(metadata, "why_now"),
+        read_string(record, "next_action")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    String.contains?(text, ["eta", "deadline", "today", "tomorrow", "when"]) and
+      blank?(read_string(record, "deadline")) and
+      is_nil(insight.due_at)
+  end
+
+  defp artifact_needed?(%Insight{} = insight, metadata, record) do
+    text =
+      [
+        insight.title,
+        insight.summary,
+        insight.recommended_action,
+        read_string(record, "commitment"),
+        read_string(metadata, "context_brief")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    String.contains?(text, ["send", "share", "deck", "doc", "artifact", "proposal", "answer"]) and
+      read_string_list(record, "completion_evidence") == [] and
+      read_string_list(metadata, "completion_evidence") == []
+  end
+
+  defp operator_voice_guidance(user_id) do
+    %{
+      "speaker" => speaker_name(user_id),
+      "write_as" => "Kent in first person",
+      "style_rules" => [
+        "short and direct",
+        "specific next step over general reassurance",
+        "low-apology unless Kent clearly caused the delay",
+        "no assistant or Maraithon framing",
+        "do not invent facts, attachments, completion, or availability",
+        "use a concrete ETA only when evidence or Kent supplied one"
+      ]
+    }
+  end
+
+  defp fallback_context_sentence(nil, %Insight{} = insight), do: insight.summary
+  defp fallback_context_sentence("", %Insight{} = insight), do: insight.summary
+  defp fallback_context_sentence(plan, _insight), do: plan
+
+  defp fallback_needs_line([]), do: "I am checking the final detail now."
+
+  defp fallback_needs_line(needs) when is_list(needs) do
+    "I am checking: #{Enum.join(needs, "; ")}."
   end
 
   defp slack_source_ts("slack:" <> rest) do
@@ -873,11 +1064,14 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp normalize_reply_subject(_), do: "Quick follow-up"
 
-  defp sender_name do
+  defp sender_name(user_id) do
     System.get_env("MARAITHON_DEFAULT_SENDER_NAME") ||
       Application.get_env(:maraithon, :insights, [])
-      |> Keyword.get(:default_sender_name, "Maraithon")
+      |> Keyword.get(:default_sender_name, speaker_name(user_id))
   end
+
+  defp speaker_name("kent" <> _), do: "Kent"
+  defp speaker_name(_), do: "Kent"
 
   defp ensure_insight_preloaded(%Delivery{insight: %Insight{}} = delivery), do: delivery
   defp ensure_insight_preloaded(%Delivery{} = delivery), do: Repo.preload(delivery, :insight)
@@ -894,6 +1088,9 @@ defmodule Maraithon.InsightNotifications.Actions do
       {key, value}, acc -> Map.put(acc, key, value)
     end)
   end
+
+  defp maybe_append(list, item, true) when is_binary(item), do: list ++ [item]
+  defp maybe_append(list, _item, _condition), do: list
 
   defp stringify_map_keys(map) when is_map(map) do
     Enum.reduce(map, %{}, fn
