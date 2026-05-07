@@ -1,11 +1,18 @@
 defmodule MaraithonWeb.AdminController do
   use MaraithonWeb, :controller
 
+  import Ecto.Query
+
   alias Maraithon.Admin
+  alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
+  alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights.Refresh, as: InsightRefresh
+  alias Maraithon.Insights.Insight
+  alias Maraithon.Repo
   alias Maraithon.TelegramResponder
+  alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
@@ -187,6 +194,68 @@ defmodule MaraithonWeb.AdminController do
         conn
         |> put_status(:bad_request)
         |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
+  def reset_operator_state(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+
+    if truthy_param?(params["confirm"]) do
+      result =
+        Repo.transaction(fn ->
+          {push_receipts, _} =
+            from(receipt in PushReceipt, where: receipt.user_id == ^user_id)
+            |> Repo.delete_all()
+
+          {briefs, _} =
+            from(brief in Brief, where: brief.user_id == ^user_id)
+            |> Repo.delete_all()
+
+          {todos, _} =
+            from(todo in Todo, where: todo.user_id == ^user_id)
+            |> Repo.delete_all()
+
+          {deliveries, _} =
+            from(delivery in Delivery, where: delivery.user_id == ^user_id)
+            |> Repo.delete_all()
+
+          {insights, _} =
+            from(insight in Insight, where: insight.user_id == ^user_id)
+            |> Repo.delete_all()
+
+          %{
+            user_id: user_id,
+            deleted: %{
+              telegram_push_receipts: push_receipts,
+              briefs: briefs,
+              todos: todos,
+              insight_deliveries: deliveries,
+              insights: insights
+            },
+            preserved: [
+              "users",
+              "connected_accounts",
+              "oauth_tokens",
+              "agents",
+              "preference_rules",
+              "user_memory"
+            ]
+          }
+        end)
+
+      case result do
+        {:ok, payload} ->
+          json(conn, payload)
+
+        {:error, reason} ->
+          conn
+          |> put_status(:bad_gateway)
+          |> json(%{error: "reset_failed", message: inspect(reason)})
+      end
+    else
+      conn
+      |> put_status(:bad_request)
+      |> json(%{error: "confirmation_required", message: "Pass confirm=true to reset state."})
     end
   end
 

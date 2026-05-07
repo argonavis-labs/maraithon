@@ -514,7 +514,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         end)
 
       messages ->
-        Enum.take(messages, state.email_scan_limit)
+        messages
+        |> filter_messages_within_followup_window(state)
+        |> Enum.take(state.email_scan_limit)
     end
   end
 
@@ -548,9 +550,24 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         end)
 
       messages ->
-        Enum.take(messages, sent_limit)
+        messages
+        |> filter_messages_within_followup_window(state)
+        |> Enum.take(sent_limit)
     end
   end
+
+  defp filter_messages_within_followup_window(messages, state) when is_list(messages) do
+    cutoff = DateTime.add(DateTime.utc_now(), -state.follow_up_window_hours, :hour)
+
+    Enum.filter(messages, fn message ->
+      case message_timestamp(message) do
+        %DateTime{} = occurred_at -> DateTime.compare(occurred_at, cutoff) in [:gt, :eq]
+        _ -> true
+      end
+    end)
+  end
+
+  defp filter_messages_within_followup_window(messages, _state), do: messages
 
   defp fetch_recent_calendar_events(state) do
     case SourceBundle.calendar_events(state.source_bundle) do
