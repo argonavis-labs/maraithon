@@ -363,6 +363,7 @@ defmodule Maraithon.InsightNotifications.Actions do
              "person" => record_value(metadata, "person"),
              "context" => build_context(insight, metadata),
              "operator_needs" => operator_needs(insight, metadata),
+             "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
              "draft_plan" => draft_plan(insight, metadata),
              "voice_guidance" => operator_voice_guidance(insight.user_id)
            }}
@@ -386,6 +387,7 @@ defmodule Maraithon.InsightNotifications.Actions do
              "person" => record_value(metadata, "person"),
              "context" => build_context(insight, metadata),
              "operator_needs" => operator_needs(insight, metadata),
+             "suggested_reply_points" => read_string_list(metadata, "suggested_reply_points"),
              "draft_plan" => draft_plan(insight, metadata),
              "voice_guidance" => operator_voice_guidance(insight.user_id)
            }}
@@ -716,6 +718,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Include only the next step, owner, and ETA that the source evidence supports.
     - Do not claim attachments, delivery, or completed work unless explicitly proven.
     - If the promised artifact is not clearly available, send an honest progress update plus a firm ETA.
+    - Use draft_plan and suggested_reply_points as drafting instructions, not text to quote.
+    - If operator_needs are present, ask for or name the missing detail instead of inventing it.
     - Close the loop in one message.
     - Follow durable operator style and action preferences when they are relevant.
 
@@ -746,6 +750,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Avoid corporate filler, over-apologizing, and vague status language.
     - Include owner / next step / ETA when appropriate.
     - Do not claim work is already done unless proven.
+    - Use draft_plan and suggested_reply_points as drafting instructions, not text to quote.
+    - If operator_needs are present, ask for or name the missing detail instead of inventing it.
     - Follow durable operator style and action preferences when they are relevant.
 
     Insight JSON:
@@ -778,13 +784,16 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp fallback_email_body(spec, insight) do
     greeting = email_greeting(spec["person"], spec["to"])
     needs_line = fallback_needs_line(read_string_list(spec, "operator_needs"))
-    draft_plan_line = read_string(spec, "draft_plan")
+
+    reply_points_line =
+      fallback_reply_points_line(read_string_list(spec, "suggested_reply_points"))
 
     """
     #{greeting}
 
-    Thanks for the nudge. #{fallback_context_sentence(draft_plan_line, insight)}
+    Thanks for the nudge. #{fallback_context_sentence(insight)}
 
+    #{reply_points_line}
     #{needs_line}
 
     I don't want to leave this open. I'll send the remaining detail and a concrete ETA shortly.
@@ -796,11 +805,12 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp fallback_slack_text(spec, insight) do
-    plan = read_string(spec, "draft_plan")
+    reply_points = read_string_list(spec, "suggested_reply_points")
 
     [
       "On it.",
-      fallback_context_sentence(plan, insight),
+      fallback_context_sentence(insight),
+      fallback_reply_points_sentence(reply_points),
       "I'll close the loop with owner, next step, and exact ETA shortly."
     ]
     |> Enum.reject(&blank?/1)
@@ -889,6 +899,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       "to" => spec["to"],
       "subject" => spec["subject"],
       "operator_needs" => read_string_list(spec, "operator_needs"),
+      "suggested_reply_points" => read_string_list(spec, "suggested_reply_points"),
       "draft_plan" => read_string(spec, "draft_plan")
     })
   end
@@ -995,9 +1006,21 @@ defmodule Maraithon.InsightNotifications.Actions do
     }
   end
 
-  defp fallback_context_sentence(nil, %Insight{} = insight), do: insight.summary
-  defp fallback_context_sentence("", %Insight{} = insight), do: insight.summary
-  defp fallback_context_sentence(plan, _insight), do: plan
+  defp fallback_context_sentence(%Insight{} = insight), do: insight.summary
+
+  defp fallback_reply_points_line([]), do: nil
+
+  defp fallback_reply_points_line(points) when is_list(points) do
+    "Useful reply points: #{Enum.join(points, " ")}"
+  end
+
+  defp fallback_reply_points_sentence([]), do: nil
+
+  defp fallback_reply_points_sentence(points) when is_list(points) do
+    points
+    |> Enum.take(2)
+    |> Enum.join(" ")
+  end
 
   defp fallback_needs_line([]), do: "I am checking the final detail now."
 
