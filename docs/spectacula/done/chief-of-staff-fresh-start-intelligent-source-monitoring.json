@@ -1,0 +1,27 @@
+{
+  "slug": "chief-of-staff-fresh-start-intelligent-source-monitoring",
+  "title": "Chief of Staff Fresh Start and Intelligent Source Monitoring",
+  "stage": "done",
+  "spec_path": "docs/spectacula/specs/chief-of-staff-fresh-start-intelligent-source-monitoring.md",
+  "summary": "Delivered the fresh-start operational slice: stale Kent state reset, legacy Gmail overlap stopped, Gmail freshness guarded, source ownership repaired, and Chief of Staff ensure automation added.",
+  "next_action": "Follow-on phase: add richer MCP/provider tools for Gmail thread fetch, Slack thread history, Calendar details, and Telegram feedback learning.",
+  "resume_context": "Implementation is committed-ready after precommit. Production still needs the final deploy, ensure endpoint call, refresh trigger, dashboard/todo verification, and Telegram completion notice.",
+  "updated_at": "2026-05-07T00:25:00Z",
+  "history": [
+    {
+      "at": "2026-05-07T00:00:00Z",
+      "event": "spec_created",
+      "summary": "Recorded implementation contract for Kent's Chief of Staff fresh start."
+    },
+    {
+      "at": "2026-05-07T00:25:00Z",
+      "event": "implementation_completed",
+      "summary": "Implemented reset controls, freshness guard, user-scoped agent updates, subscription sync hardening, and Chief of Staff ensure endpoint."
+    },
+    {
+      "at": "2026-05-07T00:25:00Z",
+      "event": "spec_completed",
+      "summary": "Marked the operational spec done; MCP/provider tool expansion remains a follow-on phase."
+    }
+  ]
+}

@@ -2,12 +2,15 @@ defmodule MaraithonWeb.AdminControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.AgentSubscriptions
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Effects.Effect
   alias Maraithon.Events
   alias Maraithon.Insights
   alias Maraithon.OAuth
+  alias Maraithon.OAuth.Google
   alias Maraithon.Repo
   alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Todos
@@ -68,6 +71,66 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert Map.has_key?(response, "total_spend")
       assert Enum.any?(response["recent_activity"], &(&1["event_type"] == "dashboard_event"))
       assert Enum.any?(response["recent_logs"], &(&1["message"] == "dashboard log entry"))
+    end
+  end
+
+  describe "POST /api/v1/admin/chief-of-staff/ensure" do
+    test "repairs a chief of staff agent from live source scope", %{conn: conn} do
+      user_id = "ensure-chief@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _google} =
+        OAuth.store_tokens(user_id, "google:kent@example.com", %{
+          access_token: "google-token",
+          scopes: Google.scopes_for(["gmail", "calendar"]),
+          metadata: %{"account_email" => "kent@example.com"}
+        })
+
+      {:ok, _slack} =
+        OAuth.store_tokens(user_id, "slack:T12345", %{
+          access_token: "xoxb-token",
+          scopes: ["channels:read"],
+          metadata: %{"team_id" => "T12345", "team_name" => "Agora"}
+        })
+
+      {:ok, _telegram} =
+        ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+          external_account_id: "6114124042",
+          metadata: %{"chat_id" => "6114124042"}
+        })
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "ai_chief_of_staff",
+          config: %{"user_id" => user_id, "name" => "Kent Chief"},
+          status: "stopped"
+        })
+
+      conn = post(conn, "/api/v1/admin/chief_of_staff/ensure", %{"user_id" => user_id})
+
+      response = json_response(conn, 200)
+      assert response["status"] == "updated"
+      assert response["agent"]["id"] == agent.id
+      assert response["agent"]["user_id"] == user_id
+      assert response["agent"]["config"]["name"] == "Kent Chief"
+      assert response["source_scope"]["telegram_connected"] == true
+
+      assert response["subscriptions"] == [
+               "email:kent@example.com",
+               "calendar:ensure-chief@example.com",
+               "slack:T12345"
+             ]
+
+      updated = Agents.get_agent(agent.id)
+      assert updated.user_id == user_id
+
+      assert AgentSubscriptions.list_for_agent(agent.id)
+             |> Enum.map(&{&1.user_id, &1.topic})
+             |> Enum.sort() == [
+               {user_id, "calendar:ensure-chief@example.com"},
+               {user_id, "email:kent@example.com"},
+               {user_id, "slack:T12345"}
+             ]
     end
   end
 

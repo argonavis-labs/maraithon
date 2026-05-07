@@ -4,13 +4,17 @@ defmodule MaraithonWeb.AdminController do
   import Ecto.Query
 
   alias Maraithon.Admin
+  alias Maraithon.AgentSubscriptions
+  alias Maraithon.Agents
   alias Maraithon.Briefs.Brief
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Insights.Insight
   alias Maraithon.Repo
+  alias Maraithon.Runtime
   alias Maraithon.TelegramResponder
   alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.Todos
@@ -22,11 +26,14 @@ defmodule MaraithonWeb.AdminController do
          {:ok, failure_limit} <-
            parse_positive_integer_param(params["failure_limit"], 20, "failure_limit"),
          {:ok, log_limit} <- parse_positive_integer_param(params["log_limit"], 200, "log_limit") do
+      user_id = blank_to_nil(params["user_id"])
+
       snapshot =
         case Admin.safe_control_center_snapshot(
                activity_limit: activity_limit,
                failure_limit: failure_limit,
-               log_limit: log_limit
+               log_limit: log_limit,
+               user_id: user_id
              ) do
           {:ok, snapshot} -> snapshot
           {:degraded, snapshot} -> snapshot
@@ -301,6 +308,32 @@ defmodule MaraithonWeb.AdminController do
     json(conn, normalize_json(result))
   end
 
+  def ensure_chief_of_staff(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+    scope = SourceScope.resolve(user_id)
+    subscriptions = SourceScope.subscriptions(scope, user_id)
+
+    case ensure_chief_of_staff_agent(user_id, scope, subscriptions) do
+      {:ok, status, agent} ->
+        json(conn, %{
+          status: status,
+          user_id: user_id,
+          agent: serialize_agent(agent),
+          source_scope: scope,
+          subscriptions: subscriptions,
+          active_subscriptions:
+            agent.id
+            |> AgentSubscriptions.list_for_agent()
+            |> Enum.map(&serialize_agent_subscription/1)
+        })
+
+      {:error, reason} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "chief_of_staff_ensure_failed", message: format_error(reason)})
+    end
+  end
+
   def disconnect_connection(conn, %{"provider" => provider} = params) do
     user_id = parse_user_id(params["user_id"])
 
@@ -323,6 +356,51 @@ defmodule MaraithonWeb.AdminController do
         |> put_status(:bad_gateway)
         |> json(%{error: "disconnect_failed", message: inspect(reason)})
     end
+  end
+
+  defp ensure_chief_of_staff_agent(user_id, source_scope, subscriptions) do
+    config = chief_of_staff_config(%{}, user_id, source_scope, subscriptions)
+
+    case chief_of_staff_agent_for_user(user_id) do
+      nil ->
+        case Runtime.start_agent(%{
+               "user_id" => user_id,
+               "behavior" => "ai_chief_of_staff",
+               "config" => config
+             }) do
+          {:ok, agent} -> {:ok, "created", agent}
+          {:error, reason} -> {:error, reason}
+        end
+
+      agent ->
+        config = chief_of_staff_config(agent.config || %{}, user_id, source_scope, subscriptions)
+
+        case Runtime.update_agent(agent.id, %{
+               "user_id" => user_id,
+               "behavior" => "ai_chief_of_staff",
+               "config" => config
+             }) do
+          {:ok, agent} -> {:ok, "updated", agent}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  defp chief_of_staff_agent_for_user(user_id) do
+    Agents.list_agents()
+    |> Enum.find(fn agent ->
+      agent.behavior == "ai_chief_of_staff" and
+        (agent.user_id == user_id or get_in(agent.config || %{}, ["user_id"]) == user_id)
+    end)
+  end
+
+  defp chief_of_staff_config(existing_config, user_id, source_scope, subscriptions) do
+    existing_config
+    |> Map.put_new("name", "AI Chief of Staff")
+    |> Map.put_new("delivery_channels", ["telegram"])
+    |> Map.put("user_id", user_id)
+    |> Map.put("source_scope", source_scope)
+    |> Map.put("subscribe", subscriptions)
   end
 
   defp parse_positive_integer_param(nil, default, _field_name), do: {:ok, default}
@@ -477,6 +555,7 @@ defmodule MaraithonWeb.AdminController do
   defp serialize_agent(agent) when is_map(agent) do
     %{
       id: agent.id,
+      user_id: Map.get(agent, :user_id),
       behavior: agent.behavior,
       config: Map.get(agent, :config, %{}),
       status: agent.status,
@@ -486,6 +565,27 @@ defmodule MaraithonWeb.AdminController do
       updated_at: Map.get(agent, :updated_at)
     }
   end
+
+  defp serialize_agent_subscription(subscription) do
+    %{
+      topic: subscription.topic,
+      status: subscription.status,
+      user_id: subscription.user_id,
+      project_id: subscription.project_id
+    }
+  end
+
+  defp format_error(%Ecto.Changeset{} = changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Enum.reduce(opts, msg, fn {key, value}, acc ->
+        String.replace(acc, "%{#{key}}", to_string(value))
+      end)
+    end)
+    |> inspect()
+  end
+
+  defp format_error(reason), do: inspect(reason)
 
   defp normalize_json(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp normalize_json(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)

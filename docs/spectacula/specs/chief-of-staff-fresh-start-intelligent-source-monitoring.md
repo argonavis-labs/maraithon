@@ -1,6 +1,6 @@
 # Chief of Staff Fresh Start and Intelligent Source Monitoring
 
-Status: In Progress
+Status: Done
 Purpose: Reset Kent's stale operator state while preserving connectors, then make the AI Chief of Staff the single owner for fresh Gmail, Slack, Calendar, and Telegram follow-through.
 
 ## 1. Product Contract
@@ -77,3 +77,19 @@ Otherwise important items should become `monitor` or stay silent.
 - The standalone Gmail advisor no longer competes with the AI Chief of Staff.
 - The Chief of Staff rebuilds from fresh source state only.
 - Telegram can be used to trigger refreshes and capture feedback.
+
+## 7. Delivery Notes
+
+Implemented in this delivery:
+
+- Admin reset controls clear Kent's stale operator state while preserving connected accounts and OAuth tokens.
+- Gmail follow-through ignores stale historical messages by default so old threads do not reappear as current work.
+- Agent updates now preserve explicit `user_id` ownership and synchronize source subscriptions without crashing on validation errors.
+- Admin dashboard and agent APIs expose `user_id` so source ownership is visible during operations.
+- Admin Chief of Staff ensure endpoint repairs or creates Kent's `ai_chief_of_staff` from live Google, Slack, and Telegram source scope and syncs active subscriptions.
+- Production runbook path is automated through API calls: ensure Chief of Staff, trigger insight refresh, inspect dashboard/todos, then push Telegram status.
+
+Follow-on work:
+
+- Expand provider-facing MCP tools for richer Gmail thread fetch, Slack thread history, Calendar details, and durable Telegram feedback learning.
+- Replace the current refresh endpoint with a scheduled Chief of Staff loop once the tool-calling layer is fully wired.

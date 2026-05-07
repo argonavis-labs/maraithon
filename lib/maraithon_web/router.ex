@@ -114,6 +114,8 @@ defmodule MaraithonWeb.Router do
     post "/admin/operator-state/reset", AdminController, :reset_operator_state
     post "/admin/telegram/push", AdminController, :push_telegram
     post "/admin/insights/refresh", AdminController, :refresh_insights
+    post "/admin/chief_of_staff/ensure", AdminController, :ensure_chief_of_staff
+    post "/admin/chief-of-staff/ensure", AdminController, :ensure_chief_of_staff
     delete "/admin/connections/:provider", AdminController, :disconnect_connection
 
     # Spend tracking

@@ -97,6 +97,8 @@ defmodule MaraithonWeb.AgentControllerTest do
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.AgentSubscriptions
+  alias Maraithon.Accounts
   alias Maraithon.Repo
 
   # ----------------------------------------------------------------------------
@@ -441,27 +443,45 @@ defmodule MaraithonWeb.AgentControllerTest do
 
   describe "PATCH /api/v1/agents/:id" do
     test "updates a stopped agent", %{conn: conn} do
+      {:ok, _user} = Accounts.get_or_create_user_by_email("chief@example.com")
+
       {:ok, agent} =
         Agents.create_agent(%{
           behavior: "prompt_agent",
-          config: %{"name" => "before-update"},
+          config: %{"name" => "before-update", "subscribe" => ["email:old@example.com"]},
           status: "stopped"
         })
 
       conn =
         patch(conn, "/api/v1/agents/#{agent.id}", %{
+          "user_id" => "chief@example.com",
           "behavior" => "watchdog_summarizer",
-          "config" => %{"name" => "after-update", "prompt" => "Updated prompt"},
+          "config" => %{
+            "name" => "after-update",
+            "prompt" => "Updated prompt",
+            "subscribe" => ["email:kent@example.com", "slack:T123"]
+          },
           "budget" => %{"llm_calls" => 25, "tool_calls" => 50}
         })
 
       response = json_response(conn, 200)
       assert response["id"] == agent.id
+      assert response["user_id"] == "chief@example.com"
       assert response["behavior"] == "watchdog_summarizer"
       assert response["config"]["name"] == "after-update"
       assert response["config"]["prompt"] == "Updated prompt"
       assert response["config"]["budget"]["llm_calls"] == 25
       assert response["config"]["budget"]["tool_calls"] == 50
+
+      updated_agent = Agents.get_agent(agent.id)
+      assert updated_agent.user_id == "chief@example.com"
+
+      assert AgentSubscriptions.list_for_agent(agent.id)
+             |> Enum.map(&{&1.user_id, &1.topic})
+             |> Enum.sort() == [
+               {"chief@example.com", "email:kent@example.com"},
+               {"chief@example.com", "slack:T123"}
+             ]
     end
   end
 

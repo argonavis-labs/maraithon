@@ -337,6 +337,12 @@ defmodule Maraithon.Runtime do
     }
 
     attrs =
+      case fetch_optional_param(params, "user_id") do
+        :missing -> attrs
+        value -> Map.put(attrs, :user_id, normalize_optional_string(value))
+      end
+
+    attrs =
       case fetch_optional_param(params, "project_id") do
         :missing -> attrs
         value -> Map.put(attrs, :project_id, normalize_optional_string(value))
@@ -467,6 +473,7 @@ defmodule Maraithon.Runtime do
   defp fetch_optional_param(params, key) when is_map(params) do
     cond do
       Map.has_key?(params, key) -> Map.get(params, key)
+      key == "user_id" and Map.has_key?(params, :user_id) -> Map.get(params, :user_id)
       key == "project_id" and Map.has_key?(params, :project_id) -> Map.get(params, :project_id)
       true -> :missing
     end

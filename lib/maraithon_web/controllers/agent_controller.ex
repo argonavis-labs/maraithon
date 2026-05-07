@@ -201,6 +201,7 @@ defmodule MaraithonWeb.AgentController do
   defp agent_summary(agent) do
     %{
       id: agent.id,
+      user_id: agent.user_id,
       behavior: agent.behavior,
       status: agent.status,
       started_at: agent.started_at,
@@ -212,6 +213,7 @@ defmodule MaraithonWeb.AgentController do
   defp agent_payload(agent) do
     %{
       id: agent.id,
+      user_id: agent.user_id,
       behavior: agent.behavior,
       status: agent.status,
       config: agent.config,
