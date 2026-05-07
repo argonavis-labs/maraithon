@@ -19,6 +19,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
+  alias Maraithon.Tools
 
   def dashboard(conn, params) do
     with {:ok, activity_limit} <-
@@ -118,6 +119,41 @@ defmodule MaraithonWeb.AdminController do
       end
 
     json(conn, serialize_connections_snapshot(snapshot))
+  end
+
+  def gmail_recent(conn, params) do
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 5, "limit") do
+      user_id = parse_user_id(params["user_id"])
+
+      case Tools.execute("gmail_list_recent", %{
+             "user_id" => user_id,
+             "max_results" => min(limit, 20)
+           }) do
+        {:ok, %{messages: messages} = result} ->
+          json(conn, %{
+            user_id: user_id,
+            source: "gmail",
+            count: length(messages),
+            provider_count: Map.get(result, :count, length(messages)),
+            messages: Enum.map(messages, &serialize_gmail_message/1)
+          })
+
+        {:error, message} when is_binary(message) ->
+          conn
+          |> put_status(:bad_gateway)
+          |> json(%{error: "gmail_unavailable", message: message})
+
+        {:error, reason} ->
+          conn
+          |> put_status(:bad_gateway)
+          |> json(%{error: "gmail_unavailable", message: inspect(reason)})
+      end
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
   end
 
   def todos(conn, params) do
@@ -526,6 +562,23 @@ defmodule MaraithonWeb.AdminController do
 
   defp serialize_connections_snapshot(snapshot) do
     normalize_json(snapshot)
+  end
+
+  defp serialize_gmail_message(message) when is_map(message) do
+    %{
+      message_id: Map.get(message, :message_id),
+      thread_id: Map.get(message, :thread_id),
+      google_provider: Map.get(message, :google_provider),
+      google_account_email: Map.get(message, :google_account_email),
+      from: Map.get(message, :from),
+      to: Map.get(message, :to),
+      subject: Map.get(message, :subject),
+      date: Map.get(message, :date),
+      internal_date: Map.get(message, :internal_date),
+      labels: Map.get(message, :labels, []),
+      snippet: Map.get(message, :snippet)
+    }
+    |> normalize_json()
   end
 
   defp serialize_todo(%Todo{} = todo) do
