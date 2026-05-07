@@ -5,7 +5,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
   alias Maraithon.Insights.Refresh, as: InsightRefresh
-  alias Maraithon.TelegramAssistant.PushBroker
+  alias Maraithon.TelegramResponder
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
@@ -193,29 +193,17 @@ defmodule MaraithonWeb.AdminController do
   def push_telegram(conn, params) do
     user_id = parse_user_id(params["user_id"])
     message = blank_to_nil(params["message"] || params["body"])
-    title = blank_to_nil(params["title"]) || "Admin notice"
-
-    dedupe_key =
-      blank_to_nil(params["dedupe_key"]) || "admin_telegram_push:#{Ecto.UUID.generate()}"
 
     with body when is_binary(body) <- message,
          chat_id when is_binary(chat_id) <-
            blank_to_nil(params["chat_id"]) || telegram_chat_id(user_id),
-         {:ok, result} <-
-           PushBroker.deliver(%{
-             user_id: user_id,
-             chat_id: chat_id,
-             origin_type: "admin_notice",
-             origin_id: dedupe_key,
-             dedupe_key: dedupe_key,
-             title: title,
-             body: body,
-             urgency: 1.0,
-             interrupt_now: true,
-             why_now: "Admin-triggered operational update.",
-             telegram_opts: [parse_mode: "HTML"]
-           }) do
-      json(conn, Map.put(result, :chat_id, chat_id))
+         {:ok, result} <- TelegramResponder.send(chat_id, body, parse_mode: "HTML") do
+      json(conn, %{
+        status: "sent",
+        user_id: user_id,
+        chat_id: chat_id,
+        message_id: result["message_id"]
+      })
     else
       nil ->
         conn
@@ -224,11 +212,6 @@ defmodule MaraithonWeb.AdminController do
           error: "invalid_params",
           message: "message and connected Telegram chat are required"
         })
-
-      {:fallback, :disabled} ->
-        conn
-        |> put_status(:bad_gateway)
-        |> json(%{error: "telegram_disabled", message: "Unified Telegram push is disabled"})
 
       {:error, reason} ->
         conn
