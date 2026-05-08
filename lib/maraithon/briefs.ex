@@ -254,7 +254,7 @@ defmodule Maraithon.Briefs do
 
   defp render_telegram_text(%Brief{} = brief) do
     if travel_brief?(brief) do
-      safe(brief.body)
+      Maraithon.TelegramMarkdown.to_html(brief.body)
     else
       cadence_label = cadence_label(brief.cadence)
 
@@ -262,9 +262,9 @@ defmodule Maraithon.Briefs do
       <b>#{safe(cadence_label)}</b>
       <b>#{safe(brief.title)}</b>
 
-      #{safe(brief.summary)}
+      #{Maraithon.TelegramMarkdown.to_html(brief.summary)}
 
-      #{safe(brief.body)}
+      #{Maraithon.TelegramMarkdown.to_html(brief.body)}
       """
       |> String.trim()
     end
