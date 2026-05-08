@@ -120,7 +120,16 @@ defmodule Maraithon.InsightNotificationActionsTest do
       Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
     sent = last_telegram_message(:send)
-    assert sent.text =~ "Maraithon Insight"
+    assert sent.text =~ "This requires action"
+    assert sent.text =~ "<b>What it is:</b>"
+    assert sent.text =~ "<b>Suggested reply:</b>"
+    assert sent.text =~ "Hi Sarah,"
+    assert sent.text =~ "<b>Actions:</b>"
+    assert sent.text =~ "Tap Draft Email"
+    refute sent.text =~ "score="
+    refute sent.text =~ "threshold="
+    refute sent.text =~ "Need from Kent"
+    refute sent.text =~ "Draft plan"
     assert button_labels(sent.opts) |> Enum.member?("Draft Email")
     assert button_labels(sent.opts) |> Enum.member?("Mark Done")
 
@@ -478,9 +487,11 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "Maraithon Watching"
-    assert sent.text =~ "<b>Watch:</b>"
-    assert sent.text =~ "<b>Change:</b> Ownership moved to Breck after acknowledgment."
+    assert sent.text =~ "Watching this"
+    assert sent.text =~ "<b>Watch for:</b>"
+    assert sent.text =~ "<b>What changed:</b> Ownership moved to Breck after acknowledgment."
+    refute sent.text =~ "score="
+    refute sent.text =~ "threshold="
 
     refute button_labels(sent.opts) |> Enum.member?("Draft Email")
     refute button_labels(sent.opts) |> Enum.member?("Mark Done")

@@ -89,81 +89,33 @@ defmodule Maraithon.InsightNotifications.Actions do
     insight = delivery.insight
     metadata = insight.metadata || %{}
     action_state = action_state(delivery)
-    why_now = read_string(metadata, "why_now")
-    follow_up_ideas = read_string_list(metadata, "follow_up_ideas")
-    operator_needs = operator_needs(insight, metadata)
-    draft_plan = draft_plan(insight, metadata)
     change_summary = metadata |> read_map("attention") |> read_string("change_summary")
 
-    due_text =
-      case insight.due_at do
-        %DateTime{} = due_at -> "\nDue: #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}"
-        _ -> ""
-      end
-
-    source_line =
-      case source_label(insight, metadata) do
-        nil -> ""
-        value -> "\nSource: #{safe(value)}"
-      end
-
-    why_now_text =
-      case why_now do
-        nil -> ""
-        value -> "\n\n<b>Why now:</b> #{safe(value)}"
-      end
-
-    ideas_text =
-      case follow_up_ideas do
-        [] ->
-          ""
-
-        ideas ->
-          rendered =
-            ideas
-            |> Enum.map_join("\n", fn idea -> "- #{safe(idea)}" end)
-
-          "\n\n<b>Ideas:</b>\n#{rendered}"
-      end
-
-    needs_text =
-      case operator_needs do
-        [] ->
-          ""
-
-        needs ->
-          rendered =
-            needs
-            |> Enum.map_join("\n", fn need -> "- #{safe(need)}" end)
-
-          "\n\n<b>Need from Kent:</b>\n#{rendered}"
-      end
-
-    draft_plan_text =
-      case draft_plan do
-        nil -> ""
-        value -> "\n\n<b>Draft plan:</b> #{safe(value)}"
-      end
-
     action_state_text = render_action_state(action_state)
-    header = if monitor_insight?(insight), do: "Maraithon Watching", else: "Maraithon Insight"
-    action_label = if monitor_insight?(insight), do: "Watch", else: "Action"
+    header = if monitor_insight?(insight), do: "Watching this", else: "This requires action"
+    action_label = if monitor_insight?(insight), do: "Watch for", else: "Suggested reply"
+    reply_text = suggested_reply(insight, metadata)
+    details_text = details_text(insight, metadata)
+    action_text = action_list_text(insight, metadata)
 
     change_summary_text =
       case change_summary do
         nil -> ""
-        value -> "\n\n<b>Change:</b> #{safe(value)}"
+        value -> "\n\n<b>What changed:</b> #{safe(value)}"
       end
 
     """
     <b>#{header}</b>
     <b>#{safe(insight.title)}</b>
 
-    #{safe(insight.summary)}
+    <b>What it is:</b> #{safe(insight.summary)}
+    #{details_text}#{change_summary_text}
 
-    <b>#{action_label}:</b> #{safe(insight.recommended_action)}#{due_text}#{source_line}#{why_now_text}#{change_summary_text}#{ideas_text}#{needs_text}#{draft_plan_text}#{action_state_text}
+    <b>#{action_label}:</b>
+    #{safe(reply_text)}
 
-    score=#{Float.round(delivery.score || 0.0, 2)} threshold=#{Float.round(delivery.threshold || 0.0, 2)}
+    <b>Actions:</b>
+    #{action_text}#{action_state_text}
     """
     |> String.trim()
   end
@@ -633,6 +585,131 @@ defmodule Maraithon.InsightNotifications.Actions do
     case delivery.metadata do
       %{"telegram_action" => %{} = state} -> state
       _ -> nil
+    end
+  end
+
+  defp details_text(%Insight{} = insight, metadata) do
+    [
+      needed_detail(insight),
+      due_detail(insight),
+      source_detail(insight, metadata)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> ""
+      details -> "\n#{Enum.map_join(details, "\n", &safe/1)}"
+    end
+  end
+
+  defp due_detail(%Insight{due_at: %DateTime{} = due_at}) do
+    "Due: #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}"
+  end
+
+  defp due_detail(%Insight{}), do: nil
+
+  defp needed_detail(%Insight{recommended_action: action}) when is_binary(action) do
+    "Needed: #{action}"
+  end
+
+  defp needed_detail(%Insight{}), do: nil
+
+  defp source_detail(%Insight{} = insight, metadata) do
+    case source_label(insight, metadata) do
+      nil -> nil
+      value -> "Source: #{value}"
+    end
+  end
+
+  defp suggested_reply(%Insight{} = insight, metadata) do
+    explicit =
+      read_string(metadata, "suggested_reply") ||
+        read_string(metadata, "draft_reply")
+
+    explicit ||
+      if monitor_insight?(insight) do
+        insight.recommended_action
+      else
+        suggested_action_reply(insight, metadata)
+      end
+  end
+
+  defp suggested_action_reply(%Insight{} = insight, metadata) do
+    person =
+      record_value(metadata, "person") || first_email_name(read_string(metadata, "to")) || "there"
+
+    points = read_string_list(metadata, "suggested_reply_points")
+
+    cond do
+      points != [] ->
+        "#{email_greeting(person, nil)} #{Enum.join(points, " ")}"
+
+      insight.source == "gmail" ->
+        "#{email_greeting(person, nil)} I owe you the follow-up here. I’m confirming the current status now and will send either the promised update or a concrete ETA in this thread."
+
+      insight.source == "slack" ->
+        "I owe you the follow-up here. I’m checking the current status and will reply with either the update or a concrete ETA."
+
+      true ->
+        insight.recommended_action
+    end
+  end
+
+  defp action_list_text(%Insight{} = insight, metadata) do
+    insight
+    |> action_items(metadata)
+    |> Enum.map_join("\n", fn item -> "- #{safe(item)}" end)
+  end
+
+  defp action_items(%Insight{} = insight, metadata) do
+    base =
+      if monitor_insight?(insight) do
+        [
+          "Keep watching for a blocker, direct ask, or stall.",
+          "Mark done if the loop is already closed.",
+          "Dismiss if this is no longer relevant."
+        ]
+      else
+        [
+          draft_action_item(insight),
+          ready_action_item(insight),
+          eta_action_item(insight, metadata)
+        ]
+      end
+
+    base
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+    |> Enum.take(3)
+  end
+
+  defp draft_action_item(%Insight{source: "gmail"}),
+    do: "Tap Draft Email to generate the in-thread reply."
+
+  defp draft_action_item(%Insight{source: "slack"}),
+    do: "Tap Draft Slack to generate the thread reply."
+
+  defp draft_action_item(%Insight{}), do: "Take the recommended action."
+
+  defp ready_action_item(%Insight{source: "gmail"}),
+    do: "If the artifact or update is ready, send it in the same email thread."
+
+  defp ready_action_item(%Insight{source: "slack"}),
+    do: "If the answer is ready, send it in the same Slack thread."
+
+  defp ready_action_item(%Insight{}), do: nil
+
+  defp eta_action_item(%Insight{} = insight, metadata) do
+    due =
+      case insight.due_at do
+        %DateTime{} = due_at -> Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")
+        _ -> nil
+      end
+
+    if due do
+      "If it is not ready, reply with the next concrete ETA before #{due}."
+    else
+      person = record_value(metadata, "person") || "the other person"
+      "If it is not ready, give #{person} a specific ETA and next step."
     end
   end
 
