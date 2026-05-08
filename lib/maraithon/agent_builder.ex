@@ -56,7 +56,7 @@ defmodule Maraithon.AgentBuilder do
   @behavior_specs [
     %{
       id: "ai_chief_of_staff",
-      label: "AI Chief of Staff",
+      label: "Chief of Staff",
       category: "Workflow",
       summary:
         "One assistant that combines follow-through, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
@@ -162,8 +162,8 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "github_product_planner",
-      label: "GitHub Product Planner",
-      category: "Planning",
+      label: "PM Agent",
+      category: "Product",
       summary:
         "Reviews one GitHub repository like a PM, proposes the next 2-3 features, and pushes the strongest roadmap ideas to Telegram each day.",
       inputs: [
@@ -424,8 +424,8 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "codebase_advisor",
-      label: "Codebase Advisor",
-      category: "Code Review",
+      label: "Coding Agent",
+      category: "Engineering",
       summary:
         "Walks a repository file by file and writes concrete review recommendations to a markdown report.",
       inputs: [
@@ -754,10 +754,19 @@ defmodule Maraithon.AgentBuilder do
 
   @behavior_spec_by_id Map.new(@behavior_specs, &{&1.id, &1})
 
-  # Behavior ids that have been superseded by another spec. They are
-  # still recognised by the runtime so existing agents keep working,
-  # but they no longer appear in the library or new-agent builder.
-  @hidden_library_ids ~w(inbox_calendar_advisor)
+  # Behavior ids that have been superseded or pulled from the public
+  # library. They are still recognised by the runtime so existing
+  # agents keep working, they just don't show up as new templates.
+  # The library currently surfaces three flagship agents: the Chief of
+  # Staff, the PM agent, and the Coding agent.
+  @hidden_library_ids ~w(
+    inbox_calendar_advisor
+    prompt_agent
+    personal_assistant_agent
+    slack_followthrough_agent
+    repo_planner
+    watchdog_summarizer
+  )
 
   def behavior_specs, do: @behavior_specs
 
