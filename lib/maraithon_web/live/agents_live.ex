@@ -499,26 +499,40 @@ defmodule MaraithonWeb.AgentsLive do
                 <h2 class="text-base/7 font-semibold text-zinc-950">
                   <%= agent_display_name(@selected_agent) %>
                 </h2>
-                <p class="mt-0.5 text-sm/6 text-zinc-500">
+                <p
+                  :if={agent_kind_label(@selected_agent) != agent_display_name(@selected_agent)}
+                  class="mt-0.5 text-sm/6 text-zinc-500"
+                >
                   <%= agent_kind_label(@selected_agent) %>
                 </p>
               </div>
-
-              <div class="flex flex-wrap items-center gap-2">
-                <.link
-                  patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
-                  class={workspace_tab_class(@selected_panel == :inspect)}
-                >
-                  Overview
-                </.link>
-                <.link
-                  patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
-                  class={workspace_tab_class(@selected_panel == :edit)}
-                >
-                  Settings
-                </.link>
-              </div>
             </div>
+            <nav class="-mb-px flex flex-wrap items-end gap-6 border-b border-zinc-950/10">
+              <.link
+                patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
+                class={workspace_tab_class(@selected_panel == :inspect)}
+              >
+                Overview
+              </.link>
+              <.link
+                patch={agents_path(@filters, %{id: @selected_agent.id, panel: :apps})}
+                class={workspace_tab_class(@selected_panel == :apps)}
+              >
+                Connected apps
+              </.link>
+              <.link
+                patch={agents_path(@filters, %{id: @selected_agent.id, panel: :skills})}
+                class={workspace_tab_class(@selected_panel == :skills)}
+              >
+                Skills
+              </.link>
+              <.link
+                patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
+                class={workspace_tab_class(@selected_panel == :edit)}
+              >
+                Settings
+              </.link>
+            </nav>
           </:header>
 
           <%= if @inspection_errors != [] do %>
@@ -714,7 +728,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <% schedule = morning_brief_schedule(@selected_agent) %>
                       <% skills = chief_skill_rows(@selected_agent) %>
 
-                      <.panel body_class="p-0">
+                      <.panel :if={@selected_panel == :inspect} body_class="p-0">
                         <div class="px-5 py-5">
                           <div class="flex flex-wrap items-start justify-between gap-4">
                             <div>
@@ -760,67 +774,60 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
                       </.panel>
 
-                      <.panel body_class="p-0">
-                        <:header>
-                          <.heading level={3}>Connected apps</.heading>
-                          <.text class="mt-1">Actual accounts this agent can read from or deliver to.</.text>
-                        </:header>
+                      <%= if @selected_panel == :apps do %>
                         <% connected_rows = connected_app_account_rows(@current_user.id, @selected_agent) %>
-                        <.table>
-                            <.table_head>
-                              <.table_row>
-                                <.table_header>App</.table_header>
-                                <.table_header>Account</.table_header>
-                                <.table_header>Access</.table_header>
-                                <.table_header>Status</.table_header>
-                                <.table_header>Updated</.table_header>
-                              </.table_row>
-                            </.table_head>
-                            <.table_body>
-                              <%= for row <- connected_rows do %>
-                                <.table_row>
-                                  <.table_cell class="align-top">
-                                    <div class="flex items-center gap-2 font-semibold text-zinc-950">
-                                      <img
-                                        src={connector_logo_src(row.logo_provider)}
-                                        alt={row.app}
-                                        class="h-5 w-5 object-contain"
-                                      />
-                                      <%= row.app %>
-                                    </div>
-                                  </.table_cell>
-                                  <.table_cell class="align-top">
-                                    <div class="font-medium text-zinc-950"><%= row.account %></div>
-                                    <div :if={row.note} class="mt-1 text-xs text-zinc-500">
-                                      <%= row.note %>
-                                    </div>
-                                  </.table_cell>
-                                  <.table_cell class="max-w-xl align-top text-zinc-600">
-                                    <%= row.access %>
-                                  </.table_cell>
-                                  <.table_cell class="align-top">
-                                    <.badge color={account_status_color(row.status)}>
-                                      <%= account_status_label(row.status) %>
-                                    </.badge>
-                                  </.table_cell>
-                                  <.table_cell class="align-top text-xs text-zinc-500">
-                                    <%= format_datetime(row.updated_at) %>
-                                  </.table_cell>
-                                </.table_row>
-                              <% end %>
+                        <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
+                          <li
+                            :for={row <- connected_rows}
+                            class="grid grid-cols-1 gap-3 px-4 py-3 sm:px-6 lg:grid-cols-12 lg:items-start"
+                          >
+                            <div class="flex items-center gap-2 lg:col-span-3">
+                              <img
+                                src={connector_logo_src(row.logo_provider)}
+                                alt={row.app}
+                                class="size-5 shrink-0 object-contain"
+                              />
+                              <span class="truncate text-sm/6 font-semibold text-zinc-950">
+                                <%= row.app %>
+                              </span>
+                            </div>
 
-                              <%= if connected_rows == [] do %>
-                                <.table_row>
-                                  <.table_cell colspan="5" class="py-8 text-sm text-zinc-500">
-                                    No connected accounts found for this agent yet.
-                                  </.table_cell>
-                                </.table_row>
-                              <% end %>
-                            </.table_body>
-                          </.table>
-                      </.panel>
+                            <div class="lg:col-span-3">
+                              <p class="truncate text-sm/6 font-medium text-zinc-950">
+                                <%= row.account %>
+                              </p>
+                              <p :if={row.note} class="mt-0.5 text-xs/5 text-zinc-500">
+                                <%= row.note %>
+                              </p>
+                            </div>
 
-                      <.panel body_class="p-0">
+                            <p class="text-sm/6 text-zinc-600 lg:col-span-4">
+                              <%= row.access %>
+                            </p>
+
+                            <div class="flex flex-wrap items-center gap-3 lg:col-span-2 lg:justify-end">
+                              <.badge
+                                color={account_status_color(row.status)}
+                                class="whitespace-nowrap"
+                              >
+                                <%= account_status_label(row.status) %>
+                              </.badge>
+                              <span class="whitespace-nowrap text-xs/5 text-zinc-500">
+                                <%= format_datetime(row.updated_at) %>
+                              </span>
+                            </div>
+                          </li>
+
+                          <li
+                            :if={connected_rows == []}
+                            class="px-4 py-8 text-center text-sm/6 text-zinc-500 sm:px-6"
+                          >
+                            No connected accounts found for this agent yet.
+                          </li>
+                        </ul>
+                      <% end %>
+
+                      <.panel :if={@selected_panel == :skills} body_class="p-0">
                         <:header>
                           <.heading level={3} class="text-base/7">Attached Skills</.heading>
                           <.text class="mt-1">Each skill owns one clear job. Adjust the settings where the work happens.</.text>
@@ -879,7 +886,7 @@ defmodule MaraithonWeb.AgentsLive do
                       </.panel>
                     <% end %>
 
-                    <%= unless chief_of_staff_agent?(@selected_agent) do %>
+                    <%= if not chief_of_staff_agent?(@selected_agent) and @selected_panel == :inspect do %>
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
@@ -1338,6 +1345,8 @@ defmodule MaraithonWeb.AgentsLive do
   defp normalize_query(_query), do: ""
 
   defp normalize_panel("inspect"), do: :inspect
+  defp normalize_panel("apps"), do: :apps
+  defp normalize_panel("skills"), do: :skills
   defp normalize_panel("edit"), do: :edit
   defp normalize_panel(_panel), do: nil
 
@@ -1395,6 +1404,8 @@ defmodule MaraithonWeb.AgentsLive do
   defp maybe_put_query(params, key, value), do: params ++ [{key, value}]
 
   defp panel_param(:inspect), do: nil
+  defp panel_param(:apps), do: "apps"
+  defp panel_param(:skills), do: "skills"
   defp panel_param(:edit), do: "edit"
   defp panel_param(_panel), do: nil
 
@@ -1452,11 +1463,11 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp workspace_tab_class(true),
     do:
-      "inline-flex items-center rounded-lg bg-zinc-950 px-3 py-1.5 text-xs/5 font-semibold text-white"
+      "inline-flex items-center border-b-2 border-zinc-950 px-1 pb-2 text-sm/6 font-medium text-zinc-950"
 
   defp workspace_tab_class(false),
     do:
-      "inline-flex items-center rounded-lg border border-zinc-950/10 px-3 py-1.5 text-xs/5 font-semibold text-zinc-700 hover:bg-zinc-950/[0.025]"
+      "inline-flex items-center border-b-2 border-transparent px-1 pb-2 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
 
   defp behaviors do
     AgentBuilder.behavior_specs()
