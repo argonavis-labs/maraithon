@@ -700,9 +700,8 @@ defmodule MaraithonWeb.DashboardLive do
       <% end %>
 
       <section>
-        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <div class="border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Overview</h2>
-          <p class="text-xs/5 text-zinc-500">Live</p>
         </div>
         <dl class="mt-6 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
           <.overview_stat
@@ -733,7 +732,9 @@ defmodule MaraithonWeb.DashboardLive do
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
-          <span class="text-xs/5 text-zinc-500"><%= @open_todo_count %> open</span>
+          <span :if={@open_todo_count > 0} class="text-xs/5 text-zinc-500">
+            <%= @open_todo_count %> open
+          </span>
         </div>
 
         <div class="mt-4">

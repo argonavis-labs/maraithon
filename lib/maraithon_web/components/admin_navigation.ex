@@ -146,18 +146,6 @@ defmodule MaraithonWeb.AdminNavigation do
           </.sidebar_item>
         </.sidebar_section>
 
-        <.sidebar_section>
-          <.sidebar_heading>Quick actions</.sidebar_heading>
-          <.sidebar_item navigate="/agents/new">
-            <.icon name={:plus} class="size-5" />
-            <.sidebar_label>New agent</.sidebar_label>
-          </.sidebar_item>
-          <.sidebar_item navigate="/connectors">
-            <.icon name={:connectors} class="size-5" />
-            <.sidebar_label>Connect a service</.sidebar_label>
-          </.sidebar_item>
-        </.sidebar_section>
-
         <.sidebar_spacer />
 
         <.sidebar_section>
