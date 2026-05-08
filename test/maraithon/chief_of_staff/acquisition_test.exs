@@ -2,7 +2,7 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.ChiefOfStaff.{Acquisition, SourceBundle}
-  alias Maraithon.TestSupport.{TravelCalendarStub, TravelGmailStub}
+  alias Maraithon.TestSupport.{NewsStub, TravelCalendarStub, TravelGmailStub}
 
   setup do
     original_config = Application.get_env(:maraithon, Acquisition, [])
@@ -14,7 +14,8 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       Acquisition,
       Keyword.merge(original_config,
         gmail_module: TravelGmailStub,
-        calendar_module: TravelCalendarStub
+        calendar_module: TravelCalendarStub,
+        news_module: NewsStub
       )
     )
 
@@ -109,5 +110,36 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
     assert length(SourceBundle.calendar_events(bundle)) == 1
     assert get_in(telemetry, ["sources", "gmail", "status"]) == "ready"
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
+  test "adds configured news to the morning briefing source bundle" do
+    now = ~U[2026-05-08 12:00:00Z]
+
+    skill_configs = %{
+      "morning_briefing" => %{
+        "news_enabled" => true,
+        "news_feeds" => [
+          %{"name" => "Test News", "url" => "https://example.com/rss.xml"}
+        ]
+      }
+    }
+
+    context = %{
+      agent_id: "chief-agent-news",
+      user_id: "chief@example.com",
+      timestamp: now,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      trigger: %{type: :wakeup, job_type: "wakeup"},
+      event: nil
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build("chief@example.com", ["morning_briefing"], skill_configs, context)
+
+    [item] = SourceBundle.news_items(bundle)
+    assert item["title"] =~ "Slack launches"
+    assert get_in(telemetry, ["sources", "news", "status"]) == "ready"
+    assert get_in(telemetry, ["sources", "news", "item_count"]) == 1
   end
 end

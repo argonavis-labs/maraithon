@@ -5,6 +5,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.News
   alias Maraithon.OAuth
   alias Maraithon.Tools.SlackHelpers
 
@@ -41,6 +42,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> maybe_fetch_gmail(user_id, source_scope, plan, context)
       |> maybe_fetch_calendar(user_id, source_scope, plan, context)
       |> maybe_fetch_slack(user_id, source_scope, plan, context)
+      |> maybe_fetch_news(user_id, source_scope, plan, context)
       |> then(fn {telemetry, bundle} -> {bundle, telemetry} end)
 
     {bundle, telemetry}
@@ -202,13 +204,59 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
+  defp maybe_fetch_news({telemetry, bundle}, _user_id, _source_scope, %{news: false}, _context),
+    do: {telemetry, bundle}
+
+  defp maybe_fetch_news({telemetry, bundle}, _user_id, _source_scope, plan, context) do
+    now = context[:timestamp] || DateTime.utc_now()
+
+    case news_module().fetch_for_brief(Map.get(plan, :news_config, %{}), now) do
+      {:ok, %{} = result} ->
+        bundle =
+          SourceBundle.put_news(bundle, %{
+            "items" => Map.get(result, "items", []),
+            "feeds" => Map.get(result, "feeds", []),
+            "providers" => Map.get(result, "feeds", []),
+            "metadata" => %{"mode" => "rss"},
+            "status" => Map.get(result, "status", "ready"),
+            "fetched_at" => Map.get(result, "fetched_at", DateTime.to_iso8601(now))
+          })
+
+        fetches = Map.get(result, "fetches", [])
+
+        telemetry =
+          telemetry
+          |> Map.update("fetches", fetches, &(fetches ++ &1))
+          |> put_source_summary("news", %{
+            "mode" => "rss",
+            "status" => Map.get(result, "status", "ready"),
+            "feed_count" => length(Map.get(result, "feeds", [])),
+            "item_count" => length(Map.get(result, "items", []))
+          })
+
+        {telemetry, bundle}
+
+      {:error, reason} ->
+        bundle = SourceBundle.mark_unavailable(bundle, "news", inspect(reason))
+
+        telemetry =
+          put_source_summary(telemetry, "news", %{
+            "mode" => "rss",
+            "status" => "error",
+            "reason" => inspect(reason)
+          })
+
+        {telemetry, bundle}
+    end
+  end
+
   defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
     with {:ok, token} <-
            SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "auto"),
          {:ok, response} <-
            slack_module().list_conversations(token.access_token,
              types: ["public_channel", "private_channel", "mpim", "im"],
-             limit: plan.slack_channel_limit,
+             limit: max(plan.slack_channel_limit * 10, 200),
              exclude_archived: true
            ) do
       workspace = SourceScope.slack_workspace_for_team(source_scope, team_id) || %{}
@@ -218,6 +266,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Map.get("channels", [])
         |> normalize_list()
         |> Enum.filter(&key_slack_channel?(&1, plan.slack_key_channels))
+        |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
         |> Enum.take(plan.slack_channel_limit)
 
       {channels, fetches} =
@@ -580,6 +629,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     max_lookback_hours =
       max_skill_integer(skill_ids, skill_configs, "lookback_hours", @default_lookback_hours)
 
+    news_config = news_config(skill_ids, skill_configs)
+
     %{
       gmail:
         service_required?(requirements, "google", "gmail") and
@@ -588,6 +639,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         service_required?(requirements, "google", "calendar") and
           event_allows_source?(event_source, "google_calendar"),
       slack: service_required?(requirements, "slack", nil),
+      news: morning_brief_trigger?(skill_ids, context) and news_enabled?(news_config),
+      news_config: news_config,
       web_context: morning_brief_trigger?(skill_ids, context),
       inbox_limit: max(max_email_scan_limit, 10),
       sent_limit: max(max_email_scan_limit * 2, 12),
@@ -600,6 +653,35 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       forward_days: @default_forward_days
     }
   end
+
+  defp news_config(skill_ids, skill_configs) do
+    skill_ids
+    |> Enum.map(fn skill_id -> Map.get(skill_configs, skill_id, %{}) end)
+    |> Enum.reduce(%{}, fn config, acc ->
+      acc
+      |> maybe_put("news_enabled", Map.get(config, "news_enabled"))
+      |> maybe_put("news_limit", Map.get(config, "news_limit"))
+      |> maybe_merge_news_feeds(Map.get(config, "news_feeds"))
+    end)
+  end
+
+  defp news_enabled?(%{"news_enabled" => false}), do: false
+  defp news_enabled?(%{"news_enabled" => "false"}), do: false
+  defp news_enabled?(%{"news_enabled" => "0"}), do: false
+
+  defp news_enabled?(config) when is_map(config) do
+    config
+    |> Map.get("news_feeds", [])
+    |> List.wrap()
+    |> Enum.any?()
+  end
+
+  defp maybe_merge_news_feeds(config, feeds) when is_list(feeds) do
+    current = Map.get(config, "news_feeds", [])
+    Map.put(config, "news_feeds", Enum.uniq(current ++ feeds))
+  end
+
+  defp maybe_merge_news_feeds(config, _feeds), do: config
 
   defp resolve_source_scope(user_id, skill_ids, skill_configs) do
     configured_scope =
@@ -816,6 +898,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "is_private" => channel["is_private"] || false,
       "is_im" => channel["is_im"] || false,
       "is_mpim" => channel["is_mpim"] || false,
+      "conversation_kind" => slack_conversation_kind(channel),
       "is_member" => channel["is_member"] || false
     }
   end
@@ -825,7 +908,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "team_id" => team_id,
       "team_name" => Map.get(workspace, "team_name"),
       "channel_id" => channel["id"],
-      "channel_name" => channel["name"],
+      "channel_name" => channel["name"] || slack_conversation_kind(channel),
+      "conversation_kind" => slack_conversation_kind(channel),
       "ts" => message["ts"],
       "thread_ts" => message["thread_ts"],
       "user" => message["user"],
@@ -902,6 +986,40 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> normalize_list()
     end)
   end
+
+  defp slack_channel_priority(channel, key_channels) when is_map(channel) do
+    name = normalize_channel_name(channel["name"])
+
+    cond do
+      is_binary(name) and name in key_channels ->
+        0
+
+      is_binary(name) and String.starts_with?(name, "exec-") ->
+        1
+
+      is_binary(name) and String.starts_with?(name, "founders-") ->
+        2
+
+      channel["is_private"] == true and channel["is_im"] != true and channel["is_mpim"] != true ->
+        3
+
+      channel["is_im"] == true ->
+        4
+
+      channel["is_mpim"] == true ->
+        5
+
+      true ->
+        6
+    end
+  end
+
+  defp slack_channel_priority(_channel, _key_channels), do: 6
+
+  defp slack_conversation_kind(%{"is_im" => true}), do: "dm"
+  defp slack_conversation_kind(%{"is_mpim" => true}), do: "group_dm"
+  defp slack_conversation_kind(%{"is_private" => true}), do: "private_channel"
+  defp slack_conversation_kind(_channel), do: "public_channel"
 
   defp normalize_list(values) when is_list(values), do: values
   defp normalize_list(_values), do: []
@@ -989,6 +1107,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp slack_module do
     Application.get_env(:maraithon, __MODULE__, [])
     |> Keyword.get(:slack_module, Maraithon.Connectors.Slack)
+  end
+
+  defp news_module do
+    Application.get_env(:maraithon, __MODULE__, [])
+    |> Keyword.get(:news_module, News)
   end
 
   defp account_provider(%{"provider" => provider}) when is_binary(provider), do: provider

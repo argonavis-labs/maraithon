@@ -16,6 +16,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_email_scan_limit 30
   @default_slack_channel_scan_limit 16
   @default_slack_message_scan_limit 8
+  @default_news_limit 6
   @default_lookback_hours 18
 
   @impl true
@@ -30,6 +31,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "email_scan_limit" => @default_email_scan_limit,
       "slack_channel_scan_limit" => @default_slack_channel_scan_limit,
       "slack_message_scan_limit" => @default_slack_message_scan_limit,
+      "news_enabled" => true,
+      "news_limit" => @default_news_limit,
+      "news_feeds" => [
+        %{
+          "name" => "Techmeme",
+          "url" => "https://www.techmeme.com/feed.xml"
+        },
+        %{
+          "name" => "Hacker News",
+          "url" => "https://hnrss.org/frontpage"
+        }
+      ],
       "lookback_hours" => @default_lookback_hours,
       "slack_key_channels" => [
         "runner-general",
@@ -221,6 +234,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     calendar_events = SourceBundle.calendar_events(source_bundle)
     gmail_messages = SourceBundle.gmail_inbox_messages(source_bundle)
     slack_messages = SourceBundle.slack_messages(source_bundle)
+    news_items = SourceBundle.news_items(source_bundle)
 
     recent_slack_messages =
       Enum.filter(slack_messages, &recent_slack_message?(&1, lookback_start))
@@ -266,6 +280,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "messages" => length(slack_messages),
           "recent_messages" => length(recent_slack_messages),
           "mentions" => length(SourceBundle.slack_mentions(source_bundle))
+        }
+      },
+      "news" => %{
+        "items" =>
+          news_items
+          |> Enum.map(&news_item_for_prompt/1)
+          |> Enum.take(@default_news_limit),
+        "counts" => %{
+          "items" => length(news_items),
+          "feeds" => length(SourceBundle.news_feeds(source_bundle))
         }
       },
       "commitments" =>
@@ -314,6 +338,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     - Make the title specific: "<Weekday>, <Month> <day> — <plain-English read on the day>".
     - Open the body with a one-sentence temperature read that says what today's real move is.
     - Use these sections when supported by the source data: "## Needs Your Attention", "## Today's Schedule", "## Inbox", "## Slack", "## Open Commitments", "## Look Ahead".
+    - Include a short "## News" section when news items are available. Keep it relevant and action-light unless it affects a real decision today.
     - Keep it action-first. For anything that needs action, say what it is and the next move in the same bullet.
     - For reply loops, include a concrete suggested reply or ETA language when source data supports it.
     - Surface counts only when useful, like "25 in last 18h", "4 need response", "8 overdue"; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
@@ -370,6 +395,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     date = read_string(brief_input, "date", "Today")
     gmail = read_map(brief_input, "gmail")
     slack = read_map(brief_input, "slack")
+    news = read_map(brief_input, "news")
     calendar = read_map(brief_input, "calendar")
     commitments = read_map(brief_input, "commitments")
     open_work = read_map(brief_input, "open_work")
@@ -408,6 +434,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     ## Slack
     #{fallback_slack_lines(read_list(slack, "key_threads"))}
 
+    ## News
+    #{fallback_news_lines(read_list(news, "items"))}
+
     ## Open Commitments
     #{fallback_commitment_lines(commitments)}
 
@@ -420,7 +449,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "title" => "#{fallback_title_date(date)} — #{fallback_title_read(commitments, open_work)}",
       "summary" =>
-        "#{length(read_list(gmail, "recent_unread"))} recent unread emails, #{length(read_list(slack, "key_threads"))} Slack items, #{read_integer(commitments, "active_count", 0)} active commitments.",
+        "#{length(read_list(gmail, "recent_unread"))} recent unread emails, #{length(read_list(slack, "key_threads"))} Slack items, #{length(read_list(news, "items"))} news items, #{read_integer(commitments, "active_count", 0)} active commitments.",
       "body" => String.trim(body)
     }
   end
@@ -451,6 +480,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.take(7)
     |> Enum.map_join("\n", fn message ->
       "- **##{read_string(message, "channel_name", "slack")}** — #{truncate(read_string(message, "text", ""), 140)}"
+    end)
+  end
+
+  defp fallback_news_lines([]), do: "- No configured news feeds surfaced items."
+
+  defp fallback_news_lines(items) do
+    items
+    |> Enum.take(5)
+    |> Enum.map_join("\n", fn item ->
+      source = read_string(item, "source", "News")
+      title = read_string(item, "title", "Untitled")
+      summary = read_string(item, "summary", nil)
+
+      [
+        "- **#{source}** — #{title}",
+        if(summary, do: ": #{truncate(summary, 140)}")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("")
     end)
   end
 
@@ -625,11 +673,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "team_name" => read_string(message, "team_name", nil),
       "channel_id" => read_string(message, "channel_id", nil),
       "channel_name" => read_string(message, "channel_name", nil),
+      "conversation_kind" => read_string(message, "conversation_kind", nil),
       "user" => read_string(message, "user", nil),
       "ts" => read_string(message, "ts", nil),
       "thread_ts" => read_string(message, "thread_ts", nil),
       "text" => truncate(read_string(message, "text", ""), 260),
       "reply_count" => read_integer(message, "reply_count", 0)
+    }
+  end
+
+  defp news_item_for_prompt(item) when is_map(item) do
+    %{
+      "source" => read_string(item, "source", nil),
+      "title" => read_string(item, "title", nil),
+      "summary" => truncate(read_string(item, "summary", ""), 220),
+      "url" => read_string(item, "url", nil),
+      "published_at" => read_string(item, "published_at", nil)
     }
   end
 
@@ -723,6 +782,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "counts" => %{
         "gmail_recent_unread" => length(get_in(input, ["gmail", "recent_unread"]) || []),
         "slack_key_threads" => length(get_in(input, ["slack", "key_threads"]) || []),
+        "news_items" => length(get_in(input, ["news", "items"]) || []),
         "commitments_active" => get_in(input, ["commitments", "active_count"]) || 0,
         "insights" => length(get_in(input, ["open_work", "insights"]) || []),
         "todos" => length(get_in(input, ["open_work", "todos"]) || [])

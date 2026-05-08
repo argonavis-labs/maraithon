@@ -93,6 +93,11 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_label(:unknown), do: "unknown"
   def connection_status_label(_status), do: "disconnected"
 
+  def connection_status_color(:connected), do: "emerald"
+  def connection_status_color(status) when status in [:partial, :missing_scope], do: "amber"
+  def connection_status_color(:needs_refresh), do: "rose"
+  def connection_status_color(_status), do: "zinc"
+
   def refresh_token_status_label(:active), do: "refresh active"
   def refresh_token_status_label(:inactive), do: "refresh inactive"
   def refresh_token_status_label(:missing), do: "no refresh token"
@@ -100,6 +105,10 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def refresh_token_status_label(:not_applicable), do: "not applicable"
   def refresh_token_status_label(:unknown), do: "unknown"
   def refresh_token_status_label(_status), do: "unknown"
+
+  def refresh_token_status_color(:active), do: "emerald"
+  def refresh_token_status_color(status) when status in [:inactive, :missing], do: "amber"
+  def refresh_token_status_color(_status), do: "zinc"
 
   def refresh_token_badge_class(:active),
     do:

@@ -76,6 +76,23 @@ defmodule Maraithon.Runtime.Scheduler do
     end
   end
 
+  def pending_payload?(agent_id, job_type, payload_key, payload_value)
+      when is_binary(agent_id) and is_binary(job_type) and is_binary(payload_key) and
+             is_binary(payload_value) do
+    case DbResilience.with_database("scheduler pending payload lookup", fn ->
+           from(j in ScheduledJob,
+             where: j.agent_id == ^agent_id,
+             where: j.job_type == ^job_type,
+             where: j.status in ["pending", "dispatched"],
+             where: fragment("?->>? = ?", j.payload, ^payload_key, ^payload_value)
+           )
+           |> Repo.exists?()
+         end) do
+      {:ok, result} -> result
+      {:error, _reason} -> false
+    end
+  end
+
   @doc """
   Mark a dispatched job as delivered after an agent acknowledges receipt.
   """

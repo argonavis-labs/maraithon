@@ -21,7 +21,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "highlights the Agents tab and links back to the agents workspace", %{conn: conn} do
       {:ok, view, html} = live(conn, "/agents/new")
 
-      assert has_element?(view, "a[href='/agents'].bg-indigo-700", "Agents")
+      assert has_element?(view, "a[href='/agents'].bg-zinc-950", "Agents")
       assert html =~ "Back to agents"
     end
 

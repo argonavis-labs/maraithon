@@ -1,18 +1,16 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
   <div class="space-y-5">
-    <section class="border-b border-slate-200 pb-4">
+    <.panel body_class="px-6 py-6">
       <div class="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Admin Control Center
           </p>
-          <h1 class="mt-1 text-2xl font-semibold text-slate-950">Connectors</h1>
+          <.heading class="mt-1">Connectors</.heading>
         </div>
-        <p class="text-sm text-slate-600">
-          <span class="font-medium text-slate-950"><%= @connected_count %></span> connected
-        </p>
+        <.badge color="zinc" class="px-3 py-1 text-sm"><%= @connected_count %> connected</.badge>
       </div>
-    </section>
+    </.panel>
 
     <%= if @connection_errors != [] do %>
       <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
@@ -32,24 +30,23 @@
       </section>
     <% end %>
 
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div class="border-b border-slate-200 px-4 py-3 sm:px-5">
-        <h2 class="text-base font-semibold text-slate-950">Apps</h2>
-      </div>
-
-      <div class="divide-y divide-slate-200">
+    <.panel body_class="p-0">
+      <:header>
+        <.heading level={2} class="text-base/7">Apps</.heading>
+      </:header>
+      <div class="divide-y divide-zinc-950/5">
         <%= for provider <- @providers do %>
-          <div class="grid grid-cols-1 gap-3 px-4 py-4 sm:px-5 lg:grid-cols-12 lg:items-center">
+          <div class="grid grid-cols-1 gap-3 px-5 py-4 transition hover:bg-zinc-950/[0.025] lg:grid-cols-12 lg:items-center">
             <a
               href={provider_detail_path(provider)}
               class="group flex min-w-0 items-center gap-3 lg:col-span-7"
             >
               <.oauth_logo provider={provider.logo} />
               <div class="min-w-0">
-                <p class="text-sm font-semibold text-slate-950 group-hover:text-indigo-700">
+                <p class="text-sm font-semibold text-zinc-950 group-hover:text-blue-700">
                   <%= provider.label %>
                 </p>
-                <p class="mt-0.5 truncate text-sm text-slate-600"><%= provider.description %></p>
+                <p class="mt-0.5 truncate text-sm text-zinc-500"><%= provider.description %></p>
               </div>
             </a>
 
@@ -57,50 +54,35 @@
               href={provider_detail_path(provider)}
               class="flex items-center justify-between gap-3 lg:col-span-3 lg:justify-start"
             >
-              <span class={connection_status_badge_class(provider.status)}>
+              <.badge color={connection_status_color(provider.status)}>
                 <%= connection_status_label(provider.status) %>
-              </span>
-              <span class="text-sm text-slate-600"><%= provider_account_summary(provider) %></span>
+              </.badge>
+              <span class="text-sm text-zinc-500"><%= provider_account_summary(provider) %></span>
             </a>
 
             <div class="flex items-center gap-2 lg:col-span-2 lg:justify-end">
               <%= cond do %>
                 <% provider.provider != "telegram" and not telegram_connected?(@providers) -> %>
-                  <button
-                    type="button"
-                    disabled
-                    class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-                  >
+                  <.button type="button" variant="outline" disabled class="text-xs">
                     Connect Telegram first
-                  </button>
+                  </.button>
                 <% provider[:connect_blocked?] -> %>
-                  <button
-                    type="button"
-                    disabled
-                    class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-                  >
+                  <.button type="button" variant="outline" disabled class="text-xs">
                     <%= provider[:connect_block_reason] %>
-                  </button>
+                  </.button>
                 <% connection_action_enabled?(provider) -> %>
-                  <a
-                    href={provider.connect_url}
-                    class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-500"
-                  >
+                  <.button href={provider.connect_url} color="indigo" class="text-xs">
                     <%= connection_primary_action(provider) %>
-                  </a>
+                  </.button>
                 <% true -> %>
-                  <button
-                    type="button"
-                    disabled
-                    class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-                  >
+                  <.button type="button" variant="outline" disabled class="text-xs">
                     Configure OAuth First
-                  </button>
+                  </.button>
               <% end %>
             </div>
           </div>
         <% end %>
       </div>
-    </section>
+    </.panel>
   </div>
 </Layouts.app>

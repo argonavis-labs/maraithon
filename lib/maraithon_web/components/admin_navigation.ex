@@ -29,12 +29,12 @@ defmodule MaraithonWeb.AdminNavigation do
       |> assign(:normalized_path, normalize_path(assigns.current_path))
 
     ~H"""
-    <nav class="bg-indigo-600">
+    <nav class="border-b border-zinc-950/10 bg-white">
       <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div class="flex h-16 items-center justify-between">
           <div class="flex items-center">
             <div class="flex-shrink-0">
-              <span class="text-2xl font-bold text-white">Maraithon</span>
+              <span class="text-xl font-semibold tracking-tight text-zinc-950">Maraithon</span>
             </div>
             <div class="hidden md:block">
               <div class="ml-10 flex items-baseline space-x-3">
@@ -51,18 +51,15 @@ defmodule MaraithonWeb.AdminNavigation do
           <div class="hidden md:block">
             <div class="ml-4 flex items-center gap-4 md:ml-6">
               <%= if @current_user do %>
-                <span class="text-sm text-indigo-100"><%= @current_user.email %></span>
+                <span class="text-sm text-zinc-500"><%= @current_user.email %></span>
                 <.form for={%{}} action={~p"/logout"} method="post">
                   <input type="hidden" name="_method" value="delete" />
-                  <button
-                    type="submit"
-                    class="rounded-md border border-indigo-300 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
-                  >
+                  <.button type="submit" variant="outline" class="min-h-8 px-2.5 py-1 text-xs">
                     Logout
-                  </button>
+                  </.button>
                 </.form>
               <% end %>
-              <span class="text-sm text-indigo-200">Long-lived LLM Agent Runtime</span>
+              <span class="text-sm text-zinc-400">Long-lived LLM Agent Runtime</span>
             </div>
           </div>
         </div>
@@ -87,12 +84,12 @@ defmodule MaraithonWeb.AdminNavigation do
   defp normalize_path(_path), do: "/dashboard"
 
   defp tab_link_class(current_path, tab_path) do
-    base = "rounded-md px-3 py-2 text-sm font-medium"
+    base = "rounded-lg px-3 py-2 text-sm font-medium transition"
 
     if active_tab?(current_path, tab_path) do
-      base <> " bg-indigo-700 text-white"
+      base <> " bg-zinc-950 text-white"
     else
-      base <> " text-indigo-100 hover:bg-indigo-500 hover:text-white"
+      base <> " text-zinc-600 hover:bg-zinc-950/5 hover:text-zinc-950"
     end
   end
 

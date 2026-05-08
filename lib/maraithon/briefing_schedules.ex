@@ -5,6 +5,7 @@ defmodule Maraithon.BriefingSchedules do
 
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.Runtime
 
@@ -72,6 +73,15 @@ defmodule Maraithon.BriefingSchedules do
   end
 
   def summarize_for_prompt(_user_id), do: default_summary()
+
+  @spec list_due_morning_agents(DateTime.t()) :: [map()]
+  def list_due_morning_agents(%DateTime{} = now) do
+    Agents.list_resumable_agents()
+    |> Enum.filter(&briefing_agent?/1)
+    |> Enum.map(&morning_due_entry(&1, now))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reject(&Briefs.exists?(&1.user_id, &1.dedupe_key))
+  end
 
   @spec update_schedule(String.t(), map()) :: {:ok, map()} | {:error, atom() | String.t()}
   def update_schedule(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
@@ -156,6 +166,37 @@ defmodule Maraithon.BriefingSchedules do
         end
     end
   end
+
+  defp morning_due_entry(%Agent{user_id: user_id} = agent, now) when is_binary(user_id) do
+    timezone_offset_hours =
+      agent
+      |> config_value("timezone_offset_hours")
+      |> parse_integer(@default_timezone_offset_hours)
+
+    morning_hour =
+      agent
+      |> config_value("morning_brief_hour_local")
+      |> parse_integer(@default_morning_hour)
+
+    local_now = DateTime.add(now, timezone_offset_hours, :hour)
+
+    if local_now.hour >= morning_hour do
+      local_date = DateTime.to_date(local_now)
+      dedupe_key = "morning_briefing:#{Date.to_iso8601(local_date)}"
+
+      %{
+        agent: agent,
+        agent_id: agent.id,
+        user_id: user_id,
+        dedupe_key: dedupe_key,
+        local_date: local_date,
+        timezone_offset_hours: timezone_offset_hours,
+        morning_brief_hour_local: morning_hour
+      }
+    end
+  end
+
+  defp morning_due_entry(_agent, _now), do: nil
 
   defp normalize_schedule_update(attrs, agents) when is_map(attrs) and is_list(agents) do
     with {:ok, briefing_kind} <-

@@ -28,6 +28,7 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
         "events_by_provider" => %{}
       },
       "slack" => %{},
+      "news" => %{"items" => [], "feeds" => []},
       "web_context" => nil,
       "source_scope" => SourceScope.normalize(source_scope)
     }
@@ -96,6 +97,24 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
     |> put_freshness("slack", freshness)
   end
 
+  def put_news(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    items = normalize_items(read_list(attrs, "items"))
+    feeds = normalize_items(read_list(attrs, "feeds"))
+
+    freshness =
+      build_freshness("news", attrs, %{
+        "item_count" => length(items),
+        "feed_count" => length(feeds)
+      })
+
+    bundle
+    |> Map.put("news", %{
+      "items" => items,
+      "feeds" => feeds
+    })
+    |> put_freshness("news", freshness)
+  end
+
   def mark_unavailable(bundle, source, reason, metadata \\ %{})
       when is_map(bundle) and is_binary(source) do
     put_freshness(bundle, source, %{
@@ -113,6 +132,8 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def slack_workspaces(bundle), do: bundle |> read_map("slack") |> read_list("workspaces")
   def slack_messages(bundle), do: bundle |> read_map("slack") |> read_list("messages")
   def slack_mentions(bundle), do: bundle |> read_map("slack") |> read_list("mentions")
+  def news_items(bundle), do: bundle |> read_map("news") |> read_list("items")
+  def news_feeds(bundle), do: bundle |> read_map("news") |> read_list("feeds")
   def freshness(bundle), do: read_map(bundle, "freshness")
   def source_scope(bundle), do: bundle |> read_map("source_scope") |> SourceScope.normalize()
 

@@ -99,6 +99,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         "status" => "ready",
         "fetched_at" => now
       })
+      |> SourceBundle.put_news(%{
+        "items" => [
+          %{
+            "source" => "Techmeme",
+            "title" => "OpenAI ships briefing-relevant updates",
+            "summary" => "A concise product update worth scanning.",
+            "url" => "https://example.com/news",
+            "published_at" => DateTime.to_iso8601(now)
+          }
+        ],
+        "feeds" => [%{"name" => "Techmeme", "url" => "https://example.com/feed.xml"}],
+        "status" => "ready",
+        "fetched_at" => now
+      })
 
     state =
       MorningBriefing.init(%{
@@ -128,6 +142,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Today's move:"
     assert prompt =~ "Instagram"
     assert prompt =~ "runner-general"
+    assert prompt =~ "OpenAI ships briefing-relevant updates"
+    assert prompt =~ "## News"
 
     response = %{
       content:
@@ -149,6 +165,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief.metadata["source_backed"] == true
     assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "slack_key_threads"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "news_items"]) == 1
   end
 
   test "fallback brief keeps the chief-of-staff morning briefing shape", %{

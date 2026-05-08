@@ -76,6 +76,12 @@ defmodule Maraithon.Briefs do
     |> Repo.all()
   end
 
+  def exists?(user_id, dedupe_key) when is_binary(user_id) and is_binary(dedupe_key) do
+    Brief
+    |> where([b], b.user_id == ^user_id and b.dedupe_key == ^dedupe_key)
+    |> Repo.exists?()
+  end
+
   def dispatch_telegram_batch(opts \\ []) do
     if telegram_module().configured?() do
       batch_size = Keyword.get(opts, :batch_size, 10)

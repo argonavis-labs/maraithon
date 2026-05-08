@@ -5,6 +5,9 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.AgentArchitecture
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
+  alias Maraithon.BriefingSchedules
+  alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
+  alias Maraithon.Connections
   alias Maraithon.Runtime
 
   @refresh_interval 5_000
@@ -99,6 +102,15 @@ defmodule MaraithonWeb.AgentsLive do
 
   def handle_event("clear_filters", _params, socket) do
     {:noreply, push_patch(socket, to: agents_path_for_socket(socket, default_filters()))}
+  end
+
+  def handle_event("select_agent", %{"id" => id}, socket) do
+    if agent_owned_by_current_user?(socket, id) do
+      {:noreply,
+       push_patch(socket, to: agents_path(socket.assigns.filters, %{id: id, panel: :inspect}))}
+    else
+      {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+    end
   end
 
   def handle_event("start_agent", %{"id" => id} = params, socket) do
@@ -288,45 +300,78 @@ defmodule MaraithonWeb.AgentsLive do
     end
   end
 
+  def handle_event("update_morning_brief_time", %{"schedule" => params}, socket) do
+    id = socket.assigns.selected_agent_id
+
+    with true <- is_binary(id),
+         true <- agent_owned_by_current_user?(socket, id),
+         {:ok, result} <-
+           BriefingSchedules.update_schedule(
+             current_user_id(socket),
+             Map.merge(params, %{"agent_id" => id, "briefing_kind" => "morning"})
+           ) do
+      {:noreply,
+       socket
+       |> refresh_registry()
+       |> refresh_selected_workspace_or_clear()
+       |> put_flash(
+         :info,
+         "Morning briefing set for #{result.display_time_local} #{result.local_timezone}"
+       )}
+    else
+      false ->
+        {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> refresh_registry()
+         |> refresh_selected_workspace_or_clear()
+         |> put_flash(
+           :error,
+           "Failed to update morning briefing: #{schedule_error_message(reason)}"
+         )}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
-        <section class="overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.2),_transparent_28%),linear-gradient(135deg,_#0f172a,_#0f766e_50%,_#164e63)] px-6 py-7 text-white shadow-xl">
+        <.panel body_class="px-6 py-6">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div class="max-w-3xl">
-              <p class="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
                 Agents Workspace
               </p>
-              <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Create, control, and inspect every agent you own</h1>
-              <p class="mt-3 max-w-2xl text-sm text-slate-200 sm:text-base">
-                Manage lifecycle actions, edit saved definitions, and inspect spend, queued work, events, and logs without leaving this page.
-              </p>
+              <.heading class="mt-2 text-3xl sm:text-4xl">
+                Your agents
+              </.heading>
+              <.text class="mt-3 max-w-2xl sm:text-base">
+                Choose an assistant, review what it does, and adjust the settings that affect your day.
+              </.text>
             </div>
 
             <div class="flex flex-wrap items-center gap-3">
-              <span class="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-white">
+              <.badge color="zinc" class="px-3 py-1 text-sm">
                 <%= length(@all_agents) %> total
-              </span>
-              <a
-                href={~p"/agents/new"}
-                class="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-100"
-              >
+              </.badge>
+              <.button href={~p"/agents/new"} class="min-h-11 px-5">
                 New Agent
-              </a>
+              </.button>
             </div>
           </div>
-        </section>
+        </.panel>
 
-        <section class="rounded-2xl bg-white shadow">
-          <div class="border-b border-slate-200 px-5 py-5">
+        <.panel body_class="p-0">
+          <:header>
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 class="text-lg font-semibold text-slate-900">Registry</h2>
-                <p class="mt-1 text-sm text-slate-500">
-                  Search by name, behavior, or id. Row actions operate directly on the selected agent.
-                </p>
+                <.heading level={2} class="text-lg/7">Choose an agent</.heading>
+                <.text class="mt-1">
+                  Open an agent to see its overview, connected apps, skills, and delivery settings.
+                </.text>
               </div>
               <form id="agent-filters" phx-change="update_filters" class="flex flex-wrap items-center gap-3">
                 <label class="sr-only" for="agent-search">Search agents</label>
@@ -335,14 +380,14 @@ defmodule MaraithonWeb.AgentsLive do
                   type="search"
                   name="filters[q]"
                   value={@filters.q}
-                  placeholder="Search name, behavior, or id"
-                  class="w-72 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  placeholder="Search agents"
+                  class="min-h-11 w-72 rounded-lg border border-zinc-950/10 bg-white px-3 text-sm/6 text-zinc-950 shadow-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 />
                 <label class="sr-only" for="agent-status">Filter by status</label>
                 <select
                   id="agent-status"
                   name="filters[status]"
-                  class="rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  class="min-h-11 rounded-lg border border-zinc-950/10 bg-white px-3 text-sm/6 text-zinc-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
                   <option
                     :for={status <- @status_options}
@@ -356,169 +401,128 @@ defmodule MaraithonWeb.AgentsLive do
                   :if={@filters.status != "all" or @filters.q != ""}
                   type="button"
                   phx-click="clear_filters"
-                  class="inline-flex items-center rounded-xl border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  class="group relative isolate inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-950/10 bg-white px-4 text-sm/6 font-semibold text-zinc-950 shadow-sm hover:bg-zinc-950/[0.025] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
                 >
                   Reset
                 </button>
               </form>
             </div>
-          </div>
+          </:header>
 
-          <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 text-sm">
-              <thead class="bg-slate-50">
-                <tr>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">Agent</th>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">What it does for you</th>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">Connectors it looks at</th>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">Status</th>
-                  <th class="px-4 py-3 text-left font-medium text-slate-500">Updated</th>
-                  <th class="px-4 py-3 text-right font-medium text-slate-500">Actions</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-slate-200 bg-white">
+          <.table>
+              <.table_head>
+                <.table_row>
+                  <.table_header>Agent</.table_header>
+                  <.table_header>Status</.table_header>
+                  <.table_header>Last updated</.table_header>
+                  <.table_header class="text-right">Actions</.table_header>
+                </.table_row>
+              </.table_head>
+              <.table_body>
                 <%= for agent <- @agents do %>
-                  <tr class={row_class(@selected_agent_id, agent.id)}>
-                    <td class="px-4 py-4 align-top">
-                      <div class="font-semibold text-slate-900"><%= agent_name(agent.config) %></div>
-                      <div class="text-xs text-slate-500"><%= agent.behavior %></div>
+                  <.table_row
+                    class={row_class(@selected_agent_id, agent.id)}
+                    phx-click="select_agent"
+                    phx-value-id={agent.id}
+                    phx-keydown="select_agent"
+                    phx-key="Enter"
+                    role="link"
+                    tabindex="0"
+                    title={"Open #{agent_display_name(agent)}"}
+                  >
+                    <.table_cell class="align-top">
+                      <.link
+                        patch={agents_path(@filters, %{id: agent.id, panel: :inspect})}
+                        class="text-base font-semibold text-zinc-950 hover:text-blue-700"
+                      >
+                        <%= agent_display_name(agent) %>
+                      </.link>
+                      <div class="mt-1 text-xs text-zinc-500"><%= agent_kind_label(agent) %></div>
+                      <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-600">
+                        <%= agent_row_summary(agent) %>
+                      </p>
                       <%= if agent.project do %>
                         <div class="mt-1 text-xs font-medium text-emerald-700">
                           Project: <%= agent.project.name %>
                         </div>
                       <% end %>
-                      <div class="mt-1 font-mono text-[11px] text-slate-400"><%= agent.id %></div>
-                    </td>
-                    <td class="px-4 py-4 align-top">
-                      <p class="max-w-md text-sm text-slate-700"><%= agent_job_summary(agent) %></p>
-                      <div class="mt-2 text-xs text-slate-500">
-                        <%= subscriptions_preview(agent.config) %>
-                      </div>
-                    </td>
-                    <td class="px-4 py-4 align-top">
-                      <div class="flex max-w-xs flex-wrap gap-2">
-                        <%= for connector <- agent_connector_requirements(agent) do %>
-                          <span class="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700">
+                      <div class="mt-3 flex flex-wrap items-center gap-2">
+                        <%= for connector <- agent_connector_logo_items(agent) do %>
+                          <span
+                            title={connector.label}
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-950/10 bg-white shadow-sm"
+                          >
                             <img
                               src={connector_logo_src(connector.provider)}
                               alt={connector.label}
-                              class="h-4 w-4 object-contain"
+                              class="h-5 w-5 object-contain"
                             />
-                            <%= connector.label %>
                           </span>
                         <% end %>
                       </div>
-                    </td>
-                    <td class="px-4 py-4 align-top">
+                    </.table_cell>
+                    <.table_cell class="align-top">
                       <.status_badge status={agent.status} />
-                    </td>
-                    <td class="px-4 py-4 align-top text-xs text-slate-500">
+                    </.table_cell>
+                    <.table_cell class="align-top text-xs text-zinc-500">
                       <%= format_datetime(agent.updated_at) %>
-                    </td>
-                    <td class="px-4 py-4 align-top">
+                    </.table_cell>
+                    <.table_cell class="align-top">
                       <div class="flex flex-wrap justify-end gap-2">
-                        <.link
-                          patch={agents_path(@filters, %{id: agent.id, panel: :inspect})}
-                          class="inline-flex items-center rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          Inspect
-                        </.link>
-                        <.link
-                          patch={agents_path(@filters, %{id: agent.id, panel: :edit})}
-                          class="inline-flex items-center rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          Edit
-                        </.link>
-                        <%= if agent.status in ["running", "degraded"] do %>
-                          <button
-                            type="button"
-                            phx-click="stop_agent"
-                            phx-value-id={agent.id}
-                            phx-value-surface="row"
-                            phx-disable-with="Stopping..."
-                            class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                          >
-                            Stop
-                          </button>
-                        <% else %>
-                          <button
-                            type="button"
-                            phx-click="start_agent"
-                            phx-value-id={agent.id}
-                            phx-value-surface="row"
-                            phx-disable-with="Starting..."
-                            class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
-                          >
-                            Start
-                          </button>
-                        <% end %>
-                        <button
-                          type="button"
-                          phx-click="delete_agent"
-                          phx-value-id={agent.id}
-                          phx-value-surface="row"
-                          phx-disable-with="Deleting..."
-                          data-confirm="Delete this agent and all dependent records?"
-                          class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
-                        >
-                          Delete
-                        </button>
+                        <.button patch={agents_path(@filters, %{id: agent.id, panel: :inspect})} class="min-h-8 px-3 text-xs">
+                          Open
+                        </.button>
                       </div>
-                    </td>
-                  </tr>
+                    </.table_cell>
+                  </.table_row>
                 <% end %>
 
                 <%= if @all_agents == [] do %>
-                  <tr>
-                    <td colspan="6" class="px-4 py-12">
-                      <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
-                        <p class="text-base font-semibold text-slate-900">No agents exist yet.</p>
-                        <p class="mt-2 text-sm text-slate-600">
+                  <.table_row>
+                    <.table_cell colspan="4" class="py-12">
+                      <div class="rounded-xl border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
+                        <p class="text-base font-semibold text-zinc-950">No agents exist yet.</p>
+                        <p class="mt-2 text-sm text-zinc-600">
                           Start with the builder, then come back here to inspect, edit, or control the runtime.
                         </p>
-                        <a
-                          href={~p"/agents/new"}
-                          class="mt-4 inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
-                        >
+                        <.button href={~p"/agents/new"} class="mt-4">
                           Create your first agent
-                        </a>
+                        </.button>
                       </div>
-                    </td>
-                  </tr>
+                    </.table_cell>
+                  </.table_row>
                 <% end %>
 
                 <%= if @all_agents != [] and @agents == [] do %>
-                  <tr>
-                    <td colspan="6" class="px-4 py-12">
-                      <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center">
-                        <p class="text-base font-semibold text-slate-900">No agents match the current filters.</p>
-                        <p class="mt-2 text-sm text-slate-600">
+                  <.table_row>
+                    <.table_cell colspan="4" class="py-12">
+                      <div class="rounded-xl border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
+                        <p class="text-base font-semibold text-zinc-950">No agents match the current filters.</p>
+                        <p class="mt-2 text-sm text-zinc-600">
                           Clear the current search or status filter to see the full registry again.
                         </p>
-                        <button
+                        <.button
                           type="button"
                           phx-click="clear_filters"
-                          class="mt-4 inline-flex items-center rounded-full border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                          variant="outline"
+                          class="mt-4"
                         >
                           Reset filters
-                        </button>
+                        </.button>
                       </div>
-                    </td>
-                  </tr>
+                    </.table_cell>
+                  </.table_row>
                 <% end %>
-              </tbody>
-            </table>
-          </div>
-        </section>
+              </.table_body>
+            </.table>
+        </.panel>
 
-        <section class="overflow-hidden rounded-2xl bg-white shadow">
+        <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div class="border-b border-slate-200 px-5 py-5">
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 class="text-lg font-semibold text-slate-900">Selected Agent Workspace</h2>
-                <p class="mt-1 text-sm text-slate-500">
-                  Inspect runtime state or edit the saved definition for the selected agent.
-                </p>
+                <h2 class="text-lg font-semibold text-slate-950">Agent details</h2>
+                <p class="mt-1 text-sm text-slate-500">Review this agent and adjust its day-to-day behavior.</p>
               </div>
 
               <%= if @selected_agent do %>
@@ -527,13 +531,13 @@ defmodule MaraithonWeb.AgentsLive do
                     patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
                     class={workspace_tab_class(@selected_panel == :inspect)}
                   >
-                    Inspect
+                    Overview
                   </.link>
                   <.link
                     patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
                     class={workspace_tab_class(@selected_panel == :edit)}
                   >
-                    Edit
+                    Settings
                   </.link>
                 </div>
               <% end %>
@@ -559,24 +563,23 @@ defmodule MaraithonWeb.AgentsLive do
                     <h3 class="text-2xl font-semibold text-slate-900"><%= agent_name(@selected_agent.config) %></h3>
                     <.status_badge status={@selected_agent.status} />
                   </div>
-                  <p class="mt-1 text-sm text-slate-500"><%= @selected_agent.behavior %></p>
-                  <p class="mt-2 font-mono text-xs text-slate-400"><%= @selected_agent.id %></p>
+                  <p class="mt-1 text-sm text-slate-500"><%= agent_kind_label(@selected_agent) %></p>
                 </div>
 
                 <div class="flex flex-wrap gap-2">
                   <%= if @selected_panel == :inspect do %>
                     <.link
                       patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
-                      class="inline-flex items-center rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      class="inline-flex min-h-10 items-center rounded-full border border-slate-300 px-4 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     >
-                      Edit Definition
+                      Edit Settings
                     </.link>
                   <% else %>
                     <.link
                       patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
-                      class="inline-flex items-center rounded-md border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      class="inline-flex min-h-10 items-center rounded-full border border-slate-300 px-4 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     >
-                      Back to Inspect
+                      Back to Overview
                     </.link>
                   <% end %>
 
@@ -587,7 +590,7 @@ defmodule MaraithonWeb.AgentsLive do
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Stopping..."
-                      class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                      class="inline-flex min-h-10 items-center rounded-full border border-amber-200 bg-amber-50 px-4 text-xs font-medium text-amber-800 hover:bg-amber-100"
                     >
                       Stop Agent
                     </button>
@@ -598,7 +601,7 @@ defmodule MaraithonWeb.AgentsLive do
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Starting..."
-                      class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                      class="inline-flex min-h-10 items-center rounded-full border border-emerald-200 bg-emerald-50 px-4 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
                     >
                       Start Agent
                     </button>
@@ -611,7 +614,7 @@ defmodule MaraithonWeb.AgentsLive do
                     phx-value-surface="workspace"
                     phx-disable-with="Deleting..."
                     data-confirm="Delete this agent and all dependent records?"
-                    class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                    class="inline-flex min-h-10 items-center rounded-full border border-rose-200 bg-rose-50 px-4 text-xs font-medium text-rose-700 hover:bg-rose-100"
                   >
                     Delete Agent
                   </button>
@@ -784,8 +787,184 @@ defmodule MaraithonWeb.AgentsLive do
                   </form>
                 </div>
               <% else %>
-                <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                <div class={inspect_layout_class(@selected_agent)}>
                   <div class="space-y-6">
+                    <%= if chief_of_staff_agent?(@selected_agent) do %>
+                      <% schedule = morning_brief_schedule(@selected_agent) %>
+                      <% skills = chief_skill_rows(@selected_agent) %>
+
+                      <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div class="px-5 py-5">
+                          <div class="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                              <h3 class="text-xl font-semibold tracking-tight text-slate-950">Overview</h3>
+                              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                                A daily operating assistant for commitments, schedule changes, travel, projects, and personal reminders.
+                              </p>
+                            </div>
+                            <div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                              Active skills: <%= length(skills) %>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="grid grid-cols-1 border-t border-slate-200 text-sm sm:grid-cols-3">
+                          <div class="border-b border-slate-200 px-5 py-4 sm:border-b-0 sm:border-r">
+                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              Morning briefing
+                            </div>
+                            <div class="mt-2 text-2xl font-semibold text-slate-950">
+                              <%= schedule.display_time_local %>
+                            </div>
+                            <div class="mt-1 text-xs text-slate-500"><%= schedule.local_timezone %></div>
+                          </div>
+                          <div class="border-b border-slate-200 px-5 py-4 sm:border-b-0 sm:border-r">
+                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              Delivered by
+                            </div>
+                            <div class="mt-2 text-2xl font-semibold text-slate-950">Telegram</div>
+                            <div class="mt-1 text-xs text-slate-500">sent from the Maraithon server</div>
+                          </div>
+                          <div class="px-5 py-4">
+                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                              Sources
+                            </div>
+                            <div class="mt-2 flex flex-wrap gap-2">
+                              <%= for source <- chief_source_labels() do %>
+                                <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                  <%= source %>
+                                </span>
+                              <% end %>
+                            </div>
+                          </div>
+                        </div>
+                      </section>
+
+                      <.panel body_class="p-0">
+                        <:header>
+                          <.heading level={3}>Connected apps</.heading>
+                          <.text class="mt-1">Actual accounts this agent can read from or deliver to.</.text>
+                        </:header>
+                        <% connected_rows = connected_app_account_rows(@current_user.id, @selected_agent) %>
+                        <.table>
+                            <.table_head>
+                              <.table_row>
+                                <.table_header>App</.table_header>
+                                <.table_header>Account</.table_header>
+                                <.table_header>Access</.table_header>
+                                <.table_header>Status</.table_header>
+                                <.table_header>Updated</.table_header>
+                              </.table_row>
+                            </.table_head>
+                            <.table_body>
+                              <%= for row <- connected_rows do %>
+                                <.table_row>
+                                  <.table_cell class="align-top">
+                                    <div class="flex items-center gap-2 font-semibold text-zinc-950">
+                                      <img
+                                        src={connector_logo_src(row.logo_provider)}
+                                        alt={row.app}
+                                        class="h-5 w-5 object-contain"
+                                      />
+                                      <%= row.app %>
+                                    </div>
+                                  </.table_cell>
+                                  <.table_cell class="align-top">
+                                    <div class="font-medium text-zinc-950"><%= row.account %></div>
+                                    <div :if={row.note} class="mt-1 text-xs text-zinc-500">
+                                      <%= row.note %>
+                                    </div>
+                                  </.table_cell>
+                                  <.table_cell class="max-w-xl align-top text-zinc-600">
+                                    <%= row.access %>
+                                  </.table_cell>
+                                  <.table_cell class="align-top">
+                                    <.badge color={account_status_color(row.status)}>
+                                      <%= account_status_label(row.status) %>
+                                    </.badge>
+                                  </.table_cell>
+                                  <.table_cell class="align-top text-xs text-zinc-500">
+                                    <%= format_datetime(row.updated_at) %>
+                                  </.table_cell>
+                                </.table_row>
+                              <% end %>
+
+                              <%= if connected_rows == [] do %>
+                                <.table_row>
+                                  <.table_cell colspan="5" class="py-8 text-sm text-zinc-500">
+                                    No connected accounts found for this agent yet.
+                                  </.table_cell>
+                                </.table_row>
+                              <% end %>
+                            </.table_body>
+                          </.table>
+                      </.panel>
+
+                      <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                        <div class="border-b border-slate-200 px-5 py-5">
+                          <h3 class="text-xl font-semibold tracking-tight text-slate-950">Attached Skills</h3>
+                          <p class="mt-1 text-sm text-slate-500">Each skill owns one clear job. Adjust the settings where the work happens.</p>
+                        </div>
+                        <div class="divide-y divide-slate-200">
+                          <%= for skill <- skills do %>
+                            <div id={"chief-skill-#{skill.id}"} class="px-5 py-5">
+                              <div class="flex flex-wrap items-start justify-between gap-4">
+                                <div class="min-w-0">
+                                  <div class="flex flex-wrap items-center gap-2">
+                                    <h4 class="text-base font-semibold text-slate-950"><%= skill.label %></h4>
+                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                                      On
+                                    </span>
+                                  </div>
+                                  <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600"><%= skill.description %></p>
+                                </div>
+
+                                <%= if skill.id == "morning_briefing" do %>
+                                  <form
+                                    id="morning-brief-time-form"
+                                    phx-submit="update_morning_brief_time"
+                                    class="flex w-full flex-wrap items-end gap-3 rounded-2xl bg-slate-50 px-4 py-4 sm:w-auto"
+                                  >
+                                    <div>
+                                      <label
+                                        for="morning-brief-hour"
+                                        class="block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500"
+                                      >
+                                        Send each morning at
+                                      </label>
+                                      <select
+                                        id="morning-brief-hour"
+                                        name="schedule[local_hour]"
+                                        class="mt-1 min-h-11 min-w-44 rounded-xl border border-slate-300 bg-white px-3 text-sm font-medium text-slate-950 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                                      >
+                                        <option
+                                          :for={option <- morning_brief_hour_options()}
+                                          value={option.value}
+                                          selected={option.value == schedule.hour}
+                                        >
+                                          <%= option.label %>
+                                        </option>
+                                      </select>
+                                    </div>
+                                    <button
+                                      type="submit"
+                                      phx-disable-with="Saving..."
+                                      class="inline-flex min-h-11 items-center rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-slate-800"
+                                    >
+                                      Update time
+                                    </button>
+                                    <div class="w-full text-xs text-slate-500">
+                                      Uses <%= schedule.local_timezone %>. Sent by Telegram with Gmail, Calendar, Slack, and news context.
+                                    </div>
+                                  </form>
+                                <% end %>
+                              </div>
+                            </div>
+                          <% end %>
+                        </div>
+                      </section>
+                    <% end %>
+
+                    <%= unless chief_of_staff_agent?(@selected_agent) do %>
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
@@ -925,9 +1104,10 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
                       </div>
                     </section>
+                    <% end %>
                   </div>
 
-                  <div class="space-y-6">
+                  <div :if={!chief_of_staff_agent?(@selected_agent)} class="space-y-6">
                     <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
                       <div class="border-b border-slate-200 px-4 py-4">
                         <h3 class="text-lg font-semibold text-slate-900">Recent Events</h3>
@@ -981,6 +1161,39 @@ defmodule MaraithonWeb.AgentsLive do
                       </div>
                     </section>
                   </div>
+
+                  <details
+                    :if={chief_of_staff_agent?(@selected_agent)}
+                    class="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+                  >
+                    <summary class="cursor-pointer list-none">
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <h3 class="text-base font-semibold text-slate-950">Advanced diagnostics</h3>
+                          <p class="mt-1 text-sm text-slate-500">Runtime details for debugging, billing, and support.</p>
+                        </div>
+                        <span class="text-sm font-medium text-slate-500">Show</span>
+                      </div>
+                    </summary>
+
+                    <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
+                      <.summary_card title="Last Updated" value={format_datetime(agent_updated_at(@selected_agent))} />
+                      <.summary_card title="Events" value={to_string(@inspection.event_count)} />
+                      <.summary_card
+                        title="Spend"
+                        value={"$#{Float.round(@agent_spend.total_cost, 4)}"}
+                        value_class="text-amber-700"
+                      />
+                    </div>
+
+                    <div class="mt-4 rounded-2xl bg-slate-50 p-4">
+                      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                        Agent id
+                      </div>
+                      <p class="mt-2 break-all font-mono text-xs text-slate-600"><%= @selected_agent.id %></p>
+                    </div>
+                  </details>
                 </div>
               <% end %>
             </div>
@@ -1320,9 +1533,20 @@ defmodule MaraithonWeb.AgentsLive do
   defp humanize_status(status), do: status |> String.replace("_", " ") |> String.capitalize()
 
   defp row_class(selected_agent_id, agent_id) when selected_agent_id == agent_id,
-    do: "bg-cyan-50/70"
+    do:
+      "cursor-pointer bg-cyan-50/70 transition hover:bg-cyan-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500"
 
-  defp row_class(_selected_agent_id, _agent_id), do: ""
+  defp row_class(_selected_agent_id, _agent_id),
+    do:
+      "cursor-pointer transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500"
+
+  defp inspect_layout_class(agent) do
+    if chief_of_staff_agent?(agent) do
+      "space-y-6"
+    else
+      "grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]"
+    end
+  end
 
   defp workspace_tab_class(true),
     do:
@@ -1397,6 +1621,172 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp agent_name(config), do: config["name"] || "unnamed_agent"
 
+  defp agent_display_name(%{config: config} = agent) when is_map(config) do
+    name = agent_name(config)
+
+    if technical_agent_name?(name) do
+      agent_kind_label(agent)
+    else
+      name
+    end
+  end
+
+  defp agent_display_name(agent), do: agent_kind_label(agent)
+
+  defp technical_agent_name?(name) when is_binary(name) do
+    String.contains?(name, "_") or Regex.match?(~r/-[0-9a-f]{4,}$/i, name)
+  end
+
+  defp technical_agent_name?(_name), do: true
+
+  defp agent_updated_at(%{updated_at: updated_at}), do: updated_at
+  defp agent_updated_at(_agent), do: nil
+
+  defp agent_kind_label(%{behavior: "ai_chief_of_staff"}), do: "Chief of Staff"
+
+  defp agent_kind_label(%{behavior: "founder_followthrough_agent"}),
+    do: "Follow-through assistant"
+
+  defp agent_kind_label(%{behavior: "inbox_calendar_advisor"}), do: "Inbox and calendar assistant"
+
+  defp agent_kind_label(%{behavior: "slack_followthrough_agent"}),
+    do: "Slack follow-through assistant"
+
+  defp agent_kind_label(%{behavior: "prompt_agent"}), do: "Custom assistant"
+
+  defp agent_kind_label(%{behavior: behavior}) when is_binary(behavior) do
+    behavior
+    |> String.replace("_", " ")
+    |> String.split()
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  defp agent_kind_label(_agent), do: "Assistant"
+
+  defp agent_row_summary(%{behavior: "ai_chief_of_staff"}),
+    do: "Daily briefings, follow-through, travel, projects, and reminders."
+
+  defp agent_row_summary(%{behavior: "founder_followthrough_agent"}),
+    do: "Tracks open loops and reminds you when a commitment needs action."
+
+  defp agent_row_summary(%{behavior: "inbox_calendar_advisor"}),
+    do: "Watches inbox and calendar context for timely follow-up."
+
+  defp agent_row_summary(%{behavior: "slack_followthrough_agent"}),
+    do: "Finds Slack threads and messages that need a reply."
+
+  defp agent_row_summary(agent), do: agent_job_summary(agent)
+
+  defp chief_of_staff_agent?(%{behavior: behavior}) when behavior in ["ai_chief_of_staff"],
+    do: true
+
+  defp chief_of_staff_agent?(_agent), do: false
+
+  defp chief_skill_rows(%{config: config}) when is_map(config) do
+    enabled_ids = ChiefOfStaffSkills.enabled_ids(config)
+
+    enabled_ids
+    |> Enum.map(fn id ->
+      %{
+        id: id,
+        label: chief_skill_label(id),
+        description: chief_skill_description(id)
+      }
+    end)
+  end
+
+  defp chief_skill_rows(_agent), do: []
+
+  defp chief_skill_label("followthrough"), do: "Follow-through"
+  defp chief_skill_label("travel_logistics"), do: "Travel logistics"
+  defp chief_skill_label("morning_briefing"), do: "Morning briefing"
+  defp chief_skill_label("briefing"), do: "Briefing"
+  defp chief_skill_label("project_scope_alignment"), do: "Project scope alignment"
+  defp chief_skill_label("holiday_radar"), do: "Holiday radar"
+
+  defp chief_skill_label(id) when is_binary(id) do
+    id
+    |> String.replace("_", " ")
+    |> String.split()
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  defp chief_skill_description("followthrough"),
+    do: "Finds commitments, unanswered threads, and replies that need action."
+
+  defp chief_skill_description("travel_logistics"),
+    do: "Tracks flights, hotels, local timing, and calendar-sensitive travel work."
+
+  defp chief_skill_description("morning_briefing"),
+    do: "Builds the daily Chief of Staff briefing and sends it through Telegram."
+
+  defp chief_skill_description("briefing"),
+    do: "Prepares scheduled operator summaries from the configured source bundle."
+
+  defp chief_skill_description("project_scope_alignment"),
+    do: "Checks whether active work is aligned with the current project scope."
+
+  defp chief_skill_description("holiday_radar"),
+    do: "Surfaces upcoming family, holiday, and gift reminders before they become urgent."
+
+  defp chief_skill_description(_id), do: "Runs as part of the Chief of Staff cycle."
+
+  defp chief_source_labels, do: ["Gmail", "Calendar", "Slack", "News"]
+
+  defp morning_brief_schedule(%{config: config}) when is_map(config) do
+    hour = config |> Map.get("morning_brief_hour_local") |> parse_integer(8) |> clamp_hour()
+    timezone_offset = config |> Map.get("timezone_offset_hours") |> parse_integer(-5)
+
+    %{
+      hour: hour,
+      display_time_local: display_hour(hour),
+      local_timezone: timezone_label(timezone_offset)
+    }
+  end
+
+  defp morning_brief_schedule(_agent) do
+    %{hour: 8, display_time_local: "8:00 AM", local_timezone: "UTC-05:00"}
+  end
+
+  defp morning_brief_hour_options do
+    Enum.map(0..23, fn hour ->
+      %{value: hour, label: display_hour(hour)}
+    end)
+  end
+
+  defp schedule_error_message(reason) when is_binary(reason), do: reason
+  defp schedule_error_message(reason), do: reason |> inspect() |> String.replace("_", " ")
+
+  defp parse_integer(value, _default) when is_integer(value), do: value
+
+  defp parse_integer(value, default) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> default
+    end
+  end
+
+  defp parse_integer(_value, default), do: default
+
+  defp clamp_hour(hour) when hour < 0, do: 0
+  defp clamp_hour(hour) when hour > 23, do: 23
+  defp clamp_hour(hour), do: hour
+
+  defp display_hour(hour) when is_integer(hour) do
+    suffix = if hour < 12, do: "AM", else: "PM"
+    display_hour = rem(hour, 12)
+    display_hour = if display_hour == 0, do: 12, else: display_hour
+
+    "#{display_hour}:00 #{suffix}"
+  end
+
+  defp timezone_label(offset) when is_integer(offset) do
+    sign = if offset < 0, do: "-", else: "+"
+    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
+
+    "UTC#{sign}#{hours}:00"
+  end
+
   defp agent_prompt(config),
     do: config["prompt"] || AgentBuilder.default_launch_params()["prompt"]
 
@@ -1449,6 +1839,12 @@ defmodule MaraithonWeb.AgentsLive do
     end
   end
 
+  defp agent_connector_logo_items(agent) do
+    agent
+    |> agent_connector_requirements()
+    |> Enum.uniq_by(& &1.provider)
+  end
+
   defp behavior_spec(agent), do: AgentBuilder.behavior_spec(agent.behavior)
 
   defp connector_requirement?(%{kind: kind, provider: provider})
@@ -1484,16 +1880,210 @@ defmodule MaraithonWeb.AgentsLive do
   defp inferred_subscription_connectors(_config),
     do: [%{provider: "generic", label: "No connector dependency"}]
 
+  defp connected_app_account_rows(user_id, agent) when is_binary(user_id) do
+    requirements =
+      agent
+      |> agent_connector_requirements()
+      |> Enum.reject(&(&1.provider == "generic"))
+      |> Enum.group_by(& &1.provider)
+
+    required_providers = requirements |> Map.keys() |> MapSet.new()
+
+    user_id
+    |> connection_snapshot()
+    |> Map.get(:providers, [])
+    |> Enum.filter(fn provider ->
+      provider_key = provider_key(provider)
+      MapSet.member?(required_providers, provider_key)
+    end)
+    |> Enum.flat_map(fn provider ->
+      provider
+      |> provider_account_rows(Map.get(requirements, provider_key(provider), []), user_id)
+    end)
+  end
+
+  defp connected_app_account_rows(_user_id, _agent), do: []
+
+  defp connection_snapshot(user_id) do
+    case Connections.safe_dashboard_snapshot(user_id, return_to: "/agents") do
+      {:ok, snapshot} -> snapshot
+      {:degraded, snapshot} -> snapshot
+      _ -> %{providers: []}
+    end
+  end
+
+  defp provider_account_rows(%{provider: "telegram"} = provider, requirements, user_id) do
+    case Maraithon.ConnectedAccounts.get(user_id, "telegram") do
+      %{status: "connected"} = account ->
+        [telegram_account_row(provider, account)]
+
+      _ ->
+        fallback_provider_account_rows(provider, requirements)
+    end
+  end
+
+  defp provider_account_rows(provider, requirements, _user_id) do
+    account_rows =
+      provider
+      |> Map.get(:accounts, [])
+      |> Enum.map(&account_row(provider, &1, requirements))
+
+    case account_rows do
+      [] -> fallback_provider_account_rows(provider, requirements)
+      rows -> rows
+    end
+  end
+
+  defp telegram_account_row(provider, account) do
+    metadata = account.metadata || %{}
+    username = presence(metadata["username"] || metadata[:username])
+    chat_id = presence(account.external_account_id || metadata["chat_id"] || metadata[:chat_id])
+
+    %{
+      logo_provider: "telegram",
+      app: Map.get(provider, :label) || "Telegram",
+      account: if(username, do: "@#{username}", else: chat_id || "Telegram chat"),
+      note: chat_id && "Chat ID #{chat_id}",
+      access: "Delivery to Telegram",
+      status: account.status,
+      updated_at: account.updated_at
+    }
+  end
+
+  defp account_row(provider, account, requirements) do
+    %{
+      logo_provider: connector_logo_provider(provider_key(provider)),
+      app: Map.get(provider, :label) || connector_label(provider_key(provider)),
+      account: account_value(account, :account, "Connected account"),
+      note: account_value(account, :status_note, nil),
+      access: account_access_summary(account, requirements),
+      status: Map.get(account, :status, Map.get(provider, :status)),
+      updated_at: Map.get(account, :updated_at) || Map.get(provider, :updated_at)
+    }
+  end
+
+  defp fallback_provider_account_rows(%{status: status} = provider, requirements) do
+    details = Map.get(provider, :details, [])
+
+    if status in [:connected, :partial, :needs_refresh] or details != [] do
+      [
+        %{
+          logo_provider: connector_logo_provider(provider_key(provider)),
+          app: Map.get(provider, :label) || connector_label(provider_key(provider)),
+          account: provider_account_label(provider),
+          note: nil,
+          access: provider_access_summary(provider, requirements),
+          status: status,
+          updated_at: Map.get(provider, :updated_at)
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp fallback_provider_account_rows(_provider, _requirements), do: []
+
+  defp provider_key(%{provider: provider}) when is_binary(provider),
+    do: connector_logo_provider(provider)
+
+  defp provider_key(%{id: id}) when is_binary(id), do: connector_logo_provider(id)
+  defp provider_key(_provider), do: "generic"
+
+  defp account_value(account, key, fallback) when is_map(account) do
+    account
+    |> Map.get(key)
+    |> presence()
+    |> case do
+      nil -> fallback
+      value -> value
+    end
+  end
+
+  defp account_value(_account, _key, fallback), do: fallback
+
+  defp account_access_summary(account, requirements) do
+    details =
+      account
+      |> Map.get(:details, [])
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      details != [] ->
+        Enum.join(details, " · ")
+
+      requirements != [] ->
+        requirements |> Enum.map(& &1.label) |> Enum.join(", ")
+
+      true ->
+        "Connected"
+    end
+  end
+
+  defp provider_account_label(%{provider: "telegram", details: details}) when is_list(details) do
+    Enum.find(details, &String.starts_with?(to_string(&1), "@")) ||
+      Enum.find(details, &String.starts_with?(to_string(&1), "Chat")) ||
+      "Telegram chat"
+  end
+
+  defp provider_account_label(%{label: label}) when is_binary(label), do: label
+  defp provider_account_label(_provider), do: "Connected account"
+
+  defp provider_access_summary(%{provider: "telegram"}, _requirements), do: "Delivery to Telegram"
+
+  defp provider_access_summary(provider, requirements) do
+    details =
+      provider
+      |> Map.get(:details, [])
+      |> Enum.map(&to_string/1)
+      |> Enum.reject(&(&1 == ""))
+
+    cond do
+      details != [] -> Enum.join(details, " · ")
+      requirements != [] -> requirements |> Enum.map(& &1.label) |> Enum.join(", ")
+      true -> "Connected"
+    end
+  end
+
+  defp account_status_label(status) when is_atom(status) do
+    status |> Atom.to_string() |> account_status_label()
+  end
+
+  defp account_status_label(status) when is_binary(status) do
+    status |> String.replace("_", " ") |> String.capitalize()
+  end
+
+  defp account_status_label(_status), do: "Connected"
+
+  defp account_status_color(status) when status in [:connected, "connected"], do: "emerald"
+
+  defp account_status_color(status)
+       when status in [:partial, "partial", :needs_refresh, "needs_refresh"],
+       do: "amber"
+
+  defp account_status_color(_status), do: "zinc"
+
+  defp presence(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp presence(nil), do: nil
+  defp presence(value), do: value
+
   defp subscription_provider(topic) when is_binary(topic) do
     topic
     |> String.split(":", parts: 2)
     |> List.first()
     |> case do
       provider
-      when provider in ["google", "gmail", "calendar", "slack", "github", "linear", "telegram"] ->
+      when provider in ["gmail", "calendar", "github", "slack", "linear", "telegram", "notion"] ->
         provider
 
-      _provider ->
+      _ ->
         nil
     end
   end

@@ -4,7 +4,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Effects.Effect
+  alias Maraithon.OAuth
+  alias Maraithon.OAuth.Google
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.ScheduledJob
 
@@ -24,7 +27,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, view, html} = live(conn, "/agents")
 
     assert html =~ "Agents Workspace"
-    assert has_element?(view, "a[href='/agents'].bg-indigo-700", "Agents")
+    assert has_element?(view, "a[href='/agents'].bg-zinc-950", "Agents")
   end
 
   test "renders empty registry and empty workspace states", %{conn: conn} do
@@ -44,9 +47,8 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "What it does for you"
-    assert html =~ "Connectors it looks at"
-    assert html =~ "Runs the focused Chief of Staff stack"
+    assert html =~ "Choose an agent"
+    assert html =~ "Watches inbox and calendar context"
     assert html =~ "Google Gmail"
     assert html =~ "Slack Channels"
     assert html =~ "Telegram"
@@ -64,13 +66,13 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, "/agents")
 
     view
-    |> element("a[href='/agents?id=#{agent.id}']", "Inspect")
+    |> element("tr[phx-click=select_agent][phx-value-id='#{agent.id}']")
     |> render_click()
 
     assert_patch(view, "/agents?id=#{agent.id}")
 
     html = render(view)
-    assert html =~ "Selected Agent Workspace"
+    assert html =~ "Agent details"
     assert html =~ "inspect-me"
   end
 
@@ -82,10 +84,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
-    {:ok, view, _html} = live(conn, "/agents")
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
 
     view
-    |> element("a[href='/agents?id=#{agent.id}&panel=edit']", "Edit")
+    |> element("a[href='/agents?id=#{agent.id}&panel=edit']", "Edit Settings")
     |> render_click()
 
     assert_patch(view, "/agents?id=#{agent.id}&panel=edit")
@@ -103,10 +105,12 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
-    {:ok, view, _html} = live(conn, "/agents")
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
 
     view
-    |> element("button[phx-click=start_agent][phx-value-id=\"#{agent.id}\"]")
+    |> element(
+      "button[phx-click=start_agent][phx-value-id=\"#{agent.id}\"][phx-value-surface=workspace]"
+    )
     |> render_click()
 
     assert Agents.get_agent!(agent.id).status == "running"
@@ -131,10 +135,12 @@ defmodule MaraithonWeb.AgentsLiveTest do
         started_at: DateTime.utc_now()
       })
 
-    {:ok, view, _html} = live(conn, "/agents")
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
 
     view
-    |> element("button[phx-click=stop_agent][phx-value-id=\"#{agent.id}\"]")
+    |> element(
+      "button[phx-click=stop_agent][phx-value-id=\"#{agent.id}\"][phx-value-surface=workspace]"
+    )
     |> render_click()
 
     assert Agents.get_agent!(agent.id).status == "stopped"
@@ -232,6 +238,75 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Architecture"
     assert html =~ "Runtime contract"
     assert html =~ "OTP Agent Runtime"
+  end
+
+  test "chief of staff inspection shows attached skills and edits morning briefing time", %{
+    conn: conn
+  } do
+    {:ok, _google} =
+      OAuth.store_tokens(@user_email, "google:founder@example.com", %{
+        access_token: "google-token",
+        scopes: Google.scopes_for(["gmail", "calendar"]),
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    {:ok, _slack_bot} =
+      OAuth.store_tokens(@user_email, "slack:T12345", %{
+        access_token: "xoxb-test-token",
+        scopes: ["channels:read", "channels:history"],
+        metadata: %{"team_id" => "T12345", "team_name" => "Agora"}
+      })
+
+    {:ok, _slack_user} =
+      OAuth.store_tokens(@user_email, "slack:T12345:user:U99999", %{
+        access_token: "xoxp-test-token",
+        scopes: ["search:read", "im:read", "chat:write"],
+        metadata: %{
+          "team_id" => "T12345",
+          "team_name" => "Agora",
+          "slack_user_id" => "U99999"
+        }
+      })
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(@user_email, "telegram", %{
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042", "username" => "kentfenwick"}
+      })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "enabled_skills" => ["followthrough", "morning_briefing", "travel_logistics"],
+          "morning_brief_hour_local" => 8,
+          "timezone_offset_hours" => -5
+        },
+        status: "stopped"
+      })
+
+    {:ok, view, html} = live(conn, "/agents?id=#{agent.id}")
+
+    assert html =~ "Overview"
+    assert html =~ "Connected apps"
+    assert html =~ "Actual accounts this agent can read from or deliver to."
+    assert html =~ "founder@example.com"
+    assert html =~ "Agora"
+    assert html =~ "@kentfenwick"
+    assert html =~ "Attached Skills"
+    assert html =~ "Morning briefing"
+    assert html =~ "8:00 AM"
+    assert html =~ "Send each morning at"
+    assert has_element?(view, "#morning-brief-time-form")
+
+    view
+    |> form("#morning-brief-time-form", %{"schedule" => %{"local_hour" => "9"}})
+    |> render_submit()
+
+    updated = Agents.get_agent!(agent.id)
+    assert updated.config["morning_brief_hour_local"] == 9
+    assert render(view) =~ "9:00 AM"
   end
 
   test "unauthorized ids clear the selection safely", %{conn: conn} do

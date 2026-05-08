@@ -1,33 +1,30 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
   <div class="space-y-5">
-    <section class="border-b border-slate-200 pb-4">
+    <.panel body_class="px-6 py-6">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div class="flex min-w-0 items-start gap-3">
           <.oauth_logo provider={@provider.logo} />
           <div class="min-w-0">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">
               Connector Detail
             </p>
-            <h1 class="mt-1 text-2xl font-semibold text-slate-950"><%= @provider.label %></h1>
-            <p class="mt-1 max-w-3xl text-sm text-slate-600"><%= @provider.description %></p>
+            <.heading class="mt-1"><%= @provider.label %></.heading>
+            <.text class="mt-1 max-w-3xl"><%= @provider.description %></.text>
           </div>
         </div>
         <div class="flex flex-wrap items-center justify-end gap-2">
-          <span class={connection_status_badge_class(@provider.status)}>
+          <.badge color={connection_status_color(@provider.status)}>
             <%= connection_status_label(@provider.status) %>
-          </span>
-          <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
+          </.badge>
+          <.badge color={refresh_token_status_color(@provider[:refresh_token_status])}>
             <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
-          </span>
-          <a
-            href={~p"/connectors"}
-            class="inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
+          </.badge>
+          <.button href={~p"/connectors"} variant="outline" class="text-xs">
             Back
-          </a>
+          </.button>
         </div>
       </div>
-    </section>
+    </.panel>
 
     <%= if @connection_errors != [] do %>
       <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
@@ -38,62 +35,49 @@
       </section>
     <% end %>
 
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white">
-      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
+    <.panel body_class="p-0">
+      <:header>
+      <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 class="text-base font-semibold text-slate-950">
+          <.heading level={2} class="text-base/7">
             <%= connected_accounts_heading(@provider) %>
-          </h2>
-          <p class="mt-0.5 text-sm text-slate-600"><%= provider_account_summary(@provider) %></p>
+          </.heading>
+          <.text class="mt-0.5"><%= provider_account_summary(@provider) %></.text>
         </div>
 
         <%= cond do %>
           <% @provider.provider != "telegram" and not @telegram_connected -> %>
-            <button
-              type="button"
-              disabled
-              class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-            >
+            <.button type="button" variant="outline" disabled class="text-xs">
               Connect Telegram first
-            </button>
+            </.button>
           <% @provider[:connect_blocked?] -> %>
-            <button
-              type="button"
-              disabled
-              class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-            >
+            <.button type="button" variant="outline" disabled class="text-xs">
               <%= @provider[:connect_block_reason] %>
-            </button>
+            </.button>
           <% connection_action_enabled?(@provider) -> %>
-            <a
-              href={@provider.connect_url}
-              class="inline-flex items-center rounded-md bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-500"
-            >
+            <.button href={@provider.connect_url} color="indigo" class="text-xs">
               <%= connection_primary_action(@provider) %>
-            </a>
+            </.button>
           <% true -> %>
-            <button
-              type="button"
-              disabled
-              class="inline-flex items-center rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-medium text-slate-500"
-            >
+            <.button type="button" variant="outline" disabled class="text-xs">
               Configure OAuth First
-            </button>
+            </.button>
         <% end %>
       </div>
+      </:header>
 
       <%= if @provider[:accounts] && @provider.accounts != [] do %>
-        <div class="divide-y divide-slate-200">
+        <div class="divide-y divide-zinc-950/5">
           <%= for account <- @provider.accounts do %>
-            <div class="grid grid-cols-1 gap-3 px-4 py-3 sm:px-5 lg:grid-cols-12 lg:items-center">
+            <div class="grid grid-cols-1 gap-3 px-5 py-4 lg:grid-cols-12 lg:items-center">
               <div class="min-w-0 lg:col-span-5">
                 <div class="flex flex-wrap items-center gap-2">
-                  <p class="truncate text-sm font-medium text-slate-950"><%= account.account %></p>
-                  <span class={connection_status_badge_class(account.status)}>
+                  <p class="truncate text-sm font-medium text-zinc-950"><%= account.account %></p>
+                  <.badge color={connection_status_color(account.status)}>
                     <%= connection_status_label(account.status) %>
-                  </span>
+                  </.badge>
                 </div>
-                <p class="mt-1 text-xs text-slate-500">
+                <p class="mt-1 text-xs text-zinc-500">
                   Updated <%= format_datetime(account.updated_at) %>
                 </p>
               </div>
@@ -102,20 +86,20 @@
                 <%= if account[:status_note] && account.status_note != "Healthy" do %>
                   <p class="text-sm text-rose-700"><%= account.status_note %></p>
                 <% else %>
-                  <p class="text-sm text-slate-500">Healthy</p>
+                  <p class="text-sm text-zinc-500">Healthy</p>
                 <% end %>
 
                 <%= if account[:details] && account.details != [] do %>
-                  <div class="mt-2 space-y-1 text-xs text-slate-500">
+                  <div class="mt-2 space-y-1 text-xs text-zinc-500">
                     <p :for={detail <- account.details}><%= detail %></p>
                   </div>
                 <% end %>
 
                 <%= if account[:refresh_token_status] do %>
                   <div class="mt-2">
-                    <span class={refresh_token_badge_class(account.refresh_token_status)}>
+                    <.badge color={refresh_token_status_color(account.refresh_token_status)}>
                       <%= refresh_token_status_label(account.refresh_token_status) %>
-                    </span>
+                    </.badge>
                   </div>
                 <% end %>
               </div>
@@ -124,35 +108,33 @@
                 <%= if account[:reconnect_url] &&
                           (@provider.provider == "telegram" || @telegram_connected) &&
                           @provider[:connect_blocked?] != true do %>
-                  <a
-                    href={account.reconnect_url}
-                    class="inline-flex items-center rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-                  >
+                  <.button href={account.reconnect_url} variant="outline" class="text-xs text-amber-800">
                     Reconnect
-                  </a>
+                  </.button>
                 <% end %>
                 <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post">
                   <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
                   <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
                   <input type="hidden" name="provider_key" value={account.provider} />
                   <input type="hidden" name="account_label" value={account.account} />
-                  <button
+                  <.button
                     type="submit"
-                    class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                    variant="outline"
+                    class="text-xs text-rose-700"
                   >
                     Disconnect
-                  </button>
+                  </.button>
                 </form>
               </div>
             </div>
           <% end %>
         </div>
       <% else %>
-        <div class="px-4 py-6 text-sm text-slate-500 sm:px-5">
+        <div class="px-5 py-6 text-sm text-zinc-500">
           No connected accounts yet.
         </div>
       <% end %>
-    </section>
+    </.panel>
 
     <%= if provider_grant_panels_visible?(@provider) do %>
       <section class="grid grid-cols-1 gap-5 xl:grid-cols-3">
