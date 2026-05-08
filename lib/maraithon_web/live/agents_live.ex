@@ -34,7 +34,8 @@ defmodule MaraithonWeb.AgentsLive do
         inspection_errors: [],
         launch: default_launch_params(),
         launch_error: nil,
-        route_state: nil
+        route_state: nil,
+        library: AgentBuilder.behavior_specs()
       )
 
     if connected?(socket) do
@@ -110,6 +111,41 @@ defmodule MaraithonWeb.AgentsLive do
        push_patch(socket, to: agents_path(socket.assigns.filters, %{id: id, panel: :inspect}))}
     else
       {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+    end
+  end
+
+  def handle_event("install_library_agent", %{"behavior" => behavior_id}, socket) do
+    user_id = current_user_id(socket)
+    launch = Map.put(default_launch_params(), "behavior", behavior_id)
+
+    case build_agent_start_params(launch, user_id) do
+      {:ok, params} ->
+        case Runtime.start_agent(params) do
+          {:ok, agent} ->
+            {:noreply,
+             socket
+             |> refresh_registry()
+             |> put_flash(:info, "Installed #{agent_display_name(agent)}")
+             |> push_patch(
+               to: agents_path(socket.assigns.filters, %{id: agent.id, panel: :inspect})
+             )}
+
+          {:error, message} when is_binary(message) ->
+            {:noreply, put_flash(socket, :error, "Could not install: #{message}")}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply,
+             put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+        end
+
+      {:error, message} when is_binary(message) ->
+        {:noreply, put_flash(socket, :error, message)}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
     end
   end
 
@@ -492,6 +528,68 @@ defmodule MaraithonWeb.AgentsLive do
             </.table>
         </div>
 
+        <section :if={@library != []}>
+          <div class="flex flex-wrap items-end justify-between gap-2 border-b border-zinc-950/10 pb-1">
+            <div>
+              <h2 class="text-base/7 font-semibold text-zinc-950">Library</h2>
+              <p class="mt-0.5 text-sm/6 text-zinc-500">
+                Pre-built agents you can install. Each one ships with the right prompts, subscriptions, and tool allowlists.
+              </p>
+            </div>
+            <span class="text-xs/5 text-zinc-500">
+              <%= length(@library) %> templates
+            </span>
+          </div>
+
+          <ul role="list" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <li
+              :for={spec <- @library}
+              class="flex flex-col rounded-lg border border-zinc-950/10 bg-white p-4"
+            >
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h3 class="text-sm/6 font-semibold text-zinc-950"><%= spec.label %></h3>
+                  <p class="mt-0.5 text-xs/5 text-zinc-500"><%= spec.category %></p>
+                </div>
+                <span class="flex shrink-0 items-center gap-1">
+                  <img
+                    :for={connector <- library_connector_logos(spec)}
+                    src={connector_logo_src(connector)}
+                    alt={connector}
+                    title={connector}
+                    class="size-5 object-contain"
+                  />
+                </span>
+              </div>
+
+              <p class="mt-3 line-clamp-3 text-sm/6 text-zinc-600">
+                <%= spec.summary %>
+              </p>
+
+              <p class="mt-3 text-xs/5 text-zinc-500">
+                <%= library_requirement_summary(spec) %>
+              </p>
+
+              <div class="mt-4 flex items-center justify-between border-t border-zinc-950/5 pt-3">
+                <.link
+                  navigate={~p"/agents/new?behavior=#{spec.id}"}
+                  class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
+                >
+                  Preview →
+                </.link>
+                <.button
+                  type="button"
+                  phx-click="install_library_agent"
+                  phx-value-behavior={spec.id}
+                  class="text-xs"
+                >
+                  Install
+                </.button>
+              </div>
+            </li>
+          </ul>
+        </section>
+
         <.panel :if={@selected_agent} body_class="p-0">
           <:header>
             <div class="flex flex-wrap items-start justify-between gap-4">
@@ -591,136 +689,151 @@ defmodule MaraithonWeb.AgentsLive do
               </div>
 
               <%= if @selected_panel == :edit do %>
-                <.panel class="bg-zinc-50">
-                  <div class="mb-4">
-                    <.heading level={3} class="text-base/7">Edit Agent</.heading>
-                    <.text class="mt-1">
-                      Save a new definition for this agent. Running agents restart with the updated config.
-                    </.text>
-                  </div>
-
+                <div class="space-y-8">
                   <%= if @launch_error do %>
-                    <.alert color="rose" class="mb-4">
+                    <.alert color="rose">
                       <%= @launch_error %>
                     </.alert>
                   <% end %>
 
-                  <form id="agent-edit-form" phx-submit="save_agent" class="space-y-4">
+                  <form id="agent-edit-form" phx-submit="save_agent" class="space-y-8">
                     <input
                       type="hidden"
                       name="launch[builder_mode]"
                       value={Map.get(@launch, "builder_mode", "advanced")}
                     />
 
-                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <.field label="Behavior" for="launch_behavior">
-                        <.c_select
-                          id="launch_behavior"
-                          name="launch[behavior]"
-                        >
-                          <%= for behavior <- behaviors() do %>
-                            <option value={behavior} selected={behavior == @launch["behavior"]}>
-                              <%= behavior %>
-                            </option>
-                          <% end %>
-                        </.c_select>
-                      </.field>
-
-                      <.field label="Name" for="launch_name">
-                        <.c_input
-                          id="launch_name"
-                          type="text"
-                          name="launch[name]"
-                          value={@launch["name"]}
-                          placeholder="optional display name"
+                    <section>
+                      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+                        <h3 class="text-base/7 font-semibold text-zinc-950">Prompt</h3>
+                        <span class="text-xs/5 text-zinc-500">
+                          Updates take effect on the next wakeup
+                        </span>
+                      </div>
+                      <p class="mt-2 text-sm/6 text-zinc-500">
+                        How should this agent reason, and what tone should it take?
+                      </p>
+                      <div class="mt-4">
+                        <.c_textarea
+                          id="launch_prompt"
+                          name="launch[prompt]"
+                          rows={10}
+                          value={@launch["prompt"]}
                         />
-                      </.field>
-                    </div>
+                      </div>
+                    </section>
 
-                    <.field label="Prompt" for="launch_prompt">
-                      <.c_textarea
-                        id="launch_prompt"
-                        name="launch[prompt]"
-                        rows={4}
-                        value={@launch["prompt"]}
-                      />
-                    </.field>
+                    <details class="group rounded-lg border border-zinc-950/10 bg-white">
+                      <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+                        <span class="flex items-center gap-2">
+                          <span>Advanced</span>
+                          <span class="text-xs/5 text-zinc-500">
+                            behavior · subscriptions · tools · budgets · raw config
+                          </span>
+                        </span>
+                        <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
+                        <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Close</span>
+                      </summary>
+                      <div class="space-y-6 border-t border-zinc-950/10 px-4 py-5 sm:px-6">
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <.field label="Behavior" for="launch_behavior">
+                            <.c_select id="launch_behavior" name="launch[behavior]">
+                              <%= for behavior <- behaviors() do %>
+                                <option value={behavior} selected={behavior == @launch["behavior"]}>
+                                  <%= behavior %>
+                                </option>
+                              <% end %>
+                            </.c_select>
+                          </.field>
 
-                    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <.field label="Subscriptions" for="launch_subscriptions">
-                        <.c_input
-                          id="launch_subscriptions"
-                          type="text"
-                          name="launch[subscriptions]"
-                          value={@launch["subscriptions"]}
-                          placeholder="github:owner/repo,email:kent"
-                        />
-                      </.field>
+                          <.field label="Name" for="launch_name">
+                            <.c_input
+                              id="launch_name"
+                              type="text"
+                              name="launch[name]"
+                              value={@launch["name"]}
+                              placeholder="optional display name"
+                            />
+                          </.field>
+                        </div>
 
-                      <.field label="Tools" for="launch_tools">
-                        <.c_input
-                          id="launch_tools"
-                          type="text"
-                          name="launch[tools]"
-                          value={@launch["tools"]}
-                          placeholder="read_file,search_files,http_get"
-                        />
-                      </.field>
-                    </div>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <.field label="Subscriptions" for="launch_subscriptions">
+                            <.c_input
+                              id="launch_subscriptions"
+                              type="text"
+                              name="launch[subscriptions]"
+                              value={@launch["subscriptions"]}
+                              placeholder="github:owner/repo,email:kent"
+                            />
+                          </.field>
 
-                    <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                      <.field label="Memory Limit" for="launch_memory_limit">
-                        <.c_input
-                          id="launch_memory_limit"
-                          type="number"
-                          min="1"
-                          name="launch[memory_limit]"
-                          value={@launch["memory_limit"]}
-                        />
-                      </.field>
+                          <.field label="Tools" for="launch_tools">
+                            <.c_input
+                              id="launch_tools"
+                              type="text"
+                              name="launch[tools]"
+                              value={@launch["tools"]}
+                              placeholder="read_file,search_files,http_get"
+                            />
+                          </.field>
+                        </div>
 
-                      <.field label="LLM Call Budget" for="launch_budget_llm_calls">
-                        <.c_input
-                          id="launch_budget_llm_calls"
-                          type="number"
-                          min="1"
-                          name="launch[budget_llm_calls]"
-                          value={@launch["budget_llm_calls"]}
-                        />
-                      </.field>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                          <.field label="Memory Limit" for="launch_memory_limit">
+                            <.c_input
+                              id="launch_memory_limit"
+                              type="number"
+                              min="1"
+                              name="launch[memory_limit]"
+                              value={@launch["memory_limit"]}
+                            />
+                          </.field>
 
-                      <.field label="Tool Call Budget" for="launch_budget_tool_calls">
-                        <.c_input
-                          id="launch_budget_tool_calls"
-                          type="number"
-                          min="1"
-                          name="launch[budget_tool_calls]"
-                          value={@launch["budget_tool_calls"]}
-                        />
-                      </.field>
-                    </div>
+                          <.field label="LLM Call Budget" for="launch_budget_llm_calls">
+                            <.c_input
+                              id="launch_budget_llm_calls"
+                              type="number"
+                              min="1"
+                              name="launch[budget_llm_calls]"
+                              value={@launch["budget_llm_calls"]}
+                            />
+                          </.field>
 
-                    <.field label="Additional Config JSON" for="launch_config_json">
-                      <.c_textarea
-                        id="launch_config_json"
-                        name="launch[config_json]"
-                        rows={5}
-                        class="font-mono"
-                        placeholder={"{\"custom_key\":\"value\"}"}
-                        value={@launch["config_json"]}
-                      />
-                    </.field>
+                          <.field label="Tool Call Budget" for="launch_budget_tool_calls">
+                            <.c_input
+                              id="launch_budget_tool_calls"
+                              type="number"
+                              min="1"
+                              name="launch[budget_tool_calls]"
+                              value={@launch["budget_tool_calls"]}
+                            />
+                          </.field>
+                        </div>
+
+                        <.field label="Additional config JSON" for="launch_config_json">
+                          <.c_textarea
+                            id="launch_config_json"
+                            name="launch[config_json]"
+                            rows={5}
+                            class="font-mono"
+                            placeholder={"{\"custom_key\":\"value\"}"}
+                            value={@launch["config_json"]}
+                          />
+                        </.field>
+                      </div>
+                    </details>
 
                     <div class="flex justify-end">
                       <.button
                         type="submit"
                         phx-disable-with="Saving..."
                       >
-                        Save Changes
+                        Save changes
                       </.button>
                     </div>
                   </form>
-                </.panel>
+                </div>
               <% else %>
                 <div class={inspect_layout_class(@selected_agent)}>
                   <div class="space-y-6">
@@ -1757,6 +1870,33 @@ defmodule MaraithonWeb.AgentsLive do
     |> agent_connector_requirements()
     |> Enum.uniq_by(& &1.provider)
   end
+
+  defp library_connector_logos(spec) do
+    (spec.requirements || [])
+    |> Enum.filter(&connector_requirement?/1)
+    |> Enum.map(& &1.provider)
+    |> Enum.map(&connector_logo_provider/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.take(5)
+  end
+
+  defp library_requirement_summary(%{requirements: []}), do: "No connected apps required."
+
+  defp library_requirement_summary(%{requirements: requirements}) do
+    labels =
+      requirements
+      |> Enum.filter(& &1[:required?])
+      |> Enum.map(& &1.label)
+      |> Enum.uniq()
+
+    case labels do
+      [] -> "Optional connectors only."
+      list -> "Needs " <> Enum.join(list, ", ")
+    end
+  end
+
+  defp library_requirement_summary(_spec), do: ""
 
   defp behavior_spec(agent), do: AgentBuilder.behavior_spec(agent.behavior)
 
