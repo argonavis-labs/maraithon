@@ -175,35 +175,28 @@ defmodule MaraithonWeb.AgentBuilderLive do
             </div>
 
             <div class="flex flex-wrap gap-2">
-              <a
-                href={~p"/connectors"}
-                class="inline-flex items-center rounded-md border border-zinc-950/10 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-              >
+              <.button href={~p"/connectors"} variant="outline">
                 Connectors
-              </a>
-              <a
-                href={~p"/agents"}
-                class="inline-flex items-center rounded-md bg-zinc-950 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
-              >
+              </.button>
+              <.button href={~p"/agents"}>
                 Back to agents
-              </a>
+              </.button>
             </div>
           </div>
         </section>
 
         <%= if @builder_error do %>
-          <section class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
+          <.alert color="rose">
             <%= @builder_error %>
-          </section>
+          </.alert>
         <% end %>
 
         <%= if @connection_errors != [] do %>
-          <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
-            <p class="font-medium">Permission readiness could not be fully verified.</p>
-            <p class="mt-1 text-amber-800">
+          <.alert color="amber" title="Permission readiness could not be fully verified.">
+            <p>
               Connector status is temporarily degraded, so the builder is showing best-effort guidance.
             </p>
-          </section>
+          </.alert>
         <% end %>
 
         <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.9fr)]">
@@ -396,116 +389,76 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
-                <%= if field_visible?(@selected_spec, "prompt") do %>
-                  <div>
-                    <label for="launch_prompt" class="block text-sm font-medium text-zinc-700">
-                      Prompt
-                    </label>
-                    <textarea
-                      id="launch_prompt"
-                      name="launch[prompt]"
-                      rows="5"
-                      class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                    ><%= @launch["prompt"] %></textarea>
-                    <p class="mt-2 text-xs text-zinc-500">
-                      Define how the agent should reason, what tone it should use, and which actions it should avoid.
-                    </p>
-                  </div>
-                <% end %>
+                <.launch_textarea
+                  :if={field_visible?(@selected_spec, "prompt")}
+                  id="launch_prompt"
+                  name="launch[prompt]"
+                  label="Prompt"
+                  value={@launch["prompt"]}
+                  rows={5}
+                  description="Define how the agent should reason, what tone it should use, and which actions it should avoid."
+                />
 
                 <%= if field_visible?(@selected_spec, "subscriptions") or field_visible?(@selected_spec, "tools") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <%= if field_visible?(@selected_spec, "subscriptions") do %>
-                      <div>
-                        <label for="launch_subscriptions" class="block text-sm font-medium text-slate-700">
-                          Input subscriptions
-                        </label>
-                        <input
-                          id="launch_subscriptions"
-                          type="text"
-                          name="launch[subscriptions]"
-                          value={@launch["subscriptions"]}
-                          placeholder="github:owner/repo,email:kent"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">
-                          Comma-separated topics. Leave blank if the agent should only react to direct operator messages.
-                        </p>
-                      </div>
+                      <.launch_input
+                        id="launch_subscriptions"
+                        name="launch[subscriptions]"
+                        label="Input subscriptions"
+                        value={@launch["subscriptions"]}
+                        placeholder="github:owner/repo,email:kent"
+                        description="Comma-separated topics. Leave blank if the agent should only react to direct operator messages."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "tools") do %>
-                      <div>
-                        <label for="launch_tools" class="block text-sm font-medium text-slate-700">
-                          Allowed tools
-                        </label>
-                        <input
-                          id="launch_tools"
-                          type="text"
-                          name="launch[tools]"
-                          value={@launch["tools"]}
-                          placeholder="read_file,search_files,http_get"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">
-                          Comma-separated tool allowlist. Any tool not listed here is off-limits to the agent.
-                        </p>
-                      </div>
+                      <.launch_input
+                        id="launch_tools"
+                        name="launch[tools]"
+                        label="Allowed tools"
+                        value={@launch["tools"]}
+                        placeholder="read_file,search_files,http_get"
+                        description="Comma-separated tool allowlist. Any tool not listed here is off-limits to the agent."
+                      />
                     <% end %>
                   </div>
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "memory_limit") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                    <div>
-                      <label for="launch_memory_limit" class="block text-sm font-medium text-slate-700">
-                        Memory limit
-                      </label>
-                      <input
-                        id="launch_memory_limit"
-                        type="number"
-                        min="1"
-                        name="launch[memory_limit]"
-                        value={@launch["memory_limit"]}
-                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                      />
-                      <p class="mt-2 text-xs text-slate-500">How many recent events the prompt agent keeps in rolling memory.</p>
-                    </div>
+                    <.launch_input
+                      id="launch_memory_limit"
+                      type="number"
+                      min="1"
+                      name="launch[memory_limit]"
+                      label="Memory limit"
+                      value={@launch["memory_limit"]}
+                      description="How many recent events the prompt agent keeps in rolling memory."
+                    />
                   </div>
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "codebase_path") or field_visible?(@selected_spec, "output_path") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <%= if field_visible?(@selected_spec, "codebase_path") do %>
-                      <div>
-                        <label for="launch_codebase_path" class="block text-sm font-medium text-slate-700">
-                          Codebase path
-                        </label>
-                        <input
-                          id="launch_codebase_path"
-                          type="text"
-                          name="launch[codebase_path]"
-                          value={@launch["codebase_path"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">Absolute or relative directory that Maraithon should inspect.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_codebase_path"
+                        name="launch[codebase_path]"
+                        label="Codebase path"
+                        value={@launch["codebase_path"]}
+                        description="Absolute or relative directory that Maraithon should inspect."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "output_path") do %>
-                      <div>
-                        <label for="launch_output_path" class="block text-sm font-medium text-slate-700">
-                          Output path
-                        </label>
-                        <input
-                          id="launch_output_path"
-                          type="text"
-                          name="launch[output_path]"
-                          value={@launch["output_path"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">Where the report or generated plan files should be written.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_output_path"
+                        name="launch[output_path]"
+                        label="Output path"
+                        value={@launch["output_path"]}
+                        description="Where the report or generated plan files should be written."
+                      />
                     <% end %>
                   </div>
                 <% end %>
@@ -513,107 +466,73 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "file_patterns") or field_visible?(@selected_spec, "ignore_patterns") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <%= if field_visible?(@selected_spec, "file_patterns") do %>
-                      <div>
-                        <label for="launch_file_patterns" class="block text-sm font-medium text-slate-700">
-                          Include patterns
-                        </label>
-                        <input
-                          id="launch_file_patterns"
-                          type="text"
-                          name="launch[file_patterns]"
-                          value={@launch["file_patterns"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">Comma-separated glob patterns that define the files the agent may inspect.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_file_patterns"
+                        name="launch[file_patterns]"
+                        label="Include patterns"
+                        value={@launch["file_patterns"]}
+                        description="Comma-separated glob patterns that define the files the agent may inspect."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "ignore_patterns") do %>
-                      <div>
-                        <label for="launch_ignore_patterns" class="block text-sm font-medium text-slate-700">
-                          Ignore patterns
-                        </label>
-                        <input
-                          id="launch_ignore_patterns"
-                          type="text"
-                          name="launch[ignore_patterns]"
-                          value={@launch["ignore_patterns"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">Comma-separated globs to exclude generated, vendored, or irrelevant files.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_ignore_patterns"
+                        name="launch[ignore_patterns]"
+                        label="Ignore patterns"
+                        value={@launch["ignore_patterns"]}
+                        description="Comma-separated globs to exclude generated, vendored, or irrelevant files."
+                      />
                     <% end %>
                   </div>
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "check_url") do %>
-                  <div>
-                    <label for="launch_check_url" class="block text-sm font-medium text-slate-700">
-                      Optional URL to check
-                    </label>
-                    <input
-                      id="launch_check_url"
-                      type="text"
-                      name="launch[check_url]"
-                      value={@launch["check_url"]}
-                      placeholder="https://status.example.com/health"
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                    />
-                    <p class="mt-2 text-xs text-slate-500">If set, the watchdog will periodically issue `http_get` checks against this URL.</p>
-                  </div>
+                  <.launch_input
+                    id="launch_check_url"
+                    name="launch[check_url]"
+                    label="Optional URL to check"
+                    value={@launch["check_url"]}
+                    placeholder="https://status.example.com/health"
+                    description="If set, the watchdog will periodically issue http_get checks against this URL."
+                  />
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "repo_full_name") or field_visible?(@selected_spec, "base_branch") or field_visible?(@selected_spec, "feature_limit") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <%= if field_visible?(@selected_spec, "repo_full_name") do %>
-                      <div>
-                        <label for="launch_repo_full_name" class="block text-sm font-medium text-slate-700">
-                          GitHub repository
-                        </label>
-                        <input
-                          id="launch_repo_full_name"
-                          type="text"
-                          name="launch[repo_full_name]"
-                          value={@launch["repo_full_name"]}
-                          placeholder="owner/repo"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">The exact GitHub repository the planner should review every day.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_repo_full_name"
+                        name="launch[repo_full_name]"
+                        label="GitHub repository"
+                        value={@launch["repo_full_name"]}
+                        placeholder="owner/repo"
+                        description="The exact GitHub repository the planner should review every day."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "base_branch") do %>
-                      <div>
-                        <label for="launch_base_branch" class="block text-sm font-medium text-slate-700">
-                          Base branch
-                        </label>
-                        <input
-                          id="launch_base_branch"
-                          type="text"
-                          name="launch[base_branch]"
-                          value={@launch["base_branch"]}
-                          placeholder="main"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">Usually `main`. This is the branch snapshot the planner treats as the current product baseline.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_base_branch"
+                        name="launch[base_branch]"
+                        label="Base branch"
+                        value={@launch["base_branch"]}
+                        placeholder="main"
+                        description="Usually main. This is the branch snapshot the planner treats as the current product baseline."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "feature_limit") do %>
-                      <div>
-                        <label for="launch_feature_limit" class="block text-sm font-medium text-slate-700">
-                          Daily feature limit
-                        </label>
-                        <select
-                          id="launch_feature_limit"
-                          name="launch[feature_limit]"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        >
+                      <.launch_select
+                        id="launch_feature_limit"
+                        name="launch[feature_limit]"
+                        label="Daily feature limit"
+                        value={@launch["feature_limit"]}
+                        description="How many roadmap opportunities the planner should surface in each daily batch."
+                      >
                           <option value="2" selected={@launch["feature_limit"] == "2"}>2</option>
                           <option value="3" selected={@launch["feature_limit"] == "3"}>3</option>
-                        </select>
-                        <p class="mt-2 text-xs text-slate-500">How many roadmap opportunities the planner should surface in each daily batch.</p>
-                      </div>
+                      </.launch_select>
                     <% end %>
                   </div>
                 <% end %>
@@ -621,82 +540,56 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "email_scan_limit") or field_visible?(@selected_spec, "event_scan_limit") or field_visible?(@selected_spec, "prep_window_hours") or field_visible?(@selected_spec, "max_insights_per_cycle") or field_visible?(@selected_spec, "min_confidence") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <%= if field_visible?(@selected_spec, "email_scan_limit") do %>
-                      <div>
-                        <label for="launch_email_scan_limit" class="block text-sm font-medium text-slate-700">
-                          Email scan limit
-                        </label>
-                        <input
-                          id="launch_email_scan_limit"
-                          type="number"
-                          min="1"
-                          name="launch[email_scan_limit]"
-                          value={@launch["email_scan_limit"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_email_scan_limit"
+                        type="number"
+                        min="1"
+                        name="launch[email_scan_limit]"
+                        label="Email scan limit"
+                        value={@launch["email_scan_limit"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "event_scan_limit") do %>
-                      <div>
-                        <label for="launch_event_scan_limit" class="block text-sm font-medium text-slate-700">
-                          Event scan limit
-                        </label>
-                        <input
-                          id="launch_event_scan_limit"
-                          type="number"
-                          min="1"
-                          name="launch[event_scan_limit]"
-                          value={@launch["event_scan_limit"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_event_scan_limit"
+                        type="number"
+                        min="1"
+                        name="launch[event_scan_limit]"
+                        label="Event scan limit"
+                        value={@launch["event_scan_limit"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "prep_window_hours") do %>
-                      <div>
-                        <label for="launch_prep_window_hours" class="block text-sm font-medium text-slate-700">
-                          Meeting follow-up window (hours)
-                        </label>
-                        <input
-                          id="launch_prep_window_hours"
-                          type="number"
-                          min="1"
-                          name="launch[prep_window_hours]"
-                          value={@launch["prep_window_hours"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_prep_window_hours"
+                        type="number"
+                        min="1"
+                        name="launch[prep_window_hours]"
+                        label="Meeting follow-up window (hours)"
+                        value={@launch["prep_window_hours"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "max_insights_per_cycle") do %>
-                      <div>
-                        <label for="launch_max_insights_per_cycle" class="block text-sm font-medium text-slate-700">
-                          Max insights per cycle
-                        </label>
-                        <input
-                          id="launch_max_insights_per_cycle"
-                          type="number"
-                          min="1"
-                          name="launch[max_insights_per_cycle]"
-                          value={@launch["max_insights_per_cycle"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_max_insights_per_cycle"
+                        type="number"
+                        min="1"
+                        name="launch[max_insights_per_cycle]"
+                        label="Max insights per cycle"
+                        value={@launch["max_insights_per_cycle"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "min_confidence") do %>
-                      <div>
-                        <label for="launch_min_confidence" class="block text-sm font-medium text-slate-700">
-                          Minimum confidence
-                        </label>
-                        <input
-                          id="launch_min_confidence"
-                          type="text"
-                          name="launch[min_confidence]"
-                          value={@launch["min_confidence"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_min_confidence"
+                        name="launch[min_confidence]"
+                        label="Minimum confidence"
+                        value={@launch["min_confidence"]}
+                      />
                     <% end %>
                   </div>
                 <% end %>
@@ -704,70 +597,47 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "team_id") or field_visible?(@selected_spec, "channel_scan_limit") or field_visible?(@selected_spec, "dm_scan_limit") or field_visible?(@selected_spec, "lookback_hours") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <%= if field_visible?(@selected_spec, "team_id") do %>
-                      <div>
-                        <label for="launch_team_id" class="block text-sm font-medium text-slate-700">
-                          Slack team ID (optional)
-                        </label>
-                        <input
-                          id="launch_team_id"
-                          type="text"
-                          name="launch[team_id]"
-                          value={@launch["team_id"]}
-                          placeholder="T01234567"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">
-                          Leave blank to scan every connected workspace; set this to pin the agent to one team.
-                        </p>
-                      </div>
+                      <.launch_input
+                        id="launch_team_id"
+                        name="launch[team_id]"
+                        label="Slack team ID"
+                        value={@launch["team_id"]}
+                        placeholder="T01234567"
+                        description="Leave blank to scan every connected workspace; set this to pin the agent to one team."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "channel_scan_limit") do %>
-                      <div>
-                        <label for="launch_channel_scan_limit" class="block text-sm font-medium text-slate-700">
-                          Channel message scan limit
-                        </label>
-                        <input
-                          id="launch_channel_scan_limit"
-                          type="number"
-                          min="1"
-                          name="launch[channel_scan_limit]"
-                          value={@launch["channel_scan_limit"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_channel_scan_limit"
+                        type="number"
+                        min="1"
+                        name="launch[channel_scan_limit]"
+                        label="Channel message scan limit"
+                        value={@launch["channel_scan_limit"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "dm_scan_limit") do %>
-                      <div>
-                        <label for="launch_dm_scan_limit" class="block text-sm font-medium text-slate-700">
-                          DM message scan limit
-                        </label>
-                        <input
-                          id="launch_dm_scan_limit"
-                          type="number"
-                          min="1"
-                          name="launch[dm_scan_limit]"
-                          value={@launch["dm_scan_limit"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_dm_scan_limit"
+                        type="number"
+                        min="1"
+                        name="launch[dm_scan_limit]"
+                        label="DM message scan limit"
+                        value={@launch["dm_scan_limit"]}
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "lookback_hours") do %>
-                      <div>
-                        <label for="launch_lookback_hours" class="block text-sm font-medium text-slate-700">
-                          Lookback window (hours)
-                        </label>
-                        <input
-                          id="launch_lookback_hours"
-                          type="number"
-                          min="1"
-                          name="launch[lookback_hours]"
-                          value={@launch["lookback_hours"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                      </div>
+                      <.launch_input
+                        id="launch_lookback_hours"
+                        type="number"
+                        min="1"
+                        name="launch[lookback_hours]"
+                        label="Lookback window (hours)"
+                        value={@launch["lookback_hours"]}
+                      />
                     <% end %>
                   </div>
                 <% end %>
@@ -775,37 +645,28 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "wakeup_interval_ms") or field_visible?(@selected_spec, "write_plan_files") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <%= if field_visible?(@selected_spec, "wakeup_interval_ms") do %>
-                      <div>
-                        <label for="launch_wakeup_interval_ms" class="block text-sm font-medium text-slate-700">
-                          Wakeup interval (ms)
-                        </label>
-                        <input
-                          id="launch_wakeup_interval_ms"
-                          type="number"
-                          min="1"
-                          name="launch[wakeup_interval_ms]"
-                          value={@launch["wakeup_interval_ms"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        />
-                        <p class="mt-2 text-xs text-slate-500">How frequently the behavior wakes up to continue work or check for new tasks.</p>
-                      </div>
+                      <.launch_input
+                        id="launch_wakeup_interval_ms"
+                        type="number"
+                        min="1"
+                        name="launch[wakeup_interval_ms]"
+                        label="Wakeup interval (ms)"
+                        value={@launch["wakeup_interval_ms"]}
+                        description="How frequently the behavior wakes up to continue work or check for new tasks."
+                      />
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "write_plan_files") do %>
-                      <div>
-                        <label for="launch_write_plan_files" class="block text-sm font-medium text-slate-700">
-                          Write plan files
-                        </label>
-                        <select
-                          id="launch_write_plan_files"
-                          name="launch[write_plan_files]"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                        >
+                      <.launch_select
+                        id="launch_write_plan_files"
+                        name="launch[write_plan_files]"
+                        label="Write plan files"
+                        value={@launch["write_plan_files"]}
+                        description="When enabled, generated plans are written to disk in addition to runtime notes."
+                      >
                           <option value="true" selected={@launch["write_plan_files"] == "true"}>Yes</option>
                           <option value="false" selected={@launch["write_plan_files"] == "false"}>No</option>
-                        </select>
-                        <p class="mt-2 text-xs text-slate-500">When enabled, generated plans are written to disk in addition to runtime notes.</p>
-                      </div>
+                      </.launch_select>
                     <% end %>
                   </div>
                 <% end %>
@@ -821,107 +682,77 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                       <%= if field_visible?(@selected_spec, "timezone_offset_hours") do %>
-                        <div>
-                          <label for="launch_timezone_offset_hours" class="block text-sm font-medium text-slate-700">
-                            Timezone offset from UTC
-                          </label>
-                          <input
-                            id="launch_timezone_offset_hours"
-                            type="number"
-                            min="-12"
-                            max="14"
-                            name="launch[timezone_offset_hours]"
-                            value={@launch["timezone_offset_hours"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                          <p class="mt-2 text-xs text-slate-500">Use `-5` for Eastern Standard Time, `-4` for Eastern Daylight Time, `0` for UTC.</p>
-                        </div>
+                        <.launch_input
+                          id="launch_timezone_offset_hours"
+                          type="number"
+                          min="-12"
+                          max="14"
+                          name="launch[timezone_offset_hours]"
+                          label="Timezone offset from UTC"
+                          value={@launch["timezone_offset_hours"]}
+                          description="Use -5 for Eastern Standard Time, -4 for Eastern Daylight Time, 0 for UTC."
+                        />
                       <% end %>
 
                       <%= if field_visible?(@selected_spec, "morning_brief_hour_local") do %>
-                        <div>
-                          <label for="launch_morning_brief_hour_local" class="block text-sm font-medium text-slate-700">
-                            Morning brief hour
-                          </label>
-                          <input
-                            id="launch_morning_brief_hour_local"
-                            type="number"
-                            min="0"
-                            max="23"
-                            name="launch[morning_brief_hour_local]"
-                            value={@launch["morning_brief_hour_local"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                        </div>
+                        <.launch_input
+                          id="launch_morning_brief_hour_local"
+                          type="number"
+                          min="0"
+                          max="23"
+                          name="launch[morning_brief_hour_local]"
+                          label="Morning brief hour"
+                          value={@launch["morning_brief_hour_local"]}
+                        />
                       <% end %>
 
                       <%= if field_visible?(@selected_spec, "end_of_day_brief_hour_local") do %>
-                        <div>
-                          <label for="launch_end_of_day_brief_hour_local" class="block text-sm font-medium text-slate-700">
-                            End-of-day brief hour
-                          </label>
-                          <input
-                            id="launch_end_of_day_brief_hour_local"
-                            type="number"
-                            min="0"
-                            max="23"
-                            name="launch[end_of_day_brief_hour_local]"
-                            value={@launch["end_of_day_brief_hour_local"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                        </div>
+                        <.launch_input
+                          id="launch_end_of_day_brief_hour_local"
+                          type="number"
+                          min="0"
+                          max="23"
+                          name="launch[end_of_day_brief_hour_local]"
+                          label="End-of-day brief hour"
+                          value={@launch["end_of_day_brief_hour_local"]}
+                        />
                       <% end %>
 
                       <%= if field_visible?(@selected_spec, "weekly_review_day_local") do %>
-                        <div>
-                          <label for="launch_weekly_review_day_local" class="block text-sm font-medium text-slate-700">
-                            Weekly review day
-                          </label>
-                          <input
-                            id="launch_weekly_review_day_local"
-                            type="number"
-                            min="1"
-                            max="7"
-                            name="launch[weekly_review_day_local]"
-                            value={@launch["weekly_review_day_local"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                          <p class="mt-2 text-xs text-slate-500">Use `1` for Monday through `7` for Sunday.</p>
-                        </div>
+                        <.launch_input
+                          id="launch_weekly_review_day_local"
+                          type="number"
+                          min="1"
+                          max="7"
+                          name="launch[weekly_review_day_local]"
+                          label="Weekly review day"
+                          value={@launch["weekly_review_day_local"]}
+                          description="Use 1 for Monday through 7 for Sunday."
+                        />
                       <% end %>
 
                       <%= if field_visible?(@selected_spec, "weekly_review_hour_local") do %>
-                        <div>
-                          <label for="launch_weekly_review_hour_local" class="block text-sm font-medium text-slate-700">
-                            Weekly review hour
-                          </label>
-                          <input
-                            id="launch_weekly_review_hour_local"
-                            type="number"
-                            min="0"
-                            max="23"
-                            name="launch[weekly_review_hour_local]"
-                            value={@launch["weekly_review_hour_local"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                        </div>
+                        <.launch_input
+                          id="launch_weekly_review_hour_local"
+                          type="number"
+                          min="0"
+                          max="23"
+                          name="launch[weekly_review_hour_local]"
+                          label="Weekly review hour"
+                          value={@launch["weekly_review_hour_local"]}
+                        />
                       <% end %>
 
                       <%= if field_visible?(@selected_spec, "brief_max_items") do %>
-                        <div>
-                          <label for="launch_brief_max_items" class="block text-sm font-medium text-slate-700">
-                            Items per brief
-                          </label>
-                          <input
-                            id="launch_brief_max_items"
-                            type="number"
-                            min="1"
-                            max="5"
-                            name="launch[brief_max_items]"
-                            value={@launch["brief_max_items"]}
-                            class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                          />
-                        </div>
+                        <.launch_input
+                          id="launch_brief_max_items"
+                          type="number"
+                          min="1"
+                          max="5"
+                          name="launch[brief_max_items]"
+                          label="Items per brief"
+                          value={@launch["brief_max_items"]}
+                        />
                       <% end %>
                     </div>
                   </div>
@@ -929,49 +760,34 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
                 <%= if @builder_mode == "advanced" do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <div>
-                      <label for="launch_budget_llm_calls" class="block text-sm font-medium text-slate-700">
-                        LLM call budget
-                      </label>
-                      <input
-                        id="launch_budget_llm_calls"
-                        type="number"
-                        min="1"
-                        name="launch[budget_llm_calls]"
-                        value={@launch["budget_llm_calls"]}
-                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                      />
-                    </div>
+                    <.launch_input
+                      id="launch_budget_llm_calls"
+                      type="number"
+                      min="1"
+                      name="launch[budget_llm_calls]"
+                      label="LLM call budget"
+                      value={@launch["budget_llm_calls"]}
+                    />
 
-                    <div>
-                      <label for="launch_budget_tool_calls" class="block text-sm font-medium text-slate-700">
-                        Tool call budget
-                      </label>
-                      <input
-                        id="launch_budget_tool_calls"
-                        type="number"
-                        min="1"
-                        name="launch[budget_tool_calls]"
-                        value={@launch["budget_tool_calls"]}
-                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                      />
-                    </div>
+                    <.launch_input
+                      id="launch_budget_tool_calls"
+                      type="number"
+                      min="1"
+                      name="launch[budget_tool_calls]"
+                      label="Tool call budget"
+                      value={@launch["budget_tool_calls"]}
+                    />
                   </div>
 
-                  <div>
-                    <label for="launch_config_json" class="block text-sm font-medium text-slate-700">
-                      Advanced JSON overrides
-                    </label>
-                    <textarea
-                      id="launch_config_json"
-                      name="launch[config_json]"
-                      rows="6"
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-                    ><%= @launch["config_json"] %></textarea>
-                    <p class="mt-2 text-xs text-slate-500">
-                      Optional object merged into the final config after the form values above. Use this for advanced behavior-specific keys.
-                    </p>
-                  </div>
+                  <.launch_textarea
+                    id="launch_config_json"
+                    name="launch[config_json]"
+                    label="Advanced JSON overrides"
+                    value={@launch["config_json"]}
+                    rows={6}
+                    textarea_class="font-mono"
+                    description="Optional object merged into the final config after the form values above. Use this for advanced behavior-specific keys."
+                  />
                 <% end %>
 
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-950/10 pt-5">
@@ -983,14 +799,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <% end %>
                   </div>
 
-                  <button
+                  <.button
                     type="submit"
                     phx-disable-with="Creating..."
                     disabled={@blockers != []}
-                    class={submit_button_class(@blockers == [])}
+                    color={if @blockers == [], do: "dark", else: "zinc"}
                   >
                     Create Agent
-                  </button>
+                  </.button>
                 </div>
               </form>
             </section>
@@ -1679,6 +1495,79 @@ defmodule MaraithonWeb.AgentBuilderLive do
     end
   end
 
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :any, default: nil
+  attr :type, :string, default: "text"
+  attr :description, :string, default: nil
+  attr :placeholder, :string, default: nil
+  attr :min, :any, default: nil
+  attr :max, :any, default: nil
+  attr :class, :string, default: nil
+  attr :rest, :global
+
+  defp launch_input(assigns) do
+    ~H"""
+    <.field label={@label} description={@description} for={@id} class={@class}>
+      <.c_input
+        id={@id}
+        name={@name}
+        type={@type}
+        value={@value}
+        min={@min}
+        max={@max}
+        placeholder={@placeholder}
+        {@rest}
+      />
+    </.field>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :any, default: nil
+  attr :description, :string, default: nil
+  attr :class, :string, default: nil
+  attr :rest, :global
+  slot :inner_block, required: true
+
+  defp launch_select(assigns) do
+    ~H"""
+    <.field label={@label} description={@description} for={@id} class={@class}>
+      <.c_select id={@id} name={@name} value={@value} {@rest}>
+        <%= render_slot(@inner_block) %>
+      </.c_select>
+    </.field>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :any, default: nil
+  attr :rows, :integer, default: 4
+  attr :description, :string, default: nil
+  attr :class, :string, default: nil
+  attr :textarea_class, :string, default: nil
+  attr :rest, :global
+
+  defp launch_textarea(assigns) do
+    ~H"""
+    <.field label={@label} description={@description} for={@id} class={@class}>
+      <.c_textarea
+        id={@id}
+        name={@name}
+        value={@value}
+        rows={@rows}
+        class={@textarea_class}
+        {@rest}
+      />
+    </.field>
+    """
+  end
+
   defp current_user_id(socket), do: socket.assigns.current_user.id
 
   defp field_visible?(spec, field), do: field in spec.fields
@@ -1826,14 +1715,6 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp readiness_badge_text(%{required?: true, ready?: true}), do: "Ready"
   defp readiness_badge_text(%{required?: true, ready?: false}), do: "Blocked"
   defp readiness_badge_text(_item), do: "Optional"
-
-  defp submit_button_class(true),
-    do:
-      "inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
-
-  defp submit_button_class(false),
-    do:
-      "inline-flex cursor-not-allowed items-center rounded-md bg-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-600"
 
   defp current_path_from_uri(uri) when is_binary(uri) do
     uri

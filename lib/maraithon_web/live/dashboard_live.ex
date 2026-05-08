@@ -753,34 +753,30 @@ defmodule MaraithonWeb.DashboardLive do
       </.panel>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-4">
-        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
-          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-slate-900">Connected Apps</h2>
-            <p class="mt-1 text-sm text-slate-500">
+        <.panel body_class="space-y-4 px-4 py-4 sm:px-6">
+          <:header>
+            <.heading level={2} class="text-base/7">Connected Apps</.heading>
+            <.text class="mt-1">
               Your linked accounts form the shared operator context across all projects.
-            </p>
-          </div>
-          <div class="space-y-4 px-4 py-4 sm:px-6">
+            </.text>
+          </:header>
             <div class="flex items-end justify-between gap-3">
               <div>
-                <p class="text-3xl font-semibold text-slate-900"><%= @connected_provider_count %></p>
-                <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Connected providers</p>
+                <p class="text-3xl/9 font-semibold text-zinc-950"><%= @connected_provider_count %></p>
+                <p class="text-sm/6 text-zinc-500">Connected providers</p>
               </div>
-              <.link
-                navigate={"/connectors"}
-                class="inline-flex items-center rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
+              <.button navigate={"/connectors"} variant="outline" class="text-xs">
                 Manage
-              </.link>
+              </.button>
             </div>
 
             <div class="space-y-3">
               <%= for provider <- @connections do %>
-                <div class="rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3">
+                <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-3">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
-                      <p class="text-sm font-medium text-slate-900"><%= provider.label %></p>
-                      <p class="mt-1 text-xs text-slate-500"><%= provider.description %></p>
+                      <p class="text-sm/6 font-medium text-zinc-950"><%= provider.label %></p>
+                      <p class="mt-1 text-xs/5 text-zinc-500"><%= provider.description %></p>
                     </div>
                     <span class={provider_status_class(provider.status)}>
                       <%= provider_status_label(provider.status) %>
@@ -790,7 +786,7 @@ defmodule MaraithonWeb.DashboardLive do
                   <div :if={Map.get(provider, :details, []) != []} class="mt-3 space-y-1">
                     <p
                       :for={detail <- Enum.take(Map.get(provider, :details, []), 2)}
-                      class="text-xs leading-5 text-slate-600"
+                      class="text-xs/5 text-zinc-600"
                     >
                       <%= detail %>
                     </p>
@@ -799,35 +795,33 @@ defmodule MaraithonWeb.DashboardLive do
                   <div :if={Map.get(provider, :accounts, []) != []} class="mt-3 space-y-2">
                     <div
                       :for={account <- Enum.take(Map.get(provider, :accounts, []), 2)}
-                      class="rounded-xl border border-slate-200 bg-white px-3 py-2"
+                      class="rounded-lg border border-zinc-950/10 bg-white px-3 py-2"
                     >
                       <div class="flex items-center justify-between gap-2">
-                        <p class="truncate text-xs font-medium text-slate-900"><%= account.account %></p>
+                        <p class="truncate text-xs/5 font-medium text-zinc-950"><%= account.account %></p>
                         <span class={provider_status_class(account.status)}>
                           <%= provider_status_label(account.status) %>
                         </span>
                       </div>
-                      <p class="mt-1 text-[11px] text-slate-500"><%= account.status_note %></p>
+                      <p class="mt-1 text-xs/5 text-zinc-500"><%= account.status_note %></p>
                     </div>
                   </div>
 
                   <div :if={Map.get(provider, :services, []) != []} class="mt-3 flex flex-wrap gap-2">
-                    <span
-                      :for={service <- Map.get(provider, :services, [])}
-                      class="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200"
-                    >
+                    <.badge :for={service <- Map.get(provider, :services, [])} class="bg-white">
                       <%= service.label %>: <%= provider_status_label(service.status) %>
-                    </span>
+                    </.badge>
                   </div>
 
                   <div class="mt-3 flex flex-wrap gap-2">
-                    <a
+                    <.button
                       href={
                         if provider.status == :connected,
                           do: "/connectors/#{provider.provider}",
                           else: provider.connect_url
                       }
-                      class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                      variant="outline"
+                      class="text-xs"
                     >
                       <%= cond do %>
                         <% provider.status == :connected -> %>
@@ -837,123 +831,119 @@ defmodule MaraithonWeb.DashboardLive do
                         <% true -> %>
                           Connect
                       <% end %>
-                    </a>
+                    </.button>
                   </div>
                 </div>
               <% end %>
             </div>
-          </div>
-        </div>
+        </.panel>
 
-        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
-          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-slate-900">Memory</h2>
-            <p class="mt-1 text-sm text-slate-500">
+        <.panel body_class="space-y-4 px-4 py-4 sm:px-6">
+          <:header>
+            <.heading level={2} class="text-base/7">Memory</.heading>
+            <.text class="mt-1">
               Maraithon is building a reusable operating profile that all installed agents share.
-            </p>
-          </div>
-          <div class="space-y-4 px-4 py-4 sm:px-6">
-            <div class="rounded-2xl bg-slate-950 px-4 py-4 text-white">
+            </.text>
+          </:header>
+            <div class="rounded-lg border border-zinc-950 bg-zinc-950 px-4 py-4 text-white shadow-sm">
               <div class="flex items-center justify-between gap-3">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200">
+                <p class="text-sm/6 font-medium text-zinc-300">
                   Learned profile
                 </p>
-                <span class="text-[11px] text-sky-100/80">
+                <span class="text-xs/5 text-zinc-400">
                   confidence <%= format_confidence(@memory_profile.confidence) %>
                 </span>
               </div>
-              <p class="mt-3 text-sm leading-6 text-slate-100"><%= @memory_profile.summary %></p>
+              <p class="mt-3 text-sm/6 text-zinc-100"><%= @memory_profile.summary %></p>
             </div>
 
             <div class="grid grid-cols-1 gap-3">
               <div
                 :for={field <- memory_profile_fields(@memory_profile)}
-                class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-3"
               >
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <p class="text-xs/5 font-medium text-zinc-500">
                   <%= field.label %>
                 </p>
-                <p class="mt-2 text-sm text-slate-700"><%= field.value %></p>
+                <p class="mt-2 text-sm/6 text-zinc-700"><%= field.value %></p>
               </div>
             </div>
 
             <div>
               <div class="flex items-center justify-between gap-3">
-                <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <p class="text-sm/6 font-medium text-zinc-950">
                   Saved preferences
                 </p>
-                <span class="text-[11px] text-slate-400"><%= length(@memory_rules) %> rules</span>
+                <span class="text-xs/5 text-zinc-500"><%= length(@memory_rules) %> rules</span>
               </div>
               <%= if @memory_rules == [] do %>
-                <p class="mt-2 text-sm text-slate-500">
+                <p class="mt-2 text-sm/6 text-zinc-500">
                   No durable preferences yet. Maraithon will learn these from conversation and feedback.
                 </p>
               <% else %>
                 <div class="mt-2 space-y-2">
                   <div
                     :for={rule <- Enum.take(@memory_rules, 3)}
-                    class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                    class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3"
                   >
                     <div class="flex items-center justify-between gap-3">
-                      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      <p class="text-xs/5 font-medium text-zinc-500">
                         <%= memory_rule_kind_label(rule["kind"]) %>
                       </p>
-                      <span class="text-[11px] text-slate-400">
+                      <span class="text-xs/5 text-zinc-500">
                         <%= format_confidence(rule["confidence"]) %>
                       </span>
                     </div>
-                    <p class="mt-2 text-sm text-slate-700"><%= rule["instruction"] || rule["label"] %></p>
+                    <p class="mt-2 text-sm/6 text-zinc-700"><%= rule["instruction"] || rule["label"] %></p>
                   </div>
                 </div>
               <% end %>
             </div>
 
             <div :if={@global_memory_summaries != []} class="space-y-2">
-              <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              <p class="text-sm/6 font-medium text-zinc-950">
                 Global State
               </p>
               <div
                 :for={summary <- Enum.take(@global_memory_summaries, 3)}
-                class="rounded-xl border border-slate-200 bg-white px-4 py-3"
+                class="rounded-lg border border-zinc-950/10 bg-white px-4 py-3"
               >
                 <div class="flex items-center justify-between gap-3">
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="text-xs/5 font-medium text-zinc-500">
                     <%= memory_summary_label(summary.type) %>
                   </p>
-                  <span class="text-[11px] text-slate-400">
+                  <span class="text-xs/5 text-zinc-500">
                     <%= format_confidence(summary.confidence) %>
                   </span>
                 </div>
-                <p class="mt-2 text-sm text-slate-700"><%= summary.content %></p>
+                <p class="mt-2 text-sm/6 text-zinc-700"><%= summary.content %></p>
               </div>
             </div>
-          </div>
-        </div>
+        </.panel>
 
-        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
-          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+        <.panel body_class="space-y-3 px-4 py-4 sm:px-6">
+          <:header>
             <div class="flex items-center justify-between gap-3">
               <div>
-                <h2 class="text-lg font-medium text-slate-900">Todos</h2>
-                <p class="mt-1 text-sm text-slate-500">
+                <.heading level={2} class="text-base/7">Todos</.heading>
+                <.text class="mt-1">
                   Active work objects the operator is tracking for you across inbox, projects, and follow-through.
-                </p>
+                </.text>
               </div>
-              <span class="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200">
+              <.badge color="emerald">
                 <%= @open_todo_count %> open
-              </span>
+              </.badge>
             </div>
-          </div>
-          <div class="space-y-3 px-4 py-4 sm:px-6">
+          </:header>
             <%= if @todos == [] do %>
-              <p class="text-sm text-slate-500">
+              <p class="text-sm/6 text-zinc-500">
                 No open todos yet. As agents surface work and you chat with Maraithon, tasks will accumulate here.
               </p>
             <% else %>
               <div
                 :for={todo <- @todos}
                 id={"todo-#{todo.id}"}
-                class="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-4"
+                class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-4"
               >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0 flex-1">
@@ -961,46 +951,47 @@ defmodule MaraithonWeb.DashboardLive do
                       <span class={todo_status_class(todo.status)}>
                         <%= todo_status_label(todo.status) %>
                       </span>
-                      <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                      <.badge class="bg-white">
                         <%= todo_source_label(todo.source) %>
-                      </span>
-                      <span class="text-xs text-slate-500">
+                      </.badge>
+                      <span class="text-xs/5 text-zinc-500">
                         priority <%= todo.priority %>
                       </span>
                     </div>
-                    <p class="mt-2 text-sm font-semibold text-slate-900"><%= todo.title %></p>
-                    <p class="mt-1 text-sm text-slate-600"><%= todo.summary %></p>
+                    <p class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= todo.title %></p>
+                    <p class="mt-1 text-sm/6 text-zinc-600"><%= todo.summary %></p>
                     <p class="mt-2 text-sm text-emerald-800">
                       <span class="font-medium">Next:</span> <%= todo.next_action %>
                     </p>
-                    <p class="mt-2 text-xs text-slate-500">
+                    <p class="mt-2 text-xs/5 text-zinc-500">
                       <%= todo_context_line(todo) %>
                     </p>
                   </div>
 
                   <div class="flex flex-wrap gap-2">
-                    <button
+                    <.button
                       type="button"
                       phx-click="complete_todo"
                       phx-value-id={todo.id}
-                      class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                      variant="outline"
+                      class="text-xs text-emerald-800"
                     >
                       Mark done
-                    </button>
-                    <button
+                    </.button>
+                    <.button
                       type="button"
                       phx-click="dismiss_todo"
                       phx-value-id={todo.id}
-                      class="inline-flex items-center rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                      variant="outline"
+                      class="text-xs"
                     >
                       Dismiss
-                    </button>
+                    </.button>
                   </div>
                 </div>
               </div>
             <% end %>
-          </div>
-        </div>
+        </.panel>
 
         <div class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
           <div class="border-b border-zinc-950/10 px-4 py-4 sm:px-6">
@@ -1145,27 +1136,27 @@ defmodule MaraithonWeb.DashboardLive do
         </.form>
       </.panel>
 
-      <section class="overflow-hidden rounded-xl bg-white shadow">
-        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+      <.panel body_class="px-4 py-4 sm:px-6">
+        <:header>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 class="text-lg font-medium text-slate-900">Projects</h2>
-              <p class="mt-1 text-sm text-slate-500">
+              <.heading level={2} class="text-base/7">Projects</.heading>
+              <.text class="mt-1">
                 Each project keeps its own local memory and can host specialist agents like the project manager.
-              </p>
+              </.text>
             </div>
-            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+            <.badge>
               <%= length(@projects) %> total
-            </span>
+            </.badge>
           </div>
-        </div>
-        <div class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-2">
+        </:header>
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <%= for project_card <- @projects do %>
-            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+            <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-5">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="text-lg font-semibold text-slate-900"><%= project_card.project.name %></h3>
+                    <h3 class="text-base/7 font-semibold text-zinc-950"><%= project_card.project.name %></h3>
                     <span class={project_status_class(project_card.project.status)}>
                       <%= project_card.project.status %>
                     </span>
@@ -1173,44 +1164,46 @@ defmodule MaraithonWeb.DashboardLive do
                       <%= project_card.project.priority %>
                     </span>
                   </div>
-                  <p class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
+                  <p class="mt-1 text-xs/5 text-zinc-500">
                     <%= project_card.project.slug %>
                   </p>
-                  <p class="mt-3 text-sm text-slate-600">
+                  <p class="mt-3 text-sm/6 text-zinc-600">
                     <%= project_summary(project_card.project) %>
                   </p>
                 </div>
 
-                <.link
+                <.button
                   navigate={"/agents/new?behavior=github_product_planner&project_id=#{project_card.project.id}"}
-                  class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                  variant="outline"
+                  class="text-xs"
                 >
                   Attach Project Manager
-                </.link>
+                </.button>
               </div>
 
               <div class="mt-4 flex flex-wrap gap-2">
-                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                <.badge class="bg-white">
                   <%= length(project_card.agents) %> agents
-                </span>
-                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                </.badge>
+                <.badge class="bg-white">
                   <%= length(project_card.items) %> recent items
-                </span>
-                <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+                </.badge>
+                <.badge class="bg-white">
                   <%= length(project_card.recommendations) %> PM recommendations
-                </span>
+                </.badge>
               </div>
 
               <%= if project_card.agents != [] do %>
                 <div class="mt-4">
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Attached agents</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">Attached agents</p>
                   <div class="mt-2 flex flex-wrap gap-2">
-                    <span
+                    <.badge
                       :for={agent <- project_card.agents}
-                      class="rounded-full bg-slate-900 px-2.5 py-1 text-xs font-medium text-white"
+                      color="zinc"
+                      class="bg-zinc-950 text-white"
                     >
                       <%= get_in(agent.config || %{}, ["name"]) || agent.behavior %>
-                    </span>
+                    </.badge>
                   </div>
                 </div>
               <% end %>
@@ -1218,78 +1211,78 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div class="space-y-3">
                   <div class="flex items-center justify-between gap-3">
-                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                    <p class="text-sm/6 font-medium text-zinc-950">
                       Project memory
                     </p>
                   </div>
                   <%= if project_card.items == [] do %>
-                    <p class="text-sm text-slate-500">
+                    <p class="text-sm/6 text-zinc-500">
                       No project memory yet. Add a note, todo, or grant above so the agent has local context.
                     </p>
                   <% else %>
                     <div
                       :for={item <- project_card.items}
-                      class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                      class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3"
                     >
                       <div class="flex items-center justify-between gap-3">
-                        <p class="text-sm font-medium text-slate-900"><%= item.title || item_type_label(item.item_type) %></p>
-                        <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                        <p class="text-sm/6 font-medium text-zinc-950"><%= item.title || item_type_label(item.item_type) %></p>
+                        <.badge>
                           <%= item_type_label(item.item_type) %>
-                        </span>
+                        </.badge>
                       </div>
-                      <p class="mt-2 text-sm text-slate-600"><%= item.content %></p>
+                      <p class="mt-2 text-sm/6 text-zinc-600"><%= item.content %></p>
                     </div>
                   <% end %>
                 </div>
 
                 <div class="space-y-3">
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="text-sm/6 font-medium text-zinc-950">
                     Project manager recommendations
                   </p>
                   <%= if project_card.recommendations == [] do %>
-                    <p class="text-sm text-slate-500">
+                    <p class="text-sm/6 text-zinc-500">
                       No project-manager output yet. Attach a GitHub Product Planner to this project and let it run.
                     </p>
                   <% else %>
                     <div
                       :for={recommendation <- project_card.recommendations}
-                      class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3"
+                      class="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3"
                     >
                       <div class="flex items-center justify-between gap-3">
                         <div>
-                          <p class="text-sm font-medium text-slate-900"><%= recommendation.title %></p>
+                          <p class="text-sm/6 font-medium text-zinc-950"><%= recommendation.title %></p>
                           <div class="mt-2 flex flex-wrap gap-2">
                             <span class="text-xs font-semibold text-emerald-700">
                               p<%= recommendation.priority %>
                             </span>
                             <%= if recommendation.decision do %>
-                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                              <.badge class="bg-white">
                                 <%= recommendation_decision_label(recommendation.decision.decision) %>
-                              </span>
+                              </.badge>
                             <% end %>
                             <%= if recommendation.repo_grant do %>
-                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                              <.badge class="bg-white">
                                 <%= repo_scope_label(recommendation.repo_grant.scope) %>
-                              </span>
+                              </.badge>
                             <% end %>
                             <%= if recommendation.latest_run do %>
-                              <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200">
+                              <.badge class="bg-white">
                                 <%= implementation_run_status_label(recommendation.latest_run.status) %>
-                              </span>
+                              </.badge>
                             <% end %>
                           </div>
                         </div>
                       </div>
-                      <p class="mt-2 text-sm text-slate-600"><%= recommendation.summary %></p>
-                      <p class="mt-2 text-sm text-emerald-900">
+                      <p class="mt-2 text-sm/6 text-zinc-600"><%= recommendation.summary %></p>
+                      <p class="mt-2 text-sm/6 text-emerald-900">
                         <span class="font-medium">Next step:</span> <%= recommendation.recommended_action %>
                       </p>
                       <%= if recommendation.why_now do %>
-                        <p class="mt-2 text-xs text-emerald-800"><%= recommendation.why_now %></p>
+                        <p class="mt-2 text-xs/5 text-emerald-800"><%= recommendation.why_now %></p>
                       <% end %>
                       <%= if recommendation.latest_run do %>
-                        <p class="mt-2 text-xs text-slate-600"><%= recommendation.latest_run.result_summary %></p>
-                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <p class="mt-2 text-xs/5 text-zinc-600"><%= recommendation.latest_run.result_summary %></p>
+                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs/5 text-zinc-500">
                           <%= if recommendation.latest_run.branch_name do %>
                             <span>Branch: <code><%= recommendation.latest_run.branch_name %></code></span>
                           <% end %>
@@ -1306,108 +1299,113 @@ defmodule MaraithonWeb.DashboardLive do
                         </div>
                       <% end %>
                       <div class="mt-3 flex flex-wrap gap-2">
-                        <button
+                        <.button
                           type="button"
                           phx-click="decide_project_recommendation"
                           phx-value-project_id={project_card.project.id}
                           phx-value-recommendation_id={recommendation.id}
                           phx-value-decision="accepted"
-                          class="inline-flex items-center rounded-md border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                          variant="outline"
+                          class="text-xs text-emerald-800"
                         >
                           Accept
-                        </button>
-                        <button
+                        </.button>
+                        <.button
                           type="button"
                           phx-click="decide_project_recommendation"
                           phx-value-project_id={project_card.project.id}
                           phx-value-recommendation_id={recommendation.id}
                           phx-value-decision="deferred"
-                          class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          variant="outline"
+                          class="text-xs"
                         >
                           Defer
-                        </button>
-                        <button
+                        </.button>
+                        <.button
                           type="button"
                           phx-click="decide_project_recommendation"
                           phx-value-project_id={project_card.project.id}
                           phx-value-recommendation_id={recommendation.id}
                           phx-value-decision="rejected"
-                          class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                          variant="outline"
+                          class="text-xs"
                         >
                           Reject
-                        </button>
+                        </.button>
                         <%= if recommendation.repo_full_name do %>
-                          <button
+                          <.button
                             type="button"
                             phx-click="grant_project_repo_access"
                             phx-value-project_id={project_card.project.id}
                             phx-value-repo_full_name={recommendation.repo_full_name}
                             phx-value-scope="read_only"
-                            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            variant="outline"
+                            class="text-xs"
                           >
                             Grant Read Access
-                          </button>
-                          <button
+                          </.button>
+                          <.button
                             type="button"
                             phx-click="grant_project_repo_access"
                             phx-value-project_id={project_card.project.id}
                             phx-value-repo_full_name={recommendation.repo_full_name}
                             phx-value-scope="branch_write"
-                            class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                            variant="outline"
+                            class="text-xs"
                           >
                             Grant Branch Access
-                          </button>
+                          </.button>
                         <% end %>
-                        <button
+                        <.button
                           type="button"
                           phx-click="start_project_implementation_run"
                           phx-value-project_id={project_card.project.id}
                           phx-value-recommendation_id={recommendation.id}
-                          class="inline-flex items-center rounded-md border border-slate-900 bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800"
+                          class="text-xs"
                         >
                           Start Delivery
-                        </button>
+                        </.button>
                       </div>
                     </div>
                   <% end %>
 
-                  <div class="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
+                    <p class="text-sm/6 font-medium text-zinc-950">
                       Repo Access
                     </p>
                     <%= if project_card.repo_grants == [] do %>
-                      <p class="mt-2 text-sm text-slate-500">
+                      <p class="mt-2 text-sm/6 text-zinc-500">
                         No explicit repo grants yet.
                       </p>
                     <% else %>
-                      <div :for={grant <- project_card.repo_grants} class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
+                      <div :for={grant <- project_card.repo_grants} class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-zinc-950/10 px-3 py-2">
                         <div class="min-w-0">
-                          <p class="truncate text-sm font-medium text-slate-900"><%= grant.repo_full_name %></p>
-                          <p class="text-xs text-slate-500"><%= repo_scope_label(grant.scope) %></p>
+                          <p class="truncate text-sm/6 font-medium text-zinc-950"><%= grant.repo_full_name %></p>
+                          <p class="text-xs/5 text-zinc-500"><%= repo_scope_label(grant.scope) %></p>
                         </div>
-                        <span class="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                        <.badge>
                           <%= String.capitalize(grant.status) %>
-                        </span>
+                        </.badge>
                       </div>
                     <% end %>
                   </div>
 
-                  <div class="rounded-xl border border-slate-200 bg-white px-3 py-3">
-                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
+                    <p class="text-sm/6 font-medium text-zinc-950">
                       Delivery Runs
                     </p>
                     <%= if project_card.implementation_runs == [] do %>
-                      <p class="mt-2 text-sm text-slate-500">
+                      <p class="mt-2 text-sm/6 text-zinc-500">
                         No implementation runs yet.
                       </p>
                     <% else %>
-                      <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-slate-200 px-3 py-2">
+                      <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-zinc-950/10 px-3 py-2">
                         <div class="flex items-center justify-between gap-3">
-                          <p class="text-sm font-medium text-slate-900"><%= implementation_run_status_label(run.status) %></p>
-                          <span class="text-xs text-slate-500"><%= run.repo_full_name || "repo pending" %></span>
+                          <p class="text-sm/6 font-medium text-zinc-950"><%= implementation_run_status_label(run.status) %></p>
+                          <span class="text-xs/5 text-zinc-500"><%= run.repo_full_name || "repo pending" %></span>
                         </div>
-                        <p class="mt-2 text-sm text-slate-600"><%= run.result_summary %></p>
-                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                        <p class="mt-2 text-sm/6 text-zinc-600"><%= run.result_summary %></p>
+                        <div class="mt-2 flex flex-wrap items-center gap-3 text-xs/5 text-zinc-500">
                           <%= if run.branch_name do %>
                             <span>Branch: <code><%= run.branch_name %></code></span>
                           <% end %>
@@ -1434,51 +1432,52 @@ defmodule MaraithonWeb.DashboardLive do
           <% end %>
 
           <%= if @projects == [] do %>
-            <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center text-sm text-slate-500 xl:col-span-2">
+            <div class="rounded-lg border border-dashed border-zinc-950/20 bg-white px-5 py-10 text-center text-sm/6 text-zinc-500 xl:col-span-2">
               No projects yet. Create one above, attach a specialist agent, and start building project-local state.
             </div>
           <% end %>
         </div>
-      </section>
+      </.panel>
 
       <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
-        <section id="proof-of-value" class="overflow-hidden rounded-xl border border-emerald-100 bg-white shadow">
-          <div class="border-b border-emerald-100 bg-emerald-50/70 px-4 py-4 sm:px-6">
+        <.panel id="proof-of-value" body_class="p-0">
+          <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div class="flex flex-wrap items-center gap-2">
-                  <h2 class="text-lg font-medium text-slate-900">3 things Maraithon would have caught this week</h2>
-                  <span class="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700 ring-1 ring-emerald-200">
+                  <.heading level={2} class="text-base/7">3 things Maraithon would have caught this week</.heading>
+                  <.badge color="emerald" class="bg-white">
                     Preview
-                  </span>
+                  </.badge>
                 </div>
-                <p class="mt-1 text-sm text-slate-600">
+                <.text class="mt-1">
                   Real examples from your connected accounts. This is a lightweight proof-of-value scan, not a full always-on agent run.
-                </p>
+                </.text>
               </div>
-              <button
+              <.button
                 type="button"
                 phx-click="refresh_onboarding_preview"
-                class="inline-flex items-center rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50"
+                variant="outline"
+                class="text-emerald-800"
               >
                 Refresh preview
-              </button>
+              </.button>
             </div>
-          </div>
+          </:header>
 
-          <div class="divide-y divide-slate-200">
+          <div class="divide-y divide-zinc-950/5">
             <%= case @onboarding_preview.status do %>
               <% :loading -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm font-medium text-slate-900">Scanning your connected data...</p>
-                  <p class="mt-1 text-sm text-slate-600">
+                  <p class="text-sm/6 font-medium text-zinc-950">Scanning your connected data...</p>
+                  <p class="mt-1 text-sm/6 text-zinc-600">
                     Maraithon is pulling a small recent slice from your linked accounts and selecting the highest-signal examples.
                   </p>
                 </div>
               <% :ready when @onboarding_preview.items == [] -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm font-medium text-slate-900">Nothing high-signal surfaced in the recent sample.</p>
-                  <p class="mt-1 text-sm text-slate-600">
+                  <p class="text-sm/6 font-medium text-zinc-950">Nothing high-signal surfaced in the recent sample.</p>
+                  <p class="mt-1 text-sm/6 text-zinc-600">
                     That is a good sign. Once you start an agent, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
                   </p>
                 </div>
@@ -1491,75 +1490,74 @@ defmodule MaraithonWeb.DashboardLive do
                           <span class={preview_source_class(item.source)}>
                             <%= preview_source_label(item.source) %>
                           </span>
-                          <span class="text-xs text-slate-500">
+                          <span class="text-xs/5 text-zinc-500">
                             <%= item.account_label %>
                           </span>
-                          <span class="text-xs text-slate-500">
+                          <span class="text-xs/5 text-zinc-500">
                             confidence <%= format_confidence(item.confidence) %>
                           </span>
                         </div>
-                        <p class="mt-2 text-base font-semibold text-slate-900"><%= item.title %></p>
-                        <p class="mt-1 text-sm text-slate-600"><%= item.summary %></p>
-                        <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <p class="mt-2 text-base/7 font-semibold text-zinc-950"><%= item.title %></p>
+                        <p class="mt-1 text-sm/6 text-zinc-600"><%= item.summary %></p>
+                        <p class="mt-2 text-xs/5 font-medium text-zinc-500">
                           Why this matters
                         </p>
-                        <p class="mt-1 text-sm text-slate-600"><%= item.rationale %></p>
-                        <p class="mt-2 text-sm text-indigo-700">
+                        <p class="mt-1 text-sm/6 text-zinc-600"><%= item.rationale %></p>
+                        <p class="mt-2 text-sm/6 text-indigo-700">
                           <span class="font-medium">What Maraithon would do:</span> <%= item.recommended_action %>
                         </p>
                       </div>
-                      <div class="w-full max-w-xs rounded-xl border border-slate-200 bg-slate-50 p-4">
-                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      <div class="w-full max-w-xs rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
+                        <p class="text-xs/5 font-medium text-zinc-500">
                           Best next step
                         </p>
-                        <p class="mt-2 text-sm font-medium text-slate-900">
+                        <p class="mt-2 text-sm/6 font-medium text-zinc-950">
                           Start <%= onboarding_behavior_label(item.suggested_behavior) %>
                         </p>
-                        <p class="mt-1 text-sm text-slate-600">
+                        <p class="mt-1 text-sm/6 text-zinc-600">
                           This agent is the best fit to catch this kind of loop continuously and escalate only when it matters.
                         </p>
-                        <.link
+                        <.button
                           navigate={"/agents/new?behavior=#{item.suggested_behavior}"}
-                          class="mt-3 inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                          class="mt-3"
                         >
                           Use this setup
-                        </.link>
+                        </.button>
                       </div>
                     </div>
                   </div>
                 <% end %>
               <% :error -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm font-medium text-slate-900">Preview temporarily unavailable.</p>
-                  <p class="mt-1 text-sm text-slate-600">
+                  <p class="text-sm/6 font-medium text-zinc-950">Preview temporarily unavailable.</p>
+                  <p class="mt-1 text-sm/6 text-zinc-600">
                     Maraithon could not build the onboarding proof just now. You can refresh this preview or go straight to the agent builder.
                   </p>
                 </div>
               <% _ -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm text-slate-600">Connect Gmail, Calendar, or Slack to see a proof-of-value preview.</p>
+                  <p class="text-sm/6 text-zinc-600">Connect Gmail, Calendar, or Slack to see a proof-of-value preview.</p>
                 </div>
             <% end %>
           </div>
-        </section>
+        </.panel>
       <% end %>
 
-      <section class="overflow-hidden rounded-xl bg-white shadow">
-        <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
+      <.panel body_class="space-y-6 px-4 py-4 sm:px-6">
+        <:header>
           <div class="flex items-center justify-between gap-3">
             <div>
-              <h2 class="text-lg font-medium text-gray-900">Actionable Insights</h2>
-              <p class="mt-1 text-sm text-gray-500">
+              <.heading level={2} class="text-base/7">Actionable Insights</.heading>
+              <.text class="mt-1">
                 Open-loop recommendations from long-running Gmail, Calendar, and Slack advisors, split between threads that need you now and threads Maraithon is watching.
-              </p>
+              </.text>
             </div>
-            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+            <.badge>
               <%= length(@insights) %> open
-            </span>
+            </.badge>
           </div>
-        </div>
+        </:header>
 
-        <div class="space-y-6 px-4 py-4 sm:px-6">
           <.insight_group
             title="Needs Action"
             subtitle="Threads that currently look like direct founder debt."
@@ -1574,90 +1572,84 @@ defmodule MaraithonWeb.DashboardLive do
           />
 
           <%= if @insights == [] do %>
-            <div class="py-10 text-center text-sm text-slate-500">
+            <div class="py-10 text-center text-sm/6 text-zinc-500">
               No actionable insights yet. Start a <span class="font-medium">ai_chief_of_staff</span>, <span class="font-medium">inbox_calendar_advisor</span>, or <span class="font-medium">slack_followthrough_agent</span> and connect the required services.
             </div>
           <% end %>
-        </div>
-      </section>
+      </.panel>
 
-      <section class="overflow-hidden rounded-xl bg-white shadow">
-        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
+      <.panel body_class="px-4 py-4 sm:px-6">
+        <:header>
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 class="text-lg font-medium text-slate-900">Agent Activity</h2>
-              <p class="mt-1 text-sm text-slate-500">
+              <.heading level={2} class="text-base/7">Agent Activity</.heading>
+              <.text class="mt-1">
                 Each installed specialist keeps its own runtime, logs, and recent work, while the full control surface still lives in the Agents workspace.
-              </p>
+              </.text>
             </div>
             <div class="flex flex-wrap gap-2">
-              <.link
-                navigate={"/agents"}
-                class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-              >
+              <.button navigate={"/agents"}>
                 Manage Agents
-              </.link>
-              <.link
-                navigate={"/agents/new"}
-                class="inline-flex items-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
+              </.button>
+              <.button navigate={"/agents/new"} variant="outline">
                 New Agent
-              </.link>
+              </.button>
             </div>
           </div>
-        </div>
+        </:header>
 
-        <div class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-2">
+        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <%= for overview <- @agent_overviews do %>
-            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+            <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-5">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="text-lg font-semibold text-slate-900">
+                    <h3 class="text-base/7 font-semibold text-zinc-950">
                       <%= agent_display_name(overview.agent) %>
                     </h3>
                     <span class={agent_status_class(overview.agent.status)}>
                       <%= overview.agent.status %>
                     </span>
                   </div>
-                  <p class="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
+                  <p class="mt-1 text-xs/5 text-zinc-500">
                     <%= humanize_text_token(overview.agent.behavior) %>
                   </p>
-                  <p :if={overview.project_name} class="mt-2 text-sm text-slate-600">
-                    Project: <span class="font-medium text-slate-900"><%= overview.project_name %></span>
+                  <p :if={overview.project_name} class="mt-2 text-sm/6 text-zinc-600">
+                    Project: <span class="font-medium text-zinc-950"><%= overview.project_name %></span>
                   </p>
                 </div>
 
-                <.link
+                <.button
                   navigate={"/agents?id=#{overview.agent.id}"}
-                  class="inline-flex items-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                  variant="outline"
+                  class="text-xs"
                 >
                   Open
-                </.link>
+                </.button>
               </div>
 
               <div class="mt-4 grid grid-cols-3 gap-3">
-                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
-                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
+                  <p class="text-xs/5 font-medium text-zinc-500">
                     Events
                   </p>
-                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                  <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.event_count %>
                   </p>
                 </div>
-                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
-                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
+                  <p class="text-xs/5 font-medium text-zinc-500">
                     Effects
                   </p>
-                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                  <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.effect_counts.pending %>
                   </p>
                 </div>
-                <div class="rounded-xl bg-white px-3 py-3 ring-1 ring-slate-200">
-                  <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
+                  <p class="text-xs/5 font-medium text-zinc-500">
                     Jobs
                   </p>
-                  <p class="mt-2 text-lg font-semibold text-slate-900">
+                  <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.job_counts.pending %>
                   </p>
                 </div>
@@ -1665,48 +1657,48 @@ defmodule MaraithonWeb.DashboardLive do
 
               <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div>
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="text-sm/6 font-medium text-zinc-950">
                     Recent events
                   </p>
                   <%= if overview.recent_activity == [] do %>
-                    <p class="mt-2 text-sm text-slate-500">No recent events recorded.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No recent events recorded.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
                         :for={activity <- overview.recent_activity}
-                        class="rounded-xl border border-slate-200 bg-white px-3 py-3"
+                        class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3"
                       >
                         <div class="flex items-center justify-between gap-3">
-                          <p class="text-sm font-medium text-slate-900"><%= activity.event_type %></p>
-                          <span class="text-xs text-slate-400"><%= format_time(activity.inserted_at) %></span>
+                          <p class="text-sm/6 font-medium text-zinc-950"><%= activity.event_type %></p>
+                          <span class="text-xs/5 text-zinc-500"><%= format_time(activity.inserted_at) %></span>
                         </div>
-                        <p class="mt-2 text-xs text-slate-500"><%= payload_preview(activity.payload) %></p>
+                        <p class="mt-2 text-xs/5 text-zinc-500"><%= payload_preview(activity.payload) %></p>
                       </div>
                     </div>
                   <% end %>
                 </div>
 
                 <div>
-                  <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="text-sm/6 font-medium text-zinc-950">
                     Recent logs
                   </p>
                   <%= if overview.inspection.recent_logs == [] do %>
-                    <p class="mt-2 text-sm text-slate-500">No recent logs captured.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No recent logs captured.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
                         :for={log <- overview.inspection.recent_logs}
-                        class="rounded-xl border border-slate-200 bg-slate-950 px-3 py-3"
+                        class="rounded-lg border border-zinc-950 bg-zinc-950 px-3 py-3"
                       >
                         <div class="flex items-center justify-between gap-3">
-                          <span class={["text-xs font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+                          <span class={["text-xs/5 font-semibold", log_level_class(log.level)]}>
                             <%= log.level %>
                           </span>
-                          <span class="text-[11px] text-slate-500">
+                          <span class="text-xs/5 text-zinc-500">
                             <%= format_log_timestamp(log.timestamp) %>
                           </span>
                         </div>
-                        <p class="mt-2 text-xs leading-5 text-slate-100"><%= log.message %></p>
+                        <p class="mt-2 text-xs/5 text-zinc-100"><%= log.message %></p>
                       </div>
                     </div>
                   <% end %>
@@ -1714,32 +1706,32 @@ defmodule MaraithonWeb.DashboardLive do
               </div>
 
               <%= if overview.errors != [] do %>
-                <div class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-                  <p class="text-sm font-medium text-amber-900"><%= List.first(overview.errors).message %></p>
-                  <p class="mt-1 text-xs text-amber-800"><%= List.first(overview.errors).details %></p>
-                </div>
+                <.alert color="amber" class="mt-4">
+                  <p class="text-sm/6 font-medium"><%= List.first(overview.errors).message %></p>
+                  <p class="mt-1 text-xs/5"><%= List.first(overview.errors).details %></p>
+                </.alert>
               <% end %>
             </div>
           <% end %>
 
           <%= if @agent_overviews == [] do %>
-            <div class="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-10 text-center text-sm text-slate-500 xl:col-span-2">
+            <div class="rounded-lg border border-dashed border-zinc-950/20 bg-white px-5 py-10 text-center text-sm/6 text-zinc-500 xl:col-span-2">
               No agents yet. Install a chief of staff, project manager, or coding agent to start building the operator system.
             </div>
           <% end %>
         </div>
-      </section>
+      </.panel>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-1">
-        <div class="overflow-hidden rounded-xl bg-white shadow">
-          <div class="border-b border-gray-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-gray-900">Health & Monitoring</h2>
-          </div>
-          <div class="grid grid-cols-1 gap-6 px-4 py-5 sm:px-6 md:grid-cols-2">
+        <.panel>
+          <:header>
+            <.heading level={2} class="text-base/7">Health & Monitoring</.heading>
+          </:header>
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div class="space-y-4">
               <div class="flex items-center justify-between">
-                <span class="text-sm font-medium text-gray-500">System Status</span>
-                <span class={"inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium #{health_badge_class(@health.status)}"}>
+                <span class="text-sm/6 font-medium text-zinc-500">System Status</span>
+                <span class={health_badge_class(@health.status)}>
                   <%= @health.status %>
                 </span>
               </div>
@@ -1759,14 +1751,14 @@ defmodule MaraithonWeb.DashboardLive do
                 <.health_row
                   label="Version"
                   value={@health.version || "n/a"}
-                  value_class="font-mono text-xs text-gray-900"
+                  value_class="font-mono text-xs/5 text-zinc-950"
                 />
               </dl>
             </div>
 
             <div class="space-y-4">
               <div>
-                <h3 class="text-sm font-medium text-gray-700">Effects Queue</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Effects Queue</h3>
                 <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
                   <.queue_metric title="Pending" value={@queue_metrics.effects.pending} />
                   <.queue_metric
@@ -1779,7 +1771,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
               </div>
               <div>
-                <h3 class="text-sm font-medium text-gray-700">Scheduled Jobs</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Scheduled Jobs</h3>
                 <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
                   <.queue_metric title="Pending" value={@queue_metrics.jobs.pending} />
                   <.queue_metric
@@ -1793,58 +1785,58 @@ defmodule MaraithonWeb.DashboardLive do
               </div>
             </div>
           </div>
-        </div>
+        </.panel>
 
       </section>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <div class="overflow-hidden rounded-xl bg-white shadow">
-          <div class="border-b border-gray-200 bg-white px-4 py-5 sm:px-6">
-            <h3 class="text-lg font-medium leading-6 text-gray-900">Operational Logs</h3>
-            <p class="mt-1 text-sm text-gray-500">
+        <.panel>
+          <:header>
+            <.heading level={3} class="text-base/7">Operational Logs</.heading>
+            <.text class="mt-1">
               Structured event activity across all agents.
-            </p>
-          </div>
+            </.text>
+          </:header>
           <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
             <%= for activity <- @recent_activity do %>
-              <div class="rounded border border-gray-100 p-3">
+              <div class="rounded-lg border border-zinc-950/10 p-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="truncate text-sm font-medium text-indigo-600"><%= activity.event_type %></div>
-                  <div class="text-xs text-gray-400"><%= format_time(activity.inserted_at) %></div>
+                  <div class="text-xs/5 text-zinc-500"><%= format_time(activity.inserted_at) %></div>
                 </div>
-                <div class="mt-1 text-xs text-gray-500">
+                <div class="mt-1 text-xs/5 text-zinc-500">
                   <span class="font-medium"><%= activity.behavior %></span>
                   <span class="mx-1">•</span>
                   <span class="font-mono"><%= short_id(activity.agent_id) %></span>
                 </div>
-                <div class="mt-2 break-all rounded bg-gray-50 px-2 py-1 font-mono text-[11px] text-gray-600">
+                <div class="mt-2 break-all rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
                   <%= payload_preview(activity.payload) %>
                 </div>
               </div>
             <% end %>
             <%= if @recent_activity == [] do %>
-              <p class="text-sm text-gray-500">No activity yet.</p>
+              <p class="text-sm/6 text-zinc-500">No activity yet.</p>
             <% end %>
           </div>
-        </div>
+        </.panel>
 
-        <div class="overflow-hidden rounded-xl bg-white shadow">
-          <div class="border-b border-gray-200 bg-white px-4 py-5 sm:px-6">
-            <h3 class="text-lg font-medium leading-6 text-gray-900">Failures & Stale Work</h3>
-            <p class="mt-1 text-sm text-gray-500">
+        <.panel>
+          <:header>
+            <.heading level={3} class="text-base/7">Failures & Stale Work</.heading>
+            <.text class="mt-1">
               Failed effects and jobs that are dispatched for too long.
-            </p>
-          </div>
+            </.text>
+          </:header>
           <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
             <%= for failure <- @recent_failures do %>
-              <div class="rounded border border-red-100 bg-red-50/30 p-3">
+              <div class="rounded-lg border border-red-200 bg-red-50/40 p-3">
                 <div class="flex items-center justify-between gap-3">
                   <div class="truncate text-sm font-medium text-red-700">
                     <%= failure.type %> (<%= failure.source %>)
                   </div>
-                  <div class="text-xs text-gray-500"><%= format_time(failure.inserted_at) %></div>
+                  <div class="text-xs/5 text-zinc-500"><%= format_time(failure.inserted_at) %></div>
                 </div>
-                <div class="mt-1 text-xs text-gray-500">
+                <div class="mt-1 text-xs/5 text-zinc-500">
                   <span class="font-medium"><%= failure.behavior %></span>
                   <span class="mx-1">•</span>
                   <span class="font-mono"><%= short_id(failure.agent_id) %></span>
@@ -1853,67 +1845,68 @@ defmodule MaraithonWeb.DashboardLive do
                   <span class="mx-1">•</span>
                   <span>attempts <%= failure.attempts %></span>
                 </div>
-                <div class="mt-2 break-all rounded bg-white px-2 py-1 font-mono text-[11px] text-gray-700">
+                <div class="mt-2 break-all rounded-lg bg-white px-2 py-1 font-mono text-xs/5 text-zinc-700">
                   <%= failure.details %>
                 </div>
               </div>
             <% end %>
             <%= if @recent_failures == [] do %>
-              <p class="text-sm text-gray-500">No failures detected.</p>
+              <p class="text-sm/6 text-zinc-500">No failures detected.</p>
             <% end %>
           </div>
-        </div>
+        </.panel>
       </section>
 
-      <section class="overflow-hidden rounded-xl bg-slate-950 shadow">
-        <div class="border-b border-slate-800 px-4 py-5 sm:px-6">
-          <h3 class="text-lg font-medium leading-6 text-slate-100">Raw Logs</h3>
-          <p class="mt-1 text-sm text-slate-400">
+      <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
+        <div class="border-b border-white/10 px-4 py-5 sm:px-6">
+          <h3 class="text-base/7 font-semibold text-white">Raw Logs</h3>
+          <p class="mt-1 text-sm/6 text-zinc-400">
             Recent runtime logs captured in-app for live debugging and fleet-wide inspection.
           </p>
         </div>
         <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5 sm:px-6">
           <%= for log <- @recent_logs do %>
-            <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-slate-900 py-2">
-              <span class="text-slate-500"><%= format_log_timestamp(log.timestamp) %></span>
-              <span class={["font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+            <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-white/10 py-2">
+              <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
+              <span class={["font-semibold", log_level_class(log.level)]}>
                 <%= log.level %>
               </span>
               <div class="min-w-0">
                 <%= if metadata = log_metadata_preview(log.metadata) do %>
-                  <span class="mr-2 text-slate-500"><%= metadata %></span>
+                  <span class="mr-2 text-zinc-500"><%= metadata %></span>
                 <% end %>
-                <span class="break-words whitespace-pre-wrap text-slate-100"><%= log.message %></span>
+                <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
               </div>
             </div>
           <% end %>
           <%= if @recent_logs == [] do %>
-            <p class="text-sm text-slate-500">No logs captured yet.</p>
+            <p class="text-sm/6 text-zinc-500">No logs captured yet.</p>
           <% end %>
         </div>
       </section>
 
-      <section class="overflow-hidden rounded-xl bg-slate-950 shadow">
-        <div class="border-b border-slate-800 px-4 py-5 sm:px-6">
+      <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
+        <div class="border-b border-white/10 px-4 py-5 sm:px-6">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 class="text-lg font-medium leading-6 text-slate-100">Fly.io Platform Logs</h3>
-              <p class="mt-1 text-sm text-slate-400">
+              <h3 class="text-base/7 font-semibold text-white">Fly.io Platform Logs</h3>
+              <p class="mt-1 text-sm/6 text-zinc-400">
                 App, machine, and runner logs fetched from Fly for full production troubleshooting.
               </p>
             </div>
-            <button
+            <.button
               type="button"
               phx-click="refresh_fly_logs"
-              class="inline-flex items-center rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-medium text-slate-100 hover:bg-slate-800"
+              variant="outline"
+              class="border-white/20 bg-white/10 text-xs text-white hover:bg-white/15"
             >
               Refresh Fly Logs
-            </button>
+            </.button>
           </div>
           <%= if @fly_logs.apps != [] do %>
             <div class="mt-3 flex flex-wrap gap-2">
               <%= for app <- @fly_logs.apps do %>
-                <span class="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-300">
+                <span class="rounded-md bg-white/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-300">
                   <%= app %>
                 </span>
               <% end %>
@@ -1931,24 +1924,24 @@ defmodule MaraithonWeb.DashboardLive do
           <% end %>
 
           <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
-            <p class="text-sm text-slate-500">
+            <p class="text-sm/6 text-zinc-500">
               Configure `FLY_API_TOKEN` and `FLY_LOG_APPS` to load Fly platform logs in-app.
             </p>
           <% else %>
             <%= if @fly_logs.logs == [] do %>
-              <p class="text-sm text-slate-500">No Fly logs returned yet.</p>
+              <p class="text-sm/6 text-zinc-500">No Fly logs returned yet.</p>
             <% else %>
               <%= for log <- @fly_logs.logs do %>
-                <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-slate-900 py-2">
-                  <span class="text-slate-500"><%= format_log_timestamp(log.timestamp) %></span>
-                  <span class={["font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+                <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-white/10 py-2">
+                  <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
+                  <span class={["font-semibold", log_level_class(log.level)]}>
                     <%= log.level %>
                   </span>
                   <div class="min-w-0">
                     <%= if metadata = fly_log_metadata_preview(log) do %>
-                      <span class="mr-2 text-slate-500"><%= metadata %></span>
+                      <span class="mr-2 text-zinc-500"><%= metadata %></span>
                     <% end %>
-                    <span class="break-words whitespace-pre-wrap text-slate-100"><%= log.message %></span>
+                    <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
                   </div>
                 </div>
               <% end %>
@@ -2868,13 +2861,14 @@ defmodule MaraithonWeb.DashboardLive do
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp insight_priority_class(priority) when is_integer(priority) and priority >= 80,
-    do: "rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+    do: "inline-flex rounded-md bg-red-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-red-700"
 
   defp insight_priority_class(priority) when is_integer(priority) and priority >= 60,
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+    do:
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp insight_priority_class(_),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp format_confidence(value) when is_float(value), do: "#{Float.round(value * 100, 0)}%"
   defp format_confidence(value) when is_integer(value), do: "#{value}%"
@@ -3046,20 +3040,20 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp insight_group(assigns) do
     ~H"""
-    <section :if={@cards != []} class="overflow-hidden rounded-xl border border-slate-200">
-      <div class="border-b border-slate-200 bg-slate-50/70 px-4 py-4">
+    <section :if={@cards != []} class="overflow-hidden rounded-lg border border-zinc-950/10">
+      <div class="border-b border-zinc-950/10 bg-zinc-50 px-4 py-4">
         <div class="flex items-center justify-between gap-3">
           <div>
-            <h3 class="text-sm font-semibold text-slate-900"><%= @title %></h3>
-            <p :if={@subtitle} class="mt-1 text-sm text-slate-600"><%= @subtitle %></p>
+            <h3 class="text-sm/6 font-semibold text-zinc-950"><%= @title %></h3>
+            <p :if={@subtitle} class="mt-1 text-sm/6 text-zinc-600"><%= @subtitle %></p>
           </div>
-          <span class="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200">
+          <.badge class="bg-white">
             <%= length(@cards) %>
-          </span>
+          </.badge>
         </div>
       </div>
 
-      <div class="divide-y divide-slate-200">
+      <div class="divide-y divide-zinc-950/5">
         <%= for card <- @cards do %>
           <% insight = card.insight %>
           <% detail = card.detail %>
@@ -3077,19 +3071,19 @@ defmodule MaraithonWeb.DashboardLive do
                   <span class={insight_priority_class(insight.priority)}>
                     P<%= insight.priority %>
                   </span>
-                  <span class="text-xs text-slate-500">
+                  <span class="text-xs/5 text-zinc-500">
                     confidence <%= format_confidence(insight.confidence) %>
                   </span>
-                  <span :if={insight.due_at} class="text-xs text-amber-700">
+                  <span :if={insight.due_at} class="text-xs/5 text-amber-700">
                     due <%= format_datetime(insight.due_at) %>
                   </span>
                 </div>
-                <p class="mt-2 text-sm font-semibold text-slate-900"><%= insight.title %></p>
-                <p class="mt-1 text-xs text-slate-500">
+                <p class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= insight.title %></p>
+                <p class="mt-1 text-xs/5 text-zinc-500">
                   from <%= insight_source_label(insight.source) %> · account <%= insight_account_label(insight) %>
                 </p>
-                <p class="mt-1 text-sm text-slate-600"><%= insight.summary %></p>
-                <p class="mt-2 text-sm text-indigo-700">
+                <p class="mt-1 text-sm/6 text-zinc-600"><%= insight.summary %></p>
+                <p class="mt-2 text-sm/6 text-indigo-700">
                   <span class="font-medium">
                     <%= if insight.attention_mode == "monitor", do: "Watch:", else: "Action:" %>
                   </span>
@@ -3097,37 +3091,38 @@ defmodule MaraithonWeb.DashboardLive do
                 </p>
                 <% why_now = insight_why_now(insight) %>
                 <%= if why_now do %>
-                  <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="mt-2 text-xs/5 font-medium text-zinc-500">
                     Why now
                   </p>
-                  <p class="mt-1 text-sm text-slate-600"><%= why_now %></p>
+                  <p class="mt-1 text-sm/6 text-zinc-600"><%= why_now %></p>
                 <% end %>
                 <% ideas = insight_follow_up_ideas(insight) %>
                 <%= if ideas != [] do %>
-                  <p class="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <p class="mt-2 text-xs/5 font-medium text-zinc-500">
                     Ideas
                   </p>
-                  <ul class="mt-1 space-y-1 text-sm text-slate-600">
+                  <ul class="mt-1 space-y-1 text-sm/6 text-zinc-600">
                     <%= for idea <- ideas do %>
                       <li>- <%= idea %></li>
                     <% end %>
                   </ul>
                 <% end %>
-                <button
+                <.button
                   type="button"
                   phx-click="toggle_insight_detail"
                   phx-value-id={insight.id}
                   aria-expanded={to_string(expanded?)}
                   aria-controls={"insight-detail-#{insight.id}"}
-                  class="mt-3 inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                  variant="outline"
+                  class="mt-3 text-xs"
                 >
                   <%= if expanded?, do: "Hide evidence", else: "Show evidence" %>
-                </button>
+                </.button>
 
                 <%= if expanded? do %>
                   <div
                     id={"insight-detail-#{insight.id}"}
-                    class="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4"
+                    class="mt-4 space-y-4 rounded-lg border border-zinc-950/10 bg-zinc-50 p-4"
                   >
                     <.insight_detail_section
                       title="Exact promise"
@@ -3141,21 +3136,21 @@ defmodule MaraithonWeb.DashboardLive do
                     />
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
-                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <p class="text-xs/5 font-medium text-zinc-500">
                           Evidence checked
                         </p>
                       </div>
                       <%= if detail.evidence_checked == [] do %>
-                        <p class="text-sm text-slate-600">
+                        <p class="text-sm/6 text-zinc-600">
                           No persisted evidence bullets were captured for this insight.
                         </p>
                       <% else %>
-                        <ul class="space-y-2 text-sm text-slate-700">
+                        <ul class="space-y-2 text-sm/6 text-zinc-700">
                           <%= for item <- detail.evidence_checked do %>
-                            <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                              <p class="font-medium text-slate-900"><%= item.label %></p>
-                              <p :if={item.detail} class="mt-1 text-slate-600"><%= item.detail %></p>
-                              <p class="mt-1 text-xs text-slate-500">
+                            <li class="rounded-lg border border-zinc-950/10 bg-white px-3 py-2">
+                              <p class="font-medium text-zinc-950"><%= item.label %></p>
+                              <p :if={item.detail} class="mt-1 text-zinc-600"><%= item.detail %></p>
+                              <p class="mt-1 text-xs/5 text-zinc-500">
                                 <%= evidence_metadata(item) %>
                               </p>
                             </li>
@@ -3165,26 +3160,26 @@ defmodule MaraithonWeb.DashboardLive do
                     </div>
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
-                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <p class="text-xs/5 font-medium text-zinc-500">
                           Delivery evidence checked
                         </p>
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
-                        <p class="text-sm text-slate-600">No delivery attempts recorded.</p>
+                        <p class="text-sm/6 text-zinc-600">No delivery attempts recorded.</p>
                       <% else %>
-                        <ul class="space-y-2 text-sm text-slate-700">
+                        <ul class="space-y-2 text-sm/6 text-zinc-700">
                           <%= for delivery <- detail.delivery_evidence do %>
-                            <li class="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <li class="rounded-lg border border-zinc-950/10 bg-white px-3 py-2">
                               <div class="flex flex-wrap items-center gap-2">
-                                <span class="font-medium text-slate-900">
+                                <span class="font-medium text-zinc-950">
                                   <%= humanize_text_token(delivery.channel) %>
                                 </span>
-                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                                <.badge>
                                   <%= humanize_text_token(delivery.status) %>
-                                </span>
+                                </.badge>
                               </div>
-                              <p class="mt-1 text-slate-600"><%= delivery.destination_label %></p>
-                              <p class="mt-1 text-xs text-slate-500">
+                              <p class="mt-1 text-zinc-600"><%= delivery.destination_label %></p>
+                              <p class="mt-1 text-xs/5 text-zinc-500">
                                 <%= delivery_metadata(delivery) %>
                               </p>
                             </li>
@@ -3194,37 +3189,37 @@ defmodule MaraithonWeb.DashboardLive do
                     </div>
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
-                        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                        <p class="text-xs/5 font-medium text-zinc-500">
                           Why Maraithon still thinks this is open
                         </p>
-                        <span
+                        <.badge
                           :if={detail.open_loop_reason}
-                          class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+                          class="bg-white"
                         >
                           <%= reason_origin_label(detail.open_loop_reason) %>
-                        </span>
+                        </.badge>
                       </div>
                       <%= if detail.open_loop_reason do %>
-                        <p class="text-sm text-slate-700"><%= detail.open_loop_reason.text %></p>
+                        <p class="text-sm/6 text-zinc-700"><%= detail.open_loop_reason.text %></p>
                         <ul
                           :if={detail.open_loop_reason.origin == :derived and detail.open_loop_reason.factors != []}
-                          class="space-y-1 text-sm text-slate-600"
+                          class="space-y-1 text-sm/6 text-zinc-600"
                         >
                           <%= for factor <- detail.open_loop_reason.factors do %>
                             <li>- <%= factor %></li>
                           <% end %>
                         </ul>
                       <% else %>
-                        <p class="text-sm text-slate-600">
+                        <p class="text-sm/6 text-zinc-600">
                           Open-loop reason could not be reconstructed from persisted data.
                         </p>
                       <% end %>
                     </div>
                     <div :if={detail.data_gaps != []} class="space-y-2">
-                      <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      <p class="text-xs/5 font-medium text-zinc-500">
                         Data gaps
                       </p>
-                      <ul class="space-y-1 text-sm text-slate-600">
+                      <ul class="space-y-1 text-sm/6 text-zinc-600">
                         <%= for gap <- detail.data_gaps do %>
                           <li>- <%= gap %></li>
                         <% end %>
@@ -3234,30 +3229,33 @@ defmodule MaraithonWeb.DashboardLive do
                 <% end %>
               </div>
               <div class="flex flex-wrap gap-2">
-                <button
+                <.button
                   type="button"
                   phx-click="ack_insight"
                   phx-value-id={insight.id}
-                  class="inline-flex items-center rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                  variant="outline"
+                  class="text-xs text-emerald-800"
                 >
                   Acknowledge
-                </button>
-                <button
+                </.button>
+                <.button
                   type="button"
                   phx-click="snooze_insight"
                   phx-value-id={insight.id}
-                  class="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                  variant="outline"
+                  class="text-xs text-amber-800"
                 >
                   Snooze 4h
-                </button>
-                <button
+                </.button>
+                <.button
                   type="button"
                   phx-click="dismiss_insight"
                   phx-value-id={insight.id}
-                  class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                  variant="outline"
+                  class="text-xs text-rose-700"
                 >
                   Dismiss
-                </button>
+                </.button>
               </div>
             </div>
           </div>
@@ -3290,9 +3288,15 @@ defmodule MaraithonWeb.DashboardLive do
     """
   end
 
-  defp health_badge_class(:healthy), do: "bg-green-100 text-green-800"
-  defp health_badge_class(:unhealthy), do: "bg-red-100 text-red-800"
-  defp health_badge_class(_), do: "bg-gray-100 text-gray-700"
+  defp health_badge_class(:healthy),
+    do:
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
+
+  defp health_badge_class(:unhealthy),
+    do: "inline-flex rounded-md bg-red-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-red-700"
+
+  defp health_badge_class(_),
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   attr :title, :string, required: true
   attr :value, :any, required: true
@@ -3322,12 +3326,12 @@ defmodule MaraithonWeb.DashboardLive do
 
   attr :label, :string, required: true
   attr :value, :string, required: true
-  attr :value_class, :string, default: "font-medium text-gray-900"
+  attr :value_class, :string, default: "font-medium text-zinc-950"
 
   defp health_row(assigns) do
     ~H"""
     <div class="flex items-center justify-between">
-      <dt class="text-gray-500"><%= @label %></dt>
+      <dt class="text-zinc-500"><%= @label %></dt>
       <dd class={@value_class}><%= @value %></dd>
     </div>
     """
@@ -3383,11 +3387,11 @@ defmodule MaraithonWeb.DashboardLive do
       "notice" -> log_level_class(:notice)
       "info" -> log_level_class(:info)
       "debug" -> log_level_class(:debug)
-      _ -> "text-slate-300"
+      _ -> "text-zinc-300"
     end
   end
 
-  defp log_level_class(_), do: "text-slate-300"
+  defp log_level_class(_), do: "text-zinc-300"
 
   defp log_metadata_preview(metadata) when metadata in [%{}, nil], do: nil
 
