@@ -157,6 +157,22 @@ defmodule Maraithon.Connections do
     end
   end
 
+  def disconnect(user_id, "slack:" <> _ = provider) when is_binary(user_id) do
+    slack_providers =
+      OAuth.list_user_tokens(user_id)
+      |> Enum.map(& &1.provider)
+      |> Enum.filter(&slack_same_workspace_provider?(&1, provider))
+      |> Enum.uniq()
+
+    case slack_providers do
+      [] ->
+        {:error, :no_token}
+
+      providers ->
+        revoke_many(user_id, providers)
+    end
+  end
+
   def disconnect(user_id, "telegram") when is_binary(user_id) do
     ConnectedAccounts.mark_disconnected(user_id, "telegram", notify?: false)
   end
@@ -794,27 +810,148 @@ defmodule Maraithon.Connections do
 
   defp slack_user_provider?(_provider), do: false
 
+  defp slack_same_workspace_provider?(candidate_provider, provider)
+       when is_binary(candidate_provider) and is_binary(provider) do
+    team_id = slack_team_id_from_provider(provider)
+
+    not is_nil(team_id) and slack_team_id_from_provider(candidate_provider) == team_id
+  end
+
+  defp slack_same_workspace_provider?(_candidate_provider, _provider), do: false
+
+  defp slack_team_id(%Token{} = token) do
+    normalize_text(metadata_value(token, ["team_id"])) ||
+      slack_team_id_from_provider(token.provider)
+  end
+
+  defp slack_team_id(_token), do: nil
+
+  defp slack_team_id_from_provider(provider) when is_binary(provider) do
+    case String.split(provider, ":") do
+      ["slack", team_id] -> normalize_text(team_id)
+      ["slack", team_id, "user", _user_id] -> normalize_text(team_id)
+      _ -> nil
+    end
+  end
+
+  defp slack_team_id_from_provider(_provider), do: nil
+
   defp slack_account_entries(user_id, tokens, account_by_provider, return_to)
        when is_binary(user_id) and is_list(tokens) and is_map(account_by_provider) do
     reconnect_url = auth_url("/auth/slack", user_id, return_to)
 
     tokens
     |> Enum.filter(&slack_provider?(&1.provider))
-    |> Enum.map(fn token ->
-      status = token_account_status(token, account_by_provider)
-
-      %{
-        provider: token.provider,
-        account: slack_account_label(token),
-        updated_at: token_or_account_updated_at(token, account_by_provider),
-        status: status,
-        status_note: token_account_status_note(token, account_by_provider),
-        reconnect_url: reconnect_url,
-        needs_reconnect?: status == :needs_refresh
-      }
+    |> Enum.group_by(&slack_team_id/1)
+    |> Enum.reject(fn {team_id, _tokens} -> is_nil(team_id) end)
+    |> Enum.map(fn {team_id, workspace_tokens} ->
+      slack_workspace_account_entry(team_id, workspace_tokens, account_by_provider, reconnect_url)
     end)
     |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
   end
+
+  defp slack_workspace_account_entry(team_id, tokens, account_by_provider, reconnect_url)
+       when is_binary(team_id) and is_list(tokens) do
+    bot_token = slack_bot_token(tokens)
+    user_tokens = slack_user_tokens(tokens)
+    primary_token = bot_token || List.first(user_tokens)
+    token_statuses = Enum.map(tokens, &token_account_status(&1, account_by_provider))
+    status = slack_workspace_status(bot_token, user_tokens, token_statuses)
+
+    %{
+      provider: slack_workspace_provider(team_id, primary_token),
+      account: slack_workspace_label(primary_token, team_id),
+      updated_at: latest_token_or_account_updated_at(tokens, account_by_provider),
+      status: status,
+      status_note: slack_workspace_status_note(status, bot_token, user_tokens, token_statuses),
+      refresh_token_status:
+        refresh_token_status(tokens, Enum.map(token_statuses, &%{status: &1})),
+      details: slack_workspace_details(bot_token, user_tokens),
+      reconnect_url: reconnect_url,
+      needs_reconnect?: status in [:needs_refresh, :partial, :missing_scope]
+    }
+  end
+
+  defp slack_workspace_provider(team_id, %Token{provider: provider})
+       when is_binary(provider) do
+    if slack_bot_provider?(provider), do: provider, else: "slack:#{team_id}"
+  end
+
+  defp slack_workspace_provider(team_id, _token), do: "slack:#{team_id}"
+
+  defp slack_workspace_label(%Token{} = token, team_id) do
+    normalize_text(metadata_value(token, ["team_name"])) ||
+      normalize_text(team_id) ||
+      "Slack workspace"
+  end
+
+  defp slack_workspace_label(_token, team_id),
+    do: normalize_text(team_id) || "Slack workspace"
+
+  defp slack_workspace_status(bot_token, user_tokens, token_statuses) do
+    cond do
+      :needs_refresh in token_statuses ->
+        :needs_refresh
+
+      is_nil(bot_token) ->
+        :partial
+
+      user_tokens == [] ->
+        :partial
+
+      Enum.any?(user_tokens, &token_has_scope?(&1, "chat:write")) ->
+        :connected
+
+      true ->
+        :missing_scope
+    end
+  end
+
+  defp slack_workspace_status_note(:needs_refresh, _bot_token, _user_tokens, token_statuses) do
+    if Enum.any?(token_statuses, &(&1 == :needs_refresh)) do
+      "A Slack grant needs re-authentication."
+    else
+      "Reconnect Slack to refresh access."
+    end
+  end
+
+  defp slack_workspace_status_note(:partial, nil, _user_tokens, _token_statuses),
+    do: "Bot install is missing. Reconnect Slack to restore channel events."
+
+  defp slack_workspace_status_note(:partial, _bot_token, [], _token_statuses),
+    do: "User access is missing. Reconnect Slack to read DMs and post as you."
+
+  defp slack_workspace_status_note(:missing_scope, _bot_token, _user_tokens, _token_statuses),
+    do: "Reconnect Slack to grant user chat:write."
+
+  defp slack_workspace_status_note(_status, _bot_token, _user_tokens, _token_statuses),
+    do: "Healthy"
+
+  defp slack_workspace_details(bot_token, user_tokens) do
+    [
+      if(bot_token, do: "Channel events and mentions enabled"),
+      slack_user_grant_detail(user_tokens)
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp slack_user_grant_detail([]), do: nil
+
+  defp slack_user_grant_detail(user_tokens) do
+    if Enum.any?(user_tokens, &token_has_scope?(&1, "chat:write")) do
+      "DMs, private context, and posting as you enabled"
+    else
+      "DMs and private context enabled"
+    end
+  end
+
+  defp token_has_scope?(%Token{} = token, scope) when is_binary(scope) do
+    token
+    |> token_scopes()
+    |> Enum.any?(&(&1 == scope))
+  end
+
+  defp token_has_scope?(_token, _scope), do: false
 
   defp slack_service_status(false, _token, _account), do: :not_configured
   defp slack_service_status(true, nil, _account), do: :disconnected
@@ -908,6 +1045,14 @@ defmodule Maraithon.Connections do
   defp token_or_account_updated_at(%Token{} = token, _account_by_provider), do: token.updated_at
   defp token_or_account_updated_at(_token, _account_by_provider), do: nil
 
+  defp latest_token_or_account_updated_at(tokens, account_by_provider)
+       when is_list(tokens) and is_map(account_by_provider) do
+    tokens
+    |> Enum.map(&token_or_account_updated_at(&1, account_by_provider))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
+  end
+
   defp reauth_required_account?(%ConnectedAccount{status: "error"} = account) do
     account_error_reason(account) in ["oauth_reauth_required", "oauth_missing_refresh_token"]
   end
@@ -970,19 +1115,6 @@ defmodule Maraithon.Connections do
     do: refresh_token_status([token], [account_entry])
 
   defp refresh_token_status(_token, _account_entry), do: :missing
-
-  defp slack_account_label(%Token{} = token) do
-    team = normalize_text(metadata_value(token, ["team_name"])) || "Slack workspace"
-
-    if slack_user_provider?(token.provider) do
-      slack_user_id = normalize_text(metadata_value(token, ["slack_user_id"])) || "user"
-      "#{team} · DM user #{slack_user_id}"
-    else
-      "#{team} · Bot"
-    end
-  end
-
-  defp slack_account_label(_token), do: "Slack account"
 
   defp github_account_label(%Token{} = token) do
     login =

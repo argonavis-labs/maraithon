@@ -30,23 +30,37 @@ defmodule MaraithonWeb.ConnectorsHTML do
     accounts = Map.get(provider, :accounts, [])
     total_count = Enum.count(accounts)
     connected_count = Enum.count(accounts, &(&1.status == :connected))
+    unit = provider_account_unit(provider)
 
     cond do
       total_count == 0 ->
-        "No accounts connected"
+        "No #{unit}s connected"
 
       total_count == connected_count ->
-        pluralize_accounts(connected_count, "connected")
+        pluralize_units(connected_count, unit, "connected")
 
       connected_count == 0 ->
-        attention_summary(total_count)
+        attention_summary(total_count, unit)
 
       true ->
-        "#{connected_count} of #{total_count} accounts connected"
+        "#{connected_count} of #{total_count} #{unit}s connected"
     end
   end
 
   def provider_account_summary(_provider), do: "No accounts connected"
+
+  def connected_accounts_heading(%{provider: "slack"}), do: "Connected Workspaces"
+  def connected_accounts_heading(_provider), do: "Connected Accounts"
+
+  def provider_grant_panels_visible?(provider) when is_map(provider) do
+    case Map.get(provider, :provider) do
+      "google" -> false
+      "slack" -> Map.get(provider, :accounts, []) == []
+      _provider -> true
+    end
+  end
+
+  def provider_grant_panels_visible?(_provider), do: false
 
   def connection_primary_action(%{provider: "google", status: status})
       when status in [:connected, :partial],
@@ -201,11 +215,14 @@ defmodule MaraithonWeb.ConnectorsHTML do
     end
   end
 
-  defp pluralize_accounts(1, status), do: "1 account #{status}"
-  defp pluralize_accounts(count, status), do: "#{count} accounts #{status}"
+  defp provider_account_unit(%{provider: "slack"}), do: "workspace"
+  defp provider_account_unit(_provider), do: "account"
 
-  defp attention_summary(1), do: "1 account needs attention"
-  defp attention_summary(count), do: "#{count} accounts need attention"
+  defp pluralize_units(1, unit, status), do: "1 #{unit} #{status}"
+  defp pluralize_units(count, unit, status), do: "#{count} #{unit}s #{status}"
+
+  defp attention_summary(1, unit), do: "1 #{unit} needs attention"
+  defp attention_summary(count, unit), do: "#{count} #{unit}s need attention"
 
   def format_datetime(nil), do: "never"
   def format_datetime(%DateTime{} = value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")

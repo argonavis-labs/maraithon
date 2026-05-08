@@ -33,7 +33,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       {:ok, _user_token} =
         OAuth.store_tokens(user_id, "slack:T12345:user:U99999", %{
           access_token: "xoxp-test-token",
-          scopes: ["search:read", "im:read"],
+          scopes: ["search:read", "im:read", "chat:write"],
           metadata: %{
             "team_id" => "T12345",
             "team_name" => "Agora",
@@ -45,14 +45,21 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      assert html =~ "2 accounts connected"
+      assert html =~ "1 workspace connected"
       refute html =~ "Agora"
 
       detail_conn = conn |> recycle() |> get("/connectors/slack")
       detail_html = html_response(detail_conn, 200)
 
+      assert detail_html =~ "Connected Workspaces"
       assert detail_html =~ "Agora"
-      assert detail_html =~ "Workspaces: Agora"
+      assert detail_html =~ "1 workspace connected"
+      assert detail_html =~ "DMs, private context, and posting as you enabled"
+      assert detail_html =~ "Channel events and mentions enabled"
+      refute detail_html =~ "Agora · Bot"
+      refute detail_html =~ "Agora · DM user"
+      refute detail_html =~ "Stored Grant"
+      refute detail_html =~ "Connection Details"
     end
 
     test "GET /connectors summarizes Google accounts and detail page lists each email", %{
