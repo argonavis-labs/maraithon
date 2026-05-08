@@ -296,7 +296,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "content" => morning_prompt(brief_input)
         }
       ],
-      "max_tokens" => 1400,
+      "max_tokens" => 1800,
       "temperature" => 0.2,
       "reasoning_effort" => "medium"
     }
@@ -309,16 +309,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     Return ONLY valid JSON:
     {"title":"...","summary":"...","body":"..."}
 
-    Requirements:
-    - Be opinionated, scannable, and genuinely useful.
-    - 400-700 words max.
-    - Open with a temperature read, not a generic greeting.
-    - Include Needs Your Attention, Today's Schedule, Inbox, Slack, Open Commitments, and Look Ahead only when the source data supports them.
-    - Use actual Unicode emoji characters such as 🔴, 🟡, ⚠️.
-    - Cross-reference meetings, emails, Slack, and commitments when possible.
+    Briefing contract:
+    - Write like a sharp Chief of Staff, not a generic digest bot.
+    - Make the title specific: "<Weekday>, <Month> <day> — <plain-English read on the day>".
+    - Open the body with a one-sentence temperature read that says what today's real move is.
+    - Use these sections when supported by the source data: "## Needs Your Attention", "## Today's Schedule", "## Inbox", "## Slack", "## Open Commitments", "## Look Ahead".
+    - Keep it action-first. For anything that needs action, say what it is and the next move in the same bullet.
+    - For reply loops, include a concrete suggested reply or ETA language when source data supports it.
+    - Surface counts only when useful, like "25 in last 18h", "4 need response", "8 overdue"; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
+    - Use simple status markers such as 🔴, 🟡, ⚠️, ✅ only when they help scanning.
+    - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
     - Do not claim a source was checked if source_health marks it unavailable.
-    - Distinguish urgent, FYI, and ignorable items.
-    - End with one sentence of strategic advice.
+    - Separate "needs action" from FYI/closed items. Do not bury required action under preamble.
+    - End with a short "Today's move:" sentence that names the block of time or first sitting to clear the highest-leverage work.
+    - 500-900 words max.
+
+    Shape to emulate:
+    # Thursday, May 7 — Light meeting day, but you owe people. Today's the day to clear the Runner ambassador backlog.
+
+    ## Needs Your Attention
+    - **Charlie's waiting on you in #runner-gtm**: "Ready to GA heartbeat, did you want to record a video?" → Yes/no this morning so the team can ship.
+
+    ## Today's Schedule
+    - **1:00** — Runner standup. Push for the heartbeat video decision live.
+
+    ## Inbox
+    **25 in last 18h** · 4 need response · rest are FYI/closed
+    - 🟡 **Ivan Tolkunov** — He said yes, he can help. Send Jeff's actual question.
+
+    ## Open Commitments
+    🔴 **Overdue — mostly Runner ambassador/customer threads going cold**
+    - Notify Justin Dean — Gmail connector send-bug fix shipped. Send the email today.
 
     Brief input JSON:
     #{Jason.encode!(brief_input)}
@@ -356,11 +377,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     attention_items =
       []
       |> maybe_add_fallback_item(
-        "🔴 #{length(commitments["overdue"] || [])} overdue commitments",
+        "🔴 #{length(commitments["overdue"] || [])} overdue #{commitment_word(length(commitments["overdue"] || []))}",
         (commitments["overdue"] || []) != []
       )
       |> maybe_add_fallback_item(
-        "🟡 #{length(commitments["due_today"] || [])} commitments due today",
+        "🟡 #{length(commitments["due_today"] || [])} #{commitment_word(length(commitments["due_today"] || []))} due today",
         (commitments["due_today"] || []) != []
       )
       |> maybe_add_fallback_item(
@@ -373,6 +394,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       end
 
     body = """
+    #{fallback_temperature_read(date, commitments, open_work)}
+
     ## Needs Your Attention
     #{Enum.map_join(attention_items, "\n", &"- #{&1}")}
 
@@ -391,11 +414,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     ## Look Ahead
     #{fallback_tomorrow_line(read_map(calendar, "tomorrow_first_event"))}
 
-    Keep the day pointed at the oldest open obligation first; everything else can queue behind that.
+    Today's move: #{fallback_today_move(commitments, open_work)}
     """
 
     %{
-      "title" => "#{date} — Source-backed morning brief",
+      "title" => "#{fallback_title_date(date)} — #{fallback_title_read(commitments, open_work)}",
       "summary" =>
         "#{length(read_list(gmail, "recent_unread"))} recent unread emails, #{length(read_list(slack, "key_threads"))} Slack items, #{read_integer(commitments, "active_count", 0)} active commitments.",
       "body" => String.trim(body)
@@ -435,27 +458,129 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     overdue = read_list(commitments, "overdue")
     due_today = read_list(commitments, "due_today")
     coming_up = read_list(commitments, "coming_up")
+    active_count = read_integer(commitments, "active_count", length(overdue) + length(due_today))
 
     cond do
       overdue != [] ->
-        overdue
-        |> Enum.take(5)
-        |> Enum.map_join("\n", &"- 🔴 #{read_string(&1, "title", "Open commitment")}")
+        """
+        **#{active_count} active** · 🔴 **#{length(overdue)} overdue**
+        #{overdue |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "🔴"))}
+        """
+        |> String.trim()
 
       due_today != [] ->
-        due_today
-        |> Enum.take(5)
-        |> Enum.map_join("\n", &"- 🟡 #{read_string(&1, "title", "Open commitment")}")
+        """
+        **#{active_count} active** · 🟡 **#{length(due_today)} due today**
+        #{due_today |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "🟡"))}
+        """
+        |> String.trim()
 
       coming_up != [] ->
-        coming_up
-        |> Enum.take(5)
-        |> Enum.map_join("\n", &"- 📋 #{read_string(&1, "title", "Open commitment")}")
+        """
+        **#{active_count} active** · 📋 **#{length(coming_up)} coming up**
+        #{coming_up |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "📋"))}
+        """
+        |> String.trim()
 
       true ->
         "- No open commitments surfaced."
     end
   end
+
+  defp fallback_commitment_line(commitment, marker) do
+    title = read_string(commitment, "title", "Open commitment")
+    project = read_string(commitment, "project", nil)
+    owed_to = read_string(commitment, "owed_to", nil)
+    metadata = read_map(commitment, "metadata")
+
+    action =
+      read_string(commitment, "next_action", nil) ||
+        read_string(metadata, "next_action", nil) ||
+        read_string(read_map(metadata, "record"), "next_action", nil)
+
+    context =
+      [project, owed_to && "owed to #{owed_to}"]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" · ")
+
+    [
+      "- #{marker} #{title}",
+      if(context != "", do: " · #{context}"),
+      if(action, do: " → #{action}")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("")
+  end
+
+  defp fallback_temperature_read(date, commitments, open_work) do
+    overdue_count = length(read_list(commitments, "overdue"))
+    due_today_count = length(read_list(commitments, "due_today"))
+
+    open_work_count =
+      length(read_list(open_work, "insights")) + length(read_list(open_work, "todos"))
+
+    cond do
+      overdue_count > 0 ->
+        "#{fallback_title_date(date)} has #{overdue_count} overdue commitment#{plural_suffix(overdue_count)}. Start there before the inbox gets louder."
+
+      due_today_count > 0 ->
+        "#{fallback_title_date(date)} has #{due_today_count} commitment#{plural_suffix(due_today_count)} due today. Clear or reset those first."
+
+      open_work_count > 0 ->
+        "#{fallback_title_date(date)} has #{open_work_count} open action item#{plural_suffix(open_work_count)}. Pick the one with a real person waiting."
+
+      true ->
+        "#{fallback_title_date(date)} looks clear. Use the first focused block to prevent new open loops."
+    end
+  end
+
+  defp fallback_today_move(commitments, open_work) do
+    cond do
+      read_list(commitments, "overdue") != [] ->
+        "clear the oldest overdue commitment, then send short ETA resets for anything that cannot be finished today."
+
+      read_list(commitments, "due_today") != [] ->
+        "handle the commitments due today before opening new work."
+
+      read_list(open_work, "insights") != [] ->
+        "resolve the highest-priority act-now insight, then refresh the list."
+
+      read_list(open_work, "todos") != [] ->
+        "close the highest-priority todo with a human counterparty."
+
+      true ->
+        "protect the first focused block and keep the day from accumulating reply debt."
+    end
+  end
+
+  defp fallback_title_read(commitments, open_work) do
+    cond do
+      read_list(commitments, "overdue") != [] ->
+        "Clear the oldest overdue commitments first."
+
+      read_list(commitments, "due_today") != [] ->
+        "Due-today commitments set the pace."
+
+      read_list(open_work, "insights") != [] or read_list(open_work, "todos") != [] ->
+        "Action list is manageable if you start with the human loops."
+
+      true ->
+        "Clean slate, but protect the focus block."
+    end
+  end
+
+  defp fallback_title_date(date) when is_binary(date) do
+    case Date.from_iso8601(date) do
+      {:ok, parsed} -> Calendar.strftime(parsed, "%A, %B %-d")
+      _ -> date
+    end
+  end
+
+  defp plural_suffix(1), do: ""
+  defp plural_suffix(_count), do: "s"
+
+  defp commitment_word(1), do: "commitment"
+  defp commitment_word(_count), do: "commitments"
 
   defp fallback_tomorrow_line(%{} = event) when event != %{} do
     "- Tomorrow starts with #{read_string(event, "summary", "an event")} at #{read_string(event, "start", "time TBD")}."

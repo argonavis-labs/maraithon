@@ -120,6 +120,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
+    assert prompt =~ "Briefing contract"
+    assert prompt =~ "Write like a sharp Chief of Staff"
+    assert prompt =~ "## Needs Your Attention"
+    assert prompt =~ "## Open Commitments"
+    assert prompt =~ "never include internal scores, thresholds"
+    assert prompt =~ "Today's move:"
     assert prompt =~ "Instagram"
     assert prompt =~ "runner-general"
 
@@ -143,5 +149,60 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief.metadata["source_backed"] == true
     assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "slack_key_threads"]) == 1
+  end
+
+  test "fallback brief keeps the chief-of-staff morning briefing shape", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    {:ok, _commitment} =
+      Commitments.upsert(user_id, %{
+        "source" => "omnifocus",
+        "source_id" => "of-overdue-1",
+        "title" => "Notify Justin Dean about the Gmail send-bug fix",
+        "owed_to" => "Justin Dean",
+        "project" => "Runner",
+        "due_at" => "2026-05-05T20:00:00Z",
+        "metadata" => %{"next_action" => "Send the email today."}
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-fallback"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    {:emit, {:briefs_recorded, _payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert brief.title =~ "Thursday, May 7"
+    assert brief.title =~ "overdue"
+    assert brief.body =~ "## Needs Your Attention"
+    assert brief.body =~ "## Today's Schedule"
+    assert brief.body =~ "## Open Commitments"
+    assert brief.body =~ "Today's move:"
+    assert brief.body =~ "1 overdue commitment"
+    assert brief.body =~ "Notify Justin Dean"
+    assert brief.body =~ "Runner"
+    assert brief.body =~ "owed to Justin Dean"
+    assert brief.body =~ "Send the email today."
+    refute brief.body =~ "score="
+    refute brief.body =~ "threshold"
   end
 end
