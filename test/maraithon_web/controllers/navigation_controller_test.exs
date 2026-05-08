@@ -168,7 +168,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "/webhooks/slack"
     end
 
-    test "GET /connectors/github shows account-level reconnect/disconnect controls", %{conn: conn} do
+    test "GET /connectors/github shows account-level disconnect controls for healthy account", %{
+      conn: conn
+    } do
       user_id = "github-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
       connect_telegram(user_id)
@@ -185,11 +187,13 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "@octocat"
-      assert html =~ "Reconnect"
+      refute html =~ ">Reconnect<"
       assert html =~ "Disconnect"
     end
 
-    test "GET /connectors/linear shows account-level reconnect/disconnect controls", %{conn: conn} do
+    test "GET /connectors/linear shows account-level disconnect controls for healthy account", %{
+      conn: conn
+    } do
       user_id = "linear-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
       connect_telegram(user_id)
@@ -206,11 +210,13 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "Platform"
-      assert html =~ "Reconnect"
+      refute html =~ ">Reconnect<"
       assert html =~ "Disconnect"
     end
 
-    test "GET /connectors/notion shows account-level reconnect/disconnect controls", %{conn: conn} do
+    test "GET /connectors/notion shows account-level disconnect controls for healthy account", %{
+      conn: conn
+    } do
       user_id = "notion-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
       connect_telegram(user_id)
@@ -227,11 +233,13 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "Agora Docs"
-      assert html =~ "Reconnect"
+      refute html =~ ">Reconnect<"
       assert html =~ "Disconnect"
     end
 
-    test "GET /connectors/notaui shows account-level reconnect/disconnect controls", %{conn: conn} do
+    test "GET /connectors/notaui shows account-level disconnect controls for healthy account", %{
+      conn: conn
+    } do
       user_id = "notaui-detail@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
       connect_telegram(user_id)
@@ -262,7 +270,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Default account: Personal"
       assert html =~ "Discovered 2 accessible accounts"
       assert html =~ "https://api.notaui.com/mcp"
-      assert html =~ "Reconnect"
+      refute html =~ ">Reconnect<"
       assert html =~ "Disconnect"
     end
 

@@ -54,8 +54,8 @@
             <.button type="button" variant="outline" disabled class="text-xs">
               <%= @provider[:connect_block_reason] %>
             </.button>
-          <% connection_action_enabled?(@provider) -> %>
-            <.button href={@provider.connect_url} color="indigo" class="text-xs">
+          <% connection_primary_action_visible_on_detail?(@provider) -> %>
+            <.button href={connection_primary_url(@provider)} color="indigo" class="text-xs">
               <%= connection_primary_action(@provider) %>
             </.button>
           <% true -> %>
@@ -105,9 +105,7 @@
               </div>
 
               <div class="flex flex-wrap items-center gap-2 lg:col-span-3 lg:justify-end">
-                <%= if account[:reconnect_url] &&
-                          (@provider.provider == "telegram" || @telegram_connected) &&
-                          @provider[:connect_blocked?] != true do %>
+                <%= if account_reconnect_visible?(@provider, account, @telegram_connected) do %>
                   <.button href={account.reconnect_url} variant="outline" class="text-xs text-amber-800">
                     Reconnect
                   </.button>

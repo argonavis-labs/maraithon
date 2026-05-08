@@ -840,10 +840,21 @@ defmodule MaraithonWeb.DashboardLive do
 
                   <div class="mt-3 flex flex-wrap gap-2">
                     <a
-                      href={provider.connect_url}
+                      href={
+                        if provider.status == :connected,
+                          do: "/connectors/#{provider.provider}",
+                          else: provider.connect_url
+                      }
                       class="inline-flex items-center rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
                     >
-                      <%= if provider.status in [:connected, :partial], do: "Reconnect", else: "Connect" %>
+                      <%= cond do %>
+                        <% provider.status == :connected -> %>
+                          View
+                        <% provider.status in [:partial, :missing_scope, :needs_refresh] -> %>
+                          Reconnect
+                        <% true -> %>
+                          Connect
+                      <% end %>
                     </a>
                   </div>
                 </div>

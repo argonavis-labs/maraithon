@@ -72,18 +72,50 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_primary_action(%{provider: "google"}), do: "Connect Google"
 
   def connection_primary_action(%{provider: "telegram", status: :connected}),
+    do: "View Telegram"
+
+  def connection_primary_action(%{provider: "telegram", status: :needs_refresh}),
     do: "Reconnect Telegram"
 
   def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
-  def connection_primary_action(%{provider: "slack", status: :connected}), do: "Reconnect Slack"
+
+  def connection_primary_action(%{provider: "slack", status: :connected}), do: "View Slack"
+
+  def connection_primary_action(%{provider: "slack", status: status})
+      when status in [:partial, :missing_scope, :needs_refresh],
+      do: "Reconnect Slack"
+
   def connection_primary_action(%{provider: "slack"}), do: "Connect Slack"
   def connection_primary_action(%{status: :needs_refresh}), do: "Reconnect"
-  def connection_primary_action(%{status: :connected}), do: "Reconnect"
+  def connection_primary_action(%{status: :connected}), do: "View"
   def connection_primary_action(_provider), do: "Connect"
 
   def connection_action_enabled?(%{connect_blocked?: true}), do: false
   def connection_action_enabled?(%{configured?: true}), do: true
   def connection_action_enabled?(_provider), do: false
+
+  def connection_primary_url(%{provider: "google"} = provider), do: provider.connect_url
+
+  def connection_primary_url(%{status: :connected} = provider), do: provider_detail_path(provider)
+
+  def connection_primary_url(provider) when is_map(provider),
+    do: Map.get(provider, :connect_url) || provider_detail_path(provider)
+
+  def connection_primary_url(_provider), do: "/connectors"
+
+  def connection_primary_action_visible_on_detail?(%{provider: provider, status: :connected})
+      when provider != "google",
+      do: false
+
+  def connection_primary_action_visible_on_detail?(provider),
+    do: connection_action_enabled?(provider)
+
+  def account_reconnect_visible?(provider, account, telegram_connected) do
+    account[:reconnect_url] &&
+      account[:needs_reconnect?] == true &&
+      (provider.provider == "telegram" || telegram_connected) &&
+      provider[:connect_blocked?] != true
+  end
 
   def connection_status_label(:connected), do: "connected"
   def connection_status_label(:partial), do: "partial"

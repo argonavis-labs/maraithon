@@ -3,9 +3,9 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
 
   alias MaraithonWeb.ConnectorsHTML
 
-  test "connection_primary_action/1 uses reconnect wording for connected telegram" do
+  test "connection_primary_action/1 uses view wording for healthy connected telegram" do
     assert ConnectorsHTML.connection_primary_action(%{provider: "telegram", status: :connected}) ==
-             "Reconnect Telegram"
+             "View Telegram"
 
     assert ConnectorsHTML.connection_primary_action(%{
              provider: "telegram",
@@ -20,6 +20,30 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
   test "connection_primary_action/1 uses reconnect wording for refresh-required google" do
     assert ConnectorsHTML.connection_primary_action(%{provider: "google", status: :needs_refresh}) ==
              "Reconnect Google"
+  end
+
+  test "connection_primary_action/1 only uses reconnect wording for stale slack" do
+    assert ConnectorsHTML.connection_primary_action(%{provider: "slack", status: :connected}) ==
+             "View Slack"
+
+    assert ConnectorsHTML.connection_primary_action(%{provider: "slack", status: :missing_scope}) ==
+             "Reconnect Slack"
+  end
+
+  test "account_reconnect_visible?/3 only shows stale account reconnect controls" do
+    provider = %{provider: "slack", connect_blocked?: false}
+
+    refute ConnectorsHTML.account_reconnect_visible?(
+             provider,
+             %{reconnect_url: "/auth/slack", needs_reconnect?: false},
+             true
+           )
+
+    assert ConnectorsHTML.account_reconnect_visible?(
+             provider,
+             %{reconnect_url: "/auth/slack", needs_reconnect?: true},
+             true
+           )
   end
 
   test "refresh_token_status_label/1 explains refresh token state" do

@@ -71,7 +71,11 @@
                     <%= provider[:connect_block_reason] %>
                   </.button>
                 <% connection_action_enabled?(provider) -> %>
-                  <.button href={provider.connect_url} color="indigo" class="text-xs">
+                  <.button
+                    href={connection_primary_url(provider)}
+                    color="indigo"
+                    class="text-xs"
+                  >
                     <%= connection_primary_action(provider) %>
                   </.button>
                 <% true -> %>
