@@ -41,7 +41,14 @@ defmodule MaraithonWeb.AgentLibraryLive do
         %{}
 
       user_id ->
-        case Connections.safe_dashboard_snapshot(user_id) do
+        snapshot =
+          case Connections.safe_dashboard_snapshot(user_id) do
+            {:ok, snapshot} -> snapshot
+            {:degraded, snapshot} -> snapshot
+            _ -> %{}
+          end
+
+        case snapshot do
           %{providers: providers} when is_list(providers) ->
             providers
             |> Enum.map(fn provider ->

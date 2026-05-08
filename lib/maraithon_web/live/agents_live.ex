@@ -35,7 +35,8 @@ defmodule MaraithonWeb.AgentsLive do
         launch: default_launch_params(),
         launch_error: nil,
         route_state: nil,
-        library: AgentBuilder.library_specs()
+        library: AgentBuilder.library_specs(),
+        provider_status: %{}
       )
 
     if connected?(socket) do
@@ -543,6 +544,7 @@ defmodule MaraithonWeb.AgentsLive do
 
           <ul role="list" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             <li :for={spec <- @library} class="group">
+              <% readiness = library_readiness(spec, @provider_status) %>
               <.link
                 navigate={~p"/agents/library/#{spec.id}"}
                 class="flex h-full flex-col rounded-lg border border-zinc-950/10 bg-white p-4 transition hover:border-zinc-950/20 hover:shadow-sm"
@@ -555,19 +557,46 @@ defmodule MaraithonWeb.AgentsLive do
                     <p class="mt-0.5 text-xs/5 text-zinc-500"><%= spec.category %></p>
                   </div>
                   <span class="flex shrink-0 items-center gap-1">
-                    <img
-                      :for={connector <- library_connector_logos(spec)}
-                      src={connector_logo_src(connector)}
-                      alt={connector}
-                      title={connector}
-                      class="size-5 object-contain"
-                    />
+                    <span :for={connector <- library_connector_logos(spec)} class="relative">
+                      <img
+                        src={connector_logo_src(connector)}
+                        alt={connector}
+                        title={connector}
+                        class="size-5 object-contain"
+                      />
+                      <span
+                        :if={Map.get(@provider_status, connector) == :connected}
+                        class="absolute -right-0.5 -bottom-0.5 size-2 rounded-full bg-emerald-500 ring-2 ring-white"
+                        aria-label="Connected"
+                      />
+                    </span>
                   </span>
                 </div>
 
                 <p class="mt-3 line-clamp-3 text-sm/6 text-zinc-600">
                   <%= spec.summary %>
                 </p>
+
+                <div :if={readiness.total > 0} class="mt-3 flex items-center gap-1.5">
+                  <span class={[
+                    "size-1.5 rounded-full",
+                    cond do
+                      readiness.connected == readiness.total -> "bg-emerald-500"
+                      readiness.connected > 0 -> "bg-amber-500"
+                      true -> "bg-zinc-300"
+                    end
+                  ]} aria-hidden="true" />
+                  <span class={[
+                    "text-xs/5 font-medium",
+                    cond do
+                      readiness.connected == readiness.total -> "text-emerald-700"
+                      readiness.connected > 0 -> "text-amber-700"
+                      true -> "text-zinc-500"
+                    end
+                  ]}>
+                    <%= readiness.label %>
+                  </span>
+                </div>
 
                 <p class="mt-3 text-xs/5 text-zinc-500">
                   <%= library_requirement_summary(spec) %>
@@ -1335,10 +1364,63 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp refresh_registry(socket) do
-    agents = Agents.list_agents(user_id: current_user_id(socket), preload: [:project])
+    user_id = current_user_id(socket)
+    agents = Agents.list_agents(user_id: user_id, preload: [:project])
     filtered_agents = filter_agents(agents, socket.assigns.filters)
+    provider_status = library_provider_status(user_id)
 
-    assign(socket, all_agents: agents, agents: filtered_agents)
+    assign(socket,
+      all_agents: agents,
+      agents: filtered_agents,
+      provider_status: provider_status
+    )
+  end
+
+  defp library_provider_status(nil), do: %{}
+
+  defp library_provider_status(user_id) do
+    case connection_snapshot(user_id) do
+      %{providers: providers} when is_list(providers) ->
+        providers
+        |> Enum.map(fn provider ->
+          {to_string(provider.provider), Map.get(provider, :status, :not_configured)}
+        end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp library_readiness(spec, provider_status) do
+    providers =
+      (spec.requirements || [])
+      |> Enum.filter(&connector_requirement?/1)
+      |> Enum.filter(& &1[:required?])
+      |> Enum.map(& &1.provider)
+      |> Enum.uniq()
+
+    case providers do
+      [] ->
+        %{label: "Ready to install", connected: 0, total: 0}
+
+      list ->
+        connected =
+          Enum.count(list, fn provider ->
+            Map.get(provider_status, provider, :not_configured) == :connected
+          end)
+
+        %{
+          label:
+            cond do
+              connected == length(list) -> "All connectors ready"
+              connected > 0 -> "#{connected} of #{length(list)} ready"
+              true -> "Connect required apps"
+            end,
+          connected: connected,
+          total: length(list)
+        }
+    end
   end
 
   defp refresh_selected_workspace(socket) do
