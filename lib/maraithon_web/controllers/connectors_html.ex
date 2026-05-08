@@ -26,6 +26,28 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def setup_completion_text(%{setup_status: :configured}), do: "Connector configured"
   def setup_completion_text(_provider), do: "Connector setup required"
 
+  def provider_account_summary(provider) when is_map(provider) do
+    accounts = Map.get(provider, :accounts, [])
+    total_count = Enum.count(accounts)
+    connected_count = Enum.count(accounts, &(&1.status == :connected))
+
+    cond do
+      total_count == 0 ->
+        "No accounts connected"
+
+      total_count == connected_count ->
+        pluralize_accounts(connected_count, "connected")
+
+      connected_count == 0 ->
+        attention_summary(total_count)
+
+      true ->
+        "#{connected_count} of #{total_count} accounts connected"
+    end
+  end
+
+  def provider_account_summary(_provider), do: "No accounts connected"
+
   def connection_primary_action(%{provider: "google", status: status})
       when status in [:connected, :partial],
       do: "Add Google Account"
@@ -179,6 +201,12 @@ defmodule MaraithonWeb.ConnectorsHTML do
     end
   end
 
+  defp pluralize_accounts(1, status), do: "1 account #{status}"
+  defp pluralize_accounts(count, status), do: "#{count} accounts #{status}"
+
+  defp attention_summary(1), do: "1 account needs attention"
+  defp attention_summary(count), do: "#{count} accounts need attention"
+
   def format_datetime(nil), do: "never"
   def format_datetime(%DateTime{} = value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
 
@@ -196,7 +224,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def oauth_logo(assigns) do
     ~H"""
-    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm">
+    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5">
       <img
         src={connector_logo_src(@provider)}
         alt={connector_logo_alt(@provider)}

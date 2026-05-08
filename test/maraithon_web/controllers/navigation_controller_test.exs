@@ -15,7 +15,6 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
       assert html =~ "Slack"
-      assert html =~ "View"
       assert html =~ "Telegram is required before other connectors."
       assert html =~ "Connect Telegram first"
     end
@@ -46,11 +45,19 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      assert html =~ "Agora"
-      assert html =~ "Workspaces: Agora"
+      assert html =~ "2 accounts connected"
+      refute html =~ "Agora"
+
+      detail_conn = conn |> recycle() |> get("/connectors/slack")
+      detail_html = html_response(detail_conn, 200)
+
+      assert detail_html =~ "Agora"
+      assert detail_html =~ "Workspaces: Agora"
     end
 
-    test "GET /connectors renders Google account rows for each connected email", %{conn: conn} do
+    test "GET /connectors summarizes Google accounts and detail page lists each email", %{
+      conn: conn
+    } do
       user_id = "google-multi@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
@@ -74,12 +81,25 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user(user_id) |> get("/connectors")
       html = html_response(conn, 200)
 
-      assert html =~ "founder@example.com"
-      assert html =~ "ops@example.com"
-      assert html =~ "Disconnect"
+      assert html =~ "2 accounts connected"
+      refute html =~ "founder@example.com"
+      refute html =~ "ops@example.com"
+      refute html =~ "Disconnect"
+
+      detail_conn = conn |> recycle() |> get("/connectors/google")
+      detail_html = html_response(detail_conn, 200)
+
+      assert detail_html =~ "Connected Accounts"
+      assert detail_html =~ "2 accounts connected"
+      assert detail_html =~ "founder@example.com"
+      assert detail_html =~ "ops@example.com"
+      assert detail_html =~ "Disconnect"
     end
 
-    test "GET /connectors shows refresh-required state for errored Google account", %{conn: conn} do
+    test "GET /connectors shows refresh-required summary and detail-level Google account action",
+         %{
+           conn: conn
+         } do
       user_id = "google-refresh-needed@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
       connect_telegram(user_id)
@@ -101,15 +121,15 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user(user_id) |> get("/connectors")
       html = html_response(conn, 200)
 
-      assert html =~ "refresh required"
-      assert html =~ "Token refresh failed and the account must be re-authenticated."
-      assert html =~ "Reconnect"
+      assert html =~ "1 account needs attention"
+      refute html =~ "Token refresh failed and the account must be re-authenticated."
 
       detail_conn = conn |> recycle() |> get("/connectors/google")
       detail_html = html_response(detail_conn, 200)
 
       assert detail_html =~ "Connected Accounts"
       assert detail_html =~ "founder@example.com"
+      assert detail_html =~ "Token refresh failed and the account must be re-authenticated."
       assert detail_html =~ "Reconnect"
       assert detail_html =~ "Disconnect"
     end

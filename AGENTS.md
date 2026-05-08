@@ -5,6 +5,14 @@ This is a web application written using the Phoenix web framework.
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
 
+## Design guidelines
+
+- Keep operational pages clean, minimal, and row-oriented. Prefer compact tables or list rows over large decorative cards.
+- Summary pages should show the highest-signal rollup only. For connectors, the main row should show the connector name, status, and how many accounts are connected; individual accounts belong on the connector detail page.
+- Make rows clickable when they drill into details. Keep secondary actions small, aligned, and visually quieter than the row content.
+- Avoid gradient hero sections, oversized marketing copy, nested cards, and heavy shadows in the app UI. Use restrained borders, consistent spacing, and 8px or smaller border radii.
+- When a page needs account-level detail, render each account as its own clean row with status, last update, and actions.
+
 ### Phoenix v1.8 guidelines
 
 - **Always** begin your LiveView templates with `<Layouts.app flash={@flash} ...>` which wraps all inner content
