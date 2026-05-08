@@ -34,12 +34,12 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
         <p class={summary_class(@mode)}><%= @architecture.summary %></p>
       </div>
 
-      <div class={metrics_class(@mode)}>
-        <div :for={metric <- @metrics} class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2">
-          <p class="text-xs/5 font-medium text-zinc-500"><%= metric.label %></p>
-          <p class="mt-1 text-sm/6 font-medium text-zinc-950"><%= metric.value %></p>
+      <dl class={metrics_class(@mode)}>
+        <div :for={metric <- @metrics} class="flex items-baseline justify-between gap-3">
+          <dt class="text-xs/5 text-zinc-500"><%= metric.label %></dt>
+          <dd class="text-sm/6 font-medium text-zinc-950"><%= metric.value %></dd>
         </div>
-      </div>
+      </dl>
 
       <div :if={@mode == "full"} class="border-t border-zinc-950/10 px-4 py-4">
         <div class="mb-3 flex items-center justify-between gap-3 text-xs/5">
@@ -105,8 +105,11 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
   defp summary_class("full"), do: "mt-2 text-sm/6 text-zinc-600"
   defp summary_class(_mode), do: "mt-3 text-sm/6 text-zinc-600"
 
-  defp metrics_class("full"), do: "grid grid-cols-2 gap-3 px-4 py-4 text-xs sm:grid-cols-4"
-  defp metrics_class(_mode), do: "mt-4 grid grid-cols-2 gap-2 text-xs"
+  defp metrics_class("full"),
+    do: "grid grid-cols-1 gap-y-2 px-4 py-4 sm:grid-cols-2 sm:gap-x-6"
+
+  defp metrics_class(_mode),
+    do: "mt-4 divide-y divide-zinc-950/5 border-y border-zinc-950/5 [&>div]:py-2"
 
   defp component_grid_class("two"), do: "grid grid-cols-1 gap-2 md:grid-cols-2"
   defp component_grid_class(_columns), do: "space-y-2"

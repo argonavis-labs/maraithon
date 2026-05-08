@@ -673,14 +673,13 @@ defmodule MaraithonWeb.DashboardLive do
           <%= dashboard_greeting(@current_user) %>
         </h1>
         <div class="flex flex-wrap items-center gap-2">
-          <.button
+          <button
             type="button"
             phx-click="refresh_now"
-            variant="plain"
-            class="text-zinc-500"
+            class="rounded-md px-2 py-1 text-xs/5 font-medium text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
           >
             Refresh
-          </.button>
+          </button>
           <.button navigate={"/agents/new"}>
             New agent
           </.button>
