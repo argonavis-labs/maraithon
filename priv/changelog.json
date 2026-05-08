@@ -1,184 +1,205 @@
 {
-  "total": 152,
-  "generated_at": "2026-05-08T15:58:54.277787Z",
+  "total": 155,
+  "generated_at": "2026-05-08T16:25:11.229058Z",
   "days": [
     {
       "date": "2026-05-08",
       "entries": [
         {
           "date": "2026-05-08",
+          "title": "Curate the library to three flagship agents",
+          "summary": "Hide Prompt Agent, Personal Assistant Agent, Slack Followthrough Agent, Repo Planner, and Watchdog Summarizer from the library and the new-agent builder so the install surface reads as the three roles operators actually pick: Chief of Staff, PM Agent, Coding Agent. Rename labels to match — \"AI Chief of Staff\" → \"Chief of Staff\", \"GitHub Product Planner\" → \"PM Agent\" (Product), \"Codebase Advisor\" → \"Coding Agent\" (Engineering). Existing agents on hidden behaviors keep running because the runtime still recognises their ids.",
+          "datetime": "2026-05-08T16:25:02Z",
+          "sha": "a2afef6"
+        },
+        {
+          "date": "2026-05-08",
+          "title": "Hide deprecated Chief of Staff Agent from library",
+          "summary": "The library was listing both \"AI Chief of Staff\" and the older \"Chief of Staff Agent\" (inbox_calendar_advisor) which cover the same ground. Add a hidden_library_ids list inside AgentBuilder and a new library_specs/0 helper that filters them out, then route the agents library and the new-agent builder through it. The runtime still recognises the deprecated id so any existing inbox_calendar_advisor agents keep working — they just don't show up as something fresh to install anymore.",
+          "datetime": "2026-05-08T16:23:00Z",
+          "sha": "5112e39"
+        },
+        {
+          "date": "2026-05-08",
+          "title": "Refresh changelog",
+          "summary": null,
+          "datetime": "2026-05-08T15:58:54Z",
+          "sha": "b036d73"
+        },
+        {
+          "date": "2026-05-08",
           "title": "Per-agent library detail page with one-click install",
           "summary": "Each entry in the library now has its own marketing-style detail page at /agents/library/:behavior with a back link to the library, a long description, \"What goes in\" / \"What comes out\" two-column lists, a Connected apps required section that surfaces each connector's current status (Connected / Not configured / etc), a Suggested setup tips list, and a bottom install band. Both top and bottom Install buttons spin up the agent with default config and route directly to its detail view. Library cards on /agents now read as \"Learn more →\" cards that link to this detail page instead of preview-jumping to the builder.",
-          "sha": "aa53f9c",
-          "datetime": "2026-05-08T15:58:43Z"
+          "datetime": "2026-05-08T15:58:43Z",
+          "sha": "aa53f9c"
         },
         {
           "date": "2026-05-08",
           "title": "Regenerate changelog",
           "summary": null,
-          "sha": "edb8d1e",
-          "datetime": "2026-05-08T15:52:51Z"
+          "datetime": "2026-05-08T15:52:51Z",
+          "sha": "edb8d1e"
         },
         {
           "date": "2026-05-08",
           "title": "Agent library + focused prompt-first Settings tab",
           "summary": "Add a \"Library\" section to /agents that lists every available agent template as a Catalyst-style card grid: name + category, the connector logos it integrates with, a one-line summary, the connectors it needs, a \"Preview\" link to the builder, and a one-click \"Install\" button that spins up the agent with default config and routes you straight to its detail view.",
-          "sha": "bd2c077",
-          "datetime": "2026-05-08T15:52:42Z"
+          "datetime": "2026-05-08T15:52:42Z",
+          "sha": "bd2c077"
         },
         {
           "date": "2026-05-08",
           "title": "Ship a consumer-facing changelog page",
           "summary": "Add /changelog as a calm, daily-grouped feed of recent updates. The mix task `mix changelog.generate` walks `git log`, drops chore/ci/ test/wip commits, trims each commit body to its first paragraph, and writes a static `priv/changelog.json`. The page reads that JSON, groups entries by day with a sticky date column on the left and the title + summary on the right (the Stripe/Vercel-style pattern), and falls back to a quiet empty state. Sidebar Changelog link now goes to /changelog instead of github.com.",
-          "sha": "87eb014",
-          "datetime": "2026-05-08T15:44:28Z"
+          "datetime": "2026-05-08T15:44:28Z",
+          "sha": "87eb014"
         },
         {
           "date": "2026-05-08",
           "title": "Add Catalyst sub-nav tabs to the agent detail surface",
           "summary": "Split the giant single-page agent detail into Overview / Connected apps / Skills / Settings tabs using a Catalyst-style underlined sub-nav. The connected accounts table that was overflowing into the Status and Updated columns is replaced with a clean row list whose columns wrap properly, so long Access copy (\"Enabled: Gmail, Google Calendar… · Granted 5 OAuth scopes · Expires 2026-…\") no longer collides with the status badge or the timestamp. Skip the redundant \"Chief of Staff / Chief of Staff\" subtitle when it equals the title.",
-          "sha": "fe2300d",
-          "datetime": "2026-05-08T15:41:36Z"
+          "datetime": "2026-05-08T15:41:36Z",
+          "sha": "fe2300d"
         },
         {
           "date": "2026-05-08",
           "title": "Quieter sidebar + dashboard header band micro-polish",
           "summary": "Drop the \"Quick actions\" sidebar section — main nav already covers Agents and Connectors, and the dashboard New agent button covers the create flow. Hide the \"0 open\" Today counter when nothing is queued and remove the empty \"Live\" indicator on the Overview band so the header strips read as plain section headers.",
-          "sha": "00df8c2",
-          "datetime": "2026-05-08T15:31:00Z"
+          "datetime": "2026-05-08T15:31:00Z",
+          "sha": "00df8c2"
         },
         {
           "date": "2026-05-08",
           "title": "Polish architecture metrics + dashboard Refresh button",
           "summary": "Convert the architecture_card metrics from a grid of bordered tiles into a description list with subtle dividers. Replace the dashboard header Refresh button (which was a plain Catalyst button overriding its own font-semibold and color) with a quiet inline button that respects the muted text-zinc-500 → text-zinc-950 hover rhythm.",
-          "sha": "b71769e",
-          "datetime": "2026-05-08T15:29:22Z"
+          "datetime": "2026-05-08T15:29:22Z",
+          "sha": "b71769e"
         },
         {
           "date": "2026-05-08",
           "title": "Tighten agents empty state and align workspace summary cards",
           "summary": "Lift the agents-table empty state from a single line into a calm two-line message with a \"Start with a template →\" link. Strip the bordered card chrome from the dashboard workspace summary cards in favor of the same left-border pattern used by the Overview stats so the two sections share visual rhythm.",
-          "sha": "49b6bd3",
-          "datetime": "2026-05-08T15:20:32Z"
+          "datetime": "2026-05-08T15:20:32Z",
+          "sha": "49b6bd3"
         },
         {
           "date": "2026-05-08",
           "title": "Catalyst-aligned auth screen + tighter button + calmer empty states",
           "summary": "Replace the home/sign-in eyebrow+panel with the Catalyst AuthLayout pattern: a centered white rounded card on zinc-100. Tighten the shared button primitive (drop min-h-9, rely on padding) so CTAs match the Catalyst 32px height. Drop the dotted-border empty card on the dashboard \"Today\" section.",
-          "sha": "3f299b9",
-          "datetime": "2026-05-08T15:18:04Z"
+          "datetime": "2026-05-08T15:18:04Z",
+          "sha": "3f299b9"
         },
         {
           "date": "2026-05-08",
           "title": "Calmer agent details and connector detail surfaces",
           "summary": "Hide the agent details panel entirely when nothing is selected and strip the duplicate H3 + redundant CTA cluster, leaving status badge plus quiet inline Stop/Start/Delete actions. Rewrite the connector detail page from a stack of nested panels into editorial sections: flat header with back link, Connected Accounts as a divider list, Grant + OAuth setup as section bands, and the dark callback URL box swapped for a calm bordered zinc-50 mono strip.",
-          "sha": "47d5c47",
-          "datetime": "2026-05-08T15:14:24Z"
+          "datetime": "2026-05-08T15:14:24Z",
+          "sha": "47d5c47"
         },
         {
           "date": "2026-05-08",
           "title": "Calm dashboard tail: Health band + collapsed activity/logs",
           "summary": "Convert Health & Monitoring panel to a section band with left dl and 4-cell queue strips. Collapse Operational Logs and Failures into a single \"Operational activity\" details disclosure with side-by-side columns. Drop the giant header chrome and emergency-red alarm tones in favor of the same calm Catalyst rhythm used by the rest of the page.",
-          "sha": "fc36a12",
-          "datetime": "2026-05-08T15:10:14Z"
+          "datetime": "2026-05-08T15:10:14Z",
+          "sha": "fc36a12"
         },
         {
           "date": "2026-05-08",
           "title": "Switch admin shell to Catalyst sidebar layout",
           "summary": "Port Catalyst sidebar/navbar primitives into Phoenix components and replace the top-tab AdminNavigation with a sidebar layout across every admin surface. Strip eyebrow/page_header chrome, nested cards, dark inverted log panels, and rainbow stat rows on dashboard, agents, agent builder, connectors, how-it-works, and settings. Convert dense mid-page sections (Memory, Projects, Insights, Agent activity) to calm divider-list section bands, and tuck the project memory and new project forms behind <details> collapses so the dashboard scans like the Catalyst demo.",
-          "sha": "4aec84b",
-          "datetime": "2026-05-08T15:07:55Z"
+          "datetime": "2026-05-08T15:07:55Z",
+          "sha": "4aec84b"
         },
         {
           "date": "2026-05-08",
           "title": "Document Catalyst design contract",
           "summary": null,
-          "sha": "c46c565",
-          "datetime": "2026-05-08T14:29:31Z"
+          "datetime": "2026-05-08T14:29:31Z",
+          "sha": "c46c565"
         },
         {
           "date": "2026-05-08",
           "title": "Finish Catalyst UI pass",
           "summary": null,
-          "sha": "84d09db",
-          "datetime": "2026-05-08T14:23:38Z"
+          "datetime": "2026-05-08T14:23:38Z",
+          "sha": "84d09db"
         },
         {
           "date": "2026-05-08",
           "title": "Apply Catalyst UI primitives across app",
           "summary": null,
-          "sha": "568e496",
-          "datetime": "2026-05-08T14:07:11Z"
+          "datetime": "2026-05-08T14:07:11Z",
+          "sha": "568e496"
         },
         {
           "date": "2026-05-08",
           "title": "Polish agent builder setup UI",
           "summary": null,
-          "sha": "c2fabc7",
-          "datetime": "2026-05-08T13:48:13Z"
+          "datetime": "2026-05-08T13:48:13Z",
+          "sha": "c2fabc7"
         },
         {
           "date": "2026-05-08",
           "title": "Only show reconnect for stale connectors",
           "summary": null,
-          "sha": "260a760",
-          "datetime": "2026-05-08T13:41:14Z"
+          "datetime": "2026-05-08T13:41:14Z",
+          "sha": "260a760"
         },
         {
           "date": "2026-05-08",
           "title": "Polish Maraithon agents and briefing delivery",
           "summary": null,
-          "sha": "ad9a875",
-          "datetime": "2026-05-08T13:33:57Z"
+          "datetime": "2026-05-08T13:33:57Z",
+          "sha": "ad9a875"
         },
         {
           "date": "2026-05-08",
           "title": "Clean up Slack connector workspace rows",
           "summary": null,
-          "sha": "0f6773c",
-          "datetime": "2026-05-08T11:47:11Z"
+          "datetime": "2026-05-08T11:47:11Z",
+          "sha": "0f6773c"
         },
         {
           "date": "2026-05-08",
           "title": "Use Slack user tokens for read and write",
           "summary": null,
-          "sha": "c4d26d7",
-          "datetime": "2026-05-08T02:05:09Z"
+          "datetime": "2026-05-08T02:05:09Z",
+          "sha": "c4d26d7"
         },
         {
           "date": "2026-05-08",
           "title": "Document Slack integration setup",
           "summary": "Covers the user-token + bot-token OAuth pattern that lets Maraithon read channels without inviting a bot. Lists required scopes, env vars, and the in-repo wiring for token resolution.",
-          "sha": "98f8661",
-          "datetime": "2026-05-08T01:58:10Z"
+          "datetime": "2026-05-08T01:58:10Z",
+          "sha": "98f8661"
         },
         {
           "date": "2026-05-08",
           "title": "Sharpen chief of staff morning briefings",
           "summary": null,
-          "sha": "1194419",
-          "datetime": "2026-05-08T01:41:44Z"
+          "datetime": "2026-05-08T01:41:44Z",
+          "sha": "1194419"
         },
         {
           "date": "2026-05-08",
           "title": "Scope Google connector details per account",
           "summary": null,
-          "sha": "b6e3a51",
-          "datetime": "2026-05-08T01:28:40Z"
+          "datetime": "2026-05-08T01:28:40Z",
+          "sha": "b6e3a51"
         },
         {
           "date": "2026-05-08",
           "title": "Clean up connector rows",
           "summary": null,
-          "sha": "29eb7a4",
-          "datetime": "2026-05-08T00:23:32Z"
+          "datetime": "2026-05-08T00:23:32Z",
+          "sha": "29eb7a4"
         },
         {
           "date": "2026-05-08",
           "title": "Tighten Telegram insight action briefs",
           "summary": null,
-          "sha": "3e6b3f7",
-          "datetime": "2026-05-08T00:05:03Z"
+          "datetime": "2026-05-08T00:05:03Z",
+          "sha": "3e6b3f7"
         }
       ]
     },
@@ -189,85 +210,85 @@
           "date": "2026-05-07",
           "title": "Add agent architecture manifests",
           "summary": null,
-          "sha": "d3e9c48",
-          "datetime": "2026-05-07T21:24:29Z"
+          "datetime": "2026-05-07T21:24:29Z",
+          "sha": "d3e9c48"
         },
         {
           "date": "2026-05-07",
           "title": "Fix hosted MCP controller action",
           "summary": null,
-          "sha": "d2d784a",
-          "datetime": "2026-05-07T15:22:30Z"
+          "datetime": "2026-05-07T15:22:30Z",
+          "sha": "d2d784a"
         },
         {
           "date": "2026-05-07",
           "title": "Add hosted MCP connector tools",
           "summary": null,
-          "sha": "b98b083",
-          "datetime": "2026-05-07T15:19:38Z"
+          "datetime": "2026-05-07T15:19:38Z",
+          "sha": "b98b083"
         },
         {
           "date": "2026-05-07",
           "title": "Add source-backed morning briefing",
           "summary": null,
-          "sha": "3309962",
-          "datetime": "2026-05-07T15:04:08Z"
+          "datetime": "2026-05-07T15:04:08Z",
+          "sha": "3309962"
         },
         {
           "date": "2026-05-07",
           "title": "Add admin Gmail recent endpoint",
           "summary": null,
-          "sha": "885f70c",
-          "datetime": "2026-05-07T14:39:05Z"
+          "datetime": "2026-05-07T14:39:05Z",
+          "sha": "885f70c"
         },
         {
           "date": "2026-05-07",
           "title": "Add Maraithon goals document",
           "summary": null,
-          "sha": "3d8ecdc",
-          "datetime": "2026-05-07T01:06:27Z"
+          "datetime": "2026-05-07T01:06:27Z",
+          "sha": "3d8ecdc"
         },
         {
           "date": "2026-05-07",
           "title": "Tighten Telegram draft generation prompts",
           "summary": null,
-          "sha": "6e97ea8",
-          "datetime": "2026-05-07T00:47:22Z"
+          "datetime": "2026-05-07T00:47:22Z",
+          "sha": "6e97ea8"
         },
         {
           "date": "2026-05-07",
           "title": "Enrich chief of staff triage drafting context",
           "summary": null,
-          "sha": "89896bf",
-          "datetime": "2026-05-07T00:44:17Z"
+          "datetime": "2026-05-07T00:44:17Z",
+          "sha": "89896bf"
         },
         {
           "date": "2026-05-07",
           "title": "Improve chief of staff action drafting",
           "summary": null,
-          "sha": "3532263",
-          "datetime": "2026-05-07T00:31:01Z"
+          "datetime": "2026-05-07T00:31:01Z",
+          "sha": "3532263"
         },
         {
           "date": "2026-05-07",
           "title": "Ensure chief of staff source ownership",
           "summary": null,
-          "sha": "1587b3d",
-          "datetime": "2026-05-07T00:25:47Z"
+          "datetime": "2026-05-07T00:25:47Z",
+          "sha": "1587b3d"
         },
         {
           "date": "2026-05-07",
           "title": "Reset chief of staff state and narrow Gmail freshness",
           "summary": null,
-          "sha": "86b4636",
-          "datetime": "2026-05-07T00:09:39Z"
+          "datetime": "2026-05-07T00:09:39Z",
+          "sha": "86b4636"
         },
         {
           "date": "2026-05-07",
           "title": "Simplify admin Telegram push",
           "summary": null,
-          "sha": "cbc75dd",
-          "datetime": "2026-05-07T00:00:49Z"
+          "datetime": "2026-05-07T00:00:49Z",
+          "sha": "cbc75dd"
         }
       ]
     },
@@ -278,22 +299,22 @@
           "date": "2026-05-06",
           "title": "Add admin Telegram push endpoint",
           "summary": null,
-          "sha": "7d527bf",
-          "datetime": "2026-05-06T23:58:57Z"
+          "datetime": "2026-05-06T23:58:57Z",
+          "sha": "7d527bf"
         },
         {
           "date": "2026-05-06",
           "title": "Add admin todo cleanup API",
           "summary": null,
-          "sha": "d6bd317",
-          "datetime": "2026-05-06T23:55:39Z"
+          "datetime": "2026-05-06T23:55:39Z",
+          "sha": "d6bd317"
         },
         {
           "date": "2026-05-06",
           "title": "Add connector inventory and Telegram gate",
           "summary": null,
-          "sha": "7b5c029",
-          "datetime": "2026-05-06T23:46:24Z"
+          "datetime": "2026-05-06T23:46:24Z",
+          "sha": "7b5c029"
         }
       ]
     },
@@ -304,169 +325,169 @@
           "date": "2026-04-02",
           "title": "Deliver chief of staff day briefs as todo cards",
           "summary": null,
-          "sha": "1545253",
-          "datetime": "2026-04-02T23:15:00Z"
+          "datetime": "2026-04-02T23:15:00Z",
+          "sha": "1545253"
         },
         {
           "date": "2026-04-02",
           "title": "Default review questions to full todo cards",
           "summary": null,
-          "sha": "09abe56",
-          "datetime": "2026-04-02T22:36:18Z"
+          "datetime": "2026-04-02T22:36:18Z",
+          "sha": "09abe56"
         },
         {
           "date": "2026-04-02",
           "title": "Deliver chief of staff check-ins as todo cards",
           "summary": null,
-          "sha": "c96482e",
-          "datetime": "2026-04-02T22:04:10Z"
+          "datetime": "2026-04-02T22:04:10Z",
+          "sha": "c96482e"
         },
         {
           "date": "2026-04-02",
           "title": "Bind prod endpoint to IPv4 for Fly",
           "summary": null,
-          "sha": "0c37517",
-          "datetime": "2026-04-02T13:10:16Z"
+          "datetime": "2026-04-02T13:10:16Z",
+          "sha": "0c37517"
         },
         {
           "date": "2026-04-02",
           "title": "Add chief of staff holiday planning radar",
           "summary": null,
-          "sha": "7bb2162",
-          "datetime": "2026-04-02T13:06:43Z"
+          "datetime": "2026-04-02T13:06:43Z",
+          "sha": "7bb2162"
         },
         {
           "date": "2026-04-02",
           "title": "Add adaptive chief of staff todo flows",
           "summary": null,
-          "sha": "6f7a981",
-          "datetime": "2026-04-02T12:42:30Z"
+          "datetime": "2026-04-02T12:42:30Z",
+          "sha": "6f7a981"
         },
         {
           "date": "2026-04-02",
           "title": "Close shipped spectacula specs",
           "summary": null,
-          "sha": "b1d7d64",
-          "datetime": "2026-04-02T10:49:28Z"
+          "datetime": "2026-04-02T10:49:28Z",
+          "sha": "b1d7d64"
         },
         {
           "date": "2026-04-02",
           "title": "Track project delivery runs",
           "summary": null,
-          "sha": "517e730",
-          "datetime": "2026-04-02T10:49:22Z"
+          "datetime": "2026-04-02T10:49:22Z",
+          "sha": "517e730"
         },
         {
           "date": "2026-04-02",
           "title": "Add chief of staff shared acquisition",
           "summary": null,
-          "sha": "b883702",
-          "datetime": "2026-04-02T10:49:17Z"
+          "datetime": "2026-04-02T10:49:17Z",
+          "sha": "b883702"
         },
         {
           "date": "2026-04-02",
           "title": "Close completed specs and stage follow-on work",
           "summary": null,
-          "sha": "6855789",
-          "datetime": "2026-04-02T09:59:29Z"
+          "datetime": "2026-04-02T09:59:29Z",
+          "sha": "6855789"
         },
         {
           "date": "2026-04-02",
           "title": "Deliver actionable Telegram todo messages",
           "summary": null,
-          "sha": "fe2630a",
-          "datetime": "2026-04-02T09:47:49Z"
+          "datetime": "2026-04-02T09:47:49Z",
+          "sha": "fe2630a"
         },
         {
           "date": "2026-04-02",
           "title": "Upgrade dashboard operator workspace",
           "summary": null,
-          "sha": "e9bd8ff",
-          "datetime": "2026-04-02T09:03:19Z"
+          "datetime": "2026-04-02T09:03:19Z",
+          "sha": "e9bd8ff"
         },
         {
           "date": "2026-04-02",
           "title": "Teach assistant to remember durable preferences",
           "summary": null,
-          "sha": "9752b57",
-          "datetime": "2026-04-02T08:39:39Z"
+          "datetime": "2026-04-02T08:39:39Z",
+          "sha": "9752b57"
         },
         {
           "date": "2026-04-02",
           "title": "Notify on unexpected service disconnects",
           "summary": null,
-          "sha": "30f9ee2",
-          "datetime": "2026-04-02T08:22:22Z"
+          "datetime": "2026-04-02T08:22:22Z",
+          "sha": "30f9ee2"
         },
         {
           "date": "2026-04-02",
           "title": "Add conversational briefing schedule updates",
           "summary": null,
-          "sha": "98349df",
-          "datetime": "2026-04-02T08:10:57Z"
+          "datetime": "2026-04-02T08:10:57Z",
+          "sha": "98349df"
         },
         {
           "date": "2026-04-02",
           "title": "Improve live inbox refresh and chief of staff briefings",
           "summary": null,
-          "sha": "a59a6a1",
-          "datetime": "2026-04-02T07:49:25Z"
+          "datetime": "2026-04-02T07:49:25Z",
+          "sha": "a59a6a1"
         },
         {
           "date": "2026-04-02",
           "title": "Add durable todos to the operator flow",
           "summary": null,
-          "sha": "e97414f",
-          "datetime": "2026-04-02T07:49:18Z"
+          "datetime": "2026-04-02T07:49:18Z",
+          "sha": "e97414f"
         },
         {
           "date": "2026-04-02",
           "title": "Add project dashboard and agent attachment flows",
           "summary": null,
-          "sha": "8cb7526",
-          "datetime": "2026-04-02T07:49:08Z"
+          "datetime": "2026-04-02T07:49:08Z",
+          "sha": "8cb7526"
         },
         {
           "date": "2026-04-02",
           "title": "Add durable cross-agent user memory",
           "summary": null,
-          "sha": "970b23c",
-          "datetime": "2026-04-02T06:59:27Z"
+          "datetime": "2026-04-02T06:59:27Z",
+          "sha": "970b23c"
         },
         {
           "date": "2026-04-02",
           "title": "Make chief of staff trigger-aware",
           "summary": null,
-          "sha": "6c72f9d",
-          "datetime": "2026-04-02T06:37:26Z"
+          "datetime": "2026-04-02T06:37:26Z",
+          "sha": "6c72f9d"
         },
         {
           "date": "2026-04-02",
           "title": "Clean warning-only branches and test precision",
           "summary": null,
-          "sha": "f553ad3",
-          "datetime": "2026-04-02T06:15:14Z"
+          "datetime": "2026-04-02T06:15:14Z",
+          "sha": "f553ad3"
         },
         {
           "date": "2026-04-02",
           "title": "Add project persistence and agent attachment",
           "summary": null,
-          "sha": "8ca7baf",
-          "datetime": "2026-04-02T06:08:26Z"
+          "datetime": "2026-04-02T06:08:26Z",
+          "sha": "8ca7baf"
         },
         {
           "date": "2026-04-02",
           "title": "Wire operator events into agent runtime",
           "summary": null,
-          "sha": "3c559c0",
-          "datetime": "2026-04-02T06:03:56Z"
+          "datetime": "2026-04-02T06:03:56Z",
+          "sha": "3c559c0"
         },
         {
           "date": "2026-04-02",
           "title": "Add operator event and subscription persistence",
           "summary": null,
-          "sha": "becfcb5",
-          "datetime": "2026-04-02T05:51:52Z"
+          "datetime": "2026-04-02T05:51:52Z",
+          "sha": "becfcb5"
         }
       ]
     },
@@ -477,8 +498,8 @@
           "date": "2026-03-17",
           "title": "Unify chief of staff followthrough attention flow",
           "summary": null,
-          "sha": "d81ec3b",
-          "datetime": "2026-03-17T00:23:40Z"
+          "datetime": "2026-03-17T00:23:40Z",
+          "sha": "d81ec3b"
         }
       ]
     },
@@ -489,36 +510,36 @@
           "date": "2026-03-16",
           "title": "Generalize saved watch rules for insight triage",
           "summary": null,
-          "sha": "897ae84",
-          "datetime": "2026-03-16T19:19:51Z"
+          "datetime": "2026-03-16T19:19:51Z",
+          "sha": "897ae84"
         },
         {
           "date": "2026-03-16",
           "title": "Improve chief of staff actionable FYI triage",
           "summary": null,
-          "sha": "41f089c",
-          "datetime": "2026-03-16T15:12:52Z"
+          "datetime": "2026-03-16T15:12:52Z",
+          "sha": "41f089c"
         },
         {
           "date": "2026-03-16",
           "title": "Auto-connect Chief of Staff sources",
           "summary": null,
-          "sha": "b766f10",
-          "datetime": "2026-03-16T01:55:23Z"
+          "datetime": "2026-03-16T01:55:23Z",
+          "sha": "b766f10"
         },
         {
           "date": "2026-03-16",
           "title": "Add chief of staff, travel, and followthrough workflows",
           "summary": null,
-          "sha": "8f7631b",
-          "datetime": "2026-03-16T00:57:29Z"
+          "datetime": "2026-03-16T00:57:29Z",
+          "sha": "8f7631b"
         },
         {
           "date": "2026-03-16",
           "title": "Add AI Chief of Staff architecture spec",
           "summary": null,
-          "sha": "c111223",
-          "datetime": "2026-03-16T00:37:18Z"
+          "datetime": "2026-03-16T00:37:18Z",
+          "sha": "c111223"
         }
       ]
     },
@@ -529,8 +550,8 @@
           "date": "2026-03-13",
           "title": "Make followthrough insights conversation-aware",
           "summary": null,
-          "sha": "a46d04a",
-          "datetime": "2026-03-13T14:48:41Z"
+          "datetime": "2026-03-13T14:48:41Z",
+          "sha": "a46d04a"
         }
       ]
     },
@@ -541,57 +562,57 @@
           "date": "2026-03-12",
           "title": "Implement Notaui OAuth client",
           "summary": null,
-          "sha": "0bef514",
-          "datetime": "2026-03-12T20:27:50Z"
+          "datetime": "2026-03-12T20:27:50Z",
+          "sha": "0bef514"
         },
         {
           "date": "2026-03-12",
           "title": "Add Telegram assistant liveness feedback",
           "summary": null,
-          "sha": "8e071ab",
-          "datetime": "2026-03-12T17:23:39Z"
+          "datetime": "2026-03-12T17:23:39Z",
+          "sha": "8e071ab"
         },
         {
           "date": "2026-03-12",
           "title": "Implement unified Telegram operator chat",
           "summary": null,
-          "sha": "4e86c42",
-          "datetime": "2026-03-12T16:17:08Z"
+          "datetime": "2026-03-12T16:17:08Z",
+          "sha": "4e86c42"
         },
         {
           "date": "2026-03-12",
           "title": "Add dedicated Agents workspace",
           "summary": null,
-          "sha": "7b51c97",
-          "datetime": "2026-03-12T15:33:49Z"
+          "datetime": "2026-03-12T15:33:49Z",
+          "sha": "7b51c97"
         },
         {
           "date": "2026-03-12",
           "title": "Implement evidence-first insight detail",
           "summary": null,
-          "sha": "90300c3",
-          "datetime": "2026-03-12T14:59:11Z"
+          "datetime": "2026-03-12T14:59:11Z",
+          "sha": "90300c3"
         },
         {
           "date": "2026-03-12",
           "title": "fix(telegram): restore inbound chat for metadata-linked accounts",
           "summary": null,
-          "sha": "bd37311",
-          "datetime": "2026-03-12T12:43:44Z"
+          "datetime": "2026-03-12T12:43:44Z",
+          "sha": "bd37311"
         },
         {
           "date": "2026-03-12",
           "title": "feat(telegram): harden conversational memory behavior",
           "summary": null,
-          "sha": "8477b56",
-          "datetime": "2026-03-12T12:09:04Z"
+          "datetime": "2026-03-12T12:09:04Z",
+          "sha": "8477b56"
         },
         {
           "date": "2026-03-12",
           "title": "feat(telegram): add conversational memory and learning",
           "summary": null,
-          "sha": "4a5e55d",
-          "datetime": "2026-03-12T11:54:41Z"
+          "datetime": "2026-03-12T11:54:41Z",
+          "sha": "4a5e55d"
         }
       ]
     },
@@ -602,92 +623,92 @@
           "date": "2026-03-11",
           "title": "feat(builder): make simple mode cost-first",
           "summary": null,
-          "sha": "76b598d",
-          "datetime": "2026-03-11T18:10:56Z"
+          "datetime": "2026-03-11T18:10:56Z",
+          "sha": "76b598d"
         },
         {
           "date": "2026-03-11",
           "title": "feat(builder): add simple and advanced agent modes",
           "summary": null,
-          "sha": "22a6a45",
-          "datetime": "2026-03-11T17:23:04Z"
+          "datetime": "2026-03-11T17:23:04Z",
+          "sha": "22a6a45"
         },
         {
           "date": "2026-03-11",
           "title": "feat(preferences): add durable operator policy memory",
           "summary": null,
-          "sha": "a2e6cb3",
-          "datetime": "2026-03-11T16:59:32Z"
+          "datetime": "2026-03-11T16:59:32Z",
+          "sha": "a2e6cb3"
         },
         {
           "date": "2026-03-11",
           "title": "feat(briefs): add recurring chief-of-staff Telegram summaries",
           "summary": null,
-          "sha": "fdbb794",
-          "datetime": "2026-03-11T16:37:26Z"
+          "datetime": "2026-03-11T16:37:26Z",
+          "sha": "fdbb794"
         },
         {
           "date": "2026-03-11",
           "title": "feat(onboarding): add proof-of-value preview after connect",
           "summary": null,
-          "sha": "3e319e6",
-          "datetime": "2026-03-11T16:10:53Z"
+          "datetime": "2026-03-11T16:10:53Z",
+          "sha": "3e319e6"
         },
         {
           "date": "2026-03-11",
           "title": "feat(telegram): execute insight actions in chat",
           "summary": null,
-          "sha": "0d54cba",
-          "datetime": "2026-03-11T14:53:27Z"
+          "datetime": "2026-03-11T14:53:27Z",
+          "sha": "0d54cba"
         },
         {
           "date": "2026-03-11",
           "title": "docs(readme): switch LLM docs and diagrams to OpenAI-first",
           "summary": null,
-          "sha": "81ad09a",
-          "datetime": "2026-03-11T14:06:49Z"
+          "datetime": "2026-03-11T14:06:49Z",
+          "sha": "81ad09a"
         },
         {
           "date": "2026-03-11",
           "title": "docs(readme): align architecture and operations with current agent model",
           "summary": null,
-          "sha": "bbeecdc",
-          "datetime": "2026-03-11T14:03:17Z"
+          "datetime": "2026-03-11T14:03:17Z",
+          "sha": "bbeecdc"
         },
         {
           "date": "2026-03-11",
           "title": "ci(deploy): auto-deploy Fly app on pushes to main",
           "summary": null,
-          "sha": "7481d3b",
-          "datetime": "2026-03-11T13:52:11Z"
+          "datetime": "2026-03-11T13:52:11Z",
+          "sha": "7481d3b"
         },
         {
           "date": "2026-03-11",
           "title": "feat(connectors): add per-account reconnect/disconnect for OAuth apps",
           "summary": null,
-          "sha": "ea67f8b",
-          "datetime": "2026-03-11T13:47:32Z"
+          "datetime": "2026-03-11T13:47:32Z",
+          "sha": "ea67f8b"
         },
         {
           "date": "2026-03-11",
           "title": "Harden OAuth refresh selection and reauth short-circuiting",
           "summary": null,
-          "sha": "0206ddb",
-          "datetime": "2026-03-11T07:09:36Z"
+          "datetime": "2026-03-11T07:09:36Z",
+          "sha": "0206ddb"
         },
         {
           "date": "2026-03-11",
           "title": "Improve connector reliability, insight quality, and account health UX",
           "summary": null,
-          "sha": "f5fd46c",
-          "datetime": "2026-03-11T07:01:24Z"
+          "datetime": "2026-03-11T07:01:24Z",
+          "sha": "f5fd46c"
         },
         {
           "date": "2026-03-11",
           "title": "Harden OAuth token refresh and add proactive refresher",
           "summary": null,
-          "sha": "3c790c3",
-          "datetime": "2026-03-11T00:12:26Z"
+          "datetime": "2026-03-11T00:12:26Z",
+          "sha": "3c790c3"
         }
       ]
     },
@@ -698,57 +719,57 @@
           "date": "2026-03-10",
           "title": "Support multiple Google connector accounts with per-account disconnect",
           "summary": null,
-          "sha": "1038189",
-          "datetime": "2026-03-10T18:00:06Z"
+          "datetime": "2026-03-10T18:00:06Z",
+          "sha": "1038189"
         },
         {
           "date": "2026-03-10",
           "title": "Show source account on actionable insight cards",
           "summary": null,
-          "sha": "da03c32",
-          "datetime": "2026-03-10T16:39:27Z"
+          "datetime": "2026-03-10T16:39:27Z",
+          "sha": "da03c32"
         },
         {
           "date": "2026-03-10",
           "title": "Unify founder followthrough across Slack Gmail and Calendar",
           "summary": null,
-          "sha": "89ddf62",
-          "datetime": "2026-03-10T16:35:08Z"
+          "datetime": "2026-03-10T16:35:08Z",
+          "sha": "89ddf62"
         },
         {
           "date": "2026-03-10",
           "title": "Fix connectors crash with Slack token timestamps",
           "summary": null,
-          "sha": "414b57b",
-          "datetime": "2026-03-10T16:22:49Z"
+          "datetime": "2026-03-10T16:22:49Z",
+          "sha": "414b57b"
         },
         {
           "date": "2026-03-10",
           "title": "Add Slack followthrough integration and connector tooling",
           "summary": null,
-          "sha": "00e8050",
-          "datetime": "2026-03-10T15:43:14Z"
+          "datetime": "2026-03-10T15:43:14Z",
+          "sha": "00e8050"
         },
         {
           "date": "2026-03-10",
           "title": "Enrich advisor insight context",
           "summary": null,
-          "sha": "ee69ab7",
-          "datetime": "2026-03-10T12:30:37Z"
+          "datetime": "2026-03-10T12:30:37Z",
+          "sha": "ee69ab7"
         },
         {
           "date": "2026-03-10",
           "title": "Add OpenAI GPT-5.4 provider",
           "summary": null,
-          "sha": "257fcb1",
-          "datetime": "2026-03-10T01:37:30Z"
+          "datetime": "2026-03-10T01:37:30Z",
+          "sha": "257fcb1"
         },
         {
           "date": "2026-03-10",
           "title": "Add dedicated agent builder",
           "summary": null,
-          "sha": "708c3a4",
-          "datetime": "2026-03-10T01:01:22Z"
+          "datetime": "2026-03-10T01:01:22Z",
+          "sha": "708c3a4"
         }
       ]
     },
@@ -759,162 +780,162 @@
           "date": "2026-03-09",
           "title": "Refine Telegram connector copy",
           "summary": null,
-          "sha": "7b374fc",
-          "datetime": "2026-03-09T23:36:36Z"
+          "datetime": "2026-03-09T23:36:36Z",
+          "sha": "7b374fc"
         },
         {
           "date": "2026-03-09",
           "title": "Fix Telegram linking for numeric chat IDs and bot command mentions",
           "summary": null,
-          "sha": "bbc170c",
-          "datetime": "2026-03-09T23:14:34Z"
+          "datetime": "2026-03-09T23:14:34Z",
+          "sha": "bbc170c"
         },
         {
           "date": "2026-03-09",
           "title": "Add insights pipeline, Telegram notifications, and Google MCP tools",
           "summary": null,
-          "sha": "3918bba",
-          "datetime": "2026-03-09T22:55:22Z"
+          "datetime": "2026-03-09T22:55:22Z",
+          "sha": "3918bba"
         },
         {
           "date": "2026-03-09",
           "title": "Refactor connectors into Zapier-style list and detail pages",
           "summary": null,
-          "sha": "9159ae3",
-          "datetime": "2026-03-09T21:24:16Z"
+          "datetime": "2026-03-09T21:24:16Z",
+          "sha": "9159ae3"
         },
         {
           "date": "2026-03-09",
           "title": "Refactor magic link emails into reusable templates",
           "summary": null,
-          "sha": "69077fd",
-          "datetime": "2026-03-09T20:36:21Z"
+          "datetime": "2026-03-09T20:36:21Z",
+          "sha": "69077fd"
         },
         {
           "date": "2026-03-09",
           "title": "Add user auth, magic links, and user-scoped connectors",
           "summary": null,
-          "sha": "94def21",
-          "datetime": "2026-03-09T20:29:35Z"
+          "datetime": "2026-03-09T20:29:35Z",
+          "sha": "94def21"
         },
         {
           "date": "2026-03-09",
           "title": "Refactor admin UI into tabbed MVC pages",
           "summary": null,
-          "sha": "5f6d7ca",
-          "datetime": "2026-03-09T18:46:48Z"
+          "datetime": "2026-03-09T18:46:48Z",
+          "sha": "5f6d7ca"
         },
         {
           "date": "2026-03-09",
           "title": "Build OAuth control center and harden Fly log access",
           "summary": null,
-          "sha": "842361c",
-          "datetime": "2026-03-09T17:47:16Z"
+          "datetime": "2026-03-09T17:47:16Z",
+          "sha": "842361c"
         },
         {
           "date": "2026-03-09",
           "title": "Fix LiveView asset version drift",
           "summary": null,
-          "sha": "9b2b813",
-          "datetime": "2026-03-09T16:40:01Z"
+          "datetime": "2026-03-09T16:40:01Z",
+          "sha": "9b2b813"
         },
         {
           "date": "2026-03-09",
           "title": "Fix Fly release command cutover",
           "summary": null,
-          "sha": "1e17a5f",
-          "datetime": "2026-03-09T15:57:52Z"
+          "datetime": "2026-03-09T15:57:52Z",
+          "sha": "1e17a5f"
         },
         {
           "date": "2026-03-09",
           "title": "Prepare Fly managed Postgres cutover",
           "summary": null,
-          "sha": "e5b6353",
-          "datetime": "2026-03-09T15:28:52Z"
+          "datetime": "2026-03-09T15:28:52Z",
+          "sha": "e5b6353"
         },
         {
           "date": "2026-03-09",
           "title": "Speed up degraded admin responses",
           "summary": null,
-          "sha": "7b74f1e",
-          "datetime": "2026-03-09T15:16:40Z"
+          "datetime": "2026-03-09T15:16:40Z",
+          "sha": "7b74f1e"
         },
         {
           "date": "2026-03-09",
           "title": "Harden admin control center and Fly operations",
           "summary": null,
-          "sha": "270eef1",
-          "datetime": "2026-03-09T15:01:36Z"
+          "datetime": "2026-03-09T15:01:36Z",
+          "sha": "270eef1"
         },
         {
           "date": "2026-03-09",
           "title": "Refresh README for production operations",
           "summary": null,
-          "sha": "3ce09e5",
-          "datetime": "2026-03-09T12:58:50Z"
+          "datetime": "2026-03-09T12:58:50Z",
+          "sha": "3ce09e5"
         },
         {
           "date": "2026-03-09",
           "title": "Build agent control center and operator CLI",
           "summary": null,
-          "sha": "450afc7",
-          "datetime": "2026-03-09T12:54:48Z"
+          "datetime": "2026-03-09T12:54:48Z",
+          "sha": "450afc7"
         },
         {
           "date": "2026-03-09",
           "title": "Integrate Notaui MCP as todo source and action tools",
           "summary": null,
-          "sha": "b36bc81",
-          "datetime": "2026-03-09T03:49:29Z"
+          "datetime": "2026-03-09T03:49:29Z",
+          "sha": "b36bc81"
         },
         {
           "date": "2026-03-09",
           "title": "Simplify webhook flow and harden HTTP GET input validation",
           "summary": null,
-          "sha": "51b26ff",
-          "datetime": "2026-03-09T03:39:09Z"
+          "datetime": "2026-03-09T03:39:09Z",
+          "sha": "51b26ff"
         },
         {
           "date": "2026-03-09",
           "title": "Apply GoF command and factory patterns to effects",
           "summary": null,
-          "sha": "fe4b3a0",
-          "datetime": "2026-03-09T03:34:55Z"
+          "datetime": "2026-03-09T03:34:55Z",
+          "sha": "fe4b3a0"
         },
         {
           "date": "2026-03-09",
           "title": "Refactor admin dashboard and OAuth flows for DRY reuse",
           "summary": null,
-          "sha": "6e1a579",
-          "datetime": "2026-03-09T03:30:10Z"
+          "datetime": "2026-03-09T03:30:10Z",
+          "sha": "6e1a579"
         },
         {
           "date": "2026-03-09",
           "title": "Harden auth and OAuth state handling for production",
           "summary": null,
-          "sha": "bd88d43",
-          "datetime": "2026-03-09T03:24:01Z"
+          "datetime": "2026-03-09T03:24:01Z",
+          "sha": "bd88d43"
         },
         {
           "date": "2026-03-09",
           "title": "Build admin control plane for launching and monitoring agents",
           "summary": null,
-          "sha": "e33cc8e",
-          "datetime": "2026-03-09T03:18:08Z"
+          "datetime": "2026-03-09T03:18:08Z",
+          "sha": "e33cc8e"
         },
         {
           "date": "2026-03-09",
           "title": "Add Fly.io deployment config for always-on Maraithon",
           "summary": null,
-          "sha": "342d0f7",
-          "datetime": "2026-03-09T03:05:30Z"
+          "datetime": "2026-03-09T03:05:30Z",
+          "sha": "342d0f7"
         },
         {
           "date": "2026-03-09",
           "title": "Harden runtime for production clustering and secure tools",
           "summary": null,
-          "sha": "d9e29e7",
-          "datetime": "2026-03-09T02:26:23Z"
+          "datetime": "2026-03-09T02:26:23Z",
+          "sha": "d9e29e7"
         }
       ]
     },
@@ -925,155 +946,155 @@
           "date": "2026-01-13",
           "title": "Add ASCII art to README",
           "summary": "- Add large banner with MARAITHON logo - Add high-level architecture diagram showing data flow - Enhance architecture section with detailed component diagram - Add side-by-side comparison of traditional vs OTP agents - Add inspirational quote banner for use cases - Add footer with tech stack summary",
-          "sha": "c077916",
-          "datetime": "2026-01-13T19:36:50Z"
+          "datetime": "2026-01-13T19:36:50Z",
+          "sha": "c077916"
         },
         {
           "date": "2026-01-13",
           "title": "Add comprehensive documentation to integration test files",
           "summary": "Document all integration test files with: - Product-driven explanations explaining what each test validates - \"Why it matters\" sections describing user impact if code breaks - ASCII architecture diagrams showing component interactions - Technical details covering API mappings and dependencies - Section comments for each describe block - @doc annotations on individual tests",
-          "sha": "1dde248",
-          "datetime": "2026-01-13T19:35:36Z"
+          "datetime": "2026-01-13T19:35:36Z",
+          "sha": "1dde248"
         },
         {
           "date": "2026-01-13",
           "title": "Fix test errors and warnings",
           "summary": "- Fix agent_controller_test to properly set up scheduler for spawned agents - Simplify agent_supervisor_test to avoid sandbox access race condition - Fix runtime_test resume_all_agents to not spawn processes that crash - Remove unused import in cache_raw_body_test",
-          "sha": "e2d732b",
-          "datetime": "2026-01-13T19:10:42Z"
+          "datetime": "2026-01-13T19:10:42Z",
+          "sha": "e2d732b"
         },
         {
           "date": "2026-01-13",
           "title": "Add comprehensive test coverage (87.3%)",
           "summary": "- Make HTTP clients injectable in OAuth providers (Google, Linear, Slack) - Make HTTP clients injectable in connectors (Gmail, Google Calendar) - Make Telegram API base URL configurable for testing - Fix Task.Supervisor usage in runtime supervisor - Add Anthropic provider tests with mocked API - Add effect_runner integration tests with retries - Add vault encryption/decryption tests - Add agent_supervisor tests - Add scheduler edge case tests - Update test_helper to start Bypass",
-          "sha": "a70590e",
-          "datetime": "2026-01-13T19:00:50Z"
+          "datetime": "2026-01-13T19:00:50Z",
+          "sha": "a70590e"
         },
         {
           "date": "2026-01-13",
           "title": "Add smoke testing, CONTRIBUTING.md, and test coverage",
           "summary": "Smoke Testing: - Add scripts/smoke_test.sh for end-to-end verification - Checks: deps, compilation, formatting, migrations, tests, server health - Detects hardcoded secrets and reports TODO/FIXME counts",
-          "sha": "92a5837",
-          "datetime": "2026-01-13T16:34:19Z"
+          "datetime": "2026-01-13T16:34:19Z",
+          "sha": "92a5837"
         },
         {
           "date": "2026-01-13",
           "title": "Fix test configuration for local PostgreSQL",
           "summary": "- Use $USER env var for database username (falls back to postgres) - Allow empty password for local peer authentication - Disable background workers (Scheduler, EffectRunner) in test mode to prevent database access before sandbox is configured",
-          "sha": "f9c81cd",
-          "datetime": "2026-01-13T16:22:13Z"
+          "datetime": "2026-01-13T16:22:13Z",
+          "sha": "f9c81cd"
         },
         {
           "date": "2026-01-13",
           "title": "Fix unused variable warnings",
           "summary": "- effect_runner.ex: prefix unused result and timeout with underscore - http.ex: prefix unused url parameter with underscore - runtime.ex: remove unused Agent alias",
-          "sha": "12556d5",
-          "datetime": "2026-01-13T16:18:40Z"
+          "datetime": "2026-01-13T16:18:40Z",
+          "sha": "12556d5"
         },
         {
           "date": "2026-01-13",
           "title": "Fix deprecated Logger.warn calls",
           "summary": "Replace all Logger.warn/1 and Logger.warn/2 with Logger.warning/2 across the codebase: - runtime/agent.ex (5 occurrences) - runtime/scheduler.ex (1 occurrence) - runtime/effect_runner.ex (3 occurrences) - llm/anthropic_provider.ex (2 occurrences) - behaviors/codebase_advisor.ex (1 occurrence)",
-          "sha": "3f8f12b",
-          "datetime": "2026-01-13T16:14:18Z"
+          "datetime": "2026-01-13T16:14:18Z",
+          "sha": "3f8f12b"
         },
         {
           "date": "2026-01-13",
           "title": "DRY: Extract shared HTTP and Crypto modules",
           "summary": "- Create Maraithon.HTTP for consistent HTTP client interface - post_form, post_json, get, delete, put_json, patch_json - Proper error handling and JSON encoding/decoding - Charlist conversion for :httpc compatibility",
-          "sha": "d9d946c",
-          "datetime": "2026-01-13T16:12:49Z"
+          "datetime": "2026-01-13T16:12:49Z",
+          "sha": "d9d946c"
         },
         {
           "date": "2026-01-13",
           "title": "Security: Cache raw request body for webhook signature verification",
           "summary": "- Add CacheRawBody plug to cache original request bytes before parsing - Update endpoint to use custom body reader - Update webhook controller to use cached raw body - Prevents signature verification failures due to JSON re-encoding differences",
-          "sha": "ee0b4da",
-          "datetime": "2026-01-13T16:07:16Z"
+          "datetime": "2026-01-13T16:07:16Z",
+          "sha": "ee0b4da"
         },
         {
           "date": "2026-01-13",
           "title": "Security: Add token encryption at rest with Cloak",
           "summary": "- Add Cloak and Cloak.Ecto dependencies for AES-256-GCM encryption - Create Maraithon.Vault for encryption key management - Create Maraithon.Encrypted.Binary type for encrypted fields - Update OAuth.Token schema to use encrypted types for access_token and refresh_token - Add vault to application supervision tree - Configure allow_insecure_vault for dev/test environments - Production requires CLOAK_KEY environment variable",
-          "sha": "3c88417",
-          "datetime": "2026-01-13T16:05:40Z"
+          "datetime": "2026-01-13T16:05:40Z",
+          "sha": "3c88417"
         },
         {
           "date": "2026-01-13",
           "title": "Security: Make webhook signature verification fail closed",
           "summary": "- Signature verification now requires explicit ALLOW_UNSIGNED_WEBHOOKS=true to bypass - Added allow_unsigned config option to all connectors (GitHub, Slack, WhatsApp, Linear, Telegram) - Default behavior is now to reject webhooks when secrets are not configured - Prevents accidental deployment without proper security configuration",
-          "sha": "d1a936a",
-          "datetime": "2026-01-13T16:03:48Z"
+          "datetime": "2026-01-13T16:03:48Z",
+          "sha": "d1a936a"
         },
         {
           "date": "2026-01-13",
           "title": "Security: Replace unsafe JSON parsing with safe error handling",
           "summary": "- Replace all Jason.decode! calls with Jason.decode/1 and proper error handling - Prevents process crashes on malformed JSON responses from external APIs - Fix Linear Authorization header to include Bearer prefix - Affected files: OAuth modules (google, slack, linear) and connectors (telegram, whatsapp)",
-          "sha": "52b2538",
-          "datetime": "2026-01-13T16:01:57Z"
+          "datetime": "2026-01-13T16:01:57Z",
+          "sha": "52b2538"
         },
         {
           "date": "2026-01-13",
           "title": "Add Linear and Telegram connectors",
           "summary": "Linear: - Add Linear OAuth helpers (authorize, exchange, GraphQL API) - Add Linear connector with webhook support - Support issue, comment, project, and cycle events - API helpers: create_issue, create_comment, update_issue_state - Topic format: linear:{team_key}",
-          "sha": "b0d5060",
-          "datetime": "2026-01-13T15:52:46Z"
+          "datetime": "2026-01-13T15:52:46Z",
+          "sha": "b0d5060"
         },
         {
           "date": "2026-01-13",
           "title": "Add Slack and WhatsApp connectors",
           "summary": "Slack: - Add Slack OAuth helpers (authorize_url, exchange_code, verify_signature) - Add Slack connector with Events API support - Support message, reaction, app_mention, and member events - Topic format: slack:{team_id}:{channel_id}",
-          "sha": "7e489d4",
-          "datetime": "2026-01-13T15:42:45Z"
+          "datetime": "2026-01-13T15:42:45Z",
+          "sha": "7e489d4"
         },
         {
           "date": "2026-01-13",
           "title": "Update README with Google Calendar and Gmail connector docs",
           "summary": "Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
-          "sha": "8f3437a",
-          "datetime": "2026-01-13T15:33:50Z"
+          "datetime": "2026-01-13T15:33:50Z",
+          "sha": "8f3437a"
         },
         {
           "date": "2026-01-13",
           "title": "Add Google Calendar and Gmail connectors",
           "summary": "- Add OAuth controller for Google auth flow - Add Google Calendar connector with push notification support - Add Gmail connector with Cloud Pub/Sub integration - Add webhook handlers for Google Calendar and Gmail - Add routes for OAuth (/auth/google) and webhooks - Add Google config (client_id, client_secret, redirect_uri, etc.)",
-          "sha": "58bf7a3",
-          "datetime": "2026-01-13T15:33:13Z"
+          "datetime": "2026-01-13T15:33:13Z",
+          "sha": "58bf7a3"
         },
         {
           "date": "2026-01-13",
           "title": "Add OAuth token storage and Google OAuth helpers",
           "summary": "- Add oauth_tokens migration for storing user OAuth credentials - Add Token schema with expiry checking - Add OAuth context for token management (store, get, refresh, revoke) - Add Google OAuth helpers (authorize_url, exchange_code, refresh_token)",
-          "sha": "4b2086f",
-          "datetime": "2026-01-13T15:30:11Z"
+          "datetime": "2026-01-13T15:30:11Z",
+          "sha": "4b2086f"
         },
         {
           "date": "2026-01-13",
           "title": "Update README with framework vision and documentation",
           "summary": "Comprehensive documentation covering: - Core vision: Agent = Prompt + State + Subscriptions + Tools - Architecture overview with connectors, runtime, and tools - Quick start guide - Behaviors (PromptAgent, custom behaviors) - Connectors (GitHub available, future roadmap) - How to build custom connectors - API reference - Configuration - Use cases (issue planner, personal assistant, code guardian) - Why OTP matters for AI agents",
-          "sha": "de86d20",
-          "datetime": "2026-01-13T15:12:38Z"
+          "datetime": "2026-01-13T15:12:38Z",
+          "sha": "de86d20"
         },
         {
           "date": "2026-01-13",
           "title": "Add Connector SDK and GitHub connector",
           "summary": "Connector SDK for integrating external services with agents: - Connector behavior defining handle_webhook and verify_signature callbacks - Standard event format for normalized cross-connector events - Helper functions for publishing to PubSub",
-          "sha": "b59ac4e",
-          "datetime": "2026-01-13T15:11:49Z"
+          "datetime": "2026-01-13T15:11:49Z",
+          "sha": "b59ac4e"
         },
         {
           "date": "2026-01-13",
           "title": "Add PromptAgent: generic prompt-driven agent framework",
           "summary": "The core primitive: Agent = Prompt + State + Subscriptions + Tools",
-          "sha": "910cc87",
-          "datetime": "2026-01-13T15:02:47Z"
+          "datetime": "2026-01-13T15:02:47Z",
+          "sha": "910cc87"
         },
         {
           "date": "2026-01-13",
           "title": "Add RepoPlanner behavior for codebase analysis and implementation planning",
           "summary": "New behavior that analyzes repositories and generates implementation plans: - Indexes key entry point files (mix.exs, README, config, etc.) on startup - Receives planning tasks via /api/v1/agents/:id/ask endpoint - Generates detailed plans using LLM with actual codebase context - Writes plans to markdown files in PLANS/ directory",
-          "sha": "aecf159",
-          "datetime": "2026-01-13T12:54:17Z"
+          "datetime": "2026-01-13T12:54:17Z",
+          "sha": "aecf159"
         }
       ]
     },
@@ -1084,50 +1105,50 @@
           "date": "2026-01-12",
           "title": "Add GCP project configuration file",
           "summary": "Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
-          "sha": "2c532e3",
-          "datetime": "2026-01-12T22:03:08Z"
+          "datetime": "2026-01-12T22:03:08Z",
+          "sha": "2c532e3"
         },
         {
           "date": "2026-01-12",
           "title": "Add LLM spend tracking and dashboard display",
           "summary": "- Create Spend module with Claude model pricing and cost calculation - Update AnthropicProvider to calculate and return usage/cost data - Add spend API endpoints (per-agent and total) - Update dashboard to show LLM calls, total spend, and per-agent spend - Add logging to EffectRunner for LLM call execution",
-          "sha": "be8a5e6",
-          "datetime": "2026-01-12T21:47:14Z"
+          "datetime": "2026-01-12T21:47:14Z",
+          "sha": "be8a5e6"
         },
         {
           "date": "2026-01-12",
           "title": "Fix: update phoenix_live_view to ~> 1.0 for Phoenix 1.8 compatibility",
           "summary": "Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>",
-          "sha": "c55d19b",
-          "datetime": "2026-01-12T21:34:11Z"
+          "datetime": "2026-01-12T21:34:11Z",
+          "sha": "c55d19b"
         },
         {
           "date": "2026-01-12",
           "title": "Add LiveView dashboard for agent monitoring",
           "summary": "- Real-time dashboard with auto-refresh every 5 seconds - Agent list with status badges - Agent detail view showing config, budget, and runtime info - Recent events display for selected agent - Uses Tailwind CSS via CDN for styling",
-          "sha": "5dd6d4b",
-          "datetime": "2026-01-12T21:32:13Z"
+          "datetime": "2026-01-12T21:32:13Z",
+          "sha": "5dd6d4b"
         },
         {
           "date": "2026-01-12",
           "title": "Fix: capture emit_event return value to preserve sequence_num",
           "summary": "The emit_event function returns a new data struct with updated sequence_num, but the return value was being discarded in several places, causing duplicate sequence numbers and constraint violations.",
-          "sha": "93df64c",
-          "datetime": "2026-01-12T21:24:08Z"
+          "datetime": "2026-01-12T21:24:08Z",
+          "sha": "93df64c"
         },
         {
           "date": "2026-01-12",
           "title": "Add mise.toml for dev environment management",
           "summary": "- Erlang 26.2.2 and Elixir 1.16.2 (matching Dockerfile) - Includes common development tasks - Ensures consistent dev environment across team",
-          "sha": "fa929f3",
-          "datetime": "2026-01-12T21:11:58Z"
+          "datetime": "2026-01-12T21:11:58Z",
+          "sha": "fa929f3"
         },
         {
           "date": "2026-01-12",
           "title": "Initial commit: Maraithon - Long-lived LLM Agent Runtime",
           "summary": "A durable Elixir/OTP runtime for LLM agents that can run for 48+ hours, surviving crashes and VM restarts using event sourcing.",
-          "sha": "a6e2763",
-          "datetime": "2026-01-12T21:11:15Z"
+          "datetime": "2026-01-12T21:11:15Z",
+          "sha": "a6e2763"
         }
       ]
     }
