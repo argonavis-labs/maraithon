@@ -144,55 +144,47 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def refresh_token_badge_class(:active),
     do:
-      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   def refresh_token_badge_class(:inactive),
-    do:
-      "inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   def refresh_token_badge_class(:missing),
     do:
-      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   def refresh_token_badge_class(:not_required),
-    do:
-      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def refresh_token_badge_class(:not_applicable),
-    do:
-      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def refresh_token_badge_class(_status),
-    do:
-      "inline-flex items-center rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def connection_status_badge_class(:connected),
     do:
-      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   def connection_status_badge_class(:partial),
     do:
-      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   def connection_status_badge_class(:missing_scope),
     do:
-      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   def connection_status_badge_class(:needs_refresh),
-    do:
-      "inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   def connection_status_badge_class(:not_configured),
-    do:
-      "inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def connection_status_badge_class(:unknown),
-    do:
-      "inline-flex items-center rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def connection_status_badge_class(_status),
-    do:
-      "inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-700"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   def setup_status_label(:configured), do: "configured"
   def setup_status_label(:incomplete), do: "needs setup"
@@ -200,23 +192,21 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def setup_status_badge_class(:configured),
     do:
-      "inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   def setup_status_badge_class(:incomplete),
     do:
-      "inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   def setup_status_badge_class(_status),
-    do:
-      "inline-flex items-center rounded-full bg-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def callback_badge_class(true),
     do:
-      "inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700"
+      "inline-flex rounded-md bg-indigo-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-indigo-700"
 
   def callback_badge_class(false),
-    do:
-      "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def env_status_label(true, _required), do: "present"
   def env_status_label(false, true), do: "missing"
@@ -224,15 +214,13 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def env_status_badge_class(true, _required),
     do:
-      "inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   def env_status_badge_class(false, true),
-    do:
-      "inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-800"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   def env_status_badge_class(false, false),
-    do:
-      "inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   def connection_token_summary(token) when is_map(token) do
     scopes =
@@ -282,7 +270,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def oauth_logo(assigns) do
     ~H"""
-    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-1.5">
+    <div class="flex h-10 w-10 items-center justify-center overflow-hidden rounded-lg border border-zinc-950/10 bg-white p-1.5 shadow-sm">
       <img
         src={connector_logo_src(@provider)}
         alt={connector_logo_alt(@provider)}

@@ -35,16 +35,16 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
       </div>
 
       <div class={metrics_class(@mode)}>
-        <div :for={metric <- @metrics} class="rounded-xl bg-slate-50 px-3 py-2">
-          <p class="font-semibold uppercase tracking-[0.14em] text-slate-500"><%= metric.label %></p>
-          <p class="mt-1 text-sm font-semibold text-slate-900"><%= metric.value %></p>
+        <div :for={metric <- @metrics} class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2">
+          <p class="text-xs/5 font-medium text-zinc-500"><%= metric.label %></p>
+          <p class="mt-1 text-sm/6 font-medium text-zinc-950"><%= metric.value %></p>
         </div>
       </div>
 
-      <div :if={@mode == "full"} class="border-t border-slate-100 px-4 py-4">
-        <div class="mb-3 flex items-center justify-between gap-3 text-xs">
-          <span class="font-semibold uppercase tracking-[0.18em] text-slate-500">Runtime contract</span>
-          <span class="font-mono text-slate-500"><%= @architecture.contract.behaviour %></span>
+      <div :if={@mode == "full"} class="border-t border-zinc-950/10 px-4 py-4">
+        <div class="mb-3 flex items-center justify-between gap-3 text-xs/5">
+          <span class="font-medium text-zinc-500">Runtime contract</span>
+          <span class="font-mono text-zinc-500"><%= @architecture.contract.behaviour %></span>
         </div>
         <.component_grid components={@components} columns="two" />
       </div>
@@ -62,14 +62,14 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
   defp component_grid(assigns) do
     ~H"""
     <div class={component_grid_class(@columns)}>
-      <div :for={component <- @components} class="rounded-xl border border-slate-200 px-3 py-2">
+      <div :for={component <- @components} class="rounded-lg border border-zinc-950/10 px-3 py-2">
         <div class="flex items-center justify-between gap-3">
-          <p class="text-sm font-medium text-slate-900"><%= component.label %></p>
-          <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+          <p class="text-sm/6 font-medium text-zinc-950"><%= component.label %></p>
+          <span class="inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-600">
             <%= component.kind %>
           </span>
         </div>
-        <p class="mt-1 line-clamp-2 text-xs text-slate-500">
+        <p class="mt-1 line-clamp-2 text-xs/5 text-zinc-500">
           <%= AgentArchitecture.component_detail(component) %>
         </p>
       </div>
@@ -80,30 +80,30 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
   defp limit("full"), do: 8
   defp limit(_mode), do: 8
 
-  defp section_class("full"), do: "overflow-hidden rounded-2xl border border-cyan-100 bg-white"
-  defp section_class(_mode), do: "rounded-2xl bg-white p-5 shadow"
+  defp section_class("full"),
+    do: "overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm"
 
-  defp header_class("full"), do: "border-b border-cyan-100 bg-cyan-50/70 px-4 py-4"
+  defp section_class(_mode), do: "rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm"
+
+  defp header_class("full"), do: "border-b border-zinc-950/10 bg-zinc-50 px-4 py-4"
   defp header_class(_mode), do: ""
 
-  defp eyebrow_class("full"),
-    do: "text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700"
+  defp eyebrow_class("full"), do: "text-xs/5 font-medium text-zinc-500"
 
-  defp eyebrow_class(_mode), do: "text-xs font-semibold uppercase tracking-[0.2em] text-slate-500"
+  defp eyebrow_class(_mode), do: "text-xs/5 font-medium text-zinc-500"
 
-  defp title_class("full"), do: "mt-1 text-lg font-semibold text-slate-900"
-  defp title_class(_mode), do: "mt-2 text-base font-semibold text-slate-900"
+  defp title_class("full"), do: "mt-1 text-base/7 font-semibold text-zinc-950"
+  defp title_class(_mode), do: "mt-2 text-base/7 font-semibold text-zinc-950"
 
   defp category_class("full"),
     do:
-      "rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-800 shadow-sm"
+      "inline-flex rounded-md bg-white px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700 shadow-sm ring-1 ring-zinc-950/10"
 
   defp category_class(_mode),
-    do:
-      "rounded-full bg-cyan-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-800"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  defp summary_class("full"), do: "mt-2 text-sm text-cyan-900/75"
-  defp summary_class(_mode), do: "mt-3 text-sm text-slate-600"
+  defp summary_class("full"), do: "mt-2 text-sm/6 text-zinc-600"
+  defp summary_class(_mode), do: "mt-3 text-sm/6 text-zinc-600"
 
   defp metrics_class("full"), do: "grid grid-cols-2 gap-3 px-4 py-4 text-xs sm:grid-cols-4"
   defp metrics_class(_mode), do: "mt-4 grid grid-cols-2 gap-2 text-xs"

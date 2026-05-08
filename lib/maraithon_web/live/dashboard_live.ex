@@ -668,59 +668,44 @@ defmodule MaraithonWeb.DashboardLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
-      <section class="rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-900 px-6 py-6 text-white shadow">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-          <div class="max-w-3xl">
-            <p class="text-xs font-semibold uppercase tracking-[0.28em] text-indigo-200">
-              Admin Control Center
-            </p>
-            <h1 class="mt-2 text-3xl font-semibold tracking-tight">Agent Fleet Operations</h1>
-            <p class="mt-2 text-sm text-slate-200">
-              <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
-                You've connected real data. Maraithon is scanning a recent slice of Gmail, Calendar,
-                and Slack to show immediate value before you create anything.
-              <% else %>
-                Watch fleet health, queues, failures, logs, and actionable insights from one control center.
-                Use the dedicated Agents workspace for CRUD, lifecycle control, logs, and deep inspection.
-              <% end %>
-            </p>
-          </div>
-
-          <div class="flex gap-2">
+      <.page_header
+        eyebrow="Admin Control Center"
+        title="Agent Fleet Operations"
+        subtitle={
+          if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do
+            "You've connected real data. Maraithon is scanning a recent slice of Gmail, Calendar, and Slack to show immediate value before you create anything."
+          else
+            "Watch fleet health, queues, failures, logs, and actionable insights from one control center."
+          end
+        }
+      >
+        <:actions>
+          <div class="flex flex-wrap gap-2">
             <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
-              <a
-                href="#proof-of-value"
-                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
-              >
+              <.button href="#proof-of-value" variant="outline">
                 See Proof
-              </a>
+              </.button>
             <% else %>
-              <.link
-                navigate={"/agents"}
-                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
-              >
+              <.button navigate={"/agents"} variant="outline">
                 Manage Agents
-              </.link>
-              <.link
-                navigate={"/agents/new"}
-                class="inline-flex items-center rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm font-medium text-white hover:bg-white/15"
-              >
+              </.button>
+              <.button navigate={"/agents/new"}>
                 New Agent
-              </.link>
+              </.button>
             <% end %>
-            <button
+            <.button
               type="button"
               phx-click="refresh_now"
-              class="inline-flex items-center rounded-md border border-white/20 bg-white px-3 py-2 text-sm font-medium text-slate-900 hover:bg-slate-100"
+              variant="outline"
             >
               Refresh
-            </button>
+            </.button>
           </div>
-        </div>
-      </section>
+        </:actions>
+      </.page_header>
 
       <%= if @dashboard_errors != [] do %>
-        <section class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 shadow-sm">
+        <.alert color="amber">
           <div class="space-y-2">
             <%= for error <- @dashboard_errors do %>
               <div>
@@ -729,7 +714,7 @@ defmodule MaraithonWeb.DashboardLive do
               </div>
             <% end %>
           </div>
-        </section>
+        </.alert>
       <% end %>
 
       <section class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-6">
@@ -753,22 +738,19 @@ defmodule MaraithonWeb.DashboardLive do
         <.stat_card title="Pending Effects" value={@queue_metrics.effects.pending} />
       </section>
 
-      <section class="rounded-3xl border border-sky-100 bg-gradient-to-r from-sky-50 via-white to-emerald-50 px-4 py-4 shadow-sm sm:px-6">
+      <.panel>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="text-lg font-medium text-slate-950">Operator Workspace</h2>
-            <p class="mt-1 text-sm text-slate-700">
+            <.heading level={2} class="text-base/7">Operator Workspace</.heading>
+            <.text class="mt-1">
               Todos, memory, connected systems, and projects all feed the same conversational operator.
-            </p>
+            </.text>
           </div>
-          <.link
-            navigate={"/connectors"}
-            class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-          >
+          <.button navigate={"/connectors"}>
             Manage Connectors
-          </.link>
+          </.button>
         </div>
-      </section>
+      </.panel>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-4">
         <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
@@ -1020,12 +1002,12 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-3xl bg-white shadow ring-1 ring-slate-200/70">
-          <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
-            <h2 class="text-lg font-medium text-slate-900">Add Project</h2>
-            <p class="mt-1 text-sm text-slate-500">
+        <div class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
+          <div class="border-b border-zinc-950/10 px-4 py-4 sm:px-6">
+            <.heading level={2} class="text-base/7">Add Project</.heading>
+            <.text class="mt-1">
               Projects hold local state, attached agents, and project-manager recommendations.
-            </p>
+            </.text>
           </div>
           <.form
             for={@project_form}
@@ -1034,78 +1016,62 @@ defmodule MaraithonWeb.DashboardLive do
             phx-submit="create_project"
             class="space-y-4 px-4 py-4 sm:px-6"
           >
-            <div>
-              <label for="project_name" class="block text-sm font-medium text-slate-700">
-                Project name
-              </label>
-              <input
+            <.field label="Project name" for="project_name">
+              <.c_input
                 id="project_name"
                 type="text"
                 name="project[name]"
                 value={@project_form[:name].value}
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
               />
-            </div>
+            </.field>
 
-            <div>
-              <label for="project_summary" class="block text-sm font-medium text-slate-700">
-                Summary
-              </label>
-              <input
+            <.field label="Summary" for="project_summary">
+              <.c_input
                 id="project_summary"
                 type="text"
                 name="project[summary]"
                 value={@project_form[:summary].value}
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
               />
-            </div>
+            </.field>
 
-            <div>
-              <label for="project_description" class="block text-sm font-medium text-slate-700">
-                Description
-              </label>
-              <textarea
+            <.field label="Description" for="project_description">
+              <.c_textarea
                 id="project_description"
                 name="project[description]"
-                rows="4"
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
-              ><%= @project_form[:description].value %></textarea>
-            </div>
+                rows={4}
+                value={@project_form[:description].value}
+              />
+            </.field>
 
-            <div>
-              <label for="project_priority" class="block text-sm font-medium text-slate-700">
-                Priority
-              </label>
-              <select
+            <.field label="Priority" for="project_priority">
+              <.c_select
                 id="project_priority"
                 name="project[priority]"
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
               >
                 <option value="low" selected={@project_form[:priority].value == "low"}>Low</option>
                 <option value="normal" selected={@project_form[:priority].value == "normal"}>Normal</option>
                 <option value="high" selected={@project_form[:priority].value == "high"}>High</option>
                 <option value="critical" selected={@project_form[:priority].value == "critical"}>Critical</option>
-              </select>
-            </div>
+              </.c_select>
+            </.field>
 
-            <button
+            <.button
               type="submit"
               phx-disable-with="Creating..."
-              class="inline-flex items-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
             >
               Create project
-            </button>
+            </.button>
           </.form>
         </div>
       </section>
 
-      <section class="overflow-hidden rounded-xl bg-white shadow">
-        <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
-          <h2 class="text-lg font-medium text-slate-900">Project Memory</h2>
-          <p class="mt-1 text-sm text-slate-500">
+      <.panel body_class="p-0">
+        <:header>
+          <.heading level={2} class="text-base/7">Project Memory</.heading>
+          <.text class="mt-1">
             Add notes, todos, decisions, resources, or grants to a project so the operator can use them later.
-          </p>
-        </div>
+          </.text>
+        </:header>
         <.form
           for={@project_item_form}
           id="project-item-form"
@@ -1114,14 +1080,10 @@ defmodule MaraithonWeb.DashboardLive do
           class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
         >
           <div class="space-y-4">
-            <div>
-              <label for="project_item_project_id" class="block text-sm font-medium text-slate-700">
-                Project
-              </label>
-              <select
+            <.field label="Project" for="project_item_project_id">
+              <.c_select
                 id="project_item_project_id"
                 name="project_item[project_id]"
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
               >
                 <option value="">Choose a project</option>
                 <option
@@ -1131,16 +1093,12 @@ defmodule MaraithonWeb.DashboardLive do
                 >
                   <%= label %>
                 </option>
-              </select>
-            </div>
-            <div>
-              <label for="project_item_item_type" class="block text-sm font-medium text-slate-700">
-                Item type
-              </label>
-              <select
+              </.c_select>
+            </.field>
+            <.field label="Item type" for="project_item_item_type">
+              <.c_select
                 id="project_item_item_type"
                 name="project_item[item_type]"
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
               >
                 <option
                   :for={{label, value} <- project_item_type_options(@project_item_types)}
@@ -1149,51 +1107,43 @@ defmodule MaraithonWeb.DashboardLive do
                 >
                   <%= label %>
                 </option>
-              </select>
-            </div>
+              </.c_select>
+            </.field>
           </div>
 
           <div class="space-y-4">
-            <div>
-              <label for="project_item_title" class="block text-sm font-medium text-slate-700">
-                Title
-              </label>
-              <input
+            <.field label="Title" for="project_item_title">
+              <.c_input
                 id="project_item_title"
                 type="text"
                 name="project_item[title]"
                 value={@project_item_form[:title].value}
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
               />
-            </div>
-            <p class="text-xs text-slate-500">
+            </.field>
+            <p class="text-xs/5 text-zinc-500">
               Use this for concise labels like “Q2 launch goal” or “Ship project dashboard”.
             </p>
           </div>
 
           <div class="space-y-4">
-            <div>
-              <label for="project_item_content" class="block text-sm font-medium text-slate-700">
-                Content
-              </label>
-              <textarea
+            <.field label="Content" for="project_item_content">
+              <.c_textarea
                 id="project_item_content"
                 name="project_item[content]"
-                rows="4"
-                class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
-              ><%= @project_item_form[:content].value %></textarea>
-            </div>
-            <button
+                rows={4}
+                value={@project_item_form[:content].value}
+              />
+            </.field>
+            <.button
               type="submit"
               phx-disable-with="Saving..."
               disabled={@projects == []}
-              class="inline-flex items-center rounded-md bg-cyan-700 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-600 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               Save project memory
-            </button>
+            </.button>
           </div>
         </.form>
-      </section>
+      </.panel>
 
       <section class="overflow-hidden rounded-xl bg-white shadow">
         <div class="border-b border-slate-200 px-4 py-4 sm:px-6">
@@ -2658,19 +2608,17 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp provider_status_class(:connected),
     do:
-      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp provider_status_class(:partial),
     do:
-      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp provider_status_class(:needs_refresh),
-    do:
-      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp provider_status_class(_status),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp memory_summary_label("content_preferences"), do: "Content Preferences"
   defp memory_summary_label("telegram_behavior"), do: "Conversation Style"
@@ -2717,30 +2665,27 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp project_status_class("active"),
     do:
-      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp project_status_class("paused"),
     do:
-      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp project_status_class(_status),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp project_priority_class("critical"),
-    do:
-      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp project_priority_class("high"),
     do:
-      "rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700 ring-1 ring-orange-200"
+      "inline-flex rounded-md bg-orange-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-orange-700"
 
   defp project_priority_class("normal"),
-    do: "rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 ring-1 ring-sky-200"
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-700"
 
   defp project_priority_class(_priority),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp project_summary(project) do
     project.summary || project.description || "No project summary yet."
@@ -2788,19 +2733,17 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp todo_status_class("open"),
     do:
-      "rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp todo_status_class("snoozed"),
     do:
-      "rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp todo_status_class("done"),
-    do:
-      "rounded-full bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 ring-1 ring-sky-200"
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-700"
 
   defp todo_status_class(_status),
-    do:
-      "rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-700 ring-1 ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp todo_source_label(source), do: insight_source_label(source)
 
@@ -2838,34 +2781,31 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp agent_status_class("running"),
     do:
-      "rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-emerald-200"
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp agent_status_class("degraded"),
     do:
-      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp agent_status_class("stopped"),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp agent_status_class(_status),
-    do: "rounded-full bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 ring-1 ring-sky-200"
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-700"
 
   defp preview_source_class("gmail"),
-    do:
-      "rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-200"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp preview_source_class("calendar"),
     do:
-      "rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200"
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp preview_source_class("slack"),
     do:
-      "rounded-full bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 ring-1 ring-inset ring-violet-200"
+      "inline-flex rounded-md bg-violet-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-violet-700"
 
   defp preview_source_class(_),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp onboarding_behavior_label("founder_followthrough_agent"), do: "Chief of Staff"
   defp onboarding_behavior_label("inbox_calendar_advisor"), do: "Chief of Staff"
@@ -2894,34 +2834,38 @@ defmodule MaraithonWeb.DashboardLive do
   defp attention_mode_label(_), do: "Needs Action"
 
   defp attention_mode_class("monitor"),
-    do: "rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-800"
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-700"
 
   defp attention_mode_class(_),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
+    do:
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp insight_category_class("reply_urgent"),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800"
+    do:
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp insight_category_class("tone_risk"),
-    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp insight_category_class("event_important"),
-    do: "rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700"
+    do:
+      "inline-flex rounded-md bg-indigo-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-indigo-700"
 
   defp insight_category_class("event_prep_needed"),
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+    do:
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp insight_category_class("commitment_unresolved"),
-    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp insight_category_class("meeting_follow_up"),
-    do: "rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700"
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-700"
 
   defp insight_category_class("product_opportunity"),
-    do: "rounded-full bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-800"
+    do: "inline-flex rounded-md bg-cyan-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-cyan-800"
 
   defp insight_category_class(_),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp insight_priority_class(priority) when is_integer(priority) and priority >= 80,
     do: "rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
@@ -3331,17 +3275,17 @@ defmodule MaraithonWeb.DashboardLive do
     ~H"""
     <div class="space-y-2">
       <div class="flex items-center gap-2">
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <p class="text-xs/5 font-medium text-zinc-500">
           <%= @title %>
         </p>
         <span
           :if={@origin}
-          class="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 ring-1 ring-slate-200"
+          class="rounded-md bg-white px-1.5 py-0.5 text-xs/5 font-medium text-zinc-600 ring-1 ring-zinc-950/10"
         >
           <%= @origin %>
         </span>
       </div>
-      <p class="text-sm text-slate-700"><%= @value %></p>
+      <p class="text-sm/6 text-zinc-700"><%= @value %></p>
     </div>
     """
   end
@@ -3352,25 +3296,25 @@ defmodule MaraithonWeb.DashboardLive do
 
   attr :title, :string, required: true
   attr :value, :any, required: true
-  attr :value_class, :string, default: "text-gray-900"
+  attr :value_class, :string, default: "text-zinc-950"
 
   defp stat_card(assigns) do
     ~H"""
-    <div class="overflow-hidden rounded-lg bg-white px-4 py-5 shadow sm:p-6">
-      <dt class="truncate text-sm font-medium text-gray-500"><%= @title %></dt>
-      <dd class={"mt-1 text-3xl font-semibold tracking-tight #{@value_class}"}><%= @value %></dd>
+    <div class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white px-4 py-5 shadow-sm sm:p-6">
+      <dt class="truncate text-sm/6 font-medium text-zinc-500"><%= @title %></dt>
+      <dd class={"mt-1 text-3xl/9 font-semibold tracking-tight #{@value_class}"}><%= @value %></dd>
     </div>
     """
   end
 
   attr :title, :string, required: true
   attr :value, :any, required: true
-  attr :value_class, :string, default: "text-gray-900"
+  attr :value_class, :string, default: "text-zinc-950"
 
   defp queue_metric(assigns) do
     ~H"""
-    <div class="rounded bg-gray-50 p-2">
-      <div class="text-gray-500"><%= @title %></div>
+    <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-2">
+      <div class="text-zinc-500"><%= @title %></div>
       <div class={"text-sm font-semibold #{@value_class}"}><%= @value %></div>
     </div>
     """

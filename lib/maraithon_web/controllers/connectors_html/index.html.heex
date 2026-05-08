@@ -1,33 +1,26 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
   <div class="space-y-5">
-    <.panel body_class="px-6 py-6">
-      <div class="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Admin Control Center
-          </p>
-          <.heading class="mt-1">Connectors</.heading>
-        </div>
+    <.page_header eyebrow="Admin Control Center" title="Connectors">
+      <:actions>
         <.badge color="zinc" class="px-3 py-1 text-sm"><%= @connected_count %> connected</.badge>
-      </div>
-    </.panel>
+      </:actions>
+    </.page_header>
 
     <%= if @connection_errors != [] do %>
-      <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+      <.alert color="amber">
         <%= for error <- @connection_errors do %>
           <p class="text-sm font-medium"><%= error.message %></p>
           <p class="mt-1 text-xs"><%= error.details %></p>
         <% end %>
-      </section>
+      </.alert>
     <% end %>
 
     <%= if not telegram_connected?(@providers) do %>
-      <section class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sky-950">
-        <p class="text-sm font-semibold">Telegram is required before other connectors.</p>
-        <p class="mt-1 text-sm text-sky-800">
+      <.alert color="blue" title="Telegram is required before other connectors.">
+        <p>
           Link Telegram first so Maraithon has a place to message you.
         </p>
-      </section>
+      </.alert>
     <% end %>
 
     <.panel body_class="p-0">

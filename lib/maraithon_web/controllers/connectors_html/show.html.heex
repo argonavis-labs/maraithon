@@ -5,7 +5,7 @@
         <div class="flex min-w-0 items-start gap-3">
           <.oauth_logo provider={@provider.logo} />
           <div class="min-w-0">
-            <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            <p class="text-sm/6 font-medium text-zinc-500">
               Connector Detail
             </p>
             <.heading class="mt-1"><%= @provider.label %></.heading>
@@ -27,12 +27,12 @@
     </.panel>
 
     <%= if @connection_errors != [] do %>
-      <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+      <.alert color="amber">
         <%= for error <- @connection_errors do %>
           <p class="text-sm font-medium"><%= error.message %></p>
           <p class="mt-1 text-xs"><%= error.details %></p>
         <% end %>
-      </section>
+      </.alert>
     <% end %>
 
     <.panel body_class="p-0">
@@ -136,83 +136,90 @@
 
     <%= if provider_grant_panels_visible?(@provider) do %>
       <section class="grid grid-cols-1 gap-5 xl:grid-cols-3">
-        <div class="rounded-lg border border-slate-200 bg-white p-5 xl:col-span-2">
-          <h2 class="text-base font-semibold text-slate-950">Connection Details</h2>
-          <div class="mt-3 space-y-2 text-sm text-slate-600">
+        <.panel class="xl:col-span-2">
+          <:header>
+            <.heading level={2} class="text-base/7">Connection Details</.heading>
+          </:header>
+          <div class="space-y-2 text-sm/6 text-zinc-600">
             <p :for={detail <- @provider.details}><%= detail %></p>
           </div>
-        </div>
+        </.panel>
 
-        <div class="rounded-lg border border-slate-200 bg-white p-5">
-          <h2 class="text-base font-semibold text-slate-950">Stored Grant</h2>
-          <p class="mt-3 text-sm text-slate-700">
+        <.panel>
+          <:header>
+            <.heading level={2} class="text-base/7">Stored Grant</.heading>
+          </:header>
+          <p class="text-sm/6 text-zinc-600">
             Refresh token:
-            <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
+            <.badge color={refresh_token_status_color(@provider[:refresh_token_status])}>
               <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
-            </span>
+            </.badge>
           </p>
           <%= if @token do %>
-            <p class="mt-2 text-sm text-slate-700"><%= connection_token_summary(@token) %></p>
-            <p class="mt-2 text-xs text-slate-500">
+            <p class="mt-2 text-sm/6 text-zinc-600"><%= connection_token_summary(@token) %></p>
+            <p class="mt-2 text-xs/5 text-zinc-500">
               Updated <%= format_datetime(@token.updated_at) %>
             </p>
           <% else %>
-            <p class="mt-2 text-sm text-slate-500">No token stored for this connector yet.</p>
+            <p class="mt-2 text-sm/6 text-zinc-500">No token stored for this connector yet.</p>
           <% end %>
 
           <%= if @provider[:disconnectable?] do %>
             <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post" class="mt-4">
               <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
               <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
-              <button
+              <.button
                 type="submit"
                 onclick={"return confirm(\"Disconnect #{@provider.label}?\")"}
-                class="inline-flex w-full items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+                variant="outline"
+                class="w-full text-rose-700"
               >
                 <%= @provider.disconnect_label %>
-              </button>
+              </.button>
             </form>
           <% end %>
-        </div>
+        </.panel>
       </section>
     <% end %>
 
     <%= if @provider.services != [] do %>
-      <section class="overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div class="border-b border-slate-200 px-4 py-3 sm:px-5">
-          <h2 class="text-base font-semibold text-slate-950">Service Access</h2>
-        </div>
-        <div class="divide-y divide-slate-200">
+      <.panel body_class="p-0">
+        <:header>
+          <.heading level={2} class="text-base/7">Service Access</.heading>
+        </:header>
+        <div class="divide-y divide-zinc-950/5">
           <%= for service <- @provider.services do %>
             <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
               <div>
-                <p class="text-sm font-medium text-slate-950"><%= service.label %></p>
-                <p class="mt-1 text-xs text-slate-500"><%= service.description %></p>
+                <p class="text-sm/6 font-medium text-zinc-950"><%= service.label %></p>
+                <p class="mt-1 text-xs/5 text-zinc-500"><%= service.description %></p>
               </div>
-              <span class={connection_status_badge_class(service.status)}>
+              <.badge color={connection_status_color(service.status)}>
                 <%= connection_status_label(service.status) %>
-              </span>
+              </.badge>
             </div>
           <% end %>
         </div>
-      </section>
+      </.panel>
     <% end %>
 
-    <section class="rounded-lg border border-slate-200 bg-white p-5">
-      <h2 class="text-base font-semibold text-slate-950">OAuth Setup</h2>
+    <.panel>
+      <:header>
+        <.heading level={2} class="text-base/7">OAuth Setup</.heading>
+      </:header>
       <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-lg border border-slate-200 p-4">
-          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Callback URLs</p>
+        <div class="rounded-lg border border-zinc-950/10 p-4">
+          <p class="text-sm/6 font-medium text-zinc-950">Callback URLs</p>
           <div class="mt-3 space-y-3">
             <%= for callback <- @provider.callback_urls do %>
               <div>
                 <div class="flex items-center gap-2">
-                  <p class="text-sm font-medium text-slate-950"><%= callback.label %></p>
-                  <span class={callback_badge_class(callback.required?)}>
+                  <p class="text-sm/6 font-medium text-zinc-950"><%= callback.label %></p>
+                  <.badge color={if callback.required?, do: "amber", else: "zinc"}>
                     <%= if callback.required?, do: "required", else: "optional" %>
-                  </span>
+                  </.badge>
                 </div>
-                <p class="mt-2 overflow-x-auto rounded-md bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100">
+                <p class="mt-2 overflow-x-auto rounded-lg bg-zinc-950 px-3 py-2 font-mono text-xs/5 text-white">
                   <%= callback.url %>
                 </p>
               </div>
@@ -220,20 +227,20 @@
           </div>
         </div>
 
-        <div class="rounded-lg border border-slate-200 p-4">
-          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Environment</p>
+        <div class="rounded-lg border border-zinc-950/10 p-4">
+          <p class="text-sm/6 font-medium text-zinc-950">Environment</p>
           <div class="mt-3 space-y-3">
             <%= for env <- @provider.env_requirements do %>
-              <div class="rounded-md border border-slate-200 px-3 py-3">
+              <div class="rounded-lg border border-zinc-950/10 px-3 py-3">
                 <div class="flex items-center justify-between gap-2">
-                  <p class="font-mono text-xs text-slate-950"><%= env.name %></p>
-                  <span class={env_status_badge_class(env.present?, env.required?)}>
+                  <p class="font-mono text-xs/5 text-zinc-950"><%= env.name %></p>
+                  <.badge color={if env.present?, do: "green", else: if(env.required?, do: "red", else: "zinc")}>
                     <%= env_status_label(env.present?, env.required?) %>
-                  </span>
+                  </.badge>
                 </div>
-                <p class="mt-2 text-xs text-slate-600"><%= env.description %></p>
+                <p class="mt-2 text-xs/5 text-zinc-600"><%= env.description %></p>
                 <%= if env.recommended_value do %>
-                  <p class="mt-2 overflow-x-auto rounded-md bg-slate-100 px-3 py-2 font-mono text-[11px] text-slate-700">
+                  <p class="mt-2 overflow-x-auto rounded-lg bg-zinc-100 px-3 py-2 font-mono text-xs/5 text-zinc-700">
                     <%= env.recommended_value %>
                   </p>
                 <% end %>
@@ -244,24 +251,24 @@
       </div>
 
       <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <div class="rounded-lg border border-slate-200 p-4">
-          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Permissions</p>
+        <div class="rounded-lg border border-zinc-950/10 p-4">
+          <p class="text-sm/6 font-medium text-zinc-950">Permissions</p>
           <div class="mt-3 flex flex-wrap gap-2">
             <%= for permission <- @provider.permissions do %>
-              <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700">
+              <.badge color="indigo">
                 <%= permission %>
-              </span>
+              </.badge>
             <% end %>
           </div>
         </div>
 
-        <div class="rounded-lg border border-slate-200 p-4">
-          <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Setup Notes</p>
-          <div class="mt-3 space-y-2 text-sm text-slate-600">
+        <div class="rounded-lg border border-zinc-950/10 p-4">
+          <p class="text-sm/6 font-medium text-zinc-950">Setup Notes</p>
+          <div class="mt-3 space-y-2 text-sm/6 text-zinc-600">
             <p :for={note <- @provider.setup_notes}><%= note %></p>
           </div>
         </div>
       </div>
-    </section>
+    </.panel>
   </div>
 </Layouts.app>

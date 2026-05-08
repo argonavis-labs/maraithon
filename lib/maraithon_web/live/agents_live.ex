@@ -339,30 +339,20 @@ defmodule MaraithonWeb.AgentsLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
-        <.panel body_class="px-6 py-6">
-          <div class="flex flex-wrap items-start justify-between gap-4">
-            <div class="max-w-3xl">
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
-                Agents Workspace
-              </p>
-              <.heading class="mt-2 text-3xl sm:text-4xl">
-                Your agents
-              </.heading>
-              <.text class="mt-3 max-w-2xl sm:text-base">
-                Choose an assistant, review what it does, and adjust the settings that affect your day.
-              </.text>
-            </div>
-
-            <div class="flex flex-wrap items-center gap-3">
-              <.badge color="zinc" class="px-3 py-1 text-sm">
-                <%= length(@all_agents) %> total
-              </.badge>
-              <.button href={~p"/agents/new"} class="min-h-11 px-5">
-                New Agent
-              </.button>
-            </div>
-          </div>
-        </.panel>
+        <.page_header
+          eyebrow="Agents Workspace"
+          title="Your agents"
+          subtitle="Choose an assistant, review what it does, and adjust the settings that affect your day."
+        >
+          <:actions>
+            <.badge color="zinc" class="px-3 py-1 text-sm">
+              <%= length(@all_agents) %> total
+            </.badge>
+            <.button href={~p"/agents/new"} class="min-h-11 px-5">
+              New Agent
+            </.button>
+          </:actions>
+        </.page_header>
 
         <.panel body_class="p-0">
           <:header>
@@ -375,19 +365,18 @@ defmodule MaraithonWeb.AgentsLive do
               </div>
               <form id="agent-filters" phx-change="update_filters" class="flex flex-wrap items-center gap-3">
                 <label class="sr-only" for="agent-search">Search agents</label>
-                <input
+                <.c_input
                   id="agent-search"
                   type="search"
                   name="filters[q]"
                   value={@filters.q}
                   placeholder="Search agents"
-                  class="min-h-11 w-72 rounded-lg border border-zinc-950/10 bg-white px-3 text-sm/6 text-zinc-950 shadow-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  class="w-72"
                 />
                 <label class="sr-only" for="agent-status">Filter by status</label>
-                <select
+                <.c_select
                   id="agent-status"
                   name="filters[status]"
-                  class="min-h-11 rounded-lg border border-zinc-950/10 bg-white px-3 text-sm/6 text-zinc-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
                   <option
                     :for={status <- @status_options}
@@ -396,15 +385,16 @@ defmodule MaraithonWeb.AgentsLive do
                   >
                     <%= humanize_status(status) %>
                   </option>
-                </select>
-                <button
+                </.c_select>
+                <.button
                   :if={@filters.status != "all" or @filters.q != ""}
                   type="button"
                   phx-click="clear_filters"
-                  class="group relative isolate inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-950/10 bg-white px-4 text-sm/6 font-semibold text-zinc-950 shadow-sm hover:bg-zinc-950/[0.025] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  variant="outline"
+                  class="min-h-11"
                 >
                   Reset
-                </button>
+                </.button>
               </form>
             </div>
           </:header>
@@ -480,7 +470,7 @@ defmodule MaraithonWeb.AgentsLive do
                 <%= if @all_agents == [] do %>
                   <.table_row>
                     <.table_cell colspan="4" class="py-12">
-                      <div class="rounded-xl border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
+                      <div class="rounded-lg border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
                         <p class="text-base font-semibold text-zinc-950">No agents exist yet.</p>
                         <p class="mt-2 text-sm text-zinc-600">
                           Start with the builder, then come back here to inspect, edit, or control the runtime.
@@ -496,7 +486,7 @@ defmodule MaraithonWeb.AgentsLive do
                 <%= if @all_agents != [] and @agents == [] do %>
                   <.table_row>
                     <.table_cell colspan="4" class="py-12">
-                      <div class="rounded-xl border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
+                      <div class="rounded-lg border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
                         <p class="text-base font-semibold text-zinc-950">No agents match the current filters.</p>
                         <p class="mt-2 text-sm text-zinc-600">
                           Clear the current search or status filter to see the full registry again.
@@ -517,12 +507,12 @@ defmodule MaraithonWeb.AgentsLive do
             </.table>
         </.panel>
 
-        <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div class="border-b border-slate-200 px-5 py-5">
+        <.panel body_class="p-0">
+          <:header>
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 class="text-lg font-semibold text-slate-950">Agent details</h2>
-                <p class="mt-1 text-sm text-slate-500">Review this agent and adjust its day-to-day behavior.</p>
+                <.heading level={2} class="text-lg/7">Agent details</.heading>
+                <.text class="mt-1">Review this agent and adjust its day-to-day behavior.</.text>
               </div>
 
               <%= if @selected_agent do %>
@@ -542,7 +532,7 @@ defmodule MaraithonWeb.AgentsLive do
                 </div>
               <% end %>
             </div>
-          </div>
+          </:header>
 
           <%= if @inspection_errors != [] do %>
             <div class="border-b border-amber-200 bg-amber-50 px-5 py-4">
@@ -560,80 +550,87 @@ defmodule MaraithonWeb.AgentsLive do
               <div class="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div class="flex flex-wrap items-center gap-3">
-                    <h3 class="text-2xl font-semibold text-slate-900"><%= agent_name(@selected_agent.config) %></h3>
+                    <h3 class="text-2xl/8 font-semibold tracking-tight text-zinc-950">
+                      <%= agent_name(@selected_agent.config) %>
+                    </h3>
                     <.status_badge status={@selected_agent.status} />
                   </div>
-                  <p class="mt-1 text-sm text-slate-500"><%= agent_kind_label(@selected_agent) %></p>
+                  <p class="mt-1 text-sm/6 text-zinc-500"><%= agent_kind_label(@selected_agent) %></p>
                 </div>
 
                 <div class="flex flex-wrap gap-2">
                   <%= if @selected_panel == :inspect do %>
-                    <.link
+                    <.button
                       patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
-                      class="inline-flex min-h-10 items-center rounded-full border border-slate-300 px-4 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      variant="outline"
+                      class="text-xs"
                     >
                       Edit Settings
-                    </.link>
+                    </.button>
                   <% else %>
-                    <.link
+                    <.button
                       patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
-                      class="inline-flex min-h-10 items-center rounded-full border border-slate-300 px-4 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      variant="outline"
+                      class="text-xs"
                     >
                       Back to Overview
-                    </.link>
+                    </.button>
                   <% end %>
 
                   <%= if @selected_agent.status in ["running", "degraded"] do %>
-                    <button
+                    <.button
                       type="button"
                       phx-click="stop_agent"
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Stopping..."
-                      class="inline-flex min-h-10 items-center rounded-full border border-amber-200 bg-amber-50 px-4 text-xs font-medium text-amber-800 hover:bg-amber-100"
+                      variant="outline"
+                      class="text-xs text-amber-800"
                     >
                       Stop Agent
-                    </button>
+                    </.button>
                   <% else %>
-                    <button
+                    <.button
                       type="button"
                       phx-click="start_agent"
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Starting..."
-                      class="inline-flex min-h-10 items-center rounded-full border border-emerald-200 bg-emerald-50 px-4 text-xs font-medium text-emerald-800 hover:bg-emerald-100"
+                      variant="outline"
+                      class="text-xs text-emerald-800"
                     >
                       Start Agent
-                    </button>
+                    </.button>
                   <% end %>
 
-                  <button
+                  <.button
                     type="button"
                     phx-click="delete_agent"
                     phx-value-id={@selected_agent.id}
                     phx-value-surface="workspace"
                     phx-disable-with="Deleting..."
                     data-confirm="Delete this agent and all dependent records?"
-                    class="inline-flex min-h-10 items-center rounded-full border border-rose-200 bg-rose-50 px-4 text-xs font-medium text-rose-700 hover:bg-rose-100"
+                    variant="outline"
+                    class="text-xs text-rose-700"
                   >
                     Delete Agent
-                  </button>
+                  </.button>
                 </div>
               </div>
 
               <%= if @selected_panel == :edit do %>
-                <div class="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <.panel class="bg-zinc-50">
                   <div class="mb-4">
-                    <h3 class="text-lg font-semibold text-slate-900">Edit Agent</h3>
-                    <p class="mt-1 text-sm text-slate-600">
+                    <.heading level={3} class="text-base/7">Edit Agent</.heading>
+                    <.text class="mt-1">
                       Save a new definition for this agent. Running agents restart with the updated config.
-                    </p>
+                    </.text>
                   </div>
 
                   <%= if @launch_error do %>
-                    <div class="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+                    <.alert color="rose" class="mb-4">
                       <%= @launch_error %>
-                    </div>
+                    </.alert>
                   <% end %>
 
                   <form id="agent-edit-form" phx-submit="save_agent" class="space-y-4">
@@ -644,148 +641,114 @@ defmodule MaraithonWeb.AgentsLive do
                     />
 
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div>
-                        <label for="launch_behavior" class="block text-sm font-medium text-slate-700">
-                          Behavior
-                        </label>
-                        <select
+                      <.field label="Behavior" for="launch_behavior">
+                        <.c_select
                           id="launch_behavior"
                           name="launch[behavior]"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         >
                           <%= for behavior <- behaviors() do %>
                             <option value={behavior} selected={behavior == @launch["behavior"]}>
                               <%= behavior %>
                             </option>
                           <% end %>
-                        </select>
-                      </div>
+                        </.c_select>
+                      </.field>
 
-                      <div>
-                        <label for="launch_name" class="block text-sm font-medium text-slate-700">
-                          Name
-                        </label>
-                        <input
+                      <.field label="Name" for="launch_name">
+                        <.c_input
                           id="launch_name"
                           type="text"
                           name="launch[name]"
                           value={@launch["name"]}
                           placeholder="optional display name"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
                     </div>
 
-                    <div>
-                      <label for="launch_prompt" class="block text-sm font-medium text-slate-700">
-                        Prompt
-                      </label>
-                      <textarea
+                    <.field label="Prompt" for="launch_prompt">
+                      <.c_textarea
                         id="launch_prompt"
                         name="launch[prompt]"
-                        rows="4"
-                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
-                      ><%= @launch["prompt"] %></textarea>
-                    </div>
+                        rows={4}
+                        value={@launch["prompt"]}
+                      />
+                    </.field>
 
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                      <div>
-                        <label for="launch_subscriptions" class="block text-sm font-medium text-slate-700">
-                          Subscriptions
-                        </label>
-                        <input
+                      <.field label="Subscriptions" for="launch_subscriptions">
+                        <.c_input
                           id="launch_subscriptions"
                           type="text"
                           name="launch[subscriptions]"
                           value={@launch["subscriptions"]}
                           placeholder="github:owner/repo,email:kent"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
 
-                      <div>
-                        <label for="launch_tools" class="block text-sm font-medium text-slate-700">
-                          Tools
-                        </label>
-                        <input
+                      <.field label="Tools" for="launch_tools">
+                        <.c_input
                           id="launch_tools"
                           type="text"
                           name="launch[tools]"
                           value={@launch["tools"]}
                           placeholder="read_file,search_files,http_get"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
                     </div>
 
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                      <div>
-                        <label for="launch_memory_limit" class="block text-sm font-medium text-slate-700">
-                          Memory Limit
-                        </label>
-                        <input
+                      <.field label="Memory Limit" for="launch_memory_limit">
+                        <.c_input
                           id="launch_memory_limit"
                           type="number"
                           min="1"
                           name="launch[memory_limit]"
                           value={@launch["memory_limit"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
 
-                      <div>
-                        <label for="launch_budget_llm_calls" class="block text-sm font-medium text-slate-700">
-                          LLM Call Budget
-                        </label>
-                        <input
+                      <.field label="LLM Call Budget" for="launch_budget_llm_calls">
+                        <.c_input
                           id="launch_budget_llm_calls"
                           type="number"
                           min="1"
                           name="launch[budget_llm_calls]"
                           value={@launch["budget_llm_calls"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
 
-                      <div>
-                        <label for="launch_budget_tool_calls" class="block text-sm font-medium text-slate-700">
-                          Tool Call Budget
-                        </label>
-                        <input
+                      <.field label="Tool Call Budget" for="launch_budget_tool_calls">
+                        <.c_input
                           id="launch_budget_tool_calls"
                           type="number"
                           min="1"
                           name="launch[budget_tool_calls]"
                           value={@launch["budget_tool_calls"]}
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm"
                         />
-                      </div>
+                      </.field>
                     </div>
 
-                    <div>
-                      <label for="launch_config_json" class="block text-sm font-medium text-slate-700">
-                        Additional Config JSON
-                      </label>
-                      <textarea
+                    <.field label="Additional Config JSON" for="launch_config_json">
+                      <.c_textarea
                         id="launch_config_json"
                         name="launch[config_json]"
-                        rows="5"
-                        class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 font-mono text-sm text-slate-900 shadow-sm"
+                        rows={5}
+                        class="font-mono"
                         placeholder={"{\"custom_key\":\"value\"}"}
-                      ><%= @launch["config_json"] %></textarea>
-                    </div>
+                        value={@launch["config_json"]}
+                      />
+                    </.field>
 
                     <div class="flex justify-end">
-                      <button
+                      <.button
                         type="submit"
                         phx-disable-with="Saving..."
-                        class="inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
                       >
                         Save Changes
-                      </button>
+                      </.button>
                     </div>
                   </form>
-                </div>
+                </.panel>
               <% else %>
                 <div class={inspect_layout_class(@selected_agent)}>
                   <div class="space-y-6">
@@ -793,51 +756,51 @@ defmodule MaraithonWeb.AgentsLive do
                       <% schedule = morning_brief_schedule(@selected_agent) %>
                       <% skills = chief_skill_rows(@selected_agent) %>
 
-                      <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                      <.panel body_class="p-0">
                         <div class="px-5 py-5">
                           <div class="flex flex-wrap items-start justify-between gap-4">
                             <div>
-                              <h3 class="text-xl font-semibold tracking-tight text-slate-950">Overview</h3>
-                              <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                              <.heading level={3} class="text-base/7">Overview</.heading>
+                              <.text class="mt-2 max-w-2xl">
                                 A daily operating assistant for commitments, schedule changes, travel, projects, and personal reminders.
-                              </p>
+                              </.text>
                             </div>
-                            <div class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                            <.badge color="emerald">
                               Active skills: <%= length(skills) %>
-                            </div>
+                            </.badge>
                           </div>
                         </div>
-                        <div class="grid grid-cols-1 border-t border-slate-200 text-sm sm:grid-cols-3">
-                          <div class="border-b border-slate-200 px-5 py-4 sm:border-b-0 sm:border-r">
-                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                        <div class="grid grid-cols-1 border-t border-zinc-950/10 text-sm sm:grid-cols-3">
+                          <div class="border-b border-zinc-950/10 px-5 py-4 sm:border-b-0 sm:border-r">
+                            <div class="text-xs/5 font-medium text-zinc-500">
                               Morning briefing
                             </div>
-                            <div class="mt-2 text-2xl font-semibold text-slate-950">
+                            <div class="mt-2 text-2xl/8 font-semibold text-zinc-950">
                               <%= schedule.display_time_local %>
                             </div>
-                            <div class="mt-1 text-xs text-slate-500"><%= schedule.local_timezone %></div>
+                            <div class="mt-1 text-xs/5 text-zinc-500"><%= schedule.local_timezone %></div>
                           </div>
-                          <div class="border-b border-slate-200 px-5 py-4 sm:border-b-0 sm:border-r">
-                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                          <div class="border-b border-zinc-950/10 px-5 py-4 sm:border-b-0 sm:border-r">
+                            <div class="text-xs/5 font-medium text-zinc-500">
                               Delivered by
                             </div>
-                            <div class="mt-2 text-2xl font-semibold text-slate-950">Telegram</div>
-                            <div class="mt-1 text-xs text-slate-500">sent from the Maraithon server</div>
+                            <div class="mt-2 text-2xl/8 font-semibold text-zinc-950">Telegram</div>
+                            <div class="mt-1 text-xs/5 text-zinc-500">sent from the Maraithon server</div>
                           </div>
                           <div class="px-5 py-4">
-                            <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+                            <div class="text-xs/5 font-medium text-zinc-500">
                               Sources
                             </div>
                             <div class="mt-2 flex flex-wrap gap-2">
                               <%= for source <- chief_source_labels() do %>
-                                <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                <.badge>
                                   <%= source %>
-                                </span>
+                                </.badge>
                               <% end %>
                             </div>
                           </div>
                         </div>
-                      </section>
+                      </.panel>
 
                       <.panel body_class="p-0">
                         <:header>
@@ -899,42 +862,36 @@ defmodule MaraithonWeb.AgentsLive do
                           </.table>
                       </.panel>
 
-                      <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                        <div class="border-b border-slate-200 px-5 py-5">
-                          <h3 class="text-xl font-semibold tracking-tight text-slate-950">Attached Skills</h3>
-                          <p class="mt-1 text-sm text-slate-500">Each skill owns one clear job. Adjust the settings where the work happens.</p>
-                        </div>
-                        <div class="divide-y divide-slate-200">
+                      <.panel body_class="p-0">
+                        <:header>
+                          <.heading level={3} class="text-base/7">Attached Skills</.heading>
+                          <.text class="mt-1">Each skill owns one clear job. Adjust the settings where the work happens.</.text>
+                        </:header>
+                        <div class="divide-y divide-zinc-950/5">
                           <%= for skill <- skills do %>
                             <div id={"chief-skill-#{skill.id}"} class="px-5 py-5">
                               <div class="flex flex-wrap items-start justify-between gap-4">
                                 <div class="min-w-0">
                                   <div class="flex flex-wrap items-center gap-2">
-                                    <h4 class="text-base font-semibold text-slate-950"><%= skill.label %></h4>
-                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
+                                    <h4 class="text-sm/6 font-medium text-zinc-950"><%= skill.label %></h4>
+                                    <.badge>
                                       On
-                                    </span>
+                                    </.badge>
                                   </div>
-                                  <p class="mt-2 max-w-2xl text-sm leading-6 text-slate-600"><%= skill.description %></p>
+                                  <.text class="mt-2 max-w-2xl"><%= skill.description %></.text>
                                 </div>
 
                                 <%= if skill.id == "morning_briefing" do %>
                                   <form
                                     id="morning-brief-time-form"
                                     phx-submit="update_morning_brief_time"
-                                    class="flex w-full flex-wrap items-end gap-3 rounded-2xl bg-slate-50 px-4 py-4 sm:w-auto"
+                                    class="flex w-full flex-wrap items-end gap-3 rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-4 sm:w-auto"
                                   >
-                                    <div>
-                                      <label
-                                        for="morning-brief-hour"
-                                        class="block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500"
-                                      >
-                                        Send each morning at
-                                      </label>
-                                      <select
+                                    <.field label="Send each morning at" for="morning-brief-hour" class="min-w-44">
+                                      <.c_select
                                         id="morning-brief-hour"
                                         name="schedule[local_hour]"
-                                        class="mt-1 min-h-11 min-w-44 rounded-xl border border-slate-300 bg-white px-3 text-sm font-medium text-slate-950 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                                        class="min-w-44"
                                       >
                                         <option
                                           :for={option <- morning_brief_hour_options()}
@@ -943,16 +900,16 @@ defmodule MaraithonWeb.AgentsLive do
                                         >
                                           <%= option.label %>
                                         </option>
-                                      </select>
-                                    </div>
-                                    <button
+                                      </.c_select>
+                                    </.field>
+                                    <.button
                                       type="submit"
                                       phx-disable-with="Saving..."
-                                      class="inline-flex min-h-11 items-center rounded-xl bg-slate-950 px-5 text-sm font-semibold text-white hover:bg-slate-800"
+                                      class="min-h-11 px-5"
                                     >
                                       Update time
-                                    </button>
-                                    <div class="w-full text-xs text-slate-500">
+                                    </.button>
+                                    <div class="w-full text-xs/5 text-zinc-500">
                                       Uses <%= schedule.local_timezone %>. Sent by Telegram with Gmail, Calendar, Slack, and news context.
                                     </div>
                                   </form>
@@ -961,7 +918,7 @@ defmodule MaraithonWeb.AgentsLive do
                             </div>
                           <% end %>
                         </div>
-                      </section>
+                      </.panel>
                     <% end %>
 
                     <%= unless chief_of_staff_agent?(@selected_agent) do %>
@@ -979,10 +936,8 @@ defmodule MaraithonWeb.AgentsLive do
                     <% end %>
 
                     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                      <div class="rounded-2xl bg-amber-50 p-4">
-                        <div class="text-xs font-semibold uppercase tracking-[0.18em] text-amber-700">
-                          Spend Summary
-                        </div>
+                      <.panel class="bg-amber-50">
+                        <.heading level={3} class="text-base/7 text-amber-950">Spend Summary</.heading>
                         <dl class="mt-3 space-y-2 text-sm">
                           <div class="flex items-center justify-between gap-3">
                             <dt class="text-amber-700/80">LLM Calls</dt>
@@ -1003,29 +958,27 @@ defmodule MaraithonWeb.AgentsLive do
                             </dd>
                           </div>
                         </dl>
-                      </div>
+                      </.panel>
 
-                      <div class="rounded-2xl bg-slate-50 p-4">
-                        <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-                          Config Snapshot
-                        </div>
-                        <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-[11px] text-slate-700"><%= pretty_config(@selected_agent.config) %></pre>
-                      </div>
+                      <.panel class="bg-zinc-50">
+                        <.heading level={3} class="text-base/7">Config Snapshot</.heading>
+                        <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs/5 text-zinc-600"><%= pretty_config(@selected_agent.config) %></pre>
+                      </.panel>
                     </div>
 
-                    <div class="rounded-2xl bg-slate-50 p-4">
-                      <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Prompt</div>
-                      <p class="mt-3 whitespace-pre-wrap text-sm text-slate-800"><%= agent_prompt(@selected_agent.config) %></p>
-                    </div>
+                    <.panel class="bg-zinc-50">
+                      <.heading level={3} class="text-base/7">Prompt</.heading>
+                      <p class="mt-3 whitespace-pre-wrap text-sm/6 text-zinc-700"><%= agent_prompt(@selected_agent.config) %></p>
+                    </.panel>
 
-                    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                      <div class="border-b border-slate-200 px-4 py-4">
-                        <h3 class="text-lg font-semibold text-slate-900">Effect Queue</h3>
-                        <p class="mt-1 text-sm text-slate-500">
+                    <.panel>
+                      <:header>
+                        <.heading level={3} class="text-base/7">Effect Queue</.heading>
+                        <.text class="mt-1">
                           Inspect pending and historical effects for this agent.
-                        </p>
-                      </div>
-                      <div class="space-y-3 px-4 py-5">
+                        </.text>
+                      </:header>
+                      <div class="space-y-3">
                         <div class="grid grid-cols-3 gap-2 text-xs">
                           <.queue_metric title="Pending" value={@inspection.effect_counts.pending} />
                           <.queue_metric title="Claimed" value={@inspection.effect_counts.claimed} />
@@ -1038,37 +991,37 @@ defmodule MaraithonWeb.AgentsLive do
 
                         <div class="max-h-80 space-y-2 overflow-y-auto">
                           <%= for effect <- @inspection.recent_effects do %>
-                            <div class="rounded-xl border border-slate-200 p-3">
+                            <div class="rounded-lg border border-zinc-950/10 p-3">
                               <div class="flex items-center justify-between gap-3">
-                                <div class="text-sm font-medium text-slate-900"><%= effect.effect_type %></div>
+                                <div class="text-sm/6 font-medium text-zinc-950"><%= effect.effect_type %></div>
                                 <span class={effect_status_class(effect.status)}><%= effect.status %></span>
                               </div>
-                              <div class="mt-1 text-xs text-slate-500">
+                              <div class="mt-1 text-xs/5 text-zinc-500">
                                 attempts <%= effect.attempts %>
                                 <span class="mx-1">•</span>
                                 updated <%= format_time(effect.updated_at) %>
                               </div>
-                              <div class="mt-2 rounded bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-600">
+                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
                                 <%= effect_preview(effect) %>
                               </div>
                             </div>
                           <% end %>
 
                           <%= if @inspection.recent_effects == [] do %>
-                            <p class="text-sm text-slate-500">No effects recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No effects recorded yet.</p>
                           <% end %>
                         </div>
                       </div>
-                    </section>
+                    </.panel>
 
-                    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                      <div class="border-b border-slate-200 px-4 py-4">
-                        <h3 class="text-lg font-semibold text-slate-900">Scheduled Jobs</h3>
-                        <p class="mt-1 text-sm text-slate-500">
+                    <.panel>
+                      <:header>
+                        <.heading level={3} class="text-base/7">Scheduled Jobs</.heading>
+                        <.text class="mt-1">
                           Wakeups, heartbeats, and checkpoints queued for this agent.
-                        </p>
-                      </div>
-                      <div class="space-y-3 px-4 py-5">
+                        </.text>
+                      </:header>
+                      <div class="space-y-3">
                         <div class="grid grid-cols-2 gap-2 text-xs">
                           <.queue_metric title="Pending" value={@inspection.job_counts.pending} />
                           <.queue_metric
@@ -1082,81 +1035,81 @@ defmodule MaraithonWeb.AgentsLive do
 
                         <div class="max-h-80 space-y-2 overflow-y-auto">
                           <%= for job <- @inspection.recent_jobs do %>
-                            <div class="rounded-xl border border-slate-200 p-3">
+                            <div class="rounded-lg border border-zinc-950/10 p-3">
                               <div class="flex items-center justify-between gap-3">
-                                <div class="text-sm font-medium text-slate-900"><%= job.job_type %></div>
+                                <div class="text-sm/6 font-medium text-zinc-950"><%= job.job_type %></div>
                                 <span class={job_status_class(job.status)}><%= job.status %></span>
                               </div>
-                              <div class="mt-1 text-xs text-slate-500">
+                              <div class="mt-1 text-xs/5 text-zinc-500">
                                 fire at <%= format_datetime(job.fire_at) %>
                                 <span class="mx-1">•</span>
                                 attempts <%= job.attempts %>
                               </div>
-                              <div class="mt-2 rounded bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-600">
+                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
                                 <%= payload_preview(job.payload) %>
                               </div>
                             </div>
                           <% end %>
 
                           <%= if @inspection.recent_jobs == [] do %>
-                            <p class="text-sm text-slate-500">No scheduled jobs recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No scheduled jobs recorded yet.</p>
                           <% end %>
                         </div>
                       </div>
-                    </section>
+                    </.panel>
                     <% end %>
                   </div>
 
                   <div :if={!chief_of_staff_agent?(@selected_agent)} class="space-y-6">
-                    <section class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                      <div class="border-b border-slate-200 px-4 py-4">
-                        <h3 class="text-lg font-semibold text-slate-900">Recent Events</h3>
-                      </div>
+                    <.panel body_class="px-4 py-4">
+                      <:header>
+                        <.heading level={3} class="text-base/7">Recent Events</.heading>
+                      </:header>
                       <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4">
                         <%= for event <- Enum.reverse(@events) do %>
-                          <div class="rounded-xl border border-slate-200 p-3 text-sm">
+                          <div class="rounded-lg border border-zinc-950/10 p-3 text-sm">
                             <div class="flex items-center justify-between gap-3">
                               <span class="font-medium text-cyan-700"><%= event.event_type %></span>
-                              <span class="text-xs text-slate-400">#<%= event.sequence_num %></span>
+                              <span class="text-xs/5 text-zinc-400">#<%= event.sequence_num %></span>
                             </div>
-                            <div class="mt-1 text-xs text-slate-500"><%= format_datetime(event.created_at) %></div>
-                            <div class="mt-2 rounded bg-slate-50 px-2 py-1 font-mono text-[11px] text-slate-600">
+                            <div class="mt-1 text-xs/5 text-zinc-500"><%= format_datetime(event.created_at) %></div>
+                            <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
                               <%= payload_preview(event.payload) %>
                             </div>
                           </div>
                         <% end %>
 
                         <%= if @events == [] do %>
-                          <p class="text-sm text-slate-500">No events yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No events yet.</p>
                         <% end %>
                       </div>
-                    </section>
+                    </.panel>
 
-                    <section class="overflow-hidden rounded-2xl bg-slate-950 shadow">
-                      <div class="border-b border-slate-800 px-4 py-4">
-                        <h3 class="text-lg font-semibold text-slate-100">Agent Logs</h3>
-                        <p class="mt-1 text-sm text-slate-400">
+                    <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
+                      <div class="border-b border-white/10 px-4 py-4">
+                        <h3 class="text-base/7 font-semibold text-white">Agent Logs</h3>
+                        <p class="mt-1 text-sm/6 text-zinc-400">
                           Raw log lines scoped to this agent's runtime metadata.
                         </p>
                       </div>
                       <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5">
                         <%= for log <- @inspection.recent_logs do %>
-                          <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-slate-900 py-2">
-                            <span class="text-slate-500"><%= format_log_timestamp(log.timestamp) %></span>
-                            <span class={["font-semibold uppercase tracking-wide", log_level_class(log.level)]}>
+                          <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-white/10 py-2">
+                            <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
+                            <span class={["font-semibold", log_level_class(log.level)]}>
                               <%= log.level %>
                             </span>
                             <div class="min-w-0">
                               <%= if metadata = log_metadata_preview(log.metadata) do %>
-                                <span class="mr-2 text-slate-500"><%= metadata %></span>
+                                <span class="mr-2 text-zinc-500"><%= metadata %></span>
                               <% end %>
-                              <span class="break-words whitespace-pre-wrap text-slate-100"><%= log.message %></span>
+                              <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
                             </div>
                           </div>
                         <% end %>
 
                         <%= if @inspection.recent_logs == [] do %>
-                          <p class="text-sm text-slate-500">No agent-scoped logs captured yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No agent-scoped logs captured yet.</p>
                         <% end %>
                       </div>
                     </section>
@@ -1164,15 +1117,15 @@ defmodule MaraithonWeb.AgentsLive do
 
                   <details
                     :if={chief_of_staff_agent?(@selected_agent)}
-                    class="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm"
+                    class="rounded-lg border border-zinc-950/10 bg-white px-5 py-4 shadow-sm"
                   >
                     <summary class="cursor-pointer list-none">
                       <div class="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <h3 class="text-base font-semibold text-slate-950">Advanced diagnostics</h3>
-                          <p class="mt-1 text-sm text-slate-500">Runtime details for debugging, billing, and support.</p>
+                          <h3 class="text-base/7 font-semibold text-zinc-950">Advanced diagnostics</h3>
+                          <p class="mt-1 text-sm/6 text-zinc-500">Runtime details for debugging, billing, and support.</p>
                         </div>
-                        <span class="text-sm font-medium text-slate-500">Show</span>
+                        <span class="text-sm/6 font-medium text-zinc-500">Show</span>
                       </div>
                     </summary>
 
@@ -1187,11 +1140,11 @@ defmodule MaraithonWeb.AgentsLive do
                       />
                     </div>
 
-                    <div class="mt-4 rounded-2xl bg-slate-50 p-4">
-                      <div class="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <div class="mt-4 rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
+                      <div class="text-xs/5 font-medium text-zinc-500">
                         Agent id
                       </div>
-                      <p class="mt-2 break-all font-mono text-xs text-slate-600"><%= @selected_agent.id %></p>
+                      <p class="mt-2 break-all font-mono text-xs/5 text-zinc-600"><%= @selected_agent.id %></p>
                     </div>
                   </details>
                 </div>
@@ -1199,15 +1152,15 @@ defmodule MaraithonWeb.AgentsLive do
             </div>
           <% else %>
             <div class="px-5 py-12">
-              <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
-                <p class="text-base font-semibold text-slate-900">No agent selected.</p>
-                <p class="mt-2 text-sm text-slate-600">
+              <div class="rounded-lg border border-dashed border-zinc-950/20 bg-zinc-50 px-6 py-10 text-center">
+                <p class="text-base/7 font-semibold text-zinc-950">No agent selected.</p>
+                <p class="mt-2 text-sm/6 text-zinc-600">
                   Pick an agent from the registry above to inspect runtime state or edit the saved definition.
                 </p>
               </div>
             </div>
           <% end %>
-        </section>
+        </.panel>
       </div>
     </Layouts.app>
     """
@@ -1215,12 +1168,12 @@ defmodule MaraithonWeb.AgentsLive do
 
   attr :title, :string, required: true
   attr :value, :string, required: true
-  attr :value_class, :string, default: "text-slate-900"
+  attr :value_class, :string, default: "text-zinc-950"
 
   defp summary_card(assigns) do
     ~H"""
-    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <dt class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500"><%= @title %></dt>
+    <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
+      <dt class="text-xs/5 font-medium text-zinc-500"><%= @title %></dt>
       <dd class={"mt-2 text-sm font-medium #{@value_class}"}><%= @value %></dd>
     </div>
     """
@@ -1228,12 +1181,12 @@ defmodule MaraithonWeb.AgentsLive do
 
   attr :title, :string, required: true
   attr :value, :any, required: true
-  attr :value_class, :string, default: "text-slate-900"
+  attr :value_class, :string, default: "text-zinc-950"
 
   defp queue_metric(assigns) do
     ~H"""
-    <div class="rounded-xl bg-slate-50 p-2">
-      <div class="text-slate-500"><%= @title %></div>
+    <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-2">
+      <div class="text-zinc-500"><%= @title %></div>
       <div class={"text-sm font-semibold #{@value_class}"}><%= @value %></div>
     </div>
     """
@@ -1534,11 +1487,11 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp row_class(selected_agent_id, agent_id) when selected_agent_id == agent_id,
     do:
-      "cursor-pointer bg-cyan-50/70 transition hover:bg-cyan-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500"
+      "cursor-pointer bg-blue-50/70 transition hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
 
   defp row_class(_selected_agent_id, _agent_id),
     do:
-      "cursor-pointer transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-cyan-500"
+      "cursor-pointer transition hover:bg-zinc-950/[0.025] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
 
   defp inspect_layout_class(agent) do
     if chief_of_staff_agent?(agent) do
@@ -1550,11 +1503,11 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp workspace_tab_class(true),
     do:
-      "inline-flex items-center rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white"
+      "inline-flex items-center rounded-lg bg-zinc-950 px-3 py-1.5 text-xs/5 font-semibold text-white"
 
   defp workspace_tab_class(false),
     do:
-      "inline-flex items-center rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+      "inline-flex items-center rounded-lg border border-zinc-950/10 px-3 py-1.5 text-xs/5 font-semibold text-zinc-700 hover:bg-zinc-950/[0.025]"
 
   defp behaviors do
     AgentBuilder.behavior_specs()
@@ -2126,28 +2079,32 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp effect_status_class("failed"),
-    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp effect_status_class("completed"),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+    do:
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp effect_status_class("claimed"),
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+    do:
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp effect_status_class(_status),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp job_status_class("cancelled"),
-    do: "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700"
+    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
   defp job_status_class("delivered"),
-    do: "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+    do:
+      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
 
   defp job_status_class("dispatched"),
-    do: "rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+    do:
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
 
   defp job_status_class(_status),
-    do: "rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp payload_preview(payload) when is_map(payload) do
     payload
@@ -2196,11 +2153,11 @@ defmodule MaraithonWeb.AgentsLive do
       "notice" -> log_level_class(:notice)
       "info" -> log_level_class(:info)
       "debug" -> log_level_class(:debug)
-      _ -> "text-slate-300"
+      _ -> "text-zinc-300"
     end
   end
 
-  defp log_level_class(_level), do: "text-slate-300"
+  defp log_level_class(_level), do: "text-zinc-300"
 
   defp log_metadata_preview(metadata) when metadata in [%{}, nil], do: nil
 

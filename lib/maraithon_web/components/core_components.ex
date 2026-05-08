@@ -44,6 +44,45 @@ defmodule MaraithonWeb.CoreComponents do
   end
 
   @doc """
+  Catalyst-style page header with optional actions.
+  """
+  attr :eyebrow, :string, default: nil
+  attr :title, :string, required: true
+  attr :subtitle, :string, default: nil
+  attr :class, :string, default: nil
+  slot :actions
+
+  def page_header(assigns) do
+    ~H"""
+    <header class={["border-b border-zinc-950/10 pb-5", @class]}>
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          <p :if={@eyebrow} class="text-sm/6 font-medium text-zinc-500"><%= @eyebrow %></p>
+          <h1 class="mt-1 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-3xl/9">
+            <%= @title %>
+          </h1>
+          <p :if={@subtitle} class="mt-2 max-w-3xl text-sm/6 text-zinc-600"><%= @subtitle %></p>
+        </div>
+        <div :if={@actions != []} class="flex flex-wrap items-center gap-2">
+          <%= render_slot(@actions) %>
+        </div>
+      </div>
+    </header>
+    """
+  end
+
+  @doc """
+  Catalyst-style divider.
+  """
+  attr :class, :string, default: nil
+
+  def divider(assigns) do
+    ~H"""
+    <hr class={["border-t border-zinc-950/10", @class]} />
+    """
+  end
+
+  @doc """
   Catalyst-inspired panel container.
   """
   attr :class, :string, default: nil
@@ -53,11 +92,32 @@ defmodule MaraithonWeb.CoreComponents do
 
   def panel(assigns) do
     ~H"""
-    <section class={["overflow-hidden rounded-xl border border-zinc-950/10 bg-white shadow-sm", @class]}>
+    <section class={["overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm", @class]}>
       <div :if={@header != []} class="border-b border-zinc-950/10 px-5 py-5">
         <%= render_slot(@header) %>
       </div>
       <div class={@body_class}>
+        <%= render_slot(@inner_block) %>
+      </div>
+    </section>
+    """
+  end
+
+  @doc """
+  Catalyst-style alert.
+  """
+  attr :color, :string, default: "amber"
+  attr :title, :string, default: nil
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def alert(assigns) do
+    assigns = assign(assigns, :classes, alert_class(assigns.color, assigns.class))
+
+    ~H"""
+    <section class={@classes}>
+      <p :if={@title} class="font-medium"><%= @title %></p>
+      <div class={[@title && "mt-1", "text-sm/6"]}>
         <%= render_slot(@inner_block) %>
       </div>
     </section>
@@ -128,7 +188,7 @@ defmodule MaraithonWeb.CoreComponents do
   def table(assigns) do
     ~H"""
     <div class={["flow-root", @class]}>
-      <div class="-mx-5 overflow-x-auto whitespace-nowrap">
+      <div class="-mx-5 overflow-x-auto whitespace-nowrap [--gutter:1.25rem]">
         <div class="inline-block min-w-full align-middle sm:px-5">
           <table class="min-w-full text-left text-sm/6 text-zinc-950">
             <%= render_slot(@inner_block) %>
@@ -136,6 +196,146 @@ defmodule MaraithonWeb.CoreComponents do
         </div>
       </div>
     </div>
+    """
+  end
+
+  @doc """
+  Catalyst-style description list.
+  """
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def description_list(assigns) do
+    ~H"""
+    <dl class={["grid grid-cols-1 text-sm/6 sm:grid-cols-[min(50%,20rem)_auto]", @class]}>
+      <%= render_slot(@inner_block) %>
+    </dl>
+    """
+  end
+
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def description_term(assigns) do
+    ~H"""
+    <dt class={["col-start-1 border-t border-zinc-950/5 pt-3 text-zinc-500 first:border-none sm:py-3", @class]}>
+      <%= render_slot(@inner_block) %>
+    </dt>
+    """
+  end
+
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def description_details(assigns) do
+    ~H"""
+    <dd class={["pt-1 pb-3 text-zinc-950 sm:border-t sm:border-zinc-950/5 sm:py-3 sm:[&:nth-of-type(1)]:border-none", @class]}>
+      <%= render_slot(@inner_block) %>
+    </dd>
+    """
+  end
+
+  @doc """
+  Catalyst-style form field wrapper.
+  """
+  attr :label, :string, required: true
+  attr :description, :string, default: nil
+  attr :error, :string, default: nil
+  attr :for, :string, default: nil
+  attr :class, :string, default: nil
+  slot :inner_block, required: true
+
+  def field(assigns) do
+    ~H"""
+    <div class={["[&>[data-slot=control]]:mt-3", @class]}>
+      <label data-slot="label" for={@for} class="text-sm/6 font-medium text-zinc-950">
+        <%= @label %>
+      </label>
+      <p :if={@description} data-slot="description" class="mt-1 text-sm/6 text-zinc-500">
+        <%= @description %>
+      </p>
+      <div data-slot="control">
+        <%= render_slot(@inner_block) %>
+      </div>
+      <p :if={@error} data-slot="error" class="mt-3 text-sm/6 text-red-600"><%= @error %></p>
+    </div>
+    """
+  end
+
+  @doc """
+  Catalyst-style text input.
+  """
+  attr :id, :string, default: nil
+  attr :name, :string, default: nil
+  attr :type, :string, default: "text"
+  attr :value, :any, default: nil
+  attr :class, :string, default: nil
+  attr :autocomplete, :string, default: nil
+  attr :min, :any, default: nil
+  attr :required, :boolean, default: false
+  attr :rest, :global
+
+  def c_input(assigns) do
+    ~H"""
+    <span data-slot="control" class={["relative block w-full", @class]}>
+      <input
+        id={@id}
+        name={@name}
+        type={@type}
+        value={@value}
+        autocomplete={@autocomplete}
+        min={@min}
+        required={@required}
+        class="relative block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6 disabled:opacity-50"
+        {@rest}
+      />
+    </span>
+    """
+  end
+
+  @doc """
+  Catalyst-style textarea.
+  """
+  attr :id, :string, default: nil
+  attr :name, :string, default: nil
+  attr :value, :any, default: nil
+  attr :rows, :integer, default: 4
+  attr :class, :string, default: nil
+  attr :rest, :global
+
+  def c_textarea(assigns) do
+    ~H"""
+    <textarea
+      id={@id}
+      name={@name}
+      rows={@rows}
+      class={["block w-full resize-y rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
+      {@rest}
+    ><%= @value %></textarea>
+    """
+  end
+
+  @doc """
+  Catalyst-style select.
+  """
+  attr :id, :string, default: nil
+  attr :name, :string, default: nil
+  attr :value, :any, default: nil
+  attr :class, :string, default: nil
+  attr :rest, :global
+  slot :inner_block, required: true
+
+  def c_select(assigns) do
+    ~H"""
+    <select
+      id={@id}
+      name={@name}
+      value={@value}
+      class={["block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
+      {@rest}
+    >
+      <%= render_slot(@inner_block) %>
+    </select>
     """
   end
 
@@ -262,6 +462,23 @@ defmodule MaraithonWeb.CoreComponents do
       <%= @status %>
     </.badge>
     """
+  end
+
+  defp alert_class(color, extra) do
+    color_class =
+      case color do
+        "red" -> "border-red-200 bg-red-50 text-red-800"
+        "rose" -> "border-rose-200 bg-rose-50 text-rose-800"
+        "blue" -> "border-blue-200 bg-blue-50 text-blue-900"
+        "cyan" -> "border-cyan-200 bg-cyan-50 text-cyan-900"
+        "emerald" -> "border-emerald-200 bg-emerald-50 text-emerald-900"
+        "green" -> "border-green-200 bg-green-50 text-green-900"
+        _ -> "border-amber-200 bg-amber-50 text-amber-900"
+      end
+
+    ["rounded-lg border px-4 py-3 shadow-sm", color_class, extra]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
   end
 
   defp button_class(variant, color, extra) do
