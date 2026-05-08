@@ -483,30 +483,32 @@ defmodule MaraithonWeb.AgentsLive do
             </.table>
         </div>
 
-        <.panel body_class="p-0">
+        <.panel :if={@selected_agent} body_class="p-0">
           <:header>
             <div class="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <.heading level={2} class="text-lg/7">Agent details</.heading>
-                <.text class="mt-1">Review this agent and adjust its day-to-day behavior.</.text>
+                <h2 class="text-base/7 font-semibold text-zinc-950">
+                  <%= agent_display_name(@selected_agent) %>
+                </h2>
+                <p class="mt-0.5 text-sm/6 text-zinc-500">
+                  <%= agent_kind_label(@selected_agent) %>
+                </p>
               </div>
 
-              <%= if @selected_agent do %>
-                <div class="flex flex-wrap items-center gap-2">
-                  <.link
-                    patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
-                    class={workspace_tab_class(@selected_panel == :inspect)}
-                  >
-                    Overview
-                  </.link>
-                  <.link
-                    patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
-                    class={workspace_tab_class(@selected_panel == :edit)}
-                  >
-                    Settings
-                  </.link>
-                </div>
-              <% end %>
+              <div class="flex flex-wrap items-center gap-2">
+                <.link
+                  patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
+                  class={workspace_tab_class(@selected_panel == :inspect)}
+                >
+                  Overview
+                </.link>
+                <.link
+                  patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
+                  class={workspace_tab_class(@selected_panel == :edit)}
+                >
+                  Settings
+                </.link>
+              </div>
             </div>
           </:header>
 
@@ -523,74 +525,45 @@ defmodule MaraithonWeb.AgentsLive do
 
           <%= if @selected_agent do %>
             <div class="space-y-6 px-5 py-5">
-              <div class="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <div class="flex flex-wrap items-center gap-3">
-                    <h3 class="text-2xl/8 font-semibold tracking-tight text-zinc-950">
-                      <%= agent_name(@selected_agent.config) %>
-                    </h3>
-                    <.status_badge status={@selected_agent.status} />
-                  </div>
-                  <p class="mt-1 text-sm/6 text-zinc-500"><%= agent_kind_label(@selected_agent) %></p>
-                </div>
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <.status_badge status={@selected_agent.status} />
 
-                <div class="flex flex-wrap gap-2">
-                  <%= if @selected_panel == :inspect do %>
-                    <.button
-                      patch={agents_path(@filters, %{id: @selected_agent.id, panel: :edit})}
-                      variant="outline"
-                      class="text-xs"
-                    >
-                      Edit Settings
-                    </.button>
-                  <% else %>
-                    <.button
-                      patch={agents_path(@filters, %{id: @selected_agent.id, panel: :inspect})}
-                      variant="outline"
-                      class="text-xs"
-                    >
-                      Back to Overview
-                    </.button>
-                  <% end %>
-
+                <div class="flex flex-wrap items-center gap-1">
                   <%= if @selected_agent.status in ["running", "degraded"] do %>
-                    <.button
+                    <button
                       type="button"
                       phx-click="stop_agent"
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Stopping..."
-                      variant="outline"
-                      class="text-xs text-amber-800"
+                      class="rounded-md px-2 py-1 text-xs/5 font-medium text-amber-800 hover:bg-amber-50"
                     >
-                      Stop Agent
-                    </.button>
+                      Stop
+                    </button>
                   <% else %>
-                    <.button
+                    <button
                       type="button"
                       phx-click="start_agent"
                       phx-value-id={@selected_agent.id}
                       phx-value-surface="workspace"
                       phx-disable-with="Starting..."
-                      variant="outline"
-                      class="text-xs text-emerald-800"
+                      class="rounded-md px-2 py-1 text-xs/5 font-medium text-emerald-800 hover:bg-emerald-50"
                     >
-                      Start Agent
-                    </.button>
+                      Start
+                    </button>
                   <% end %>
 
-                  <.button
+                  <button
                     type="button"
                     phx-click="delete_agent"
                     phx-value-id={@selected_agent.id}
                     phx-value-surface="workspace"
                     phx-disable-with="Deleting..."
                     data-confirm="Delete this agent and all dependent records?"
-                    variant="outline"
-                    class="text-xs text-rose-700"
+                    class="rounded-md px-2 py-1 text-xs/5 font-medium text-rose-700 hover:bg-rose-50"
                   >
-                    Delete Agent
-                  </.button>
+                    Delete
+                  </button>
                 </div>
               </div>
 
@@ -1125,15 +1098,6 @@ defmodule MaraithonWeb.AgentsLive do
                   </details>
                 </div>
               <% end %>
-            </div>
-          <% else %>
-            <div class="px-5 py-12">
-              <div class="rounded-lg border border-dashed border-zinc-950/20 bg-zinc-50 px-6 py-10 text-center">
-                <p class="text-base/7 font-semibold text-zinc-950">No agent selected.</p>
-                <p class="mt-2 text-sm/6 text-zinc-600">
-                  Pick an agent from the registry above to inspect runtime state or edit the saved definition.
-                </p>
-              </div>
             </div>
           <% end %>
         </.panel>
