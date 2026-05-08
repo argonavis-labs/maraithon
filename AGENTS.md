@@ -7,6 +7,10 @@ This is a web application written using the Phoenix web framework.
 
 ## Design guidelines
 
+- Follow `DESIGN.md` for all product UI work. Treat it as a required design contract, not optional inspiration.
+- Find components before building components. Use the app primitives in `lib/maraithon_web/components/core_components.ex` first, then the local Catalyst kit at `/Users/kent/bliss/aitools/catalyst-ui-kit`, then the Catalyst docs at https://catalyst.tailwindui.com/docs.
+- Preserve the Catalyst/Tailwind UI look and feel across every surface. Do not add bespoke one-off Tailwind component systems when a shared primitive or Catalyst pattern exists.
+- If a new UI primitive is necessary, make it a small reusable wrapper around a Catalyst pattern and use it consistently.
 - Keep operational pages clean, minimal, and row-oriented. Prefer compact tables or list rows over large decorative cards.
 - Summary pages should show the highest-signal rollup only. For connectors, the main row should show the connector name, status, and how many accounts are connected; individual accounts belong on the connector detail page.
 - Make rows clickable when they drill into details. Keep secondary actions small, aligned, and visually quieter than the row content.
