@@ -542,50 +542,46 @@ defmodule MaraithonWeb.AgentsLive do
           </div>
 
           <ul role="list" class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <li
-              :for={spec <- @library}
-              class="flex flex-col rounded-lg border border-zinc-950/10 bg-white p-4"
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <h3 class="text-sm/6 font-semibold text-zinc-950"><%= spec.label %></h3>
-                  <p class="mt-0.5 text-xs/5 text-zinc-500"><%= spec.category %></p>
+            <li :for={spec <- @library} class="group">
+              <.link
+                navigate={~p"/agents/library/#{spec.id}"}
+                class="flex h-full flex-col rounded-lg border border-zinc-950/10 bg-white p-4 transition hover:border-zinc-950/20 hover:shadow-sm"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <h3 class="text-sm/6 font-semibold text-zinc-950">
+                      <%= spec.label %>
+                    </h3>
+                    <p class="mt-0.5 text-xs/5 text-zinc-500"><%= spec.category %></p>
+                  </div>
+                  <span class="flex shrink-0 items-center gap-1">
+                    <img
+                      :for={connector <- library_connector_logos(spec)}
+                      src={connector_logo_src(connector)}
+                      alt={connector}
+                      title={connector}
+                      class="size-5 object-contain"
+                    />
+                  </span>
                 </div>
-                <span class="flex shrink-0 items-center gap-1">
-                  <img
-                    :for={connector <- library_connector_logos(spec)}
-                    src={connector_logo_src(connector)}
-                    alt={connector}
-                    title={connector}
-                    class="size-5 object-contain"
-                  />
-                </span>
-              </div>
 
-              <p class="mt-3 line-clamp-3 text-sm/6 text-zinc-600">
-                <%= spec.summary %>
-              </p>
+                <p class="mt-3 line-clamp-3 text-sm/6 text-zinc-600">
+                  <%= spec.summary %>
+                </p>
 
-              <p class="mt-3 text-xs/5 text-zinc-500">
-                <%= library_requirement_summary(spec) %>
-              </p>
+                <p class="mt-3 text-xs/5 text-zinc-500">
+                  <%= library_requirement_summary(spec) %>
+                </p>
 
-              <div class="mt-4 flex items-center justify-between border-t border-zinc-950/5 pt-3">
-                <.link
-                  navigate={~p"/agents/new?behavior=#{spec.id}"}
-                  class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
-                >
-                  Preview →
-                </.link>
-                <.button
-                  type="button"
-                  phx-click="install_library_agent"
-                  phx-value-behavior={spec.id}
-                  class="text-xs"
-                >
-                  Install
-                </.button>
-              </div>
+                <div class="mt-auto flex items-center justify-between border-t border-zinc-950/5 pt-3">
+                  <span class="text-xs/5 font-medium text-zinc-500 group-hover:text-zinc-950">
+                    Learn more →
+                  </span>
+                  <span class="text-xs/5 font-medium text-zinc-950">
+                    Install
+                  </span>
+                </div>
+              </.link>
             </li>
           </ul>
         </section>
