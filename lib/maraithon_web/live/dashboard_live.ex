@@ -1610,140 +1610,144 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </section>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-1">
-        <.panel>
-          <:header>
-            <.heading level={2} class="text-base/7">Health & Monitoring</.heading>
-          </:header>
-          <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <div class="space-y-4">
-              <div class="flex items-center justify-between">
-                <span class="text-sm/6 font-medium text-zinc-500">System Status</span>
-                <span class={health_badge_class(@health.status)}>
-                  <%= @health.status %>
-                </span>
-              </div>
+      <section>
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Health</h2>
+          <span class={[health_badge_class(@health.status), "whitespace-nowrap"]}>
+            <%= @health.status %>
+          </span>
+        </div>
 
-              <dl class="space-y-2 text-sm">
-                <.health_row
-                  label="Database"
-                  value={to_string(@health.checks.database)}
-                  value_class={
-                    if @health.checks.database == :ok,
-                      do: "text-green-600 font-medium",
-                      else: "text-red-600 font-medium"
-                  }
-                />
-                <.health_row label="Memory" value={"#{@health.checks.memory_mb} MB"} />
-                <.health_row label="Uptime" value={format_uptime(@health.checks.uptime_seconds)} />
-                <.health_row
-                  label="Version"
-                  value={@health.version || "n/a"}
-                  value_class="font-mono text-xs/5 text-zinc-950"
-                />
-              </dl>
-            </div>
+        <div class="mt-4 grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-2">
+          <dl class="space-y-2 text-sm/6">
+            <.health_row
+              label="Database"
+              value={to_string(@health.checks.database)}
+              value_class={
+                if @health.checks.database == :ok,
+                  do: "text-emerald-700 font-medium",
+                  else: "text-red-600 font-medium"
+              }
+            />
+            <.health_row label="Memory" value={"#{@health.checks.memory_mb} MB"} />
+            <.health_row label="Uptime" value={format_uptime(@health.checks.uptime_seconds)} />
+            <.health_row
+              label="Version"
+              value={@health.version || "n/a"}
+              value_class="font-mono text-xs/5 text-zinc-950"
+            />
+          </dl>
 
-            <div class="space-y-4">
-              <div>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Effects Queue</h3>
-                <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
-                  <.queue_metric title="Pending" value={@queue_metrics.effects.pending} />
-                  <.queue_metric
-                    title="Failed"
-                    value={@queue_metrics.effects.failed}
-                    value_class="text-red-600"
-                  />
-                  <.queue_metric title="Claimed" value={@queue_metrics.effects.claimed} />
-                  <.queue_metric title="Completed" value={@queue_metrics.effects.completed} />
-                </div>
-              </div>
-              <div>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Scheduled Jobs</h3>
-                <div class="mt-2 grid grid-cols-2 gap-2 text-xs">
-                  <.queue_metric title="Pending" value={@queue_metrics.jobs.pending} />
-                  <.queue_metric
-                    title="Dispatched"
-                    value={@queue_metrics.jobs.dispatched}
-                    value_class="text-amber-600"
-                  />
-                  <.queue_metric title="Delivered" value={@queue_metrics.jobs.delivered} />
-                  <.queue_metric title="Cancelled" value={@queue_metrics.jobs.cancelled} />
-                </div>
-              </div>
-            </div>
+          <div class="space-y-5">
+            <.queue_strip
+              title="Effects queue"
+              metrics={[
+                %{label: "pending", value: @queue_metrics.effects.pending},
+                %{label: "claimed", value: @queue_metrics.effects.claimed},
+                %{label: "completed", value: @queue_metrics.effects.completed},
+                %{
+                  label: "failed",
+                  value: @queue_metrics.effects.failed,
+                  emphasis:
+                    if(@queue_metrics.effects.failed > 0, do: "text-red-700", else: nil)
+                }
+              ]}
+            />
+            <.queue_strip
+              title="Scheduled jobs"
+              metrics={[
+                %{label: "pending", value: @queue_metrics.jobs.pending},
+                %{
+                  label: "dispatched",
+                  value: @queue_metrics.jobs.dispatched,
+                  emphasis:
+                    if(@queue_metrics.jobs.dispatched > 0, do: "text-amber-700", else: nil)
+                },
+                %{label: "delivered", value: @queue_metrics.jobs.delivered},
+                %{label: "cancelled", value: @queue_metrics.jobs.cancelled}
+              ]}
+            />
           </div>
-        </.panel>
-
+        </div>
       </section>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        <.panel>
-          <:header>
-            <.heading level={3} class="text-base/7">Operational Logs</.heading>
-            <.text class="mt-1">
-              Structured event activity across all agents.
-            </.text>
-          </:header>
-          <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
-            <%= for activity <- @recent_activity do %>
-              <div class="rounded-lg border border-zinc-950/10 p-3">
+      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+          <span class="flex items-center gap-2">
+            <span>Operational activity</span>
+            <span class="text-xs/5 text-zinc-500">
+              <%= length(@recent_activity) %> events · <%= length(@recent_failures) %> failures
+            </span>
+          </span>
+          <span class="text-xs/5 text-zinc-500 group-open:hidden">Show</span>
+          <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Hide</span>
+        </summary>
+        <div class="grid grid-cols-1 gap-0 border-t border-zinc-950/10 lg:grid-cols-2 lg:divide-x lg:divide-zinc-950/5">
+          <div class="px-4 py-4 sm:px-6">
+            <p class="text-xs/5 font-medium text-zinc-500">Recent events</p>
+            <div class="mt-2 max-h-80 space-y-2 overflow-y-auto">
+              <div
+                :for={activity <- @recent_activity}
+                class="rounded-lg border border-zinc-950/10 p-3"
+              >
                 <div class="flex items-center justify-between gap-3">
-                  <div class="truncate text-sm font-medium text-indigo-600"><%= activity.event_type %></div>
-                  <div class="text-xs/5 text-zinc-500"><%= format_time(activity.inserted_at) %></div>
+                  <div class="truncate text-sm/6 font-medium text-zinc-950">
+                    <%= activity.event_type %>
+                  </div>
+                  <div class="text-xs/5 text-zinc-500">
+                    <%= format_time(activity.inserted_at) %>
+                  </div>
                 </div>
                 <div class="mt-1 text-xs/5 text-zinc-500">
                   <span class="font-medium"><%= activity.behavior %></span>
-                  <span class="mx-1">•</span>
+                  <span class="mx-1">·</span>
                   <span class="font-mono"><%= short_id(activity.agent_id) %></span>
                 </div>
-                <div class="mt-2 break-all rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
+                <div class="mt-2 break-all rounded-md bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
                   <%= payload_preview(activity.payload) %>
                 </div>
               </div>
-            <% end %>
-            <%= if @recent_activity == [] do %>
-              <p class="text-sm/6 text-zinc-500">No activity yet.</p>
-            <% end %>
+              <%= if @recent_activity == [] do %>
+                <p class="text-sm/6 text-zinc-500">No activity yet.</p>
+              <% end %>
+            </div>
           </div>
-        </.panel>
 
-        <.panel>
-          <:header>
-            <.heading level={3} class="text-base/7">Failures & Stale Work</.heading>
-            <.text class="mt-1">
-              Failed effects and jobs that are dispatched for too long.
-            </.text>
-          </:header>
-          <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4 sm:px-6">
-            <%= for failure <- @recent_failures do %>
-              <div class="rounded-lg border border-red-200 bg-red-50/40 p-3">
+          <div class="px-4 py-4 sm:px-6">
+            <p class="text-xs/5 font-medium text-zinc-500">Failures &amp; stale work</p>
+            <div class="mt-2 max-h-80 space-y-2 overflow-y-auto">
+              <div
+                :for={failure <- @recent_failures}
+                class="rounded-lg border border-red-200 bg-red-50/40 p-3"
+              >
                 <div class="flex items-center justify-between gap-3">
-                  <div class="truncate text-sm font-medium text-red-700">
+                  <div class="truncate text-sm/6 font-medium text-red-700">
                     <%= failure.type %> (<%= failure.source %>)
                   </div>
-                  <div class="text-xs/5 text-zinc-500"><%= format_time(failure.inserted_at) %></div>
+                  <div class="text-xs/5 text-zinc-500">
+                    <%= format_time(failure.inserted_at) %>
+                  </div>
                 </div>
                 <div class="mt-1 text-xs/5 text-zinc-500">
                   <span class="font-medium"><%= failure.behavior %></span>
-                  <span class="mx-1">•</span>
+                  <span class="mx-1">·</span>
                   <span class="font-mono"><%= short_id(failure.agent_id) %></span>
-                  <span class="mx-1">•</span>
+                  <span class="mx-1">·</span>
                   <span class="font-medium"><%= failure.status %></span>
-                  <span class="mx-1">•</span>
+                  <span class="mx-1">·</span>
                   <span>attempts <%= failure.attempts %></span>
                 </div>
-                <div class="mt-2 break-all rounded-lg bg-white px-2 py-1 font-mono text-xs/5 text-zinc-700">
+                <div class="mt-2 break-all rounded-md bg-white px-2 py-1 font-mono text-xs/5 text-zinc-700">
                   <%= failure.details %>
                 </div>
               </div>
-            <% end %>
-            <%= if @recent_failures == [] do %>
-              <p class="text-sm/6 text-zinc-500">No failures detected.</p>
-            <% end %>
+              <%= if @recent_failures == [] do %>
+                <p class="text-sm/6 text-zinc-500">No failures detected.</p>
+              <% end %>
+            </div>
           </div>
-        </.panel>
-      </section>
+        </div>
+      </details>
 
       <details class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
@@ -3242,6 +3246,25 @@ defmodule MaraithonWeb.DashboardLive do
       end
 
     if name, do: "Good #{period}, #{name}", else: "Good #{period}"
+  end
+
+  attr :title, :string, required: true
+  attr :metrics, :list, required: true
+
+  defp queue_strip(assigns) do
+    ~H"""
+    <div>
+      <p class="text-xs/5 font-medium text-zinc-500"><%= @title %></p>
+      <dl class="mt-1.5 grid grid-cols-4 divide-x divide-zinc-950/5 rounded-lg border border-zinc-950/10">
+        <div :for={m <- @metrics} class="flex flex-col items-baseline px-3 py-2">
+          <dt class="text-xs/5 text-zinc-500"><%= m.label %></dt>
+          <dd class={["text-sm/6 font-semibold", Map.get(m, :emphasis) || "text-zinc-950"]}>
+            <%= m.value %>
+          </dd>
+        </div>
+      </dl>
+    </div>
+    """
   end
 
   attr :title, :string, required: true
