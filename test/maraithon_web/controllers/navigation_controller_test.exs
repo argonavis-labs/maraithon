@@ -93,7 +93,13 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "2 accounts connected"
       assert detail_html =~ "founder@example.com"
       assert detail_html =~ "ops@example.com"
+      assert detail_html =~ "Enabled: Gmail, Google Calendar"
+      assert detail_html =~ "Enabled: Google Contacts"
+      assert detail_html =~ "Granted 2 Google OAuth scopes"
+      assert detail_html =~ "Granted 1 Google OAuth scope"
       assert detail_html =~ "Disconnect"
+      refute detail_html =~ "Stored Grant"
+      refute detail_html =~ "Connection Details"
     end
 
     test "GET /connectors shows refresh-required summary and detail-level Google account action",
@@ -130,8 +136,10 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "Connected Accounts"
       assert detail_html =~ "founder@example.com"
       assert detail_html =~ "Token refresh failed and the account must be re-authenticated."
+      assert detail_html =~ "refresh inactive"
       assert detail_html =~ "Reconnect"
       assert detail_html =~ "Disconnect"
+      refute detail_html =~ "Stored Grant"
     end
 
     test "GET /connectors/:provider renders provider details", %{conn: conn} do

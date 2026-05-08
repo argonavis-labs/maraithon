@@ -218,9 +218,7 @@ defmodule Maraithon.Connections do
   defp google_card(user_id, tokens, account_by_provider, return_to)
        when is_list(tokens) and is_map(account_by_provider) do
     configured? = Google.configured?()
-    primary_token = primary_google_token(tokens)
     account_entries = google_account_entries(user_id, tokens, account_by_provider, return_to)
-    granted_scope_count = tokens |> Enum.flat_map(&token_scopes/1) |> Enum.uniq() |> length()
     reauth_required? = Enum.any?(account_entries, &(&1.status == :needs_refresh))
 
     services =
@@ -264,14 +262,7 @@ defmodule Maraithon.Connections do
         auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts"),
       disconnect_label: "Disconnect Google",
       refresh_token_status: refresh_token_status(tokens, account_entries),
-      details:
-        google_details(primary_token, [
-          if(account_entries != [],
-            do:
-              "Connected accounts: #{account_entries |> Enum.map(& &1.account) |> Enum.join(", ")}"
-          ),
-          "Granted #{granted_scope_count} Google OAuth scopes"
-        ]),
+      details: google_details(tokens),
       services: services,
       accounts: account_entries
     }
@@ -610,20 +601,10 @@ defmodule Maraithon.Connections do
     |> Map.put(:connect_block_reason, "Connect Telegram first")
   end
 
-  defp google_details(nil, items), do: provider_details(nil, items)
+  defp google_details([]), do: ["Not connected yet."]
 
-  defp google_details(token, items) do
-    granted =
-      @google_services
-      |> Enum.filter(fn service ->
-        google_service_connected?(token, Google.scopes_for([service.id]))
-      end)
-      |> Enum.map(& &1.label)
-
-    provider_details(token, [
-      if(granted != [], do: "Enabled: #{Enum.join(granted, ", ")}")
-      | items
-    ])
+  defp google_details(tokens) when is_list(tokens) do
+    ["#{length(tokens)} Google #{account_word(length(tokens))} linked"]
   end
 
   defp provider_details(nil, _items), do: ["Not connected yet."]
@@ -694,16 +675,14 @@ defmodule Maraithon.Connections do
         updated_at: token_or_account_updated_at(token, account_by_provider),
         status: status,
         status_note: token_account_status_note(token, account_by_provider),
+        refresh_token_status: refresh_token_status([token], [%{status: status}]),
+        expires_at: token.expires_at,
+        details: google_account_details(token),
         reconnect_url: reconnect_url,
         needs_reconnect?: status == :needs_refresh
       }
     end)
     |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
-  end
-
-  defp primary_google_token(tokens) when is_list(tokens) do
-    Enum.find(tokens, &(&1.provider == "google")) ||
-      Enum.max_by(tokens, &timestamp_sort_value(&1.updated_at), fn -> nil end)
   end
 
   defp google_account_label(%Token{} = token) do
@@ -714,6 +693,28 @@ defmodule Maraithon.Connections do
   end
 
   defp google_account_label(_token), do: "Google account"
+
+  defp google_account_details(%Token{} = token) do
+    scopes = token_scopes(token)
+    enabled_services = google_enabled_service_labels(token)
+
+    [
+      if(enabled_services != [], do: "Enabled: #{Enum.join(enabled_services, ", ")}"),
+      if(scopes != [], do: "Granted #{length(scopes)} Google OAuth #{scope_word(length(scopes))}"),
+      if(token.expires_at, do: "Expires #{format_datetime(token.expires_at)}")
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp google_account_details(_token), do: []
+
+  defp google_enabled_service_labels(%Token{} = token) do
+    @google_services
+    |> Enum.filter(fn service ->
+      google_service_connected?(token, Google.scopes_for([service.id]))
+    end)
+    |> Enum.map(& &1.label)
+  end
 
   defp google_provider_suffix("google"), do: nil
 
@@ -1127,6 +1128,12 @@ defmodule Maraithon.Connections do
 
   defp plural_suffix(1), do: ""
   defp plural_suffix(_count), do: "s"
+
+  defp account_word(1), do: "account"
+  defp account_word(_count), do: "accounts"
+
+  defp scope_word(1), do: "scope"
+  defp scope_word(_count), do: "scopes"
 
   defp provider_sort_key(%Token{provider: provider}) do
     cond do

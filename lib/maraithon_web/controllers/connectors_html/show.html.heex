@@ -102,6 +102,20 @@
                 <% else %>
                   <p class="text-sm text-slate-500">Healthy</p>
                 <% end %>
+
+                <%= if account[:details] && account.details != [] do %>
+                  <div class="mt-2 space-y-1 text-xs text-slate-500">
+                    <p :for={detail <- account.details}><%= detail %></p>
+                  </div>
+                <% end %>
+
+                <%= if account[:refresh_token_status] do %>
+                  <div class="mt-2">
+                    <span class={refresh_token_badge_class(account.refresh_token_status)}>
+                      <%= refresh_token_status_label(account.refresh_token_status) %>
+                    </span>
+                  </div>
+                <% end %>
               </div>
 
               <div class="flex flex-wrap items-center gap-2 lg:col-span-3 lg:justify-end">
@@ -138,44 +152,48 @@
       <% end %>
     </section>
 
-    <section class="grid grid-cols-1 gap-5 xl:grid-cols-3">
-      <div class="rounded-lg border border-slate-200 bg-white p-5 xl:col-span-2">
-        <h2 class="text-base font-semibold text-slate-950">Connection Details</h2>
-        <div class="mt-3 space-y-2 text-sm text-slate-600">
-          <p :for={detail <- @provider.details}><%= detail %></p>
+    <%= if @provider.provider != "google" do %>
+      <section class="grid grid-cols-1 gap-5 xl:grid-cols-3">
+        <div class="rounded-lg border border-slate-200 bg-white p-5 xl:col-span-2">
+          <h2 class="text-base font-semibold text-slate-950">Connection Details</h2>
+          <div class="mt-3 space-y-2 text-sm text-slate-600">
+            <p :for={detail <- @provider.details}><%= detail %></p>
+          </div>
         </div>
-      </div>
 
-      <div class="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 class="text-base font-semibold text-slate-950">Stored Grant</h2>
-        <p class="mt-3 text-sm text-slate-700">
-          Refresh token:
-          <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
-            <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
-          </span>
-        </p>
-        <%= if @token do %>
-          <p class="mt-2 text-sm text-slate-700"><%= connection_token_summary(@token) %></p>
-          <p class="mt-2 text-xs text-slate-500">Updated <%= format_datetime(@token.updated_at) %></p>
-        <% else %>
-          <p class="mt-2 text-sm text-slate-500">No token stored for this connector yet.</p>
-        <% end %>
+        <div class="rounded-lg border border-slate-200 bg-white p-5">
+          <h2 class="text-base font-semibold text-slate-950">Stored Grant</h2>
+          <p class="mt-3 text-sm text-slate-700">
+            Refresh token:
+            <span class={refresh_token_badge_class(@provider[:refresh_token_status])}>
+              <%= refresh_token_status_label(@provider[:refresh_token_status]) %>
+            </span>
+          </p>
+          <%= if @token do %>
+            <p class="mt-2 text-sm text-slate-700"><%= connection_token_summary(@token) %></p>
+            <p class="mt-2 text-xs text-slate-500">
+              Updated <%= format_datetime(@token.updated_at) %>
+            </p>
+          <% else %>
+            <p class="mt-2 text-sm text-slate-500">No token stored for this connector yet.</p>
+          <% end %>
 
-        <%= if @provider[:disconnectable?] do %>
-          <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post" class="mt-4">
-            <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-            <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
-            <button
-              type="submit"
-              onclick={"return confirm(\"Disconnect #{@provider.label}?\")"}
-              class="inline-flex w-full items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
-            >
-              <%= @provider.disconnect_label %>
-            </button>
-          </form>
-        <% end %>
-      </div>
-    </section>
+          <%= if @provider[:disconnectable?] do %>
+            <form action={~p"/connectors/#{@provider.provider}/disconnect"} method="post" class="mt-4">
+              <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+              <input type="hidden" name="return_to" value={~p"/connectors/#{@provider.provider}"} />
+              <button
+                type="submit"
+                onclick={"return confirm(\"Disconnect #{@provider.label}?\")"}
+                class="inline-flex w-full items-center justify-center rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+              >
+                <%= @provider.disconnect_label %>
+              </button>
+            </form>
+          <% end %>
+        </div>
+      </section>
+    <% end %>
 
     <%= if @provider.services != [] do %>
       <section class="overflow-hidden rounded-lg border border-slate-200 bg-white">
