@@ -459,8 +459,17 @@ defmodule MaraithonWeb.AgentsLive do
 
                 <%= if @all_agents == [] do %>
                   <.table_row>
-                    <.table_cell colspan="4" class="py-10 text-center text-sm/6 text-zinc-500">
-                      No agents yet. Start with the builder to create one.
+                    <.table_cell colspan="4" class="py-12 text-center">
+                      <p class="text-sm/6 text-zinc-700">No agents yet.</p>
+                      <p class="mt-1 text-sm/6 text-zinc-500">
+                        Build one from a template — connect the apps it needs and launch it from there.
+                      </p>
+                      <.link
+                        navigate={~p"/agents/new"}
+                        class="mt-4 inline-flex text-xs/5 font-medium text-zinc-950 hover:text-zinc-700"
+                      >
+                        Start with a template →
+                      </.link>
                     </.table_cell>
                   </.table_row>
                 <% end %>

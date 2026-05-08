@@ -3193,14 +3193,16 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp workspace_summary(assigns) do
     ~H"""
-    <div class="rounded-lg border border-zinc-950/10 bg-white p-4">
+    <div class="border-l border-zinc-950/10 pl-4">
       <dt class="text-xs/5 font-medium text-zinc-500"><%= @label %></dt>
       <dd class="mt-1 flex items-baseline gap-1.5">
         <span class="text-xl/7 font-semibold tracking-tight text-zinc-950"><%= @value %></span>
         <span :if={@unit} class="text-xs/5 text-zinc-500"><%= @unit %></span>
       </dd>
-      <dd :if={@description} class="mt-2 text-sm/6 text-zinc-600 line-clamp-2"><%= @description %></dd>
-      <dd :if={@href && @cta} class="mt-3">
+      <dd :if={@description} class="mt-1.5 text-sm/6 text-zinc-600 line-clamp-2">
+        <%= @description %>
+      </dd>
+      <dd :if={@href && @cta} class="mt-2">
         <.link href={@href} class="text-xs/5 font-medium text-zinc-950 hover:text-zinc-700">
           <%= @cta %> →
         </.link>
