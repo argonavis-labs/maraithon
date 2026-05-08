@@ -1,0 +1,46 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-10">
+    <header>
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        Changelog
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
+        What's new in Maraithon. Updates land daily and are grouped by the day they shipped.
+      </p>
+    </header>
+
+    <%= if @days == [] do %>
+      <p class="text-sm/6 text-zinc-500">
+        No updates have been published yet. Check back soon.
+      </p>
+    <% else %>
+      <ol role="list" class="space-y-12">
+        <li :for={day <- @days} class="grid grid-cols-1 gap-x-8 gap-y-4 lg:grid-cols-[12rem_minmax(0,1fr)]">
+          <div class="lg:sticky lg:top-6 lg:self-start">
+            <p class="text-sm/6 font-semibold text-zinc-950">
+              <%= format_day(day.date) %>
+            </p>
+            <p :if={relative_day(day.date)} class="mt-0.5 text-xs/5 text-zinc-500">
+              <%= relative_day(day.date) %>
+            </p>
+          </div>
+
+          <ul role="list" class="space-y-6">
+            <li :for={entry <- day.entries} class="border-l-2 border-zinc-950/10 pl-4">
+              <h3 class="text-sm/6 font-semibold text-zinc-950">
+                <%= entry.title %>
+              </h3>
+              <p :if={entry.summary} class="mt-1 text-sm/6 text-zinc-600">
+                <%= entry.summary %>
+              </p>
+            </li>
+          </ul>
+        </li>
+      </ol>
+    <% end %>
+
+    <p :if={@generated_at} class="text-xs/5 text-zinc-400">
+      Last regenerated <%= Calendar.strftime(@generated_at, "%Y-%m-%d %H:%M UTC") %>
+    </p>
+  </div>
+</Layouts.app>

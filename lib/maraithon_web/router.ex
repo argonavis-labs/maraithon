@@ -37,6 +37,7 @@ defmodule MaraithonWeb.Router do
     pipe_through :browser
 
     get "/", HomeController, :index
+    get "/changelog", ChangelogController, :index
     post "/auth/magic-link", SessionController, :create_magic_link
     get "/auth/magic/:token", SessionController, :consume_magic_link
     delete "/logout", SessionController, :delete

@@ -24,7 +24,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @secondary_nav [
     %{label: "Support", path: "mailto:kent.fenwick@gmail.com", icon: :lifebuoy},
-    %{label: "Changelog", path: "https://github.com/", icon: :bolt}
+    %{label: "Changelog", path: "/changelog", icon: :bolt}
   ]
 
   attr :current_path, :string, default: "/dashboard"
