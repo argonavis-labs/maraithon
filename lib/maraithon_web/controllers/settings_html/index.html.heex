@@ -1,70 +1,77 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-  <div class="space-y-6">
-    <.page_header
-      eyebrow="Admin Settings"
-      title="Settings"
-      subtitle="Configuration visibility for runtime, security, and connector readiness."
-    />
+  <div class="space-y-10">
+    <header>
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        Settings
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
+        Configuration visibility for runtime, security, and connector readiness.
+      </p>
+    </header>
 
-    <.panel>
-      <:header>
-        <.heading level={2} class="text-base/7">Runtime</.heading>
-      </:header>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <%= for item <- @runtime_items do %>
-          <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-3">
-            <div class="text-xs/5 font-medium text-zinc-500"><%= item.name %></div>
-            <div class="mt-1 break-all font-mono text-sm/6 text-zinc-950"><%= item.value %></div>
-          </div>
-        <% end %>
+    <section>
+      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <h2 class="text-base/7 font-semibold text-zinc-950">Runtime</h2>
       </div>
-    </.panel>
+      <dl class="mt-2 divide-y divide-zinc-950/5">
+        <div
+          :for={item <- @runtime_items}
+          class="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:items-baseline sm:gap-6"
+        >
+          <dt class="text-sm/6 text-zinc-500"><%= item.name %></dt>
+          <dd class="break-all font-mono text-sm/6 text-zinc-950"><%= item.value %></dd>
+        </div>
+      </dl>
+    </section>
 
-    <.panel>
-      <:header>
-        <.heading level={2} class="text-base/7">Security Secrets</.heading>
-      </:header>
-      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <%= for item <- @security_items do %>
-          <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-3">
-            <div class="flex items-center justify-between gap-2">
-              <div class="font-mono text-xs/5 text-zinc-950"><%= item.name %></div>
-              <span class={setting_badge_class(item.present?)}>
-                <%= setting_badge_label(item.present?) %>
-              </span>
-            </div>
-            <p class="mt-2 text-xs/5 text-zinc-500">
-              <%= if item.required?, do: "required", else: "optional" %>
-            </p>
-          </div>
-        <% end %>
+    <section>
+      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <h2 class="text-base/7 font-semibold text-zinc-950">Security secrets</h2>
+        <span class="text-xs/5 text-zinc-500">presence only</span>
       </div>
-    </.panel>
+      <dl class="mt-2 divide-y divide-zinc-950/5">
+        <div
+          :for={item <- @security_items}
+          class="flex items-center justify-between gap-3 py-3"
+        >
+          <div class="min-w-0">
+            <dt class="font-mono text-sm/6 text-zinc-950"><%= item.name %></dt>
+            <dd class="text-xs/5 text-zinc-500">
+              <%= if item.required?, do: "Required", else: "Optional" %>
+            </dd>
+          </div>
+          <span class={[setting_badge_class(item.present?), "whitespace-nowrap"]}>
+            <%= setting_badge_label(item.present?) %>
+          </span>
+        </div>
+      </dl>
+    </section>
 
-    <.panel body_class="px-5 py-4">
-      <:header>
-        <.heading level={2} class="text-base/7">OAuth Provider Readiness</.heading>
-      </:header>
-      <.table>
-        <.table_head>
+    <section>
+      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <h2 class="text-base/7 font-semibold text-zinc-950">OAuth provider readiness</h2>
+      </div>
+      <div class="mt-2">
+        <.table>
+          <.table_head>
             <tr>
               <.table_header>Provider</.table_header>
               <.table_header>Client ID</.table_header>
-              <.table_header>Client Secret</.table_header>
+              <.table_header>Client secret</.table_header>
               <.table_header>Redirect URI</.table_header>
             </tr>
-        </.table_head>
-        <.table_body>
+          </.table_head>
+          <.table_body>
             <%= for item <- @oauth_items do %>
               <.table_row>
                 <.table_cell class="font-medium"><%= item.name %></.table_cell>
                 <.table_cell>
-                  <span class={setting_badge_class(item.client_id_present?)}>
+                  <span class={[setting_badge_class(item.client_id_present?), "whitespace-nowrap"]}>
                     <%= setting_badge_label(item.client_id_present?) %>
                   </span>
                 </.table_cell>
                 <.table_cell>
-                  <span class={setting_badge_class(item.client_secret_present?)}>
+                  <span class={[setting_badge_class(item.client_secret_present?), "whitespace-nowrap"]}>
                     <%= setting_badge_label(item.client_secret_present?) %>
                   </span>
                 </.table_cell>
@@ -73,8 +80,9 @@
                 </.table_cell>
               </.table_row>
             <% end %>
-        </.table_body>
-      </.table>
-    </.panel>
+          </.table_body>
+        </.table>
+      </div>
+    </section>
   </div>
 </Layouts.app>

@@ -1,10 +1,11 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-  <div class="space-y-5">
-    <.page_header eyebrow="Admin Control Center" title="Connectors">
-      <:actions>
-        <.badge color="zinc" class="px-3 py-1 text-sm"><%= @connected_count %> connected</.badge>
-      </:actions>
-    </.page_header>
+  <div class="space-y-6">
+    <header class="flex flex-wrap items-end justify-between gap-3">
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        Connectors
+      </h1>
+      <span class="text-xs/5 text-zinc-500"><%= @connected_count %> connected</span>
+    </header>
 
     <%= if @connection_errors != [] do %>
       <.alert color="amber">
@@ -16,70 +17,59 @@
     <% end %>
 
     <%= if not telegram_connected?(@providers) do %>
-      <.alert color="blue" title="Telegram is required before other connectors.">
+      <.alert color="blue" title="Connect Telegram first">
         <p>
-          Link Telegram first so Maraithon has a place to message you.
+          Maraithon needs a Telegram chat to message you before any other connector becomes available.
         </p>
       </.alert>
     <% end %>
 
-    <.panel body_class="p-0">
-      <:header>
-        <.heading level={2} class="text-base/7">Apps</.heading>
-      </:header>
-      <div class="divide-y divide-zinc-950/5">
-        <%= for provider <- @providers do %>
-          <div class="grid grid-cols-1 gap-3 px-5 py-4 transition hover:bg-zinc-950/[0.025] lg:grid-cols-12 lg:items-center">
-            <a
-              href={provider_detail_path(provider)}
-              class="group flex min-w-0 items-center gap-3 lg:col-span-7"
-            >
-              <.oauth_logo provider={provider.logo} />
-              <div class="min-w-0">
-                <p class="text-sm font-semibold text-zinc-950 group-hover:text-blue-700">
-                  <%= provider.label %>
-                </p>
-                <p class="mt-0.5 truncate text-sm text-zinc-500"><%= provider.description %></p>
-              </div>
-            </a>
+    <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
+      <li :for={provider <- @providers}>
+        <a
+          href={provider_detail_path(provider)}
+          class="grid grid-cols-1 gap-2 px-4 py-3 transition hover:bg-zinc-950/[0.025] sm:px-6 lg:grid-cols-12 lg:items-center"
+        >
+          <span class="flex min-w-0 items-center gap-3 lg:col-span-6">
+            <.oauth_logo provider={provider.logo} />
+            <span class="min-w-0">
+              <span class="block truncate text-sm/6 font-semibold text-zinc-950">
+                <%= provider.label %>
+              </span>
+              <span class="mt-0.5 block truncate text-sm/6 text-zinc-500">
+                <%= provider.description %>
+              </span>
+            </span>
+          </span>
 
-            <a
-              href={provider_detail_path(provider)}
-              class="flex items-center justify-between gap-3 lg:col-span-3 lg:justify-start"
-            >
-              <.badge color={connection_status_color(provider.status)}>
-                <%= connection_status_label(provider.status) %>
-              </.badge>
-              <span class="text-sm text-zinc-500"><%= provider_account_summary(provider) %></span>
-            </a>
+          <span class="flex items-center gap-3 lg:col-span-3">
+            <.badge color={connection_status_color(provider.status)} class="whitespace-nowrap">
+              <%= connection_status_label(provider.status) %>
+            </.badge>
+            <span class="truncate text-sm/6 text-zinc-500">
+              <%= provider_account_summary(provider) %>
+            </span>
+          </span>
 
-            <div class="flex items-center gap-2 lg:col-span-2 lg:justify-end">
-              <%= cond do %>
-                <% provider.provider != "telegram" and not telegram_connected?(@providers) -> %>
-                  <.button type="button" variant="outline" disabled class="text-xs">
-                    Connect Telegram first
-                  </.button>
-                <% provider[:connect_blocked?] -> %>
-                  <.button type="button" variant="outline" disabled class="text-xs">
-                    <%= provider[:connect_block_reason] %>
-                  </.button>
-                <% connection_action_enabled?(provider) -> %>
-                  <.button
-                    href={connection_primary_url(provider)}
-                    color="indigo"
-                    class="text-xs"
-                  >
-                    <%= connection_primary_action(provider) %>
-                  </.button>
-                <% true -> %>
-                  <.button type="button" variant="outline" disabled class="text-xs">
-                    Configure OAuth First
-                  </.button>
-              <% end %>
-            </div>
-          </div>
-        <% end %>
-      </div>
-    </.panel>
+          <span class="flex items-center justify-end gap-3 lg:col-span-3">
+            <%= cond do %>
+              <% provider.provider != "telegram" and not telegram_connected?(@providers) -> %>
+                <span class="text-xs/5 text-zinc-400">Telegram required</span>
+              <% provider[:connect_blocked?] -> %>
+                <span class="text-xs/5 text-zinc-400">
+                  <%= provider[:connect_block_reason] %>
+                </span>
+              <% connection_action_enabled?(provider) -> %>
+                <span class="text-xs/5 font-medium text-zinc-950">
+                  <%= connection_primary_action(provider) %>
+                </span>
+              <% true -> %>
+                <span class="text-xs/5 text-zinc-400">Configure OAuth first</span>
+            <% end %>
+            <span class="text-zinc-400" aria-hidden="true">→</span>
+          </span>
+        </a>
+      </li>
+    </ul>
   </div>
 </Layouts.app>

@@ -667,42 +667,25 @@ defmodule MaraithonWeb.DashboardLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-      <div class="space-y-6">
-      <.page_header
-        eyebrow="Admin Control Center"
-        title="Agent Fleet Operations"
-        subtitle={
-          if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do
-            "You've connected real data. Maraithon is scanning a recent slice of Gmail, Calendar, and Slack to show immediate value before you create anything."
-          else
-            "Watch fleet health, queues, failures, logs, and actionable insights from one control center."
-          end
-        }
-      >
-        <:actions>
-          <div class="flex flex-wrap gap-2">
-            <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
-              <.button href="#proof-of-value" variant="outline">
-                See Proof
-              </.button>
-            <% else %>
-              <.button navigate={"/agents"} variant="outline">
-                Manage Agents
-              </.button>
-              <.button navigate={"/agents/new"}>
-                New Agent
-              </.button>
-            <% end %>
-            <.button
-              type="button"
-              phx-click="refresh_now"
-              variant="outline"
-            >
-              Refresh
-            </.button>
-          </div>
-        </:actions>
-      </.page_header>
+      <div class="space-y-10">
+      <header class="flex flex-wrap items-end justify-between gap-3">
+        <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+          <%= dashboard_greeting(@current_user) %>
+        </h1>
+        <div class="flex flex-wrap items-center gap-2">
+          <.button
+            type="button"
+            phx-click="refresh_now"
+            variant="plain"
+            class="text-zinc-500"
+          >
+            Refresh
+          </.button>
+          <.button navigate={"/agents/new"}>
+            New agent
+          </.button>
+        </div>
+      </header>
 
       <%= if @dashboard_errors != [] do %>
         <.alert color="amber">
@@ -717,358 +700,291 @@ defmodule MaraithonWeb.DashboardLive do
         </.alert>
       <% end %>
 
-      <section class="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-6">
-        <.stat_card title="Total Agents" value={length(@agents)} />
-        <.stat_card
-          title="Running"
-          value={Enum.count(@agents, &(&1.status == "running"))}
-          value_class="text-green-600"
-        />
-        <.stat_card
-          title="Degraded"
-          value={Enum.count(@agents, &(&1.status == "degraded"))}
-          value_class="text-amber-600"
-        />
-        <.stat_card title="LLM Calls" value={@total_spend.llm_calls} value_class="text-indigo-600" />
-        <.stat_card
-          title="Total Spend"
-          value={"$#{Float.round(@total_spend.total_cost, 4)}"}
-          value_class="text-amber-600"
-        />
-        <.stat_card title="Pending Effects" value={@queue_metrics.effects.pending} />
+      <section>
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Overview</h2>
+          <p class="text-xs/5 text-zinc-500">Live</p>
+        </div>
+        <dl class="mt-6 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
+          <.overview_stat
+            label="Agents"
+            value={length(@agents)}
+            note={
+              "#{Enum.count(@agents, &(&1.status == "running"))} running · #{Enum.count(@agents, &(&1.status == "degraded"))} degraded"
+            }
+          />
+          <.overview_stat
+            label="LLM calls"
+            value={@total_spend.llm_calls}
+            note="last 30 days"
+          />
+          <.overview_stat
+            label="Spend"
+            value={"$#{Float.round(@total_spend.total_cost, 2)}"}
+            note="last 30 days"
+          />
+          <.overview_stat
+            label="Pending effects"
+            value={@queue_metrics.effects.pending}
+            note={"#{@queue_metrics.effects.failed} failed"}
+          />
+        </dl>
       </section>
 
-      <.panel>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <.heading level={2} class="text-base/7">Operator Workspace</.heading>
-            <.text class="mt-1">
-              Todos, memory, connected systems, and projects all feed the same conversational operator.
-            </.text>
-          </div>
-          <.button navigate={"/connectors"}>
-            Manage Connectors
-          </.button>
+      <section>
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
+          <span class="text-xs/5 text-zinc-500"><%= @open_todo_count %> open</span>
         </div>
-      </.panel>
 
-      <section class="grid grid-cols-1 gap-6 xl:grid-cols-4">
-        <.panel body_class="space-y-4 px-4 py-4 sm:px-6">
-          <:header>
-            <.heading level={2} class="text-base/7">Connected Apps</.heading>
-            <.text class="mt-1">
-              Your linked accounts form the shared operator context across all projects.
-            </.text>
-          </:header>
-            <div class="flex items-end justify-between gap-3">
-              <div>
-                <p class="text-3xl/9 font-semibold text-zinc-950"><%= @connected_provider_count %></p>
-                <p class="text-sm/6 text-zinc-500">Connected providers</p>
-              </div>
-              <.button navigate={"/connectors"} variant="outline" class="text-xs">
-                Manage
-              </.button>
-            </div>
-
-            <div class="space-y-3">
-              <%= for provider <- @connections do %>
-                <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-3">
-                  <div class="flex items-start justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="text-sm/6 font-medium text-zinc-950"><%= provider.label %></p>
-                      <p class="mt-1 text-xs/5 text-zinc-500"><%= provider.description %></p>
-                    </div>
-                    <span class={provider_status_class(provider.status)}>
-                      <%= provider_status_label(provider.status) %>
+        <div class="mt-4">
+          <%= if @todos == [] do %>
+            <p class="rounded-lg border border-dashed border-zinc-950/10 px-4 py-10 text-center text-sm/6 text-zinc-500">
+              No open todos yet. Maraithon will surface work here as agents notice it.
+            </p>
+          <% else %>
+            <ul role="list" class="divide-y divide-zinc-950/5">
+              <li
+                :for={todo <- @todos}
+                id={"todo-#{todo.id}"}
+                class="flex flex-wrap items-start justify-between gap-3 py-4"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs/5 text-zinc-500">
+                    <span class={todo_status_class(todo.status)}>
+                      <%= todo_status_label(todo.status) %>
                     </span>
+                    <span><%= todo_source_label(todo.source) %></span>
+                    <span aria-hidden="true">·</span>
+                    <span>priority <%= todo.priority %></span>
                   </div>
-
-                  <div :if={Map.get(provider, :details, []) != []} class="mt-3 space-y-1">
-                    <p
-                      :for={detail <- Enum.take(Map.get(provider, :details, []), 2)}
-                      class="text-xs/5 text-zinc-600"
-                    >
-                      <%= detail %>
-                    </p>
-                  </div>
-
-                  <div :if={Map.get(provider, :accounts, []) != []} class="mt-3 space-y-2">
-                    <div
-                      :for={account <- Enum.take(Map.get(provider, :accounts, []), 2)}
-                      class="rounded-lg border border-zinc-950/10 bg-white px-3 py-2"
-                    >
-                      <div class="flex items-center justify-between gap-2">
-                        <p class="truncate text-xs/5 font-medium text-zinc-950"><%= account.account %></p>
-                        <span class={provider_status_class(account.status)}>
-                          <%= provider_status_label(account.status) %>
-                        </span>
-                      </div>
-                      <p class="mt-1 text-xs/5 text-zinc-500"><%= account.status_note %></p>
-                    </div>
-                  </div>
-
-                  <div :if={Map.get(provider, :services, []) != []} class="mt-3 flex flex-wrap gap-2">
-                    <.badge :for={service <- Map.get(provider, :services, [])} class="bg-white">
-                      <%= service.label %>: <%= provider_status_label(service.status) %>
-                    </.badge>
-                  </div>
-
-                  <div class="mt-3 flex flex-wrap gap-2">
-                    <.button
-                      href={
-                        if provider.status == :connected,
-                          do: "/connectors/#{provider.provider}",
-                          else: provider.connect_url
-                      }
-                      variant="outline"
-                      class="text-xs"
-                    >
-                      <%= cond do %>
-                        <% provider.status == :connected -> %>
-                          View
-                        <% provider.status in [:partial, :missing_scope, :needs_refresh] -> %>
-                          Reconnect
-                        <% true -> %>
-                          Connect
-                      <% end %>
-                    </.button>
-                  </div>
+                  <p class="mt-1.5 text-sm/6 font-medium text-zinc-950"><%= todo.title %></p>
+                  <p :if={todo.summary && todo.summary != ""} class="mt-0.5 text-sm/6 text-zinc-600">
+                    <%= todo.summary %>
+                  </p>
+                  <p :if={todo.next_action && todo.next_action != ""} class="mt-1.5 text-sm/6 text-zinc-700">
+                    <span class="font-medium text-zinc-950">Next:</span> <%= todo.next_action %>
+                  </p>
+                  <p class="mt-1 text-xs/5 text-zinc-500">
+                    <%= todo_context_line(todo) %>
+                  </p>
                 </div>
-              <% end %>
-            </div>
-        </.panel>
-
-        <.panel body_class="space-y-4 px-4 py-4 sm:px-6">
-          <:header>
-            <.heading level={2} class="text-base/7">Memory</.heading>
-            <.text class="mt-1">
-              Maraithon is building a reusable operating profile that all installed agents share.
-            </.text>
-          </:header>
-            <div class="rounded-lg border border-zinc-950 bg-zinc-950 px-4 py-4 text-white shadow-sm">
-              <div class="flex items-center justify-between gap-3">
-                <p class="text-sm/6 font-medium text-zinc-300">
-                  Learned profile
-                </p>
-                <span class="text-xs/5 text-zinc-400">
-                  confidence <%= format_confidence(@memory_profile.confidence) %>
-                </span>
-              </div>
-              <p class="mt-3 text-sm/6 text-zinc-100"><%= @memory_profile.summary %></p>
-            </div>
-
-            <div class="grid grid-cols-1 gap-3">
-              <div
-                :for={field <- memory_profile_fields(@memory_profile)}
-                class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-3"
-              >
-                <p class="text-xs/5 font-medium text-zinc-500">
-                  <%= field.label %>
-                </p>
-                <p class="mt-2 text-sm/6 text-zinc-700"><%= field.value %></p>
-              </div>
-            </div>
-
-            <div>
-              <div class="flex items-center justify-between gap-3">
-                <p class="text-sm/6 font-medium text-zinc-950">
-                  Saved preferences
-                </p>
-                <span class="text-xs/5 text-zinc-500"><%= length(@memory_rules) %> rules</span>
-              </div>
-              <%= if @memory_rules == [] do %>
-                <p class="mt-2 text-sm/6 text-zinc-500">
-                  No durable preferences yet. Maraithon will learn these from conversation and feedback.
-                </p>
-              <% else %>
-                <div class="mt-2 space-y-2">
-                  <div
-                    :for={rule <- Enum.take(@memory_rules, 3)}
-                    class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3"
+                <div class="flex shrink-0 items-center gap-1">
+                  <.button
+                    type="button"
+                    phx-click="complete_todo"
+                    phx-value-id={todo.id}
+                    variant="plain"
+                    class="text-xs text-zinc-500 hover:text-zinc-950"
                   >
-                    <div class="flex items-center justify-between gap-3">
-                      <p class="text-xs/5 font-medium text-zinc-500">
-                        <%= memory_rule_kind_label(rule["kind"]) %>
-                      </p>
-                      <span class="text-xs/5 text-zinc-500">
-                        <%= format_confidence(rule["confidence"]) %>
-                      </span>
-                    </div>
-                    <p class="mt-2 text-sm/6 text-zinc-700"><%= rule["instruction"] || rule["label"] %></p>
-                  </div>
+                    Mark done
+                  </.button>
+                  <.button
+                    type="button"
+                    phx-click="dismiss_todo"
+                    phx-value-id={todo.id}
+                    variant="plain"
+                    class="text-xs text-zinc-500 hover:text-zinc-950"
+                  >
+                    Dismiss
+                  </.button>
                 </div>
-              <% end %>
-            </div>
+              </li>
+            </ul>
+          <% end %>
+        </div>
+      </section>
 
-            <div :if={@global_memory_summaries != []} class="space-y-2">
-              <p class="text-sm/6 font-medium text-zinc-950">
-                Global State
-              </p>
-              <div
-                :for={summary <- Enum.take(@global_memory_summaries, 3)}
-                class="rounded-lg border border-zinc-950/10 bg-white px-4 py-3"
+      <section>
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Workspace</h2>
+          <.link navigate="/connectors" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
+            Manage connectors →
+          </.link>
+        </div>
+        <dl class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <.workspace_summary
+            label="Connected services"
+            value={@connected_provider_count}
+            description={
+              if @connected_provider_count == 0,
+                do: "No services linked yet.",
+                else: "Linked accounts feed every project."
+            }
+            href="/connectors"
+            cta="Connectors"
+          />
+          <.workspace_summary
+            label="Memory"
+            value={length(@memory_rules)}
+            unit="rules"
+            description={
+              if @memory_profile.summary && @memory_profile.summary != "",
+                do: @memory_profile.summary,
+                else: "No durable preferences yet."
+            }
+            href="#memory-detail"
+            cta="View memory"
+          />
+          <.workspace_summary
+            label="Projects"
+            value={length(@projects)}
+            description={
+              if length(@projects) == 0,
+                do: "Projects hold notes, decisions, and grants.",
+                else: "Each project carries its own context."
+            }
+            href="#projects"
+            cta="View projects"
+          />
+        </dl>
+      </section>
+
+      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+          <span>New project</span>
+          <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
+          <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Close</span>
+        </summary>
+        <.form
+          for={@project_form}
+          id="project-form"
+          phx-change="update_project_form"
+          phx-submit="create_project"
+          class="space-y-4 border-t border-zinc-950/10 px-4 py-4 sm:px-6"
+        >
+          <.field label="Project name" for="project_name">
+            <.c_input
+              id="project_name"
+              type="text"
+              name="project[name]"
+              value={@project_form[:name].value}
+            />
+          </.field>
+
+          <.field label="Summary" for="project_summary">
+            <.c_input
+              id="project_summary"
+              type="text"
+              name="project[summary]"
+              value={@project_form[:summary].value}
+            />
+          </.field>
+
+          <.field label="Description" for="project_description">
+            <.c_textarea
+              id="project_description"
+              name="project[description]"
+              rows={4}
+              value={@project_form[:description].value}
+            />
+          </.field>
+
+          <.field label="Priority" for="project_priority">
+            <.c_select
+              id="project_priority"
+              name="project[priority]"
+            >
+              <option value="low" selected={@project_form[:priority].value == "low"}>Low</option>
+              <option value="normal" selected={@project_form[:priority].value == "normal"}>Normal</option>
+              <option value="high" selected={@project_form[:priority].value == "high"}>High</option>
+              <option value="critical" selected={@project_form[:priority].value == "critical"}>Critical</option>
+            </.c_select>
+          </.field>
+
+          <div class="flex justify-end">
+            <.button type="submit" phx-disable-with="Creating...">
+              Create project
+            </.button>
+          </div>
+        </.form>
+      </details>
+
+      <section
+        :if={@memory_profile.summary not in [nil, ""] or @memory_rules != [] or @global_memory_summaries != []}
+        id="memory-detail"
+      >
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Memory</h2>
+          <span class="text-xs/5 text-zinc-500">
+            confidence <%= format_confidence(@memory_profile.confidence) %>
+          </span>
+        </div>
+        <div class="mt-4 space-y-4">
+          <p
+            :if={@memory_profile.summary not in [nil, ""]}
+            class="text-sm/6 text-zinc-700"
+          >
+            <%= @memory_profile.summary %>
+          </p>
+
+          <dl
+            :if={memory_profile_fields(@memory_profile) != []}
+            class="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2"
+          >
+            <div :for={field <- memory_profile_fields(@memory_profile)}>
+              <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+              <dd class="mt-0.5 text-sm/6 text-zinc-700"><%= field.value %></dd>
+            </div>
+          </dl>
+
+          <div :if={@memory_rules != []}>
+            <p class="text-sm/6 font-medium text-zinc-950">Saved preferences</p>
+            <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
+              <li
+                :for={rule <- Enum.take(@memory_rules, 3)}
+                class="flex flex-wrap items-start justify-between gap-3 py-2.5"
               >
-                <div class="flex items-center justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs/5 font-medium text-zinc-500">
+                    <%= memory_rule_kind_label(rule["kind"]) %>
+                  </p>
+                  <p class="mt-0.5 text-sm/6 text-zinc-700"><%= rule["instruction"] || rule["label"] %></p>
+                </div>
+                <span class="text-xs/5 text-zinc-500">
+                  <%= format_confidence(rule["confidence"]) %>
+                </span>
+              </li>
+            </ul>
+          </div>
+
+          <div :if={@global_memory_summaries != []}>
+            <p class="text-sm/6 font-medium text-zinc-950">Global state</p>
+            <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
+              <li
+                :for={summary <- Enum.take(@global_memory_summaries, 3)}
+                class="flex flex-wrap items-start justify-between gap-3 py-2.5"
+              >
+                <div class="min-w-0 flex-1">
                   <p class="text-xs/5 font-medium text-zinc-500">
                     <%= memory_summary_label(summary.type) %>
                   </p>
-                  <span class="text-xs/5 text-zinc-500">
-                    <%= format_confidence(summary.confidence) %>
-                  </span>
+                  <p class="mt-0.5 text-sm/6 text-zinc-700"><%= summary.content %></p>
                 </div>
-                <p class="mt-2 text-sm/6 text-zinc-700"><%= summary.content %></p>
-              </div>
-            </div>
-        </.panel>
-
-        <.panel body_class="space-y-3 px-4 py-4 sm:px-6">
-          <:header>
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <.heading level={2} class="text-base/7">Todos</.heading>
-                <.text class="mt-1">
-                  Active work objects the operator is tracking for you across inbox, projects, and follow-through.
-                </.text>
-              </div>
-              <.badge color="emerald">
-                <%= @open_todo_count %> open
-              </.badge>
-            </div>
-          </:header>
-            <%= if @todos == [] do %>
-              <p class="text-sm/6 text-zinc-500">
-                No open todos yet. As agents surface work and you chat with Maraithon, tasks will accumulate here.
-              </p>
-            <% else %>
-              <div
-                :for={todo <- @todos}
-                id={"todo-#{todo.id}"}
-                class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-4"
-              >
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div class="min-w-0 flex-1">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span class={todo_status_class(todo.status)}>
-                        <%= todo_status_label(todo.status) %>
-                      </span>
-                      <.badge class="bg-white">
-                        <%= todo_source_label(todo.source) %>
-                      </.badge>
-                      <span class="text-xs/5 text-zinc-500">
-                        priority <%= todo.priority %>
-                      </span>
-                    </div>
-                    <p class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= todo.title %></p>
-                    <p class="mt-1 text-sm/6 text-zinc-600"><%= todo.summary %></p>
-                    <p class="mt-2 text-sm text-emerald-800">
-                      <span class="font-medium">Next:</span> <%= todo.next_action %>
-                    </p>
-                    <p class="mt-2 text-xs/5 text-zinc-500">
-                      <%= todo_context_line(todo) %>
-                    </p>
-                  </div>
-
-                  <div class="flex flex-wrap gap-2">
-                    <.button
-                      type="button"
-                      phx-click="complete_todo"
-                      phx-value-id={todo.id}
-                      variant="outline"
-                      class="text-xs text-emerald-800"
-                    >
-                      Mark done
-                    </.button>
-                    <.button
-                      type="button"
-                      phx-click="dismiss_todo"
-                      phx-value-id={todo.id}
-                      variant="outline"
-                      class="text-xs"
-                    >
-                      Dismiss
-                    </.button>
-                  </div>
-                </div>
-              </div>
-            <% end %>
-        </.panel>
-
-        <div class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
-          <div class="border-b border-zinc-950/10 px-4 py-4 sm:px-6">
-            <.heading level={2} class="text-base/7">Add Project</.heading>
-            <.text class="mt-1">
-              Projects hold local state, attached agents, and project-manager recommendations.
-            </.text>
+                <span class="text-xs/5 text-zinc-500">
+                  <%= format_confidence(summary.confidence) %>
+                </span>
+              </li>
+            </ul>
           </div>
-          <.form
-            for={@project_form}
-            id="project-form"
-            phx-change="update_project_form"
-            phx-submit="create_project"
-            class="space-y-4 px-4 py-4 sm:px-6"
-          >
-            <.field label="Project name" for="project_name">
-              <.c_input
-                id="project_name"
-                type="text"
-                name="project[name]"
-                value={@project_form[:name].value}
-              />
-            </.field>
-
-            <.field label="Summary" for="project_summary">
-              <.c_input
-                id="project_summary"
-                type="text"
-                name="project[summary]"
-                value={@project_form[:summary].value}
-              />
-            </.field>
-
-            <.field label="Description" for="project_description">
-              <.c_textarea
-                id="project_description"
-                name="project[description]"
-                rows={4}
-                value={@project_form[:description].value}
-              />
-            </.field>
-
-            <.field label="Priority" for="project_priority">
-              <.c_select
-                id="project_priority"
-                name="project[priority]"
-              >
-                <option value="low" selected={@project_form[:priority].value == "low"}>Low</option>
-                <option value="normal" selected={@project_form[:priority].value == "normal"}>Normal</option>
-                <option value="high" selected={@project_form[:priority].value == "high"}>High</option>
-                <option value="critical" selected={@project_form[:priority].value == "critical"}>Critical</option>
-              </.c_select>
-            </.field>
-
-            <.button
-              type="submit"
-              phx-disable-with="Creating..."
-            >
-              Create project
-            </.button>
-          </.form>
         </div>
       </section>
 
-      <.panel body_class="p-0">
-        <:header>
-          <.heading level={2} class="text-base/7">Project Memory</.heading>
-          <.text class="mt-1">
-            Add notes, todos, decisions, resources, or grants to a project so the operator can use them later.
-          </.text>
-        </:header>
+      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+          <span class="flex items-center gap-2">
+            <span>Add to project memory</span>
+            <span class="text-xs/5 text-zinc-500">notes · decisions · grants</span>
+          </span>
+          <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
+          <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Close</span>
+        </summary>
         <.form
           for={@project_item_form}
           id="project-item-form"
           phx-change="update_project_item_form"
           phx-submit="create_project_item"
-          class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
+          class="grid grid-cols-1 gap-4 border-t border-zinc-950/10 px-4 py-4 sm:px-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]"
         >
           <div class="space-y-4">
             <.field label="Project" for="project_item_project_id">
@@ -1125,32 +1041,25 @@ defmodule MaraithonWeb.DashboardLive do
                 value={@project_item_form[:content].value}
               />
             </.field>
-            <.button
-              type="submit"
-              phx-disable-with="Saving..."
-              disabled={@projects == []}
-            >
-              Save project memory
-            </.button>
+            <div class="flex justify-end">
+              <.button
+                type="submit"
+                phx-disable-with="Saving..."
+                disabled={@projects == []}
+              >
+                Save
+              </.button>
+            </div>
           </div>
         </.form>
-      </.panel>
+      </details>
 
-      <.panel body_class="px-4 py-4 sm:px-6">
-        <:header>
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <.heading level={2} class="text-base/7">Projects</.heading>
-              <.text class="mt-1">
-                Each project keeps its own local memory and can host specialist agents like the project manager.
-              </.text>
-            </div>
-            <.badge>
-              <%= length(@projects) %> total
-            </.badge>
-          </div>
-        </:header>
-        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <section id="projects">
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Projects</h2>
+          <span class="text-xs/5 text-zinc-500"><%= length(@projects) %> total</span>
+        </div>
+        <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
           <%= for project_card <- @projects do %>
             <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-5">
               <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1432,12 +1341,12 @@ defmodule MaraithonWeb.DashboardLive do
           <% end %>
 
           <%= if @projects == [] do %>
-            <div class="rounded-lg border border-dashed border-zinc-950/20 bg-white px-5 py-10 text-center text-sm/6 text-zinc-500 xl:col-span-2">
-              No projects yet. Create one above, attach a specialist agent, and start building project-local state.
-            </div>
+            <p class="text-sm/6 text-zinc-500 xl:col-span-2">
+              No projects yet. Use “New project” above and attach a specialist agent to start building project-local state.
+            </p>
           <% end %>
         </div>
-      </.panel>
+      </section>
 
       <%= if show_onboarding_preview?(@onboarding_preview_eligible?, @agents) do %>
         <.panel id="proof-of-value" body_class="p-0">
@@ -1543,20 +1452,11 @@ defmodule MaraithonWeb.DashboardLive do
         </.panel>
       <% end %>
 
-      <.panel body_class="space-y-6 px-4 py-4 sm:px-6">
-        <:header>
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <.heading level={2} class="text-base/7">Actionable Insights</.heading>
-              <.text class="mt-1">
-                Open-loop recommendations from long-running Gmail, Calendar, and Slack advisors, split between threads that need you now and threads Maraithon is watching.
-              </.text>
-            </div>
-            <.badge>
-              <%= length(@insights) %> open
-            </.badge>
-          </div>
-        </:header>
+      <section class="space-y-6">
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Actionable insights</h2>
+          <span class="text-xs/5 text-zinc-500"><%= length(@insights) %> open</span>
+        </div>
 
           <.insight_group
             title="Needs Action"
@@ -1572,33 +1472,21 @@ defmodule MaraithonWeb.DashboardLive do
           />
 
           <%= if @insights == [] do %>
-            <div class="py-10 text-center text-sm/6 text-zinc-500">
-              No actionable insights yet. Start a <span class="font-medium">ai_chief_of_staff</span>, <span class="font-medium">inbox_calendar_advisor</span>, or <span class="font-medium">slack_followthrough_agent</span> and connect the required services.
-            </div>
+            <p class="text-sm/6 text-zinc-500">
+              No actionable insights yet. Start an <code class="font-mono">ai_chief_of_staff</code>, <code class="font-mono">inbox_calendar_advisor</code>, or <code class="font-mono">slack_followthrough_agent</code> agent.
+            </p>
           <% end %>
-      </.panel>
+      </section>
 
-      <.panel body_class="px-4 py-4 sm:px-6">
-        <:header>
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <.heading level={2} class="text-base/7">Agent Activity</.heading>
-              <.text class="mt-1">
-                Each installed specialist keeps its own runtime, logs, and recent work, while the full control surface still lives in the Agents workspace.
-              </.text>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <.button navigate={"/agents"}>
-                Manage Agents
-              </.button>
-              <.button navigate={"/agents/new"} variant="outline">
-                New Agent
-              </.button>
-            </div>
-          </div>
-        </:header>
+      <section>
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Agent activity</h2>
+          <.link navigate="/agents" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
+            All agents →
+          </.link>
+        </div>
 
-        <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
           <%= for overview <- @agent_overviews do %>
             <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-5">
               <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1715,12 +1603,12 @@ defmodule MaraithonWeb.DashboardLive do
           <% end %>
 
           <%= if @agent_overviews == [] do %>
-            <div class="rounded-lg border border-dashed border-zinc-950/20 bg-white px-5 py-10 text-center text-sm/6 text-zinc-500 xl:col-span-2">
+            <p class="text-sm/6 text-zinc-500 xl:col-span-2">
               No agents yet. Install a chief of staff, project manager, or coding agent to start building the operator system.
-            </div>
+            </p>
           <% end %>
         </div>
-      </.panel>
+      </section>
 
       <section class="grid grid-cols-1 gap-6 xl:grid-cols-1">
         <.panel>
@@ -1857,98 +1745,101 @@ defmodule MaraithonWeb.DashboardLive do
         </.panel>
       </section>
 
-      <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
-        <div class="border-b border-white/10 px-4 py-5 sm:px-6">
-          <h3 class="text-base/7 font-semibold text-white">Raw Logs</h3>
-          <p class="mt-1 text-sm/6 text-zinc-400">
-            Recent runtime logs captured in-app for live debugging and fleet-wide inspection.
-          </p>
-        </div>
-        <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5 sm:px-6">
+      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+          <span class="flex items-center gap-2">
+            <span>Raw logs</span>
+            <span class="text-xs/5 text-zinc-500">runtime · in-app</span>
+          </span>
+          <span class="text-xs/5 text-zinc-500 group-open:hidden">Show</span>
+          <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Hide</span>
+        </summary>
+        <div class="max-h-[28rem] overflow-y-auto border-t border-zinc-950/10 px-4 py-3 font-mono text-[11px] leading-5 sm:px-6">
           <%= for log <- @recent_logs do %>
-            <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-white/10 py-2">
+            <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-zinc-950/5 py-1.5 last:border-0">
               <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
-              <span class={["font-semibold", log_level_class(log.level)]}>
+              <span class={["font-semibold", log_level_text_class(log.level)]}>
                 <%= log.level %>
               </span>
               <div class="min-w-0">
                 <%= if metadata = log_metadata_preview(log.metadata) do %>
                   <span class="mr-2 text-zinc-500"><%= metadata %></span>
                 <% end %>
-                <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
+                <span class="break-words whitespace-pre-wrap text-zinc-700"><%= log.message %></span>
               </div>
             </div>
           <% end %>
           <%= if @recent_logs == [] do %>
-            <p class="text-sm/6 text-zinc-500">No logs captured yet.</p>
+            <p class="font-sans text-sm/6 text-zinc-500">No logs captured yet.</p>
           <% end %>
         </div>
-      </section>
+      </details>
 
-      <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
-        <div class="border-b border-white/10 px-4 py-5 sm:px-6">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h3 class="text-base/7 font-semibold text-white">Fly.io Platform Logs</h3>
-              <p class="mt-1 text-sm/6 text-zinc-400">
-                App, machine, and runner logs fetched from Fly for full production troubleshooting.
-              </p>
-            </div>
-            <.button
+      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
+          <span class="flex items-center gap-2">
+            <span>Fly.io platform logs</span>
+            <span class="text-xs/5 text-zinc-500">app · machine · runner</span>
+          </span>
+          <span class="flex items-center gap-3">
+            <button
               type="button"
               phx-click="refresh_fly_logs"
-              variant="outline"
-              class="border-white/20 bg-white/10 text-xs text-white hover:bg-white/15"
+              class="rounded-md border border-zinc-950/10 px-2 py-0.5 text-xs/5 font-medium text-zinc-700 hover:bg-zinc-950/5"
             >
-              Refresh Fly Logs
-            </.button>
+              Refresh
+            </button>
+            <span class="text-xs/5 text-zinc-500 group-open:hidden">Show</span>
+            <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Hide</span>
+          </span>
+        </summary>
+        <div class="border-t border-zinc-950/10">
+          <div :if={@fly_logs.apps != []} class="flex flex-wrap gap-1.5 px-4 pt-3 sm:px-6">
+            <span
+              :for={app <- @fly_logs.apps}
+              class="rounded-md border border-zinc-950/10 bg-zinc-50 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
+            >
+              <%= app %>
+            </span>
           </div>
-          <%= if @fly_logs.apps != [] do %>
-            <div class="mt-3 flex flex-wrap gap-2">
-              <%= for app <- @fly_logs.apps do %>
-                <span class="rounded-md bg-white/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-300">
-                  <%= app %>
-                </span>
-              <% end %>
-            </div>
-          <% end %>
-        </div>
-        <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5 sm:px-6">
-          <%= for error <- @fly_logs.errors do %>
-            <div class="mb-3 rounded-md border border-red-900 bg-red-950/50 px-3 py-2 text-red-200">
-              <%= if error[:app] do %>
-                <span class="mr-2 font-semibold"><%= error.app %></span>
-              <% end %>
-              <span><%= error.message %></span>
-            </div>
-          <% end %>
 
-          <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
-            <p class="text-sm/6 text-zinc-500">
-              Configure `FLY_API_TOKEN` and `FLY_LOG_APPS` to load Fly platform logs in-app.
-            </p>
-          <% else %>
-            <%= if @fly_logs.logs == [] do %>
-              <p class="text-sm/6 text-zinc-500">No Fly logs returned yet.</p>
+          <div class="max-h-[28rem] overflow-y-auto px-4 py-3 font-mono text-[11px] leading-5 sm:px-6">
+            <%= for error <- @fly_logs.errors do %>
+              <div class="mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-red-800">
+                <%= if error[:app] do %>
+                  <span class="mr-2 font-semibold"><%= error.app %></span>
+                <% end %>
+                <span><%= error.message %></span>
+              </div>
+            <% end %>
+
+            <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
+              <p class="font-sans text-sm/6 text-zinc-500">
+                Configure <code class="font-mono">FLY_API_TOKEN</code> and <code class="font-mono">FLY_LOG_APPS</code> to load Fly logs in-app.
+              </p>
             <% else %>
-              <%= for log <- @fly_logs.logs do %>
-                <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-white/10 py-2">
-                  <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
-                  <span class={["font-semibold", log_level_class(log.level)]}>
-                    <%= log.level %>
-                  </span>
-                  <div class="min-w-0">
-                    <%= if metadata = fly_log_metadata_preview(log) do %>
-                      <span class="mr-2 text-zinc-500"><%= metadata %></span>
-                    <% end %>
-                    <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
+              <%= if @fly_logs.logs == [] do %>
+                <p class="font-sans text-sm/6 text-zinc-500">No Fly logs returned yet.</p>
+              <% else %>
+                <%= for log <- @fly_logs.logs do %>
+                  <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-zinc-950/5 py-1.5 last:border-0">
+                    <span class="text-zinc-500"><%= format_log_timestamp(log.timestamp) %></span>
+                    <span class={["font-semibold", log_level_text_class(log.level)]}>
+                      <%= log.level %>
+                    </span>
+                    <div class="min-w-0">
+                      <%= if metadata = fly_log_metadata_preview(log) do %>
+                        <span class="mr-2 text-zinc-500"><%= metadata %></span>
+                      <% end %>
+                      <span class="break-words whitespace-pre-wrap text-zinc-700"><%= log.message %></span>
+                    </div>
                   </div>
-                </div>
+                <% end %>
               <% end %>
             <% end %>
-          <% end %>
+          </div>
         </div>
-      </section>
+      </details>
       </div>
     </Layouts.app>
     """
@@ -2590,28 +2481,6 @@ defmodule MaraithonWeb.DashboardLive do
   defp provider_label("linear"), do: "Linear"
   defp provider_label("notion"), do: "Notion"
   defp provider_label(provider), do: provider
-
-  defp provider_status_label(:connected), do: "Connected"
-  defp provider_status_label(:partial), do: "Partial"
-  defp provider_status_label(:needs_refresh), do: "Needs refresh"
-  defp provider_status_label(:disconnected), do: "Disconnected"
-  defp provider_status_label(:not_configured), do: "Not configured"
-  defp provider_status_label(status) when is_binary(status), do: status
-  defp provider_status_label(status), do: status |> to_string() |> String.replace("_", " ")
-
-  defp provider_status_class(:connected),
-    do:
-      "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
-
-  defp provider_status_class(:partial),
-    do:
-      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
-
-  defp provider_status_class(:needs_refresh),
-    do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
-
-  defp provider_status_class(_status),
-    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
   defp memory_summary_label("content_preferences"), do: "Content Preferences"
   defp memory_summary_label("telegram_behavior"), do: "Conversation Style"
@@ -3311,6 +3180,70 @@ defmodule MaraithonWeb.DashboardLive do
     """
   end
 
+  attr :label, :string, required: true
+  attr :value, :any, required: true
+  attr :unit, :string, default: nil
+  attr :description, :string, default: nil
+  attr :href, :string, default: nil
+  attr :cta, :string, default: nil
+
+  defp workspace_summary(assigns) do
+    ~H"""
+    <div class="rounded-lg border border-zinc-950/10 bg-white p-4">
+      <dt class="text-xs/5 font-medium text-zinc-500"><%= @label %></dt>
+      <dd class="mt-1 flex items-baseline gap-1.5">
+        <span class="text-xl/7 font-semibold tracking-tight text-zinc-950"><%= @value %></span>
+        <span :if={@unit} class="text-xs/5 text-zinc-500"><%= @unit %></span>
+      </dd>
+      <dd :if={@description} class="mt-2 text-sm/6 text-zinc-600 line-clamp-2"><%= @description %></dd>
+      <dd :if={@href && @cta} class="mt-3">
+        <.link href={@href} class="text-xs/5 font-medium text-zinc-950 hover:text-zinc-700">
+          <%= @cta %> →
+        </.link>
+      </dd>
+    </div>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :value, :any, required: true
+  attr :note, :string, default: nil
+
+  defp overview_stat(assigns) do
+    ~H"""
+    <div class="border-l border-zinc-950/10 pl-4">
+      <dt class="text-sm/6 font-medium text-zinc-500"><%= @label %></dt>
+      <dd class="mt-1 text-2xl/8 font-semibold tracking-tight text-zinc-950">
+        <%= @value %>
+      </dd>
+      <dd :if={@note} class="mt-1 text-xs/5 text-zinc-500"><%= @note %></dd>
+    </div>
+    """
+  end
+
+  defp dashboard_greeting(user) do
+    name =
+      user
+      |> case do
+        %{name: name} when is_binary(name) and name != "" -> name
+        %{email: email} when is_binary(email) -> email |> String.split("@") |> List.first()
+        _ -> nil
+      end
+      |> case do
+        nil -> nil
+        value -> value |> String.split([".", "_"]) |> List.first() |> String.capitalize()
+      end
+
+    period =
+      case Time.utc_now().hour do
+        h when h < 12 -> "morning"
+        h when h < 17 -> "afternoon"
+        _ -> "evening"
+      end
+
+    if name, do: "Good #{period}, #{name}", else: "Good #{period}"
+  end
+
   attr :title, :string, required: true
   attr :value, :any, required: true
   attr :value_class, :string, default: "text-zinc-950"
@@ -3392,6 +3325,29 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp log_level_class(_), do: "text-zinc-300"
+
+  defp log_level_text_class(level) when level in [:error, :critical, :alert, :emergency],
+    do: "text-red-700"
+
+  defp log_level_text_class(level) when level in [:warning, :notice], do: "text-amber-700"
+  defp log_level_text_class(:info), do: "text-emerald-700"
+  defp log_level_text_class(:debug), do: "text-sky-700"
+
+  defp log_level_text_class(level) when is_binary(level) do
+    case level do
+      "error" -> log_level_text_class(:error)
+      "critical" -> log_level_text_class(:critical)
+      "alert" -> log_level_text_class(:alert)
+      "emergency" -> log_level_text_class(:emergency)
+      "warning" -> log_level_text_class(:warning)
+      "notice" -> log_level_text_class(:notice)
+      "info" -> log_level_text_class(:info)
+      "debug" -> log_level_text_class(:debug)
+      _ -> "text-zinc-600"
+    end
+  end
+
+  defp log_level_text_class(_), do: "text-zinc-600"
 
   defp log_metadata_preview(metadata) when metadata in [%{}, nil], do: nil
 

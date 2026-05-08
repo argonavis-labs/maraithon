@@ -339,66 +339,56 @@ defmodule MaraithonWeb.AgentsLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
-        <.page_header
-          eyebrow="Agents Workspace"
-          title="Your agents"
-          subtitle="Choose an assistant, review what it does, and adjust the settings that affect your day."
-        >
-          <:actions>
-            <.badge color="zinc" class="px-3 py-1 text-sm">
-              <%= length(@all_agents) %> total
-            </.badge>
-            <.button href={~p"/agents/new"} class="min-h-11 px-5">
-              New Agent
+        <header class="flex flex-wrap items-end justify-between gap-3">
+          <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+            Agents
+          </h1>
+          <div class="flex items-center gap-2">
+            <span class="text-xs/5 text-zinc-500"><%= length(@all_agents) %> total</span>
+            <.button href={~p"/agents/new"}>
+              New agent
             </.button>
-          </:actions>
-        </.page_header>
+          </div>
+        </header>
 
-        <.panel body_class="p-0">
-          <:header>
-            <div class="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <.heading level={2} class="text-lg/7">Choose an agent</.heading>
-                <.text class="mt-1">
-                  Open an agent to see its overview, connected apps, skills, and delivery settings.
-                </.text>
-              </div>
-              <form id="agent-filters" phx-change="update_filters" class="flex flex-wrap items-center gap-3">
-                <label class="sr-only" for="agent-search">Search agents</label>
-                <.c_input
-                  id="agent-search"
-                  type="search"
-                  name="filters[q]"
-                  value={@filters.q}
-                  placeholder="Search agents"
-                  class="w-72"
-                />
-                <label class="sr-only" for="agent-status">Filter by status</label>
-                <.c_select
-                  id="agent-status"
-                  name="filters[status]"
-                >
-                  <option
-                    :for={status <- @status_options}
-                    value={status}
-                    selected={status == @filters.status}
-                  >
-                    <%= humanize_status(status) %>
-                  </option>
-                </.c_select>
-                <.button
-                  :if={@filters.status != "all" or @filters.q != ""}
-                  type="button"
-                  phx-click="clear_filters"
-                  variant="outline"
-                  class="min-h-11"
-                >
-                  Reset
-                </.button>
-              </form>
-            </div>
-          </:header>
+        <form
+          id="agent-filters"
+          phx-change="update_filters"
+          class="flex flex-wrap items-center gap-2"
+        >
+          <label class="sr-only" for="agent-search">Search agents</label>
+          <div class="w-72">
+            <.c_input
+              id="agent-search"
+              type="search"
+              name="filters[q]"
+              value={@filters.q}
+              placeholder="Search agents"
+            />
+          </div>
+          <label class="sr-only" for="agent-status">Filter by status</label>
+          <div class="w-44">
+            <.c_select id="agent-status" name="filters[status]">
+              <option
+                :for={status <- @status_options}
+                value={status}
+                selected={status == @filters.status}
+              >
+                <%= humanize_status(status) %>
+              </option>
+            </.c_select>
+          </div>
+          <button
+            :if={@filters.status != "all" or @filters.q != ""}
+            type="button"
+            phx-click="clear_filters"
+            class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
+          >
+            Reset
+          </button>
+        </form>
 
+        <div>
           <.table>
               <.table_head>
                 <.table_row>
@@ -469,43 +459,29 @@ defmodule MaraithonWeb.AgentsLive do
 
                 <%= if @all_agents == [] do %>
                   <.table_row>
-                    <.table_cell colspan="4" class="py-12">
-                      <div class="rounded-lg border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
-                        <p class="text-base font-semibold text-zinc-950">No agents exist yet.</p>
-                        <p class="mt-2 text-sm text-zinc-600">
-                          Start with the builder, then come back here to inspect, edit, or control the runtime.
-                        </p>
-                        <.button href={~p"/agents/new"} class="mt-4">
-                          Create your first agent
-                        </.button>
-                      </div>
+                    <.table_cell colspan="4" class="py-10 text-center text-sm/6 text-zinc-500">
+                      No agents yet. Start with the builder to create one.
                     </.table_cell>
                   </.table_row>
                 <% end %>
 
                 <%= if @all_agents != [] and @agents == [] do %>
                   <.table_row>
-                    <.table_cell colspan="4" class="py-12">
-                      <div class="rounded-lg border border-dashed border-zinc-950/10 bg-zinc-50 px-6 py-8 text-center">
-                        <p class="text-base font-semibold text-zinc-950">No agents match the current filters.</p>
-                        <p class="mt-2 text-sm text-zinc-600">
-                          Clear the current search or status filter to see the full registry again.
-                        </p>
-                        <.button
-                          type="button"
-                          phx-click="clear_filters"
-                          variant="outline"
-                          class="mt-4"
-                        >
-                          Reset filters
-                        </.button>
-                      </div>
+                    <.table_cell colspan="4" class="py-10 text-center text-sm/6 text-zinc-500">
+                      No agents match the current filters.
+                      <button
+                        type="button"
+                        phx-click="clear_filters"
+                        class="ml-1 font-medium text-zinc-950 hover:text-zinc-700"
+                      >
+                        Reset filters →
+                      </button>
                     </.table_cell>
                   </.table_row>
                 <% end %>
               </.table_body>
             </.table>
-        </.panel>
+        </div>
 
         <.panel body_class="p-0">
           <:header>

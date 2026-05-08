@@ -162,28 +162,22 @@ defmodule MaraithonWeb.AgentBuilderLive do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-5">
-        <section class="border-b border-zinc-950/10 pb-5">
-          <div class="flex flex-wrap items-start justify-between gap-4">
-            <div class="max-w-3xl">
-              <p class="text-sm font-medium text-zinc-500">Agent builder</p>
-              <h1 class="mt-1 text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl">
-                Create a new agent
-              </h1>
-              <p class="mt-2 max-w-2xl text-sm text-zinc-600">
-                Choose the job, confirm the connected apps it can use, then launch it.
-              </p>
-            </div>
-
-            <div class="flex flex-wrap gap-2">
-              <.button href={~p"/connectors"} variant="outline">
-                Connectors
-              </.button>
-              <.button href={~p"/agents"}>
-                Back to agents
-              </.button>
-            </div>
+        <header class="flex flex-wrap items-end justify-between gap-3">
+          <div class="min-w-0">
+            <.link
+              navigate={~p"/agents"}
+              class="inline-flex items-center gap-1 text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
+            >
+              <span aria-hidden="true">←</span> Agents
+            </.link>
+            <h1 class="mt-1 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+              New agent
+            </h1>
+            <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
+              Pick the job, confirm the connected apps it can use, then launch.
+            </p>
           </div>
-        </section>
+        </header>
 
         <%= if @builder_error do %>
           <.alert color="rose">
@@ -814,21 +808,29 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
           <aside class="space-y-5 xl:sticky xl:top-5 xl:self-start">
             <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
-              <p class="text-sm font-semibold text-zinc-950">What goes in</p>
+              <p class="text-sm/6 font-semibold text-zinc-950">What goes in</p>
               <div class="mt-3 divide-y divide-zinc-950/5">
-                <div :for={item <- @input_preview} class="py-3 first:pt-0 last:pb-0">
-                  <p class="text-sm font-medium text-zinc-950"><%= item.title %></p>
-                  <p class="mt-1 text-sm leading-6 text-zinc-600"><%= item.body %></p>
+                <div :for={item <- @input_preview} class="py-2.5 first:pt-0 last:pb-0">
+                  <p :if={item.title} class="text-xs/5 font-medium text-zinc-500">
+                    <%= item.title %>
+                  </p>
+                  <p class={["text-sm/6 text-zinc-700", item.title && "mt-0.5"]}>
+                    <%= item.body %>
+                  </p>
                 </div>
               </div>
             </section>
 
             <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
-              <p class="text-sm font-semibold text-zinc-950">What comes out</p>
+              <p class="text-sm/6 font-semibold text-zinc-950">What comes out</p>
               <div class="mt-3 divide-y divide-zinc-950/5">
-                <div :for={item <- @output_preview} class="py-3 first:pt-0 last:pb-0">
-                  <p class="text-sm font-medium text-zinc-950"><%= item.title %></p>
-                  <p class="mt-1 text-sm leading-6 text-zinc-600"><%= item.body %></p>
+                <div :for={item <- @output_preview} class="py-2.5 first:pt-0 last:pb-0">
+                  <p :if={item.title} class="text-xs/5 font-medium text-zinc-500">
+                    <%= item.title %>
+                  </p>
+                  <p class={["text-sm/6 text-zinc-700", item.title && "mt-0.5"]}>
+                    <%= item.body %>
+                  </p>
                 </div>
               </div>
             </section>
@@ -1090,13 +1092,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
   end
 
   defp input_preview(spec, launch) do
-    base =
-      spec.inputs
-      |> Enum.with_index(1)
-      |> Enum.map(fn {line, index} ->
-        %{title: "Input #{index}", body: line}
-      end)
-
+    base = Enum.map(spec.inputs, fn line -> %{title: nil, body: line} end)
     base ++ dynamic_input_preview(spec.id, launch)
   end
 
@@ -1295,11 +1291,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_input_preview(_behavior, _launch), do: []
 
   defp output_preview(spec, launch) do
-    (spec.outputs
-     |> Enum.with_index(1)
-     |> Enum.map(fn {line, index} ->
-       %{title: "Output #{index}", body: line}
-     end)) ++ dynamic_output_preview(spec.id, launch)
+    base = Enum.map(spec.outputs, fn line -> %{title: nil, body: line} end)
+    base ++ dynamic_output_preview(spec.id, launch)
   end
 
   defp dynamic_output_preview("prompt_agent", launch) do

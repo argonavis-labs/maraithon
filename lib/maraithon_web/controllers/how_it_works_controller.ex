@@ -14,27 +14,27 @@ defmodule MaraithonWeb.HowItWorksController do
   defp stages do
     [
       %{
-        title: "1. Ingress",
+        title: "Ingress",
         description:
           "External systems push events via webhook endpoints or API ingress. Each event is normalized and persisted."
       },
       %{
-        title: "2. Runtime Scheduling",
+        title: "Runtime scheduling",
         description:
           "The runtime scheduler claims queued work, dispatches agent jobs, and tracks retries, staleness, and delivery state."
       },
       %{
-        title: "3. Agent Reasoning",
+        title: "Agent reasoning",
         description:
           "Agents run their configured behavior using the active LLM provider and persist every effect for durability and auditability."
       },
       %{
-        title: "4. Tool Execution",
+        title: "Tool execution",
         description:
           "Tool effects are executed through allow-listed adapters (filesystem, HTTP, connectors), with limits and timeout controls."
       },
       %{
-        title: "5. Monitoring",
+        title: "Monitoring",
         description:
           "Admin APIs and dashboard telemetry expose health checks, queue depth, recent failures, and raw logs for operators."
       }

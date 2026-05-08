@@ -1,34 +1,41 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-  <div class="space-y-6">
-    <.page_header
-      eyebrow="Operator Guide"
-      title="How it works"
-      subtitle="Maraithon is a long-running agent runtime with explicit control loops, durable storage, and observable operations."
-    />
+  <div class="space-y-10">
+    <header>
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        How it works
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
+        Maraithon is a long-running agent runtime with explicit control loops, durable storage, and observable operations.
+      </p>
+    </header>
 
-    <.panel>
-      <:header>
-        <.heading level={2} class="text-base/7">Execution Flow</.heading>
-      </:header>
-      <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <%= for stage <- @stages do %>
-          <article class="rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
-            <h3 class="text-sm/6 font-medium text-zinc-950"><%= stage.title %></h3>
-            <p class="mt-2 text-sm/6 text-zinc-600"><%= stage.description %></p>
-          </article>
-        <% end %>
+    <section>
+      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <h2 class="text-base/7 font-semibold text-zinc-950">Execution flow</h2>
+        <span class="text-xs/5 text-zinc-500">Five stages</span>
       </div>
-    </.panel>
+      <ol role="list" class="mt-2 divide-y divide-zinc-950/5">
+        <li :for={{stage, index} <- Enum.with_index(@stages, 1)} class="flex items-start gap-4 py-4">
+          <span class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full border border-zinc-950/10 bg-zinc-50 text-xs/5 font-medium text-zinc-600">
+            <%= index %>
+          </span>
+          <div class="min-w-0">
+            <h3 class="text-sm/6 font-semibold text-zinc-950"><%= stage.title %></h3>
+            <p class="mt-0.5 text-sm/6 text-zinc-600"><%= stage.description %></p>
+          </div>
+        </li>
+      </ol>
+    </section>
 
-    <.panel>
-      <:header>
-        <.heading level={2} class="text-base/7">Engineering Principles</.heading>
-      </:header>
-      <ul class="space-y-2 text-sm/6 text-zinc-700">
-        <li :for={principle <- @principles} class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2">
+    <section>
+      <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+        <h2 class="text-base/7 font-semibold text-zinc-950">Engineering principles</h2>
+      </div>
+      <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
+        <li :for={principle <- @principles} class="py-3 text-sm/6 text-zinc-700">
           <%= principle %>
         </li>
       </ul>
-    </.panel>
+    </section>
   </div>
 </Layouts.app>
