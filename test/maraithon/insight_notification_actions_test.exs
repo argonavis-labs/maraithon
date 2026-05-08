@@ -218,9 +218,17 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     {:ok, _token} =
       OAuth.store_tokens(user_id, "slack:T123", %{
-        access_token: "slack-access",
+        access_token: "slack-bot-access",
         refresh_token: "slack-refresh",
         expires_in: 3600
+      })
+
+    {:ok, _user_token} =
+      OAuth.store_tokens(user_id, "slack:T123:user:U999", %{
+        access_token: "slack-user-access",
+        refresh_token: "slack-user-refresh",
+        expires_in: 3600,
+        scopes: ["chat:write", "search:read"]
       })
 
     {:ok, [insight]} =
@@ -277,6 +285,8 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert drafted.text =~ "Owner is me"
 
     Bypass.expect_once(bypass, "POST", "/chat.postMessage", fn conn ->
+      assert ["Bearer slack-user-access"] == Plug.Conn.get_req_header(conn, "authorization")
+
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       payload = Jason.decode!(body)
       assert payload["channel"] == "C999"

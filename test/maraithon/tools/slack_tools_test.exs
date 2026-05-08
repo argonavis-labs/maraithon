@@ -111,6 +111,48 @@ defmodule Maraithon.Tools.SlackToolsTest do
     assert hd(result.messages).text == "Need this today?"
   end
 
+  test "SlackListMessages prefers user token when both user and bot tokens exist" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}/api")
+
+    assert {:ok, _bot_token} =
+             OAuth.store_tokens("slack-tool-user-2b", "slack:T123", %{
+               access_token: "xoxb-bot-token",
+               scopes: ["channels:history"]
+             })
+
+    assert {:ok, _user_token} =
+             OAuth.store_tokens("slack-tool-user-2b", "slack:T123:user:U999", %{
+               access_token: "xoxp-user-token",
+               scopes: ["channels:history", "groups:history", "im:history", "mpim:history"]
+             })
+
+    Bypass.expect_once(bypass, "GET", "/api/conversations.history", fn conn ->
+      assert ["Bearer xoxp-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "ok" => true,
+          "messages" => [%{"ts" => "1762502400.000001", "user" => "U1", "text" => "User-visible"}]
+        })
+      )
+    end)
+
+    assert {:ok, result} =
+             SlackListMessages.execute(%{
+               "user_id" => "slack-tool-user-2b",
+               "team_id" => "T123",
+               "channel" => "C111"
+             })
+
+    assert result.token_provider == "slack:T123:user:U999"
+    assert hd(result.messages).text == "User-visible"
+  end
+
   test "SlackGetThreadReplies reads thread messages" do
     bypass = Bypass.open()
 

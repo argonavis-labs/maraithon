@@ -827,7 +827,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
               "access_token" => "xoxp-user-access-token",
               "refresh_token" => "xoxe-refresh-user",
               "expires_in" => 43_200,
-              "scope" => "search:read,im:history",
+              "scope" => "search:read,im:history,chat:write",
               "token_type" => "user"
             }
           })
@@ -855,6 +855,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert user_token.access_token == "xoxp-user-access-token"
       assert user_token.refresh_token == "xoxe-refresh-user"
       assert "search:read" in (user_token.scopes || [])
+      assert "chat:write" in (user_token.scopes || [])
     end
   end
 

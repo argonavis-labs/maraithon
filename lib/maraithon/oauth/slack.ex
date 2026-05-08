@@ -45,6 +45,7 @@ defmodule Maraithon.OAuth.Slack do
     "im:read",
     "mpim:history",
     "mpim:read",
+    "chat:write",
     "search:read",
     "users:read"
   ]

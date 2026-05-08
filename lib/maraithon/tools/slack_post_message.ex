@@ -42,7 +42,8 @@ defmodule Maraithon.Tools.SlackPostMessage do
     SlackHelpers.resolve_access_token(
       user_id,
       team_id,
-      token_preference: ActionHelpers.optional_string(args, "token_preference"),
+      token_preference: ActionHelpers.optional_string(args, "token_preference") || "user",
+      required_scopes: ["chat:write"],
       slack_user_id: ActionHelpers.optional_string(args, "slack_user_id")
     )
   end

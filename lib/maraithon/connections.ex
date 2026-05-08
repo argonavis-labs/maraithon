@@ -335,10 +335,10 @@ defmodule Maraithon.Connections do
       provider_details(bot_token, [
         if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
         "Bot scopes: #{MapSet.size(bot_scopes)} granted",
-        if(user_tokens != [], do: "Personal Slack access connected for DM scans."),
+        if(user_tokens != [], do: "Personal Slack access connected for read/write as user."),
         if(user_tokens == [],
           do:
-            "Reconnect Slack with user scopes enabled to scan personal DMs and private follow-through."
+            "Reconnect Slack with user scopes enabled to read private context and send as the user."
         )
       ])
 
@@ -372,7 +372,7 @@ defmodule Maraithon.Connections do
       provider: "slack",
       label: "Slack",
       description:
-        "Install Maraithon in Slack to track open loops in channels and personal messages.",
+        "Install Maraithon in Slack to track open loops and send replies with user-scoped access.",
       status: status,
       configured?: configured?,
       updated_at: latest_updated_at(tokens),
@@ -1306,7 +1306,7 @@ defmodule Maraithon.Connections do
       permissions: [
         "Read channel and thread history",
         "Read DM and MPIM history with user scopes",
-        "Post messages back into channels",
+        "Post messages and thread replies with the connected user's Slack token",
         "Process Slack Events API webhooks for near-real-time updates"
       ],
       callback_urls: [
@@ -1342,7 +1342,7 @@ defmodule Maraithon.Connections do
       ],
       setup_notes: [
         "Enable OAuth token rotation in your Slack app so refresh tokens are issued.",
-        "Install the app to each workspace and request both bot scopes and user scopes for DM scanning.",
+        "Install the app to each workspace and request both bot scopes and user scopes for read/write as user.",
         "Configure Event Subscriptions with the events callback URL and enable message events for channels and DMs.",
         "After install, reconnect once if scopes change so Maraithon stores the updated grant."
       ]

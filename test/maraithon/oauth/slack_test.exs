@@ -40,6 +40,7 @@ defmodule Maraithon.OAuth.SlackTest do
 
       assert "im:history" in scopes
       assert "mpim:history" in scopes
+      assert "chat:write" in scopes
       assert "search:read" in scopes
     end
   end
@@ -62,6 +63,9 @@ defmodule Maraithon.OAuth.SlackTest do
       assert url =~ "state=test_state_123"
       assert url =~ "scope="
       assert url =~ "user_scope="
+
+      assert URI.decode(url) =~
+               "user_scope=channels:history,channels:read,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,chat:write,search:read,users:read"
     end
 
     test "generates URL with custom scopes" do

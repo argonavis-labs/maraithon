@@ -66,14 +66,20 @@ defmodule Maraithon.Tools.ActionToolsTest do
 
     Application.put_env(:maraithon, :slack, api_base_url: "http://localhost:#{bypass.port}")
 
-    assert {:ok, _token} =
+    assert {:ok, _bot_token} =
              OAuth.store_tokens("user-1", "slack:T123", %{
-               access_token: "slack-token",
+               access_token: "slack-bot-token",
+               scopes: ["chat:write"]
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("user-1", "slack:T123:user:U999", %{
+               access_token: "slack-user-token",
                scopes: ["chat:write"]
              })
 
     Bypass.expect_once(bypass, "POST", "/chat.postMessage", fn conn ->
-      assert ["Bearer slack-token"] == Plug.Conn.get_req_header(conn, "authorization")
+      assert ["Bearer slack-user-token"] == Plug.Conn.get_req_header(conn, "authorization")
 
       {:ok, body, conn} = Plug.Conn.read_body(conn)
       request = Jason.decode!(body)
@@ -85,7 +91,39 @@ defmodule Maraithon.Tools.ActionToolsTest do
       |> Plug.Conn.resp(200, Jason.encode!(%{"ok" => true, "ts" => "123.456"}))
     end)
 
-    assert {:ok, %{source: "slack", ts: "123.456"}} =
+    assert {:ok, %{source: "slack", ts: "123.456", token_provider: "slack:T123:user:U999"}} =
+             SlackPostMessage.execute(%{
+               "user_id" => "user-1",
+               "team_id" => "T123",
+               "channel" => "C456",
+               "text" => "Heads up"
+             })
+  end
+
+  test "SlackPostMessage requires a write-capable user token by default" do
+    assert {:ok, _token} =
+             OAuth.store_tokens("user-1", "slack:T123", %{
+               access_token: "slack-bot-token",
+               scopes: ["chat:write"]
+             })
+
+    assert {:error, "slack_user_scope_not_connected"} =
+             SlackPostMessage.execute(%{
+               "user_id" => "user-1",
+               "team_id" => "T123",
+               "channel" => "C456",
+               "text" => "Heads up"
+             })
+  end
+
+  test "SlackPostMessage reports stale user scopes before calling Slack" do
+    assert {:ok, _token} =
+             OAuth.store_tokens("user-1", "slack:T123:user:U999", %{
+               access_token: "slack-user-token",
+               scopes: ["search:read"]
+             })
+
+    assert {:error, "slack_user_scope_missing: chat:write"} =
              SlackPostMessage.execute(%{
                "user_id" => "user-1",
                "team_id" => "T123",
