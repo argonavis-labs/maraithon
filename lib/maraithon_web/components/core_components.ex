@@ -486,7 +486,7 @@ defmodule MaraithonWeb.CoreComponents do
 
   defp button_class(variant, color, extra) do
     base =
-      "group relative isolate inline-flex min-h-9 items-center justify-center gap-x-2 rounded-lg border px-3 py-1.5 text-sm/6 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+      "relative isolate inline-flex items-center justify-center gap-x-2 rounded-lg border px-3 py-1.5 text-sm/6 font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
 
     style =
       case {variant, color} do

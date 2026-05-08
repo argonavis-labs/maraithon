@@ -739,8 +739,8 @@ defmodule MaraithonWeb.DashboardLive do
 
         <div class="mt-4">
           <%= if @todos == [] do %>
-            <p class="rounded-lg border border-dashed border-zinc-950/10 px-4 py-10 text-center text-sm/6 text-zinc-500">
-              No open todos yet. Maraithon will surface work here as agents notice it.
+            <p class="text-sm/6 text-zinc-500">
+              All caught up. Maraithon will surface work here as agents notice it.
             </p>
           <% else %>
             <ul role="list" class="divide-y divide-zinc-950/5">

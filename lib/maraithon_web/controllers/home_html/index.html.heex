@@ -1,30 +1,44 @@
 <Layouts.app flash={@flash} show_nav={false}>
-  <section class="mx-auto max-w-md">
-    <.page_header
-      eyebrow="Maraithon"
-      title="Sign in"
-      subtitle="Enter your email and we'll send a secure magic link."
-      class="pb-5"
-    />
-
-    <.panel class="mt-6">
-      <.form for={@form} action={~p"/auth/magic-link"} method="post" class="space-y-5">
-        <.field label="Email" for="magic_link_email">
-          <.c_input
-            id="magic_link_email"
-            type="email"
-            name="magic_link[email]"
-            value={@form[:email].value}
-            required
-            autocomplete="email"
-          />
-        </.field>
-        <div class="flex justify-end">
-          <.button type="submit" color="indigo">
-          Send magic link
-          </.button>
+  <main class="flex min-h-svh flex-col p-2 bg-zinc-100">
+    <div class="flex grow items-center justify-center p-6 lg:rounded-lg lg:bg-white lg:p-10 lg:shadow-xs lg:ring-1 lg:ring-zinc-950/5">
+      <div class="w-full max-w-sm">
+        <div class="flex items-center gap-3">
+          <span class="flex size-9 items-center justify-center rounded-lg bg-zinc-950 text-white">
+            <svg viewBox="0 0 16 16" class="size-5 fill-current" aria-hidden="true">
+              <path d="M2.5 2h2.4l3.1 5.4L11.1 2h2.4v12h-1.9V5.5L8.6 11.1H7.4L4.4 5.5V14H2.5V2Z" />
+            </svg>
+          </span>
+          <span class="text-sm/5 font-semibold tracking-tight text-zinc-950">Maraithon</span>
         </div>
-      </.form>
-    </.panel>
-  </section>
+
+        <h1 class="mt-10 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+          Sign in
+        </h1>
+        <p class="mt-1 text-sm/6 text-zinc-500">
+          Enter your email and we'll send a one-time link.
+        </p>
+
+        <.form for={@form} action={~p"/auth/magic-link"} method="post" class="mt-8 space-y-5">
+          <.field label="Email" for="magic_link_email">
+            <.c_input
+              id="magic_link_email"
+              type="email"
+              name="magic_link[email]"
+              value={@form[:email].value}
+              required
+              autocomplete="email"
+              placeholder="you@example.com"
+            />
+          </.field>
+          <.button type="submit" class="w-full">
+            Email me a link
+          </.button>
+        </.form>
+
+        <p class="mt-8 text-xs/5 text-zinc-500">
+          Long-running agent runtime · links expire in 15 minutes.
+        </p>
+      </div>
+    </div>
+  </main>
 </Layouts.app>
