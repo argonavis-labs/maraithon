@@ -50,7 +50,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       |> assign(
         page_title: "Build Agent",
         current_path: "/agents/new",
-        behavior_specs: AgentBuilder.behavior_specs(),
+        behavior_specs: AgentBuilder.library_specs(),
         cost_profile_options: AgentBuilder.cost_profile_options(),
         provider_map: providers,
         connection_errors: connection_errors,

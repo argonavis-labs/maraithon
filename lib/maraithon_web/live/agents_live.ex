@@ -35,7 +35,7 @@ defmodule MaraithonWeb.AgentsLive do
         launch: default_launch_params(),
         launch_error: nil,
         route_state: nil,
-        library: AgentBuilder.behavior_specs()
+        library: AgentBuilder.library_specs()
       )
 
     if connected?(socket) do

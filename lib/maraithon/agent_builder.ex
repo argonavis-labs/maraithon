@@ -754,7 +754,20 @@ defmodule Maraithon.AgentBuilder do
 
   @behavior_spec_by_id Map.new(@behavior_specs, &{&1.id, &1})
 
+  # Behavior ids that have been superseded by another spec. They are
+  # still recognised by the runtime so existing agents keep working,
+  # but they no longer appear in the library or new-agent builder.
+  @hidden_library_ids ~w(inbox_calendar_advisor)
+
   def behavior_specs, do: @behavior_specs
+
+  @doc """
+  Specs to surface in the in-app library and new-agent builder. Hides
+  any behavior whose id is in `@hidden_library_ids`.
+  """
+  def library_specs do
+    Enum.reject(@behavior_specs, &(&1.id in @hidden_library_ids))
+  end
 
   def behavior_spec(id) when is_binary(id) do
     id
