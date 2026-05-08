@@ -161,29 +161,29 @@ defmodule MaraithonWeb.AgentBuilderLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
-      <div class="space-y-6">
-        <section class="overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_top_left,_rgba(129,140,248,0.22),_transparent_30%),linear-gradient(135deg,_#0f172a,_#172554_58%,_#1d4ed8)] px-6 py-7 text-white shadow-xl">
+      <div class="space-y-5">
+        <section class="border-b border-zinc-950/10 pb-5">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div class="max-w-3xl">
-              <p class="text-xs font-semibold uppercase tracking-[0.3em] text-indigo-200">
-                Agent Builder
-              </p>
-              <h1 class="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Create an agent with a clear contract</h1>
-              <p class="mt-3 max-w-2xl text-sm text-slate-200 sm:text-base">
-                Pick a template, review exactly what goes in and what comes out, confirm the required permissions, then launch it. New agents start running immediately after creation.
+              <p class="text-sm font-medium text-zinc-500">Agent builder</p>
+              <h1 class="mt-1 text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl">
+                Create a new agent
+              </h1>
+              <p class="mt-2 max-w-2xl text-sm text-zinc-600">
+                Choose the job, confirm the connected apps it can use, then launch it.
               </p>
             </div>
 
             <div class="flex flex-wrap gap-2">
               <a
                 href={~p"/connectors"}
-                class="inline-flex items-center rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white hover:bg-white/15"
+                class="inline-flex items-center rounded-md border border-zinc-950/10 bg-white px-3 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
               >
-                Review connectors
+                Connectors
               </a>
               <a
                 href={~p"/agents"}
-                class="inline-flex items-center rounded-full bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-100"
+                class="inline-flex items-center rounded-md bg-zinc-950 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
               >
                 Back to agents
               </a>
@@ -192,13 +192,13 @@ defmodule MaraithonWeb.AgentBuilderLive do
         </section>
 
         <%= if @builder_error do %>
-          <section class="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
+          <section class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 shadow-sm">
             <%= @builder_error %>
           </section>
         <% end %>
 
         <%= if @connection_errors != [] do %>
-          <section class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
+          <section class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
             <p class="font-medium">Permission readiness could not be fully verified.</p>
             <p class="mt-1 text-amber-800">
               Connector status is temporarily degraded, so the builder is showing best-effort guidance.
@@ -206,17 +206,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
           </section>
         <% end %>
 
-        <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)]">
-          <div class="space-y-6">
-            <section class="rounded-2xl bg-white shadow">
-              <div class="border-b border-slate-200 px-5 py-5">
-                <h2 class="text-lg font-semibold text-slate-900">Choose a template</h2>
-                <p class="mt-1 text-sm text-slate-500">
-                  The template controls which inputs matter, what the agent produces, and which permissions need to be ready.
+        <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(340px,0.9fr)]">
+          <div class="space-y-5">
+            <section class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
+              <div class="border-b border-zinc-950/10 px-5 py-4">
+                <h2 class="text-base font-semibold text-zinc-950">Template</h2>
+                <p class="mt-1 text-sm text-zinc-500">
+                  Pick the outcome you want. Each row shows the work it will do and the apps it needs.
                 </p>
               </div>
 
-              <div class="grid grid-cols-1 gap-4 p-5 md:grid-cols-2">
+              <div class="divide-y divide-zinc-950/5">
                 <button
                   :for={spec <- @behavior_specs}
                   type="button"
@@ -224,56 +224,57 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   phx-value-behavior={spec.id}
                   class={behavior_card_class(@selected_spec.id == spec.id)}
                 >
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <p class="text-base font-semibold text-slate-900"><%= spec.label %></p>
-                      <p class="mt-1 text-xs font-semibold uppercase tracking-[0.24em] text-indigo-600"><%= spec.category %></p>
-                    </div>
-                    <span class={behavior_chip_class(@selected_spec.id == spec.id)}>
-                      <%= if @selected_spec.id == spec.id, do: "Selected", else: "Template" %>
+                  <span class={behavior_indicator_class(@selected_spec.id == spec.id)}></span>
+                  <span class="min-w-0 flex-1">
+                    <span class="flex flex-wrap items-center gap-2">
+                      <span class="text-sm font-semibold text-zinc-950"><%= spec.label %></span>
+                      <span class="rounded-md bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600">
+                        <%= spec.category %>
+                      </span>
                     </span>
-                  </div>
-                  <p class="mt-3 text-sm leading-6 text-slate-600"><%= spec.summary %></p>
+                    <span class="mt-1 block text-sm leading-6 text-zinc-600"><%= spec.summary %></span>
+                    <span class="mt-2 block text-xs text-zinc-500">
+                      <%= spec_requirement_summary(spec) %>
+                    </span>
+                  </span>
+                  <span class="shrink-0 text-xs font-medium text-zinc-500">
+                    <%= if @selected_spec.id == spec.id, do: "Selected", else: "Choose" %>
+                  </span>
                 </button>
               </div>
             </section>
 
-            <section class="rounded-2xl bg-white shadow">
-              <div class="border-b border-slate-200 px-5 py-5">
-                <div class="flex flex-wrap items-start justify-between gap-3">
+            <section class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
+              <div class="border-b border-zinc-950/10 px-5 py-4">
+                <div class="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 class="text-lg font-semibold text-slate-900">Configure this agent</h2>
-                    <p class="mt-1 text-sm text-slate-500">
-                      Start with the focused setup. Switch to Advanced when you want to tune scan depth, cadence, budgets, or raw config.
+                    <h2 class="text-base font-semibold text-zinc-950">Setup</h2>
+                    <p class="mt-1 text-sm text-zinc-500">
+                      Configure only what this template needs. Advanced keeps the lower-level controls available.
                     </p>
                   </div>
-                  <div class="flex flex-wrap items-center gap-2">
-                    <div class="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
-                      <button
-                        type="button"
-                        phx-click="set_builder_mode"
-                        phx-value-mode="simple"
-                        class={builder_mode_button_class(@builder_mode == "simple")}
-                      >
-                        Simple
-                      </button>
-                      <button
-                        type="button"
-                        phx-click="set_builder_mode"
-                        phx-value-mode="advanced"
-                        class={builder_mode_button_class(@builder_mode == "advanced")}
-                      >
-                        Advanced
-                      </button>
-                    </div>
-                    <span class="rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-indigo-700">
-                      Starts immediately
-                    </span>
+                  <div class="inline-flex rounded-lg border border-zinc-950/10 bg-zinc-50 p-1">
+                    <button
+                      type="button"
+                      phx-click="set_builder_mode"
+                      phx-value-mode="simple"
+                      class={builder_mode_button_class(@builder_mode == "simple")}
+                    >
+                      Simple
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="set_builder_mode"
+                      phx-value-mode="advanced"
+                      class={builder_mode_button_class(@builder_mode == "advanced")}
+                    >
+                      Advanced
+                    </button>
                   </div>
                 </div>
               </div>
 
-              <form id="agent-builder-form" phx-change="update_launch" phx-submit="create_agent" class="space-y-6 px-5 py-5">
+              <form id="agent-builder-form" phx-change="update_launch" phx-submit="create_agent" class="space-y-5 px-5 py-5">
                 <input type="hidden" name="launch[behavior]" value={@launch["behavior"]} />
                 <input type="hidden" name="launch[builder_mode]" value={@builder_mode} />
                 <input :for={field <- @hidden_fields} type="hidden" name={"launch[#{field}]"} value={Map.get(@launch, field, "")} />
@@ -284,18 +285,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <% end %>
 
                 <%= if @builder_mode == "simple" do %>
-                  <div class="rounded-2xl border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-sky-950">
+                  <div class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
                     <p class="font-medium">Focused setup</p>
                     <p class="mt-1 text-sky-900/80">
-                      Start by choosing the coverage and spend level you want. Maraithon will set the scan depth, cadence, and budgets for you.
-                      <%= @hidden_simple_count %> advanced settings stay on their defaults unless you open Advanced.
+                      Set the name, scope, and coverage. <%= @hidden_simple_count %> advanced settings stay on defaults unless you open Advanced.
                     </p>
                   </div>
                 <% end %>
 
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
                   <div>
-                    <label for="launch_name" class="block text-sm font-medium text-slate-700">
+                    <label for="launch_name" class="block text-sm font-medium text-zinc-700">
                       Agent name
                     </label>
                     <input
@@ -303,32 +303,34 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="text"
                       name="launch[name]"
                       value={@launch["name"]}
-                      placeholder="optional display name"
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                      placeholder="Optional display name"
+                      class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                     />
-                    <p class="mt-2 text-xs text-slate-500">
-                      This is the name operators will see in the Agents workspace. If blank, Maraithon generates one.
+                    <p class="mt-2 text-xs text-zinc-500">
+                      Leave blank and Maraithon will name it from the template.
                     </p>
                   </div>
 
-                  <div class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                    <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Selected template</p>
-                    <p class="mt-2 text-base font-semibold text-slate-900"><%= @selected_spec.label %></p>
-                    <p class="mt-1 text-sm text-slate-600"><%= @selected_spec.summary %></p>
+                  <div class="rounded-lg border border-zinc-950/10 bg-zinc-50 px-4 py-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <p class="text-sm font-semibold text-zinc-950"><%= @selected_spec.label %></p>
+                      <span class="text-xs font-medium text-zinc-500"><%= @selected_spec.category %></span>
+                    </div>
+                    <p class="mt-2 text-sm leading-6 text-zinc-600"><%= @selected_spec.summary %></p>
                   </div>
                 </div>
 
                 <%= if @projects != [] do %>
-                  <div class="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+                  <div class="rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                       <div>
-                        <label for="launch_project_id" class="block text-sm font-medium text-slate-700">
+                        <label for="launch_project_id" class="block text-sm font-medium text-zinc-700">
                           Attach to project
                         </label>
                         <select
                           id="launch_project_id"
                           name="launch[project_id]"
-                          class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                          class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                         >
                           <option value="">No project</option>
                           <option
@@ -339,16 +341,16 @@ defmodule MaraithonWeb.AgentBuilderLive do
                             <%= project.name %>
                           </option>
                         </select>
-                        <p class="mt-2 text-xs text-slate-500">
+                        <p class="mt-2 text-xs text-zinc-500">
                           Attach this agent to a project so Maraithon can use its output when you ask about that project in chat.
                         </p>
                       </div>
 
-                      <div class="rounded-2xl border border-white/70 bg-white px-4 py-3">
-                        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
+                      <div class="rounded-lg border border-white/70 bg-white px-4 py-3">
+                        <p class="text-xs font-semibold text-emerald-700">
                           Why this matters
                         </p>
-                        <p class="mt-2 text-sm text-slate-700">
+                        <p class="mt-2 text-sm text-zinc-700">
                           Project-scoped agents feed local project state instead of disappearing into global noise. This is especially important for the project manager and coding agent flows.
                         </p>
                       </div>
@@ -357,7 +359,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "cost_profile") do %>
-                  <div class="space-y-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
+                  <div class="space-y-4 rounded-lg border border-violet-200 bg-violet-50/60 p-4">
                     <div>
                       <p class="text-sm font-medium text-violet-950">Coverage and spend</p>
                       <p class="mt-1 text-xs text-violet-900/80">
@@ -379,14 +381,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         />
                         <div class="flex items-start justify-between gap-3">
                           <div>
-                            <p class="text-sm font-semibold text-slate-900"><%= option.label %></p>
-                            <p class="mt-1 text-xs leading-5 text-slate-600"><%= option.description %></p>
+                            <p class="text-sm font-semibold text-zinc-950"><%= option.label %></p>
+                            <p class="mt-1 text-xs leading-5 text-zinc-600"><%= option.description %></p>
                           </div>
-                          <span class="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-700">
+                          <span class="rounded-md bg-white/80 px-2 py-1 text-[11px] font-semibold text-violet-700">
                             <%= if @launch["cost_profile"] == option.id, do: "Selected", else: "Option" %>
                           </span>
                         </div>
-                        <p class="mt-3 text-xs leading-5 text-slate-700">
+                        <p class="mt-3 text-xs leading-5 text-zinc-700">
                           <%= cost_profile_summary(@selected_spec_full.id, option.id) %>
                         </p>
                       </label>
@@ -396,16 +398,16 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
                 <%= if field_visible?(@selected_spec, "prompt") do %>
                   <div>
-                    <label for="launch_prompt" class="block text-sm font-medium text-slate-700">
+                    <label for="launch_prompt" class="block text-sm font-medium text-zinc-700">
                       Prompt
                     </label>
                     <textarea
                       id="launch_prompt"
                       name="launch[prompt]"
                       rows="5"
-                      class="mt-1 block w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                      class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-950 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                     ><%= @launch["prompt"] %></textarea>
-                    <p class="mt-2 text-xs text-slate-500">
+                    <p class="mt-2 text-xs text-zinc-500">
                       Define how the agent should reason, what tone it should use, and which actions it should avoid.
                     </p>
                   </div>
@@ -809,7 +811,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <% end %>
 
                 <%= if field_visible?(@selected_spec, "timezone_offset_hours") or field_visible?(@selected_spec, "morning_brief_hour_local") or field_visible?(@selected_spec, "end_of_day_brief_hour_local") or field_visible?(@selected_spec, "weekly_review_day_local") or field_visible?(@selected_spec, "weekly_review_hour_local") or field_visible?(@selected_spec, "brief_max_items") do %>
-                  <div class="space-y-4 rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4">
+                  <div class="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
                     <div>
                       <p class="text-sm font-medium text-emerald-950">Chief-of-Staff Briefing</p>
                       <p class="mt-1 text-xs text-emerald-900/80">
@@ -972,8 +974,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
-                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5">
-                  <div class="text-sm text-slate-500">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-950/10 pt-5">
+                  <div class="text-sm text-zinc-500">
                     <%= if @blockers == [] do %>
                       Ready to create. Maraithon will persist the agent and start it right away.
                     <% else %>
@@ -994,58 +996,58 @@ defmodule MaraithonWeb.AgentBuilderLive do
             </section>
           </div>
 
-          <aside class="space-y-6">
-            <section class="rounded-2xl bg-white p-5 shadow">
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">What goes in</p>
-              <div class="mt-4 space-y-3">
-                <div :for={item <- @input_preview} class="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p class="text-sm font-medium text-slate-900"><%= item.title %></p>
-                  <p class="mt-1 text-sm text-slate-600"><%= item.body %></p>
+          <aside class="space-y-5 xl:sticky xl:top-5 xl:self-start">
+            <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
+              <p class="text-sm font-semibold text-zinc-950">What goes in</p>
+              <div class="mt-3 divide-y divide-zinc-950/5">
+                <div :for={item <- @input_preview} class="py-3 first:pt-0 last:pb-0">
+                  <p class="text-sm font-medium text-zinc-950"><%= item.title %></p>
+                  <p class="mt-1 text-sm leading-6 text-zinc-600"><%= item.body %></p>
                 </div>
               </div>
             </section>
 
-            <section class="rounded-2xl bg-white p-5 shadow">
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">What comes out</p>
-              <div class="mt-4 space-y-3">
-                <div :for={item <- @output_preview} class="rounded-2xl border border-slate-200 px-4 py-3">
-                  <p class="text-sm font-medium text-slate-900"><%= item.title %></p>
-                  <p class="mt-1 text-sm text-slate-600"><%= item.body %></p>
+            <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
+              <p class="text-sm font-semibold text-zinc-950">What comes out</p>
+              <div class="mt-3 divide-y divide-zinc-950/5">
+                <div :for={item <- @output_preview} class="py-3 first:pt-0 last:pb-0">
+                  <p class="text-sm font-medium text-zinc-950"><%= item.title %></p>
+                  <p class="mt-1 text-sm leading-6 text-zinc-600"><%= item.body %></p>
                 </div>
               </div>
             </section>
 
             <.architecture_card architecture={@architecture} mode="compact" />
 
-            <section class="rounded-2xl bg-white p-5 shadow">
+            <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
               <div class="flex items-center justify-between gap-3">
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Permission readiness</p>
+                <p class="text-sm font-semibold text-zinc-950">Permission readiness</p>
                 <a href={~p"/connectors"} class="text-xs font-medium text-indigo-600 hover:text-indigo-500">Open connectors</a>
               </div>
-              <div class="mt-4 space-y-3">
-                <div :for={item <- @readiness_items} class="rounded-2xl border border-slate-200 px-4 py-3">
+              <div class="mt-3 space-y-2">
+                <div :for={item <- @readiness_items} class="rounded-lg border border-zinc-950/10 px-3 py-3">
                   <div class="flex items-start justify-between gap-3">
                     <div>
-                      <p class="text-sm font-medium text-slate-900"><%= item.label %></p>
-                      <p class="mt-1 text-sm text-slate-600"><%= item.description %></p>
+                      <p class="text-sm font-medium text-zinc-950"><%= item.label %></p>
+                      <p class="mt-1 text-sm leading-6 text-zinc-600"><%= item.description %></p>
                     </div>
                     <span class={readiness_badge_class(item)}>
                       <%= readiness_badge_text(item) %>
                     </span>
                   </div>
-                  <p class="mt-2 text-xs text-slate-500"><%= item.details %></p>
+                  <p class="mt-2 text-xs text-zinc-500"><%= item.details %></p>
                 </div>
               </div>
             </section>
 
-            <section class="rounded-2xl bg-white p-5 shadow">
-              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Suggested starting point</p>
-              <div class="mt-4 space-y-3">
-                <div :for={item <- @starter_values} class="flex items-start justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-                  <div class="text-sm font-medium text-slate-900"><%= item.label %></div>
-                  <div class="max-w-[55%] text-right text-sm text-slate-600"><%= item.value %></div>
+            <section class="rounded-lg border border-zinc-950/10 bg-white p-5 shadow-sm">
+              <p class="text-sm font-semibold text-zinc-950">Suggested starting point</p>
+              <div class="mt-3 space-y-2">
+                <div :for={item <- @starter_values} class="flex items-start justify-between gap-3 rounded-lg bg-zinc-50 px-3 py-2">
+                  <div class="text-sm font-medium text-zinc-950"><%= item.label %></div>
+                  <div class="max-w-[55%] text-right text-sm text-zinc-600"><%= item.value %></div>
                 </div>
-                <div :for={tip <- @selected_spec.suggestions} class="rounded-2xl border border-dashed border-slate-200 px-4 py-3 text-sm text-slate-600">
+                <div :for={tip <- @selected_spec.suggestions} class="rounded-lg border border-dashed border-zinc-200 px-3 py-3 text-sm leading-6 text-zinc-600">
                   <%= tip %>
                 </div>
               </div>
@@ -1681,6 +1683,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp field_visible?(spec, field), do: field in spec.fields
 
+  defp spec_requirement_summary(%{requirements: []}), do: "No connected apps required."
+
+  defp spec_requirement_summary(%{requirements: requirements}) do
+    labels =
+      requirements
+      |> Enum.map(& &1.label)
+      |> Enum.uniq()
+
+    "Needs " <> Enum.join(labels, ", ")
+  end
+
   defp hidden_control_count("advanced"), do: 0
   defp hidden_control_count(_mode), do: 3
 
@@ -1776,47 +1789,39 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp behavior_card_class(true),
     do:
-      "rounded-2xl border border-indigo-300 bg-indigo-50 px-4 py-4 text-left shadow-sm transition hover:border-indigo-400 hover:bg-indigo-50"
+      "flex w-full items-start gap-3 bg-indigo-50 px-5 py-4 text-left transition hover:bg-indigo-50"
 
   defp behavior_card_class(false),
-    do:
-      "rounded-2xl border border-slate-200 bg-white px-4 py-4 text-left shadow-sm transition hover:border-indigo-200 hover:bg-slate-50"
+    do: "flex w-full items-start gap-3 bg-white px-5 py-4 text-left transition hover:bg-zinc-50"
 
-  defp behavior_chip_class(true),
-    do:
-      "rounded-full bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-white"
+  defp behavior_indicator_class(true),
+    do: "mt-1 h-3 w-3 shrink-0 rounded-full bg-indigo-600 ring-4 ring-indigo-100"
 
-  defp behavior_chip_class(false),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+  defp behavior_indicator_class(false),
+    do: "mt-1 h-3 w-3 shrink-0 rounded-full border border-zinc-300 bg-white"
 
   defp builder_mode_button_class(true),
-    do:
-      "rounded-full bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-900 shadow-sm"
+    do: "rounded-md bg-white px-3 py-1.5 text-sm font-medium text-zinc-950 shadow-sm"
 
   defp builder_mode_button_class(false),
-    do:
-      "rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500 transition hover:text-slate-700"
+    do: "rounded-md px-3 py-1.5 text-sm font-medium text-zinc-500 transition hover:text-zinc-700"
 
   defp cost_profile_card_class(true),
     do:
-      "block cursor-pointer rounded-2xl border border-violet-300 bg-white px-4 py-4 shadow-sm ring-2 ring-violet-200"
+      "block cursor-pointer rounded-lg border border-violet-300 bg-white px-4 py-4 shadow-sm ring-2 ring-violet-200"
 
   defp cost_profile_card_class(false),
     do:
-      "block cursor-pointer rounded-2xl border border-violet-100 bg-white/80 px-4 py-4 transition hover:border-violet-200 hover:bg-white"
+      "block cursor-pointer rounded-lg border border-violet-100 bg-white/80 px-4 py-4 transition hover:border-violet-200 hover:bg-white"
 
   defp readiness_badge_class(%{required?: true, ready?: true}),
-    do:
-      "rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-800"
+    do: "rounded-md bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800"
 
   defp readiness_badge_class(%{required?: true, ready?: false}),
-    do:
-      "rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-800"
+    do: "rounded-md bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800"
 
   defp readiness_badge_class(_item),
-    do:
-      "rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+    do: "rounded-md bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600"
 
   defp readiness_badge_text(%{required?: true, ready?: true}), do: "Ready"
   defp readiness_badge_text(%{required?: true, ready?: false}), do: "Blocked"
@@ -1824,11 +1829,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp submit_button_class(true),
     do:
-      "inline-flex items-center rounded-full bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
+      "inline-flex items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500"
 
   defp submit_button_class(false),
     do:
-      "inline-flex cursor-not-allowed items-center rounded-full bg-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-600"
+      "inline-flex cursor-not-allowed items-center rounded-md bg-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-600"
 
   defp current_path_from_uri(uri) when is_binary(uri) do
     uri

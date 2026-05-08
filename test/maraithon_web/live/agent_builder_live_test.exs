@@ -28,7 +28,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "shows clear inputs, outputs, and readiness guidance", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new")
 
-      assert html =~ "Create an agent with a clear contract"
+      assert html =~ "Create a new agent"
       assert html =~ "What goes in"
       assert html =~ "What comes out"
       assert html =~ "Architecture"
