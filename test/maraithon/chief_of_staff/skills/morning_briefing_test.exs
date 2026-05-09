@@ -8,6 +8,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm
+  alias Maraithon.Memory
+  alias Maraithon.Todos
 
   setup do
     user_id = "morning-briefing-#{System.unique_integer([:positive])}@example.com"
@@ -136,6 +139,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         "fetched_at" => now
       })
 
+    {:ok, _person} =
+      Crm.upsert_person(user_id, %{
+        "first_name" => "Charlie",
+        "last_name" => "Jones",
+        "slack_id" => "UCHARLIE",
+        "preferred_communication_method" => "slack",
+        "relationship" => "Runner teammate",
+        "communication_frequency" => "weekly"
+      })
+
+    {:ok, _memory} =
+      Memory.write(user_id, %{
+        "title" => "Generic retail promotions are briefing noise",
+        "content" =>
+          "Retail promotions should not appear in the morning briefing unless they create a real obligation.",
+        "kind" => "relevance_feedback",
+        "polarity" => "negative",
+        "importance" => 82
+      })
+
     state =
       MorningBriefing.init(%{
         "user_id" => user_id,
@@ -164,7 +187,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "body_available"
     assert prompt =~ "Instagram reported a new login"
     assert prompt =~ "Promotional retail offer"
-    assert prompt =~ ~s({"title":"...","summary":"...","body":"..."})
+    assert prompt =~ ~s({"title":"...","summary":"...","body":"...","todos":[)
     assert prompt =~ "Write like a sharp Chief of Staff"
     assert prompt =~ "This is not a digest"
     assert prompt =~ "## Needs Your Attention"
@@ -176,6 +199,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
     assert prompt =~ "Include news only when it affects Runner"
+    assert prompt =~ "relationships"
+    assert prompt =~ "Charlie Jones"
+    assert prompt =~ "Runner teammate"
+    assert prompt =~ "deep_memory"
+    assert prompt =~ "Generic retail promotions are briefing noise"
 
     response = %{
       content:
@@ -199,6 +227,68 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 2
     assert get_in(brief.metadata, ["brief_input", "counts", "slack_key_threads"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "news_items"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "relationships"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "deep_memory"]) == 1
+  end
+
+  test "persists model-emitted morning todos through todo intelligence", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-todos"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "title" => "Thursday, May 7 - Review the launch note",
+          "summary" => "One Slack follow-up belongs on the todo list.",
+          "body" => "## Needs Your Attention\n- Review the Runner launch note.",
+          "todos" => [
+            %{
+              "source" => "slack",
+              "title" => "Review Runner launch note",
+              "summary" => "The GTM channel needs Kent to review the Runner launch note.",
+              "next_action" => "Open the launch note and leave approval or edits.",
+              "notes" => "Mentioned in #runner-gtm.",
+              "action_plan" => "Scan claims, check launch timing, then approve or comment.",
+              "dedupe_key" => "morning:slack:runner-launch-note",
+              "metadata" => %{"channel_name" => "runner-gtm"}
+            }
+          ]
+        })
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.todo_count == 1
+    assert payload.todo_skipped_count == 0
+
+    [todo] = Todos.list_for_user(user_id, source: "slack", limit: 5)
+    assert todo.title == "Review Runner launch note"
+    assert todo.action_plan =~ "Scan claims"
+    assert todo.metadata["origin_skill_id"] == "morning_briefing"
+
+    assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
+             "chief_of_staff_morning_briefing"
   end
 
   test "invalid model output records an explicit generation error instead of a heuristic fallback",

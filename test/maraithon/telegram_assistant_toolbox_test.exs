@@ -134,6 +134,17 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              )
 
     assert persisted.count == 2
+    assert persisted.enrichment == %{errors: [], memories: [], person_links: []}
+
+    assert {:ok, open_loops} =
+             Toolbox.execute(
+               "get_open_loops",
+               %{"query" => "billing", "limit" => 10},
+               runtime_context
+             )
+
+    assert open_loops.source == "maraithon_open_loops"
+    assert open_loops.totals.open_todos == 2
 
     assert {:ok, billing_search} =
              Toolbox.execute(
@@ -168,6 +179,77 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     [remaining_todo] = resolved.remaining_todos
     assert remaining_todo.title =~ "OAuth"
     refute remaining_todo.title =~ "Billing"
+  end
+
+  test "CRM tools can persist people and return relationship context" do
+    user_id = "toolbox-people-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, persisted} =
+             Toolbox.execute(
+               "upsert_person",
+               %{
+                 "person" => %{
+                   "first_name" => "Charlie",
+                   "last_name" => "Jones",
+                   "slack_id" => "UCHARLIE",
+                   "preferred_communication_method" => "slack",
+                   "relationship" => "Runner teammate",
+                   "communication_frequency" => "weekly"
+                 }
+               },
+               runtime_context
+             )
+
+    person = persisted.person
+    assert person.display_name == "Charlie Jones"
+    assert person.preferred_communication_method == "slack"
+
+    assert {:ok, listed} =
+             Toolbox.execute(
+               "list_people",
+               %{"query" => "Charlie"},
+               runtime_context
+             )
+
+    assert listed.count == 1
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Confirm launch plan with Charlie",
+          "summary" => "Charlie needs a launch plan decision.",
+          "next_action" => "Reply to Charlie in Slack.",
+          "dedupe_key" => "toolbox-people:charlie-launch"
+        }
+      ])
+
+    assert {:ok, _linked} =
+             Toolbox.execute(
+               "link_person_data",
+               %{
+                 "person_id" => person.id,
+                 "todo_id" => todo.id,
+                 "resource_source" => "slack"
+               },
+               runtime_context
+             )
+
+    assert {:ok, context_result} =
+             Toolbox.execute(
+               "get_relationship_context",
+               %{"query" => "Charlie"},
+               runtime_context
+             )
+
+    context = context_result.relationship_context
+    assert context.person.id == person.id
+    assert context.open_todo_count == 1
+    assert [%{title: title}] = context.todos
+    assert title =~ "Charlie"
   end
 
   test "briefing schedule tool updates morning briefings in the user's local timezone" do
@@ -342,6 +424,68 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert forgotten.pending_count == 0
     assert forgotten.message =~ "Removed preference"
     assert PreferenceMemory.active_rules(user_id) == []
+  end
+
+  test "deep memory tools write, recall, record feedback, list, and forget memories" do
+    user_id = "toolbox-memory-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{}}
+
+    assert {:ok, written} =
+             Toolbox.execute(
+               "write_memory",
+               %{
+                 "memory" => %{
+                   "kind" => "preference",
+                   "title" => "School notices matter",
+                   "content" =>
+                     "School notices are relevant when they mention pickup, forms, or schedule changes.",
+                   "tags" => ["school", "relevance"],
+                   "importance" => 85
+                 }
+               },
+               runtime_context
+             )
+
+    assert written.memory.title == "School notices matter"
+
+    assert {:ok, recalled} =
+             Toolbox.execute(
+               "recall_memory",
+               %{"query" => "school pickup", "limit" => 5},
+               runtime_context
+             )
+
+    assert recalled.count == 1
+    assert hd(recalled.memories).id == written.memory.id
+
+    assert {:ok, feedback} =
+             Toolbox.execute(
+               "record_memory_feedback",
+               %{
+                 "subject" => "Generic VC newsletter",
+                 "feedback" => "not_relevant",
+                 "reason" => "No concrete Runner or customer implication."
+               },
+               runtime_context
+             )
+
+    assert feedback.memory.kind == "relevance_feedback"
+    assert feedback.memory.polarity == "negative"
+
+    assert {:ok, listed} = Toolbox.execute("list_memories", %{}, runtime_context)
+    assert listed.count == 2
+
+    assert {:ok, forgotten} =
+             Toolbox.execute(
+               "forget_memory",
+               %{"memory_id" => written.memory.id},
+               runtime_context
+             )
+
+    assert forgotten.forgotten == true
+    assert forgotten.memory.status == "archived"
   end
 
   test "project delivery tools can accept a recommendation, grant access, and start a run" do

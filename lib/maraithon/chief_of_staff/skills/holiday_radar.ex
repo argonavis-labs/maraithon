@@ -9,6 +9,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.HolidayCalendar
   alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.OpenLoops
   alias Maraithon.Projects
   alias Maraithon.Projects.Project
   alias Maraithon.Repo
@@ -249,44 +250,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
         end
       end)
 
-    Repo.transaction(fn ->
-      todos =
-        case todo_attrs do
-          [] ->
-            []
+    with {:ok, todos} <- persist_holiday_todos(state.user_id, todo_attrs) do
+      Repo.transaction(fn ->
+        briefs =
+          case brief_attrs do
+            [] ->
+              []
 
-          attrs_list ->
-            case Todos.upsert_many(state.user_id, Enum.reverse(attrs_list)) do
-              {:ok, items} -> items
-              {:error, reason} -> Repo.rollback(reason)
-            end
-        end
+            attrs_list ->
+              Enum.reverse(attrs_list)
+              |> Enum.reduce([], fn attrs, acc ->
+                case Briefs.record(state.user_id, context.agent_id, attrs) do
+                  {:ok, brief} -> [brief | acc]
+                  {:error, reason} -> Repo.rollback(reason)
+                end
+              end)
+              |> Enum.reverse()
+          end
 
-      briefs =
-        case brief_attrs do
-          [] ->
-            []
-
-          attrs_list ->
-            Enum.reverse(attrs_list)
-            |> Enum.reduce([], fn attrs, acc ->
-              case Briefs.record(state.user_id, context.agent_id, attrs) do
-                {:ok, brief} -> [brief | acc]
-                {:error, reason} -> Repo.rollback(reason)
-              end
-            end)
-            |> Enum.reverse()
-        end
-
-      %{todos: todos, briefs: briefs}
-    end)
-    |> case do
-      {:ok, persisted} -> {:ok, persisted}
-      {:error, reason} -> {:error, reason}
+        %{todos: todos, briefs: briefs}
+      end)
+      |> case do
+        {:ok, persisted} -> {:ok, persisted}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
   defp persist_notifications(_decoded, _state, _context), do: {:error, :invalid_payload}
+
+  defp persist_holiday_todos(_user_id, []), do: {:ok, []}
+
+  defp persist_holiday_todos(user_id, attrs_list) do
+    case OpenLoops.ingest_todos(user_id, Enum.reverse(attrs_list),
+           source: "chief_of_staff_holiday"
+         ) do
+      {:ok, result} -> {:ok, result.todos}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp notification_attrs(attrs, pending_holidays, reviewed_at) do
     with holiday_id when is_binary(holiday_id) <- normalize_string(Map.get(attrs, "holiday_id")),

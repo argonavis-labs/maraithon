@@ -12,6 +12,8 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Insights.Refresh, as: InsightRefresh
+  alias Maraithon.Memory
+  alias Maraithon.OpenLoops
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
   alias Maraithon.UserMemory
@@ -524,6 +526,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp request_effect(data, {effect_type, tool_name, params}) do
+    params = maybe_inject_memory_into_effect(data, effect_type, params)
     effect_id = Ecto.UUID.generate()
     idempotency_key = Ecto.UUID.generate()
 
@@ -746,6 +749,21 @@ defmodule Maraithon.Runtime.Agent do
       # TODO: Load recent events
       recent_events: [],
       user_memory: UserMemory.prompt_context(data.user_id),
+      deep_memory:
+        Memory.prompt_context(data.user_id,
+          query: data.current_message,
+          limit: 8
+        ),
+      memory_tools:
+        ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback),
+      open_loops:
+        OpenLoops.snapshot(data.user_id,
+          query: data.current_message,
+          limit: 8,
+          include_memory?: false
+        ),
+      open_loop_tools:
+        ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context recall_memory write_memory record_memory_feedback),
       last_message: data.current_message,
       last_message_metadata: data.current_message_metadata || %{},
       last_message_id: data.current_message_id,
@@ -753,6 +771,19 @@ defmodule Maraithon.Runtime.Agent do
       event: data.current_event
     }
   end
+
+  defp maybe_inject_memory_into_effect(data, effect_type, params)
+       when effect_type in [:llm_call, "llm_call"] and is_map(params) do
+    params
+    |> Memory.inject_llm_params(data.user_id, query: data.current_message, limit: 8)
+    |> OpenLoops.inject_llm_params(data.user_id,
+      query: data.current_message,
+      limit: 8,
+      include_memory?: false
+    )
+  end
+
+  defp maybe_inject_memory_into_effect(_data, _effect_type, params), do: params
 
   defp put_wakeup_trigger(data, job_type, job_id, payload) do
     %{

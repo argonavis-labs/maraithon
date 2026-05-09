@@ -11,9 +11,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
   alias Maraithon.Insights
+  alias Maraithon.Memory
   alias Maraithon.OperatorMemory
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Linear, as: LinearOAuth
+  alias Maraithon.OpenLoops
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.Repo
@@ -67,6 +69,17 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "type" => "object",
           "properties" => %{
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 10}
+          }
+        }
+      ),
+      tool_definition(
+        "get_open_loops",
+        "Fetch the linked user's durable open-loop snapshot across todos, CRM relationships, and deep memory.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
       ),
@@ -154,6 +167,95 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "list_memories",
+        "List the linked user's durable deep memory items.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "status" => %{"type" => "string"},
+            "kind" => %{"type" => "string"},
+            "scope" => %{"type" => "string"},
+            "tag" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "recall_memory",
+        "Recall relevant durable deep memories for a query using model-level memory intelligence.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "kind" => %{"type" => "string"},
+            "scope" => %{"type" => "string"},
+            "tag" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 40}
+          }
+        }
+      ),
+      tool_definition(
+        "write_memory",
+        "Create or update a durable deep memory item for the linked user.",
+        %{
+          "type" => "object",
+          "required" => ["memory"],
+          "properties" => %{
+            "memory" => %{
+              "type" => "object",
+              "required" => ["content"],
+              "properties" => %{
+                "memory_id" => %{"type" => "string"},
+                "kind" => %{"type" => "string"},
+                "scope" => %{"type" => "string"},
+                "title" => %{"type" => "string"},
+                "content" => %{"type" => "string"},
+                "summary" => %{"type" => "string"},
+                "source" => %{"type" => "string"},
+                "author_type" => %{"type" => "string"},
+                "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+                "importance" => %{"type" => "integer", "minimum" => 0, "maximum" => 100},
+                "confidence" => %{"type" => "number"},
+                "polarity" => %{"type" => "string"},
+                "dedupe_key" => %{"type" => "string"},
+                "metadata" => %{"type" => "object"}
+              }
+            }
+          }
+        }
+      ),
+      tool_definition(
+        "record_memory_feedback",
+        "Record that something is relevant or not relevant as durable deep memory.",
+        %{
+          "type" => "object",
+          "required" => ["subject", "feedback"],
+          "properties" => %{
+            "subject" => %{"type" => "string"},
+            "feedback" => %{"type" => "string"},
+            "reason" => %{"type" => "string"},
+            "resource_type" => %{"type" => "string"},
+            "resource_id" => %{"type" => "string"},
+            "source" => %{"type" => "string"},
+            "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "forget_memory",
+        "Archive, supersede, or reject one durable deep memory item.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "memory_id" => %{"type" => "string"},
+            "query" => %{"type" => "string"},
+            "status" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
         "list_todos",
         "List the linked user's persisted todos and their statuses.",
         %{
@@ -162,15 +264,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "query" => %{"type" => "string"},
             "statuses" => %{"type" => "array", "items" => %{"type" => "string"}},
             "source" => %{"type" => "string"},
+            "source_account_id" => %{"type" => "integer"},
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
+            "owner_user_id" => %{"type" => "string"},
+            "due_before" => %{"type" => "string"},
+            "due_after" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
       ),
       tool_definition(
         "upsert_todos",
-        "Create or update persisted todos for the linked user.",
+        "Create, update, or skip persisted todos for the linked user using model-level todo intelligence and semantic dedupe.",
         %{
           "type" => "object",
           "required" => ["todos"],
@@ -187,6 +293,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
                   "title" => %{"type" => "string"},
                   "summary" => %{"type" => "string"},
                   "next_action" => %{"type" => "string"},
+                  "due_at" => %{"type" => "string"},
+                  "due_date" => %{"type" => "string"},
+                  "notes" => %{"type" => "string"},
+                  "action_plan" => %{"type" => "string"},
+                  "action_draft" => %{"type" => "object"},
+                  "owner_user_id" => %{"type" => "string"},
+                  "owner_label" => %{"type" => "string"},
+                  "source_account_id" => %{"type" => "integer"},
+                  "source_account_label" => %{"type" => "string"},
                   "priority" => %{"type" => "integer"},
                   "status" => %{"type" => "string"},
                   "source_item_id" => %{"type" => "string"},
@@ -212,10 +327,116 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "snooze_until" => %{"type" => "string"},
             "include_remaining" => %{"type" => "boolean"},
             "source" => %{"type" => "string"},
+            "source_account_id" => %{"type" => "integer"},
             "kind" => %{"type" => "string"},
             "attention_mode" => %{"type" => "string"},
+            "owner_user_id" => %{"type" => "string"},
+            "due_before" => %{"type" => "string"},
+            "due_after" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
+        }
+      ),
+      tool_definition(
+        "list_people",
+        "List the linked user's CRM people and relationship metadata.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "relationship" => %{"type" => "string"},
+            "preferred_communication_method" => %{"type" => "string"},
+            "communication_frequency" => %{"type" => "string"},
+            "contact_kind" => %{"type" => "string"},
+            "contact_value" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "get_person",
+        "Get one CRM person by id, search query, or contact detail.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "person_id" => %{"type" => "string"},
+            "query" => %{"type" => "string"},
+            "contact_kind" => %{"type" => "string"},
+            "contact_value" => %{"type" => "string"},
+            "include_links" => %{"type" => "boolean"},
+            "link_limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "upsert_person",
+        "Create or update one CRM person with contact details, preferred communication, relationship, and speaking frequency.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "person" => %{
+              "type" => "object",
+              "properties" => %{
+                "person_id" => %{"type" => "string"},
+                "first_name" => %{"type" => "string"},
+                "last_name" => %{"type" => "string"},
+                "display_name" => %{"type" => "string"},
+                "contact_details" => %{"type" => "object"},
+                "email" => %{"type" => "string"},
+                "phone" => %{"type" => "string"},
+                "slack_id" => %{"type" => "string"},
+                "preferred_communication_method" => %{"type" => "string"},
+                "relationship" => %{"type" => "string"},
+                "communication_frequency" => %{"type" => "string"},
+                "notes" => %{"type" => "string"},
+                "metadata" => %{"type" => "object"}
+              }
+            }
+          }
+        }
+      ),
+      tool_definition(
+        "link_person_data",
+        "Attach or detach a CRM person from a todo or another user-owned object.",
+        %{
+          "type" => "object",
+          "required" => ["person_id"],
+          "properties" => %{
+            "person_id" => %{"type" => "string"},
+            "operation" => %{"type" => "string"},
+            "resource_type" => %{"type" => "string"},
+            "resource_id" => %{"type" => "string"},
+            "todo_id" => %{"type" => "string"},
+            "resource_source" => %{"type" => "string"},
+            "title" => %{"type" => "string"},
+            "summary" => %{"type" => "string"},
+            "relationship_note" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"},
+            "include_context" => %{"type" => "boolean"}
+          }
+        }
+      ),
+      tool_definition(
+        "get_relationship_context",
+        "Fetch CRM relationship context for one person, including linked todos.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "person_id" => %{"type" => "string"},
+            "query" => %{"type" => "string"},
+            "contact_kind" => %{"type" => "string"},
+            "contact_value" => %{"type" => "string"},
+            "link_limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "delete_person",
+        "Delete one CRM person only when the user explicitly asks to remove that CRM record.",
+        %{
+          "type" => "object",
+          "required" => ["person_id"],
+          "properties" => %{"person_id" => %{"type" => "string"}}
         }
       ),
       tool_definition(
@@ -507,6 +728,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "get_open_work_summary" ->
         get_open_work_summary(runtime_context, args)
 
+      "get_open_loops" ->
+        get_open_loops(runtime_context, args)
+
       "inspect_open_insight" ->
         inspect_open_insight(runtime_context, args)
 
@@ -522,6 +746,21 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "forget_preference" ->
         forget_preference(runtime_context, args)
 
+      "list_memories" ->
+        inject_user_and_execute("list_memories", runtime_context, args)
+
+      "recall_memory" ->
+        inject_user_and_execute("recall_memory", runtime_context, args)
+
+      "write_memory" ->
+        inject_user_and_execute("write_memory", runtime_context, args)
+
+      "record_memory_feedback" ->
+        inject_user_and_execute("record_memory_feedback", runtime_context, args)
+
+      "forget_memory" ->
+        inject_user_and_execute("forget_memory", runtime_context, args)
+
       "list_todos" ->
         list_todos(runtime_context, args)
 
@@ -530,6 +769,24 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "resolve_todo" ->
         resolve_todo(runtime_context, args)
+
+      "list_people" ->
+        inject_user_and_execute("list_people", runtime_context, args)
+
+      "get_person" ->
+        inject_user_and_execute("get_person", runtime_context, args)
+
+      "upsert_person" ->
+        inject_user_and_execute("upsert_person", runtime_context, args)
+
+      "link_person_data" ->
+        inject_user_and_execute("link_person_data", runtime_context, args)
+
+      "get_relationship_context" ->
+        inject_user_and_execute("get_relationship_context", runtime_context, args)
+
+      "delete_person" ->
+        inject_user_and_execute("delete_person", runtime_context, args)
 
       "gmail_search_messages" ->
         inject_user_and_execute("gmail_search", runtime_context, args)
@@ -646,6 +903,16 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
      }}
   end
 
+  defp get_open_loops(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 12, 50)
+
+    {:ok,
+     OpenLoops.snapshot(runtime_context.user_id,
+       query: Map.get(args, "query"),
+       limit: limit
+     )}
+  end
+
   defp list_todos(runtime_context, args) do
     limit = normalize_limit(Map.get(args, "limit"), 50, 50)
     statuses = Map.get(args, "statuses")
@@ -656,16 +923,24 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           limit: limit,
           statuses: statuses,
           source: Map.get(args, "source"),
+          source_account_id: Map.get(args, "source_account_id"),
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
+          owner_user_id: Map.get(args, "owner_user_id"),
+          due_before: Map.get(args, "due_before"),
+          due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
         )
       else
         Todos.list_open_for_user(runtime_context.user_id,
           limit: limit,
           source: Map.get(args, "source"),
+          source_account_id: Map.get(args, "source_account_id"),
           kind: Map.get(args, "kind"),
           attention_mode: Map.get(args, "attention_mode"),
+          owner_user_id: Map.get(args, "owner_user_id"),
+          due_before: Map.get(args, "due_before"),
+          due_after: Map.get(args, "due_after"),
           query: Map.get(args, "query")
         )
       end
@@ -765,13 +1040,22 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     todos = Map.get(args, "todos", [])
 
     if is_list(todos) do
-      with {:ok, persisted} <-
-             Todos.upsert_many(runtime_context.user_id, Enum.filter(todos, &is_map/1)) do
-        {:ok,
-         %{
-           count: length(persisted),
-           todos: Enum.map(persisted, &serialize_todo_detail/1)
-         }}
+      case OpenLoops.ingest_todos(runtime_context.user_id, Enum.filter(todos, &is_map/1),
+             source: "telegram_assistant"
+           ) do
+        {:ok, result} ->
+          {:ok,
+           %{
+             count: length(result.todos),
+             skipped_count: result.skipped_count,
+             summary: result.summary,
+             decisions: result.decisions,
+             enrichment: result.enrichment,
+             todos: Enum.map(result.todos, &serialize_todo_detail/1)
+           }}
+
+        {:error, reason} ->
+          {:error, normalize_error(reason)}
       end
     else
       {:error, "invalid_todos"}
@@ -807,8 +1091,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             Todos.list_open_for_user(runtime_context.user_id,
               limit: limit,
               source: Map.get(args, "source"),
+              source_account_id: Map.get(args, "source_account_id"),
               kind: Map.get(args, "kind"),
-              attention_mode: Map.get(args, "attention_mode")
+              attention_mode: Map.get(args, "attention_mode"),
+              owner_user_id: Map.get(args, "owner_user_id"),
+              due_before: Map.get(args, "due_before"),
+              due_after: Map.get(args, "due_after")
             )
           else
             []
@@ -2160,11 +2448,16 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     %{
       id: todo.id,
       source: todo.source,
+      source_account_id: todo.source_account_id,
+      source_account_label: todo.source_account_label,
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       status: todo.status,
       title: todo.title,
       next_action: todo.next_action,
+      due_at: todo.due_at,
+      owner_user_id: todo.owner_user_id,
+      owner_label: todo.owner_label,
       priority: todo.priority
     }
   end
@@ -2173,12 +2466,20 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     %{
       id: todo.id,
       source: todo.source,
+      source_account_id: todo.source_account_id,
+      source_account_label: todo.source_account_label,
       kind: todo.kind,
       attention_mode: todo.attention_mode,
       status: todo.status,
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,
+      due_at: todo.due_at,
+      notes: todo.notes,
+      action_plan: todo.action_plan,
+      action_draft: todo.action_draft || %{},
+      owner_user_id: todo.owner_user_id,
+      owner_label: todo.owner_label,
       priority: todo.priority,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
@@ -2212,7 +2513,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       pending_rules: pending_rules,
       preference_summary: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
-      user_memory: UserMemory.prompt_context(user_id)
+      user_memory: UserMemory.prompt_context(user_id),
+      deep_memory: Memory.prompt_context(user_id)
     }
   end
 
@@ -2224,7 +2526,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       pending_rules: [],
       preference_summary: %{},
       operator_memory: [],
-      user_memory: %{}
+      user_memory: %{},
+      deep_memory: %{}
     }
   end
 

@@ -155,6 +155,27 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "\"tool\":\"list_todos\""
   end
 
+  test "build_prompt instructs the model to use CRM relationship tools" do
+    prompt = LLMJson.build_prompt(payload("What do I owe Justin?"))
+
+    assert prompt =~ "The built-in CRM is the durable relationship layer"
+    assert prompt =~ "get_open_loops"
+    assert prompt =~ "get_relationship_context"
+    assert prompt =~ "upsert_person"
+    assert prompt =~ "link_person_data"
+    assert prompt =~ "what do I owe Justin?"
+  end
+
+  test "build_prompt instructs the model to use deep memory tools" do
+    prompt = LLMJson.build_prompt(payload("That VC newsletter is not relevant to me."))
+
+    assert prompt =~ "Deep memory is the general built-in memory database"
+    assert prompt =~ "recall_memory"
+    assert prompt =~ "write_memory"
+    assert prompt =~ "record_memory_feedback"
+    assert prompt =~ "not relevant"
+  end
+
   test "build_prompt instructs the model to capture manual todos and return itemized todo lists" do
     prompt =
       LLMJson.build_prompt(payload("Add renew the domain this week to my todo list."))
@@ -171,6 +192,7 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
 
     assert String.contains?(String.downcase(prompt), "what should i review?")
     assert String.contains?(String.downcase(prompt), "what should i work on?")
+    assert String.contains?(prompt, "get_open_loops")
     assert String.contains?(prompt, "do not offer to send the full list later")
     assert String.contains?(prompt, "do not stop at a short top-3 or top-5 summary")
     assert String.contains?(prompt, "full actionable todo digest")

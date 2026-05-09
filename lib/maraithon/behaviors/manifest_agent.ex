@@ -9,6 +9,8 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.AgentHarness.Runner
   alias Maraithon.Behaviors
+  alias Maraithon.Memory
+  alias Maraithon.OpenLoops
 
   @impl true
   def init(config) do
@@ -186,8 +188,14 @@ defmodule Maraithon.Behaviors.ManifestAgent do
       message: context[:last_message],
       message_metadata: context[:last_message_metadata],
       user_memory: context[:user_memory],
+      deep_memory: context[:deep_memory],
+      memory_tools: context[:memory_tools],
+      open_loops: context[:open_loops],
+      open_loop_tools: context[:open_loop_tools],
       tool_results: context[:tool_results] || []
     }
+    |> Memory.enrich_context()
+    |> OpenLoops.enrich_context()
   end
 
   defp decode_model_action(content) when is_binary(content) do

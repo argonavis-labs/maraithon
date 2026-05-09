@@ -8,6 +8,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.Todos.Intelligence
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
@@ -23,8 +24,12 @@ defmodule Maraithon.Todos do
   def list_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)
     source = Keyword.get(opts, :source)
+    source_account_id = Keyword.get(opts, :source_account_id)
     kind = Keyword.get(opts, :kind)
     attention_mode = Keyword.get(opts, :attention_mode)
+    owner_user_id = Keyword.get(opts, :owner_user_id)
+    due_before = Keyword.get(opts, :due_before) || Keyword.get(opts, :due_before_or_at)
+    due_after = Keyword.get(opts, :due_after) || Keyword.get(opts, :due_after_or_at)
     statuses = normalize_status_filters(Keyword.get(opts, :statuses))
     query_text = normalize_query_text(Keyword.get(opts, :query))
     open_due_only? = Keyword.get(opts, :open_due_only, false)
@@ -34,8 +39,12 @@ defmodule Maraithon.Todos do
     |> maybe_filter_statuses(statuses)
     |> maybe_filter_open_due_only(open_due_only?)
     |> maybe_filter_source(source)
+    |> maybe_filter_source_account_id(source_account_id)
     |> maybe_filter_kind(kind)
     |> maybe_filter_attention_mode(attention_mode)
+    |> maybe_filter_owner_user_id(owner_user_id)
+    |> maybe_filter_due_after(due_after)
+    |> maybe_filter_due_before(due_before)
     |> maybe_filter_query(query_text)
     |> order_by(
       [
@@ -48,6 +57,7 @@ defmodule Maraithon.Todos do
           todo.attention_mode
         ),
       desc: todo.priority,
+      asc_nulls_last: todo.due_at,
       desc: todo.updated_at,
       desc: todo.inserted_at
     )
@@ -142,6 +152,15 @@ defmodule Maraithon.Todos do
   end
 
   def upsert_many(_user_id, _attrs_list), do: {:error, :invalid_todo_attrs}
+
+  def ingest_many(user_id, attrs_list, opts \\ [])
+
+  def ingest_many(user_id, attrs_list, opts)
+      when is_binary(user_id) and is_list(attrs_list) and is_list(opts) do
+    Intelligence.ingest_many(user_id, attrs_list, opts)
+  end
+
+  def ingest_many(_user_id, _attrs_list, _opts), do: {:error, :invalid_todo_candidates}
 
   def mark_done(user_id, todo_id, opts \\ [])
 
@@ -308,7 +327,15 @@ defmodule Maraithon.Todos do
       title: todo.title,
       summary: todo.summary,
       next_action: todo.next_action,
+      due_at: todo.due_at,
+      notes: todo.notes,
+      action_plan: todo.action_plan,
+      action_draft: todo.action_draft || %{},
+      owner_user_id: todo.owner_user_id,
+      owner_label: todo.owner_label,
       priority: todo.priority,
+      source_account_id: todo.source_account_id,
+      source_account_label: todo.source_account_label,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
       metadata: summarize_metadata(todo.metadata || %{})
@@ -498,15 +525,38 @@ defmodule Maraithon.Todos do
     kind = normalize_kind(read_string(attrs, "kind", "general"))
     source_item_id = read_string(attrs, "source_item_id", nil)
 
+    due_at =
+      read_datetime(attrs, "due_at") || read_datetime(attrs, "due_date") ||
+        read_datetime(attrs, "due")
+
+    owner_user_id = read_string(attrs, "owner_user_id", user_id)
+    owner_label = read_string(attrs, "owner_label", read_string(attrs, "owner", nil))
+
+    action_plan =
+      read_string(
+        attrs,
+        "action_plan",
+        read_string(attrs, "draft_plan", read_string(attrs, "plan", nil))
+      )
+
     %{
       "user_id" => user_id,
+      "owner_user_id" => owner_user_id,
+      "owner_label" => normalize_owner_label(owner_label, owner_user_id, user_id),
       "source" => source,
+      "source_account_id" => read_integer(attrs, "source_account_id", nil),
+      "source_account_label" =>
+        read_string(attrs, "source_account_label", source_account_label_from_metadata(metadata)),
       "kind" => kind,
       "attention_mode" =>
         normalize_attention_mode(read_string(attrs, "attention_mode", "act_now")),
       "title" => read_string(attrs, "title", "Open todo"),
-      "summary" => read_string(attrs, "summary", "Review this item."),
+      "summary" => read_string(attrs, "summary", read_string(attrs, "todo", "Review this item.")),
       "next_action" => read_string(attrs, "next_action", "Review and decide the next step."),
+      "due_at" => due_at,
+      "notes" => read_string(attrs, "notes", nil),
+      "action_plan" => action_plan,
+      "action_draft" => read_action_draft(attrs),
       "priority" => clamp_integer(read_integer(attrs, "priority", 50), 0, 100),
       "status" => normalize_status(read_string(attrs, "status", "open")),
       "snoozed_until" => read_datetime(attrs, "snoozed_until"),
@@ -531,9 +581,15 @@ defmodule Maraithon.Todos do
   end
 
   defp synced_insight_attrs(%Insight{} = insight) do
+    metadata = insight.metadata || %{}
+
     %{
       user_id: insight.user_id,
+      owner_user_id: insight.user_id,
+      owner_label: owner_label_from_metadata(metadata),
       source: insight.source || "system",
+      source_account_id: read_integer(metadata, "source_account_id", nil),
+      source_account_label: source_account_label_from_metadata(metadata),
       kind: todo_kind_from_insight(insight),
       attention_mode: normalize_attention_mode(insight.attention_mode || "act_now"),
       title: normalize_required_text(insight.title, "Open todo"),
@@ -543,6 +599,10 @@ defmodule Maraithon.Todos do
           insight.recommended_action,
           "Review and decide the next step."
         ),
+      due_at: insight.due_at,
+      notes: notes_from_metadata(metadata),
+      action_plan: action_plan_from_metadata(metadata),
+      action_draft: read_action_draft(metadata),
       priority: clamp_integer(insight.priority || 50, 0, 100),
       status: todo_status_from_insight(insight.status),
       snoozed_until: insight.snoozed_until,
@@ -593,6 +653,16 @@ defmodule Maraithon.Todos do
     where(query, [todo], todo.source == ^source)
   end
 
+  defp maybe_filter_source_account_id(query, nil), do: query
+  defp maybe_filter_source_account_id(query, ""), do: query
+
+  defp maybe_filter_source_account_id(query, source_account_id) do
+    case normalize_integer_filter(source_account_id) do
+      nil -> query
+      id -> where(query, [todo], todo.source_account_id == ^id)
+    end
+  end
+
   defp maybe_filter_statuses(query, nil), do: query
   defp maybe_filter_statuses(query, []), do: where(query, [todo], false)
 
@@ -625,6 +695,35 @@ defmodule Maraithon.Todos do
     where(query, [todo], todo.attention_mode == ^attention_mode)
   end
 
+  defp maybe_filter_owner_user_id(query, nil), do: query
+  defp maybe_filter_owner_user_id(query, ""), do: query
+
+  defp maybe_filter_owner_user_id(query, owner_user_id) when is_binary(owner_user_id) do
+    where(query, [todo], todo.owner_user_id == ^owner_user_id)
+  end
+
+  defp maybe_filter_owner_user_id(query, _owner_user_id), do: query
+
+  defp maybe_filter_due_after(query, nil), do: query
+  defp maybe_filter_due_after(query, ""), do: query
+
+  defp maybe_filter_due_after(query, value) do
+    case coerce_datetime(value) do
+      nil -> query
+      due_after -> where(query, [todo], not is_nil(todo.due_at) and todo.due_at >= ^due_after)
+    end
+  end
+
+  defp maybe_filter_due_before(query, nil), do: query
+  defp maybe_filter_due_before(query, ""), do: query
+
+  defp maybe_filter_due_before(query, value) do
+    case coerce_datetime(value) do
+      nil -> query
+      due_before -> where(query, [todo], not is_nil(todo.due_at) and todo.due_at <= ^due_before)
+    end
+  end
+
   defp maybe_filter_query(query, nil), do: query
   defp maybe_filter_query(query, ""), do: query
 
@@ -637,6 +736,10 @@ defmodule Maraithon.Todos do
       ilike(todo.title, ^pattern) or
         ilike(todo.summary, ^pattern) or
         ilike(todo.next_action, ^pattern) or
+        fragment("coalesce(?, '') ILIKE ?", todo.notes, ^pattern) or
+        fragment("coalesce(?, '') ILIKE ?", todo.action_plan, ^pattern) or
+        fragment("coalesce(?, '') ILIKE ?", todo.owner_label, ^pattern) or
+        fragment("coalesce(?, '') ILIKE ?", todo.source_account_label, ^pattern) or
         ilike(todo.source, ^pattern) or
         fragment("coalesce(?, '') ILIKE ?", todo.source_item_id, ^pattern) or
         fragment("coalesce(?->>'subject', '') ILIKE ?", todo.metadata, ^pattern) or
@@ -687,6 +790,14 @@ defmodule Maraithon.Todos do
       "google_account_email",
       "from",
       "subject",
+      "account_email",
+      "source_account_label",
+      "team_name",
+      "workspace_name",
+      "owner",
+      "assignee",
+      "draft_plan",
+      "suggested_reply_points",
       "life_domain",
       "resolution_note",
       "assistant_feedback",
@@ -775,6 +886,78 @@ defmodule Maraithon.Todos do
 
   defp normalize_required_text(_value, default), do: default
 
+  defp normalize_owner_label(nil, _owner_user_id, _user_id), do: nil
+  defp normalize_owner_label("", _owner_user_id, _user_id), do: nil
+  defp normalize_owner_label(owner_user_id, owner_user_id, _user_id), do: nil
+  defp normalize_owner_label(user_id, _owner_user_id, user_id), do: nil
+  defp normalize_owner_label(owner_label, _owner_user_id, _user_id), do: owner_label
+
+  defp source_account_label_from_metadata(metadata) when is_map(metadata) do
+    read_string(
+      metadata,
+      "source_account_label",
+      read_string(
+        metadata,
+        "google_account_email",
+        read_string(
+          metadata,
+          "account_email",
+          read_string(
+            metadata,
+            "email",
+            read_string(
+              metadata,
+              "team_name",
+              read_string(metadata, "workspace_name", read_string(metadata, "username", nil))
+            )
+          )
+        )
+      )
+    )
+  end
+
+  defp source_account_label_from_metadata(_metadata), do: nil
+
+  defp owner_label_from_metadata(metadata) when is_map(metadata) do
+    read_string(
+      metadata,
+      "owner_label",
+      read_string(metadata, "owner", read_string(metadata, "assignee", nil))
+    )
+  end
+
+  defp owner_label_from_metadata(_metadata), do: nil
+
+  defp notes_from_metadata(metadata) when is_map(metadata) do
+    read_string(metadata, "notes", read_string(metadata, "note", nil))
+  end
+
+  defp notes_from_metadata(_metadata), do: nil
+
+  defp action_plan_from_metadata(metadata) when is_map(metadata) do
+    read_string(metadata, "action_plan", read_string(metadata, "draft_plan", nil))
+  end
+
+  defp action_plan_from_metadata(_metadata), do: nil
+
+  defp read_action_draft(attrs) when is_map(attrs) do
+    case fetch_attr(attrs, "action_draft") || fetch_attr(attrs, "draft") do
+      value when is_map(value) ->
+        stringify_top_level_keys(value)
+
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> %{}
+          trimmed -> %{"text" => trimmed}
+        end
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp read_action_draft(_attrs), do: %{}
+
   defp read_string(attrs, key, default) do
     case fetch_attr(attrs, key) do
       value when is_binary(value) ->
@@ -810,20 +993,43 @@ defmodule Maraithon.Todos do
   end
 
   defp read_datetime(attrs, key) do
-    case fetch_attr(attrs, key) do
-      %DateTime{} = value ->
-        value
+    attrs
+    |> fetch_attr(key)
+    |> coerce_datetime()
+  end
 
-      value when is_binary(value) ->
-        case DateTime.from_iso8601(String.trim(value)) do
-          {:ok, parsed, _offset} -> parsed
-          _ -> nil
-        end
+  defp coerce_datetime(%DateTime{} = value), do: value
 
-      _ ->
+  defp coerce_datetime(%NaiveDateTime{} = value) do
+    DateTime.from_naive!(value, "Etc/UTC")
+  end
+
+  defp coerce_datetime(%Date{} = value) do
+    DateTime.new!(value, ~T[00:00:00], "Etc/UTC")
+  end
+
+  defp coerce_datetime(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" ->
         nil
+
+      true ->
+        case DateTime.from_iso8601(trimmed) do
+          {:ok, parsed, _offset} ->
+            parsed
+
+          _ ->
+            case Date.from_iso8601(trimmed) do
+              {:ok, date} -> coerce_datetime(date)
+              _ -> nil
+            end
+        end
     end
   end
+
+  defp coerce_datetime(_value), do: nil
 
   defp fetch_attr(attrs, key) when is_map(attrs) do
     case Map.fetch(attrs, key) do
@@ -842,6 +1048,17 @@ defmodule Maraithon.Todos do
     value |> max(min_value) |> min(max_value)
   end
 
+  defp normalize_integer_filter(value) when is_integer(value), do: value
+
+  defp normalize_integer_filter(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> parsed
+      _ -> nil
+    end
+  end
+
+  defp normalize_integer_filter(_value), do: nil
+
   defp compact_map(map) when is_map(map) do
     Enum.reduce(map, %{}, fn
       {_key, nil}, acc -> acc
@@ -854,6 +1071,10 @@ defmodule Maraithon.Todos do
 
   defp maybe_put(map, key, value) do
     Map.put(map, key, value)
+  end
+
+  defp stringify_top_level_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
   defp existing_atom_key(key) when is_binary(key) do

@@ -10,7 +10,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm
   alias Maraithon.Insights
+  alias Maraithon.Memory
+  alias Maraithon.OpenLoops
   alias Maraithon.Todos
 
   @default_timezone_offset_hours -5
@@ -229,11 +232,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
 
     case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
-      {:ok, _brief} ->
+      {:ok, brief_record} ->
         period_key = read_string(brief_input, "date", nil)
+        todo_result = persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
 
         event_type =
           if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+
+        todo_payload = todo_event_payload(todo_result)
 
         {:emit,
          {event_type,
@@ -243,8 +249,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             generation_mode: generation_mode,
             user_id: context[:user_id] || state.user_id,
             cadences: ["morning"],
-            source_backed: true
-          }},
+            source_backed: true,
+            brief_id: brief_record.id
+          }
+          |> Map.merge(todo_payload)},
          %{
            state
            | pending_brief_input: nil,
@@ -367,6 +375,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Todos.list_open_for_user(limit: 12)
           |> Enum.map(&todo_for_prompt/1)
       },
+      "relationships" =>
+        user_id
+        |> Crm.summarize_for_prompt(16),
+      "deep_memory" =>
+        user_id
+        |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 10),
       "source_health" => SourceBundle.freshness(source_bundle)
     }
   end
@@ -441,7 +455,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
            title when is_binary(title) <- read_string(data, "title", nil),
            summary when is_binary(summary) <- read_string(data, "summary", nil),
            body when is_binary(body) <- read_string(data, "body", nil) do
-        {:ok, %{"title" => title, "summary" => summary, "body" => body}}
+        todos = read_list(data, "todos") |> Enum.filter(&is_map/1)
+
+        {:ok, %{"title" => title, "summary" => summary, "body" => body, "todos" => todos}}
       else
         _ -> {:error, "model_response_invalid_or_missing_required_brief_json"}
       end
@@ -467,6 +483,64 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        "body" =>
          "Morning briefing generation failed because the configured model did not return a valid synthesized brief. No heuristic or keyword-based fallback was used.\n\nError: #{error_message}"
      }, "error", error_message}
+  end
+
+  defp persist_model_todos(_user_id, %{"todos" => []}, _brief_input), do: {:ok, :no_todos}
+  defp persist_model_todos(nil, _brief, _brief_input), do: {:ok, :no_todos}
+
+  defp persist_model_todos(user_id, %{"todos" => todos}, brief_input)
+       when is_binary(user_id) and is_list(todos) do
+    candidates =
+      todos
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(&morning_todo_candidate(&1, brief_input))
+
+    case candidates do
+      [] ->
+        {:ok, :no_todos}
+
+      candidates ->
+        OpenLoops.ingest_todos(user_id, candidates, source: "chief_of_staff_morning_briefing")
+    end
+  end
+
+  defp persist_model_todos(_user_id, _brief, _brief_input), do: {:ok, :no_todos}
+
+  defp morning_todo_candidate(todo, brief_input) when is_map(todo) do
+    metadata =
+      todo
+      |> read_map("metadata")
+      |> Map.merge(%{
+        "origin_skill_id" => id(),
+        "origin_cadence" => "morning",
+        "brief_date" => read_string(brief_input, "date", nil),
+        "brief_generated_at" => read_string(brief_input, "generated_at", nil)
+      })
+      |> compact_map()
+
+    todo
+    |> stringify_top_level_keys()
+    |> Map.put("metadata", metadata)
+    |> Map.put_new("source_occurred_at", read_string(brief_input, "generated_at", nil))
+  end
+
+  defp todo_event_payload({:ok, :no_todos}) do
+    %{todo_count: 0, todo_skipped_count: 0}
+  end
+
+  defp todo_event_payload({:ok, result}) when is_map(result) do
+    %{
+      todo_count: length(result.todos),
+      todo_skipped_count: result.skipped_count
+    }
+  end
+
+  defp todo_event_payload({:error, reason}) do
+    %{
+      todo_count: 0,
+      todo_skipped_count: 0,
+      todo_error: inspect(reason)
+    }
   end
 
   defp calendar_event_for_prompt(nil), do: nil
@@ -565,7 +639,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "title" => todo.title,
       "summary" => todo.summary,
       "next_action" => todo.next_action,
+      "due_at" => prompt_time(todo.due_at),
+      "notes" => todo.notes,
+      "action_plan" => todo.action_plan,
+      "owner_user_id" => todo.owner_user_id,
+      "owner_label" => todo.owner_label,
       "priority" => todo.priority,
+      "source_account_id" => todo.source_account_id,
+      "source_account_label" => todo.source_account_label,
+      "source_item_id" => todo.source_item_id,
       "source_occurred_at" => prompt_time(todo.source_occurred_at)
     }
   end
@@ -618,9 +700,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "news_items" => length(get_in(input, ["news", "items"]) || []),
         "commitments_active" => get_in(input, ["commitments", "active_count"]) || 0,
         "insights" => length(get_in(input, ["open_work", "insights"]) || []),
-        "todos" => length(get_in(input, ["open_work", "todos"]) || [])
+        "todos" => length(get_in(input, ["open_work", "todos"]) || []),
+        "relationships" => length(get_in(input, ["relationships"]) || []),
+        "deep_memory" => deep_memory_count(input)
       }
     }
+  end
+
+  defp deep_memory_count(input) do
+    case Map.get(input, "deep_memory") || Map.get(input, :deep_memory) do
+      %{count: count} when is_integer(count) -> count
+      %{"count" => count} when is_integer(count) -> count
+      _other -> 0
+    end
   end
 
   defp llm_finish_reason(%{finish_reason: reason}) when is_binary(reason), do: reason
@@ -838,6 +930,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp compact_map(map) when is_map(map) do
+    Enum.reduce(map, %{}, fn
+      {_key, nil}, acc -> acc
+      {_key, ""}, acc -> acc
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp stringify_top_level_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
+  end
 
   defp integer_in_range(value, default, min, max) do
     value

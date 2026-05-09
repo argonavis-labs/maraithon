@@ -11,7 +11,9 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
+  alias Maraithon.Memory
   alias Maraithon.OAuth
+  alias Maraithon.OpenLoops
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
@@ -47,6 +49,14 @@ defmodule Maraithon.TelegramAssistant.Context do
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_memory: OperatorMemory.summaries_for_prompt(user_id),
       user_memory: UserMemory.prompt_context(user_id),
+      deep_memory:
+        Memory.prompt_context(user_id, query: latest_user_text(conversation), limit: 8),
+      open_loops:
+        OpenLoops.snapshot(user_id,
+          query: latest_user_text(conversation),
+          limit: 8,
+          include_memory?: false
+        ),
       open_insights: serialize_open_insights(user_id),
       todos: serialize_todos(user_id),
       briefing_schedule: BriefingSchedules.summarize_for_prompt(user_id),
@@ -90,6 +100,16 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp serialize_recent_turns(_conversation), do: []
+
+  defp latest_user_text(%Conversation{} = conversation) do
+    conversation
+    |> TelegramConversations.recent_turns(limit: 4)
+    |> Enum.find_value(fn turn ->
+      if turn.role == "user", do: turn.text
+    end)
+  end
+
+  defp latest_user_text(_conversation), do: nil
 
   defp serialize_linked_item(
          %Delivery{} = delivery,

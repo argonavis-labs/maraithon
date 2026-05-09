@@ -39,6 +39,8 @@ config :maraithon, Maraithon.Runtime,
   openai_model: "gpt-5.4",
   openai_reasoning_effort: "high"
 
+config :maraithon, :todos, mock_llm_when_unconfigured: true
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

@@ -263,6 +263,8 @@ defmodule Maraithon.Behaviors.PromptAgent do
     memory_context = format_memory(state.memory)
     tools_list = format_tools(state.allowed_tools)
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
 
     """
     #{state.prompt}
@@ -275,6 +277,12 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
     ## Durable User Memory
     #{user_memory_text}
+
+    ## Deep Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
 
     ## Current Event
     Type: #{event.type}
@@ -305,6 +313,8 @@ defmodule Maraithon.Behaviors.PromptAgent do
     memory_context = format_memory(state.memory)
     timestamp = Map.get(context, :timestamp) || DateTime.utc_now()
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
 
     """
     #{state.prompt}
@@ -314,6 +324,12 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
     ## Durable User Memory
     #{user_memory_text}
+
+    ## Deep Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
 
     ## Current Time
     #{DateTime.to_iso8601(timestamp)}
@@ -329,12 +345,20 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   defp build_tool_result_prompt(state, tool_call, result, context) do
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
+    deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
+    open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
 
     """
     #{state.prompt}
 
     ## Durable User Memory
     #{user_memory_text}
+
+    ## Deep Memory
+    #{deep_memory_text}
+
+    ## Open Loops
+    #{open_loops_text}
 
     ## Tool Result
     You called: #{tool_call.tool}
@@ -410,6 +434,83 @@ defmodule Maraithon.Behaviors.PromptAgent do
   end
 
   defp format_user_memory(_memory), do: "No durable user memory yet."
+
+  defp format_deep_memory(%{memories: memories}) when is_list(memories) do
+    format_deep_memory(%{"memories" => memories})
+  end
+
+  defp format_deep_memory(%{"memories" => memories}) when is_list(memories) do
+    case memories do
+      [] ->
+        "No deep durable memories matched this context."
+
+      _ ->
+        memories
+        |> Enum.take(8)
+        |> Enum.map_join("\n", fn memory ->
+          title = Map.get(memory, :title) || Map.get(memory, "title")
+          kind = Map.get(memory, :kind) || Map.get(memory, "kind") || "memory"
+
+          summary =
+            Map.get(memory, :summary) || Map.get(memory, "summary") ||
+              Map.get(memory, :content) || Map.get(memory, "content")
+
+          "- [#{kind}] #{title}: #{summary}"
+        end)
+    end
+  end
+
+  defp format_deep_memory(_memory), do: "No deep durable memories matched this context."
+
+  defp format_open_loops(%{buckets: buckets} = snapshot) when is_map(buckets) do
+    snapshot
+    |> Map.delete(:buckets)
+    |> Map.put("buckets", buckets)
+    |> format_open_loops()
+  end
+
+  defp format_open_loops(%{"buckets" => buckets} = snapshot) when is_map(buckets) do
+    totals = Map.get(snapshot, "totals") || Map.get(snapshot, :totals) || %{}
+    total = Map.get(totals, "open_todos") || Map.get(totals, :open_todos) || 0
+
+    if total == 0 do
+      "No durable open loops matched this context."
+    else
+      rendered =
+        [
+          format_open_loop_bucket("Overdue", bucket_value(buckets, :overdue)),
+          format_open_loop_bucket("Today", bucket_value(buckets, :today)),
+          format_open_loop_bucket("Upcoming", bucket_value(buckets, :upcoming)),
+          format_open_loop_bucket("No Due Date", bucket_value(buckets, :no_due_date)),
+          format_open_loop_bucket("Monitor", bucket_value(buckets, :monitor))
+        ]
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.join("\n")
+
+      if rendered == "", do: "No durable open loops matched this context.", else: rendered
+    end
+  end
+
+  defp format_open_loops(_snapshot), do: "No durable open loops matched this context."
+
+  defp format_open_loop_bucket(_label, []), do: ""
+
+  defp format_open_loop_bucket(label, todos) do
+    rendered =
+      todos
+      |> Enum.take(6)
+      |> Enum.map_join("\n", fn todo ->
+        title = Map.get(todo, :title) || Map.get(todo, "title")
+        next_action = Map.get(todo, :next_action) || Map.get(todo, "next_action")
+        "- #{title}: #{next_action}"
+      end)
+
+    "#{label}:\n#{rendered}"
+  end
+
+  defp bucket_value(buckets, key) do
+    Map.get(buckets, key) || Map.get(buckets, to_string(key)) || []
+  end
 
   defp format_content(content) when is_binary(content), do: content
   defp format_content(content) when is_map(content), do: Jason.encode!(content, pretty: true)

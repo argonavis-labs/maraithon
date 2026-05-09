@@ -1,0 +1,92 @@
+defmodule Maraithon.Tools.PeopleToolsTest do
+  use Maraithon.DataCase, async: true
+
+  alias Maraithon.Accounts
+  alias Maraithon.Todos
+  alias Maraithon.Tools
+
+  test "CRM tools CRUD people and expose relationship context" do
+    user_id = "people-tools-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, upserted} =
+             Tools.execute("upsert_person", %{
+               "user_id" => user_id,
+               "person" => %{
+                 "first_name" => "Sam",
+                 "last_name" => "Rivers",
+                 "contact_details" => %{
+                   "emails" => ["sam@example.com"],
+                   "slack_ids" => ["U999"]
+                 },
+                 "preferred_communication_method" => "slack",
+                 "relationship" => "Customer sponsor",
+                 "communication_frequency" => "biweekly"
+               }
+             })
+
+    person = upserted.person
+    assert upserted.source == "maraithon_crm"
+    assert person.display_name == "Sam Rivers"
+
+    assert {:ok, listed} =
+             Tools.execute("list_people", %{
+               "user_id" => user_id,
+               "query" => "sam"
+             })
+
+    assert listed.count == 1
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Send Sam onboarding notes",
+          "summary" => "Sam needs the onboarding notes after the customer call.",
+          "next_action" => "Send Sam the notes in Slack.",
+          "dedupe_key" => "people-tools:sam-onboarding"
+        }
+      ])
+
+    assert {:ok, linked} =
+             Tools.execute("link_person_data", %{
+               "user_id" => user_id,
+               "person_id" => person.id,
+               "todo_id" => todo.id,
+               "resource_source" => "slack",
+               "title" => todo.title,
+               "include_context" => true
+             })
+
+    assert linked.operation == "attach"
+    assert linked.relationship_context.open_todo_count == 1
+
+    assert {:ok, context_result} =
+             Tools.execute("get_relationship_context", %{
+               "user_id" => user_id,
+               "query" => "Sam"
+             })
+
+    context = context_result.relationship_context
+    assert context.person.id == person.id
+    assert context.todo_count == 1
+    assert [%{id: todo_id}] = context.todos
+    assert todo_id == todo.id
+
+    assert {:ok, deleted} =
+             Tools.execute("delete_person", %{
+               "user_id" => user_id,
+               "person_id" => person.id
+             })
+
+    assert deleted.deleted == true
+
+    assert {:ok, empty} =
+             Tools.execute("list_people", %{
+               "user_id" => user_id,
+               "query" => "Sam"
+             })
+
+    assert empty.count == 0
+  end
+end

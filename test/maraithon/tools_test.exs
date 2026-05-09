@@ -32,6 +32,21 @@ defmodule Maraithon.ToolsTest do
       assert "gmail_search" in tools
       assert "gmail_get_message" in tools
       assert "google_calendar_list_events" in tools
+      assert "get_open_loops" in tools
+      assert "list_todos" in tools
+      assert "upsert_todos" in tools
+      assert "resolve_todo" in tools
+      assert "list_people" in tools
+      assert "get_person" in tools
+      assert "upsert_person" in tools
+      assert "delete_person" in tools
+      assert "link_person_data" in tools
+      assert "get_relationship_context" in tools
+      assert "list_memories" in tools
+      assert "write_memory" in tools
+      assert "recall_memory" in tools
+      assert "forget_memory" in tools
+      assert "record_memory_feedback" in tools
       assert "github_create_issue_comment" in tools
       assert "slack_post_message" in tools
       assert "slack_list_conversations" in tools
@@ -53,6 +68,21 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("read_file")
       assert Tools.exists?("gmail_list_recent")
       assert Tools.exists?("google_calendar_list_events")
+      assert Tools.exists?("get_open_loops")
+      assert Tools.exists?("list_todos")
+      assert Tools.exists?("upsert_todos")
+      assert Tools.exists?("resolve_todo")
+      assert Tools.exists?("list_people")
+      assert Tools.exists?("get_person")
+      assert Tools.exists?("upsert_person")
+      assert Tools.exists?("delete_person")
+      assert Tools.exists?("link_person_data")
+      assert Tools.exists?("get_relationship_context")
+      assert Tools.exists?("list_memories")
+      assert Tools.exists?("write_memory")
+      assert Tools.exists?("recall_memory")
+      assert Tools.exists?("forget_memory")
+      assert Tools.exists?("record_memory_feedback")
       assert Tools.exists?("github_create_issue_comment")
       assert Tools.exists?("slack_list_messages")
       assert Tools.exists?("notaui_list_tasks")

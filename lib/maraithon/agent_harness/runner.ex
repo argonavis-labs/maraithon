@@ -6,6 +6,8 @@ defmodule Maraithon.AgentHarness.Runner do
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.AgentHarness.ToolCatalog
   alias Maraithon.LLM
+  alias Maraithon.Memory
+  alias Maraithon.OpenLoops
 
   def run_once(manifest, context, opts \\ []) when is_map(manifest) do
     with {:ok, params} <- build_llm_params(manifest, context, opts) do
@@ -16,6 +18,11 @@ defmodule Maraithon.AgentHarness.Runner do
   def build_llm_params(manifest, context, opts \\ []) when is_map(manifest) do
     with {:ok, model} <- Manifest.require_text(manifest, :model),
          {:ok, intelligence} <- Manifest.require_text(manifest, :intelligence) do
+      context =
+        context
+        |> Memory.enrich_context()
+        |> OpenLoops.enrich_context()
+
       {:ok,
        %{
          "model" => model,
@@ -32,6 +39,8 @@ defmodule Maraithon.AgentHarness.Runner do
   defp system_message(manifest) do
     [
       Manifest.get(manifest, :system_prompt),
+      memory_guidance(Manifest.get(manifest, :tool_allowlist, [])),
+      open_loop_guidance(Manifest.get(manifest, :tool_allowlist, [])),
       "Goals:",
       Enum.join(Manifest.get(manifest, :goals, []), "\n"),
       "Skills:",
@@ -57,6 +66,38 @@ defmodule Maraithon.AgentHarness.Runner do
     tool_allowlist
     |> ToolCatalog.describe()
     |> Jason.encode!()
+  end
+
+  defp memory_guidance(tool_allowlist) do
+    memory_tools =
+      ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback)
+
+    if Enum.any?(memory_tools, &Enum.member?(tool_allowlist, &1)) do
+      """
+      Deep Memory:
+      - Use deep_memory from the runtime context as durable user/system steering context.
+      - Call recall_memory when a relationship, preference, relevance decision, or past correction may change the answer.
+      - Call write_memory when the user or system provides durable facts or instructions.
+      - Call record_memory_feedback when the user says something is or is not relevant.
+      - Call forget_memory when the user asks to remove or stop using a memory.
+      """
+      |> String.trim()
+    end
+  end
+
+  defp open_loop_guidance(tool_allowlist) do
+    open_loop_tools = ~w(get_open_loops upsert_todos list_todos resolve_todo)
+
+    if Enum.any?(open_loop_tools, &Enum.member?(tool_allowlist, &1)) do
+      """
+      Open Loops:
+      - Use open_loops from the runtime context as the durable state of work the user must not miss.
+      - Call get_open_loops before answering broad questions about what is open, owed, pending, or worth attention.
+      - Call upsert_todos to create or refresh todos; it performs model-level semantic dedupe before writing.
+      - Link people and write memory when the tool contract provides explicit structured relationship or memory evidence.
+      """
+      |> String.trim()
+    end
   end
 
   defp blank?(nil), do: true

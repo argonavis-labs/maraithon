@@ -32,6 +32,62 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "model_completion",
       side_effect: "generate"
     },
+    "get_open_loops" => %{
+      name: "get_open_loops",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "get_open_loops",
+      side_effect: "read"
+    },
+    "upsert_todos" => %{
+      name: "upsert_todos",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "model_dedupe_todos",
+      side_effect: "write"
+    },
+    "list_todos" => %{
+      name: "list_todos",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "list_todos",
+      side_effect: "read"
+    },
+    "list_memories" => %{
+      name: "list_memories",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "list_deep_memory",
+      side_effect: "read"
+    },
+    "write_memory" => %{
+      name: "write_memory",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "write_deep_memory",
+      side_effect: "write"
+    },
+    "recall_memory" => %{
+      name: "recall_memory",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "recall_deep_memory",
+      side_effect: "read"
+    },
+    "forget_memory" => %{
+      name: "forget_memory",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "forget_deep_memory",
+      side_effect: "write"
+    },
+    "record_memory_feedback" => %{
+      name: "record_memory_feedback",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "record_relevance_feedback",
+      side_effect: "write"
+    },
     "slack.read" => %{
       name: "slack.read",
       connector: "slack",

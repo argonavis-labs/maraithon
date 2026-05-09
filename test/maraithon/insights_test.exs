@@ -118,6 +118,8 @@ defmodule Maraithon.InsightsTest do
       user_id: user_id,
       agent: agent
     } do
+      due_at = DateTime.add(DateTime.utc_now(), 2, :hour)
+
       {:ok, [insight]} =
         Insights.record_many(user_id, agent.id, [
           %{
@@ -128,12 +130,15 @@ defmodule Maraithon.InsightsTest do
             "recommended_action" => "Reply in-thread now with the payment status.",
             "priority" => 88,
             "confidence" => 0.91,
+            "due_at" => due_at,
             "dedupe_key" => "billing-thread:rev-1",
             "tracking_key" => "billing-thread",
             "source_id" => "thread-billing",
             "metadata" => %{
               "thread_id" => "thread-billing",
-              "subject" => "Billing account past due"
+              "subject" => "Billing account past due",
+              "draft_plan" => "Reply as Kent with payment status, owner, and ETA.",
+              "google_account_email" => "ops@example.com"
             }
           }
         ])
@@ -141,6 +146,9 @@ defmodule Maraithon.InsightsTest do
       [todo] = Todos.list_open_for_user(user_id, kind: "gmail_triage")
       assert todo.title == "Reply to the billing thread"
       assert todo.dedupe_key == "insight:billing-thread"
+      assert DateTime.compare(todo.due_at, due_at) == :eq
+      assert todo.action_plan == "Reply as Kent with payment status, owner, and ETA."
+      assert todo.source_account_label == "ops@example.com"
       assert get_in(todo.metadata, ["source_insight_id"]) == insight.id
 
       assert {:ok, _done_todo} =
