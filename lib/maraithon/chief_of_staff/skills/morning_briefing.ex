@@ -19,7 +19,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 3200
+  @default_llm_max_tokens 12_000
   @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
 

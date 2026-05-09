@@ -141,7 +141,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 3200
+    assert params["max_tokens"] == 12_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
