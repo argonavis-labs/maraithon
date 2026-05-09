@@ -353,7 +353,8 @@ defmodule Maraithon.TelegramAssistant do
         user_id: run.user_id,
         conversation_id: run.conversation_id,
         chat_id: run.chat_id,
-        reply_to_message_id: Map.get(attrs, :source_message_id)
+        reply_to_message_id: Map.get(attrs, :source_message_id),
+        source_text: Map.get(attrs, :text)
       })
     else
       {:error, :disabled}

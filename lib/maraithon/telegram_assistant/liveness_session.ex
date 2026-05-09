@@ -10,7 +10,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   require Logger
 
   @registry Maraithon.TelegramAssistant.LivenessRegistry
-  @default_timeout_text "Something went wrong on my side. I didn't finish that in time. Try again, or ask for one narrower step."
+  @default_timeout_text "I'm still checking this, and it's taking longer than it should. I won't guess from partial context. I'll update this if the lookup finishes."
 
   def start_link(attrs) when is_map(attrs) do
     GenServer.start_link(__MODULE__, attrs, name: via(Map.fetch!(attrs, :run_id)))
@@ -30,7 +30,12 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   def note_tool(run_id, tool_name, args \\ %{})
       when is_binary(run_id) and is_binary(tool_name) and is_map(args) do
-    cast(run_id, {:tool, tool_name, args})
+    case lookup(run_id) do
+      nil -> :ok
+      _pid -> GenServer.call(via(run_id), {:tool, tool_name, args}, 5_000)
+    end
+  catch
+    :exit, _reason -> :ok
   end
 
   def prepare_final_delivery(run_id) when is_binary(run_id) do
@@ -69,6 +74,8 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   @impl true
   def init(attrs) do
+    {hint_category, hint_labels} = initial_hint(attrs)
+
     state =
       %{
         run_id: Map.fetch!(attrs, :run_id),
@@ -77,8 +84,8 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         chat_id: Map.fetch!(attrs, :chat_id),
         reply_to_message_id: Map.get(attrs, :reply_to_message_id),
         phase: "pending",
-        hint_category: "thinking",
-        hint_labels: [],
+        hint_category: hint_category,
+        hint_labels: hint_labels,
         progress_message_id: nil,
         typing_started: false,
         progress_note_sent: false,
@@ -101,16 +108,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   def handle_cast(:context_loaded, state), do: {:noreply, state}
 
   def handle_cast({:tool, tool_name, args}, state) do
-    {hint_category, hint_labels} = classify_tool(tool_name, args)
-
-    next_state =
-      if hint_specific?(hint_category, hint_labels) do
-        %{state | hint_category: hint_category, hint_labels: hint_labels}
-      else
-        state
-      end
-
-    {:noreply, next_state}
+    {:noreply, note_tool_hint(state, tool_name, args)}
   end
 
   def handle_cast(:cancel, state) do
@@ -132,6 +130,10 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     }
 
     {:stop, :normal, reply, next_state}
+  end
+
+  def handle_call({:tool, tool_name, args}, _from, state) do
+    {:reply, :ok, note_tool_hint(state, tool_name, args)}
   end
 
   def handle_call(:timed_out?, _from, state) do
@@ -338,8 +340,13 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     end
   end
 
+  defp finalize_delivery_mode(%{timed_out: true, progress_message_id: message_id} = state)
+       when is_binary(message_id) do
+    %{state | final_delivery_mode: "edit_after_timeout", phase: "completed"}
+  end
+
   defp finalize_delivery_mode(%{timed_out: true} = state) do
-    %{state | final_delivery_mode: "suppressed_after_timeout", phase: "completed"}
+    %{state | final_delivery_mode: "send_after_timeout", phase: "completed"}
   end
 
   defp finalize_delivery_mode(
@@ -353,8 +360,13 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     %{state | final_delivery_mode: "send", phase: "completed"}
   end
 
+  defp delivery_for(%{timed_out: true, progress_message_id: message_id})
+       when is_binary(message_id) do
+    %{mode: :edit, message_id: message_id}
+  end
+
   defp delivery_for(%{timed_out: true}) do
-    %{mode: :suppress_after_timeout}
+    %{mode: :send}
   end
 
   defp delivery_for(%{progress_note_sent: true, progress_message_id: message_id})
@@ -414,10 +426,19 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     }
   end
 
-  defp classify_tool(tool_name, _args) do
+  defp classify_tool(tool_name, args) do
     cond do
       tool_name in ["get_open_work_summary", "inspect_open_insight"] ->
         {"open_work", []}
+
+      tool_name in [
+        "get_relationship_context",
+        "learn_relationship_context",
+        "review_connected_context",
+        "list_people",
+        "get_person"
+      ] ->
+        {"relationships", relationship_hint_labels(tool_name, args)}
 
       String.starts_with?(tool_name, "gmail_") ->
         {"connected_accounts", ["Gmail"]}
@@ -445,6 +466,16 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     end
   end
 
+  defp note_tool_hint(state, tool_name, args) do
+    {hint_category, hint_labels} = classify_tool(tool_name, args)
+
+    if hint_specific?(hint_category, hint_labels) do
+      %{state | hint_category: hint_category, hint_labels: hint_labels}
+    else
+      state
+    end
+  end
+
   defp hint_specific?("thinking", []), do: false
   defp hint_specific?(_category, _labels), do: true
 
@@ -460,6 +491,14 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     "Still preparing that action."
   end
 
+  defp progress_text(%{hint_category: "relationships", hint_labels: [name | _]}) do
+    "Still checking what I know about #{name}."
+  end
+
+  defp progress_text(%{hint_category: "relationships"}) do
+    "Still checking your relationship context."
+  end
+
   defp progress_text(%{hint_category: "connected_accounts", hint_labels: labels}) do
     case Enum.uniq(labels) do
       ["Gmail", "Calendar"] -> "Still checking Gmail and Calendar."
@@ -473,15 +512,107 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   defp progress_text(_state), do: "Still working on that."
 
+  defp timeout_text(%{hint_category: "relationships", hint_labels: [name | _]}) do
+    "I'm still checking who #{name} is across CRM and connected sources, and it's taking longer than it should. I won't guess from a name alone. I'll update this if the lookup finishes."
+  end
+
+  defp timeout_text(%{hint_category: "connected_accounts", hint_labels: labels}) do
+    source =
+      labels
+      |> Enum.uniq()
+      |> case do
+        ["Gmail"] -> "Gmail"
+        ["Calendar"] -> "your calendar"
+        ["Gmail", "Calendar"] -> "Gmail and Calendar"
+        ["Calendar", "Gmail"] -> "Gmail and Calendar"
+        [_single] -> "your connected accounts"
+        _ -> "your connected accounts"
+      end
+
+    "I'm still checking #{source}, and it's taking longer than it should. I won't guess from partial context. I'll update this if the lookup finishes."
+  end
+
   defp timeout_text(_state), do: @default_timeout_text
 
   defp terminal?(state) do
     state.final_delivery_mode in [
       "timeout_only",
-      "suppressed_after_timeout",
+      "edit_after_timeout",
+      "send_after_timeout",
       "send",
       "edit_progress"
     ] or state.timed_out
+  end
+
+  defp relationship_hint_labels("review_connected_context", args) do
+    args
+    |> relationship_query()
+    |> List.wrap()
+  end
+
+  defp relationship_hint_labels(_tool_name, args) do
+    args
+    |> relationship_query()
+    |> List.wrap()
+  end
+
+  defp relationship_query(args) when is_map(args) do
+    [
+      Map.get(args, "query"),
+      Map.get(args, :query),
+      Map.get(args, "person"),
+      Map.get(args, :person),
+      Map.get(args, "display_name"),
+      Map.get(args, :display_name)
+    ]
+    |> Enum.find_value(fn
+      value when is_binary(value) ->
+        value = String.trim(value)
+        if value == "", do: nil, else: value
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp relationship_query(_args), do: nil
+
+  defp initial_hint(attrs) when is_map(attrs) do
+    attrs
+    |> Map.get(:source_text)
+    |> relationship_query_from_text()
+    |> case do
+      nil -> {"thinking", []}
+      query -> {"relationships", [query]}
+    end
+  end
+
+  defp relationship_query_from_text(text) when is_binary(text) do
+    text = String.trim(text)
+
+    [
+      ~r/^\s*who\s+(?:is|are)\s+(.+?)\s*\??\s*$/i,
+      ~r/^\s*what\s+do\s+i\s+owe\s+(.+?)\s*\??\s*$/i,
+      ~r/^\s*what\s+am\s+i\s+waiting\s+on\s+from\s+(.+?)\s*\??\s*$/i
+    ]
+    |> Enum.find_value(fn regex ->
+      case Regex.run(regex, text, capture: :all_but_first) do
+        [query] -> clean_relationship_query(query)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp relationship_query_from_text(_text), do: nil
+
+  defp clean_relationship_query(query) when is_binary(query) do
+    query =
+      query
+      |> String.trim()
+      |> String.trim_trailing("?")
+      |> String.trim()
+
+    if query == "", do: nil, else: query
   end
 
   defp normalize_id(nil), do: nil

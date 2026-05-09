@@ -1740,7 +1740,79 @@ defmodule Maraithon.TelegramAssistantTest do
     assert get_in(run.result_summary, ["liveness", "final_delivery_mode"]) == "edit_progress"
   end
 
-  test "timed out runs tell the user and suppress the late final reply" do
+  test "relationship lookups explain what is being checked while they run" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 100,
+      timeout_notice_ms: 1_500,
+      hard_timeout_ms: 2_000
+    )
+
+    start_supervised!(%{
+      id: :telegram_assistant_relationship_sequence,
+      start:
+        {Agent, :start_link, [fn -> 0 end, [name: :telegram_assistant_relationship_sequence]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_relationship_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{"tool" => "get_relationship_context", "arguments" => %{"query" => "Charlie"}}
+           ],
+           "summary" => "Need relationship context."
+         }}
+      else
+        run_pid = self()
+        send(parent, {:assistant_waiting, run_pid})
+
+        receive do
+          {:release_assistant, ^run_pid} ->
+            {:ok,
+             %{
+               "status" => "final",
+               "assistant_message" => "I do not have a confident Charlie yet.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "Answered from relationship lookup."
+             }}
+        end
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9204, text: "Who is Charlie?"}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 1_000
+    assert progress_text == "Still checking what I know about Charlie."
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
+
+    assert Enum.any?(
+             telegram_events(),
+             &(&1.type == :edit and &1.text == "I do not have a confident Charlie yet.")
+           )
+  end
+
+  test "timed out runs tell the user and edit the timeout notice into a late final reply" do
     parent = self()
 
     configure_liveness(
@@ -1802,21 +1874,16 @@ defmodule Maraithon.TelegramAssistantTest do
     assert_receive {:assistant_waiting, run_pid}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
-    assert timeout_text =~ "didn't finish that in time"
+    assert timeout_text =~ "taking longer than it should"
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
 
     events = telegram_events()
-    assert Enum.count(Enum.filter(events, &(&1.type == :edit))) == 1
+    assert Enum.count(Enum.filter(events, &(&1.type == :edit))) == 2
 
-    refute Enum.any?(
+    assert Enum.any?(
              events,
              &(&1.type == :edit and &1.text == "This answer should be suppressed.")
-           )
-
-    refute Enum.any?(
-             events,
-             &(&1.type == :send and &1.text == "This answer should be suppressed.")
            )
 
     [run] =
@@ -1826,11 +1893,11 @@ defmodule Maraithon.TelegramAssistantTest do
           limit: 1
       )
 
-    assert run.status == "degraded"
+    assert run.status == "completed"
     assert get_in(run.result_summary, ["liveness", "timeout_notice_sent"])
 
     assert get_in(run.result_summary, ["liveness", "final_delivery_mode"]) ==
-             "suppressed_after_timeout"
+             "edit_after_timeout"
   end
 
   test "final delivery falls back to a fresh send when editing the progress note fails" do
