@@ -404,6 +404,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Skill instructions:
        #{skill.instructions}
 
+       Email review rule:
+       Every Gmail item includes body_available, body_status, and body. Use the full body for
+       relevance and obligation judgments. Do not classify an email from sender, subject, or
+       snippet alone. If body_available is false, treat that email as unreviewable source
+       degradation and do not surface it as finance, school, marketing, urgent, or actionable
+       unless another full-body source supports that conclusion.
+
        Brief input JSON:
        #{input_json}
        """}
@@ -478,6 +485,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp gmail_message_for_prompt(message) when is_map(message) do
+    body = gmail_body_for_prompt(message)
+    body_available = body != ""
+
     %{
       "message_id" => read_string(message, "message_id", nil),
       "thread_id" => read_string(message, "thread_id", nil),
@@ -489,8 +499,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" =>
         prompt_time(read_any(message, "internal_date")) || read_string(message, "date", nil),
       "labels" => read_list(message, "labels"),
-      "snippet" => truncate(read_string(message, "snippet", ""), 240)
+      "snippet" => truncate(read_string(message, "snippet", ""), 240),
+      "body_available" => body_available,
+      "body_status" =>
+        read_string(message, "body_status", if(body_available, do: "available", else: "missing")),
+      "body" => truncate(body, 6_000)
     }
+  end
+
+  defp gmail_body_for_prompt(message) when is_map(message) do
+    [
+      read_string(message, "body_text", nil),
+      read_string(message, "text_body", nil),
+      read_string(message, "html_body", nil)
+    ]
+    |> Enum.find(fn value -> is_binary(value) and String.trim(value) != "" end)
+    |> case do
+      value when is_binary(value) -> String.trim(value)
+      _ -> ""
+    end
   end
 
   defp slack_message_for_prompt(message) when is_map(message) do

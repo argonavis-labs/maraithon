@@ -42,7 +42,7 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
              %{
                "tool" => "gmail_search_messages",
                "arguments" => %{
-                 "query" => "in:inbox newer_than:14d -category:promotions -category:social",
+                 "query" => "in:inbox newer_than:14d",
                  "max_results" => 15
                }
              }

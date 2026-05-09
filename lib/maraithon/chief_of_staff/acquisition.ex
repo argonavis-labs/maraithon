@@ -65,6 +65,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp maybe_fetch_gmail({telemetry, bundle}, user_id, source_scope, plan, context) do
     case event_gmail_messages(context, source_scope) do
       {:ok, %{messages: messages, providers: providers}} ->
+        messages = enrich_gmail_messages(messages, user_id, nil)
+
         bundle =
           SourceBundle.put_gmail(bundle, %{
             "messages" => messages,
@@ -81,7 +83,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           put_source_summary(telemetry, "gmail", %{
             "mode" => "event",
             "providers" => providers,
-            "message_count" => length(messages)
+            "message_count" => length(messages),
+            "full_body_count" => count_full_body_messages(messages),
+            "body_missing_count" => count_body_missing_messages(messages)
           })
 
         {telemetry, bundle}
@@ -420,7 +424,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
-              annotated = annotate_google_items(messages, source_scope, provider)
+              annotated =
+                messages
+                |> annotate_google_items(source_scope, provider)
+                |> enrich_gmail_messages(user_id, provider)
 
               {
                 Map.put(message_acc, provider, annotated),
@@ -430,7 +437,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "provider" => provider,
                     "mode" => "connector",
                     "status" => "ok",
-                    "count" => length(annotated)
+                    "count" => length(annotated),
+                    "full_body_count" => count_full_body_messages(annotated),
+                    "body_missing_count" => count_body_missing_messages(annotated)
                   }
                   | fetch_acc
                 ]
@@ -489,7 +498,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "mode" => "connector",
           "status" => status,
           "providers" => providers,
-          "message_count" => length(messages)
+          "message_count" => length(messages),
+          "full_body_count" => count_full_body_messages(messages),
+          "body_missing_count" => count_body_missing_messages(messages)
         })
 
       {telemetry, bundle}
@@ -855,6 +866,112 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp annotate_google_items(_items, _source_scope, _provider), do: []
 
+  defp enrich_gmail_messages(messages, user_id, default_provider)
+       when is_list(messages) and is_binary(user_id) do
+    messages
+    |> Task.async_stream(
+      fn message -> enrich_gmail_message(user_id, message, default_provider) end,
+      max_concurrency: 4,
+      timeout: :infinity
+    )
+    |> Enum.map(fn
+      {:ok, message} -> message
+      {:exit, _reason} -> %{"body_available" => false, "body_status" => "fetch_failed"}
+    end)
+  end
+
+  defp enrich_gmail_messages(messages, _user_id, _default_provider) when is_list(messages),
+    do: Enum.map(messages, &stringify_keys/1)
+
+  defp enrich_gmail_messages(_messages, _user_id, _default_provider), do: []
+
+  defp enrich_gmail_message(user_id, message, default_provider) do
+    metadata = stringify_keys(message)
+    provider = Map.get(metadata, "google_provider") || default_provider
+    message_id = Map.get(metadata, "message_id") || Map.get(metadata, "id")
+
+    cond do
+      gmail_body_available?(metadata) ->
+        metadata
+        |> Map.put("body_available", true)
+        |> Map.put("body_status", "available")
+        |> put_gmail_body_text()
+
+      is_binary(provider) and provider != "" and is_binary(message_id) and message_id != "" ->
+        case gmail_module().fetch_message_content(user_id, message_id, provider: provider) do
+          {:ok, content} ->
+            merged =
+              metadata
+              |> merge_gmail_content(content)
+              |> maybe_put("google_provider", provider)
+              |> put_gmail_body_text()
+
+            if gmail_body_available?(merged) do
+              merged
+              |> Map.put("body_available", true)
+              |> Map.put("body_status", "available")
+            else
+              merged
+              |> Map.put("body_available", false)
+              |> Map.put("body_status", "full_body_empty")
+            end
+
+          {:error, reason} ->
+            metadata
+            |> Map.put("body_available", false)
+            |> Map.put("body_status", "fetch_error")
+            |> Map.put("body_error", inspect(reason))
+        end
+
+      true ->
+        metadata
+        |> Map.put("body_available", false)
+        |> Map.put("body_status", "missing_provider_or_message_id")
+    end
+  end
+
+  defp merge_gmail_content(metadata, content) do
+    content = stringify_keys(content)
+
+    Map.merge(metadata, content, fn _key, original, fetched ->
+      if blank_string?(fetched), do: original, else: fetched
+    end)
+  end
+
+  defp put_gmail_body_text(message) do
+    body =
+      [
+        Map.get(message, "body_text"),
+        Map.get(message, "text_body"),
+        Map.get(message, "html_body")
+      ]
+      |> Enum.find(&present_string?/1)
+
+    maybe_put(message, "body_text", body)
+  end
+
+  defp gmail_body_available?(message) when is_map(message) do
+    message
+    |> put_gmail_body_text()
+    |> Map.get("body_text")
+    |> present_string?()
+  end
+
+  defp gmail_body_available?(_message), do: false
+
+  defp count_full_body_messages(messages) when is_list(messages),
+    do: Enum.count(messages, &gmail_body_available?/1)
+
+  defp count_full_body_messages(_messages), do: 0
+
+  defp count_body_missing_messages(messages) when is_list(messages) do
+    Enum.count(messages, fn message ->
+      is_map(message) and Map.get(message, "body_available") == false
+    end)
+  end
+
+  defp count_body_missing_messages(_messages), do: 0
+
   defp group_messages_by_provider(messages) when is_list(messages) do
     Enum.group_by(messages, &Map.get(&1, "google_provider", "unknown"))
   end
@@ -1070,6 +1187,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_string?(_value), do: false
+
+  defp blank_string?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_string?(nil), do: true
+  defp blank_string?(_value), do: false
 
   defp stringify_keys(%_{} = struct), do: struct
 

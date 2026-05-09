@@ -47,7 +47,25 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
           labels: ["SENT"],
           internal_date: DateTime.add(now, -1, :hour)
         }
-      ]
+      ],
+      contents: %{
+        "msg-1" => %{
+          message_id: "msg-1",
+          thread_id: "thread-1",
+          subject: "Customer ask",
+          labels: ["INBOX"],
+          internal_date: now,
+          text_body: "Customer needs a decision from Kent before Friday."
+        },
+        "msg-2" => %{
+          message_id: "msg-2",
+          thread_id: "thread-2",
+          subject: "Sent update",
+          labels: ["SENT"],
+          internal_date: DateTime.add(now, -1, :hour),
+          text_body: "Kent sent the promised update."
+        }
+      }
     )
 
     TravelCalendarStub.configure(
@@ -105,11 +123,81 @@ defmodule Maraithon.ChiefOfStaff.AcquisitionTest do
       )
 
     assert length(SourceBundle.gmail_messages(bundle)) == 2
+    assert Enum.all?(SourceBundle.gmail_messages(bundle), &(&1["body_available"] == true))
+    assert Enum.all?(SourceBundle.gmail_messages(bundle), &is_binary(&1["body_text"]))
     assert length(SourceBundle.gmail_inbox_messages(bundle)) == 1
     assert length(SourceBundle.gmail_sent_messages(bundle)) == 1
     assert length(SourceBundle.calendar_events(bundle)) == 1
     assert get_in(telemetry, ["sources", "gmail", "status"]) == "ready"
+    assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 2
+    assert get_in(telemetry, ["sources", "gmail", "body_missing_count"]) == 0
     assert get_in(telemetry, ["sources", "calendar", "status"]) == "ready"
+  end
+
+  test "enriches event Gmail payloads with full bodies before model synthesis" do
+    now = ~U[2026-05-08 12:00:00Z]
+
+    TravelGmailStub.configure(
+      contents: %{
+        "school-1" => %{
+          message_id: "school-1",
+          thread_id: "thread-school-1",
+          subject: "4M Weekly Newsletter May 11-15",
+          labels: ["INBOX", "UNREAD"],
+          internal_date: now,
+          from: "Marla Maharaj <teacher@example.com>",
+          text_body: "This week's class note covers the field trip form and spelling words."
+        }
+      }
+    )
+
+    source_scope = %{
+      "google_accounts" => [
+        %{
+          "provider" => "google:kent@example.com",
+          "account_email" => "kent@example.com",
+          "services" => ["gmail"]
+        }
+      ]
+    }
+
+    skill_configs = %{
+      "followthrough" => %{"source_scope" => source_scope, "email_scan_limit" => 10}
+    }
+
+    context = %{
+      agent_id: "chief-agent-event-gmail",
+      user_id: "chief@example.com",
+      timestamp: now,
+      trigger: %{type: :event},
+      event: %{
+        topic: "email:kent@example.com",
+        payload: %{
+          "source" => "gmail",
+          "data" => %{
+            "messages" => [
+              %{
+                "message_id" => "school-1",
+                "thread_id" => "thread-school-1",
+                "subject" => "4M Weekly Newsletter May 11-15",
+                "labels" => ["INBOX", "UNREAD"],
+                "snippet" => "Weekly newsletter"
+              }
+            ]
+          }
+        }
+      }
+    }
+
+    {bundle, telemetry} =
+      Acquisition.build("chief@example.com", ["followthrough"], skill_configs, context)
+
+    [message] = SourceBundle.gmail_messages(bundle)
+    assert message["body_available"] == true
+    assert message["body_status"] == "available"
+    assert message["body_text"] =~ "field trip form"
+    assert message["google_provider"] == "google:kent@example.com"
+    assert get_in(telemetry, ["sources", "gmail", "full_body_count"]) == 1
   end
 
   test "adds configured news to the morning briefing source bundle" do

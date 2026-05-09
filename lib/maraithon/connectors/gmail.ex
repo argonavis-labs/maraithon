@@ -205,7 +205,9 @@ defmodule Maraithon.Connectors.Gmail do
             detailed =
               messages
               |> Enum.take(max_results)
-              |> Enum.map(fn %{"id" => id} -> fetch_message(token, id, access_token: true) end)
+              |> Enum.map(fn %{"id" => id} ->
+                fetch_message_content(token, id, access_token: true)
+              end)
               |> Enum.filter(&match?({:ok, _}, &1))
               |> Enum.map(fn {:ok, msg} -> msg end)
 

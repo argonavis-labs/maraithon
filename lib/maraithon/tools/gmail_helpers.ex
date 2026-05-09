@@ -88,7 +88,7 @@ defmodule Maraithon.Tools.GmailHelpers do
          {:ok, message_ids} <- fetch_message_ids(access_token, max_results, query, label_ids) do
       messages =
         message_ids
-        |> Enum.map(&Gmail.fetch_message(access_token, &1, access_token: true))
+        |> Enum.map(&Gmail.fetch_message_content(access_token, &1, access_token: true))
         |> Enum.filter(&match?({:ok, _}, &1))
         |> Enum.map(fn {:ok, message} ->
           message

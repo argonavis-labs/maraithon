@@ -395,7 +395,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     do: "newer_than:#{@live_latest_lookback_days}d"
 
   defp build_live_gmail_query(:triage, _message_text),
-    do: "in:inbox newer_than:#{@live_inbox_lookback_days}d -category:promotions -category:social"
+    do: "in:inbox newer_than:#{@live_inbox_lookback_days}d"
 
   defp build_live_gmail_query(:specific_message, message_text) do
     query =

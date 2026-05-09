@@ -12,6 +12,7 @@ Create a concise executive brief from the connector payloads.
 - This is not a digest. Do not enumerate source rows. Use the model to select only the 3-6 items Kent would actually need a Chief of Staff to flag.
 - Use sections only when they add signal: `## Needs Your Attention`, `## Today's Schedule`, `## Decisions / Follow-ups`, `## Look Ahead`.
 - Do not include Inbox, Slack, or News as inventory sections. Mention email, Slack, or news only when it changes the action Kent should take today.
+- For every email, judge relevance from the full `body`, not sender, subject, or snippet. If `body_available` is false, treat the email as unreviewable source degradation and do not classify it as actionable, marketing, finance, school, or urgent.
 - Do not list raw marketing email, unread counts, Slack chatter, or news unless the model determines it changes a decision or action today.
 - Omit promotional, newsletter, sales, retail, receipt, and FYI-only emails unless they create a real obligation or risk.
 - Omit casual Slack chatter. Include Slack only when someone is waiting on Kent, a decision is blocked, or a launch/customer thread changed.

@@ -67,6 +67,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "from" => "Instagram <security@mail.instagram.com>",
             "subject" => "New login to Instagram",
             "snippet" => "We noticed a new login.",
+            "text_body" => "Instagram reported a new login from an unknown device.",
+            "body_available" => true,
+            "body_status" => "available",
             "internal_date" => now
           }
         ],
@@ -78,6 +81,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "from" => "Instagram <security@mail.instagram.com>",
             "subject" => "New login to Instagram",
             "snippet" => "We noticed a new login.",
+            "text_body" => "Instagram reported a new login from an unknown device.",
+            "body_available" => true,
+            "body_status" => "available",
             "internal_date" => now
           },
           %{
@@ -87,6 +93,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "from" => "SKIMS <no-reply@emails.skims.com>",
             "subject" => "Dive Into SKIMS Swim",
             "snippet" => "Limited time offer.",
+            "text_body" => "Promotional retail offer for swimwear.",
+            "body_available" => true,
+            "body_status" => "available",
             "internal_date" => now
           }
         ],
@@ -151,6 +160,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
     assert prompt =~ "Skill instructions"
+    assert prompt =~ "Email review rule"
+    assert prompt =~ "body_available"
+    assert prompt =~ "Instagram reported a new login"
+    assert prompt =~ "Promotional retail offer"
     assert prompt =~ ~s({"title":"...","summary":"...","body":"..."})
     assert prompt =~ "Write like a sharp Chief of Staff"
     assert prompt =~ "This is not a digest"
