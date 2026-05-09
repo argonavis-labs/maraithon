@@ -95,6 +95,13 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "get_relationship_context",
       side_effect: "read"
     },
+    "learn_relationship_context" => %{
+      name: "learn_relationship_context",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "learn_relationship_context",
+      side_effect: "write"
+    },
     "list_memories" => %{
       name: "list_memories",
       connector: nil,

@@ -109,6 +109,83 @@ defmodule Maraithon.OpenLoopsTest do
     assert snapshot.memory.count >= 1
   end
 
+  test "ingest_todos enriches from model-written todo metadata" do
+    user_id = unique_user_email("open-loops-model")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Return Emma permission form",
+        "summary" => "A school email says Emma's permission form is due Friday.",
+        "next_action" => "Send the signed permission form back to school.",
+        "dedupe_key" => "gmail:thread:emma-permission"
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one school todo.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "gmail:thread:emma-permission",
+                 "reasoning" => "New parent logistics action.",
+                 "todo" => %{
+                   "source" => "gmail",
+                   "kind" => "gmail_triage",
+                   "title" => "Return Emma permission form",
+                   "summary" => "A school email says Emma's permission form is due Friday.",
+                   "next_action" => "Send the signed permission form back to school.",
+                   "dedupe_key" => "gmail:thread:emma-permission",
+                   "metadata" => %{
+                     "crm_people" => [
+                       %{
+                         "display_name" => "Emma",
+                         "relationship" => "child",
+                         "relationship_note" => "This todo is about Emma's school logistics."
+                       }
+                     ],
+                     "relationship_memories" => [
+                       %{
+                         "kind" => "relationship",
+                         "title" => "Emma school logistics should be treated as parent actions",
+                         "content" =>
+                           "School permission forms and classroom updates about Emma should be framed as parent actions.",
+                         "tags" => ["emma", "school"],
+                         "importance" => 85,
+                         "confidence" => 0.9,
+                         "dedupe_key" => "open-loops-model:emma-school"
+                       }
+                     ]
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             OpenLoops.ingest_todos(user_id, candidates,
+               source: "test_open_loops",
+               llm_complete: llm_complete
+             )
+
+    assert [%{person_name: "Emma"}] = result.enrichment.person_links
+
+    assert [%{title: "Emma school logistics should be treated as parent actions"}] =
+             result.enrichment.memories
+
+    assert [%{display_name: "Emma"}] = Crm.list_people(user_id, query: "Emma")
+    assert [memory] = Memory.list_items(user_id, query: "Emma school logistics", limit: 5)
+    assert memory.source_ref_type == "todo"
+  end
+
   defp unique_user_email(prefix) do
     "#{prefix}-#{System.unique_integer([:positive])}@example.com"
   end

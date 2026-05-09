@@ -97,7 +97,7 @@ Each todo should be per user and include:
 - Draft or plan for the next action.
 - Owner, defaulting to the main user.
 - Status: open, snoozed, done, dismissed.
-- Priority and attention mode.
+- Priority and attention mode for internal ranking, not user-facing numeric priority.
 - Semantic dedupe key and evidence.
 
 Todos should be created by model-level intelligence from Chief of Staff skills, Telegram requests, source scans, briefings, and connector events. Dedupe should be smart and semantic, not exact-string or keyword matching.
@@ -141,6 +141,8 @@ The assistant should make it easy to ask:
 - What context should I remember before replying?
 
 CRUDing people and relationship links should be tool-callable by the Chief of Staff, Telegram assistant, and future MCP clients.
+
+The user should not have to manually declare which relationships matter. If the same parent, teacher, spouse, assistant, teammate, investor, customer, or other proxy repeatedly contacts the user across email, texts, calendar, Slack, Telegram, WhatsApp, or future sources about another person, the model should recognize that pattern, create or enrich the relevant People records, write durable relationship memory, and link the source items and todos. For example, if Emma's mom, school, or teacher keeps sending messages about forms, schedule changes, or logistics, Maraithon should learn that Emma is important context and frame the resulting todo as what Kent needs to do as a parent.
 
 ### Memory
 

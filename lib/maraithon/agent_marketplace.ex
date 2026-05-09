@@ -205,6 +205,7 @@ defmodule Maraithon.AgentMarketplace do
       "upsert_person",
       "link_person_data",
       "get_relationship_context",
+      "learn_relationship_context",
       "recall_memory",
       "write_memory",
       "record_memory_feedback",

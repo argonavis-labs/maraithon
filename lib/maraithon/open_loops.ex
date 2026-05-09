@@ -17,7 +17,7 @@ defmodule Maraithon.OpenLoops do
   @max_limit 50
   @prompt_limit 8
   @open_statuses ~w(open snoozed)
-  @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context recall_memory write_memory record_memory_feedback)
+  @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback)
   @read_key_atoms %{
     "contact_details" => :contact_details,
     "contacts" => :contacts,
@@ -32,6 +32,8 @@ defmodule Maraithon.OpenLoops do
     "last_name" => :last_name,
     "memories" => :memories,
     "memory" => :memory,
+    "relationship_memories" => :relationship_memories,
+    "relationship_memory" => :relationship_memory,
     "metadata" => :metadata,
     "people" => :people,
     "person" => :person,
@@ -110,6 +112,28 @@ defmodule Maraithon.OpenLoops do
   end
 
   def ingest_todos(_user_id, _candidates, _opts), do: {:error, :invalid_todo_candidates}
+
+  def enrich_existing_todos(user_id, todos, candidates, opts \\ [])
+
+  def enrich_existing_todos(user_id, todos, candidates, opts)
+      when is_binary(user_id) and is_list(todos) and is_list(candidates) and is_list(opts) do
+    todos = Enum.filter(todos, &match?(%Todo{}, &1))
+    normalized_candidates = Enum.map(candidates, &stringify_top_level_keys/1)
+
+    decisions =
+      todos
+      |> Enum.with_index()
+      |> Enum.map(fn {todo, index} ->
+        %{persisted_todo_id: todo.id, candidate_index: index}
+      end)
+
+    result = %{todos: todos, decisions: decisions}
+    enrich_persisted_todos(user_id, normalized_candidates, result, opts)
+  end
+
+  def enrich_existing_todos(_user_id, _todos, _candidates, _opts) do
+    %{person_links: [], memories: [], errors: []}
+  end
 
   def enrich_context(context) when is_map(context) do
     user_id = Map.get(context, :user_id) || Map.get(context, "user_id")
@@ -207,7 +231,7 @@ defmodule Maraithon.OpenLoops do
 
   defp enrich_people(acc, user_id, %Todo{} = todo, candidate, candidate_index) do
     candidate
-    |> explicit_people()
+    |> explicit_people(todo)
     |> Enum.reduce(acc, fn person_attrs, acc ->
       case resolve_or_upsert_person(user_id, person_attrs) do
         {:ok, %Person{} = person} ->
@@ -221,7 +245,7 @@ defmodule Maraithon.OpenLoops do
 
   defp enrich_memories(acc, user_id, %Todo{} = todo, candidate, candidate_index, source) do
     candidate
-    |> explicit_memories()
+    |> explicit_memories(todo)
     |> Enum.reduce(acc, fn memory_attrs, acc ->
       memory_attrs = memory_attrs_for_todo(memory_attrs, todo, candidate_index, source)
 
@@ -328,18 +352,34 @@ defmodule Maraithon.OpenLoops do
     |> Enum.map(&stringify_top_level_keys/1)
   end
 
+  defp explicit_people(candidate, %Todo{} = todo) do
+    [candidate, %{"metadata" => todo.metadata || %{}}]
+    |> Enum.flat_map(&explicit_people/1)
+    |> Enum.uniq_by(&inspect/1)
+  end
+
   defp explicit_memories(candidate) do
     metadata = read_map(candidate, "metadata")
 
     [
       fetch_attr(candidate, "memory"),
       fetch_attr(candidate, "memories"),
+      fetch_attr(candidate, "relationship_memory"),
+      fetch_attr(candidate, "relationship_memories"),
       fetch_attr(metadata, "memory"),
-      fetch_attr(metadata, "memories")
+      fetch_attr(metadata, "memories"),
+      fetch_attr(metadata, "relationship_memory"),
+      fetch_attr(metadata, "relationship_memories")
     ]
     |> Enum.flat_map(&listify/1)
     |> Enum.filter(&is_map/1)
     |> Enum.map(&stringify_top_level_keys/1)
+  end
+
+  defp explicit_memories(candidate, %Todo{} = todo) do
+    [candidate, %{"metadata" => todo.metadata || %{}}]
+    |> Enum.flat_map(&explicit_memories/1)
+    |> Enum.uniq_by(&inspect/1)
   end
 
   defp memory_attrs_for_todo(attrs, %Todo{} = todo, candidate_index, source) do

@@ -763,7 +763,7 @@ defmodule Maraithon.Runtime.Agent do
           include_memory?: false
         ),
       open_loop_tools:
-        ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context recall_memory write_memory record_memory_feedback),
+        ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback),
       last_message: data.current_message,
       last_message_metadata: data.current_message_metadata || %{},
       last_message_id: data.current_message_id,

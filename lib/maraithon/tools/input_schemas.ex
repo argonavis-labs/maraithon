@@ -174,6 +174,15 @@ defmodule Maraithon.Tools.InputSchemas do
       "get_relationship_context" ->
         user_object(person_lookup_fields(%{"link_limit" => @integer, "resource_type" => @string}))
 
+      "learn_relationship_context" ->
+        user_object(
+          %{
+            "source" => @string,
+            "observations" => %{"type" => "array", "items" => relationship_observation_schema()}
+          },
+          ["observations"]
+        )
+
       "list_memories" ->
         user_object(memory_filter_fields())
 
@@ -507,6 +516,22 @@ defmodule Maraithon.Tools.InputSchemas do
   end
 
   defp person_link_schema, do: object(person_link_fields())
+
+  defp relationship_observation_schema do
+    object(%{
+      "source" => @string,
+      "resource_type" => @string,
+      "resource_id" => @string,
+      "title" => @string,
+      "summary" => @string,
+      "from" => @string,
+      "to" => @string,
+      "account" => @string,
+      "occurred_at" => @string,
+      "body_excerpt" => @string,
+      "metadata" => @object
+    })
+  end
 
   defp memory_filter_fields do
     %{

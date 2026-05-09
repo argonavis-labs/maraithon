@@ -86,7 +86,8 @@ defmodule Maraithon.AgentHarness.Runner do
   end
 
   defp open_loop_guidance(tool_allowlist) do
-    open_loop_tools = ~w(get_open_loops upsert_todos list_todos resolve_todo)
+    open_loop_tools =
+      ~w(get_open_loops upsert_todos list_todos resolve_todo learn_relationship_context)
 
     if Enum.any?(open_loop_tools, &Enum.member?(tool_allowlist, &1)) do
       """
@@ -94,6 +95,7 @@ defmodule Maraithon.AgentHarness.Runner do
       - Use open_loops from the runtime context as the durable state of work the user must not miss.
       - Call get_open_loops before answering broad questions about what is open, owed, pending, or worth attention.
       - Call upsert_todos to create or refresh todos; it performs model-level semantic dedupe before writing.
+      - Call learn_relationship_context when source observations reveal recurring people, relationship proxies, contact preferences, or who work concerns.
       - Link people and write memory when the tool contract provides explicit structured relationship or memory evidence.
       """
       |> String.trim()

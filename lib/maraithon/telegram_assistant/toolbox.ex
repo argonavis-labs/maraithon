@@ -431,6 +431,36 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "learn_relationship_context",
+        "Learn CRM people, relationship memories, and source links from recent source observations using model-level relationship intelligence.",
+        %{
+          "type" => "object",
+          "required" => ["observations"],
+          "properties" => %{
+            "source" => %{"type" => "string"},
+            "observations" => %{
+              "type" => "array",
+              "items" => %{
+                "type" => "object",
+                "properties" => %{
+                  "source" => %{"type" => "string"},
+                  "resource_type" => %{"type" => "string"},
+                  "resource_id" => %{"type" => "string"},
+                  "title" => %{"type" => "string"},
+                  "summary" => %{"type" => "string"},
+                  "from" => %{"type" => "string"},
+                  "to" => %{"type" => "string"},
+                  "account" => %{"type" => "string"},
+                  "occurred_at" => %{"type" => "string"},
+                  "body_excerpt" => %{"type" => "string"},
+                  "metadata" => %{"type" => "object"}
+                }
+              }
+            }
+          }
+        }
+      ),
+      tool_definition(
         "delete_person",
         "Delete one CRM person only when the user explicitly asks to remove that CRM record.",
         %{
@@ -784,6 +814,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "get_relationship_context" ->
         inject_user_and_execute("get_relationship_context", runtime_context, args)
+
+      "learn_relationship_context" ->
+        inject_user_and_execute("learn_relationship_context", runtime_context, args)
 
       "delete_person" ->
         inject_user_and_execute("delete_person", runtime_context, args)

@@ -5,12 +5,21 @@ defmodule MaraithonWeb.McpControllerTest do
 
   setup do
     previous_api_auth = Application.get_env(:maraithon, :api_auth)
+
+    previous_relationship_intelligence =
+      Application.get_env(:maraithon, :relationship_intelligence)
+
     Application.put_env(:maraithon, :api_auth, bearer_token: "")
 
     on_exit(fn ->
       case previous_api_auth do
         nil -> Application.delete_env(:maraithon, :api_auth)
         value -> Application.put_env(:maraithon, :api_auth, value)
+      end
+
+      case previous_relationship_intelligence do
+        nil -> Application.delete_env(:maraithon, :relationship_intelligence)
+        value -> Application.put_env(:maraithon, :relationship_intelligence, value)
       end
     end)
 
@@ -42,6 +51,7 @@ defmodule MaraithonWeb.McpControllerTest do
     assert "delete_person" in names
     assert "link_person_data" in names
     assert "get_relationship_context" in names
+    assert "learn_relationship_context" in names
     assert "list_memories" in names
     assert "write_memory" in names
     assert "recall_memory" in names
@@ -144,6 +154,86 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "isError"]) == false
     assert get_in(response, ["result", "structuredContent", "source"]) == "maraithon_crm"
     assert get_in(response, ["result", "structuredContent", "count"]) == 0
+  end
+
+  test "calls model-backed relationship learning over MCP", %{conn: conn} do
+    user_id = "mcp-relationship-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    Application.put_env(:maraithon, :relationship_intelligence,
+      llm_complete: fn _params ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "summary" => "Learned Emma school context.",
+               "people" => [
+                 %{
+                   "person_ref" => "emma",
+                   "display_name" => "Emma",
+                   "relationship" => "child",
+                   "communication_frequency" => "recurring school logistics",
+                   "confidence" => 0.92
+                 }
+               ],
+               "memories" => [
+                 %{
+                   "kind" => "relationship",
+                   "title" => "Emma school logistics",
+                   "content" =>
+                     "School newsletters and forms about Emma should be treated as parent logistics for Kent.",
+                   "tags" => ["emma", "school"],
+                   "importance" => 85,
+                   "confidence" => 0.9,
+                   "dedupe_key" => "mcp:emma-school"
+                 }
+               ],
+               "links" => [
+                 %{
+                   "person_ref" => "emma",
+                   "resource_type" => "gmail_thread",
+                   "resource_id" => "thread-4m",
+                   "resource_source" => "gmail",
+                   "title" => "4M Weekly Newsletter",
+                   "relationship_note" => "The source is about Emma's school logistics."
+                 }
+               ]
+             })
+         }}
+      end
+    )
+
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => 6,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "learn_relationship_context",
+          "arguments" => %{
+            "user_id" => user_id,
+            "source" => "mcp_test",
+            "observations" => [
+              %{
+                "source" => "gmail",
+                "resource_type" => "gmail_thread",
+                "resource_id" => "thread-4m",
+                "title" => "4M Weekly Newsletter",
+                "summary" => "Emma's class newsletter includes a permission form.",
+                "from" => "school@example.com",
+                "to" => user_id
+              }
+            ]
+          }
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == false
+    assert get_in(response, ["result", "structuredContent", "people_count"]) == 1
+    assert get_in(response, ["result", "structuredContent", "memory_count"]) == 1
+    assert get_in(response, ["result", "structuredContent", "link_count"]) == 1
   end
 
   test "calls the built-in memory list tool over MCP", %{conn: conn} do

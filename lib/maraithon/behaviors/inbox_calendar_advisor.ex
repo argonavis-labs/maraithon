@@ -18,7 +18,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
+  alias Maraithon.OpenLoops
   alias Maraithon.PreferenceMemory
+  alias Maraithon.RelationshipIntelligence
+  alias Maraithon.Todos
   alias Maraithon.Repo
   alias Maraithon.Tools.GmailHelpers
 
@@ -240,6 +243,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       source_bundle: nil,
       pending_candidates: [],
       pending_direct_insights: [],
+      pending_relationship_observations: [],
+      pending_llm_kind: nil,
+      pending_emit: nil,
       last_scan_at: nil
     }
   end
@@ -283,15 +289,28 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           |> dedupe_candidates()
           |> Enum.take(state.max_insights_per_cycle)
 
+        relationship_observations =
+          scan_result
+          |> Map.get(:relationship_observations, [])
+          |> dedupe_relationship_observations()
+
         cond do
+          candidates == [] and direct_insights == [] and relationship_observations == [] ->
+            {:idle, reset_pending_state(%{state | last_scan_at: context.timestamp})}
+
           candidates == [] and direct_insights == [] ->
-            {:idle,
-             %{
-               state
-               | pending_candidates: [],
-                 pending_direct_insights: [],
-                 last_scan_at: context.timestamp
-             }}
+            relationship_learning_effect(
+              relationship_observations,
+              %{
+                state
+                | pending_candidates: [],
+                  pending_direct_insights: [],
+                  pending_relationship_observations: relationship_observations,
+                  pending_emit: nil,
+                  last_scan_at: context.timestamp
+              },
+              context
+            )
 
           candidates == [] ->
             persist_and_reply(direct_insights, state, context)
@@ -313,6 +332,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                state
                | pending_candidates: candidates,
                  pending_direct_insights: direct_insights,
+                 pending_relationship_observations: relationship_observations,
+                 pending_llm_kind: :insights,
+                 pending_emit: nil,
                  last_scan_at: context.timestamp
              }}
         end
@@ -321,29 +343,78 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   @impl true
   def handle_effect_result({:llm_call, response}, state, context) do
-    candidates = state.pending_candidates
+    case state.pending_llm_kind do
+      :relationships ->
+        relationship_result =
+          persist_relationship_learning(response, state, context)
 
-    insights =
-      parse_llm_response(response.content, candidates, state)
-      |> Enum.filter(&high_signal_unresolved?(&1, state))
-      |> Kernel.++(state.pending_direct_insights)
-      |> prioritize_insights(state.max_insights_per_cycle)
+        case state.pending_emit do
+          {event_type, payload} ->
+            {:emit, {event_type, Map.put(payload, :relationship_learning, relationship_result)},
+             reset_pending_state(state)}
 
-    result = persist_insights(insights, state, context)
+          nil ->
+            case relationship_result do
+              %{people_count: people_count, memory_count: memory_count, link_count: link_count}
+              when people_count + memory_count + link_count > 0 ->
+                {:emit,
+                 {:relationships_learned,
+                  %{
+                    user_id: state.user_id,
+                    people_count: people_count,
+                    memory_count: memory_count,
+                    link_count: link_count
+                  }}, reset_pending_state(state)}
 
-    case result do
-      {:ok, stored} ->
-        {:emit,
-         {:insights_recorded,
-          %{
-            count: length(stored),
-            user_id: state.user_id,
-            categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
-          }}, %{state | pending_candidates: [], pending_direct_insights: []}}
+              _ ->
+                {:idle, reset_pending_state(state)}
+            end
+        end
+
+      _ ->
+        candidates = state.pending_candidates
+
+        insights =
+          parse_llm_response(response.content, candidates, state)
+          |> Enum.filter(&high_signal_unresolved?(&1, state))
+          |> Kernel.++(state.pending_direct_insights)
+          |> prioritize_insights(state.max_insights_per_cycle)
+
+        result = persist_insights(insights, state, context)
+
+        case result do
+          {:ok, stored} ->
+            emit_payload = insights_recorded_payload(stored, state)
+
+            {:emit, {:insights_recorded, emit_payload}, reset_pending_state(state)}
+        end
     end
   end
 
   def handle_effect_result({:tool_call, _result}, state, _context), do: {:idle, state}
+
+  @impl true
+  def handle_effect_error(:llm_call, reason, state, _context) do
+    case state.pending_emit do
+      {event_type, payload} ->
+        payload =
+          Map.put(payload, :relationship_learning, %{
+            source: "maraithon_relationship_intelligence",
+            people_count: 0,
+            memory_count: 0,
+            link_count: 0,
+            errors: [%{type: "llm_call", reason: inspect(reason)}]
+          })
+
+        {:emit, {event_type, payload}, reset_pending_state(state)}
+
+      nil ->
+        {:idle, reset_pending_state(state)}
+    end
+  end
+
+  def handle_effect_error(_type, _reason, state, _context),
+    do: {:idle, reset_pending_state(state)}
 
   @impl true
   def next_wakeup(_state), do: {:relative, @default_wakeup_interval_ms}
@@ -404,7 +475,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     %{
       llm_candidates:
         incoming_reply_candidates ++ explicit_promise_candidates ++ meeting_follow_up_candidates,
-      direct_insights: important_fyi_candidates(emails, state, watch_rules)
+      direct_insights: important_fyi_candidates(emails, state, watch_rules),
+      relationship_observations:
+        relationship_observations_from_sources(emails, sent_messages, events)
     }
   end
 
@@ -440,15 +513,23 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           sent_messages
           |> Enum.flat_map(&sent_commitment_candidates(&1, state, sent_messages))
 
-        %{llm_candidates: incoming ++ outgoing, direct_insights: important_fyi}
+        %{
+          llm_candidates: incoming ++ outgoing,
+          direct_insights: important_fyi,
+          relationship_observations:
+            relationship_observations_from_sources(incoming_messages, sent_messages, [])
+        }
 
       "google_calendar" ->
+        events = extract_calendar_batch(data)
+
         %{
           llm_candidates:
-            data
-            |> extract_calendar_batch()
+            events
             |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages)),
-          direct_insights: []
+          direct_insights: [],
+          relationship_observations:
+            relationship_observations_from_sources([], sent_messages, events)
         }
 
       _ ->
@@ -654,6 +735,108 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp annotate_google_items(_items, _google_source), do: []
+
+  defp relationship_observations_from_sources(emails, sent_messages, events) do
+    incoming =
+      emails
+      |> List.wrap()
+      |> Enum.map(&email_relationship_observation(&1, "incoming"))
+
+    outgoing =
+      sent_messages
+      |> List.wrap()
+      |> Enum.map(&email_relationship_observation(&1, "outgoing"))
+
+    calendar =
+      events
+      |> List.wrap()
+      |> Enum.map(&calendar_relationship_observation/1)
+
+    (incoming ++ outgoing ++ calendar)
+    |> Enum.reject(&(&1 == %{}))
+    |> dedupe_relationship_observations()
+    |> Enum.take(40)
+  end
+
+  defp email_relationship_observation(email, direction) when is_map(email) do
+    subject = read_string(email, "subject", "")
+    snippet = read_string(email, "snippet", "")
+    from = read_string(email, "from", "")
+    to = read_string(email, "to", "")
+    thread_id = read_string(email, "thread_id", nil)
+    message_id = read_string(email, "message_id", read_string(email, "id", nil))
+    resource_id = thread_id || message_id
+
+    compact_map(%{
+      "source" => "gmail",
+      "resource_type" => if(thread_id, do: "gmail_thread", else: "gmail_message"),
+      "resource_id" => resource_id,
+      "title" => subject,
+      "summary" => snippet,
+      "from" => from,
+      "to" => to,
+      "account" => read_string(email, "account", read_string(email, "google_account_email", nil)),
+      "occurred_at" => email |> message_timestamp() |> to_iso8601(),
+      "body_excerpt" => email_body_excerpt(email),
+      "metadata" =>
+        compact_map(%{
+          "direction" => direction,
+          "message_id" => message_id,
+          "thread_id" => thread_id,
+          "labels" => read_list(email, "labels"),
+          "google_provider" => read_string(email, "google_provider", nil)
+        })
+    })
+  end
+
+  defp email_relationship_observation(_email, _direction), do: %{}
+
+  defp calendar_relationship_observation(event) when is_map(event) do
+    event_id = read_string(event, "id", read_string(event, "event_id", nil))
+    attendees = read_list(event, "attendees")
+
+    compact_map(%{
+      "source" => "calendar",
+      "resource_type" => "calendar_event",
+      "resource_id" => event_id,
+      "title" => read_string(event, "summary", read_string(event, "title", "")),
+      "summary" => read_string(event, "description", ""),
+      "from" => read_string(event, "organizer", nil),
+      "to" =>
+        attendees
+        |> Enum.map(&read_string(&1, "email", nil))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.take(@max_attendee_preview)
+        |> Enum.join(", "),
+      "account" => read_string(event, "account", read_string(event, "google_account_email", nil)),
+      "occurred_at" =>
+        (read_datetime(event, "start_time") || read_datetime(event, "start"))
+        |> to_iso8601(),
+      "metadata" =>
+        compact_map(%{
+          "event_id" => event_id,
+          "attendees" => Enum.take(attendees, @max_attendee_preview),
+          "google_provider" => read_string(event, "google_provider", nil)
+        })
+    })
+  end
+
+  defp calendar_relationship_observation(_event), do: %{}
+
+  defp dedupe_relationship_observations(observations) when is_list(observations) do
+    observations
+    |> Enum.filter(&is_map/1)
+    |> Enum.uniq_by(fn observation ->
+      {
+        read_string(observation, "source", nil),
+        read_string(observation, "resource_type", nil),
+        read_string(observation, "resource_id", nil),
+        read_string(observation, "title", nil)
+      }
+    end)
+  end
+
+  defp dedupe_relationship_observations(_observations), do: []
 
   defp account_provider(account) when is_map(account) do
     normalize_string(Map.get(account, "provider"))
@@ -1676,7 +1859,47 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         |> Map.put("metadata", metadata)
       end)
 
-    Insights.record_many(state.user_id, context.agent_id, enriched)
+    case Insights.record_many(state.user_id, context.agent_id, enriched) do
+      {:ok, stored} ->
+        _ = enrich_synced_todos_from_insights(state.user_id, stored)
+        {:ok, stored}
+
+      error ->
+        error
+    end
+  end
+
+  defp enrich_synced_todos_from_insights(user_id, insights) when is_list(insights) do
+    pairs =
+      insights
+      |> Enum.flat_map(fn %Insight{} = insight ->
+        case synced_todo_for_insight(insight) do
+          nil ->
+            []
+
+          todo ->
+            [
+              {todo,
+               %{
+                 "source" => insight.source,
+                 "title" => insight.title,
+                 "summary" => insight.summary,
+                 "metadata" => insight.metadata || %{}
+               }}
+            ]
+        end
+      end)
+
+    {todos, candidates} = Enum.unzip(pairs)
+
+    OpenLoops.enrich_existing_todos(user_id, todos, candidates, source: "insight_sync")
+  end
+
+  defp enrich_synced_todos_from_insights(_user_id, _insights), do: nil
+
+  defp synced_todo_for_insight(%Insight{} = insight) do
+    dedupe_key = "insight:#{insight.tracking_key || insight.dedupe_key || insight.id}"
+    Repo.get_by(Todos.Todo, user_id: insight.user_id, dedupe_key: dedupe_key)
   end
 
   defp persist_and_reply(insights, state, context) do
@@ -1685,20 +1908,74 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     case result do
       {:ok, stored} ->
-        {:emit,
-         {:insights_recorded,
-          %{
-            count: length(stored),
-            user_id: state.user_id,
-            categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
-          }},
-         %{
-           state
-           | pending_candidates: [],
-             pending_direct_insights: [],
-             last_scan_at: context.timestamp
-         }}
+        emit_payload = insights_recorded_payload(stored, state)
+
+        {:emit, {:insights_recorded, emit_payload},
+         reset_pending_state(%{state | last_scan_at: context.timestamp})}
     end
+  end
+
+  defp insights_recorded_payload(stored, state) do
+    %{
+      count: length(stored),
+      user_id: state.user_id,
+      categories: stored |> Enum.map(& &1.category) |> Enum.uniq()
+    }
+  end
+
+  defp relationship_learning_effect(observations, state, context) do
+    case RelationshipIntelligence.llm_params(state.user_id, observations,
+           source: "inbox_calendar_advisor",
+           now: context.timestamp
+         ) do
+      {:ok, params} ->
+        {:effect, {:llm_call, params}, %{state | pending_llm_kind: :relationships}}
+
+      {:error, _reason} ->
+        case state.pending_emit do
+          {event_type, payload} -> {:emit, {event_type, payload}, reset_pending_state(state)}
+          nil -> {:idle, reset_pending_state(state)}
+        end
+    end
+  end
+
+  defp persist_relationship_learning(response, state, context) do
+    content =
+      case response do
+        %{content: content} -> content
+        %{"content" => content} -> content
+        content when is_binary(content) -> content
+        _ -> nil
+      end
+
+    with content when is_binary(content) <- content,
+         {:ok, result} <-
+           RelationshipIntelligence.persist_from_response(state.user_id, content,
+             source: "inbox_calendar_advisor",
+             now: context.timestamp
+           ) do
+      result
+    else
+      _ ->
+        %{
+          source: "maraithon_relationship_intelligence",
+          people_count: 0,
+          memory_count: 0,
+          link_count: 0,
+          errors: [%{type: "relationship_learning", reason: "invalid_response"}]
+        }
+    end
+  end
+
+  defp reset_pending_state(state) do
+    %{
+      state
+      | pending_candidates: [],
+        pending_direct_insights: [],
+        pending_relationship_observations: [],
+        pending_llm_kind: nil,
+        pending_emit: nil
+    }
   end
 
   defp prioritize_insights(insights, limit) when is_list(insights) and is_integer(limit) do
@@ -1848,6 +2125,18 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           read_string(item, "decision_reason", nil) ||
             read_string(base_metadata, "decision_reason", nil)
 
+        crm_people =
+          item
+          |> read_list("crm_people")
+          |> Enum.filter(&is_map/1)
+          |> Enum.take(6)
+
+        relationship_memories =
+          item
+          |> read_list("relationship_memories")
+          |> Enum.filter(&is_map/1)
+          |> Enum.take(6)
+
         conversation_context =
           base_metadata
           |> read_map("conversation_context")
@@ -1902,6 +2191,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               if(reply_debt_candidate?, do: evidence_against_reply_owed, else: [])
             )
             |> maybe_put("decision_reason", if(reply_debt_candidate?, do: decision_reason))
+            |> maybe_put_list("crm_people", crm_people)
+            |> maybe_put_list("relationship_memories", relationship_memories)
             |> maybe_put_list("follow_up_ideas", follow_up_ideas)
             |> maybe_put_list("missing_inputs", missing_inputs)
             |> maybe_put_list("suggested_reply_points", suggested_reply_points)
@@ -2230,6 +2521,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Keep or refine each item's structured record fields:
       commitment, person, source, deadline, status, evidence, next_action
     - Status must remain unresolved for every returned item.
+    - Include CRM enrichment when the source evidence identifies a person or
+      relationship worth remembering. Use `crm_people` as an array of person
+      objects and `relationship_memories` as an array of durable memory objects.
+      This is how Maraithon learns recurring important people and proxies
+      without requiring Kent to correct each item manually.
 
     Return ONLY valid JSON array. Each item must include:
     dedupe_key, title, summary, recommended_action, priority, confidence,
@@ -2240,7 +2536,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     interrupt_now, attention_mode, notification_posture, false_positive_risk, reasoning_summary,
     thread_type, solicited, prior_user_engagement, explicit_user_commitment,
     reply_obligation, importance, evidence_for_reply_owed, evidence_against_reply_owed,
-    decision_reason
+    decision_reason, crm_people, relationship_memories
     - Set actionability to exactly "actionable" for every returned item.
     - Set human_counterparty and missing_followthrough_evidence to true for every returned item.
     - Set attention_mode to exactly "act_now" or "monitor".

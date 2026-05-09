@@ -7,7 +7,7 @@ defmodule Maraithon.Todos.Intelligence do
   create/update/skip decisions returned by the model.
   """
 
-  alias Maraithon.LLM
+  alias Maraithon.{Crm, LLM, Memory}
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
 
@@ -58,6 +58,9 @@ defmodule Maraithon.Todos.Intelligence do
       "source" => source,
       "generated_at" => now,
       "existing_todos" => Enum.map(existing, &existing_todo_for_prompt/1),
+      "existing_people" =>
+        Crm.summarize_for_prompt(user_id, Keyword.get(opts, :people_limit, 24)),
+      "memory_context" => safe_memory_context(user_id, candidates, opts),
       "candidate_todos" => candidates
     }
 
@@ -86,6 +89,18 @@ defmodule Maraithon.Todos.Intelligence do
          summary, next_action, and dedupe_key.
        - Preserve useful source metadata such as Slack channel/thread, Gmail
          message/thread/account, calendar account/event, or Chief-of-Staff skill.
+       - Include CRM enrichment whenever source evidence identifies people:
+         put `crm_people` in todo.metadata as an array of people to upsert, with
+         contact details, relationship, preferred communication method,
+         communication frequency, notes, confidence, and relationship_note.
+       - Include durable relationship memories whenever source evidence teaches
+         something useful: put `relationship_memories` in todo.metadata as an
+         array of memory objects with kind, title, content, tags, importance,
+         confidence, and dedupe_key.
+       - Learn from recurring human contacts and relationship proxies. If a
+         person's parent, spouse, teacher, assistant, teammate, investor, or
+         customer contact repeatedly sends source items, use CRM/memory context
+         and the current source body to decide whether to enrich the relationship.
        - Default ownership is the main user unless the candidate clearly names
          another owner.
        - Use source bodies and metadata when available. Do not infer finance, tax,
@@ -127,7 +142,10 @@ defmodule Maraithon.Todos.Intelligence do
                "source_item_id": null,
                "source_occurred_at": null,
                "dedupe_key": "same stable semantic key",
-               "metadata": {}
+               "metadata": {
+                 "crm_people": [],
+                 "relationship_memories": []
+               }
              }
            }
          ]
@@ -143,6 +161,29 @@ defmodule Maraithon.Todos.Intelligence do
        #{candidates_json}
        """}
     end
+  end
+
+  defp safe_memory_context(user_id, candidates, opts) do
+    query =
+      Keyword.get(opts, :memory_query) ||
+        candidates
+        |> Enum.flat_map(fn candidate ->
+          [
+            read_string(candidate, "title", nil),
+            read_string(candidate, "summary", nil),
+            read_string(candidate, "notes", nil),
+            candidate |> read_map("metadata") |> read_string("body_excerpt", nil)
+          ]
+        end)
+        |> Enum.reject(&is_nil/1)
+        |> Enum.take(12)
+        |> Enum.join(" ")
+
+    Memory.prompt_context(user_id, query: query, limit: Keyword.get(opts, :memory_limit, 8))
+  rescue
+    _error -> %{}
+  catch
+    _kind, _reason -> %{}
   end
 
   defp llm_complete(opts) do
@@ -476,6 +517,13 @@ defmodule Maraithon.Todos.Intelligence do
 
       _other ->
         default
+    end
+  end
+
+  defp read_map(attrs, key) when is_map(attrs) do
+    case fetch_attr(attrs, key) do
+      value when is_map(value) -> stringify_top_level_keys(value)
+      _other -> %{}
     end
   end
 

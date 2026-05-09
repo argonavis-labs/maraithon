@@ -395,8 +395,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         }
       }
 
-      assert {:idle, %{pending_candidates: []}} =
+      assert {:effect, {:llm_call, params}, new_state} =
                InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert new_state.pending_candidates == []
+      assert new_state.pending_llm_kind == :relationships
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "RELATIONSHIP_INTELLIGENCE_JSON_V1"
+      assert prompt =~ "Ayoub Rezala"
     end
 
     test "persists high-impact account-risk Gmail as important_fyi without an llm pass", %{
@@ -529,8 +535,14 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         }
       }
 
-      assert {:idle, %{pending_candidates: []}} =
+      assert {:effect, {:llm_call, params}, new_state} =
                InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert new_state.pending_candidates == []
+      assert new_state.pending_llm_kind == :relationships
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "RELATIONSHIP_INTELLIGENCE_JSON_V1"
+      assert prompt =~ "Hockey schedule update"
 
       assert Insights.list_open_for_user(user_id) == []
     end
@@ -560,8 +572,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         }
       }
 
-      assert {:idle, %{pending_candidates: [], pending_direct_insights: []}} =
+      assert {:effect, {:llm_call, params}, new_state} =
                InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert new_state.pending_candidates == []
+      assert new_state.pending_direct_insights == []
+      assert new_state.pending_llm_kind == :relationships
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "RELATIONSHIP_INTELLIGENCE_JSON_V1"
+      assert prompt =~ "Wealthsimple"
 
       assert Insights.list_open_for_user(user_id) == []
     end

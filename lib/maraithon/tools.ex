@@ -30,6 +30,7 @@ defmodule Maraithon.Tools do
     "delete_person" => Maraithon.Tools.DeletePerson,
     "link_person_data" => Maraithon.Tools.LinkPersonData,
     "get_relationship_context" => Maraithon.Tools.GetRelationshipContext,
+    "learn_relationship_context" => Maraithon.Tools.LearnRelationshipContext,
     "list_memories" => Maraithon.Tools.ListMemories,
     "write_memory" => Maraithon.Tools.WriteMemory,
     "recall_memory" => Maraithon.Tools.RecallMemory,
@@ -94,6 +95,8 @@ defmodule Maraithon.Tools do
       "Attach or detach a CRM person from a todo or another user-owned data object.",
     "get_relationship_context" =>
       "Fetch CRM relationship context for a person, including linked todos.",
+    "learn_relationship_context" =>
+      "Use model-level relationship intelligence to learn CRM people, memories, and links from source observations.",
     "list_memories" => "List built-in durable deep memories for a user.",
     "write_memory" => "Create or update one built-in durable deep memory item.",
     "recall_memory" =>
@@ -223,7 +226,8 @@ defmodule Maraithon.Tools do
 
   defp idempotent_tool?(name) do
     name in ~w(
-      upsert_todos upsert_person write_memory record_memory_feedback link_person_data
+      upsert_todos upsert_person learn_relationship_context write_memory
+      record_memory_feedback link_person_data
       gmail_batch_modify notaui_update_task notion_update_page
     )
   end
