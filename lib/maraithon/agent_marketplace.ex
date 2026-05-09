@@ -6,6 +6,7 @@ defmodule Maraithon.AgentMarketplace do
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
   alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.LLM
 
   @doc """
@@ -20,19 +21,31 @@ defmodule Maraithon.AgentMarketplace do
   @doc """
   Ensure the primary operator has the default marketplace agents installed.
   """
-  def ensure_default_installations(opts \\ []) do
+  def ensure_default_installations do
+    ensure_default_installations([], :bootstrap)
+  end
+
+  def ensure_default_installations(opts) when is_list(opts) do
+    ensure_default_installations(opts, :explicit_options)
+  end
+
+  defp ensure_default_installations(opts, call_source) do
     slugs = Keyword.get(opts, :slugs, default_install_slugs())
 
-    with {:ok, user_id} <- default_install_user_id(opts),
+    with {:ok, user_id, install_source} <- default_install_user_id(opts, call_source),
          {:ok, _packages} <- sync_builtin_packages() do
       case user_id do
         nil ->
           {:ok, []}
 
         user_id ->
-          slugs
-          |> Enum.map(&ensure_user_installation(user_id, &1))
-          |> split_results()
+          if default_install_allowed?(user_id, install_source) do
+            slugs
+            |> Enum.map(&ensure_user_installation(user_id, &1))
+            |> split_results()
+          else
+            {:ok, []}
+          end
       end
     else
       {:error, reason} ->
@@ -77,18 +90,19 @@ defmodule Maraithon.AgentMarketplace do
     |> Map.put("source_behavior", behavior)
   end
 
-  defp default_install_user_id(opts) do
+  defp default_install_user_id(opts, call_source) do
     explicit_user_id = Keyword.get(opts, :user_id)
 
     cond do
-      is_binary(explicit_user_id) and String.trim(explicit_user_id) != "" ->
-        {:ok, Accounts.normalize_email(explicit_user_id)}
+      call_source == :explicit_options and is_binary(explicit_user_id) and
+          String.trim(explicit_user_id) != "" ->
+        {:ok, Accounts.normalize_email(explicit_user_id), :explicit}
 
       user = Accounts.primary_admin_email() ->
-        {:ok, user}
+        {:ok, user, :primary_admin}
 
       true ->
-        {:ok, nil}
+        {:ok, nil, :none}
     end
   end
 
@@ -97,6 +111,13 @@ defmodule Maraithon.AgentMarketplace do
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:default_install_slugs, ["ai_chief_of_staff"])
   end
+
+  defp default_install_allowed?(_user_id, :explicit), do: true
+
+  defp default_install_allowed?(user_id, :primary_admin),
+    do: ConnectedAccounts.telegram_destination(user_id) != nil
+
+  defp default_install_allowed?(_user_id, _source), do: false
 
   defp ensure_user_installation(nil, _slug), do: {:ok, nil}
 

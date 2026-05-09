@@ -5,6 +5,7 @@ defmodule Maraithon.AgentMarketplaceTest do
   alias Maraithon.AgentMarketplace
   alias Maraithon.Agents
   alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
 
   describe "builtin_manifest/1" do
     test "wraps built-in agents in the manifest harness" do
@@ -97,6 +98,35 @@ defmodule Maraithon.AgentMarketplaceTest do
 
       assert Agents.get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version])
       refute Enum.any?(Agents.list_agents(include_removed: true), &is_nil(&1.user_id))
+    end
+
+    test "does not auto-install for the primary admin until Telegram is connected" do
+      previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
+
+      user_id = "marketplace-primary-no-telegram-#{Ecto.UUID.generate()}@example.com"
+
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      System.put_env("PRIMARY_ADMIN_EMAIL", user_id)
+
+      on_exit(fn ->
+        case previous_primary_admin do
+          nil -> System.delete_env("PRIMARY_ADMIN_EMAIL")
+          value -> System.put_env("PRIMARY_ADMIN_EMAIL", value)
+        end
+      end)
+
+      assert {:ok, []} = AgentMarketplace.ensure_default_installations()
+
+      assert [] =
+               Agents.list_marketplace_packages(user_id)
+               |> Enum.filter(&(&1.package.slug == "ai_chief_of_staff" and &1.installation))
+
+      {:ok, _telegram} =
+        ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "998877"})
+
+      assert {:ok, [agent]} = AgentMarketplace.ensure_default_installations()
+      assert agent.user_id == user_id
+      assert agent.status == "running"
     end
   end
 end
