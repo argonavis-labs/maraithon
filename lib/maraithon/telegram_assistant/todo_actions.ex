@@ -170,10 +170,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     [
       prefix_text,
       "<b>#{safe(next_action)}</b>",
-      "",
       todo_context_line(todo, next_action),
-      "<b>From:</b> #{safe(source)}#{render_account(account)}",
-      feedback && "<b>Feedback:</b> #{safe(feedback)}"
+      source_sentence(source, account),
+      feedback && "Feedback noted: #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
@@ -224,8 +223,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp normalize_url(_value), do: nil
 
+  defp source_sentence("Operator", _account), do: nil
+
+  defp source_sentence(source, account),
+    do: "I found this in #{safe(source)}#{render_account(account)}."
+
   defp render_account(nil), do: ""
-  defp render_account(account), do: " · account #{safe(account)}"
+  defp render_account(account), do: " · #{safe(account)}"
 
   defp metadata_account(metadata) when is_map(metadata) do
     [

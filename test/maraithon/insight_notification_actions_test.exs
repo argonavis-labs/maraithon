@@ -120,12 +120,19 @@ defmodule Maraithon.InsightNotificationActionsTest do
       Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
     sent = last_telegram_message(:send)
-    assert sent.text =~ "This requires action"
-    assert sent.text =~ "<b>What it is:</b>"
-    assert sent.text =~ "<b>Suggested reply:</b>"
+    assert sent.text =~ "I think this needs your attention."
+
+    assert sent.text =~
+             "The commitment still appears open for Sarah and no completion evidence was found"
+
+    assert sent.text =~ "<b>What I'd send</b>"
     assert sent.text =~ "Hi Sarah,"
-    assert sent.text =~ "<b>Actions:</b>"
+    assert sent.text =~ "<b>Fast actions</b>"
     assert sent.text =~ "Tap Draft Email"
+    refute sent.text =~ "<b>What it is:</b>"
+    refute sent.text =~ "<b>Suggested reply:</b>"
+    refute sent.text =~ "Needed:"
+    refute sent.text =~ "Source:"
     refute sent.text =~ "score="
     refute sent.text =~ "threshold="
     refute sent.text =~ "Need from Kent"
@@ -497,9 +504,11 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "Watching this"
-    assert sent.text =~ "<b>Watch for:</b>"
-    assert sent.text =~ "<b>What changed:</b> Ownership moved to Breck after acknowledgment."
+    assert sent.text =~ "I'm watching this."
+    assert sent.text =~ "<b>What I'm watching</b>"
+    assert sent.text =~ "Since the last check: Ownership moved to Breck after acknowledgment."
+    refute sent.text =~ "<b>Watch for:</b>"
+    refute sent.text =~ "<b>What changed:</b>"
     refute sent.text =~ "score="
     refute sent.text =~ "threshold="
 

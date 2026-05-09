@@ -58,6 +58,17 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "not relevant"
   end
 
+  test "build_prompt instructs the model to sound like a chief of staff" do
+    prompt = LLMJson.build_prompt(payload("What should I do next?"))
+
+    assert prompt =~ "Voice contract"
+    assert prompt =~ "smart, capable chief of staff"
+    assert prompt =~ "Avoid report labels"
+    assert prompt =~ "Never mention internal priority scores"
+    assert prompt =~ "relationship questions"
+    assert prompt =~ "actionable chief-of-staff note"
+  end
+
   test "build_prompt instructs the model to capture manual todos and return itemized todo lists" do
     prompt =
       LLMJson.build_prompt(payload("Add renew the domain this week to my todo list."))

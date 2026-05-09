@@ -1113,7 +1113,11 @@ defmodule Maraithon.TelegramAssistantTest do
     refute payload.text =~ "About:"
     assert payload.text =~ "Reply with the owner and the exact billing contact."
     assert payload.text =~ "Finance needs an owner confirmation for the invoice thread."
+    assert payload.text =~ "I found this in Gmail."
     refute payload.text =~ "Priority:"
+    refute payload.text =~ "From:"
+    refute payload.text =~ "Source:"
+    refute payload.text =~ "account "
 
     assert {:ok, _conversation, turn, _telegram_result} =
              Maraithon.TelegramAssistant.send_turn(

@@ -91,33 +91,30 @@ defmodule Maraithon.InsightNotifications.Actions do
     action_state = action_state(delivery)
     change_summary = metadata |> read_map("attention") |> read_string("change_summary")
 
-    action_state_text = render_action_state(action_state)
-    header = if monitor_insight?(insight), do: "Watching this", else: "This requires action"
-    action_label = if monitor_insight?(insight), do: "Watch for", else: "Suggested reply"
+    action_state_text = action_state |> render_action_state() |> String.trim()
+
+    header =
+      if monitor_insight?(insight),
+        do: "I'm watching this.",
+        else: "I think this needs your attention."
+
+    action_label = if monitor_insight?(insight), do: "What I'm watching", else: "What I'd send"
     reply_text = suggested_reply(insight, metadata)
     details_text = details_text(insight, metadata)
     action_text = action_list_text(insight, metadata)
 
-    change_summary_text =
-      case change_summary do
-        nil -> ""
-        value -> "\n\n<b>What changed:</b> #{safe(value)}"
-      end
-
-    """
-    <b>#{header}</b>
-    <b>#{safe(insight.title)}</b>
-
-    <b>What it is:</b> #{safe(insight.summary)}
-    #{details_text}#{change_summary_text}
-
-    <b>#{action_label}:</b>
-    #{safe(reply_text)}
-
-    <b>Actions:</b>
-    #{action_text}#{action_state_text}
-    """
-    |> String.trim()
+    [
+      "<b>#{header}</b>",
+      "<b>#{safe(insight.title)}</b>",
+      safe(insight.summary),
+      details_text,
+      change_summary_text(change_summary),
+      reply_block(action_label, reply_text),
+      actions_block(action_text),
+      action_state_text
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
   end
 
   def build_reply_markup(%Delivery{} = delivery) do
@@ -597,26 +594,46 @@ defmodule Maraithon.InsightNotifications.Actions do
     |> Enum.reject(&is_nil/1)
     |> case do
       [] -> ""
-      details -> "\n#{Enum.map_join(details, "\n", &safe/1)}"
+      details -> Enum.map_join(details, "\n", &safe/1)
     end
   end
 
   defp due_detail(%Insight{due_at: %DateTime{} = due_at}) do
-    "Due: #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}"
+    "This is due #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}."
   end
 
   defp due_detail(%Insight{}), do: nil
 
   defp needed_detail(%Insight{recommended_action: action}) when is_binary(action) do
-    "Needed: #{action}"
+    "I would do this next: #{action}"
   end
 
   defp needed_detail(%Insight{}), do: nil
 
   defp source_detail(%Insight{} = insight, metadata) do
-    case source_label(insight, metadata) do
-      nil -> nil
-      value -> "Source: #{value}"
+    "I found it in #{source_label(insight, metadata)}."
+  end
+
+  defp change_summary_text(nil), do: nil
+  defp change_summary_text(value), do: "Since the last check: #{safe(value)}"
+
+  defp reply_block(_label, text) when not is_binary(text), do: nil
+
+  defp reply_block(label, text) do
+    if blank?(text) do
+      nil
+    else
+      "<b>#{safe(label)}</b>\n#{safe(text)}"
+    end
+  end
+
+  defp actions_block(text) when not is_binary(text), do: nil
+
+  defp actions_block(text) do
+    if blank?(text) do
+      nil
+    else
+      "<b>Fast actions</b>\n#{text}"
     end
   end
 
@@ -933,11 +950,20 @@ defmodule Maraithon.InsightNotifications.Actions do
       read_string(metadata, "account") ||
         read_string(metadata, "team_id")
 
+    source = source_display(insight.source)
+
     cond do
-      present?(account) -> "#{insight.source} · #{account}"
-      true -> insight.source
+      present?(account) -> "#{source} · #{account}"
+      true -> source
     end
   end
+
+  defp source_display("gmail"), do: "Gmail"
+  defp source_display("slack"), do: "Slack"
+  defp source_display("calendar"), do: "Calendar"
+  defp source_display("telegram"), do: "Telegram"
+  defp source_display(source) when is_binary(source), do: String.capitalize(source)
+  defp source_display(_source), do: "connected context"
 
   defp build_context(%Insight{}, metadata) do
     compact_map(%{
