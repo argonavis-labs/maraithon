@@ -3,6 +3,31 @@ defmodule Maraithon.AssistantHarnessTest do
 
   alias Maraithon.AssistantHarness
 
+  test "exposes the executable runtime contract used by the loop" do
+    policy = AssistantHarness.runtime_policy(max_llm_turns: 8, max_tool_steps: 12)
+
+    assert policy.contract_version == 1
+    assert policy.loop.max_llm_turns == 8
+    assert policy.loop.max_tool_steps == 12
+    assert policy.tool_calls.max_per_step == 3
+    assert "tool_calls" in policy.model_decision_contract.statuses
+    assert "todo_digest" in policy.model_decision_contract.message_classes
+  end
+
+  test "builds model requests with runtime policy instead of prompt text alone" do
+    request =
+      AssistantHarness.build_step_request(payload("What should I review?"),
+        max_tokens: 900,
+        reasoning_effort: "high"
+      )
+
+    assert request["max_tokens"] == 900
+    assert request["reasoning_effort"] == "high"
+    assert [%{"role" => "system"}, %{"role" => "user", "content" => prompt}] = request["messages"]
+    assert prompt =~ "Runtime policy JSON"
+    assert prompt =~ "\"contract_version\":1"
+  end
+
   test "uses the model response to choose tools instead of local keyword routing" do
     llm_complete = fn params ->
       prompt = get_in(params, ["messages", Access.at(1), "content"])
@@ -36,6 +61,44 @@ defmodule Maraithon.AssistantHarnessTest do
 
     assert response["tool_calls"] == [
              %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 5}}
+           ]
+  end
+
+  test "normalizes provider-style tool names and JSON encoded arguments like OpenClaw" do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "name" => "functions.gmail.search.messages:0",
+                 "input" => Jason.encode!(%{"query" => "Charlie", "newer_than" => "30d"})
+               }
+             ],
+             "summary" => "Search connected email before answering."
+           })
+       }}
+    end
+
+    assert {:ok, response} =
+             AssistantHarness.next_step(
+               %{
+                 context: %{},
+                 tools: [%{"name" => "gmail_search_messages"}],
+                 tool_history: []
+               },
+               llm_complete: llm_complete
+             )
+
+    assert response["tool_calls"] == [
+             %{
+               "tool" => "gmail_search_messages",
+               "arguments" => %{"query" => "Charlie", "newer_than" => "30d"}
+             }
            ]
   end
 

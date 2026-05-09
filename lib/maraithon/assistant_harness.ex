@@ -1,32 +1,115 @@
 defmodule Maraithon.AssistantHarness do
   @moduledoc """
-  Model-first assistant harness for user-facing chat loops.
+  Model-first assistant harness policy for user-facing chat loops.
 
-  This is the semantic decision boundary for full assistant conversations. It
-  asks the model what to say or which tools to call, validates the returned
-  contract, and leaves execution/persistence to the caller.
+  This module owns the model-facing contract: request construction, runtime
+  policy, tool-call limits, prompt assembly, and JSON response validation. The
+  durable event loop lives in `Maraithon.TelegramAssistant.Runner`, which uses
+  this policy to call the model, execute tools, persist steps, and continue
+  until the model returns a final answer.
   """
 
   alias Maraithon.LLM
 
+  @contract_version 1
+  @default_max_llm_turns 6
+  @default_max_tool_steps 10
+  @default_chat_max_tokens 1_800
+  @default_proactive_max_tokens 1_200
+  @default_temperature 0.2
+  @default_reasoning_effort "medium"
   @max_tool_calls_per_step 3
   @valid_statuses ~w(tool_calls final)
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
   @valid_proactive_decisions ~w(send_now hold)
   @valid_proactive_message_classes ~w(assistant_push todo_digest system_notice)
 
-  def next_step(payload, opts \\ []) when is_map(payload) do
-    prompt = build_prompt(payload)
+  def runtime_policy(opts \\ []) when is_list(opts) do
+    %{
+      contract_version: @contract_version,
+      loop: %{
+        max_llm_turns:
+          policy_value(opts, :max_llm_turns, @default_max_llm_turns)
+          |> positive_integer(@default_max_llm_turns),
+        max_tool_steps:
+          policy_value(opts, :max_tool_steps, @default_max_tool_steps)
+          |> positive_integer(@default_max_tool_steps)
+      },
+      tool_calls: %{
+        max_per_step: @max_tool_calls_per_step
+      },
+      model_decision_contract: %{
+        statuses: @valid_statuses,
+        message_classes: @valid_message_classes
+      },
+      proactive_decision_contract: %{
+        decisions: @valid_proactive_decisions,
+        message_classes: @valid_proactive_message_classes
+      },
+      chat_request: %{
+        max_tokens:
+          policy_value(opts, :max_tokens, @default_chat_max_tokens)
+          |> positive_integer(@default_chat_max_tokens),
+        temperature:
+          policy_value(opts, :temperature, @default_temperature)
+          |> bounded_float(@default_temperature),
+        reasoning_effort:
+          policy_value(opts, :reasoning_effort, @default_reasoning_effort)
+          |> non_empty_string(@default_reasoning_effort)
+      },
+      proactive_request: %{
+        max_tokens:
+          policy_value(
+            opts,
+            :proactive_max_tokens,
+            policy_value(opts, :max_tokens, @default_proactive_max_tokens)
+          )
+          |> positive_integer(@default_proactive_max_tokens),
+        temperature:
+          policy_value(opts, :temperature, @default_temperature)
+          |> bounded_float(@default_temperature),
+        reasoning_effort:
+          policy_value(opts, :reasoning_effort, @default_reasoning_effort)
+          |> non_empty_string(@default_reasoning_effort)
+      }
+    }
+  end
 
-    params = %{
+  def max_llm_turns(opts \\ []) when is_list(opts), do: runtime_policy(opts).loop.max_llm_turns
+  def max_tool_steps(opts \\ []) when is_list(opts), do: runtime_policy(opts).loop.max_tool_steps
+
+  def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
+    policy = runtime_policy(opts)
+    prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_prompt()
+
+    %{
       "messages" => [
         %{"role" => "system", "content" => system_prompt()},
         %{"role" => "user", "content" => prompt}
       ],
-      "max_tokens" => Keyword.get(opts, :max_tokens, 1_800),
-      "temperature" => Keyword.get(opts, :temperature, 0.2),
-      "reasoning_effort" => Keyword.get(opts, :reasoning_effort, "medium")
+      "max_tokens" => policy.chat_request.max_tokens,
+      "temperature" => policy.chat_request.temperature,
+      "reasoning_effort" => policy.chat_request.reasoning_effort
     }
+  end
+
+  def build_proactive_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
+    policy = runtime_policy(opts)
+    prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_proactive_prompt()
+
+    %{
+      "messages" => [
+        %{"role" => "system", "content" => system_prompt()},
+        %{"role" => "user", "content" => prompt}
+      ],
+      "max_tokens" => policy.proactive_request.max_tokens,
+      "temperature" => policy.proactive_request.temperature,
+      "reasoning_effort" => policy.proactive_request.reasoning_effort
+    }
+  end
+
+  def next_step(payload, opts \\ []) when is_map(payload) do
+    params = build_step_request(payload, opts)
 
     with {:ok, response} <- complete(params, opts),
          {:ok, decoded} <- decode_json(response_content(response)),
@@ -36,17 +119,7 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def proactive_plan(payload, opts \\ []) when is_map(payload) do
-    prompt = build_proactive_prompt(payload)
-
-    params = %{
-      "messages" => [
-        %{"role" => "system", "content" => system_prompt()},
-        %{"role" => "user", "content" => prompt}
-      ],
-      "max_tokens" => Keyword.get(opts, :max_tokens, 1_200),
-      "temperature" => Keyword.get(opts, :temperature, 0.2),
-      "reasoning_effort" => Keyword.get(opts, :reasoning_effort, "medium")
-    }
+    params = build_proactive_request(payload, opts)
 
     with {:ok, response} <- complete(params, opts),
          {:ok, decoded} <- decode_json(response_content(response)),
@@ -71,6 +144,7 @@ defmodule Maraithon.AssistantHarness do
     Decision contract:
     - The model is responsible for semantic decisions: intent, tool choice, relevance, prioritization, dedupe judgment, and user-facing wording.
     - Runtime code only validates contracts, enforces permissions, executes tools, persists results, and reports explicit failures.
+    - The runtime policy below is authoritative for loop budgets, tool-call budgets, and valid response classes.
     - Do not rely on keyword heuristics. Use the full context, durable memory, CRM relationships, open loops, and tool results.
     - If you cannot decide safely from the available context, ask a concise clarifying question or call the relevant read tool.
 
@@ -168,6 +242,9 @@ defmodule Maraithon.AssistantHarness do
     Tool/result history JSON:
     #{Jason.encode!(Map.get(payload, :tool_history) || Map.get(payload, "tool_history") || [])}
 
+    Runtime policy JSON:
+    #{Jason.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
+
     Iteration JSON:
     #{Jason.encode!(%{iteration: Map.get(payload, :iteration) || Map.get(payload, "iteration") || 1, llm_turns: Map.get(payload, :llm_turns) || Map.get(payload, "llm_turns") || 0, tool_steps: Map.get(payload, :tool_steps) || Map.get(payload, "tool_steps") || 0})}
     """
@@ -196,6 +273,7 @@ defmodule Maraithon.AssistantHarness do
     Proactive decision contract:
     - The model is responsible for whether to interrupt, what to say, which open loops matter, and whether a check-in is useful.
     - Runtime code only supplies context, validates this JSON contract, dedupes sends, sends Telegram, and records delivery.
+    - The runtime policy below is authoritative for proactive response classes and request budgets.
     - Do not use keyword heuristics. Reason over open loops, todos, CRM, memory, recent pushes, connected-account health, and user preferences.
     - Send only when the message would help the user avoid missing an open loop, handle a timely obligation, or maintain useful accountability.
     - Hold when nothing is urgent enough, when the same point was pushed recently, when the user has no Telegram destination, or when context is insufficient.
@@ -213,8 +291,65 @@ defmodule Maraithon.AssistantHarness do
 
     Recent proactive push receipts JSON:
     #{Jason.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
+
+    Runtime policy JSON:
+    #{Jason.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
     """
   end
+
+  defp policy_value(opts, key, default) do
+    case Keyword.fetch(opts, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        :maraithon
+        |> Application.get_env(:assistant_harness, [])
+        |> Keyword.get(key)
+        |> case do
+          nil ->
+            :maraithon
+            |> Application.get_env(:telegram_assistant, [])
+            |> Keyword.get(key, default)
+
+          value ->
+            value
+        end
+    end
+  end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _other -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
+
+  defp bounded_float(value, _default) when is_float(value) and value >= 0.0 and value <= 2.0,
+    do: value
+
+  defp bounded_float(value, _default) when is_integer(value) and value >= 0 and value <= 2,
+    do: value / 1
+
+  defp bounded_float(value, default) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {parsed, ""} when parsed >= 0.0 and parsed <= 2.0 -> parsed
+      _other -> default
+    end
+  end
+
+  defp bounded_float(_value, default), do: default
+
+  defp non_empty_string(value, default) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: default, else: value
+  end
+
+  defp non_empty_string(_value, default), do: default
 
   defp complete(params, opts) do
     cond do
@@ -292,18 +427,10 @@ defmodule Maraithon.AssistantHarness do
       |> Enum.take(@max_tool_calls_per_step)
       |> Enum.map(&normalize_tool_call/1)
 
-    cond do
-      Enum.any?(normalized, &match?({:error, _}, &1)) ->
-        {:error, :assistant_harness_invalid_tool_call}
-
-      normalized == [] ->
-        {:error, :assistant_harness_empty_tool_calls}
-
-      unknown_tool = unknown_tool(normalized, allowed_tools) ->
-        {:error, {:assistant_harness_unknown_tool, unknown_tool}}
-
-      true ->
-        {:ok, Enum.map(normalized, fn {:ok, call} -> call end)}
+    with :ok <- reject_invalid_tool_calls(normalized),
+         :ok <- reject_empty_tool_calls(normalized),
+         {:ok, resolved} <- resolve_tool_calls(normalized, allowed_tools) do
+      {:ok, resolved}
     end
   end
 
@@ -311,17 +438,157 @@ defmodule Maraithon.AssistantHarness do
     {:error, :assistant_harness_invalid_tool_calls}
   end
 
-  defp normalize_tool_call(%{"tool" => tool, "arguments" => arguments})
-       when is_binary(tool) and is_map(arguments) do
-    {:ok, %{"tool" => String.trim(tool), "arguments" => arguments}}
-  end
+  defp normalize_tool_call(%{} = tool_call) do
+    tool = Map.get(tool_call, "tool") || Map.get(tool_call, "name")
+    arguments = Map.get(tool_call, "arguments") || Map.get(tool_call, "input") || %{}
 
-  defp normalize_tool_call(%{"name" => tool, "arguments" => arguments})
-       when is_binary(tool) and is_map(arguments) do
-    {:ok, %{"tool" => String.trim(tool), "arguments" => arguments}}
+    with true <- is_binary(tool),
+         {:ok, arguments} <- normalize_tool_arguments(arguments) do
+      {:ok, %{"tool" => String.trim(tool), "arguments" => arguments}}
+    else
+      _other -> {:error, :invalid_tool_call}
+    end
   end
 
   defp normalize_tool_call(_tool_call), do: {:error, :invalid_tool_call}
+
+  defp normalize_tool_arguments(arguments) when is_map(arguments), do: {:ok, arguments}
+
+  defp normalize_tool_arguments(arguments) when is_binary(arguments) do
+    case String.trim(arguments) do
+      "" ->
+        {:ok, %{}}
+
+      trimmed ->
+        case Jason.decode(trimmed) do
+          {:ok, %{} = decoded} -> {:ok, decoded}
+          _other -> {:error, :invalid_tool_arguments}
+        end
+    end
+  end
+
+  defp normalize_tool_arguments(_arguments), do: {:error, :invalid_tool_arguments}
+
+  defp reject_invalid_tool_calls(normalized) do
+    if Enum.any?(normalized, &match?({:error, _}, &1)) do
+      {:error, :assistant_harness_invalid_tool_call}
+    else
+      :ok
+    end
+  end
+
+  defp reject_empty_tool_calls(normalized) do
+    if normalized == [], do: {:error, :assistant_harness_empty_tool_calls}, else: :ok
+  end
+
+  defp resolve_tool_calls(normalized, allowed_tools) do
+    normalized
+    |> Enum.map(fn {:ok, call} -> resolve_tool_call(call, allowed_tools) end)
+    |> collect_tool_call_resolutions()
+  end
+
+  defp resolve_tool_call(%{"tool" => tool} = call, allowed_tools) do
+    case resolve_allowed_tool_name(tool, allowed_tools) do
+      {:ok, resolved_tool} -> {:ok, %{call | "tool" => resolved_tool}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp collect_tool_call_resolutions(resolutions) do
+    case Enum.find(resolutions, &match?({:error, _}, &1)) do
+      {:error, {:unknown_tool, tool}} ->
+        {:error, {:assistant_harness_unknown_tool, tool}}
+
+      {:error, :ambiguous_tool_name} ->
+        {:error, :assistant_harness_ambiguous_tool_name}
+
+      nil ->
+        {:ok, Enum.map(resolutions, fn {:ok, call} -> call end)}
+    end
+  end
+
+  defp resolve_allowed_tool_name(tool, []) when is_binary(tool), do: {:ok, String.trim(tool)}
+
+  defp resolve_allowed_tool_name(tool, allowed_tools) when is_binary(tool) do
+    candidates = tool_name_candidates(tool)
+
+    matches =
+      candidates
+      |> Enum.flat_map(fn candidate ->
+        exact_allowed_tool_matches(candidate, allowed_tools) ++
+          normalized_allowed_tool_matches(candidate, allowed_tools)
+      end)
+      |> Enum.uniq()
+
+    case matches do
+      [match] -> {:ok, match}
+      [] -> {:error, {:unknown_tool, String.trim(tool)}}
+      _multiple -> {:error, :ambiguous_tool_name}
+    end
+  end
+
+  defp tool_name_candidates(tool) do
+    trimmed = String.trim(tool)
+    normalized_delimiter = String.replace(trimmed, "/", ".")
+
+    [
+      trimmed,
+      normalize_tool_name(trimmed),
+      normalized_delimiter,
+      normalize_tool_name(normalized_delimiter)
+    ]
+    |> Kernel.++(structured_tool_suffix_candidates(normalized_delimiter))
+    |> Kernel.++(stripped_tool_prefix_candidates(normalized_delimiter))
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp structured_tool_suffix_candidates(tool) do
+    segments =
+      tool
+      |> String.split(".")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if length(segments) > 1 do
+      1..(length(segments) - 1)
+      |> Enum.flat_map(fn index ->
+        suffix = segments |> Enum.drop(index) |> Enum.join(".")
+        [suffix, normalize_tool_name(suffix)]
+      end)
+    else
+      []
+    end
+  end
+
+  defp stripped_tool_prefix_candidates(tool) do
+    stripped =
+      ~r/^(?:functions?|tools?)[._-]?/i
+      |> Regex.replace(tool, "")
+      |> then(&Regex.replace(~r/(?:[:._-]\d+|\d+)$/i, &1, ""))
+
+    if stripped == tool, do: [], else: [stripped, normalize_tool_name(stripped)]
+  end
+
+  defp exact_allowed_tool_matches(candidate, allowed_tools) do
+    if candidate in allowed_tools, do: [candidate], else: []
+  end
+
+  defp normalized_allowed_tool_matches(candidate, allowed_tools) do
+    normalized = normalize_tool_name(candidate)
+
+    allowed_tools
+    |> Enum.filter(&(normalize_tool_name(&1) == normalized))
+  end
+
+  defp normalize_tool_name(tool) when is_binary(tool) do
+    tool
+    |> String.trim()
+    |> String.replace(~r/[.\/-]+/, "_")
+    |> String.replace(~r/[^A-Za-z0-9_]+/, "")
+    |> String.downcase()
+  end
 
   defp normalize_proactive(%{} = parsed) do
     decision = normalize_proactive_decision(Map.get(parsed, "decision"))
@@ -382,14 +649,6 @@ defmodule Maraithon.AssistantHarness do
   end
 
   defp normalize_string_list(_values), do: []
-
-  defp unknown_tool(_normalized, []), do: nil
-
-  defp unknown_tool(normalized, allowed_tools) do
-    Enum.find_value(normalized, fn {:ok, %{"tool" => tool}} ->
-      if tool in allowed_tools, do: nil, else: tool
-    end)
-  end
 
   defp allowed_tool_names(payload) do
     payload

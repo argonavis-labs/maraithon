@@ -3,6 +3,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   Bounded multi-step runner for Telegram assistant chat and prepared actions.
   """
 
+  alias Maraithon.AssistantHarness
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
@@ -13,9 +14,6 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.UserMemory
 
   require Logger
-
-  @max_llm_turns 6
-  @max_tool_steps 10
 
   def run_inbound(attrs) when is_map(attrs) do
     context = Context.build(attrs)
@@ -144,10 +142,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:error, run, :llm_turn_limit, state}
 
       true ->
+        runtime_policy = AssistantHarness.runtime_policy()
+
         request_payload = %{
           context: runtime_context.context,
           tools: Toolbox.tool_definitions(runtime_context.context),
           tool_history: state.tool_history,
+          runtime_policy: runtime_policy,
           iteration: state.iteration,
           llm_turns: state.llm_turns,
           tool_steps: state.tool_steps
@@ -781,13 +782,11 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp max_llm_turns do
-    Application.get_env(:maraithon, :telegram_assistant, [])
-    |> Keyword.get(:max_llm_turns, @max_llm_turns)
+    AssistantHarness.max_llm_turns()
   end
 
   defp max_tool_steps do
-    Application.get_env(:maraithon, :telegram_assistant, [])
-    |> Keyword.get(:max_tool_steps, @max_tool_steps)
+    AssistantHarness.max_tool_steps()
   end
 
   defp max_wall_clock_ms do

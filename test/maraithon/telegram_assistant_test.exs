@@ -161,6 +161,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
       if sequence == 0 do
         assert Enum.any?(payload.tools, &(&1["name"] == "get_open_work_summary"))
+        assert payload.runtime_policy.loop.max_llm_turns == 6
+        assert payload.runtime_policy.tool_calls.max_per_step == 3
 
         {:ok,
          %{
