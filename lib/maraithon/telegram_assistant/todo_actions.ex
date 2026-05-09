@@ -163,15 +163,18 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp render_message(todo, prefix_text) when is_map(todo) do
     metadata = todo_metadata(todo)
     account = metadata_account(metadata)
-    source = source_label(todo_source(todo))
+    todo_source = todo_source(todo)
+    source = source_label(todo_source)
     feedback = feedback_label(feedback_value(todo))
-    next_action = todo_next_action(todo)
+    next_action = display_text(todo_next_action(todo))
+    summary = display_text(todo_summary(todo))
+    assistant_source? = assistant_source?(todo_source)
 
     [
-      prefix_text,
-      "<b>#{safe(next_action)}</b>",
-      todo_context_line(todo, next_action),
-      source_sentence(source, account),
+      display_text(prefix_text),
+      action_line(next_action, assistant_source?),
+      todo_context_line(summary, next_action),
+      source_sentence(source, account, assistant_source?),
       feedback && "Feedback noted: #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
@@ -182,8 +185,71 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp source_label("slack"), do: "Slack"
   defp source_label("github"), do: "GitHub"
   defp source_label("calendar"), do: "Calendar"
-  defp source_label(source) when is_binary(source), do: String.capitalize(source)
+
+  defp source_label(source) when is_binary(source) do
+    if assistant_source?(source), do: nil, else: String.capitalize(source)
+  end
+
   defp source_label(_source), do: "Operator"
+
+  defp assistant_source?(source) when is_binary(source) do
+    source in [
+      "chief_of_staff_morning_briefing",
+      "chief_of_staff_commitment_tracker",
+      "chief_of_staff_holiday",
+      "chief_of_staff_weekend"
+    ]
+  end
+
+  defp assistant_source?(_source), do: false
+
+  defp action_line(action, true) when is_binary(action) do
+    "<b>#{safe(chief_action_copy(action))}</b>"
+  end
+
+  defp action_line(action, _assistant_source?) when is_binary(action) do
+    "<b>#{safe(action)}</b>"
+  end
+
+  defp action_line(_action, _assistant_source?), do: nil
+
+  defp chief_action_copy(action) do
+    action = strip_leading_action_label(action)
+    action = naturalize_status_check_copy(action)
+
+    cond do
+      blank?(action) ->
+        "Kent, I'd review this."
+
+      Regex.match?(~r/^(I'd|I would|I can|I'll|Let me|You|We)\b/i, action) ->
+        "Kent, #{lower_first(action)}"
+
+      true ->
+        "Kent, I'd #{lower_first(action)}"
+    end
+  end
+
+  defp strip_leading_action_label(text) when is_binary(text) do
+    String.replace(text, ~r/^\s*(next step|next|action|todo)\s*:\s*/i, "")
+  end
+
+  defp naturalize_status_check_copy(text) when is_binary(text) do
+    text
+    |> String.replace(
+      ~r/\s+for a one-line status update covering current state, fix window if still open, and any user or customer impact\.?/i,
+      ": is it resolved, who owns it, and were any users or customers affected?"
+    )
+    |> String.replace(
+      ~r/\s+for a one-line status update covering current state, owner, fix window if still open, and any user or customer impact\.?/i,
+      ": is it resolved, who owns it, and were any users or customers affected?"
+    )
+  end
+
+  defp lower_first(<<first::utf8, rest::binary>>) do
+    String.downcase(<<first::utf8>>) <> rest
+  end
+
+  defp lower_first(value), do: value
 
   defp source_link_button(todo) do
     case source_url(todo_metadata(todo)) do
@@ -223,9 +289,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp normalize_url(_value), do: nil
 
-  defp source_sentence("Operator", _account), do: nil
+  defp source_sentence(_source, _account, true), do: nil
+  defp source_sentence(nil, _account, _assistant_source?), do: nil
+  defp source_sentence("Operator", _account, _assistant_source?), do: nil
 
-  defp source_sentence(source, account),
+  defp source_sentence(source, account, _assistant_source?),
     do: "I found this in #{safe(source)}#{render_account(account)}."
 
   defp render_account(nil), do: ""
@@ -272,9 +340,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp todo_source(todo) when is_map(todo), do: map_string(todo, "source")
   defp todo_source(_todo), do: nil
 
-  defp todo_context_line(todo, next_action) do
-    summary = todo_summary(todo)
-
+  defp todo_context_line(summary, next_action) do
     cond do
       blank?(summary) -> nil
       String.trim(summary) == String.trim(next_action) -> nil
@@ -298,6 +364,48 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         "Review and decide the next step."
 
   defp todo_next_action(_todo), do: "Review and decide the next step."
+
+  defp display_text(text) when is_binary(text) do
+    text
+    |> strip_internal_lines()
+    |> replace_internal_language()
+    |> normalize_display_whitespace()
+  end
+
+  defp display_text(_text), do: nil
+
+  defp strip_internal_lines(text) do
+    text
+    |> String.split("\n")
+    |> Enum.reject(fn line ->
+      String.match?(line, ~r/^\s*(open|title|priority|status|source|from)\s*:/i)
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp replace_internal_language(text) do
+    text
+    |> String.replace(~r/\bKent needs\b/i, "you need")
+    |> String.replace(~r/\bKent has\b/i, "you have")
+    |> String.replace(~r/\bKent should\b/i, "you should")
+    |> String.replace(~r/\bKent is\b/i, "you are")
+    |> String.replace(~r/\bthe user\b/i, "you")
+    |> String.replace(
+      ~r/\bquick status check on whether the issue is resolved, who owns it, and whether users or customers were affected\b/i,
+      "quick answer on whether it is fixed, who owns the follow-up, and whether any users or customers were affected"
+    )
+    |> String.replace(~r/\bChief_of_staff_morning_briefing\b/i, "my morning briefing")
+    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "my morning briefing")
+    |> String.replace(~r/\bChief_of_staff_commitment_tracker\b/i, "my commitment tracker")
+    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "my commitment tracker")
+  end
+
+  defp normalize_display_whitespace(text) do
+    text
+    |> String.replace(~r/[ \t]+/, " ")
+    |> String.replace(~r/\n{3,}/, "\n\n")
+    |> String.trim()
+  end
 
   defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
 

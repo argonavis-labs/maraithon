@@ -799,7 +799,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert billing_message
     assert oauth_message
     assert billing_message.text =~ "Reply in-thread and close the loop."
-    assert billing_message.text =~ "This thread still needs a reply from the user."
+    assert billing_message.text =~ "This thread still needs a reply from you."
     refute billing_message.text =~ "Billing account past due"
     refute billing_message.text =~ "Maraithon Todo"
     refute billing_message.text =~ "About:"
@@ -1146,6 +1146,34 @@ defmodule Maraithon.TelegramAssistantTest do
 
     refute last_telegram_message(:edit).text =~ "Status:"
     assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
+  end
+
+  test "assistant-origin todo cards speak like Kent's chief of staff" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "chief_of_staff_morning_briefing",
+      "status" => "open",
+      "title" => "Agora getdelegates API errors were flagged",
+      "summary" =>
+        "Datadog and Sentry surfaced elevated getdelegates API errors for Agora, and Kent needs a quick status check on whether the issue is resolved, who owns it, and whether users or customers were affected.\nFrom: Chief_of_staff_morning_briefing",
+      "next_action" =>
+        "Ask the engineering owner for a one-line status update covering current state, fix window if still open, and any user or customer impact."
+    }
+
+    payload = Maraithon.TelegramAssistant.TodoActions.telegram_payload(todo)
+
+    assert payload.text =~
+             "Kent, I'd ask the engineering owner: is it resolved, who owns it, and were any users or customers affected?"
+
+    assert payload.text =~ "you need a quick answer"
+    refute payload.text =~ "covering current state"
+    refute payload.text =~ "From:"
+    refute payload.text =~ "Chief_of_staff"
+    refute payload.text =~ "chief_of_staff"
+    refute payload.text =~ "Kent needs"
+    refute payload.text =~ "I found this in"
+    refute payload.text =~ "Source:"
+    refute payload.text =~ "Priority:"
   end
 
   test "todo item callbacks are handled when full Telegram chat is disabled", %{

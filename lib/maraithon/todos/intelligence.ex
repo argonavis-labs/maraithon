@@ -108,6 +108,15 @@ defmodule Maraithon.Todos.Intelligence do
        - For school, classroom, child, camp, or family logistics, identify the
          child/person from CRM or memory when possible and write the next_action
          as the concrete thing the user needs to do.
+       - Todo title, summary, next_action, notes, and action_plan are user-facing
+         in Telegram and should read like Kent's human chief of staff wrote them.
+         Use `you` or `Kent`, never `the user`. Do not include labels like
+         `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
+         names in these fields.
+       - Write next_action as the sentence Kent should act on directly. Avoid
+         ticket/report language such as "covering current state" when a human
+         version like "ask if it is fixed, who owns it, and whether customers
+         were affected" is clearer.
        - Priority is internal ranking only. Never encode numeric priority in
          title, summary, next_action, notes, or action_plan.
        - Return ONLY valid JSON. No markdown.

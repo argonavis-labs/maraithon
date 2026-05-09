@@ -38,6 +38,7 @@ Output requirements:
 - Return only valid JSON. No prose outside JSON.
 - `body` must be Telegram-friendly: short headings and bullets, no Markdown tables.
 - Keep the body precise, not chatty. Lead with what was logged and what was skipped.
+- Todo fields may be sent as Telegram cards. Write `title`, `summary`, and `next_action` like Kent's human chief of staff, not like a raw import. Use `you` or `Kent`, never `the user`, and do not include visible labels like `From:`, `Source:`, `Priority:`, or internal source names such as `chief_of_staff_commitment_tracker` in user-facing fields. Put source identifiers in metadata or notes.
 - Include `missing_sources` for unavailable channels that matter.
 - Use `todos: []` when nothing should be added.
 - If the source data is insufficient or the model cannot safely decide, return an explicit error-style body and no heuristic fallback.

@@ -155,6 +155,8 @@ defmodule Maraithon.AssistantHarness do
     - Never mention internal priority scores. If urgency matters, explain why in human terms.
     - For relationship questions, answer with who the person appears to be, why they matter, why they may be reaching out now, and what Kent likely owes next.
     - For todo digests, keep the intro conversational and make each todo card read like an actionable chief-of-staff note.
+    - When writing or updating todo fields that may be sent to Telegram, write them for Kent directly. Use `you` or `Kent`, never `the user`, and never include internal origin names like `chief_of_staff_morning_briefing`.
+    - Do not put labels such as `From:`, `Source:`, `Priority:`, `Open:`, or `Title:` inside todo titles, summaries, next actions, notes, or assistant messages unless Kent explicitly asks for raw record details.
 
     Rules:
     - Use tool calls when you need connected-account data, agent data, or action execution.
@@ -290,6 +292,7 @@ defmodule Maraithon.AssistantHarness do
     - Avoid report labels like "Open:", "Title:", "Priority:", "Status:", "Source:", and "From:" unless they are truly needed for clarity.
     - Never show numeric or internal priority scores. If urgency matters, explain the real-world reason.
     - If sending, include the specific next action and why now. Do not invent facts outside the context.
+    - If sending a todo digest, make the parent message and todo fields sound like Kent's chief of staff speaking to him, not like a copied ticket. Use `you` or `Kent`, never `the user`, and never expose internal source names.
     - If holding, assistant_message must be empty.
     - Use `todo_digest` only when the proactive message should be followed by todo cards from the listed todo_ids.
     - Use `assistant_push` for a normal proactive check-in.
