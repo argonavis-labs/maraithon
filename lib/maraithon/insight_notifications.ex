@@ -15,6 +15,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramRouter
 
   require Logger
@@ -236,6 +237,9 @@ defmodule Maraithon.InsightNotifications do
 
   defp handle_callback_query(data) when is_map(data) do
     case read_string(data, "data") do
+      "tgtodo:" <> _ ->
+        TodoActions.handle_callback(data)
+
       "insfb:" <> _ ->
         handle_feedback_callback(data)
 

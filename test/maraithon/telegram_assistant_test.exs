@@ -1148,6 +1148,107 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
   end
 
+  test "todo item callbacks are handled when full Telegram chat is disabled", %{
+    user_id: user_id
+  } do
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(config, :telegram_full_chat_enabled, false)
+    )
+
+    refute Maraithon.TelegramAssistant.enabled?()
+
+    assert {:ok, [done_todo, dismissed_todo, helpful_todo, not_helpful_todo]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to the billing owner",
+                 "summary" => "Finance needs an owner confirmation for the invoice thread.",
+                 "next_action" => "Reply with the owner and the exact billing contact.",
+                 "priority" => 89,
+                 "dedupe_key" => "telegram-assistant:todo-callback:disabled:done"
+               },
+               %{
+                 "source" => "calendar",
+                 "kind" => "calendar_follow_up",
+                 "title" => "Skip old calendar follow-up",
+                 "summary" => "This calendar follow-up no longer matters.",
+                 "next_action" => "Ignore the stale follow-up.",
+                 "priority" => 61,
+                 "dedupe_key" => "telegram-assistant:todo-callback:disabled:dismiss"
+               },
+               %{
+                 "source" => "slack",
+                 "kind" => "relationship_follow_up",
+                 "title" => "Ask Charlie for the launch notes",
+                 "summary" => "Charlie may have the launch details Kent needs.",
+                 "next_action" => "Ask Charlie for the latest launch notes.",
+                 "priority" => 76,
+                 "dedupe_key" => "telegram-assistant:todo-callback:disabled:helpful"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Review a low-value newsletter",
+                 "summary" => "A newsletter was mistakenly promoted as a todo.",
+                 "next_action" => "Review whether this newsletter matters.",
+                 "priority" => 30,
+                 "dedupe_key" => "telegram-assistant:todo-callback:disabled:not-helpful"
+               }
+             ])
+
+    callbacks = [
+      {done_todo, "done", "cb-done"},
+      {dismissed_todo, "dismiss", "cb-dismiss"},
+      {helpful_todo, "helpful", "cb-helpful"},
+      {not_helpful_todo, "not_helpful", "cb-not-helpful"}
+    ]
+
+    Enum.each(callbacks, fn {todo, action, callback_id} ->
+      :ok =
+        InsightNotifications.handle_telegram_event(%{
+          type: "callback_query",
+          data: %{
+            chat_id: 12345,
+            message_id: "todo-message-#{action}",
+            callback_id: callback_id,
+            data: "tgtodo:#{todo.id}:#{action}"
+          }
+        })
+    end)
+
+    assert Todos.get_for_user(user_id, done_todo.id).status == "done"
+    assert Todos.get_for_user(user_id, dismissed_todo.id).status == "dismissed"
+
+    assert get_in(Todos.get_for_user(user_id, helpful_todo.id).metadata, [
+             "assistant_feedback",
+             "value"
+           ]) == "helpful"
+
+    assert get_in(Todos.get_for_user(user_id, not_helpful_todo.id).metadata, [
+             "assistant_feedback",
+             "value"
+           ]) == "not_helpful"
+
+    callback_texts =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :callback))
+      |> Enum.map(&Keyword.get(&1.opts, :text))
+
+    assert callback_texts == [
+             "Marked done",
+             "Marked not interested",
+             "Saved helpful feedback",
+             "Saved not helpful feedback"
+           ]
+
+    assert Enum.count(Enum.filter(telegram_events(), &(&1.type == :edit))) == 4
+  end
+
   test "assistant can update a linked project scope from a reply thread", %{user_id: user_id} do
     {:ok, project} =
       Projects.create_project(user_id, %{
