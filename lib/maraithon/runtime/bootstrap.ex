@@ -41,22 +41,35 @@ defmodule Maraithon.Runtime.Bootstrap do
     Logger.info("Bootstrapping runtime")
 
     case DbResilience.with_database("runtime bootstrap", fn ->
-           {:ok, _installations} = Maraithon.AgentMarketplace.ensure_default_installations()
-           Maraithon.Runtime.resume_all_agents()
+           with {:ok, _installations} <- Maraithon.AgentMarketplace.ensure_default_installations() do
+             Maraithon.Runtime.resume_all_agents()
+           end
          end) do
+      {:ok, {:error, reason}} ->
+        retry_bootstrap(reason, state)
+
       {:ok, _} ->
         {:stop, :normal, state}
 
-      {:error, _reason} ->
-        retry_in_ms = DbResilience.backoff_ms(state.retry_interval_ms, state.retry_attempts)
-
-        Logger.warning("Runtime bootstrap will retry",
-          retry_in_ms: retry_in_ms,
-          retry_attempt: state.retry_attempts + 1
-        )
-
-        Process.send_after(self(), :bootstrap, retry_in_ms)
-        {:noreply, %{state | retry_attempts: state.retry_attempts + 1}}
+      {:error, reason} ->
+        retry_bootstrap(reason, state)
     end
+  end
+
+  defp retry_bootstrap(reason, state) do
+    Logger.warning("Runtime bootstrap did not complete",
+      reason: inspect(reason),
+      retry_attempt: state.retry_attempts + 1
+    )
+
+    retry_in_ms = DbResilience.backoff_ms(state.retry_interval_ms, state.retry_attempts)
+
+    Logger.warning("Runtime bootstrap will retry",
+      retry_in_ms: retry_in_ms,
+      retry_attempt: state.retry_attempts + 1
+    )
+
+    Process.send_after(self(), :bootstrap, retry_in_ms)
+    {:noreply, %{state | retry_attempts: state.retry_attempts + 1}}
   end
 end

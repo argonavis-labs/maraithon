@@ -1,5 +1,5 @@
 defmodule Maraithon.AgentHarness.MarkdownSkillTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Maraithon.AgentHarness.Manifest
   alias Maraithon.AgentHarness.MarkdownSkill
@@ -14,6 +14,24 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.name == "Morning Briefing"
     assert "llm.complete" in skill.tools
     assert skill.instructions =~ "Do not list raw marketing email"
+  end
+
+  test "loads priv markdown skills through configured runtime priv dir" do
+    project_priv_dir = Path.expand("priv")
+    previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")
+
+    on_exit(fn ->
+      if previous_priv_dir do
+        System.put_env("MARAITHON_PRIV_DIR", previous_priv_dir)
+      else
+        System.delete_env("MARAITHON_PRIV_DIR")
+      end
+    end)
+
+    System.put_env("MARAITHON_PRIV_DIR", project_priv_dir)
+
+    assert {:ok, %MarkdownSkill{id: "morning_briefing"}} =
+             MarkdownSkill.load_file("priv/agents/skills/chief_of_staff/morning_briefing.md")
   end
 
   test "rejects malformed or incomplete markdown skill files" do

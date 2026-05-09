@@ -30,9 +30,7 @@ defmodule Maraithon.AgentHarness.MarkdownSkill do
   end
 
   def load_file(path) when is_binary(path) do
-    full_path = Path.expand(path)
-
-    with true <- File.exists?(full_path) || {:error, {:skill_not_found, path}},
+    with {:ok, full_path} <- resolve_path(path),
          {:ok, content} <- File.read(full_path),
          {:ok, metadata, instructions} <- split_frontmatter(content, path),
          {:ok, id} <- required_metadata(metadata, "id", path),
@@ -52,6 +50,48 @@ defmodule Maraithon.AgentHarness.MarkdownSkill do
   end
 
   def load_file(path), do: {:error, {:invalid_skill_path, path}}
+
+  defp resolve_path(path) do
+    path
+    |> candidate_paths()
+    |> Enum.find(&File.exists?/1)
+    |> case do
+      nil -> {:error, {:skill_not_found, path}}
+      full_path -> {:ok, full_path}
+    end
+  end
+
+  defp candidate_paths("priv/" <> relative_path = path) do
+    [
+      priv_path(configured_priv_dir(), relative_path),
+      Path.expand(path),
+      priv_path(app_priv_dir(), relative_path),
+      priv_path(source_priv_dir(), relative_path)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp candidate_paths(path), do: [Path.expand(path)]
+
+  defp priv_path(nil, _relative_path), do: nil
+  defp priv_path(priv_dir, relative_path), do: Path.join(priv_dir, relative_path)
+
+  defp configured_priv_dir do
+    case System.get_env("MARAITHON_PRIV_DIR") do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
+  defp app_priv_dir do
+    case :code.priv_dir(:maraithon) do
+      path when is_list(path) -> List.to_string(path)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp source_priv_dir, do: Path.expand("../../../priv", __DIR__)
 
   defp split_frontmatter("---\n" <> rest, path) do
     case String.split(rest, "\n---\n", parts: 2) do
