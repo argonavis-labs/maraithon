@@ -64,6 +64,13 @@ anthropic_model = System.get_env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 openai_api_key = System.get_env("OPENAI_API_KEY")
 openai_model = System.get_env("OPENAI_MODEL", "gpt-5.4")
 openai_reasoning_effort = System.get_env("OPENAI_REASONING_EFFORT", "high")
+
+llm_model_fallbacks =
+  System.get_env("LLM_MODEL_FALLBACKS", "")
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+  |> Enum.reject(&(&1 == ""))
+
 configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |> String.downcase()
 
 optional_boolean_env = fn name ->
@@ -151,6 +158,7 @@ config :maraithon, Maraithon.Runtime,
   anthropic_model: anthropic_model,
   openai_api_key: openai_api_key,
   openai_model: openai_model,
+  llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
   # Timing
   heartbeat_interval_ms: heartbeat_interval_ms,

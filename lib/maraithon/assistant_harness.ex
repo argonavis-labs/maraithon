@@ -11,20 +11,30 @@ defmodule Maraithon.AssistantHarness do
 
   alias Maraithon.LLM
 
-  @contract_version 1
+  @contract_version 2
   @default_max_llm_turns 6
   @default_max_tool_steps 10
+  @default_max_wall_clock_ms 25_000
   @default_chat_max_tokens 1_800
   @default_proactive_max_tokens 1_200
   @default_temperature 0.2
   @default_reasoning_effort "medium"
   @max_tool_calls_per_step 3
+  @default_tool_repeat_guard_window 3
+  @default_tool_history_limit 12
+  @default_tool_result_string_chars 4_000
+  @default_tool_result_list_items 20
+  @default_tool_result_map_entries 40
+  @default_model_failover_max_attempts 3
+  @retryable_model_errors ~w(timeout rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content)
   @valid_statuses ~w(tool_calls final)
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
   @valid_proactive_decisions ~w(send_now hold)
   @valid_proactive_message_classes ~w(assistant_push todo_digest system_notice)
 
   def runtime_policy(opts \\ []) when is_list(opts) do
+    model_fallbacks = model_fallbacks(opts)
+
     %{
       contract_version: @contract_version,
       loop: %{
@@ -33,10 +43,39 @@ defmodule Maraithon.AssistantHarness do
           |> positive_integer(@default_max_llm_turns),
         max_tool_steps:
           policy_value(opts, :max_tool_steps, @default_max_tool_steps)
-          |> positive_integer(@default_max_tool_steps)
+          |> positive_integer(@default_max_tool_steps),
+        max_wall_clock_ms:
+          policy_value(opts, :max_wall_clock_ms, @default_max_wall_clock_ms)
+          |> positive_integer(@default_max_wall_clock_ms)
       },
       tool_calls: %{
-        max_per_step: @max_tool_calls_per_step
+        max_per_step: @max_tool_calls_per_step,
+        repeat_guard: %{
+          enabled: true,
+          window_size:
+            policy_value(opts, :tool_repeat_guard_window, @default_tool_repeat_guard_window)
+            |> positive_integer(@default_tool_repeat_guard_window)
+        }
+      },
+      tool_evidence: %{
+        history_limit:
+          policy_value(opts, :tool_history_limit, @default_tool_history_limit)
+          |> positive_integer(@default_tool_history_limit),
+        max_string_chars:
+          policy_value(opts, :tool_result_string_chars, @default_tool_result_string_chars)
+          |> positive_integer(@default_tool_result_string_chars),
+        max_list_items:
+          policy_value(opts, :tool_result_list_items, @default_tool_result_list_items)
+          |> positive_integer(@default_tool_result_list_items),
+        max_map_entries:
+          policy_value(opts, :tool_result_map_entries, @default_tool_result_map_entries)
+          |> positive_integer(@default_tool_result_map_entries)
+      },
+      model_failover: %{
+        enabled: model_fallbacks != [],
+        max_attempts: model_failover_max_attempts(opts, model_fallbacks),
+        fallback_count: length(model_fallbacks),
+        retryable_errors: @retryable_model_errors
       },
       model_decision_contract: %{
         statuses: @valid_statuses,
@@ -78,6 +117,80 @@ defmodule Maraithon.AssistantHarness do
   def max_llm_turns(opts \\ []) when is_list(opts), do: runtime_policy(opts).loop.max_llm_turns
   def max_tool_steps(opts \\ []) when is_list(opts), do: runtime_policy(opts).loop.max_tool_steps
 
+  def initial_loop_state do
+    %{iteration: 1, llm_turns: 0, tool_steps: 0, tool_history: [], sequence: 1}
+  end
+
+  def build_loop_request_payload(runtime_context, state, opts \\ [])
+      when is_map(runtime_context) and is_map(state) and is_list(opts) do
+    policy = runtime_policy(opts)
+
+    %{
+      context: map_value(runtime_context, "context", %{}),
+      tools: map_value(runtime_context, "tools", []),
+      tool_history: compact_tool_history(map_value(state, "tool_history", []), policy),
+      runtime_policy: policy,
+      iteration: map_value(state, "iteration", 1),
+      llm_turns: map_value(state, "llm_turns", 0),
+      tool_steps: map_value(state, "tool_steps", 0)
+    }
+  end
+
+  def guard_loop(state, started_monotonic_ms, opts \\ [])
+      when is_map(state) and is_integer(started_monotonic_ms) and is_list(opts) do
+    policy = runtime_policy(opts)
+    now_monotonic_ms = Keyword.get(opts, :now_monotonic_ms, System.monotonic_time(:millisecond))
+
+    cond do
+      now_monotonic_ms - started_monotonic_ms >= policy.loop.max_wall_clock_ms ->
+        {:error, :timeout}
+
+      map_value(state, "llm_turns", 0) >= policy.loop.max_llm_turns ->
+        {:error, :llm_turn_limit}
+
+      map_value(state, "tool_steps", 0) >= policy.loop.max_tool_steps ->
+        {:error, :tool_step_limit}
+
+      true ->
+        :ok
+    end
+  end
+
+  def guard_tool_history(tool_history, opts \\ []) when is_list(tool_history) and is_list(opts) do
+    policy = runtime_policy(opts)
+    repeat_guard = policy.tool_calls.repeat_guard
+
+    if repeat_guard.enabled do
+      detect_repeated_tool_result(tool_history, repeat_guard.window_size)
+    else
+      :ok
+    end
+  end
+
+  def execution_evidence(tool_history, opts \\ []) when is_list(tool_history) and is_list(opts) do
+    compact_tool_history(tool_history, runtime_policy(opts))
+  end
+
+  def failure_message(:timeout) do
+    "I ran out of time while checking that. Ask me to narrow the source or try again."
+  end
+
+  def failure_message(:llm_turn_limit) do
+    "I hit the reasoning loop limit while working through that. Ask me for one narrower step."
+  end
+
+  def failure_message(:tool_step_limit) do
+    "I hit the tool limit while checking that. Ask me to narrow the source or the person."
+  end
+
+  def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
+    "I got the same result from #{human_tool_name(tool)} too many times, so I stopped instead of looping. Ask me to narrow the source or try again."
+  end
+
+  def failure_message(_reason) do
+    "I hit an internal issue while working on that. Try again or ask me for a narrower step."
+  end
+
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
     policy = runtime_policy(opts)
     prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_prompt()
@@ -111,8 +224,7 @@ defmodule Maraithon.AssistantHarness do
   def next_step(payload, opts \\ []) when is_map(payload) do
     params = build_step_request(payload, opts)
 
-    with {:ok, response} <- complete(params, opts),
-         {:ok, decoded} <- decode_json(response_content(response)),
+    with {:ok, decoded} <- complete_json(params, opts),
          {:ok, normalized} <- normalize(decoded, payload) do
       {:ok, normalized}
     end
@@ -121,8 +233,7 @@ defmodule Maraithon.AssistantHarness do
   def proactive_plan(payload, opts \\ []) when is_map(payload) do
     params = build_proactive_request(payload, opts)
 
-    with {:ok, response} <- complete(params, opts),
-         {:ok, decoded} <- decode_json(response_content(response)),
+    with {:ok, decoded} <- complete_json(params, opts),
          {:ok, normalized} <- normalize_proactive(decoded) do
       {:ok, normalized}
     end
@@ -145,6 +256,8 @@ defmodule Maraithon.AssistantHarness do
     - The model is responsible for semantic decisions: intent, tool choice, relevance, prioritization, dedupe judgment, and user-facing wording.
     - Runtime code only validates contracts, enforces permissions, executes tools, persists results, and reports explicit failures.
     - The runtime policy below is authoritative for loop budgets, tool-call budgets, and valid response classes.
+    - The harness may retry retryable provider or response-format failures with a configured fallback model. It must never answer from semantic heuristics when models fail.
+    - Tool/result history is compact execution evidence from prior loop steps. Treat it as source-grounded context, and call another read tool only when the evidence is insufficient or stale.
     - Do not rely on keyword heuristics. Use the full context, durable memory, CRM relationships, open loops, and tool results.
     - If you cannot decide safely from the available context, ask a concise clarifying question or call the relevant read tool.
 
@@ -365,18 +478,112 @@ defmodule Maraithon.AssistantHarness do
 
   defp non_empty_string(_value, default), do: default
 
-  defp complete(params, opts) do
+  defp complete_json(params, opts) do
+    attempts = model_attempts(params, opts)
+    llm_complete = llm_complete(opts)
+    final_attempt_index = length(attempts) - 1
+
+    attempts
+    |> Enum.with_index()
+    |> Enum.reduce_while({:error, :assistant_harness_missing_model_attempt}, fn {attempt_params,
+                                                                                 index},
+                                                                                _last_error ->
+      last_attempt? = index >= final_attempt_index
+
+      case llm_complete.(attempt_params) do
+        {:ok, response} ->
+          case decode_json(response_content(response)) do
+            {:ok, decoded} ->
+              {:halt, {:ok, decoded}}
+
+            {:error, reason} = error ->
+              if retryable_model_error?(reason) and not last_attempt? do
+                {:cont, error}
+              else
+                {:halt, error}
+              end
+          end
+
+        {:error, reason} = error ->
+          if retryable_model_error?(reason) and not last_attempt? do
+            {:cont, error}
+          else
+            {:halt, error}
+          end
+      end
+    end)
+  end
+
+  defp llm_complete(opts) do
     cond do
       is_function(Keyword.get(opts, :llm_complete), 1) ->
-        Keyword.fetch!(opts, :llm_complete).(params)
+        Keyword.fetch!(opts, :llm_complete)
 
       is_function(configured_llm_complete(), 1) ->
-        configured_llm_complete().(params)
+        configured_llm_complete()
 
       true ->
-        LLM.complete(params)
+        &LLM.complete/1
     end
   end
+
+  defp model_attempts(params, opts) do
+    primary_model = map_value(params, "model", nil)
+
+    fallbacks =
+      opts
+      |> model_fallbacks()
+      |> Enum.reject(&(&1 == primary_model))
+
+    max_attempts = model_failover_max_attempts(opts, fallbacks)
+
+    [params | Enum.map(fallbacks, &Map.put(params, "model", &1))]
+    |> Enum.take(max_attempts)
+  end
+
+  defp model_failover_max_attempts(opts, fallbacks) do
+    max_attempts =
+      policy_value(opts, :model_failover_max_attempts, @default_model_failover_max_attempts)
+      |> positive_integer(@default_model_failover_max_attempts)
+
+    min(max_attempts, 1 + length(fallbacks))
+  end
+
+  defp model_fallbacks(opts) do
+    opts
+    |> policy_value(:model_fallbacks, configured_model_fallbacks())
+    |> normalize_model_fallbacks()
+  end
+
+  defp configured_model_fallbacks do
+    assistant_config = Application.get_env(:maraithon, :assistant_harness, [])
+    runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Keyword.get(assistant_config, :model_fallbacks) ||
+      Keyword.get(runtime_config, :llm_model_fallbacks, [])
+  end
+
+  defp normalize_model_fallbacks(value) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+  end
+
+  defp normalize_model_fallbacks(value), do: normalize_string_list(value) |> Enum.uniq()
+
+  defp retryable_model_error?(:timeout), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_json), do: true
+  defp retryable_model_error?(:assistant_harness_missing_content), do: true
+  defp retryable_model_error?({:rate_limited, _retry_after}), do: true
+  defp retryable_model_error?({:network_error, _reason}), do: true
+
+  defp retryable_model_error?({:api_error, status, _body})
+       when status in [408, 425, 429, 500, 502, 503, 504],
+       do: true
+
+  defp retryable_model_error?(_reason), do: false
 
   defp configured_llm_complete do
     :maraithon
@@ -435,13 +642,11 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_tool_calls("tool_calls", tool_calls, payload) when is_list(tool_calls) do
     allowed_tools = allowed_tool_names(payload)
+    max_per_step = max_tool_calls_per_step(payload)
 
-    normalized =
-      tool_calls
-      |> Enum.take(@max_tool_calls_per_step)
-      |> Enum.map(&normalize_tool_call/1)
-
-    with :ok <- reject_invalid_tool_calls(normalized),
+    with :ok <- reject_excess_tool_calls(tool_calls, max_per_step),
+         normalized <- Enum.map(tool_calls, &normalize_tool_call/1),
+         :ok <- reject_invalid_tool_calls(normalized),
          :ok <- reject_empty_tool_calls(normalized),
          {:ok, resolved} <- resolve_tool_calls(normalized, allowed_tools) do
       {:ok, resolved}
@@ -493,6 +698,14 @@ defmodule Maraithon.AssistantHarness do
 
   defp reject_empty_tool_calls(normalized) do
     if normalized == [], do: {:error, :assistant_harness_empty_tool_calls}, else: :ok
+  end
+
+  defp reject_excess_tool_calls(tool_calls, max_per_step) do
+    if length(tool_calls) > max_per_step do
+      {:error, {:assistant_harness_too_many_tool_calls, length(tool_calls), max_per_step}}
+    else
+      :ok
+    end
   end
 
   defp resolve_tool_calls(normalized, allowed_tools) do
@@ -643,6 +856,163 @@ defmodule Maraithon.AssistantHarness do
   defp validate_proactive_message("send_now", ""), do: {:error, :assistant_harness_empty_message}
   defp validate_proactive_message(_decision, _assistant_message), do: :ok
 
+  defp compact_tool_history(tool_history, policy) when is_list(tool_history) do
+    tool_history
+    |> Enum.reverse()
+    |> Enum.take(policy.tool_evidence.history_limit)
+    |> Enum.reverse()
+    |> Enum.map(&compact_tool_history_entry(&1, policy))
+  end
+
+  defp compact_tool_history(_tool_history, _policy), do: []
+
+  defp compact_tool_history_entry(entry, policy) when is_map(entry) do
+    entry
+    |> Map.take(["tool", "arguments", "result", "error"])
+    |> Map.new(fn {key, value} -> {key, compact_tool_value(value, policy)} end)
+  end
+
+  defp compact_tool_history_entry(entry, policy) do
+    compact_tool_value(entry, policy)
+  end
+
+  defp compact_tool_value(value, policy) when is_binary(value) do
+    max_chars = policy.tool_evidence.max_string_chars
+
+    if String.length(value) > max_chars do
+      String.slice(value, 0, max_chars) <> "...[truncated]"
+    else
+      value
+    end
+  end
+
+  defp compact_tool_value(value, policy) when is_list(value) do
+    max_items = policy.tool_evidence.max_list_items
+    total = length(value)
+
+    compacted =
+      value
+      |> Enum.take(max_items)
+      |> Enum.map(&compact_tool_value(&1, policy))
+
+    if total > max_items do
+      compacted ++ [%{"_truncated_items" => total - max_items}]
+    else
+      compacted
+    end
+  end
+
+  defp compact_tool_value(value, policy) when is_map(value) do
+    max_entries = policy.tool_evidence.max_map_entries
+    entries = value |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+
+    compacted =
+      entries
+      |> Enum.take(max_entries)
+      |> Map.new(fn {key, nested_value} ->
+        {to_string(key), compact_tool_value(nested_value, policy)}
+      end)
+
+    if length(entries) > max_entries do
+      Map.put(compacted, "_truncated_keys", length(entries) - max_entries)
+    else
+      compacted
+    end
+  end
+
+  defp compact_tool_value(%DateTime{} = value, _policy), do: DateTime.to_iso8601(value)
+  defp compact_tool_value(%NaiveDateTime{} = value, _policy), do: NaiveDateTime.to_iso8601(value)
+  defp compact_tool_value(%Date{} = value, _policy), do: Date.to_iso8601(value)
+  defp compact_tool_value(%Time{} = value, _policy), do: Time.to_iso8601(value)
+
+  defp compact_tool_value(value, policy) when is_struct(value) do
+    value |> Map.from_struct() |> compact_tool_value(policy)
+  end
+
+  defp compact_tool_value(value, _policy) when is_tuple(value), do: inspect(value)
+  defp compact_tool_value(value, _policy) when is_pid(value), do: inspect(value)
+  defp compact_tool_value(value, _policy) when is_reference(value), do: inspect(value)
+  defp compact_tool_value(value, _policy) when is_function(value), do: inspect(value)
+  defp compact_tool_value(value, _policy), do: value
+
+  defp detect_repeated_tool_result(_tool_history, window_size) when window_size <= 1, do: :ok
+
+  defp detect_repeated_tool_result(tool_history, window_size) do
+    latest_observation =
+      tool_history
+      |> Enum.reverse()
+      |> Enum.find_value(&tool_observation/1)
+
+    case latest_observation do
+      nil ->
+        :ok
+
+      %{tool: tool} = observation ->
+        count =
+          Enum.count(tool_history, fn entry ->
+            tool_observation(entry) == observation
+          end)
+
+        if count >= window_size do
+          {:error, {:assistant_harness_tool_loop_detected, tool, count}}
+        else
+          :ok
+        end
+    end
+  end
+
+  defp tool_observation(entry) when is_map(entry) do
+    tool = Map.get(entry, "tool") || Map.get(entry, :tool)
+    arguments = Map.get(entry, "arguments") || Map.get(entry, :arguments) || %{}
+    result = Map.get(entry, "result") || Map.get(entry, :result)
+    error = Map.get(entry, "error") || Map.get(entry, :error)
+
+    if is_binary(tool) and (not is_nil(result) or not is_nil(error)) do
+      %{
+        tool: tool,
+        arguments_hash: stable_hash(arguments),
+        outcome_hash: stable_hash(if(is_nil(result), do: %{"error" => error}, else: result))
+      }
+    end
+  end
+
+  defp tool_observation(_entry), do: nil
+
+  defp stable_hash(value) do
+    value
+    |> stable_json()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp stable_json(value) do
+    case Jason.encode(compact_hash_value(value)) do
+      {:ok, json} -> json
+      {:error, _reason} -> inspect(value)
+    end
+  end
+
+  defp compact_hash_value(value) when is_map(value) do
+    value
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Map.new(fn {key, nested_value} -> {to_string(key), compact_hash_value(nested_value)} end)
+  end
+
+  defp compact_hash_value(value) when is_list(value), do: Enum.map(value, &compact_hash_value/1)
+  defp compact_hash_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp compact_hash_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp compact_hash_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp compact_hash_value(%Time{} = value), do: Time.to_iso8601(value)
+
+  defp compact_hash_value(value) when is_struct(value),
+    do: value |> Map.from_struct() |> compact_hash_value()
+
+  defp compact_hash_value(value) when is_tuple(value), do: inspect(value)
+  defp compact_hash_value(value) when is_pid(value), do: inspect(value)
+  defp compact_hash_value(value) when is_reference(value), do: inspect(value)
+  defp compact_hash_value(value) when is_function(value), do: inspect(value)
+  defp compact_hash_value(value), do: value
+
   defp normalize_score(value) when is_float(value), do: min(max(value, 0.0), 1.0)
   defp normalize_score(value) when is_integer(value), do: normalize_score(value / 1)
 
@@ -664,6 +1034,14 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_string_list(_values), do: []
 
+  defp max_tool_calls_per_step(payload) do
+    payload
+    |> map_value("runtime_policy", %{})
+    |> map_value("tool_calls", %{})
+    |> map_value("max_per_step", @max_tool_calls_per_step)
+    |> positive_integer(@max_tool_calls_per_step)
+  end
+
   defp allowed_tool_names(payload) do
     payload
     |> map_value("tools", [])
@@ -678,6 +1056,14 @@ defmodule Maraithon.AssistantHarness do
 
   defp normalize_message(value) when is_binary(value), do: String.trim(value)
   defp normalize_message(_value), do: ""
+
+  defp human_tool_name(tool) when is_binary(tool) do
+    tool
+    |> String.replace("_", " ")
+    |> String.replace(".", " ")
+  end
+
+  defp human_tool_name(_tool), do: "that tool"
 
   defp map_value(map, key, default) when is_map(map) do
     Map.get(map, key) || Map.get(map, existing_atom_key(key)) || default

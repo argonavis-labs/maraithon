@@ -30,7 +30,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
                run_loop(
                  run,
                  runtime_context,
-                 %{iteration: 1, llm_turns: 0, tool_steps: 0, tool_history: [], sequence: 1},
+                 AssistantHarness.initial_loop_state(),
                  System.monotonic_time(:millisecond)
                ),
              {:ok, status, summary} <-
@@ -134,25 +134,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp run_loop(run, runtime_context, state, started_monotonic_ms) do
-    cond do
-      timed_out?(started_monotonic_ms) ->
-        {:error, run, :timeout, state}
+    case AssistantHarness.guard_loop(state, started_monotonic_ms, runner_policy_opts()) do
+      {:error, reason} ->
+        {:error, run, reason, state}
 
-      state.llm_turns >= max_llm_turns() ->
-        {:error, run, :llm_turn_limit, state}
-
-      true ->
-        runtime_policy = AssistantHarness.runtime_policy()
-
-        request_payload = %{
-          context: runtime_context.context,
-          tools: Toolbox.tool_definitions(runtime_context.context),
-          tool_history: state.tool_history,
-          runtime_policy: runtime_policy,
-          iteration: state.iteration,
-          llm_turns: state.llm_turns,
-          tool_steps: state.tool_steps
-        }
+      :ok ->
+        request_payload =
+          runtime_context
+          |> Map.put(:tools, Toolbox.tool_definitions(runtime_context.context))
+          |> AssistantHarness.build_loop_request_payload(state, runner_policy_opts())
 
         now = DateTime.utc_now()
 
@@ -233,7 +223,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
                     ]
                 end)
 
-              {:cont, {:ok, next_state}}
+              case AssistantHarness.guard_tool_history(
+                     next_state.tool_history,
+                     runner_policy_opts()
+                   ) do
+                :ok -> {:cont, {:ok, next_state}}
+                {:error, reason} -> {:halt, {:error, run, reason, next_state}}
+              end
 
             {:error, reason} ->
               {:ok, _completed_tool_step} =
@@ -259,7 +255,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
                     ]
                 end)
 
-              {:cont, {:ok, next_state}}
+              case AssistantHarness.guard_tool_history(
+                     next_state.tool_history,
+                     runner_policy_opts()
+                   ) do
+                :ok -> {:cont, {:ok, next_state}}
+                {:error, reason} -> {:halt, {:error, run, reason, next_state}}
+              end
           end
         else
           {:error, reason} ->
@@ -346,7 +348,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           TelegramAssistant.send_turn(
             conversation,
             Map.fetch!(attrs, :chat_id),
-            "I hit an internal issue while working on that. Try again or ask me for a narrower step.",
+            AssistantHarness.failure_message(reason),
             reply_to_message_id: Map.get(attrs, :source_message_id),
             send_mode: send_mode_for_delivery(delivery),
             message_id: delivery[:message_id],
@@ -608,7 +610,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
       origin_id: prepared_action_id,
       structured_data: %{
         "run_id" => run.id,
-        "tool_history" => state.tool_history,
+        "tool_history" =>
+          AssistantHarness.execution_evidence(state.tool_history, runner_policy_opts()),
         "summary" => response_summary,
         "message_class" => message_class
       }
@@ -777,20 +780,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
       :ok
   end
 
-  defp timed_out?(started_monotonic_ms) do
-    System.monotonic_time(:millisecond) - started_monotonic_ms >= max_wall_clock_ms()
-  end
-
-  defp max_llm_turns do
-    AssistantHarness.max_llm_turns()
-  end
-
   defp max_tool_steps do
-    AssistantHarness.max_tool_steps()
+    AssistantHarness.max_tool_steps(runner_policy_opts())
   end
 
-  defp max_wall_clock_ms do
-    TelegramAssistant.hard_timeout_ms()
+  defp runner_policy_opts do
+    [max_wall_clock_ms: TelegramAssistant.hard_timeout_ms()]
   end
 
   defp conversation_id(%Conversation{id: id}), do: id
