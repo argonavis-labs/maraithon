@@ -168,6 +168,7 @@ defmodule Maraithon.AgentMarketplace do
   defp skill_paths_for("ai_chief_of_staff") do
     [
       "priv/agents/skills/chief_of_staff/morning_briefing.md",
+      "priv/agents/skills/chief_of_staff/commitment_tracker.md",
       "priv/agents/skills/chief_of_staff/followthrough.md",
       "priv/agents/skills/chief_of_staff/travel_logistics.md"
     ]
@@ -195,13 +196,25 @@ defmodule Maraithon.AgentMarketplace do
       "slack.search",
       "slack.read",
       "telegram.send",
+      "get_open_loops",
+      "list_todos",
+      "upsert_todos",
+      "resolve_todo",
+      "list_people",
+      "get_person",
+      "upsert_person",
+      "link_person_data",
+      "get_relationship_context",
+      "recall_memory",
+      "write_memory",
+      "record_memory_feedback",
       "llm.complete"
     ]
   end
 
   defp tool_allowlist_for(_behavior), do: ["llm.complete"]
 
-  defp mcp_allowlist_for("ai_chief_of_staff"), do: ["google", "slack", "telegram"]
+  defp mcp_allowlist_for("ai_chief_of_staff"), do: ["google", "slack", "telegram", "maraithon"]
   defp mcp_allowlist_for(_behavior), do: []
 
   defp required_connectors(requirements) do

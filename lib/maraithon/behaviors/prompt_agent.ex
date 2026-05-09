@@ -533,32 +533,20 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp normalize_optional_text(_value), do: nil
 
   defp parse_action(content, allowed_tools) do
-    content = String.trim(content)
-
-    cond do
-      String.starts_with?(content, "ACTION:") ->
-        parse_tool_action(content, allowed_tools)
-
-      String.starts_with?(content, "RESPOND:") ->
-        message = String.replace_prefix(content, "RESPOND:", "") |> String.trim()
-        {:respond, message}
-
-      String.starts_with?(content, "OBSERVE") ->
-        :observe
-
-      # Fallback: try to detect intent
-      String.contains?(content, "ACTION:") ->
-        parse_tool_action(content, allowed_tools)
-
-      true ->
-        # Default to treating the whole response as a message if it seems substantive
-        if String.length(content) > 20 do
-          {:respond, content}
-        else
-          :observe
-        end
-    end
+    content
+    |> String.trim()
+    |> parse_contract_action(allowed_tools)
   end
+
+  defp parse_contract_action("ACTION:" <> _rest = content, allowed_tools),
+    do: parse_tool_action(content, allowed_tools)
+
+  defp parse_contract_action("RESPOND:" <> message, _allowed_tools),
+    do: {:respond, String.trim(message)}
+
+  defp parse_contract_action("OBSERVE" <> _rest, _allowed_tools), do: :observe
+
+  defp parse_contract_action(_content, _allowed_tools), do: :observe
 
   defp parse_tool_action(content, allowed_tools) do
     # Extract tool name and args

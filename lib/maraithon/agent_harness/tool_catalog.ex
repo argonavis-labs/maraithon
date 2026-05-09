@@ -53,6 +53,48 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "list_todos",
       side_effect: "read"
     },
+    "resolve_todo" => %{
+      name: "resolve_todo",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "resolve_todo",
+      side_effect: "write"
+    },
+    "list_people" => %{
+      name: "list_people",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "list_people",
+      side_effect: "read"
+    },
+    "get_person" => %{
+      name: "get_person",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "get_person",
+      side_effect: "read"
+    },
+    "upsert_person" => %{
+      name: "upsert_person",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "upsert_person",
+      side_effect: "write"
+    },
+    "link_person_data" => %{
+      name: "link_person_data",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "link_person_data",
+      side_effect: "write"
+    },
+    "get_relationship_context" => %{
+      name: "get_relationship_context",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "get_relationship_context",
+      side_effect: "read"
+    },
     "list_memories" => %{
       name: "list_memories",
       connector: nil,

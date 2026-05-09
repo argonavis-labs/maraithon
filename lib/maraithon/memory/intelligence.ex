@@ -79,22 +79,54 @@ defmodule Maraithon.Memory.Intelligence do
   end
 
   defp complete(prompt, opts) do
-    case Keyword.get(opts, :llm_complete) do
+    case Keyword.get(opts, :llm_complete) || configured_llm_complete() do
       fun when is_function(fun, 1) ->
         fun.(prompt)
 
       _other ->
-        params = %{
-          "messages" => [%{"role" => "user", "content" => prompt}],
-          "max_tokens" => 1_000,
-          "temperature" => 0.1,
-          "reasoning_effort" => "medium"
-        }
-
-        with {:ok, response} <- LLM.complete(params) do
-          {:ok, response.content}
-        end
+        default_llm_complete(prompt)
     end
+  end
+
+  defp configured_llm_complete do
+    config = Application.get_env(:maraithon, :memory_intelligence, [])
+
+    case Keyword.get(config, :llm_complete) do
+      fun when is_function(fun, 1) -> fun
+      _other -> nil
+    end
+  end
+
+  defp default_llm_complete(prompt) do
+    params = %{
+      "messages" => [%{"role" => "user", "content" => prompt}],
+      "max_tokens" => 1_000,
+      "temperature" => 0.1,
+      "reasoning_effort" => "medium"
+    }
+
+    if mock_when_unconfigured?() and is_nil(LLM.provider()) do
+      with {:ok, response} <- Maraithon.LLM.MockProvider.complete(params) do
+        {:ok, response.content}
+      end
+    else
+      case LLM.complete(params) do
+        {:ok, response} -> {:ok, response.content}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp mock_when_unconfigured? do
+    configured? =
+      Application.get_env(:maraithon, :memory_intelligence, [])
+      |> Keyword.get(:mock_llm_when_unconfigured, false)
+
+    configured? or mix_test_env?()
+  end
+
+  defp mix_test_env? do
+    Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) and Mix.env() == :test
   end
 
   defp decode_json(%{content: content}) when is_binary(content), do: decode_json(content)

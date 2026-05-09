@@ -12,6 +12,7 @@ defmodule Maraithon.TelegramAssistant do
     LivenessSession,
     LivenessSupervisor,
     PreparedAction,
+    Proactive,
     PushBroker,
     PushReceipt,
     Run,
@@ -303,6 +304,10 @@ defmodule Maraithon.TelegramAssistant do
   def deliver_insight(delivery), do: PushBroker.deliver_insight(delivery)
   def deliver_brief(brief), do: PushBroker.deliver_brief(brief)
   def deliver_push_candidate(candidate), do: PushBroker.deliver(candidate)
+  def plan_proactive_check_in(user_id, opts \\ []), do: Proactive.plan_check_in(user_id, opts)
+
+  def deliver_proactive_check_in(user_id, opts \\ []),
+    do: Proactive.deliver_check_in(user_id, opts)
 
   def confirmation_window_seconds do
     Keyword.get(config(), :confirmation_window_seconds, @default_confirmation_window_seconds)

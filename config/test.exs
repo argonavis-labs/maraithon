@@ -41,6 +41,8 @@ config :maraithon, Maraithon.Runtime,
 
 config :maraithon, :todos, mock_llm_when_unconfigured: true
 
+config :maraithon, :memory_intelligence, mock_llm_when_unconfigured: true
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

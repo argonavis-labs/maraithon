@@ -79,7 +79,24 @@ defmodule Maraithon.MemoryTest do
     assert "not_relevant" in memory.tags
     assert memory.metadata["feedback"] == "not_relevant"
 
-    context = Memory.prompt_context(user_id, query: "VC newsletter", disable_llm?: true)
+    llm_complete = fn prompt ->
+      assert prompt =~ Intelligence.sentinel()
+      assert prompt =~ "Generic VC newsletter"
+
+      {:ok,
+       Jason.encode!(%{
+         "summary" => "The relevance feedback applies to this newsletter question.",
+         "selected" => [
+           %{
+             "memory_id" => memory.id,
+             "relevance" => 0.96,
+             "reason" => "This prevents resurfacing a similar broad VC newsletter."
+           }
+         ]
+       })}
+    end
+
+    context = Memory.prompt_context(user_id, query: "VC newsletter", llm_complete: llm_complete)
 
     assert context.count == 1
     assert hd(context.memories).title =~ "Generic VC newsletter"

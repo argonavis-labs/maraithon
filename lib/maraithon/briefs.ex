@@ -370,6 +370,7 @@ defmodule Maraithon.Briefs do
   defp cadence_label("weekly_review"), do: "Weekly review"
   defp cadence_label("weekend_scope"), do: "Weekend project check"
   defp cadence_label("holiday_radar"), do: "Holiday radar"
+  defp cadence_label("commitment_tracker"), do: "Commitment tracker"
   defp cadence_label("travel_prep"), do: "Travel prep"
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other

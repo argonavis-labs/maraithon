@@ -92,24 +92,19 @@ defmodule Maraithon.PreferenceMemoryTest do
     assert rule["filters"]["topics"] == ["sales_outreach", "cold_outreach"]
   end
 
-  test "falls back to dynamic watch-style urgency rules for arbitrary topics", %{
+  test "invalid model output does not create heuristic preference rules", %{
     user_id: user_id
   } do
     invalid_llm = fn _prompt -> {:ok, "not-json"} end
 
-    assert {:ok, %{learned: [rule]}} =
+    assert {:error, {:preference_model_failed, :invalid_json}} =
              PreferenceMemory.apply_explicit_instruction(
                user_id,
                "board game meetup notifications should appear as FYI",
                llm_complete: invalid_llm
              )
 
-    assert rule["id"] == "watch_board_game_meetup"
-    assert rule["kind"] == "urgency_boost"
-    assert rule["filters"]["topics"] == ["board_game_meetup"]
-    assert rule["filters"]["delivery_mode"] == "important_fyi"
-    assert rule["filters"]["ackable"] == true
-    assert "board game meetup" in rule["filters"]["keywords"]
+    assert PreferenceMemory.active_rules(user_id) == []
   end
 
   test "quiet hours suppress internal telegram interruptions but allow external ones", %{

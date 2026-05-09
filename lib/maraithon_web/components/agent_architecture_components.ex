@@ -77,8 +77,8 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
     """
   end
 
-  defp limit("full"), do: 8
-  defp limit(_mode), do: 8
+  defp limit("full"), do: 12
+  defp limit(_mode), do: 10
 
   defp section_class("full"),
     do: "overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm"

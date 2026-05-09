@@ -48,6 +48,13 @@ Application.put_env(
   |> Keyword.put(:mock_llm_when_unconfigured, true)
 )
 
+Application.put_env(
+  :maraithon,
+  :memory_intelligence,
+  Application.get_env(:maraithon, :memory_intelligence, [])
+  |> Keyword.put(:mock_llm_when_unconfigured, true)
+)
+
 {:ok, _} = Application.ensure_all_started(:maraithon)
 
 if Maraithon.Repo.config()[:pool] != Ecto.Adapters.SQL.Sandbox do

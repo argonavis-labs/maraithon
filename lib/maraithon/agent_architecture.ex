@@ -133,9 +133,11 @@ defmodule Maraithon.AgentArchitecture do
 
     architecture
     |> Map.get(:components, [])
-    |> Enum.sort_by(fn component ->
-      Enum.find_index(priority, &(&1 == component.kind)) || length(priority)
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {component, index} ->
+      {Enum.find_index(priority, &(&1 == component.kind)) || length(priority), index}
     end)
+    |> Enum.map(fn {component, _index} -> component end)
     |> Enum.take(limit)
   end
 
@@ -382,8 +384,9 @@ defmodule Maraithon.AgentArchitecture do
 
   defp skill_components("ai_chief_of_staff", config) do
     enabled_ids = ChiefOfStaffSkills.enabled_ids(config)
+    skill_ids = Enum.uniq(enabled_ids ++ ChiefOfStaffSkills.list_ids())
 
-    ChiefOfStaffSkills.list_ids()
+    skill_ids
     |> Enum.map(fn skill_id ->
       module = ChiefOfStaffSkills.get!(skill_id)
 

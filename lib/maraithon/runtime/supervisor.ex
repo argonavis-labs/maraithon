@@ -33,6 +33,7 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.InsightNotifier,
           Maraithon.Runtime.BriefingCron,
           Maraithon.Runtime.BriefNotifier,
+          Maraithon.Runtime.ProactiveCheckIn,
           Maraithon.Runtime.TokenRefresher
         ]
       else

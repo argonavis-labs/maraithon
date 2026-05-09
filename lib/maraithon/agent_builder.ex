@@ -59,7 +59,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Chief of Staff",
       category: "Workflow",
       summary:
-        "One assistant that combines follow-through, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
+        "One assistant that combines follow-through, commitment tracking, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
       inputs: [
         "Gmail, Calendar, and Slack activity relevant to commitments, reply debt, and travel logistics",
         "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
@@ -67,6 +67,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       outputs: [
         "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
+        "Daily model-deduped commitment todos from sent mail, inbox asks, calendar context, CRM, and memory",
         "Travel logistics briefs and updates for upcoming trips",
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
       ],
@@ -1177,6 +1178,18 @@ defmodule Maraithon.AgentBuilder do
           "slack_channel_scan_limit" => follow_channel_scan_limit,
           "slack_message_scan_limit" => follow_dm_scan_limit,
           "lookback_hours" => 18
+        },
+        "commitment_tracker" => %{
+          "user_id" => user_id,
+          "assistant_behavior" => "ai_chief_of_staff",
+          "source_policy" => "all_connected",
+          "source_scope" => source_scope,
+          "timezone_offset_hours" => timezone_offset_hours,
+          "commitment_review_hour_local" => 7,
+          "email_scan_limit" => follow_email_scan_limit,
+          "event_scan_limit" => follow_event_scan_limit,
+          "lookback_hours" => 24,
+          "calendar_forward_days" => 7
         },
         "briefing" => %{
           "user_id" => user_id,

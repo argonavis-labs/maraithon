@@ -25,11 +25,29 @@ defmodule Maraithon.Tools.MemoryToolsTest do
     memory = written.memory
     assert memory.title == "Prefer actionable school notices"
 
+    llm_complete = fn prompt ->
+      assert prompt =~ Maraithon.Memory.Intelligence.sentinel()
+      assert prompt =~ "Prefer actionable school notices"
+
+      {:ok,
+       Jason.encode!(%{
+         "summary" => "School notice preference applies.",
+         "selected" => [
+           %{
+             "memory_id" => memory.id,
+             "relevance" => 0.97,
+             "reason" => "The current query asks about actionable school notices."
+           }
+         ]
+       })}
+    end
+
     assert {:ok, recalled} =
              Tools.execute("recall_memory", %{
                "user_id" => user_id,
                "query" => "school pickup notice",
-               "limit" => 5
+               "limit" => 5,
+               "llm_complete" => llm_complete
              })
 
     assert recalled.source == "maraithon_memory"

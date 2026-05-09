@@ -9,6 +9,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "followthrough" => Maraithon.ChiefOfStaff.Skills.Followthrough,
     "travel_logistics" => Maraithon.ChiefOfStaff.Skills.TravelLogistics,
     "morning_briefing" => Maraithon.ChiefOfStaff.Skills.MorningBriefing,
+    "commitment_tracker" => Maraithon.ChiefOfStaff.Skills.CommitmentTracker,
     "briefing" => Maraithon.ChiefOfStaff.Skills.Briefing,
     "project_scope_alignment" => Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment,
     "holiday_radar" => Maraithon.ChiefOfStaff.Skills.HolidayRadar
@@ -18,6 +19,7 @@ defmodule Maraithon.ChiefOfStaff.Skills do
     "followthrough",
     "travel_logistics",
     "morning_briefing",
+    "commitment_tracker",
     "project_scope_alignment",
     "holiday_radar"
   ]

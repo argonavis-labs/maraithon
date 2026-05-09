@@ -20,7 +20,10 @@ defmodule Maraithon.AgentMarketplaceTest do
       assert manifest["default_config"]["behavior"] == "manifest_agent"
       assert manifest["default_config"]["source_behavior"] == "ai_chief_of_staff"
       assert "priv/agents/skills/chief_of_staff/morning_briefing.md" in manifest["skill_paths"]
+      assert "priv/agents/skills/chief_of_staff/commitment_tracker.md" in manifest["skill_paths"]
       assert "llm.complete" in manifest["tool_allowlist"]
+      assert "upsert_todos" in manifest["tool_allowlist"]
+      assert "maraithon" in manifest["mcp_allowlist"]
     end
 
     test "attaches markdown skill packs to non-chief built-in marketplace agents" do

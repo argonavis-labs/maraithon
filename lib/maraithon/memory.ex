@@ -185,24 +185,22 @@ defmodule Maraithon.Memory do
     candidates = recall_candidates(user_id, query, opts)
     serialized_candidates = Enum.map(candidates, &serialize_item/1)
 
-    recalled =
-      case Intelligence.select_relevant(user_id, query, serialized_candidates, opts) do
-        {:ok, %{items: selected}} when selected != [] ->
-          selected
+    case Intelligence.select_relevant(user_id, query, serialized_candidates, opts) do
+      {:ok, %{items: recalled} = model_result} ->
+        touch_recalled(user_id, recalled)
 
-        _other ->
-          fallback_recall(query, serialized_candidates, result_limit(opts, @default_limit))
-      end
+        {:ok,
+         %{
+           query: query,
+           count: length(recalled),
+           summary: Map.get(model_result, :summary) || recall_summary(query, recalled),
+           memories: recalled,
+           selection_source: "memory_intelligence"
+         }}
 
-    touch_recalled(user_id, recalled)
-
-    {:ok,
-     %{
-       query: query,
-       count: length(recalled),
-       summary: recall_summary(query, recalled),
-       memories: recalled
-     }}
+      {:error, reason} ->
+        {:error, {:memory_intelligence_failed, reason}}
+    end
   end
 
   def recall(_user_id, _query, _opts), do: {:error, :invalid_user}
@@ -240,22 +238,26 @@ defmodule Maraithon.Memory do
     query = Keyword.get(opts, :query) |> normalize_optional_text()
     limit = result_limit(opts, @prompt_limit)
 
-    memories =
+    {memories, recall_error} =
       if query do
         case recall(user_id, query, Keyword.put(opts, :limit, limit)) do
-          {:ok, %{memories: memories}} -> memories
-          _other -> []
+          {:ok, %{memories: memories}} -> {memories, nil}
+          {:error, reason} -> {[], inspect(reason)}
         end
       else
-        user_id
-        |> list_items(limit: limit, status: "active")
-        |> Enum.map(&serialize_item/1)
+        memories =
+          user_id
+          |> list_items(limit: limit, status: "active")
+          |> Enum.map(&serialize_item/1)
+
+        {memories, nil}
       end
 
     %{
-      summary: memory_summary(memories),
+      summary: memory_summary(memories, recall_error),
       memories: memories,
-      count: length(memories)
+      count: length(memories),
+      error: recall_error
     }
   end
 
@@ -426,7 +428,7 @@ defmodule Maraithon.Memory do
     |> Map.put_new("confidence", 0.75)
   end
 
-  defp recall_candidates(user_id, query, opts) do
+  defp recall_candidates(user_id, _query, opts) do
     Item
     |> where([item], item.user_id == ^user_id and item.status == "active")
     |> where_not_expired()
@@ -436,68 +438,7 @@ defmodule Maraithon.Memory do
     |> order_by([item], desc: item.importance, desc: item.updated_at, desc: item.inserted_at)
     |> limit(^Keyword.get(opts, :candidate_limit, @candidate_limit))
     |> Repo.all()
-    |> maybe_prioritize_text_matches(query)
     |> Enum.take(Keyword.get(opts, :candidate_limit, @candidate_limit))
-  end
-
-  defp maybe_prioritize_text_matches(items, ""), do: items
-
-  defp maybe_prioritize_text_matches(items, query) do
-    query = String.downcase(query)
-
-    Enum.sort_by(items, fn item ->
-      haystack =
-        [item.title, item.summary, item.content, Enum.join(item.tags || [], " ")]
-        |> Enum.reject(&is_nil/1)
-        |> Enum.join(" ")
-        |> String.downcase()
-
-      if String.contains?(haystack, query), do: 0, else: 1
-    end)
-  end
-
-  defp fallback_recall(_query, [], _limit), do: []
-
-  defp fallback_recall(query, candidates, limit) do
-    tokens = query_tokens(query)
-
-    candidates
-    |> Enum.map(fn candidate ->
-      score = fallback_score(candidate, tokens)
-
-      candidate
-      |> Map.put(:relevance, score)
-      |> Map.put(:reason, "Selected by local memory fallback.")
-    end)
-    |> Enum.filter(&(Map.get(&1, :relevance, 0.0) > 0.0 or tokens == []))
-    |> Enum.sort_by(&{-Map.get(&1, :relevance, 0.0), -Map.get(&1, :importance, 0)})
-    |> Enum.take(limit)
-  end
-
-  defp fallback_score(candidate, []), do: (Map.get(candidate, :importance, 0) || 0) / 100
-
-  defp fallback_score(candidate, tokens) do
-    haystack =
-      [
-        Map.get(candidate, :title),
-        Map.get(candidate, :summary),
-        Map.get(candidate, :content),
-        Enum.join(Map.get(candidate, :tags, []), " ")
-      ]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" ")
-      |> String.downcase()
-
-    matches = Enum.count(tokens, &String.contains?(haystack, &1))
-    min(1.0, matches / max(length(tokens), 1) + (Map.get(candidate, :importance, 0) || 0) / 500)
-  end
-
-  defp query_tokens(query) do
-    query
-    |> String.downcase()
-    |> String.split(~r/[^a-z0-9]+/u, trim: true)
-    |> Enum.reject(&(String.length(&1) < 3))
-    |> Enum.uniq()
   end
 
   defp touch_recalled(user_id, memories) do
@@ -618,6 +559,12 @@ defmodule Maraithon.Memory do
       get_in(context, ["trigger", "message"])
     ]
     |> Enum.find_value(&normalize_optional_text/1)
+  end
+
+  defp memory_summary(memories, nil), do: memory_summary(memories)
+
+  defp memory_summary(_memories, error) when is_binary(error) do
+    "Deep memory recall could not run model-level relevance selection: #{error}"
   end
 
   defp memory_summary([]), do: "No deep durable memories matched this context."

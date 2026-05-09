@@ -13,7 +13,7 @@ defmodule Maraithon.TelegramConversations.Turn do
 
   @roles ~w(user assistant system)
   @turn_kinds ~w(user_message assistant_reply assistant_push approval_prompt action_result system_notice)
-  @origin_types ~w(chat insight brief agent_push prepared_action system)
+  @origin_types ~w(chat insight brief agent_push assistant_digest prepared_action system)
 
   schema "telegram_conversation_turns" do
     field :role, :string

@@ -19,6 +19,7 @@ defmodule Maraithon.Briefs.Brief do
     "weekly_review",
     "weekend_scope",
     "holiday_radar",
+    "commitment_tracker",
     "travel_prep",
     "travel_update"
   ]

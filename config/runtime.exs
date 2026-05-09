@@ -66,6 +66,21 @@ openai_model = System.get_env("OPENAI_MODEL", "gpt-5.4")
 openai_reasoning_effort = System.get_env("OPENAI_REASONING_EFFORT", "high")
 configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |> String.downcase()
 
+optional_boolean_env = fn name ->
+  case System.get_env(name) do
+    nil -> nil
+    "" -> nil
+    value -> String.downcase(String.trim(value)) in ~w(true 1 yes)
+  end
+end
+
+boolean_env = fn name, default ->
+  case optional_boolean_env.(name) do
+    nil -> default
+    value -> value
+  end
+end
+
 llm_provider_name =
   cond do
     configured_llm_provider in ["anthropic", "openai"] ->
@@ -156,6 +171,10 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(System.get_env("BOOTSTRAP_RETRY_INTERVAL_MS", "5000")),
   health_report_interval_ms:
     String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
+  proactive_check_in_interval_ms:
+    String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "3600000")),
+  proactive_check_in_batch_size:
+    String.to_integer(System.get_env("PROACTIVE_CHECK_IN_BATCH_SIZE", "25")),
   oauth_refresh_interval_ms:
     String.to_integer(System.get_env("OAUTH_REFRESH_INTERVAL_MS", "300000")),
   oauth_refresh_lookahead_seconds:
@@ -167,6 +186,11 @@ config :maraithon, Maraithon.Runtime,
   tool_timeout_ms: String.to_integer(System.get_env("TOOL_TIMEOUT_MS", "30000")),
   # Retries
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
+
+config :maraithon, :telegram_assistant,
+  telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),
+  telegram_unified_push_enabled: optional_boolean_env.("TELEGRAM_UNIFIED_PUSH_ENABLED"),
+  telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false)
 
 # =============================================================================
 # Connector Configuration

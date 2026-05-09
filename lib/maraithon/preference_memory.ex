@@ -24,39 +24,6 @@ defmodule Maraithon.PreferenceMemory do
   @default_applies_to ~w(gmail calendar slack telegram)
   @autosave_threshold 0.90
   @confirm_threshold 0.70
-  @fallback_complex_markers [" unless ", " except ", " if ", " when ", " but "]
-  @fallback_content_filter_markers [
-    "ignore",
-    "mute",
-    "suppress",
-    "skip",
-    "hide",
-    "filter out",
-    "don't show",
-    "do not show",
-    "stop showing",
-    "stop surfacing"
-  ]
-  @fallback_watch_markers [
-    "watch",
-    "surface",
-    "show",
-    "track",
-    "flag",
-    "prioritize",
-    "prioritise",
-    "important",
-    "urgent",
-    "fyi",
-    "treat"
-  ]
-  @fallback_stopwords ~w(
-    a about alerts alert all and any appear are as asap away be do don filter flag for from
-    fyi hide if immediately important into is item items mark me message messages mute my not
-    notification notifications of only out please prioritise prioritize right should show skip
-    stop suppress surface tell that these this thread threads track treat update updates urgent
-    watch with
-  )
 
   @spec prompt_context(String.t() | nil) :: map()
   def prompt_context(user_id) when is_binary(user_id) do
@@ -149,21 +116,24 @@ defmodule Maraithon.PreferenceMemory do
       {:ok,
        %{reply: "Send /prefer followed by the rule you want Maraithon to remember.", learned: []}}
     else
-      result =
-        parse_explicit_instruction(user_id, instruction, opts) ||
-          fallback_parse_instruction(user_id, instruction)
+      case parse_explicit_instruction(user_id, instruction, opts) do
+        {:ok, parsed} ->
+          handle_explicit_instruction_parse(user_id, parsed)
 
-      case result do
-        %{"rules" => rules} = parsed ->
-          learned = persist_rules(user_id, rules, "explicit_telegram", explicit?: true)
-          reply = explicit_reply(parsed, learned)
-          {:ok, %{reply: reply, learned: learned}}
-
-        nil ->
-          {:error, :unable_to_parse}
+        {:error, reason} ->
+          {:error, {:preference_model_failed, reason}}
       end
     end
   end
+
+  defp handle_explicit_instruction_parse(user_id, %{"rules" => rules} = parsed)
+       when is_list(rules) do
+    learned = persist_rules(user_id, rules, "explicit_telegram", explicit?: true)
+    reply = explicit_reply(parsed, learned)
+    {:ok, %{reply: reply, learned: learned}}
+  end
+
+  defp handle_explicit_instruction_parse(_user_id, _parsed), do: {:error, :unable_to_parse}
 
   @spec forget_rule(String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def forget_rule(user_id, rule_id)
@@ -208,19 +178,12 @@ defmodule Maraithon.PreferenceMemory do
 
   def learn_from_feedback(user_id, %Insight{} = insight, feedback, opts)
       when is_binary(user_id) and feedback in ["helpful", "not_helpful"] do
-    allow_fallback? = Keyword.get(opts, :allow_fallback?, true)
+    case infer_rules_from_feedback(user_id, insight, feedback, opts) do
+      {:ok, result} ->
+        handle_feedback_inference(user_id, result)
 
-    result =
-      infer_rules_from_feedback(user_id, insight, feedback, opts) ||
-        if(allow_fallback?, do: fallback_infer_from_feedback(user_id, insight, feedback))
-
-    case result do
-      %{"rules" => rules} = parsed ->
-        learned = persist_rules(user_id, rules, "feedback_inference", explicit?: false)
-        {:ok, %{reply: inference_reply(parsed, learned), learned: learned}}
-
-      nil ->
-        {:ok, %{reply: nil, learned: []}}
+      {:error, reason} ->
+        {:error, {:preference_model_failed, reason}}
     end
   rescue
     error ->
@@ -230,6 +193,13 @@ defmodule Maraithon.PreferenceMemory do
 
   def learn_from_feedback(_user_id, _insight, _feedback, _opts),
     do: {:ok, %{reply: nil, learned: []}}
+
+  defp handle_feedback_inference(user_id, %{"rules" => rules} = parsed) when is_list(rules) do
+    learned = persist_rules(user_id, rules, "feedback_inference", explicit?: false)
+    {:ok, %{reply: inference_reply(parsed, learned), learned: learned}}
+  end
+
+  defp handle_feedback_inference(_user_id, _parsed), do: {:ok, %{reply: nil, learned: []}}
 
   def save_interpreted_rules(user_id, rules, source, opts \\ [])
       when is_binary(user_id) and is_list(rules) and is_binary(source) do
@@ -334,14 +304,11 @@ defmodule Maraithon.PreferenceMemory do
 
     case llm_json(prompt, opts) do
       {:ok, parsed} ->
-        parsed
-
-      {:error, :invalid_json} ->
-        nil
+        {:ok, parsed}
 
       {:error, reason} ->
         Logger.warning("Preference instruction parsing failed", reason: inspect(reason))
-        nil
+        {:error, reason}
     end
   end
 
@@ -350,14 +317,11 @@ defmodule Maraithon.PreferenceMemory do
 
     case llm_json(prompt, opts) do
       {:ok, parsed} ->
-        parsed
-
-      {:error, :invalid_json} ->
-        nil
+        {:ok, parsed}
 
       {:error, reason} ->
         Logger.warning("Preference feedback inference failed", reason: inspect(reason))
-        nil
+        {:error, reason}
     end
   end
 
@@ -750,33 +714,6 @@ defmodule Maraithon.PreferenceMemory do
       true -> nil
     end
   end
-
-  defp fallback_parse_instruction(_user_id, instruction) do
-    text = instruction |> String.trim() |> String.downcase()
-
-    cond do
-      fallback_content_filter_instruction?(text) ->
-        fallback_content_filter_response(text)
-
-      fallback_watch_instruction?(text) ->
-        fallback_watch_rule_response(text)
-
-      true ->
-        nil
-    end
-  end
-
-  defp fallback_infer_from_feedback(_user_id, %Insight{} = insight, "not_helpful") do
-    _ = insight
-    nil
-  end
-
-  defp fallback_infer_from_feedback(_user_id, %Insight{} = insight, "helpful") do
-    _ = insight
-    nil
-  end
-
-  defp fallback_infer_from_feedback(_user_id, _insight, _feedback), do: nil
 
   defp quiet_hours_allows?(user_id, %Insight{} = insight, rule, now) do
     filters = Map.get(rule, "filters", %{})
@@ -1224,170 +1161,6 @@ defmodule Maraithon.PreferenceMemory do
   end
 
   defp parse_integer(_value, default), do: default
-
-  defp fallback_content_filter_instruction?(text) when is_binary(text) do
-    not complex_fallback_instruction?(text) and
-      contains_any_phrase?(text, @fallback_content_filter_markers)
-  end
-
-  defp fallback_watch_instruction?(text) when is_binary(text) do
-    not complex_fallback_instruction?(text) and
-      contains_any_phrase?(text, @fallback_watch_markers)
-  end
-
-  defp complex_fallback_instruction?(text) when is_binary(text) do
-    padded = " #{String.trim(text)} "
-    contains_any_phrase?(padded, @fallback_complex_markers)
-  end
-
-  defp fallback_content_filter_response(text) do
-    with {:ok, phrase, topics, keywords} <- fallback_subject_details(text) do
-      humanized = humanize_phrase(phrase)
-
-      %{
-        "reply" => "Understood. I'll suppress #{phrase} unless there is a real human ask.",
-        "rules" => [
-          %{
-            "id" => "ignore_#{normalize_topic(phrase)}",
-            "kind" => "content_filter",
-            "label" => "Ignore #{humanized}",
-            "instruction" =>
-              "Suppress items about #{phrase} unless there is a clear human ask or unresolved commitment.",
-            "applies_to" => infer_applies_to(text, @default_applies_to),
-            "confidence" => 0.78,
-            "filters" => %{
-              "topics" => topics,
-              "keywords" => keywords,
-              "require_human_ask_to_override" => true
-            }
-          }
-        ]
-      }
-    else
-      _ -> nil
-    end
-  end
-
-  defp fallback_watch_rule_response(text) do
-    with {:ok, phrase, topics, keywords} <- fallback_subject_details(text) do
-      delivery_mode =
-        if contains_any_phrase?(text, ["urgent", "immediately", "asap", "right away"]) do
-          "interrupt_now"
-        else
-          "important_fyi"
-        end
-
-      humanized = humanize_phrase(phrase)
-
-      %{
-        "reply" =>
-          if delivery_mode == "interrupt_now" do
-            "Understood. I'll treat #{phrase} as urgent."
-          else
-            "Understood. I'll surface #{phrase} as important FYI."
-          end,
-        "rules" => [
-          %{
-            "id" => "watch_#{normalize_topic(phrase)}",
-            "kind" => "urgency_boost",
-            "label" => "Watch #{humanized}",
-            "instruction" =>
-              if delivery_mode == "interrupt_now" do
-                "Treat items about #{phrase} as urgent and surface them immediately."
-              else
-                "Surface items about #{phrase} as important FYI so they appear in future triage."
-              end,
-            "applies_to" => infer_applies_to(text, @default_applies_to),
-            "confidence" => 0.78,
-            "filters" => %{
-              "topics" => topics,
-              "keywords" => keywords,
-              "sender_domains" => fallback_sender_domains(text),
-              "delivery_mode" => delivery_mode,
-              "ackable" => delivery_mode == "important_fyi",
-              "priority_bias" => "high"
-            }
-          }
-        ]
-      }
-    else
-      _ -> nil
-    end
-  end
-
-  defp fallback_subject_details(text) when is_binary(text) do
-    keywords =
-      text
-      |> fallback_subject_tokens()
-      |> Enum.take(4)
-
-    case keywords do
-      [] ->
-        :error
-
-      tokens ->
-        phrase = Enum.join(tokens, " ")
-
-        {:ok, phrase, [normalize_topic(phrase)], fallback_keywords(phrase, tokens)}
-    end
-  end
-
-  defp fallback_subject_tokens(text) when is_binary(text) do
-    text
-    |> String.replace(~r/[^a-z0-9@\.\s]+/u, " ")
-    |> String.split(~r/\s+/, trim: true)
-    |> Enum.reject(fn token ->
-      token in @fallback_stopwords or token in ~w(email emails gmail slack calendar telegram)
-    end)
-    |> Enum.reject(&(String.length(&1) < 3))
-  end
-
-  defp fallback_keywords(phrase, tokens) do
-    [phrase | tokens]
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.uniq()
-  end
-
-  defp fallback_sender_domains(text) when is_binary(text) do
-    Regex.scan(~r/\b([a-z0-9.-]+\.[a-z]{2,})\b/i, text, capture: :all_but_first)
-    |> List.flatten()
-    |> Enum.map(&String.downcase/1)
-    |> Enum.reject(&String.contains?(&1, " "))
-    |> Enum.uniq()
-  end
-
-  defp infer_applies_to(text, default) when is_binary(text) and is_list(default) do
-    cond do
-      contains_any_phrase?(text, ["gmail", "email", "emails", "inbox"]) ->
-        ["gmail", "telegram"]
-
-      contains_any_phrase?(text, ["calendar", "meeting", "meetings"]) ->
-        ["calendar", "telegram"]
-
-      contains_any_phrase?(text, ["slack"]) ->
-        ["slack", "telegram"]
-
-      contains_any_phrase?(text, ["telegram"]) ->
-        ["telegram"]
-
-      true ->
-        default
-    end
-  end
-
-  defp humanize_phrase(value) when is_binary(value) do
-    value
-    |> String.split(~r/\s+/, trim: true)
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
-  end
-
-  defp humanize_phrase(_value), do: "Saved preference"
-
-  defp contains_any_phrase?(text, phrases) when is_binary(text) and is_list(phrases) do
-    Enum.any?(phrases, &String.contains?(text, &1))
-  end
 
   defp clamp(value, min, _max) when value < min, do: min
   defp clamp(value, _min, max) when value > max, do: max

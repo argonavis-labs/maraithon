@@ -23,6 +23,8 @@ config :maraithon, Maraithon.Runtime,
   scheduler_dispatch_timeout_ms: :timer.minutes(1),
   briefing_cron_interval_ms: :timer.minutes(1),
   health_report_interval_ms: :timer.minutes(1),
+  proactive_check_in_interval_ms: :timer.hours(1),
+  proactive_check_in_batch_size: 25,
   oauth_refresh_interval_ms: :timer.minutes(5),
   oauth_refresh_lookahead_seconds: 15 * 60,
   oauth_refresh_batch_size: 100,
@@ -39,6 +41,8 @@ config :maraithon, Maraithon.Runtime,
   anthropic_model: "claude-sonnet-4-20250514",
   openai_model: "gpt-5.4",
   openai_reasoning_effort: "high"
+
+config :maraithon, :telegram_assistant, telegram_proactive_checkins_enabled: false
 
 # Configure the endpoint
 config :maraithon, MaraithonWeb.Endpoint,

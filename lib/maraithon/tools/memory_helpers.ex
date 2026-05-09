@@ -37,6 +37,7 @@ defmodule Maraithon.Tools.MemoryHelpers do
     |> maybe_put(:kind, optional_string(args, "kind"))
     |> maybe_put(:scope, optional_string(args, "scope"))
     |> maybe_put(:tag, optional_string(args, "tag"))
+    |> maybe_put(:llm_complete, optional_function(args, "llm_complete"))
   end
 
   def memory_attrs(args) when is_map(args) do
@@ -55,4 +56,11 @@ defmodule Maraithon.Tools.MemoryHelpers do
 
   def serialize_item(%Item{} = item), do: Maraithon.Memory.serialize_item(item)
   def serialize_item(%{} = item), do: Maraithon.Memory.serialize_item(item)
+
+  defp optional_function(args, key) when is_map(args) do
+    case Map.get(args, key) || Map.get(args, :llm_complete) do
+      fun when is_function(fun, 1) -> fun
+      _other -> nil
+    end
+  end
 end

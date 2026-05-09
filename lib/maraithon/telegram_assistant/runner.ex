@@ -168,9 +168,6 @@ defmodule Maraithon.TelegramAssistant.Runner do
           next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
           handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
         else
-          {:error, reason} when state.tool_history == [] ->
-            {:fallback, reason}
-
           {:error, reason} ->
             {:error, run, reason, state}
         end
@@ -340,9 +337,6 @@ defmodule Maraithon.TelegramAssistant.Runner do
       })
 
     case {state.tool_history, Map.get(attrs, :conversation), delivery.mode} do
-      {[], _conversation, _mode} ->
-        {:fallback, reason}
-
       {_history, %Conversation{} = _conversation, :suppress_after_timeout} ->
         :ok
 

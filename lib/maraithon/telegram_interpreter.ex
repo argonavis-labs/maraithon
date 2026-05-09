@@ -22,7 +22,7 @@ defmodule Maraithon.TelegramInterpreter do
     "candidate_action" => nil,
     "feedback_target" => %{"delivery_id" => nil, "insight_id" => nil},
     "memory_summary_updates" => [],
-    "explanation" => "Low-confidence fallback."
+    "explanation" => "Model did not provide an explanation."
   }
 
   def interpret(user_id, attrs, opts \\ []) when is_binary(user_id) and is_map(attrs) do
@@ -36,7 +36,7 @@ defmodule Maraithon.TelegramInterpreter do
     else
       {:error, reason} ->
         Logger.warning("Telegram interpretation failed", reason: inspect(reason))
-        {:ok, fallback_result(attrs)}
+        {:error, {:telegram_interpreter_model_failed, reason}}
     end
   end
 
@@ -202,29 +202,6 @@ defmodule Maraithon.TelegramInterpreter do
   end
 
   defp normalize_confidence(_), do: 0.0
-
-  defp fallback_result(attrs) do
-    case {delivery_id(attrs), insight_id(attrs)} do
-      {delivery_id, insight_id} when is_binary(delivery_id) or is_binary(insight_id) ->
-        @default_result
-        |> Map.put("intent", "question_about_insight")
-        |> Map.put("confidence", 0.35)
-        |> Map.put(
-          "assistant_reply",
-          "I can help with this item. Tell me if you want me to explain it, draft a reply, or learn a rule from it."
-        )
-        |> Map.put("feedback_target", %{"delivery_id" => delivery_id, "insight_id" => insight_id})
-
-      _ ->
-        @default_result
-        |> Map.put("intent", "general_chat")
-        |> Map.put("confidence", 0.25)
-        |> Map.put(
-          "assistant_reply",
-          "I can help review what you owe, explain a suggestion, or learn a preference. Tell me what you want to change."
-        )
-    end
-  end
 
   defp delivery_payload(%{id: id} = delivery) do
     %{

@@ -52,6 +52,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Architecture"
       assert html =~ "Chief of Staff"
       assert html =~ "Followthrough"
+      assert html =~ "Commitment Tracker"
       assert html =~ "Travel Logistics"
       assert html =~ "Morning Briefing"
     end
@@ -567,6 +568,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
                "followthrough",
                "travel_logistics",
                "morning_briefing",
+               "commitment_tracker",
                "project_scope_alignment",
                "holiday_radar"
              ]

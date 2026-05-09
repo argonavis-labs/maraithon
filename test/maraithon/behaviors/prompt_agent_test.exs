@@ -155,15 +155,15 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert payload.response =~ "not available to me"
     end
 
-    test "treats substantial text as response" do
+    test "ignores freeform text that does not follow the model response contract" do
       state = PromptAgent.init(%{"name" => "test"})
       state = %{state | processing_event: %{type: :message}}
       response = %{content: "Here is a detailed explanation of what I found in the codebase."}
 
-      {:emit, {:agent_response, payload}, _state} =
+      {:idle, new_state} =
         PromptAgent.handle_effect_result({:llm_call, response}, state, @context)
 
-      assert payload.response =~ "detailed explanation"
+      assert new_state.processing_event == nil
     end
 
     test "treats short text as observe" do
@@ -175,7 +175,7 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
         PromptAgent.handle_effect_result({:llm_call, response}, state, @context)
     end
 
-    test "parses ACTION embedded in response" do
+    test "ignores ACTION embedded in prose instead of locally inferring intent" do
       state = PromptAgent.init(%{"name" => "test", "tools" => ["search_files"]})
       state = %{state | processing_event: %{type: :message}}
 
@@ -183,10 +183,11 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
         content: "Let me check that.\nACTION: search_files\nARGS: {\"pattern\": \"TODO\"}"
       }
 
-      {:effect, {:tool_call, tool, _args}, _state} =
+      {:idle, new_state} =
         PromptAgent.handle_effect_result({:llm_call, response}, state, @context)
 
-      assert tool == "search_files"
+      assert new_state.pending_tool_call == nil
+      assert new_state.processing_event == nil
     end
   end
 

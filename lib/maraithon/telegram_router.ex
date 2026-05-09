@@ -187,39 +187,47 @@ defmodule Maraithon.TelegramRouter do
        ) do
     recent_turns = TelegramConversations.recent_turns(conversation, limit: 8)
 
-    {:ok, interpretation} =
-      TelegramInterpreter.interpret(user_id, %{
-        text: text,
-        conversation: conversation,
-        recent_turns: recent_turns,
-        delivery: linked_delivery,
-        insight: linked_insight
-      })
+    case TelegramInterpreter.interpret(user_id, %{
+           text: text,
+           conversation: conversation,
+           recent_turns: recent_turns,
+           delivery: linked_delivery,
+           insight: linked_insight
+         }) do
+      {:ok, interpretation} ->
+        conversation = maybe_clear_clarification(conversation, interpretation)
 
-    conversation = maybe_clear_clarification(conversation, interpretation)
+        case route_interpretation(
+               user_id,
+               chat_id,
+               source_message_id,
+               conversation,
+               user_turn,
+               linked_delivery,
+               linked_insight,
+               interpretation
+             ) do
+          {:ok, reply_text, reply_opts} ->
+            send_assistant_turn(
+              conversation,
+              chat_id,
+              source_message_id,
+              reply_text,
+              interpretation,
+              reply_opts
+            )
 
-    case route_interpretation(
-           user_id,
-           chat_id,
-           source_message_id,
-           conversation,
-           user_turn,
-           linked_delivery,
-           linked_insight,
-           interpretation
-         ) do
-      {:ok, reply_text, reply_opts} ->
-        send_assistant_turn(
+          :ok ->
+            :ok
+        end
+
+      {:error, reason} ->
+        send_model_unavailable_turn(
           conversation,
           chat_id,
           source_message_id,
-          reply_text,
-          interpretation,
-          reply_opts
+          reason
         )
-
-      :ok ->
-        :ok
     end
   end
 
@@ -532,6 +540,25 @@ defmodule Maraithon.TelegramRouter do
         Logger.warning("Failed Telegram assistant reply", reason: inspect(reason))
         :ok
     end
+  end
+
+  defp send_model_unavailable_turn(conversation, chat_id, reply_to_message_id, reason) do
+    text =
+      "I could not run the model-backed assistant for that message, so I did not guess or route it with local rules. Try again in a moment."
+
+    send_assistant_turn(
+      conversation,
+      chat_id,
+      reply_to_message_id,
+      text,
+      %{
+        "intent" => "model_error",
+        "confidence" => 0.0,
+        "error" => inspect(reason),
+        "semantic_fallback_used" => false
+      },
+      []
+    )
   end
 
   defp linked_delivery(chat_id, reply_to_message_id) when is_binary(reply_to_message_id) do
