@@ -446,8 +446,12 @@ defmodule Maraithon.Connectors.GmailTest do
         )
       end)
 
+      body = Base.url_encode64("Full body text for the new message.", padding: false)
+
       # Mock message fetch
       Bypass.expect(bypass, "GET", "/gmail/v1/users/me/messages/new_msg1", fn conn ->
+        assert conn.query_string == "format=full"
+
         conn
         |> Plug.Conn.put_resp_content_type("application/json")
         |> Plug.Conn.resp(
@@ -460,7 +464,9 @@ defmodule Maraithon.Connectors.GmailTest do
             "payload" => %{
               "headers" => [
                 %{"name" => "Subject", "value" => "New Message"}
-              ]
+              ],
+              "mimeType" => "text/plain",
+              "body" => %{"data" => body}
             }
           })
         )
@@ -470,6 +476,7 @@ defmodule Maraithon.Connectors.GmailTest do
 
       assert length(messages) == 1
       assert hd(messages).message_id == "new_msg1"
+      assert hd(messages).text_body == "Full body text for the new message."
     end
 
     test "returns empty list when no history changes" do

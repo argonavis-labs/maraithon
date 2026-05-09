@@ -166,16 +166,25 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     source = source_label(todo_source(todo))
     feedback = feedback_label(feedback_value(todo))
 
+    status = todo_status(todo)
+
+    status_line =
+      if status == "open" do
+        nil
+      else
+        "<b>Status:</b> #{safe(todo_status_label(status))}"
+      end
+
     [
       prefix_text,
       "<b>Maraithon Todo</b>",
-      "<b>#{todo_status_label(todo_status(todo))}:</b> #{safe(todo_title(todo))}",
+      status_line,
+      "<b>You need to:</b> #{safe(todo_next_action(todo))}",
       "",
-      safe(todo_summary(todo)),
+      "<b>Context:</b> #{safe(todo_summary(todo))}",
       "",
-      "<b>Next:</b> #{safe(todo_next_action(todo))}",
-      "<b>Source:</b> #{safe(source)}#{render_account(account)}",
-      "<b>Priority:</b> #{todo_priority(todo)}",
+      "<b>About:</b> #{safe(todo_title(todo))}",
+      "<b>From:</b> #{safe(source)}#{render_account(account)}",
       feedback && "<b>Feedback:</b> #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
@@ -297,17 +306,6 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     do: map_string(todo, "next_action") || "Review and decide the next step."
 
   defp todo_next_action(_todo), do: "Review and decide the next step."
-
-  defp todo_priority(%Todo{priority: priority}) when is_integer(priority), do: priority
-
-  defp todo_priority(todo) when is_map(todo) do
-    case Map.get(todo, "priority") || Map.get(todo, :priority) do
-      value when is_integer(value) -> value
-      _ -> 50
-    end
-  end
-
-  defp todo_priority(_todo), do: 50
 
   defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
 

@@ -35,6 +35,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @max_evidence_points 3
   @max_attendee_preview 4
   @max_watch_rules 4
+  @max_email_body_excerpt_chars 2_400
 
   @promise_terms [
     "i will",
@@ -193,19 +194,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     "access suspended",
     "access restricted",
     "verification required"
-  ]
-
-  @finance_terms [
-    "rrsp",
-    "401k",
-    "ira",
-    "tfsa",
-    "hsa",
-    "rrsp contribution",
-    "retirement contribution",
-    "tax slip",
-    "tax document",
-    "contribution room"
   ]
 
   @app_store_connect_terms [
@@ -844,13 +832,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     labels = read_list(email, "labels") |> Enum.map(&to_string/1)
     occurred_at = message_timestamp(email)
 
-    body =
-      String.downcase(
-        Enum.join(
-          Enum.reject([subject, snippet, from, to, Enum.join(labels, " ")], &blank?/1),
-          " "
-        )
-      )
+    body = email_search_text(email, [subject, snippet, from, to, Enum.join(labels, " ")])
 
     builtin = builtin_fyi_profile(body)
     watch_matches = matching_watch_rules(body, from, builtin.topics, watch_rules)
@@ -911,6 +893,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                 "watch_topics" => Enum.flat_map(watch_matches, & &1.topic_matches) |> Enum.uniq(),
                 "matched_keywords" =>
                   Enum.flat_map(watch_matches, & &1.keyword_matches) |> Enum.uniq(),
+                "body_excerpt" => email_body_excerpt(email),
                 "telegram_fit_score" => profile.telegram_fit_score,
                 "telegram_fit_reason" => profile.telegram_fit_reason,
                 "why_now" => profile.why_now,
@@ -928,7 +911,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   defp builtin_fyi_profile(body) when is_binary(body) do
     account_risk_matches = matched_terms(body, @account_risk_terms)
-    finance_matches = matched_terms(body, @finance_terms)
     app_store_matches = matched_terms(body, @app_store_connect_terms)
 
     cond do
@@ -955,27 +937,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
       app_store_matches != [] ->
         platform_profile(app_store_matches)
-
-      finance_matches != [] ->
-        %{
-          type: "finance_important",
-          topics: ["finance"],
-          summary: "This looks like a finance or tax update that affects money or planning.",
-          recommended_action:
-            "Review the update and decide whether it changes any filing, transfer, or contribution work.",
-          priority: 84,
-          confidence: 0.86,
-          telegram_fit_score: 0.84,
-          telegram_fit_reason:
-            "Money and tax-related updates are worth surfacing even without reply debt.",
-          why_now:
-            "Finance and tax updates can affect deadlines, cash, or contribution planning.",
-          ackable: true,
-          evidence:
-            Enum.map(finance_matches, fn match ->
-              "Finance signal detected: #{match}."
-            end)
-        }
 
       true ->
         %{
@@ -1155,7 +1116,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       case profile.type do
         "account_risk" -> "Account risk"
         "platform_status" -> "Platform status"
-        "finance_important" -> "Finance update"
         "watch_topic" -> Map.get(profile, :watch_label) || "Important FYI"
         _ -> "Important FYI"
       end
@@ -1169,7 +1129,6 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     case profile.type do
       "account_risk" -> DateTime.add(base, 4, :hour)
       "platform_status" -> DateTime.add(base, 12, :hour)
-      "finance_important" -> DateTime.add(base, 24, :hour)
       _ -> DateTime.add(base, 24, :hour)
     end
   end
@@ -1272,13 +1231,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     labels = read_list(email, "labels") |> Enum.map(&to_string/1)
     occurred_at = message_timestamp(email)
 
-    body =
-      String.downcase(
-        Enum.join(
-          Enum.reject([subject, snippet, from, to, Enum.join(labels, " ")], &blank?/1),
-          " "
-        )
-      )
+    body = email_search_text(email, [subject, snippet, from, to, Enum.join(labels, " ")])
 
     reply_matches = matched_terms(body, @reply_request_terms)
     deadline_matches = matched_terms(body, @deadline_terms)
@@ -1407,6 +1360,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                       "to" => to,
                       "subject" => subject,
                       "labels" => labels,
+                      "body_excerpt" => email_body_excerpt(email),
                       "signals" => reply_matches,
                       "context_brief" => "Incoming request from #{person}.",
                       "missing_inputs" =>
@@ -1443,13 +1397,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     thread_id = read_string(sent_email, "thread_id", message_id)
     occurred_at = message_timestamp(sent_email)
 
-    body =
-      String.downcase(
-        Enum.join(
-          Enum.reject([subject, snippet, from, to], &blank?/1),
-          " "
-        )
-      )
+    body = email_search_text(sent_email, [subject, snippet, from, to])
 
     promise_matches = matched_terms(body, @promise_terms)
     action_matches = matched_terms(body, @commitment_action_terms)
@@ -1548,6 +1496,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "from" => from,
                   "to" => to,
                   "subject" => subject,
+                  "body_excerpt" => email_body_excerpt(sent_email),
                   "signals" => Enum.uniq(promise_matches ++ action_matches),
                   "context_brief" => "Explicit promise made to #{person}.",
                   "missing_inputs" =>
@@ -2250,6 +2199,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - If a candidate has importance_hint = "drop", omit it unless there is strong contrary thread evidence.
     - If a candidate looks like cold outreach and the user has not engaged or committed, it is not actionable.
     - If an item is mostly informational/receipt-like, omit it from output instead of rewording it.
+    - For Gmail candidates, use body_excerpt/full body evidence when available. Do not classify from sender,
+      subject, snippet, or ambiguous tokens alone.
+    - For school, classroom, camp, child, or family logistics, use CRM and durable memory to identify who
+      it concerns, then frame the task as a concrete parent/logistics action. A class name such as "4M"
+      is not finance evidence unless the full body actually discusses money, tax, banking, or filings.
     - Respect the durable preference memory above. Explicit remembered preferences outrank generic priors.
     - Respect the durable user memory profile above. Adapt your idea of urgency, framing, and interruption tolerance to this user.
     - Treat content-filter topics such as sales_outreach and cold_outreach as suppression signals unless the user already engaged or made a commitment.
@@ -2657,15 +2611,44 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp message_body(message) do
-    String.downcase(
-      Enum.join(
-        Enum.reject(
-          [read_string(message, "subject", ""), read_string(message, "snippet", "")],
-          &blank?/1
-        ),
-        " "
-      )
-    )
+    email_search_text(message, [
+      read_string(message, "subject", ""),
+      read_string(message, "snippet", "")
+    ])
+  end
+
+  defp email_search_text(message, fallback_parts)
+       when is_map(message) and is_list(fallback_parts) do
+    (fallback_parts ++ email_content_parts(message))
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp email_search_text(_message, fallback_parts) when is_list(fallback_parts) do
+    fallback_parts
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp email_body_excerpt(message) when is_map(message) do
+    message
+    |> email_content_parts()
+    |> Enum.find(&present?/1)
+    |> non_empty_truncated(@max_email_body_excerpt_chars)
+  end
+
+  defp email_body_excerpt(_message), do: nil
+
+  defp email_content_parts(message) when is_map(message) do
+    [
+      read_string(message, "text_body", ""),
+      read_string(message, "body_text", ""),
+      read_string(message, "plain_body", ""),
+      read_string(message, "body", ""),
+      read_string(message, "content", "")
+    ]
   end
 
   defp sent_messages_after(messages, nil), do: messages

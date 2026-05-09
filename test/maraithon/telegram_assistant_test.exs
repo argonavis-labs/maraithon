@@ -1084,6 +1084,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Source"))
     assert serialized_payload.text =~ "Reply to the billing owner"
+    assert payload.text =~ "You need to:"
+    assert payload.text =~ "Reply with the owner and the exact billing contact."
+    refute payload.text =~ "Priority:"
 
     assert {:ok, _conversation, turn, _telegram_result} =
              Maraithon.TelegramAssistant.send_turn(

@@ -88,6 +88,13 @@ defmodule Maraithon.Todos.Intelligence do
          message/thread/account, calendar account/event, or Chief-of-Staff skill.
        - Default ownership is the main user unless the candidate clearly names
          another owner.
+       - Use source bodies and metadata when available. Do not infer finance, tax,
+         urgency, or relationship context from an ambiguous subject token alone.
+       - For school, classroom, child, camp, or family logistics, identify the
+         child/person from CRM or memory when possible and write the next_action
+         as the concrete thing the user needs to do.
+       - Priority is internal ranking only. Never encode numeric priority in
+         title, summary, next_action, notes, or action_plan.
        - Return ONLY valid JSON. No markdown.
 
        Return JSON shaped like:

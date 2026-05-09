@@ -535,7 +535,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert Insights.list_open_for_user(user_id) == []
     end
 
-    test "surfaces RRSP emails as important_fyi", %{user_id: user_id, context: context} do
+    test "does not auto-create finance todos from keyword-only Gmail", %{
+      user_id: user_id,
+      context: context
+    } do
       state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
 
       payload = %{
@@ -557,18 +560,49 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         }
       }
 
-      assert {:emit, {:insights_recorded, result}, _final_state} =
+      assert {:idle, %{pending_candidates: [], pending_direct_insights: []}} =
                InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
 
-      assert result.count == 1
+      assert Insights.list_open_for_user(user_id) == []
+    end
 
-      [stored | _] = Insights.list_open_for_user(user_id)
-      assert stored.category == "important_fyi"
-      assert stored.title =~ "Finance update"
-      assert stored.metadata["ackable"] == true
-      assert stored.metadata["fyi_class"] == "finance_important"
-      assert stored.metadata["why_now"] =~ "Finance and tax updates"
-      assert stored.recommended_action =~ "filing, transfer, or contribution work"
+    test "uses full Gmail body for school newsletter model review", %{
+      user_id: user_id,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-school-4m-1",
+              "thread_id" => "thread-school-4m-1",
+              "subject" => "4M Weekly Newsletter May 11-15",
+              "snippet" => "Weekly update",
+              "text_body" =>
+                "Hi 4M families. Emma's field trip permission form is due Friday. Can you please send the signed consent back by Friday?",
+              "from" => "Marla Maharaj <teacher@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX"],
+              "internal_date" => DateTime.utc_now()
+            }
+          ]
+        }
+      }
+
+      assert {:effect, {:llm_call, params}, new_state} =
+               InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      assert new_state.pending_direct_insights == []
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+      assert prompt =~ "Emma's field trip permission form is due Friday"
+      assert prompt =~ ~s("body_excerpt")
+      assert prompt =~ "class name such as \"4M\""
+      assert prompt =~ "not finance evidence"
+      refute prompt =~ "Finance update"
+      assert Insights.list_open_for_user(user_id) == []
     end
 
     test "surfaces App Store Connect notifications as important_fyi", %{

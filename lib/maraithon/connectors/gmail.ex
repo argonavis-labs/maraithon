@@ -435,21 +435,20 @@ defmodule Maraithon.Connectors.Gmail do
           |> Enum.map(fn ma -> ma["message"]["id"] end)
           |> Enum.uniq()
 
-        # Fetch message details
+        # Fetch full message details so downstream model triage can use body text.
         messages =
           message_ids
           |> Enum.take(20)
-          |> Enum.map(fn id ->
-            case Google.api_request(
-                   :get,
-                   "#{api_base_url()}/users/me/messages/#{id}?format=metadata",
-                   access_token
-                 ) do
-              {:ok, msg} -> parse_message(msg)
-              _ -> nil
-            end
+          |> Task.async_stream(
+            fn id -> fetch_message_content(access_token, id, access_token: true) end,
+            max_concurrency: 8,
+            ordered: true,
+            timeout: :infinity
+          )
+          |> Enum.flat_map(fn
+            {:ok, {:ok, message}} -> [message]
+            _ -> []
           end)
-          |> Enum.reject(&is_nil/1)
 
         {:ok, messages}
 
