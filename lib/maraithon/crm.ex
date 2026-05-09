@@ -118,6 +118,42 @@ defmodule Maraithon.Crm do
 
   def list_links_for_person(_user_id, _person_id, _opts), do: []
 
+  def relationship_contexts(user_id, people, opts \\ [])
+
+  def relationship_contexts(user_id, people, opts)
+      when is_binary(user_id) and is_list(people) do
+    people = Enum.filter(people, &match?(%Person{}, &1))
+    person_ids = people |> Enum.map(& &1.id) |> Enum.uniq()
+
+    if person_ids == [] do
+      []
+    else
+      link_limit = opts |> Keyword.get(:link_limit, @default_link_limit) |> clamp_limit(1, 100)
+      resource_type = normalize_string(Keyword.get(opts, :resource_type))
+      links_by_person = links_for_people(user_id, person_ids, link_limit, resource_type)
+      todos_by_id = linked_todos_by_id(user_id, Map.values(links_by_person) |> List.flatten())
+
+      Enum.map(people, fn %Person{} = person ->
+        links = Map.get(links_by_person, person.id, [])
+
+        todos =
+          links
+          |> Enum.filter(&(&1.resource_type == "todo"))
+          |> Enum.map(&Map.get(todos_by_id, &1.resource_id))
+          |> Enum.reject(&is_nil/1)
+
+        %{
+          person: person,
+          links: links,
+          todos: todos,
+          open_todo_count: Enum.count(todos, &(&1.status in ["open", "snoozed"]))
+        }
+      end)
+    end
+  end
+
+  def relationship_contexts(_user_id, _people, _opts), do: []
+
   def attach_resource(user_id, person_id, attrs \\ %{})
 
   def attach_resource(user_id, person_id, attrs)
@@ -325,6 +361,25 @@ defmodule Maraithon.Crm do
       |> Enum.uniq()
 
     Todos.list_by_ids(user_id, todo_ids)
+  end
+
+  defp linked_todos_by_id(user_id, links) do
+    links
+    |> Enum.filter(&(&1.resource_type == "todo"))
+    |> Enum.map(& &1.resource_id)
+    |> Enum.uniq()
+    |> then(&Todos.list_by_ids(user_id, &1))
+    |> Map.new(&{&1.id, &1})
+  end
+
+  defp links_for_people(user_id, person_ids, link_limit, resource_type) do
+    PersonLink
+    |> where([link], link.user_id == ^user_id and link.person_id in ^person_ids)
+    |> maybe_filter_link_resource_type(resource_type)
+    |> order_by([link], asc: link.person_id, desc: link.updated_at, desc: link.inserted_at)
+    |> Repo.all()
+    |> Enum.group_by(& &1.person_id)
+    |> Map.new(fn {person_id, links} -> {person_id, Enum.take(links, link_limit)} end)
   end
 
   defp get_existing_link(user_id, person_id, attrs) do

@@ -47,6 +47,33 @@ defmodule MaraithonWeb.McpControllerTest do
     assert "recall_memory" in names
     assert "forget_memory" in names
     assert "record_memory_feedback" in names
+
+    list_todos =
+      response
+      |> get_in(["result", "tools"])
+      |> Enum.find(&(&1["name"] == "list_todos"))
+
+    assert get_in(list_todos, ["inputSchema", "properties", "user_id", "type"]) == "string"
+    assert "user_id" in get_in(list_todos, ["inputSchema", "required"])
+    assert get_in(list_todos, ["annotations", "readOnlyHint"]) == true
+    assert get_in(list_todos, ["annotations", "destructiveHint"]) == false
+  end
+
+  test "filters tool discovery over MCP", %{conn: conn} do
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => 11,
+        "method" => "tools/list",
+        "params" => %{"names" => ["list_todos", "upsert_todos", "not_a_tool"]}
+      })
+
+    response = json_response(conn, 200)
+
+    assert response |> get_in(["result", "tools"]) |> Enum.map(& &1["name"]) == [
+             "list_todos",
+             "upsert_todos"
+           ]
   end
 
   test "calls the built-in todo list tool over MCP", %{conn: conn} do
@@ -69,6 +96,10 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "isError"]) == false
     assert get_in(response, ["result", "structuredContent", "source"]) == "maraithon_todos"
     assert get_in(response, ["result", "structuredContent", "count"]) == 0
+
+    text = response |> get_in(["result", "content"]) |> hd() |> Map.fetch!("text")
+    assert {:ok, _decoded} = Jason.decode(text)
+    refute String.contains?(text, "\n")
   end
 
   test "calls the built-in open-loop snapshot tool over MCP", %{conn: conn} do
@@ -135,5 +166,47 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "isError"]) == false
     assert get_in(response, ["result", "structuredContent", "source"]) == "maraithon_memory"
     assert get_in(response, ["result", "structuredContent", "count"]) == 0
+  end
+
+  test "handles JSON-RPC batch calls concurrently", %{conn: conn} do
+    user_id = "mcp-batch-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    conn =
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post(
+        "/mcp",
+        Jason.encode!([
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "todos",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "list_todos",
+              "arguments" => %{"user_id" => user_id}
+            }
+          },
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "people",
+            "method" => "tools/call",
+            "params" => %{
+              "name" => "list_people",
+              "arguments" => %{"user_id" => user_id}
+            }
+          }
+        ])
+      )
+
+    response = json_response(conn, 200)
+
+    assert [%{"id" => "todos"}, %{"id" => "people"}] = response
+
+    assert get_in(Enum.at(response, 0), ["result", "structuredContent", "source"]) ==
+             "maraithon_todos"
+
+    assert get_in(Enum.at(response, 1), ["result", "structuredContent", "source"]) ==
+             "maraithon_crm"
   end
 end

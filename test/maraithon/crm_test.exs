@@ -84,5 +84,10 @@ defmodule Maraithon.CrmTest do
     assert context.open_todo_count == 1
     assert [%{id: todo_id}] = context.todos
     assert todo_id == todo.id
+
+    [batched_context] = Crm.relationship_contexts(user_id, [person], link_limit: 5)
+    assert batched_context.person.id == person.id
+    assert batched_context.open_todo_count == 1
+    assert [%{id: ^todo_id}] = batched_context.todos
   end
 end

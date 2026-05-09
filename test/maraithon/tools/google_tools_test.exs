@@ -398,4 +398,79 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert is_struct(hd(result.events).start, DateTime)
     assert Enum.at(result.events, 1).start == %{date: "2026-03-20", all_day: true}
   end
+
+  test "GoogleCalendarListEvents fans out across connected Google accounts" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :google_calendar,
+      api_base_url: "http://localhost:#{bypass.port}/calendar/v3"
+    )
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-4b", "google:work@example.com", %{
+               access_token: "calendar-work-token",
+               refresh_token: "calendar-work-refresh"
+             })
+
+    assert {:ok, _token} =
+             OAuth.store_tokens("google-tool-user-4b", "google:personal@example.com", %{
+               access_token: "calendar-personal-token",
+               refresh_token: "calendar-personal-refresh"
+             })
+
+    Bypass.stub(bypass, "GET", "/calendar/v3/calendars/primary/events", fn conn ->
+      assert conn.query_string =~ "maxResults=5"
+
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer calendar-personal-token"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "items" => [
+                %{
+                  "id" => "personal-event",
+                  "summary" => "Personal hold",
+                  "start" => %{"dateTime" => "2026-03-15T15:00:00Z"},
+                  "end" => %{"dateTime" => "2026-03-15T15:30:00Z"}
+                }
+              ]
+            })
+          )
+
+        ["Bearer calendar-work-token"] ->
+          conn
+          |> Plug.Conn.put_resp_content_type("application/json")
+          |> Plug.Conn.resp(
+            200,
+            Jason.encode!(%{
+              "items" => [
+                %{
+                  "id" => "work-event",
+                  "summary" => "Work review",
+                  "start" => %{"dateTime" => "2026-03-15T14:00:00Z"},
+                  "end" => %{"dateTime" => "2026-03-15T14:30:00Z"}
+                }
+              ]
+            })
+          )
+      end
+    end)
+
+    assert {:ok, result} =
+             GoogleCalendarListEvents.execute(%{
+               "user_id" => "google-tool-user-4b",
+               "time_min" => "2026-03-15T00:00:00Z",
+               "time_max" => "2026-03-16T00:00:00Z",
+               "max_results" => 5
+             })
+
+    assert Enum.map(result.events, & &1.event_id) == ["work-event", "personal-event"]
+
+    assert Enum.map(result.events, & &1.google_provider) == [
+             "google:work@example.com",
+             "google:personal@example.com"
+           ]
+  end
 end

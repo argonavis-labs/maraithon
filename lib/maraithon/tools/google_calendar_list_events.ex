@@ -14,6 +14,7 @@ defmodule Maraithon.Tools.GoogleCalendarListEvents do
          {:ok, events} <-
            GoogleCalendarHelpers.list_events(user_id,
              calendar_id: calendar_id,
+             provider: google_provider(args),
              query: ActionHelpers.optional_string(args, "query"),
              time_min: ActionHelpers.optional_string(args, "time_min"),
              time_max: ActionHelpers.optional_string(args, "time_max"),
@@ -43,4 +44,20 @@ defmodule Maraithon.Tools.GoogleCalendarListEvents do
 
   defp normalize_max_results(value) when is_integer(value), do: value |> max(1) |> min(100)
   defp normalize_max_results(_), do: 25
+
+  defp google_provider(args) do
+    ActionHelpers.optional_string(args, "google_provider") ||
+      ActionHelpers.optional_string(args, "provider") ||
+      google_provider_for_account(args)
+  end
+
+  defp google_provider_for_account(args) do
+    case ActionHelpers.optional_string(args, "google_account_email") ||
+           ActionHelpers.optional_string(args, "account_email") ||
+           ActionHelpers.optional_string(args, "account") do
+      nil -> nil
+      "google:" <> _ = provider -> provider
+      account_email -> "google:#{account_email}"
+    end
+  end
 end

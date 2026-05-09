@@ -382,23 +382,12 @@ defmodule Maraithon.OpenLoops do
       (focused_people ++ Crm.list_people(user_id, limit: max(limit * 3, 25)))
       |> Enum.uniq_by(& &1.id)
 
-    people
-    |> Enum.reduce([], fn person, acc ->
-      case Crm.relationship_context(user_id, %{person_id: person.id, link_limit: 12}) do
-        {:ok, context} ->
-          include? = context.open_todo_count > 0 or MapSet.member?(focused_ids, person.id)
-
-          if include? do
-            [serialize_relationship_context(context) | acc]
-          else
-            acc
-          end
-
-        {:error, _reason} ->
-          acc
-      end
+    user_id
+    |> Crm.relationship_contexts(people, link_limit: 12)
+    |> Enum.filter(fn context ->
+      context.open_todo_count > 0 or MapSet.member?(focused_ids, context.person.id)
     end)
-    |> Enum.reverse()
+    |> Enum.map(&serialize_relationship_context/1)
     |> Enum.take(limit)
   end
 

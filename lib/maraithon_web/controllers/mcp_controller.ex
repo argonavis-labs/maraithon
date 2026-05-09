@@ -4,21 +4,30 @@ defmodule MaraithonWeb.McpController do
   alias Maraithon.Tools
 
   @protocol_version "2025-03-26"
+  @batch_timeout_ms 30_000
+  @batch_max_concurrency 8
 
-  def handle(conn, %{"jsonrpc" => "2.0", "method" => method} = request) do
-    id = Map.get(request, "id")
+  def handle(conn, %{"_json" => requests}) when is_list(requests), do: handle(conn, requests)
 
-    case dispatch(method, Map.get(request, "params", %{})) do
-      {:ok, result} ->
-        json(conn, %{"jsonrpc" => "2.0", "id" => id, "result" => result})
+  def handle(conn, requests) when is_list(requests) do
+    responses =
+      requests
+      |> Task.async_stream(&response_for/1,
+        max_concurrency: @batch_max_concurrency,
+        ordered: true,
+        timeout: @batch_timeout_ms,
+        on_timeout: :kill_task
+      )
+      |> Enum.map(fn
+        {:ok, response} -> response
+        {:exit, reason} -> error_response(nil, -32603, "Batch request failed", inspect(reason))
+      end)
 
-      {:error, code, message, data} ->
-        json(conn, %{
-          "jsonrpc" => "2.0",
-          "id" => id,
-          "error" => compact(%{"code" => code, "message" => message, "data" => data})
-        })
-    end
+    json(conn, responses)
+  end
+
+  def handle(conn, %{"jsonrpc" => "2.0", "method" => _method} = request) do
+    json(conn, response_for(request))
   end
 
   def handle(conn, _params) do
@@ -42,22 +51,26 @@ defmodule MaraithonWeb.McpController do
 
   defp dispatch("notifications/initialized", _params), do: {:ok, %{}}
 
-  defp dispatch("tools/list", _params) do
-    {:ok, %{"tools" => Enum.map(Tools.describe(), &mcp_tool_descriptor/1)}}
+  defp dispatch("tools/list", params) do
+    names = if is_map(params), do: Map.get(params, "names"), else: nil
+    {:ok, %{"tools" => Enum.map(Tools.describe(names), &mcp_tool_descriptor/1)}}
   end
 
   defp dispatch("tools/call", %{"name" => name} = params) when is_binary(name) do
     arguments = Map.get(params, "arguments", %{})
 
-    if Tools.exists?(name) do
-      case Tools.execute(name, arguments) do
+    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil},
+         {:ok, module} <- Tools.fetch(name) do
+      case module.execute(arguments) do
         {:ok, result} ->
+          normalized = normalize(result)
+
           {:ok,
            %{
              "content" => [
-               %{"type" => "text", "text" => Jason.encode!(normalize(result), pretty: true)}
+               %{"type" => "text", "text" => encode_tool_text(normalized, params)}
              ],
-             "structuredContent" => normalize(result),
+             "structuredContent" => normalized,
              "isError" => false
            }}
 
@@ -69,15 +82,50 @@ defmodule MaraithonWeb.McpController do
            }}
       end
     else
-      {:error, -32602, "Unknown tool: #{name}", nil}
+      {:error, code, message, data} -> {:error, code, message, data}
+      {:error, reason} -> {:error, -32602, reason, nil}
     end
   end
 
   defp dispatch("tools/call", _params), do: {:error, -32602, "Tool name is required", nil}
   defp dispatch(method, _params), do: {:error, -32601, "Method not found: #{method}", nil}
 
-  defp mcp_tool_descriptor(%{name: name, description: description, input_schema: input_schema}) do
-    %{"name" => name, "description" => description, "inputSchema" => input_schema}
+  defp response_for(%{"jsonrpc" => "2.0", "method" => method} = request) do
+    id = Map.get(request, "id")
+
+    case dispatch(method, Map.get(request, "params", %{})) do
+      {:ok, result} ->
+        %{"jsonrpc" => "2.0", "id" => id, "result" => result}
+
+      {:error, code, message, data} ->
+        error_response(id, code, message, data)
+    end
+  end
+
+  defp response_for(_request) do
+    error_response(nil, -32600, "Invalid JSON-RPC request", nil)
+  end
+
+  defp error_response(id, code, message, data) do
+    %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => compact(%{"code" => code, "message" => message, "data" => data})
+    }
+  end
+
+  defp mcp_tool_descriptor(%{
+         name: name,
+         description: description,
+         input_schema: input_schema,
+         annotations: annotations
+       }) do
+    %{
+      "name" => name,
+      "description" => description,
+      "inputSchema" => input_schema,
+      "annotations" => annotations
+    }
   end
 
   defp normalize(%DateTime{} = value), do: DateTime.to_iso8601(value)
@@ -95,6 +143,20 @@ defmodule MaraithonWeb.McpController do
 
   defp error_text(reason) when is_binary(reason), do: reason
   defp error_text(reason), do: inspect(reason)
+
+  defp encode_tool_text(result, params) do
+    if pretty_response?(params) do
+      Jason.encode!(result, pretty: true)
+    else
+      Jason.encode!(result)
+    end
+  end
+
+  defp pretty_response?(params) when is_map(params) do
+    Map.get(params, "pretty") == true or get_in(params, ["arguments", "pretty"]) == true
+  end
+
+  defp pretty_response?(_params), do: false
 
   defp compact(map) do
     map

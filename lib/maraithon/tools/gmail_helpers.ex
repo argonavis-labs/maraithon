@@ -59,15 +59,26 @@ defmodule Maraithon.Tools.GmailHelpers do
 
   defp fetch_messages_from_providers(user_id, providers, max_results, query, label_ids) do
     {messages, errors} =
-      Enum.reduce(providers, {[], []}, fn provider, {message_acc, error_acc} ->
-        case fetch_messages_from_provider(user_id, provider, max_results, query, label_ids) do
-          {:ok, provider_messages} ->
-            {provider_messages ++ message_acc, error_acc}
+      providers
+      |> Task.async_stream(
+        fn provider ->
+          {provider,
+           fetch_messages_from_provider(user_id, provider, max_results, query, label_ids)}
+        end,
+        max_concurrency: provider_concurrency(providers),
+        ordered: true,
+        timeout: :infinity
+      )
+      |> Enum.reduce({[], []}, fn
+        {:ok, {_provider, {:ok, provider_messages}}}, {message_acc, error_acc} ->
+          {provider_messages ++ message_acc, error_acc}
 
-          {:error, reason} ->
-            ConnectedAccounts.report_access_issue(user_id, provider, reason)
-            {message_acc, [{provider, reason} | error_acc]}
-        end
+        {:ok, {provider, {:error, reason}}}, {message_acc, error_acc} ->
+          ConnectedAccounts.report_access_issue(user_id, provider, reason)
+          {message_acc, [{provider, reason} | error_acc]}
+
+        {:exit, reason}, {message_acc, error_acc} ->
+          {message_acc, [{nil, reason} | error_acc]}
       end)
 
     case Enum.sort_by(messages, &message_sort_value/1, :desc) |> Enum.take(max_results) do
@@ -88,9 +99,16 @@ defmodule Maraithon.Tools.GmailHelpers do
          {:ok, message_ids} <- fetch_message_ids(access_token, max_results, query, label_ids) do
       messages =
         message_ids
-        |> Enum.map(&Gmail.fetch_message_content(access_token, &1, access_token: true))
-        |> Enum.filter(&match?({:ok, _}, &1))
-        |> Enum.map(fn {:ok, message} ->
+        |> Task.async_stream(
+          fn message_id ->
+            Gmail.fetch_message_content(access_token, message_id, access_token: true)
+          end,
+          max_concurrency: message_concurrency(message_ids),
+          ordered: true,
+          timeout: :infinity
+        )
+        |> Enum.filter(&match?({:ok, {:ok, _}}, &1))
+        |> Enum.map(fn {:ok, {:ok, message}} ->
           message
           |> Map.put(:google_provider, provider)
           |> Map.put(:google_account_email, provider_account_email(provider))
@@ -99,6 +117,9 @@ defmodule Maraithon.Tools.GmailHelpers do
       {:ok, messages}
     end
   end
+
+  defp provider_concurrency(providers), do: providers |> length() |> max(1) |> min(4)
+  defp message_concurrency(message_ids), do: message_ids |> length() |> max(1) |> min(8)
 
   defp providers_for_search(user_id, provider) when provider in [nil, "", "google"] do
     connected_google_providers(user_id)

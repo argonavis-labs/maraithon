@@ -448,17 +448,32 @@ defmodule Maraithon.Memory do
       memories
       |> Enum.map(&(Map.get(&1, :id) || Map.get(&1, "id")))
       |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
 
-    Enum.each(memory_ids, fn memory_id ->
+    if memory_ids != [] do
       Item
-      |> where([item], item.user_id == ^user_id and item.id == ^memory_id)
+      |> where([item], item.user_id == ^user_id and item.id in ^memory_ids)
       |> Repo.update_all(
         inc: [use_count: 1],
         set: [last_used_at: now, updated_at: now]
       )
 
-      log_event(user_id, memory_id, "recalled", "runtime", %{})
-    end)
+      events =
+        Enum.map(memory_ids, fn memory_id ->
+          %{
+            id: Ecto.UUID.generate(),
+            user_id: user_id,
+            memory_id: memory_id,
+            event_type: "recalled",
+            source: "runtime",
+            payload: %{},
+            inserted_at: now,
+            updated_at: now
+          }
+        end)
+
+      Repo.insert_all(Event, events)
+    end
   end
 
   defp resolve_item(user_id, memory_id_or_query) do

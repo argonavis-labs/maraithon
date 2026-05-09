@@ -62,6 +62,20 @@ defmodule Maraithon.ToolsTest do
     end
   end
 
+  describe "describe/1" do
+    test "returns typed MCP schemas and annotations" do
+      [descriptor] = Tools.describe(["upsert_todos"])
+
+      assert descriptor.name == "upsert_todos"
+      assert get_in(descriptor.input_schema, ["properties", "user_id", "type"]) == "string"
+      assert get_in(descriptor.input_schema, ["properties", "todos", "type"]) == "array"
+      assert "user_id" in descriptor.input_schema["required"]
+      assert "todos" in descriptor.input_schema["required"]
+      assert descriptor.annotations["readOnlyHint"] == false
+      assert descriptor.annotations["idempotentHint"] == true
+    end
+  end
+
   describe "exists?/1" do
     test "returns true for existing tool" do
       assert Tools.exists?("time")

@@ -60,6 +60,8 @@ defmodule Maraithon.Tools do
     "notion_blocks" => Maraithon.Tools.NotionBlocks
   }
 
+  @tool_names @tools |> Map.keys() |> Enum.sort()
+
   @tool_descriptions %{
     "time" => "Return the current UTC time.",
     "http_get" => "Fetch a URL with an HTTP GET request.",
@@ -127,35 +129,64 @@ defmodule Maraithon.Tools do
     "notion_blocks" => "List, append, update, or archive Notion blocks."
   }
 
+  @read_only_tools MapSet.new(~w(
+    time http_get read_file list_files file_tree search_files
+    gmail_list_recent gmail_search gmail_get_message
+    google_contacts_search google_calendar_list_events
+    get_open_loops list_todos list_people get_person get_relationship_context
+    list_memories recall_memory
+    slack_list_conversations slack_list_messages slack_get_thread_replies slack_search_messages
+    linear_get_issue linear_list_issues linear_list_teams
+    notaui_list_tasks
+    notion_search notion_get_page notion_query_database
+  ))
+
+  @destructive_tools MapSet.new(~w(
+    delete_person resolve_todo forget_memory gmail_batch_modify gmail_filters gmail_labels
+    gmail_drafts notaui_complete_task notaui_update_task notion_update_page notion_blocks
+  ))
+
   @doc """
   Execute a tool by name.
   """
   def execute(name, args) do
-    case Map.get(@tools, name) do
-      nil -> {:error, "unknown_tool: #{name}"}
-      module -> module.execute(args)
+    case fetch(name) do
+      {:ok, module} -> module.execute(args)
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  @doc """
+  Resolve a tool module by name.
+  """
+  def fetch(name) when is_binary(name) do
+    case Map.get(@tools, name) do
+      nil -> {:error, "unknown_tool: #{name}"}
+      module -> {:ok, module}
+    end
+  end
+
+  def fetch(name), do: {:error, "unknown_tool: #{inspect(name)}"}
 
   @doc """
   List available tools.
   """
   def list do
-    Map.keys(@tools)
+    @tool_names
   end
 
   @doc """
   List tool descriptors for MCP and other discovery clients.
   """
-  def describe do
-    @tools
-    |> Map.keys()
-    |> Enum.sort()
+  def describe(names \\ nil) do
+    names
+    |> requested_tool_names()
     |> Enum.map(fn name ->
       %{
         name: name,
         description: Map.get(@tool_descriptions, name, "Execute the #{name} tool."),
-        input_schema: permissive_input_schema()
+        input_schema: Maraithon.Tools.InputSchemas.schema_for(name),
+        annotations: annotations_for(name)
       }
     end)
   end
@@ -167,10 +198,40 @@ defmodule Maraithon.Tools do
     Map.has_key?(@tools, name)
   end
 
-  defp permissive_input_schema do
+  defp requested_tool_names(nil), do: @tool_names
+  defp requested_tool_names([]), do: @tool_names
+
+  defp requested_tool_names(names) when is_list(names) do
+    names
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.filter(&Map.has_key?(@tools, &1))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp requested_tool_names(_names), do: @tool_names
+
+  defp annotations_for(name) do
     %{
-      "type" => "object",
-      "additionalProperties" => true
+      "title" => titleize(name),
+      "readOnlyHint" => MapSet.member?(@read_only_tools, name),
+      "destructiveHint" => MapSet.member?(@destructive_tools, name),
+      "idempotentHint" => idempotent_tool?(name)
     }
+  end
+
+  defp idempotent_tool?(name) do
+    name in ~w(
+      upsert_todos upsert_person write_memory record_memory_feedback link_person_data
+      gmail_batch_modify notaui_update_task notion_update_page
+    )
+  end
+
+  defp titleize(name) do
+    name
+    |> String.replace("_", " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 end
