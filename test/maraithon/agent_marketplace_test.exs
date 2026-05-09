@@ -19,6 +19,7 @@ defmodule Maraithon.AgentMarketplaceTest do
       assert manifest["changelog"] == "Initial manifest-backed marketplace package."
       assert manifest["default_config"]["behavior"] == "manifest_agent"
       assert manifest["default_config"]["source_behavior"] == "ai_chief_of_staff"
+      assert manifest["default_config"]["wakeup_interval_ms"] == "600000"
       assert "priv/agents/skills/chief_of_staff/morning_briefing.md" in manifest["skill_paths"]
       assert "priv/agents/skills/chief_of_staff/commitment_tracker.md" in manifest["skill_paths"]
       assert "llm.complete" in manifest["tool_allowlist"]
@@ -73,6 +74,7 @@ defmodule Maraithon.AgentMarketplaceTest do
       assert agent.delivery_policy == %{"telegram" => "enabled"}
       assert agent.config["source_behavior"] == "ai_chief_of_staff"
       assert agent.config["marketplace_behavior"] == "manifest_agent"
+      assert agent.config["wakeup_interval_ms"] == 600_000
       assert agent.config["enabled_skills"] != []
       assert get_in(agent.config, ["skill_configs", "morning_briefing", "user_id"]) == user_id
 

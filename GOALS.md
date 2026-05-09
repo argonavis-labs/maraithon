@@ -1,94 +1,480 @@
-# Maraithon — Goals
+# Maraithon Goals
 
-## What it is
+Updated: May 9, 2026
 
-Maraithon is an Erlang/OTP-based agent platform. Same job as Runner (`~/bliss/runner`) — be the chief-of-staff that lives alongside your work — but built **agentic-first**, with always-on, long-lived agents instead of request-response sessions.
+## North Star
 
-The bet: OTP's long-lived, supervised, fault-tolerant processes are a near-perfect substrate for agents that need to stay alive for days/weeks, react to events instantly, and recover cleanly from crashes without losing context.
+Maraithon is a cloud-resident, Telegram-mediated personal operating system for busy people.
 
-## Primitives
+Its job is to help the user keep track of every open loop, relationship, commitment, context, and next action without needing to sit at a desktop app. The user should be able to live in Telegram and ask Maraithon what matters, what is waiting, what they owe people, what people owe them, and what to do next.
 
-Three building blocks the whole product composes from:
+Maraithon should be both reactive and proactive:
 
-1. **Connectors** — event streams and tool surfaces into the outside world.
-2. **Projects** — scoped contexts you create and feed: files, documents, links, briefs.
-3. **Agents** — installable, opinionated workers that combine prompt + state + connectors + tools.
+- Reactive: the user can ask natural questions in Telegram and the assistant can inspect context, call tools, update state, draft actions, and answer in a Telegram-friendly way.
+- Proactive: the system can watch connected sources, create durable todos, build relationship context, remember preferences, and interrupt only when the model decides the user should see something now.
+- Always-on: the Chief of Staff should wake every 10-15 minutes, scan what changed across connected sources, update durable open-loop state, and look for ways to improve the user's life.
 
-## Current state (May 2026)
+The goal is not another dashboard. The goal is an agent-powered operating system that helps the user accomplish what they need to in the world.
 
-**Live in production at `maraithon.fly.dev`** — Phoenix 1.8 + LiveView, deployed to Fly (Toronto region), Postgres-backed, encrypted at rest with Cloak. Magic-link sign-in works. The product is real.
+## Product Bet
 
-**Connectors shipped (9):**
-- GitHub, Gmail, Google Calendar, Google Contacts, Slack, Notaui MCP, WhatsApp, Linear, Telegram (Notion is OAuth-ready, not wired up).
+Busy people do not fail because they lack task apps. They fail because commitments are scattered across email, Slack, calendar, Telegram, texts, WhatsApp, meetings, relationships, and memory. The assistant must turn that scattered surface area into durable, inspectable, actionable state.
 
-**Agents shipped:**
-- **Chief of Staff agent** — operational, delivers day briefs and check-ins as actionable todo cards via Telegram, has trigger-aware behaviors, runs holiday planning radar, surfaces follow-throughs.
-- **Generic PromptAgent** behavior — anyone can spin up a custom agent on the runtime by writing prompts + subscriptions.
+Maraithon wins if it becomes the trusted place where the user can ask:
 
-**Platform:**
-- Project dashboard exists with agent attachment flows.
-- Cross-agent durable user memory persists between sessions.
-- Operator events / event bus / effect logs / spend tracking all instrumented.
-- LiveView operator workspace ships briefings, todos, inbox refresh in real-time.
-- Onboarding proof and self-serve sign-up via magic link.
-- Service disconnect notifications.
+- What are my open loops?
+- What do I owe this person?
+- Who am I waiting on?
+- What should I do next with 15 minutes?
+- What did I promise yesterday?
+- What relationship needs attention?
+- What should I not forget?
+- What should I ignore because it is noise?
 
-**Activity:**
-- 83 commits in last 90 days; **0 commits in last 30 days** — the project has gone cold mid-flight.
-- Last commit: 2026-04-02. The April push delivered the chief-of-staff todo-card flow and project persistence, then went silent.
+## Non-Negotiable Principles
 
-## The real question (May 2026)
+1. Telegram is the primary interaction surface.
+   The cloud app and web UI are control planes. The daily user experience happens in Telegram.
 
-The next 6 months for Maraithon are **not** about building the runtime — that's done. They're about answering one question that's been hanging:
+2. Durable state beats transient summaries.
+   If something is actionable, it should become a todo. If it is relationship context, it should become CRM data. If it is a durable preference, correction, or relevance signal, it should become memory.
 
-**Is this still the bet, or has Runner (and the broader market) moved past it?**
+3. Model-level intelligence makes semantic decisions.
+   The app should not rely on keyword heuristics for relevance, dedupe, prioritization, routing, next action, memory recall, relationship interpretation, or whether to interrupt the user. The runtime may validate schemas, enforce safety, batch work, and execute tools; the model should decide what the information means.
 
-Three honest possibilities:
+4. Everything important needs a tool surface.
+   Todos, People, relationships, memory, open loops, source access, and proactive delivery all need explicit tools/MCP-style capabilities so the Chief of Staff and Telegram assistant can operate on real data instead of prose.
 
-1. **Yes, double down.** Maraithon's OTP architecture is a structural advantage for the always-on agent thesis, and the next move is finding 5–10 users who can't live without it. The dormancy is a focus problem, not a product problem.
-2. **No, fold the wins back into Runner.** The runtime experiments validated the architecture; the lessons (durable memory, projects-as-context, todo-cards-as-output) get ported into Runner where the GTM is real. Maraithon goes to maintenance mode.
-3. **Pause and reassess in 90 days.** Don't kill it, don't push on it, don't pretend it's active. Set a calendar checkpoint to revisit with fresh eyes.
+5. The system should learn from correction.
+   If the user says something is relevant, not relevant, helpful, not helpful, important, noise, or should never be surfaced again, Maraithon should record that as durable memory and use it in future decisions.
 
-**The next session should pick one of these three. Without a decision, every PM run on Maraithon will keep generating ideas for a project that may not need them.**
+6. Proactive should be respectful and useful.
+   Interruptions must be model-decided, deduped, auditable, and Telegram-native. A proactive message should explain what changed and what the user can do next.
 
-## If the answer is "double down" — definition of done in 6 months
+7. Always-on means supervised and frequent, not noisy.
+   The Erlang/Elixir runtime should keep the Chief of Staff alive with 10-15 minute wakeups. Each wakeup should gather current source context and let the model decide whether to create todos, update CRM, write memory, hold quietly, or send a Telegram check-in.
 
-**Users:**
-- 5 external users running at least one agent against their own accounts (alpha cohort, free).
-- 2 weekly-active external users (i.e., the agent is *actually* useful, not just installed).
-- One real testimonial worth quoting on a homepage.
+## Current State
 
-**Agents (installable, dogfooded):**
-- Chief of Staff agent stable enough to run on Kent's accounts 24/7 without intervention for 30 straight days.
-- **Product Manager agent shipped** — the workflow you're reading right now, ported to Maraithon's runtime, replacing the Claude skill.
-- A third agent of opportunistic choice. Top candidates:
-  - **Inbox triage agent** — drafts replies on priority threads, flags VIPs.
-  - **Customer-voice agent** — watches a Slack channel + support inbox, summarizes themes weekly.
+Maraithon is live in production at `maraithon.fly.dev`.
 
-**Distribution:**
-- A landing page (not just a magic-link sign-in) explaining what Maraithon is, who it's for, and which 1–2 agent types you can install.
-- Self-serve install of at least one agent type without any code edits — pick a connector + project, click "install Chief of Staff," done.
+The production shape is:
 
-**Runtime hardening:**
-- Crash recovery proven in production: auto-restart, state intact, in-flight work resumes. Live demo-able.
-- Per-agent observability dashboard (event log, effect log, spend) accessible to the user, not just to Kent.
+- Phoenix 1.8 + LiveView web app.
+- Fly.io deployment in Toronto.
+- Postgres-backed durable state.
+- Encrypted credentials with Cloak.
+- Magic-link sign-in.
+- Telegram bot/webhook interaction.
+- OTP runtime for long-lived agents, wakeups, event handling, and recovery.
+- GitHub Actions deploys `main` to Fly and release migrations run on deploy.
 
-## Non-goals (next 6 months)
+Shipped primitives:
 
-- Web UI parity with Runner — start CLI / minimal-LiveView, the runtime is the product.
-- Visual agent builder. Agents ship as Elixir code for now.
-- Marketplace / multi-tenant SaaS. Single-tenant deploys (Fly.io) only.
-- Multi-LLM abstraction layer. Pick one provider and don't fight that war yet.
-- Pricing / paid tier. Until weekly-active users exist, charging is theater.
+- Connectors for GitHub, Gmail, Google Calendar, Google Contacts, Slack, Notaui MCP, WhatsApp, Linear, Telegram, and Notion OAuth scaffolding.
+- Projects as scoped context.
+- Agents as installable workers with prompt, state, connectors, tools, and schedules.
+- Chief of Staff behavior with skills.
+- Generic PromptAgent behavior.
+- Live operator workspace for control, briefings, todos, and connector status.
+- Event logs, effect logs, scheduled jobs, runtime supervision, and spend instrumentation.
 
-## Big open questions to resolve first
+## Core Data Model
 
-1. **Why did April's momentum stop?** Was it priority, was it blocker, was it boredom? The answer determines whether re-starting is realistic.
-2. **Does Maraithon actually have a user other than Kent?** If yes — who, what's their workflow, what do they need next? If no — that's the goal for 6 months.
-3. **What's the relationship to Runner getting clearer or muddier?** When Runner ships its next major release, does Maraithon become more or less relevant?
+### Todos
 
-## Relationship to Runner
+Todos are the durable open-loop object layer.
 
-Runner is the chief-of-staff product Kent is shipping commercially. Maraithon was an explicit experiment in whether OTP gives a structural advantage for the same job. The runtime, primitives, and chief-of-staff agent all *work* — the bet is partly validated. **The remaining question is distribution and dogfood, not architecture.**
+Each todo should be per user and include:
 
-If the answer is "fold back into Runner," that's a successful experiment, not a failure.
+- Source: Slack, Gmail account, calendar account, Telegram, manual capture, agent, future iMessage/WhatsApp, etc.
+- Source account and source item references.
+- Title.
+- Actual todo summary.
+- Due date.
+- Notes and metadata.
+- Suggested next action.
+- Draft or plan for the next action.
+- Owner, defaulting to the main user.
+- Status: open, snoozed, done, dismissed.
+- Priority and attention mode.
+- Semantic dedupe key and evidence.
+
+Todos should be created by model-level intelligence from Chief of Staff skills, Telegram requests, source scans, briefings, and connector events. Dedupe should be smart and semantic, not exact-string or keyword matching.
+
+The todo list is not just a list. It is the current operating snapshot of the user's obligations.
+
+### People and CRM
+
+Maraithon needs a built-in CRM because most work is relationship-shaped.
+
+Each person should include:
+
+- First name.
+- Last name.
+- Display name.
+- Contact details, including email, Slack id, Telegram id, phone, and future WhatsApp/iMessage identifiers.
+- Preferred communication method, learned from how the user actually communicates with them.
+- Relationship to the user.
+- How often they speak.
+- Notes and metadata.
+
+There should be a join/link model between People and user-owned data:
+
+- Todos.
+- Emails.
+- Slack threads.
+- Calendar events.
+- Briefs.
+- Memories.
+- Projects.
+- Future message threads and external objects.
+
+The assistant should make it easy to ask:
+
+- Who is this person?
+- How do I know them?
+- How should I contact them?
+- What do I owe them?
+- What are they waiting on?
+- When did we last talk?
+- What context should I remember before replying?
+
+CRUDing people and relationship links should be tool-callable by the Chief of Staff, Telegram assistant, and future MCP clients.
+
+### Memory
+
+Memory is a first-class runtime primitive, not a side feature.
+
+Maraithon should store and recall:
+
+- Durable user preferences.
+- Relevance feedback.
+- Corrections.
+- Relationship facts.
+- Operating style.
+- Content preferences.
+- Interrupt preferences.
+- User goals and priorities.
+- Things the system should avoid surfacing.
+
+Memory should be able to influence the main assistant loop. Before answering or deciding whether to interrupt, the model should have access to relevant memory and should be able to write new memory when the user teaches the system.
+
+Examples:
+
+- "School calendar emails are relevant when they affect pickup, forms, or schedule changes."
+- "VC newsletters are not relevant unless they mention a direct opportunity."
+- "Charlie prefers Slack and I talk to him weekly."
+- "Do not surface automated receipts unless they require action."
+
+## Model-First Harness
+
+Maraithon needs a new kind of assistant harness.
+
+The harness should provide:
+
+- A compact Telegram assistant context.
+- Tool catalogs for todos, people, memory, open loops, connectors, projects, agents, and prepared actions.
+- A model-level planner that chooses which tools to call.
+- A model-level proactive planner that decides whether to send, hold, or send todo cards.
+- Schema validation and safety checks around model output.
+- Push receipts for audit and dedupe.
+- Telegram-friendly response shaping.
+
+The runtime may enforce hard constraints:
+
+- Validate JSON shape.
+- Reject empty proactive sends.
+- Enforce confirmation for dangerous writes.
+- Persist audit logs.
+- Dedupe delivery.
+- Respect connector availability.
+
+The runtime should not decide semantic relevance with hardcoded heuristics where a model should decide.
+
+## Chief of Staff
+
+The Chief of Staff is the flagship agent.
+
+Its job:
+
+- Maintain the user's open loops.
+- Create todos from source activity.
+- Create and update People and relationship links.
+- Write memory from durable user feedback.
+- Deliver morning briefings.
+- Run commitment tracking.
+- Surface proactive check-ins.
+- Help the user decide what to do next.
+
+Chief of Staff activities should add durable todos, people, links, and memories as they work. Briefings and summaries are not enough; the system should leave behind structured operating state.
+
+The Chief of Staff should be always on. By default it should wake every 10 minutes, with lean modes allowed to stretch to 15 minutes. This cadence is the reason to use Erlang/Elixir and OTP: the assistant is a supervised, long-lived process that repeatedly comes alive, scans changes, updates state, and returns to sleep without losing context.
+
+## Commitment Tracker
+
+Commitment Tracker is a Chief of Staff skill.
+
+Its job is to scan connected work sources for promises Kent made, asks Kent received, pending replies, and time-bound commitments, then write model-deduped todos to Maraithon's built-in todo list.
+
+Current source boundary:
+
+- Gmail: available.
+- Google Calendar: available for scanning.
+- Telegram: delivery surface.
+- iMessage, WhatsApp, OmniFocus writeback, and calendar write/delete mirror: future integrations unless explicit tool access exists.
+
+Commitment Tracker should:
+
+- Use full message bodies, not sender/subject/snippet-only guesses.
+- Filter personal/family/social/non-actionable noise.
+- Extract who, what, when, source, source ref, quote/context, and direction.
+- Create People records when durable relationship data appears.
+- Link todos to People.
+- Record relevance and operating memories when learned.
+- Preserve OmniFocus/project routing intent in metadata when useful, without claiming it wrote to OmniFocus unless the tool exists.
+- Produce Telegram-friendly summaries with no fragile tables.
+
+Future direction:
+
+- Add iMessage and WhatsApp ingestion.
+- Add optional OmniFocus sync for users who still want OmniFocus as an external task mirror.
+- Add Google Calendar time-block mirroring for truly time-bound commitments.
+- Add reconciliation between completed todos and downstream mirrors.
+
+## Telegram Experience
+
+Telegram should feel like the command line for your life, but forgiving and conversational.
+
+The user should be able to type or speak:
+
+- "What are my open loops?"
+- "What do I owe Charlie?"
+- "What did I promise this week?"
+- "What should I do next?"
+- "What can I handle in 15 minutes?"
+- "Add renew the domain this week."
+- "Snooze that until Monday."
+- "Handled the billing thing, what else?"
+- "Who is Elena and what do I owe her?"
+- "Remember that this kind of school email is relevant."
+- "That newsletter was not useful."
+- "Run Commitment Tracker."
+- "Give me a morning briefing."
+
+Telegram output should be:
+
+- Short.
+- Actionable.
+- Friendly to mobile screens.
+- Split into individual todo cards when the result is a todo list.
+- Easy to reply to with "done", "snooze", "dismiss", "draft reply", or "what else?"
+
+## What Would Make It Better for Busy People
+
+### 1. Mobile quick capture
+
+The fastest path into the system should be Telegram voice/text capture:
+
+- "Remind me to..."
+- "Capture this..."
+- "I owe..."
+- "Waiting on..."
+- "Remember..."
+
+The model should decide whether the capture is a todo, person update, memory, project note, or follow-up question.
+
+### 2. Today mode
+
+Busy users need a small answer to "what matters today?"
+
+Today mode should combine:
+
+- Due todos.
+- Overdue commitments.
+- Pending replies.
+- Calendar context.
+- Relationship-sensitive follow-ups.
+- Travel/time constraints.
+- User memory about priorities.
+
+Output should be a tight Telegram digest plus individual cards for actions.
+
+### 3. Waiting-on tracker
+
+Open loops are two-sided. Maraithon should track:
+
+- What Kent owes others.
+- What others owe Kent.
+- When Kent last nudged them.
+- Whether a follow-up is appropriate.
+- The best channel to use.
+
+This should be CRM-linked and source-backed.
+
+### 4. Relationship maintenance
+
+The CRM should not just answer questions; it should notice relationship drift.
+
+Examples:
+
+- "You usually talk to Charlie weekly, but it has been 18 days."
+- "Elena is waiting on two Runner items."
+- "You have three open asks from investors."
+- "This person prefers email, but your last two replies were in Slack."
+
+The model should decide whether the observation is worth surfacing.
+
+### 5. Action drafting
+
+Todos should carry drafts and plans.
+
+For many todos, the next best step is a message:
+
+- Draft the email.
+- Draft the Slack reply.
+- Draft the Telegram reply.
+- Draft the intro.
+- Draft the calendar invite.
+
+The assistant should prepare actions and ask for confirmation before sending.
+
+### 6. Source transparency
+
+Trust requires source trails.
+
+Every todo, memory, and relationship update should retain:
+
+- Source system.
+- Account.
+- Message/thread/event id when available.
+- Quote or evidence.
+- Model rationale.
+- Last reviewed time.
+
+Telegram replies should expose sources when the user asks "why?" or "where did that come from?"
+
+### 7. Undo, correction, and feedback loops
+
+Busy people will correct the assistant quickly.
+
+Supported corrections should include:
+
+- "Not relevant."
+- "Wrong person."
+- "Already done."
+- "Never show me this again."
+- "This is important."
+- "This should be Runner, not Agora."
+- "Remember that."
+
+Corrections should update todos, CRM, memory, and future model prompts.
+
+### 8. Quiet hours and interruption budget
+
+Proactive Telegram is powerful but dangerous.
+
+The system should maintain:
+
+- Quiet hours.
+- Urgency thresholds.
+- Interrupt budget.
+- "Hold until briefing" decisions.
+- User-specific examples of good and bad interruptions.
+
+The model should make send/hold decisions using this context.
+
+### 9. Connector health as product UX
+
+If the system cannot see a source, it cannot protect the user from missed loops.
+
+Telegram should proactively explain missing source access:
+
+- "Telegram is connected; Gmail is not."
+- "Calendar scan failed; reconnect Google."
+- "WhatsApp is not available yet, so this run only covers Gmail and calendar."
+
+This should be useful, not noisy.
+
+### 10. Reviewable audit trail
+
+The user should be able to ask:
+
+- "What did you add today?"
+- "What did you ignore?"
+- "What did you learn about me?"
+- "Why did you ping me?"
+- "What changed since yesterday?"
+
+This should come from durable event, todo, memory, CRM, and push receipt data.
+
+## Six-Month Definition of Done
+
+Maraithon is working if, six months from now:
+
+- Kent can run his day from Telegram without opening the web app except for setup/debugging.
+- The system captures commitments from Gmail and calendar daily.
+- The todo list is the trusted source of open loops.
+- People and relationships are automatically enriched as agents encounter them.
+- Memory materially changes future behavior after user feedback.
+- Proactive messages are useful enough that Kent leaves them enabled.
+- The assistant can answer "what am I missing?" with source-backed confidence.
+- At least 5 external users have connected Telegram and one work source.
+- At least 2 external users are weekly active because the system catches things they would otherwise miss.
+
+## Near-Term Roadmap
+
+### Now
+
+- Keep Telegram connected as the required first connector.
+- Keep the Chief of Staff always on with 10-15 minute supervised wakeups.
+- Make the built-in todo list the source of truth for all Chief of Staff output.
+- Keep Commitment Tracker model-backed and source-aware.
+- Ensure every broad "what should I do?" answer reads todos/open loops first.
+- Make correction and relevance feedback write to memory.
+- Continue removing semantic heuristics from assistant decisions.
+
+### Next
+
+- Add first-class iMessage and WhatsApp source ingestion.
+- Add optional OmniFocus sync as a downstream mirror, not the primary database.
+- Add calendar time-block creation for deadline commitments.
+- Add richer relationship timelines in CRM.
+- Add "today mode" and "waiting-on mode".
+- Add voice-message ingestion from Telegram.
+- Add an audit view for what the assistant created, skipped, remembered, and pushed.
+
+### Later
+
+- Multi-user alpha onboarding.
+- Personal setup wizard in Telegram.
+- Connector failure recovery from Telegram.
+- Calendar-aware planning and rescheduling.
+- Delegation and handoff tracking.
+- External MCP surface for other agents to CRUD todos, people, relationships, and memory.
+
+## Non-Goals For Now
+
+- A large dashboard-first productivity suite.
+- A generic visual agent builder.
+- Marketplace before dogfood retention.
+- Multi-tenant enterprise administration before a personal workflow is excellent.
+- Replacing every source app immediately.
+- Calendar/OmniFocus writes that pretend to work before the tools exist.
+
+## Relationship To Runner
+
+Runner is the commercial chief-of-staff product direction. Maraithon is the agentic-first OTP implementation of the same thesis: long-lived, supervised agents with durable memory, tools, and proactive behavior.
+
+The question is no longer whether Maraithon can be an always-on runtime. It can.
+
+The better question is whether this Telegram-first, durable-open-loop operating system is the right product shape for Runner, Maraithon, or both.
+
+If Maraithon continues, it should double down on the Telegram operating system thesis. If it folds into Runner, the things to preserve are:
+
+- Built-in todos as durable open-loop state.
+- CRM as the relationship layer.
+- Deep memory as runtime steering context.
+- Model-level tool use and semantic dedupe.
+- Proactive Telegram check-ins with push receipts.
+- Chief of Staff skills that leave structured state behind.

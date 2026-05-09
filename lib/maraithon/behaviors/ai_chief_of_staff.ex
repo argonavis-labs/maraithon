@@ -10,6 +10,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
 
+  @default_wakeup_interval_ms :timer.minutes(10)
+
   @impl true
   def init(config) do
     user_id = normalize_string(config["user_id"])
@@ -27,6 +29,8 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       enabled_skill_ids: enabled_skill_ids,
       skill_configs: skill_configs,
       skill_states: skill_states,
+      wakeup_interval_ms:
+        positive_integer(config["wakeup_interval_ms"], @default_wakeup_interval_ms),
       cycle_skill_ids: nil,
       assistant_cycle_id: nil,
       source_bundle: nil,
@@ -128,8 +132,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   @impl true
   def next_wakeup(state) do
+    scan_schedule = {:relative, Map.get(state, :wakeup_interval_ms, @default_wakeup_interval_ms)}
+
     state.enabled_skill_ids
-    |> Enum.reduce(:none, fn skill_id, schedule ->
+    |> Enum.reduce(scan_schedule, fn skill_id, schedule ->
       module = Skills.get!(skill_id)
       skill_state = Map.fetch!(state.skill_states, skill_id)
       merge_wakeup(schedule, module.next_wakeup(skill_state))
@@ -512,6 +518,17 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
         nil
     end
   end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
 
   defp map_value(payload, key) when is_map(payload) and is_binary(key) do
     Map.get(payload, key) || Map.get(payload, existing_atom(key))

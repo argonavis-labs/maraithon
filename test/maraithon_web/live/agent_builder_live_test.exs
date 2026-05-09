@@ -577,6 +577,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["include_future_sources"] == true
       assert agent.config["team_id"] == "T12345"
       assert agent.config["timezone_offset_hours"] == -8
+      assert agent.config["wakeup_interval_ms"] == 600_000
 
       assert agent.config["subscribe"] == [
                "email:#{@user_email}",

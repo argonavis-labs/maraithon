@@ -72,14 +72,15 @@ defmodule Maraithon.AgentBuilder do
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
       ],
       fields:
-        ~w(team_id timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
-      simple_fields: ~w(team_id timezone_offset_hours cost_profile),
+        ~w(team_id timezone_offset_hours wakeup_interval_ms morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone_offset_hours wakeup_interval_ms cost_profile),
       defaults: %{
         "prompt" => "",
         "tools" => "",
         "memory_limit" => "",
         "team_id" => "",
         "timezone_offset_hours" => "-5",
+        "wakeup_interval_ms" => "600000",
         "morning_brief_hour_local" => "8",
         "end_of_day_brief_hour_local" => "18",
         "weekly_review_day_local" => "5",
@@ -566,6 +567,7 @@ defmodule Maraithon.AgentBuilder do
   @cost_profiles %{
     "ai_chief_of_staff" => %{
       "lean" => %{
+        "wakeup_interval_ms" => "900000",
         "follow_email_scan_limit" => "8",
         "follow_event_scan_limit" => "6",
         "follow_prep_window_hours" => "24",
@@ -583,6 +585,7 @@ defmodule Maraithon.AgentBuilder do
         "budget_tool_calls" => "320"
       },
       "balanced" => %{
+        "wakeup_interval_ms" => "600000",
         "follow_email_scan_limit" => "14",
         "follow_event_scan_limit" => "12",
         "follow_prep_window_hours" => "36",
@@ -600,6 +603,7 @@ defmodule Maraithon.AgentBuilder do
         "budget_tool_calls" => "520"
       },
       "thorough" => %{
+        "wakeup_interval_ms" => "600000",
         "follow_email_scan_limit" => "24",
         "follow_event_scan_limit" => "18",
         "follow_prep_window_hours" => "48",
@@ -1069,6 +1073,8 @@ defmodule Maraithon.AgentBuilder do
            parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
          {:ok, brief_max_items} <-
            parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5),
+         {:ok, wakeup_interval_ms} <-
+           parse_positive_integer(launch["wakeup_interval_ms"], "Chief of Staff wakeup interval"),
          {:ok, follow_email_scan_limit} <-
            parse_positive_integer(
              launch["follow_email_scan_limit"],
@@ -1214,6 +1220,7 @@ defmodule Maraithon.AgentBuilder do
          "include_future_sources" => true,
          "source_scope" => source_scope,
          "team_id" => team_id,
+         "wakeup_interval_ms" => wakeup_interval_ms,
          "timezone_offset_hours" => timezone_offset_hours,
          "morning_brief_hour_local" => morning_brief_hour_local,
          "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
@@ -1539,6 +1546,7 @@ defmodule Maraithon.AgentBuilder do
       "include_future_sources",
       "source_scope",
       "team_id",
+      "wakeup_interval_ms",
       "timezone_offset_hours",
       "morning_brief_hour_local",
       "end_of_day_brief_hour_local",

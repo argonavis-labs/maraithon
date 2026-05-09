@@ -14,7 +14,7 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
   require Logger
 
   @name __MODULE__
-  @default_interval_ms :timer.hours(1)
+  @default_interval_ms :timer.minutes(10)
   @default_batch_size 25
 
   def start_link(opts \\ []) do

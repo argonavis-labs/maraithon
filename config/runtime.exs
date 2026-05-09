@@ -172,7 +172,7 @@ config :maraithon, Maraithon.Runtime,
   health_report_interval_ms:
     String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
   proactive_check_in_interval_ms:
-    String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "3600000")),
+    String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000")),
   proactive_check_in_batch_size:
     String.to_integer(System.get_env("PROACTIVE_CHECK_IN_BATCH_SIZE", "25")),
   oauth_refresh_interval_ms:
