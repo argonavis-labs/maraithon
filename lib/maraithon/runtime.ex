@@ -10,9 +10,33 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Events
+  alias Maraithon.Runtime.BackgroundJobs
   alias Maraithon.Runtime.Scheduler
 
   require Logger
+
+  @doc """
+  Enqueue durable app-level background work.
+
+  Use this for non-interactive processing such as email scans, relationship
+  learning, open-loop refreshes, and other long-running user-scoped work.
+  """
+  def enqueue_background_job(job_type, attrs \\ %{}) when is_binary(job_type) do
+    BackgroundJobs.enqueue(job_type, attrs)
+  end
+
+  def enqueue_email_processing(user_id, attrs \\ %{}) when is_binary(user_id) do
+    BackgroundJobs.enqueue_email_processing(user_id, attrs)
+  end
+
+  def enqueue_relationship_learning(user_id, observations, attrs \\ [])
+      when is_binary(user_id) and is_list(observations) do
+    BackgroundJobs.enqueue_relationship_learning(user_id, observations, attrs)
+  end
+
+  def enqueue_open_loop_check(user_id, attrs \\ %{}) when is_binary(user_id) do
+    BackgroundJobs.enqueue_open_loop_check(user_id, attrs)
+  end
 
   @doc """
   Start a new agent with the given parameters.

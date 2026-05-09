@@ -14,6 +14,7 @@ defmodule Maraithon.Admin do
   alias Maraithon.LogBuffer
   alias Maraithon.Repo
   alias Maraithon.Runtime
+  alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.ScheduledJob
   alias Maraithon.Spend
 
@@ -86,6 +87,7 @@ defmodule Maraithon.Admin do
     user_id = Keyword.get(opts, :user_id)
     effect_counts = effect_status_counts(user_id)
     job_counts = job_status_counts(user_id)
+    background_job_counts = background_job_status_counts(user_id)
 
     %{
       effects: %{
@@ -99,6 +101,13 @@ defmodule Maraithon.Admin do
         dispatched: Map.get(job_counts, "dispatched", 0),
         delivered: Map.get(job_counts, "delivered", 0),
         cancelled: Map.get(job_counts, "cancelled", 0)
+      },
+      background_jobs: %{
+        pending: Map.get(background_job_counts, "pending", 0),
+        running: Map.get(background_job_counts, "running", 0),
+        completed: Map.get(background_job_counts, "completed", 0),
+        failed: Map.get(background_job_counts, "failed", 0),
+        cancelled: Map.get(background_job_counts, "cancelled", 0)
       }
     }
   end
@@ -136,8 +145,9 @@ defmodule Maraithon.Admin do
 
     failed_effects = Repo.all(failed_effects_query(limit, user_id))
     stale_jobs = Repo.all(stale_jobs_query(limit, user_id))
+    failed_background_jobs = Repo.all(failed_background_jobs_query(limit, user_id))
 
-    (failed_effects ++ stale_jobs)
+    (failed_effects ++ stale_jobs ++ failed_background_jobs)
     |> Enum.sort_by(&timestamp_or_epoch/1, {:desc, DateTime})
     |> Enum.take(limit)
   end
@@ -260,6 +270,15 @@ defmodule Maraithon.Admin do
     |> Map.new()
   end
 
+  defp background_job_status_counts(user_id) do
+    BackgroundJob
+    |> maybe_filter_background_job_user(user_id)
+    |> group_by([job], job.status)
+    |> select([job], {job.status, count(job.id)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
   defp control_center_db_snapshot(user_id, activity_limit, failure_limit) do
     fetchers = [
       {:agents, fn -> Agents.list_agents(user_id: user_id) end},
@@ -333,6 +352,25 @@ defmodule Maraithon.Admin do
     })
   end
 
+  defp failed_background_jobs_query(limit, user_id) do
+    BackgroundJob
+    |> where([job], job.status == "failed")
+    |> maybe_filter_background_job_user(user_id)
+    |> order_by([job], desc: job.failed_at, desc: job.updated_at)
+    |> limit(^limit)
+    |> select([job], %{
+      source: "background_job",
+      id: job.id,
+      inserted_at: coalesce(job.failed_at, job.updated_at),
+      agent_id: nil,
+      behavior: nil,
+      status: job.status,
+      type: job.job_type,
+      attempts: job.attempts,
+      details: job.last_error
+    })
+  end
+
   defp timestamp_or_epoch(%{inserted_at: %DateTime{} = inserted_at}), do: inserted_at
   defp timestamp_or_epoch(_), do: DateTime.from_unix!(0)
 
@@ -374,7 +412,8 @@ defmodule Maraithon.Admin do
   defp empty_queue_metrics do
     %{
       effects: %{pending: 0, claimed: 0, completed: 0, failed: 0},
-      jobs: %{pending: 0, dispatched: 0, delivered: 0, cancelled: 0}
+      jobs: %{pending: 0, dispatched: 0, delivered: 0, cancelled: 0},
+      background_jobs: %{pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0}
     }
   end
 
@@ -442,6 +481,13 @@ defmodule Maraithon.Admin do
 
   defp maybe_filter_agent_user(query, user_id) when is_binary(user_id) do
     where(query, [_item, agent], agent.user_id == ^user_id)
+  end
+
+  defp maybe_filter_background_job_user(query, nil), do: query
+  defp maybe_filter_background_job_user(query, ""), do: query
+
+  defp maybe_filter_background_job_user(query, user_id) when is_binary(user_id) do
+    where(query, [job], job.user_id == ^user_id)
   end
 
   defp count_events(agent_id) do

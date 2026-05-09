@@ -75,6 +75,7 @@ Shipped primitives:
 - Projects as scoped context.
 - Agents as installable workers with prompt, state, connectors, tools, and schedules.
 - Chief of Staff behavior with skills.
+- Durable app-level background jobs for slow user-scoped work such as source ingestion, relationship learning, and open-loop refreshes.
 - Generic PromptAgent behavior.
 - Live operator workspace for control, briefings, todos, and connector status.
 - Event logs, effect logs, scheduled jobs, runtime supervision, and spend instrumentation.
@@ -214,6 +215,20 @@ Its job:
 Chief of Staff activities should add durable todos, people, links, and memories as they work. Briefings and summaries are not enough; the system should leave behind structured operating state.
 
 The Chief of Staff should be always on. By default it should wake every 10 minutes, with lean modes allowed to stretch to 15 minutes. This cadence is the reason to use Erlang/Elixir and OTP: the assistant is a supervised, long-lived process that repeatedly comes alive, scans changes, updates state, and returns to sleep without losing context.
+
+## Background Work Queue
+
+Maraithon needs a durable queue for slow or repeated user-scoped work so Telegram replies, web requests, source webhooks, and database request paths do not block while the assistant thinks or scans.
+
+The queue should handle:
+
+- Email and source processing.
+- Relationship and CRM enrichment.
+- Open-loop and todo checks.
+- Memory extraction and feedback learning.
+- Future connector ingestion from Slack, iMessage, WhatsApp, Notion, Linear, and other sources.
+
+Queued jobs should be per user, deduped, retried with backoff, observable in admin surfaces, and safe to resume after deploys or process restarts. Semantic decisions still belong to the model and tool layer; the queue exists to make that work durable, fast, supervised, and non-blocking.
 
 ## Commitment Tracker
 

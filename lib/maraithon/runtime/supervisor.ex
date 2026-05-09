@@ -19,7 +19,10 @@ defmodule Maraithon.Runtime.Supervisor do
       {DynamicSupervisor, strategy: :one_for_one, name: Maraithon.Runtime.AgentSupervisor},
 
       # Task supervisor for effect worker tasks
-      {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor}
+      {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
+
+      # Task supervisor for app-level background jobs
+      {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor}
     ]
 
     # Background workers that poll the database - disabled in test mode
@@ -28,6 +31,7 @@ defmodule Maraithon.Runtime.Supervisor do
         [
           Maraithon.Runtime.Bootstrap,
           Maraithon.Runtime.EffectRunner,
+          Maraithon.Runtime.BackgroundJobRunner,
           Maraithon.Runtime.Scheduler,
           Maraithon.Runtime.HealthReporter,
           Maraithon.Runtime.InsightNotifier,
