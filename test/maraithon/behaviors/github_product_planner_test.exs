@@ -8,6 +8,7 @@ defmodule Maraithon.Behaviors.GitHubProductPlannerTest do
   alias Maraithon.Behaviors.GitHubProductPlanner
   alias Maraithon.Insights
   alias Maraithon.OAuth
+  alias Maraithon.Todos
 
   @user_id "github-planner@example.com"
   @repo_full_name "acme/widgets"
@@ -73,7 +74,7 @@ defmodule Maraithon.Behaviors.GitHubProductPlannerTest do
       prompt = get_in(params, ["messages", Access.at(0), "content"])
 
       assert params["temperature"] == 0.3
-      assert params["max_tokens"] == 1_800
+      assert params["max_tokens"] == 2_400
       assert prompt =~ @repo_full_name
       assert prompt =~ "Acme Widgets"
       assert prompt =~ "Ship daily PM planning suggestions to Telegram"
@@ -195,6 +196,7 @@ defmodule Maraithon.Behaviors.GitHubProductPlannerTest do
       roadmap_insight = Enum.find(insights, &(&1.title == "Daily roadmap digest in Telegram"))
 
       assert payload.count == 2
+      assert payload.task_count == 2
       assert payload.user_id == @user_id
       assert payload.categories == ["product_opportunity"]
       assert returned_state.pending_snapshot == nil
@@ -204,15 +206,27 @@ defmodule Maraithon.Behaviors.GitHubProductPlannerTest do
       assert roadmap_insight.category == "product_opportunity"
       assert roadmap_insight.metadata["repo_full_name"] == @repo_full_name
       assert roadmap_insight.metadata["base_branch"] == "main"
-      assert roadmap_insight.metadata["planner_type"] == "github_product_planner"
+      assert roadmap_insight.metadata["planner_type"] == "product_manager_agent"
+      assert roadmap_insight.metadata["source_behavior"] == "github_product_planner"
       assert roadmap_insight.metadata["latest_commit_sha"] == "abc123"
       assert roadmap_insight.metadata["telegram_fit_score"] == 0.99
       assert roadmap_insight.metadata["why_now"] =~ "Recent commits and issues"
 
-      assert roadmap_insight.metadata["follow_up_ideas"] == [
-               "Let operators convert a suggestion into a tracked issue.",
-               "Show the evidence links directly in the Telegram card."
+      assert roadmap_insight.metadata["evidence"] == [
+               "Commit: Build Telegram roadmap summaries",
+               "Issue: Add a roadmap digest agent"
              ]
+
+      [todo] =
+        Todos.list_for_user(@user_id,
+          query: "Daily roadmap digest",
+          statuses: ["open"],
+          limit: 5
+        )
+
+      assert todo.source == "product_manager_agent"
+      assert todo.metadata["source_insight_id"] == roadmap_insight.id
+      assert todo.metadata["project_id"] == nil
     end
   end
 

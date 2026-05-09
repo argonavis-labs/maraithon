@@ -165,16 +165,18 @@ defmodule Maraithon.AgentBuilder do
       label: "PM Agent",
       category: "Product",
       summary:
-        "Reviews one GitHub repository like a PM, proposes the next 2-3 features, and pushes the strongest roadmap ideas to Telegram each day.",
+        "Reviews one project like a PM, proposes the next 2-3 backlog tickets from goals, repo state, and open work, then writes them into Maraithon's task surface.",
       inputs: [
+        "Project context, goals, open tasks, project memory, and attached repository activity",
         "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
         "The base branch you want reviewed, usually `main`",
-        "A daily wakeup cadence that controls when the planner re-evaluates the roadmap"
+        "A weekly wakeup cadence, explicit operator invocations, and GitHub repo events"
       ],
       outputs: [
-        "Stored roadmap insights with titles, summaries, recommended first milestones, and evidence",
+        "Stored PM recommendations with titles, summaries, recommended first milestones, and evidence",
+        "Durable todos and project-memory ticket rows that can be reviewed from the existing task surfaces",
         "Telegram-ready feature suggestions scored for whether they are worth interrupting you about",
-        "A daily planning loop grounded in the current state of the selected repository"
+        "A project PM loop grounded in the current goals, task list, and selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
       simple_fields: ~w(repo_full_name base_branch feature_limit cost_profile),
@@ -185,7 +187,7 @@ defmodule Maraithon.AgentBuilder do
         "repo_full_name" => "",
         "base_branch" => "main",
         "feature_limit" => "3",
-        "wakeup_interval_ms" => "86400000"
+        "wakeup_interval_ms" => "604800000"
       },
       requirements: [
         %{
@@ -207,8 +209,8 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Point this at one product repository, not a monorepo grab bag, so the recommendations stay coherent.",
-        "Keep `feature_limit` at 2 or 3. A daily shortlist should force prioritization instead of becoming a backlog dump.",
-        "Use the default daily cadence first, then tighten it only if you truly want more operator interrupts."
+        "Keep `feature_limit` at 2 or 3. A PM pass should force prioritization instead of becoming a backlog dump.",
+        "Use the default weekly cadence first, then rely on explicit invocations or repo events when the project needs another pass."
       ]
     },
     %{
@@ -634,19 +636,19 @@ defmodule Maraithon.AgentBuilder do
     "github_product_planner" => %{
       "lean" => %{
         "feature_limit" => "2",
-        "wakeup_interval_ms" => "172800000",
+        "wakeup_interval_ms" => "1209600000",
         "budget_llm_calls" => "30",
         "budget_tool_calls" => "10"
       },
       "balanced" => %{
         "feature_limit" => "3",
-        "wakeup_interval_ms" => "86400000",
+        "wakeup_interval_ms" => "604800000",
         "budget_llm_calls" => "60",
         "budget_tool_calls" => "20"
       },
       "thorough" => %{
         "feature_limit" => "3",
-        "wakeup_interval_ms" => "43200000",
+        "wakeup_interval_ms" => "259200000",
         "budget_llm_calls" => "120",
         "budget_tool_calls" => "40"
       }
@@ -1040,7 +1042,8 @@ defmodule Maraithon.AgentBuilder do
          "repo_full_name" => repo_full_name,
          "base_branch" => normalize_branch(launch["base_branch"]),
          "feature_limit" => feature_limit,
-         "wakeup_interval_ms" => wakeup_interval_ms
+         "wakeup_interval_ms" => wakeup_interval_ms,
+         "subscribe" => ["github:#{repo_full_name}"]
        }}
     end
   end
@@ -1496,7 +1499,9 @@ defmodule Maraithon.AgentBuilder do
       "repo_full_name",
       "base_branch",
       "feature_limit",
-      "wakeup_interval_ms"
+      "wakeup_interval_ms",
+      "subscribe",
+      "goals_path"
     ]
 
   defp known_config_keys("personal_assistant_agent"),

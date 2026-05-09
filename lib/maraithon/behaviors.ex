@@ -7,7 +7,7 @@ defmodule Maraithon.Behaviors do
     "codebase_advisor" => Maraithon.Behaviors.CodebaseAdvisor,
     "watchdog_summarizer" => Maraithon.Behaviors.WatchdogSummarizer,
     "repo_planner" => Maraithon.Behaviors.RepoPlanner,
-    "github_product_planner" => Maraithon.Behaviors.GitHubProductPlanner,
+    "github_product_planner" => Maraithon.Behaviors.ProductManagerAgent,
     "manifest_agent" => Maraithon.Behaviors.ManifestAgent,
     "prompt_agent" => Maraithon.Behaviors.PromptAgent,
     "ai_chief_of_staff" => Maraithon.Behaviors.AIChiefOfStaff,

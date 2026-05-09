@@ -89,9 +89,13 @@ defmodule Maraithon.ChiefOfStaff.AttentionArbiter do
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp maybe_put_map(map, _key, %{}), do: map
-  defp maybe_put_map(map, _key, nil), do: map
-  defp maybe_put_map(map, key, value), do: Map.put(map, key, value)
+  defp maybe_put_map(map, key, value) do
+    cond do
+      value == %{} -> map
+      is_nil(value) -> map
+      true -> Map.put(map, key, value)
+    end
+  end
 
   defp stringify_keys(%_{} = struct), do: struct
 

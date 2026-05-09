@@ -55,9 +55,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   @impl true
   def interested_in?(_config, context) do
     case get_in(context, [:trigger, :type]) do
+      nil -> is_nil(context[:event]) and is_nil(context[:last_message])
+      :wakeup -> true
       :message -> false
       :pubsub_event -> false
-      _ -> true
+      _ -> false
     end
   end
 
@@ -105,7 +107,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
               Todos.list_open_for_user(user_id, limit: state.max_todos)
               |> Enum.take(state.max_todos)
 
-            if projects == [] and todos == [] do
+            if projects == [] do
               {:idle, %{state | user_id: user_id, last_review_key: review_key}}
             else
               {:effect, {:llm_call, llm_params(projects, todos, local_now, context)},
@@ -211,10 +213,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
             []
 
           items ->
-            case Briefs.record_many(state.user_id, context.agent_id, items) do
-              {:ok, recorded} -> recorded
-              {:error, _reason} -> []
-            end
+            {:ok, recorded} = Briefs.record_many(state.user_id, context.agent_id, items)
+            recorded
         end
       end)
 
@@ -480,7 +480,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   end
 
   defp scheduled_trigger?(context) do
-    get_in(context, [:trigger, :type]) in [nil, :wakeup]
+    case get_in(context, [:trigger, :type]) do
+      nil -> is_nil(context[:event]) and is_nil(context[:last_message])
+      :wakeup -> true
+      _ -> false
+    end
   end
 
   defp shift_local(%DateTime{} = datetime, offset_hours) do

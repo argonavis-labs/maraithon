@@ -716,7 +716,9 @@ defmodule Maraithon.Connections do
 
     [
       if(enabled_services != [], do: "Enabled: #{Enum.join(enabled_services, ", ")}"),
-      if(scopes != [], do: "Granted #{length(scopes)} Google OAuth #{scope_word(length(scopes))}"),
+      if(scopes != [],
+        do: "Granted #{length(scopes)} Google OAuth #{scope_word(length(scopes))}"
+      ),
       if(token.expires_at, do: "Expires #{format_datetime(token.expires_at)}")
     ]
     |> Enum.reject(&is_nil/1)

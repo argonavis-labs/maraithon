@@ -16,6 +16,7 @@ config :maraithon, Maraithon.Repo,
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :maraithon, MaraithonWeb.Endpoint,
+  url: [host: "localhost"],
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "vvoIwP8nNJp8lGFZ9RR6Y7P31JfQ2raSNyk9Yev1qEa74gLVB0jW7aP8eFztubBE",
   server: false
