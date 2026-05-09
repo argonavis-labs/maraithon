@@ -39,6 +39,10 @@ defmodule Maraithon.RelationshipIntelligenceTest do
                  "preferred_communication_method" => "gmail",
                  "relationship" => "School contact for Emma",
                  "communication_frequency" => "recurring school updates",
+                 "relationship_strength" => 72,
+                 "affinity_score" => 64,
+                 "interaction_count_delta" => 1,
+                 "last_interaction_at" => "2026-05-09T12:00:00Z",
                  "notes" => "Sends school logistics for Emma's class.",
                  "importance" => 82,
                  "confidence" => 0.88
@@ -83,6 +87,9 @@ defmodule Maraithon.RelationshipIntelligenceTest do
     assert [person] = Crm.list_people(user_id, query: "Marla")
     assert person.relationship == "School contact for Emma"
     assert person.contact_details["emails"] == ["teacher@example.com"]
+    assert person.relationship_strength == 72
+    assert person.affinity_score == 64
+    assert person.interaction_count == 1
 
     assert [memory] = Memory.list_items(user_id, query: "4M newsletters", limit: 5)
     assert memory.kind == "relationship"

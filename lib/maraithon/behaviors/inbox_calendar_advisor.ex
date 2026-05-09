@@ -313,7 +313,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             )
 
           candidates == [] ->
-            persist_and_reply(direct_insights, state, context)
+            persist_and_reply(
+              direct_insights,
+              %{
+                state
+                | pending_relationship_observations: relationship_observations,
+                  last_scan_at: context.timestamp
+              },
+              context
+            )
 
           true ->
             params = %{
@@ -386,7 +394,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           {:ok, stored} ->
             emit_payload = insights_recorded_payload(stored, state)
 
-            {:emit, {:insights_recorded, emit_payload}, reset_pending_state(state)}
+            maybe_learn_relationships_before_emit(
+              state.pending_relationship_observations,
+              state,
+              context,
+              {:insights_recorded, emit_payload}
+            )
         end
     end
   end
@@ -1914,6 +1927,33 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
          reset_pending_state(%{state | last_scan_at: context.timestamp})}
     end
   end
+
+  defp maybe_learn_relationships_before_emit(observations, state, context, emit)
+       when is_list(observations) do
+    observations = dedupe_relationship_observations(observations)
+
+    if observations == [] do
+      {:emit, emit, reset_pending_state(state)}
+    else
+      {event_type, payload} = emit
+
+      relationship_learning_effect(
+        observations,
+        %{
+          state
+          | pending_candidates: [],
+            pending_direct_insights: [],
+            pending_relationship_observations: observations,
+            pending_llm_kind: :relationships,
+            pending_emit: {event_type, payload}
+        },
+        context
+      )
+    end
+  end
+
+  defp maybe_learn_relationships_before_emit(_observations, state, _context, emit),
+    do: {:emit, emit, reset_pending_state(state)}
 
   defp insights_recorded_payload(stored, state) do
     %{

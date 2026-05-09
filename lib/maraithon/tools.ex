@@ -20,6 +20,7 @@ defmodule Maraithon.Tools do
     "gmail_filters" => Maraithon.Tools.GmailFilters,
     "google_contacts_search" => Maraithon.Tools.GoogleContactsSearch,
     "google_calendar_list_events" => Maraithon.Tools.GoogleCalendarListEvents,
+    "review_connected_context" => Maraithon.Tools.ReviewConnectedContext,
     "get_open_loops" => Maraithon.Tools.GetOpenLoops,
     "list_todos" => Maraithon.Tools.ListTodos,
     "upsert_todos" => Maraithon.Tools.UpsertTodos,
@@ -81,6 +82,8 @@ defmodule Maraithon.Tools do
     "gmail_filters" => "List, get, create, and delete Gmail filters.",
     "google_contacts_search" => "Search connected Google Contacts.",
     "google_calendar_list_events" => "List Google Calendar events.",
+    "review_connected_context" =>
+      "Review connected CRM, Gmail, contacts, calendar, Slack, open loops, and memory for source-grounded context.",
     "get_open_loops" =>
       "Fetch the built-in open-loop snapshot across todos, CRM relationships, and deep memory.",
     "list_todos" => "List the built-in persistent todo list for a user.",
@@ -136,7 +139,7 @@ defmodule Maraithon.Tools do
     time http_get read_file list_files file_tree search_files
     gmail_list_recent gmail_search gmail_get_message
     google_contacts_search google_calendar_list_events
-    get_open_loops list_todos list_people get_person get_relationship_context
+    review_connected_context get_open_loops list_todos list_people get_person get_relationship_context
     list_memories recall_memory
     slack_list_conversations slack_list_messages slack_get_thread_replies slack_search_messages
     linear_get_issue linear_list_issues linear_list_teams

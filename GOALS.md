@@ -139,6 +139,7 @@ The assistant should make it easy to ask:
 - What are they waiting on?
 - When did we last talk?
 - What context should I remember before replying?
+- Look through my connected sources and figure out who this is.
 
 CRUDing people and relationship links should be tool-callable by the Chief of Staff, Telegram assistant, and future MCP clients.
 
@@ -177,6 +178,7 @@ The harness should provide:
 
 - A compact Telegram assistant context.
 - Tool catalogs for todos, people, memory, open loops, connectors, projects, agents, and prepared actions.
+- A first-class connected-context review primitive that can inspect CRM, Gmail, contacts, Slack, calendar, open loops, and memory for a person, topic, or vague reference.
 - A model-level planner that chooses which tools to call.
 - A model-level proactive planner that decides whether to send, hold, or send todo cards.
 - Schema validation and safety checks around model output.
@@ -252,6 +254,8 @@ The user should be able to type or speak:
 
 - "What are my open loops?"
 - "What do I owe Charlie?"
+- "Who is Dan Bourke?"
+- "Look through my email to find it."
 - "What did I promise this week?"
 - "What should I do next?"
 - "What can I handle in 15 minutes?"
@@ -356,7 +360,23 @@ Every todo, memory, and relationship update should retain:
 
 Telegram replies should expose sources when the user asks "why?" or "where did that come from?"
 
-### 7. Undo, correction, and feedback loops
+### 7. Connected context review
+
+When the user asks a vague but reasonable question like "Who is Charlie?",
+"What do I owe Charlie?", "Who is Dan Bourke?", or "Look through my email to
+find it", Maraithon should not stop at the current CRM snapshot or ask the user
+for a last name first. It should review connected source context, learn any
+durable person or relationship context it finds, and answer like a chief of
+staff:
+
+- Who the person appears to be.
+- How Maraithon knows that from source evidence.
+- Why they are likely reaching out.
+- What Kent owes them or what they owe Kent.
+- The recommended next action.
+- Confidence and source caveats, only when useful.
+
+### 8. Undo, correction, and feedback loops
 
 Busy people will correct the assistant quickly.
 
@@ -372,7 +392,7 @@ Supported corrections should include:
 
 Corrections should update todos, CRM, memory, and future model prompts.
 
-### 8. Quiet hours and interruption budget
+### 9. Quiet hours and interruption budget
 
 Proactive Telegram is powerful but dangerous.
 
@@ -386,7 +406,7 @@ The system should maintain:
 
 The model should make send/hold decisions using this context.
 
-### 9. Connector health as product UX
+### 10. Connector health as product UX
 
 If the system cannot see a source, it cannot protect the user from missed loops.
 
@@ -398,7 +418,7 @@ Telegram should proactively explain missing source access:
 
 This should be useful, not noisy.
 
-### 10. Reviewable audit trail
+### 11. Reviewable audit trail
 
 The user should be able to ask:
 
@@ -433,6 +453,7 @@ Maraithon is working if, six months from now:
 - Make the built-in todo list the source of truth for all Chief of Staff output.
 - Keep Commitment Tracker model-backed and source-aware.
 - Ensure every broad "what should I do?" answer reads todos/open loops first.
+- Make every "who is this?" and "what do I owe them?" answer review connected context before asking the user for more details.
 - Make correction and relevance feedback write to memory.
 - Continue removing semantic heuristics from assistant decisions.
 

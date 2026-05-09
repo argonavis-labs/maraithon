@@ -527,6 +527,10 @@ defmodule Maraithon.OpenLoops do
       preferred_communication_method: person.preferred_communication_method,
       relationship: person.relationship,
       communication_frequency: person.communication_frequency,
+      interaction_count: person.interaction_count,
+      relationship_strength: person.relationship_strength,
+      affinity_score: person.affinity_score,
+      last_interaction_at: person.last_interaction_at,
       notes: person.notes,
       metadata: person.metadata || %{},
       updated_at: person.updated_at

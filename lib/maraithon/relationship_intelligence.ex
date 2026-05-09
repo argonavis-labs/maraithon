@@ -101,9 +101,14 @@ defmodule Maraithon.RelationshipIntelligence do
     are evidence for you to reason over.
 
     Goals:
-    - Keep a useful CRM of people the user interacts with regularly.
+    - Keep a useful CRM of every real human the user interacts with, then let
+      repeated interactions, source evidence, and user discussion grow the
+      relationship strength over time.
     - Learn rich context for important people without requiring the user to
       manually correct every source item.
+    - Treat each real incoming or outgoing human communication as relationship
+      evidence, even when it does not create a todo. The CRM is the contact
+      ledger, not only the task ledger.
     - If a parent, spouse, assistant, teacher, teammate, investor, customer, or
       other proxy repeatedly communicates about a person, learn the proxy and
       the person/context when the evidence supports it.
@@ -117,7 +122,10 @@ defmodule Maraithon.RelationshipIntelligence do
     - Do not invent facts. Store inferred relationships only when evidence is
       visible in observations, existing_people, or memory_context.
     - Do not write a person for automated senders, newsletters, receipts, or
-      machine-only systems unless a real person is clearly attached.
+      machine-only systems unless a real human participant, owner, sender,
+      attendee, signer, asker, or discussed person is clearly attached.
+    - When a real person is visible in a human communication, create or update
+      the CRM record even if the relationship label is still provisional.
     - Do not classify ambiguous tokens like "4M" as finance, work, or family
       context without source-body evidence.
     - If the same person already exists, update that CRM record instead of
@@ -142,6 +150,10 @@ defmodule Maraithon.RelationshipIntelligence do
           "preferred_communication_method": "gmail | slack | telegram | phone | ...",
           "relationship": "concise relationship to the user",
           "communication_frequency": "model estimate from evidence",
+          "interaction_count_delta": 1,
+          "relationship_strength": 0,
+          "affinity_score": 0,
+          "last_interaction_at": "ISO-8601 datetime when the interaction occurred",
           "notes": "rich context that helps future triage",
           "importance": 0,
           "confidence": 0.0,
@@ -313,6 +325,11 @@ defmodule Maraithon.RelationshipIntelligence do
       person_attrs =
         attrs
         |> Map.drop(["person_ref", "importance", "confidence"])
+        |> Map.put_new("interaction_count_delta", 1)
+        |> Map.put_new(
+          "last_interaction_at",
+          Keyword.get(opts, :now, DateTime.utc_now()) |> normalize_json_value()
+        )
         |> Map.update("metadata", %{}, fn metadata ->
           metadata
           |> normalize_map()
@@ -462,6 +479,10 @@ defmodule Maraithon.RelationshipIntelligence do
       preferred_communication_method: person.preferred_communication_method,
       relationship: person.relationship,
       communication_frequency: person.communication_frequency,
+      interaction_count: person.interaction_count,
+      relationship_strength: person.relationship_strength,
+      affinity_score: person.affinity_score,
+      last_interaction_at: person.last_interaction_at,
       notes: person.notes
     }
     |> compact_map()

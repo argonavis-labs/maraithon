@@ -125,6 +125,19 @@ defmodule Maraithon.Tools.InputSchemas do
           })
         )
 
+      "review_connected_context" ->
+        user_object(%{
+          "query" => @string,
+          "person" => @string,
+          "review_goal" => @string,
+          "sources" => @string_array,
+          "gmail_query" => @string,
+          "time_min" => @string,
+          "time_max" => @string,
+          "since_days" => @integer,
+          "max_results" => @integer
+        })
+
       "get_open_loops" ->
         user_object(%{"query" => @string, "limit" => @integer, "include_memory" => @boolean})
 

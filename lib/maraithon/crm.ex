@@ -30,7 +30,14 @@ defmodule Maraithon.Crm do
     |> maybe_filter_text(:preferred_communication_method, method)
     |> maybe_filter_text(:communication_frequency, frequency)
     |> maybe_filter_contact(contact_kind, contact_value)
-    |> order_by([person], asc: fragment("lower(?)", person.display_name), desc: person.updated_at)
+    |> order_by(
+      [person],
+      desc: person.relationship_strength,
+      desc: person.affinity_score,
+      desc_nulls_last: person.last_interaction_at,
+      desc: person.updated_at,
+      asc: fragment("lower(?)", person.display_name)
+    )
     |> limit(^limit)
     |> Repo.all()
   end
@@ -55,7 +62,7 @@ defmodule Maraithon.Crm do
 
   def create_person(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     %Person{user_id: user_id}
-    |> Person.changeset(attrs)
+    |> Person.changeset(apply_relationship_metric_growth(attrs, nil))
     |> Repo.insert()
   end
 
@@ -63,7 +70,7 @@ defmodule Maraithon.Crm do
 
   def update_person(%Person{} = person, attrs) when is_map(attrs) do
     person
-    |> Person.changeset(attrs)
+    |> Person.changeset(apply_relationship_metric_growth(attrs, person))
     |> Repo.update()
   end
 
@@ -254,8 +261,161 @@ defmodule Maraithon.Crm do
       relationship: person.relationship,
       communication_frequency: person.communication_frequency,
       contact_details: compact_contact_details(person.contact_details || %{}),
-      notes: person.notes
+      notes: person.notes,
+      interaction_count: person.interaction_count,
+      relationship_strength: person.relationship_strength,
+      affinity_score: person.affinity_score,
+      last_interaction_at: person.last_interaction_at
     }
+  end
+
+  defp apply_relationship_metric_growth(attrs, person) when is_map(attrs) do
+    attrs = stringify_keys(attrs)
+    existing_count = existing_integer(person, :interaction_count)
+    existing_strength = existing_integer(person, :relationship_strength)
+    existing_affinity = existing_integer(person, :affinity_score)
+    existing_last_seen = person && person.last_interaction_at
+
+    attrs
+    |> maybe_put_metric(
+      "interaction_count",
+      grow_count(existing_count, attrs, ["interaction_count_delta", "interaction_delta"])
+    )
+    |> maybe_put_metric(
+      "relationship_strength",
+      grow_score(existing_strength, attrs, "relationship_strength", [
+        "relationship_strength_delta",
+        "strength_delta"
+      ])
+    )
+    |> maybe_put_metric(
+      "affinity_score",
+      grow_score(existing_affinity, attrs, "affinity_score", ["affinity_delta"])
+    )
+    |> maybe_put_datetime("last_interaction_at", latest_datetime(existing_last_seen, attrs))
+    |> Map.drop([
+      "interaction_count_delta",
+      "interaction_delta",
+      "relationship_strength_delta",
+      "strength_delta",
+      "affinity_delta",
+      "last_seen_at",
+      "last_contacted_at"
+    ])
+  end
+
+  defp apply_relationship_metric_growth(attrs, _person), do: attrs
+
+  defp grow_count(existing, attrs, delta_keys) do
+    explicit = read_integer_attr(attrs, "interaction_count")
+    delta = read_first_integer_attr(attrs, delta_keys)
+
+    cond do
+      is_integer(explicit) or is_integer(delta) ->
+        [existing, explicit, existing + max(delta || 0, 0)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.max()
+
+      true ->
+        nil
+    end
+  end
+
+  defp grow_score(existing, attrs, explicit_key, delta_keys) do
+    explicit = read_integer_attr(attrs, explicit_key)
+    delta = read_first_integer_attr(attrs, delta_keys)
+
+    cond do
+      is_integer(explicit) or is_integer(delta) ->
+        [existing, explicit, existing + max(delta || 0, 0)]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.max()
+        |> clamp_integer(0, 100)
+
+      true ->
+        nil
+    end
+  end
+
+  defp latest_datetime(existing, attrs) do
+    incoming =
+      read_datetime_attr(attrs, "last_interaction_at") ||
+        read_datetime_attr(attrs, "last_seen_at") ||
+        read_datetime_attr(attrs, "last_contacted_at")
+
+    case {existing, incoming} do
+      {%DateTime{} = existing, %DateTime{} = incoming} ->
+        if DateTime.compare(incoming, existing) == :gt, do: incoming, else: existing
+
+      {nil, %DateTime{} = incoming} ->
+        incoming
+
+      {%DateTime{} = existing, nil} ->
+        existing
+
+      _ ->
+        nil
+    end
+  end
+
+  defp maybe_put_metric(attrs, _key, nil), do: attrs
+  defp maybe_put_metric(attrs, key, value), do: Map.put(attrs, key, value)
+
+  defp maybe_put_datetime(attrs, _key, nil), do: attrs
+  defp maybe_put_datetime(attrs, key, %DateTime{} = value), do: Map.put(attrs, key, value)
+
+  defp existing_integer(%Person{} = person, field) do
+    person
+    |> Map.get(field)
+    |> case do
+      value when is_integer(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp existing_integer(_person, _field), do: 0
+
+  defp read_first_integer_attr(attrs, keys) do
+    Enum.find_value(keys, &read_integer_attr(attrs, &1))
+  end
+
+  defp read_integer_attr(attrs, key) when is_map(attrs) do
+    case Map.get(attrs, key) do
+      value when is_integer(value) ->
+        value
+
+      value when is_float(value) ->
+        round(value)
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {parsed, ""} -> parsed
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp read_datetime_attr(attrs, key) when is_map(attrs) do
+    case Map.get(attrs, key) do
+      %DateTime{} = datetime ->
+        datetime
+
+      value when is_binary(value) ->
+        case DateTime.from_iso8601(String.trim(value)) do
+          {:ok, datetime, _offset} -> datetime
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp clamp_integer(value, min_value, max_value) when is_integer(value) do
+    value |> max(min_value) |> min(max_value)
   end
 
   defp resolve_person(user_id, attrs) do

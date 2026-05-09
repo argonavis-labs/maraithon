@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Agents
   alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
@@ -57,6 +58,7 @@ defmodule Maraithon.TelegramAssistant.Context do
           limit: 8,
           include_memory?: false
         ),
+      relationships: serialize_relationships(user_id),
       open_insights: serialize_open_insights(user_id),
       todos: serialize_todos(user_id),
       briefing_schedule: BriefingSchedules.summarize_for_prompt(user_id),
@@ -192,6 +194,10 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_todos(user_id) do
     Todos.summarize_for_prompt(user_id, 20)
+  end
+
+  defp serialize_relationships(user_id) do
+    Crm.summarize_for_prompt(user_id, 20)
   end
 
   defp serialize_agents(user_id) do

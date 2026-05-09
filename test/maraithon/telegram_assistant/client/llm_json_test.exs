@@ -43,6 +43,8 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "get_relationship_context"
     assert prompt =~ "upsert_person"
     assert prompt =~ "link_person_data"
+    assert prompt =~ "review_connected_context"
+    assert prompt =~ "Do not stop with `I don't have Charlie in your CRM`"
     assert prompt =~ "what do I owe Justin?"
   end
 

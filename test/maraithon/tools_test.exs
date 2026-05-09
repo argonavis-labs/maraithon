@@ -32,6 +32,7 @@ defmodule Maraithon.ToolsTest do
       assert "gmail_search" in tools
       assert "gmail_get_message" in tools
       assert "google_calendar_list_events" in tools
+      assert "review_connected_context" in tools
       assert "get_open_loops" in tools
       assert "list_todos" in tools
       assert "upsert_todos" in tools
@@ -73,6 +74,10 @@ defmodule Maraithon.ToolsTest do
       assert "todos" in descriptor.input_schema["required"]
       assert descriptor.annotations["readOnlyHint"] == false
       assert descriptor.annotations["idempotentHint"] == true
+
+      [review_descriptor] = Tools.describe(["review_connected_context"])
+      assert review_descriptor.annotations["readOnlyHint"] == true
+      assert get_in(review_descriptor.input_schema, ["properties", "query", "type"]) == "string"
     end
   end
 
@@ -82,6 +87,7 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("read_file")
       assert Tools.exists?("gmail_list_recent")
       assert Tools.exists?("google_calendar_list_events")
+      assert Tools.exists?("review_connected_context")
       assert Tools.exists?("get_open_loops")
       assert Tools.exists?("list_todos")
       assert Tools.exists?("upsert_todos")

@@ -89,4 +89,42 @@ defmodule Maraithon.Tools.PeopleToolsTest do
 
     assert empty.count == 0
   end
+
+  test "review_connected_context returns source-grounded CRM evidence in one call" do
+    user_id = "people-review-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _upserted} =
+      Tools.execute("upsert_person", %{
+        "user_id" => user_id,
+        "person" => %{
+          "display_name" => "Charlie Jones",
+          "email" => "charlie@example.com",
+          "relationship" => "Runner collaborator",
+          "communication_frequency" => "recurring",
+          "relationship_strength" => 64,
+          "affinity_score" => 58,
+          "interaction_count_delta" => 3,
+          "last_interaction_at" => "2026-05-09T19:00:00Z"
+        }
+      })
+
+    assert {:ok, review} =
+             Tools.execute("review_connected_context", %{
+               "user_id" => user_id,
+               "query" => "Charlie",
+               "sources" => ["crm"],
+               "max_results" => 5
+             })
+
+    assert review.source == "connected_context"
+    assert review.query == "Charlie"
+    assert review.reviewed_sources == ["crm"]
+    assert review.results["crm"].count == 1
+    assert [person] = review.results["crm"].people
+    assert person.display_name == "Charlie Jones"
+    assert person.relationship_strength == 64
+    assert person.affinity_score == 58
+    assert person.interaction_count == 3
+  end
 end

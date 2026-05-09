@@ -22,6 +22,10 @@ defmodule Maraithon.Crm.Person do
     field :preferred_communication_method, :string
     field :relationship, :string
     field :communication_frequency, :string
+    field :interaction_count, :integer, default: 0
+    field :relationship_strength, :integer, default: 0
+    field :affinity_score, :integer, default: 0
+    field :last_interaction_at, :utc_datetime_usec
     field :notes, :string
     field :metadata, :map, default: %{}
 
@@ -39,6 +43,10 @@ defmodule Maraithon.Crm.Person do
     :preferred_communication_method,
     :relationship,
     :communication_frequency,
+    :interaction_count,
+    :relationship_strength,
+    :affinity_score,
+    :last_interaction_at,
     :notes,
     :metadata
   ]
@@ -55,6 +63,12 @@ defmodule Maraithon.Crm.Person do
     |> validate_length(:preferred_communication_method, max: 80)
     |> validate_length(:relationship, max: 160)
     |> validate_length(:communication_frequency, max: 120)
+    |> validate_number(:interaction_count, greater_than_or_equal_to: 0)
+    |> validate_number(:relationship_strength,
+      greater_than_or_equal_to: 0,
+      less_than_or_equal_to: 100
+    )
+    |> validate_number(:affinity_score, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
     |> validate_length(:notes, max: 8_000)
     |> validate_map(:contact_details)
     |> validate_map(:metadata)
@@ -282,6 +296,10 @@ defmodule Maraithon.Crm.Person do
   defp normalize_key(:preferredCommunicationMethod), do: "preferred_communication_method"
   defp normalize_key(:preferredMethodOfCommunication), do: "preferred_communication_method"
   defp normalize_key(:communicationFrequency), do: "communication_frequency"
+  defp normalize_key(:interactionCount), do: "interaction_count"
+  defp normalize_key(:relationshipStrength), do: "relationship_strength"
+  defp normalize_key(:affinityScore), do: "affinity_score"
+  defp normalize_key(:lastInteractionAt), do: "last_interaction_at"
   defp normalize_key(:speak_frequency), do: "communication_frequency"
   defp normalize_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_key()
   defp normalize_key("firstName"), do: "first_name"
@@ -296,6 +314,10 @@ defmodule Maraithon.Crm.Person do
   defp normalize_key("preferred_moth"), do: "preferred_communication_method"
   defp normalize_key("preferred_moth_of_communication"), do: "preferred_communication_method"
   defp normalize_key("communicationFrequency"), do: "communication_frequency"
+  defp normalize_key("interactionCount"), do: "interaction_count"
+  defp normalize_key("relationshipStrength"), do: "relationship_strength"
+  defp normalize_key("affinityScore"), do: "affinity_score"
+  defp normalize_key("lastInteractionAt"), do: "last_interaction_at"
   defp normalize_key("speak_frequency"), do: "communication_frequency"
   defp normalize_key("speaking_frequency"), do: "communication_frequency"
   defp normalize_key(key) when is_binary(key), do: key

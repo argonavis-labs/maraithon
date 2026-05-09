@@ -736,6 +736,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           state_after_wakeup,
           context
         )
+        |> complete_relationship_learning(context)
 
       assert payload.count == 1
       assert payload.user_id == user_id
@@ -800,6 +801,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           state_after_wakeup,
           context
         )
+        |> complete_relationship_learning(context)
 
       assert result.count == 0
       assert final_state.pending_candidates == []
@@ -846,6 +848,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
           state_after_wakeup,
           context
         )
+        |> complete_relationship_learning(context)
 
       assert result.count == 0
       assert final_state.pending_candidates == []
@@ -1038,6 +1041,25 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert Insights.list_open_for_user(user_id) == []
     end
   end
+
+  defp complete_relationship_learning({:effect, {:llm_call, _params}, state}, context) do
+    InboxCalendarAdvisor.handle_effect_result(
+      {:llm_call,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "No durable relationship context from this fixture.",
+             "people" => [],
+             "memories" => [],
+             "links" => []
+           })
+       }},
+      state,
+      context
+    )
+  end
+
+  defp complete_relationship_learning(result, _context), do: result
 
   defp gmail_thread_message(id, thread_id, from, to, subject, snippet, occurred_at) do
     %{

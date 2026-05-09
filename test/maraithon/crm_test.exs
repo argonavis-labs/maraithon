@@ -42,6 +42,40 @@ defmodule Maraithon.CrmTest do
     assert listed.id == person.id
   end
 
+  test "grows relationship metrics from repeated model-backed observations" do
+    user_id = "crm-metrics-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, person} =
+             Crm.upsert_person(user_id, %{
+               "display_name" => "Charlie Jones",
+               "email" => "charlie@example.com",
+               "relationship_strength" => 40,
+               "affinity_score" => 35,
+               "interaction_count_delta" => 2,
+               "last_interaction_at" => "2026-05-08T14:00:00Z"
+             })
+
+    assert person.interaction_count == 2
+    assert person.relationship_strength == 40
+    assert person.affinity_score == 35
+
+    assert {:ok, updated} =
+             Crm.upsert_person(user_id, %{
+               "email" => "charlie@example.com",
+               "relationship_strength_delta" => 8,
+               "affinity_delta" => 5,
+               "interaction_count_delta" => 1,
+               "last_interaction_at" => "2026-05-09T14:00:00Z"
+             })
+
+    assert updated.id == person.id
+    assert updated.interaction_count == 3
+    assert updated.relationship_strength == 48
+    assert updated.affinity_score == 40
+    assert DateTime.compare(updated.last_interaction_at, ~U[2026-05-09 14:00:00Z]) == :eq
+  end
+
   test "links a person to todos and returns relationship context" do
     user_id = "crm-link-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

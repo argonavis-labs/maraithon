@@ -482,6 +482,24 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "review_connected_context",
+        "Review connected CRM, Gmail, Google Contacts, Calendar, Slack, open loops, and memory in one fast source-gathering call.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "person" => %{"type" => "string"},
+            "review_goal" => %{"type" => "string"},
+            "sources" => %{"type" => "array", "items" => %{"type" => "string"}},
+            "gmail_query" => %{"type" => "string"},
+            "time_min" => %{"type" => "string"},
+            "time_max" => %{"type" => "string"},
+            "since_days" => %{"type" => "integer", "minimum" => 1, "maximum" => 365},
+            "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => 12}
+          }
+        }
+      ),
+      tool_definition(
         "gmail_get_message",
         "Fetch one Gmail message by message id, including decoded full body content when available.",
         %{
@@ -820,6 +838,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "delete_person" ->
         inject_user_and_execute("delete_person", runtime_context, args)
+
+      "review_connected_context" ->
+        inject_user_and_execute("review_connected_context", runtime_context, args)
 
       "gmail_search_messages" ->
         inject_user_and_execute("gmail_search", runtime_context, args)
