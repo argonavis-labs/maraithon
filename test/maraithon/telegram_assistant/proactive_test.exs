@@ -94,7 +94,11 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
 
     [intro, todo_card] = telegram_messages()
     assert intro.text =~ "Rippling still needs"
-    assert todo_card.text =~ "Reply to Rippling about employment eligibility"
+    assert todo_card.text =~ "Reply in-thread and close the loop."
+    assert todo_card.text =~ "This Gmail thread still needs a user response."
+    refute todo_card.text =~ "Reply to Rippling about employment eligibility"
+    refute todo_card.text =~ "Maraithon Todo"
+    refute todo_card.text =~ "About:"
 
     receipt =
       Repo.one!(

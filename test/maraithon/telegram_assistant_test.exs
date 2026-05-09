@@ -792,18 +792,19 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.count(initial_sends) == 3
     assert Enum.at(initial_sends, 0).text =~ "sending the actionable items one by one"
 
-    billing_message =
-      Enum.find(initial_sends, fn message ->
-        String.contains?(message.text, "Billing account past due")
-      end)
-
-    oauth_message =
-      Enum.find(initial_sends, fn message ->
-        String.contains?(message.text, "OAuth verification reply owed")
-      end)
-
+    billing_message = Enum.at(initial_sends, 1)
+    oauth_message = Enum.at(initial_sends, 2)
     assert billing_message
     assert oauth_message
+    assert billing_message.text =~ "Reply in-thread and close the loop."
+    assert billing_message.text =~ "This thread still needs a reply from the user."
+    refute billing_message.text =~ "Billing account past due"
+    refute billing_message.text =~ "Maraithon Todo"
+    refute billing_message.text =~ "About:"
+    assert oauth_message.text =~ "Reply in-thread and close the loop."
+    refute oauth_message.text =~ "OAuth verification reply owed"
+    refute oauth_message.text =~ "Maraithon Todo"
+    refute oauth_message.text =~ "About:"
     assert get_in(Keyword.get(billing_message.opts, :reply_markup), ["inline_keyboard"]) != nil
     assert get_in(Keyword.get(oauth_message.opts, :reply_markup), ["inline_keyboard"]) != nil
 
@@ -827,7 +828,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert Enum.count(sends_after_resolution) == 5
     assert Enum.at(sends_after_resolution, 3).text =~ "Billing is closed"
-    assert List.last(sends_after_resolution).text =~ "OAuth verification"
+    assert List.last(sends_after_resolution).text =~ "Reply in-thread and close the loop."
+    refute List.last(sends_after_resolution).text =~ "OAuth verification reply owed"
     refute List.last(sends_after_resolution).text =~ "Billing account past due"
 
     [remaining_todo] = Todos.list_open_for_user(user_id, kind: "gmail_triage")
@@ -960,7 +962,11 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert Enum.count(sends) == 3
     assert Enum.at(sends, 1).text =~ "Here is the full open todo list"
-    assert List.last(sends).text =~ "Renew the domain this week"
+    assert List.last(sends).text =~ "Renew the domain and confirm it is done."
+    refute List.last(sends).text =~ "Renew the domain this week"
+    refute List.last(sends).text =~ "Maraithon Todo"
+    refute List.last(sends).text =~ "You need to:"
+    refute List.last(sends).text =~ "About:"
     assert get_in(Keyword.get(List.last(sends).opts, :reply_markup), ["inline_keyboard"]) != nil
   end
 
@@ -1050,8 +1056,22 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert Enum.count(sends) == 3
     assert Enum.at(sends, 0).text =~ "everything open to review right now"
-    assert Enum.at(sends, 1).text =~ "Reply to Rippling about employment eligibility"
-    assert Enum.at(sends, 2).text =~ "Resolve Google Ads billing issue"
+    assert Enum.at(sends, 1).text =~ "Reply with the requested eligibility details."
+
+    assert Enum.at(sends, 1).text =~
+             "Rippling needs a user response before onboarding can continue."
+
+    refute Enum.at(sends, 1).text =~ "Reply to Rippling about employment eligibility"
+    refute Enum.at(sends, 1).text =~ "Maraithon Todo"
+    refute Enum.at(sends, 1).text =~ "About:"
+
+    assert Enum.at(sends, 2).text =~
+             "Fix the billing issue and confirm campaigns are active again."
+
+    assert Enum.at(sends, 2).text =~ "Ads have stopped because billing needs attention."
+    refute Enum.at(sends, 2).text =~ "Resolve Google Ads billing issue"
+    refute Enum.at(sends, 2).text =~ "Maraithon Todo"
+    refute Enum.at(sends, 2).text =~ "About:"
   end
 
   test "todo item callbacks can close an item directly from Telegram", %{user_id: user_id} do
@@ -1083,9 +1103,14 @@ defmodule Maraithon.TelegramAssistantTest do
     assert keyboard != nil
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Source"))
-    assert serialized_payload.text =~ "Reply to the billing owner"
-    assert payload.text =~ "You need to:"
+    assert serialized_payload.text =~ "Reply with the owner and the exact billing contact."
+    refute payload.text =~ "Maraithon Todo"
+    refute payload.text =~ "Reply to the billing owner"
+    refute payload.text =~ "You need to:"
+    refute payload.text =~ "Status:"
+    refute payload.text =~ "About:"
     assert payload.text =~ "Reply with the owner and the exact billing contact."
+    assert payload.text =~ "Finance needs an owner confirmation for the invoice thread."
     refute payload.text =~ "Priority:"
 
     assert {:ok, _conversation, turn, _telegram_result} =
@@ -1109,7 +1134,11 @@ defmodule Maraithon.TelegramAssistantTest do
       })
 
     assert Todos.get_for_user(user_id, todo.id).status == "done"
-    assert last_telegram_message(:edit).text =~ "Done"
+
+    assert last_telegram_message(:edit).text =~
+             "Reply with the owner and the exact billing contact."
+
+    refute last_telegram_message(:edit).text =~ "Status:"
     assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
   end
 
@@ -1335,9 +1364,15 @@ defmodule Maraithon.TelegramAssistantTest do
              "Hey Kent, checking on these today.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
 
     assert first_todo_message.text =~ "New Today"
-    assert first_todo_message.text =~ "Reply to Charlie about the budget"
+    assert first_todo_message.text =~ "Reply in-thread and close the loop."
+    refute first_todo_message.text =~ "Reply to Charlie about the budget"
+    refute first_todo_message.text =~ "Maraithon Todo"
+    refute first_todo_message.text =~ "About:"
     assert second_todo_message.text =~ "Still Open"
-    assert second_todo_message.text =~ "Confirm the old shipping ETA"
+    assert second_todo_message.text =~ "Reply in-thread and close the loop."
+    refute second_todo_message.text =~ "Confirm the old shipping ETA"
+    refute second_todo_message.text =~ "Maraithon Todo"
+    refute second_todo_message.text =~ "About:"
 
     keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Not Interested"))
@@ -1415,9 +1450,15 @@ defmodule Maraithon.TelegramAssistantTest do
              "Hey Kent, these still need movement tonight.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
 
     assert first_todo_message.text =~ "Opened Today"
-    assert first_todo_message.text =~ "Reply to David about the laptop"
+    assert first_todo_message.text =~ "Reply in-thread and close the loop."
+    refute first_todo_message.text =~ "Reply to David about the laptop"
+    refute first_todo_message.text =~ "Maraithon Todo"
+    refute first_todo_message.text =~ "About:"
     assert second_todo_message.text =~ "Still Open Tonight"
-    assert second_todo_message.text =~ "Close the Cowrie status loop"
+    assert second_todo_message.text =~ "Reply in-thread and close the loop."
+    refute second_todo_message.text =~ "Close the Cowrie status loop"
+    refute second_todo_message.text =~ "Maraithon Todo"
+    refute second_todo_message.text =~ "About:"
 
     keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Mark Done"))

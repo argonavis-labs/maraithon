@@ -165,39 +165,19 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     account = metadata_account(metadata)
     source = source_label(todo_source(todo))
     feedback = feedback_label(feedback_value(todo))
-
-    status = todo_status(todo)
-
-    status_line =
-      if status == "open" do
-        nil
-      else
-        "<b>Status:</b> #{safe(todo_status_label(status))}"
-      end
+    next_action = todo_next_action(todo)
 
     [
       prefix_text,
-      "<b>Maraithon Todo</b>",
-      status_line,
-      "<b>You need to:</b> #{safe(todo_next_action(todo))}",
+      "<b>#{safe(next_action)}</b>",
       "",
-      "<b>Context:</b> #{safe(todo_summary(todo))}",
-      "",
-      "<b>About:</b> #{safe(todo_title(todo))}",
+      todo_context_line(todo, next_action),
       "<b>From:</b> #{safe(source)}#{render_account(account)}",
       feedback && "<b>Feedback:</b> #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
   end
-
-  defp todo_status_label("open"), do: "Open"
-  defp todo_status_label("snoozed"), do: "Snoozed"
-  defp todo_status_label("done"), do: "Done"
-  defp todo_status_label("dismissed"), do: "Dismissed"
-
-  defp todo_status_label(status),
-    do: status |> to_string() |> String.replace("_", " ") |> String.capitalize()
 
   defp source_label("gmail"), do: "Gmail"
   defp source_label("slack"), do: "Slack"
@@ -288,22 +268,30 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp todo_source(todo) when is_map(todo), do: map_string(todo, "source")
   defp todo_source(_todo), do: nil
 
-  defp todo_title(%Todo{title: title}), do: title || "Open todo"
-  defp todo_title(todo) when is_map(todo), do: map_string(todo, "title") || "Open todo"
-  defp todo_title(_todo), do: "Open todo"
+  defp todo_context_line(todo, next_action) do
+    summary = todo_summary(todo)
 
-  defp todo_summary(%Todo{summary: summary}), do: summary || "Review this item."
+    cond do
+      blank?(summary) -> nil
+      String.trim(summary) == String.trim(next_action) -> nil
+      true -> safe(summary)
+    end
+  end
+
+  defp todo_summary(%Todo{summary: summary}), do: summary
 
   defp todo_summary(todo) when is_map(todo),
-    do: map_string(todo, "summary") || "Review this item."
+    do: map_string(todo, "summary")
 
-  defp todo_summary(_todo), do: "Review this item."
+  defp todo_summary(_todo), do: nil
 
-  defp todo_next_action(%Todo{next_action: next_action}),
-    do: next_action || "Review and decide the next step."
+  defp todo_next_action(%Todo{next_action: next_action, title: title}),
+    do: next_action || title || "Review and decide the next step."
 
   defp todo_next_action(todo) when is_map(todo),
-    do: map_string(todo, "next_action") || "Review and decide the next step."
+    do:
+      map_string(todo, "next_action") || map_string(todo, "title") ||
+        "Review and decide the next step."
 
   defp todo_next_action(_todo), do: "Review and decide the next step."
 
