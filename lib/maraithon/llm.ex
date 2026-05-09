@@ -12,7 +12,7 @@ defmodule Maraithon.LLM do
   """
   def provider do
     runtime_config()
-    |> Keyword.get(:llm_provider, Maraithon.LLM.MockProvider)
+    |> Keyword.get(:llm_provider)
   end
 
   @doc """
@@ -20,7 +20,7 @@ defmodule Maraithon.LLM do
   """
   def provider_name do
     runtime_config()
-    |> Keyword.get(:llm_provider_name, "mock")
+    |> Keyword.get(:llm_provider_name, "unconfigured")
   end
 
   @doc """
@@ -28,7 +28,17 @@ defmodule Maraithon.LLM do
   """
   def model do
     runtime_config()
-    |> Keyword.get(:llm_model, anthropic_model())
+    |> Keyword.get(:llm_model)
+  end
+
+  @doc """
+  Get the active reasoning/intelligence setting for model calls.
+  """
+  def intelligence do
+    case provider_name() do
+      "openai" -> openai_reasoning_effort()
+      _ -> runtime_config() |> Keyword.get(:llm_intelligence, openai_reasoning_effort())
+    end
   end
 
   @doc """
@@ -62,5 +72,20 @@ defmodule Maraithon.LLM do
   def openai_reasoning_effort do
     runtime_config()
     |> Keyword.get(:openai_reasoning_effort, "high")
+  end
+
+  @doc """
+  Complete a model request with the configured provider.
+  """
+  def complete(params) when is_map(params) do
+    case provider() do
+      nil ->
+        {:error,
+         {:llm_provider_not_configured,
+          "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
+
+      module ->
+        module.complete(params)
+    end
   end
 end

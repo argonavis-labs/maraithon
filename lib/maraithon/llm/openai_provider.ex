@@ -82,6 +82,10 @@ defmodule Maraithon.LLM.OpenAIProvider do
     usage = Spend.calculate_cost(model, input_tokens, output_tokens)
 
     cond do
+      finish_reason == "incomplete" ->
+        {:error,
+         {:incomplete_response, response["incomplete_details"] || %{status: "incomplete"}}}
+
       content != "" ->
         Logger.info("LLM call completed",
           model: model,
@@ -99,10 +103,6 @@ defmodule Maraithon.LLM.OpenAIProvider do
            finish_reason: finish_reason,
            usage: usage
          }}
-
-      response["status"] == "incomplete" ->
-        {:error,
-         {:incomplete_response, response["incomplete_details"] || %{status: "incomplete"}}}
 
       true ->
         {:error, {:invalid_response, response}}

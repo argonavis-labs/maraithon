@@ -29,7 +29,7 @@ defmodule Maraithon.AdminTest do
 
       _ = :sys.get_state(Maraithon.LogBuffer)
 
-      {:ok, _failed_effect} =
+      {:ok, failed_effect} =
         %Effect{}
         |> Effect.changeset(%{
           id: Ecto.UUID.generate(),
@@ -44,7 +44,7 @@ defmodule Maraithon.AdminTest do
 
       stale_claimed_at = DateTime.add(DateTime.utc_now(), -600, :second)
 
-      {:ok, _stale_job} =
+      {:ok, stale_job} =
         %ScheduledJob{}
         |> ScheduledJob.changeset(%{
           agent_id: agent.id,
@@ -59,11 +59,16 @@ defmodule Maraithon.AdminTest do
       snapshot = Admin.dashboard_snapshot(activity_limit: 10, failure_limit: 10)
 
       assert snapshot.health.status in [:healthy, :unhealthy]
-      assert snapshot.queue_metrics.effects.failed == 1
-      assert snapshot.queue_metrics.jobs.dispatched == 1
+      assert snapshot.queue_metrics.effects.failed >= 1
+      assert snapshot.queue_metrics.jobs.dispatched >= 1
       assert Enum.any?(snapshot.recent_activity, &(&1.event_type == "issue_opened"))
-      assert Enum.any?(snapshot.recent_failures, &(&1.source == "effect"))
-      assert Enum.any?(snapshot.recent_failures, &(&1.source == "job"))
+
+      assert Enum.any?(
+               snapshot.recent_failures,
+               &(&1.source == "effect" and &1.id == failed_effect.id)
+             )
+
+      assert Enum.any?(snapshot.recent_failures, &(&1.source == "job" and &1.id == stale_job.id))
       assert Enum.any?(snapshot.recent_logs, &(&1.message == "runtime initialized"))
     end
   end

@@ -33,9 +33,9 @@ config :maraithon, Maraithon.Runtime,
   # Retries
   max_effect_attempts: 3,
   # LLM provider
-  llm_provider: Maraithon.LLM.MockProvider,
-  llm_provider_name: "mock",
-  llm_model: "claude-sonnet-4-20250514",
+  llm_provider: nil,
+  llm_provider_name: "unconfigured",
+  llm_model: "gpt-5.4",
   anthropic_model: "claude-sonnet-4-20250514",
   openai_model: "gpt-5.4",
   openai_reasoning_effort: "high"

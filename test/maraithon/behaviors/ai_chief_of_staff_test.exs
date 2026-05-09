@@ -50,6 +50,20 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert {:relative, 300_000} = AIChiefOfStaff.next_wakeup(state)
   end
 
+  test "can register additional compiled skills without replacing the built-in registry" do
+    Skills.put_process_override(
+      skill_modules: %{"alpha" => ChiefOfStaffTestSkill},
+      extra_skill_modules: %{"gamma" => ChiefOfStaffTestSkill},
+      default_enabled_ids: ["alpha", "gamma"]
+    )
+
+    assert "alpha" in Skills.list_ids()
+    assert "gamma" in Skills.list_ids()
+    assert Skills.enabled_ids(%{}) == ["alpha", "gamma"]
+    assert Skills.label("gamma") == "Gamma"
+    assert Skills.description("gamma") == "Runs as part of the Chief of Staff cycle."
+  end
+
   test "merges emitted outputs from multiple skills in one wakeup", %{context: context} do
     state =
       AIChiefOfStaff.init(%{

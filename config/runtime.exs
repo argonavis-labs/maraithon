@@ -68,31 +68,42 @@ configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |>
 
 llm_provider_name =
   cond do
-    configured_llm_provider in ["mock", "anthropic", "openai"] ->
+    configured_llm_provider in ["anthropic", "openai"] ->
       configured_llm_provider
 
-    anthropic_api_key not in [nil, ""] ->
-      "anthropic"
+    configured_llm_provider == "mock" and config_env() == :test ->
+      "mock"
+
+    configured_llm_provider == "mock" ->
+      raise """
+      LLM_PROVIDER=mock is only allowed in test.
+      Configure LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY.
+      """
 
     openai_api_key not in [nil, ""] ->
       "openai"
 
+    anthropic_api_key not in [nil, ""] ->
+      "anthropic"
+
     true ->
-      "mock"
+      "unconfigured"
   end
 
 llm_provider =
   case llm_provider_name do
     "anthropic" -> Maraithon.LLM.AnthropicProvider
     "openai" -> Maraithon.LLM.OpenAIProvider
-    _ -> Maraithon.LLM.MockProvider
+    "mock" -> Maraithon.LLM.MockProvider
+    _ -> nil
   end
 
 llm_model =
   case llm_provider_name do
     "anthropic" -> anthropic_model
     "openai" -> openai_model
-    _ -> anthropic_model
+    "mock" -> "mock-v1"
+    _ -> openai_model
   end
 
 llm_api_key =

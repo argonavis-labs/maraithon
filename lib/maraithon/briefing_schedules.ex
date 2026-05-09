@@ -278,6 +278,15 @@ defmodule Maraithon.BriefingSchedules do
     |> Enum.any?(&(&1 in ["briefing", "morning_briefing"]))
   end
 
+  defp briefing_agent?(%Agent{behavior: "manifest_agent", config: config}) do
+    config = stringify_keys(config || %{})
+
+    config["source_behavior"] == "ai_chief_of_staff" and
+      config
+      |> Skills.enabled_ids()
+      |> Enum.any?(&(&1 in ["briefing", "morning_briefing"]))
+  end
+
   defp briefing_agent?(%Agent{behavior: behavior}), do: behavior in @briefing_behaviors
   defp briefing_agent?(_agent), do: false
 
@@ -346,8 +355,13 @@ defmodule Maraithon.BriefingSchedules do
     }
   end
 
-  defp config_value(%Agent{} = agent, key) when is_binary(key),
-    do: get_in(agent.config || %{}, [key])
+  defp config_value(%Agent{} = agent, key) when is_binary(key) do
+    config = stringify_keys(agent.config || %{})
+
+    config[key] ||
+      get_in(config, ["skill_configs", "morning_briefing", key]) ||
+      get_in(config, ["skill_configs", "briefing", key])
+  end
 
   defp config_value(_agent, _key), do: nil
 

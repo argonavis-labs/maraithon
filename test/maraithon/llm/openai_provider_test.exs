@@ -217,5 +217,43 @@ defmodule Maraithon.LLM.OpenAIProviderTest do
                  "messages" => [%{"role" => "user", "content" => "Hello"}]
                })
     end
+
+    test "returns incomplete response error even when partial text is produced" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime, openai_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :openai,
+        base_url: "http://localhost:#{bypass.port}/v1/responses"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/responses", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "status" => "incomplete",
+            "model" => "gpt-5.4-2026-03-05",
+            "output" => [
+              %{
+                "type" => "message",
+                "role" => "assistant",
+                "content" => [
+                  %{"type" => "output_text", "text" => "{\"title\":\"Partial"}
+                ]
+              }
+            ],
+            "incomplete_details" => %{"reason" => "max_output_tokens"},
+            "usage" => %{"input_tokens" => 10, "output_tokens" => 64, "total_tokens" => 74}
+          })
+        )
+      end)
+
+      assert {:error, {:incomplete_response, %{"reason" => "max_output_tokens"}}} =
+               OpenAIProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Hello"}]
+               })
+    end
   end
 end

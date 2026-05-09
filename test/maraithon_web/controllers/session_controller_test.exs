@@ -8,26 +8,30 @@ defmodule MaraithonWeb.SessionControllerTest do
   test "GET / renders magic-link sign-in page", %{conn: conn} do
     conn = get(conn, "/")
 
-    assert html_response(conn, 200) =~ "Send magic link"
+    assert html_response(conn, 200) =~ "Sign in"
   end
 
   test "POST /auth/magic-link issues a magic link", %{conn: conn} do
-    conn = post(conn, "/auth/magic-link", %{"magic_link" => %{"email" => "user@example.com"}})
+    email = "magic-link-#{System.unique_integer([:positive])}@example.com"
+
+    conn = post(conn, "/auth/magic-link", %{"magic_link" => %{"email" => email}})
 
     assert redirected_to(conn) == "/"
     assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Check your email"
 
-    assert Repo.aggregate(MagicLink, :count) == 1
+    assert %MagicLink{sent_to_email: ^email} = Repo.get_by(MagicLink, sent_to_email: email)
   end
 
   test "GET /auth/magic/:token signs in and creates session", %{conn: conn} do
-    {:ok, %{token: token}} = Accounts.request_magic_link("user@example.com")
+    email = "session-#{System.unique_integer([:positive])}@example.com"
+    {:ok, %{token: token, user: user}} = Accounts.request_magic_link(email)
 
     conn = get(conn, "/auth/magic/#{token}")
 
     assert redirected_to(conn) == "/dashboard"
-    assert get_session(conn, "user_session_token")
-    assert Repo.aggregate(UserSession, :count) == 1
+    assert token = get_session(conn, "user_session_token")
+    assert %UserSession{user_id: user_id} = Accounts.get_active_session(token)
+    assert user_id == user.id
   end
 
   test "DELETE /logout revokes active session", %{conn: conn} do

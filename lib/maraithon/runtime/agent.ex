@@ -8,6 +8,8 @@ defmodule Maraithon.Runtime.Agent do
 
   alias Maraithon.Events
   alias Maraithon.AgentSubscriptions
+  alias Maraithon.AgentHarness.Manifest
+  alias Maraithon.Agents
   alias Maraithon.Behaviors
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Runtime.Dispatch
@@ -19,6 +21,10 @@ defmodule Maraithon.Runtime.Agent do
   defstruct [
     :agent_id,
     :user_id,
+    :project_id,
+    :behavior,
+    :agent_package_id,
+    :agent_package_version_id,
     :behavior_module,
     :behavior_state,
     :config,
@@ -35,6 +41,7 @@ defmodule Maraithon.Runtime.Agent do
     :current_message,
     :current_message_metadata,
     :current_message_id,
+    :current_run_id,
     :deferred_messages
   ]
 
@@ -96,17 +103,19 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def recovering(:internal, {:init, agent}, data) do
+    agent_config = enrich_config_with_package_manifest(agent)
+
     # Load behavior module
     behavior_module = Behaviors.get!(agent.behavior)
 
     # Initialize budget from config
-    budget = init_budget(agent.config["budget"])
+    budget = init_budget(agent_config["budget"])
 
     # TODO: Load snapshot and replay events for crash recovery
     # For now, just initialize fresh
 
     # Initialize behavior state
-    behavior_state = behavior_module.init(agent.config)
+    behavior_state = behavior_module.init(agent_config)
 
     # Subscribe to internal runtime dispatch topic (cluster-safe routing)
     :ok = Dispatch.subscribe(agent.id)
@@ -126,7 +135,12 @@ defmodule Maraithon.Runtime.Agent do
       data
       | behavior_module: behavior_module,
         user_id: agent.user_id,
+        project_id: agent.project_id,
+        behavior: agent.behavior,
+        agent_package_id: agent.agent_package_id,
+        agent_package_version_id: agent.agent_package_version_id,
         behavior_state: behavior_state,
+        config: agent_config,
         budget: budget,
         sequence_num: Events.latest_sequence_num(agent.id),
         subscriptions: subscriptions,
@@ -134,14 +148,15 @@ defmodule Maraithon.Runtime.Agent do
         current_event: nil,
         current_message: nil,
         current_message_metadata: %{},
-        current_message_id: nil
+        current_message_id: nil,
+        current_run_id: nil
     }
 
     # Emit started event (capture updated data with new sequence_num)
     data =
       emit_event(data, "agent_started", %{
         behavior: agent.behavior,
-        config: agent.config
+        config: redact_runtime_config(agent_config)
       })
 
     # Schedule initial heartbeat and checkpoint
@@ -281,6 +296,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def working(:internal, :execute_behavior, data) do
+    data = ensure_current_run(data)
     context = build_context(data)
 
     case data.behavior_module.handle_wakeup(data.behavior_state, context) do
@@ -291,6 +307,7 @@ defmodule Maraithon.Runtime.Agent do
       {:emit, {event_type, payload}, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
         data = emit_event(data, to_string(event_type), payload)
+        data = complete_current_run(data, event_type, payload)
         data = clear_transient_context(data)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
@@ -301,6 +318,7 @@ defmodule Maraithon.Runtime.Agent do
 
       {:idle, new_behavior_state} ->
         data = %{data | behavior_state: new_behavior_state}
+        data = complete_current_run(data, :idle, %{})
         data = clear_transient_context(data)
         schedule_next_wakeup(data)
         {:next_state, :idle, data}
@@ -344,9 +362,12 @@ defmodule Maraithon.Runtime.Agent do
       {effect_info, pending_effects} ->
         data = %{data | pending_effects: pending_effects}
         data = decrement_budget(data, effect_info.type)
+        record_effect_step_result(effect_info, result)
 
         case result do
           {:ok, result_data} ->
+            update_current_run_from_effect(data.current_run_id, effect_info, result_data)
+
             data =
               emit_event(data, "effect_completed", %{
                 effect_id: effect_id,
@@ -365,12 +386,14 @@ defmodule Maraithon.Runtime.Agent do
               {:emit, {event_type, payload}, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
                 data = emit_event(data, to_string(event_type), payload)
+                data = complete_current_run(data, event_type, payload)
                 data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
 
               {:idle, new_behavior_state} ->
                 data = %{data | behavior_state: new_behavior_state}
+                data = complete_current_run(data, :idle, %{})
                 data = clear_transient_context(data)
                 schedule_next_wakeup(data)
                 {:next_state, :idle, data}
@@ -381,21 +404,55 @@ defmodule Maraithon.Runtime.Agent do
             end
 
           {:error, reason} ->
+            update_current_run_error(data.current_run_id, effect_info, reason)
+
             data =
               emit_event(data, "effect_failed", %{
                 effect_id: effect_id,
                 error: inspect(reason)
               })
 
-            data = clear_transient_context(data)
-            schedule_next_wakeup(data)
-            {:next_state, :idle, data}
+            context = build_context(data)
+
+            if function_exported?(data.behavior_module, :handle_effect_error, 4) do
+              case data.behavior_module.handle_effect_error(
+                     effect_info.type,
+                     reason,
+                     data.behavior_state,
+                     context
+                   ) do
+                {:emit, {event_type, payload}, new_behavior_state} ->
+                  data = %{data | behavior_state: new_behavior_state}
+                  data = emit_event(data, to_string(event_type), payload)
+                  data = complete_current_run(data, event_type, payload)
+                  data = clear_transient_context(data)
+                  schedule_next_wakeup(data)
+                  {:next_state, :idle, data}
+
+                {:idle, new_behavior_state} ->
+                  data = %{data | behavior_state: new_behavior_state}
+                  data = complete_current_run(data, :idle, %{})
+                  data = clear_transient_context(data)
+                  schedule_next_wakeup(data)
+                  {:next_state, :idle, data}
+
+                {:effect, effect, new_behavior_state} ->
+                  data = %{data | behavior_state: new_behavior_state}
+                  request_effect(data, effect)
+              end
+            else
+              data = fail_current_run(data, reason)
+              data = clear_transient_context(data)
+              schedule_next_wakeup(data)
+              {:next_state, :idle, data}
+            end
         end
     end
   end
 
   def waiting_effect(:state_timeout, :effect_timeout, data) do
     Logger.warning("Effect timeout")
+    data = fail_current_run(data, "effect_timeout")
     data = clear_transient_context(data)
     schedule_next_wakeup(data)
     {:next_state, :idle, data}
@@ -474,7 +531,9 @@ defmodule Maraithon.Runtime.Agent do
       type: effect_type,
       tool_name: tool_name,
       params: params,
-      requested_at: DateTime.utc_now()
+      requested_at: DateTime.utc_now(),
+      run_id: data.current_run_id,
+      run_step_id: record_effect_step(data, effect_type, tool_name, params)
     }
 
     # Write to effect outbox
@@ -494,10 +553,194 @@ defmodule Maraithon.Runtime.Agent do
     {:next_state, :waiting_effect, data}
   end
 
+  defp ensure_current_run(%{current_run_id: run_id} = data) when is_binary(run_id), do: data
+
+  defp ensure_current_run(data) do
+    agent = %Maraithon.Agents.Agent{
+      id: data.agent_id,
+      user_id: data.user_id,
+      project_id: data.project_id,
+      behavior: data.behavior,
+      agent_package_id: data.agent_package_id,
+      agent_package_version_id: data.agent_package_version_id
+    }
+
+    manifest = data.config["_harness_manifest"] || %{}
+    now = DateTime.utc_now()
+
+    attrs = %{
+      trigger_type: trigger_type(data.current_trigger),
+      trigger: to_jsonable(data.current_trigger || %{}),
+      resolved_model: Manifest.get(manifest, :model),
+      intelligence: Manifest.get(manifest, :intelligence),
+      active_skills: Manifest.active_skill_ids(manifest),
+      tool_allowlist: Manifest.get(manifest, :tool_allowlist, []),
+      budget_snapshot: %{
+        "llm_calls" => data.budget.llm_calls,
+        "tool_calls" => data.budget.tool_calls
+      },
+      metadata: %{
+        "package_manifest" => data.agent_package_version_id != nil,
+        "started_by_runtime_at" => DateTime.to_iso8601(now)
+      },
+      started_at: now
+    }
+
+    case Agents.start_agent_run(agent, attrs) do
+      {:ok, run} ->
+        %{data | current_run_id: run.id}
+
+      {:error, reason} ->
+        Logger.error("Failed to record agent run",
+          agent_id: data.agent_id,
+          reason: inspect(reason)
+        )
+
+        data
+    end
+  end
+
+  defp record_effect_step(%{current_run_id: nil}, _effect_type, _tool_name, _params), do: nil
+
+  defp record_effect_step(data, effect_type, tool_name, params) do
+    attrs = %{
+      step_type: step_type(effect_type),
+      effect_type: to_string(effect_type),
+      tool_name: tool_name,
+      status: "requested",
+      resolved_model: model_from_params(params),
+      intelligence: intelligence_from_params(params),
+      request_payload: to_jsonable(params),
+      generation_mode: generation_mode_for_effect(effect_type)
+    }
+
+    case Agents.record_agent_run_step(data.current_run_id, data.agent_id, attrs) do
+      {:ok, step} ->
+        step.id
+
+      {:error, reason} ->
+        Logger.error("Failed to record agent run step",
+          agent_id: data.agent_id,
+          run_id: data.current_run_id,
+          reason: inspect(reason)
+        )
+
+        nil
+    end
+  end
+
+  defp record_effect_step_result(%{run_step_id: nil}, _result), do: :ok
+
+  defp record_effect_step_result(effect_info, {:ok, result_data}) do
+    attrs = %{
+      status: "completed",
+      response_payload: to_jsonable(result_data),
+      resolved_model: model_from_response(result_data) || model_from_params(effect_info.params),
+      intelligence: intelligence_from_params(effect_info.params),
+      finish_reason: finish_reason_from_response(result_data),
+      generation_mode: generation_mode_for_effect(effect_info.type)
+    }
+
+    update_run_step(effect_info.run_step_id, attrs)
+  end
+
+  defp record_effect_step_result(effect_info, {:error, reason}) do
+    update_run_step(effect_info.run_step_id, %{
+      status: "failed",
+      error: inspect(reason),
+      response_payload: %{"error" => inspect(reason)}
+    })
+  end
+
+  defp update_current_run_from_effect(nil, _effect_info, _result_data), do: :ok
+
+  defp update_current_run_from_effect(run_id, %{type: :llm_call} = effect_info, result_data) do
+    Agents.update_agent_run(run_id, %{
+      resolved_model: model_from_response(result_data) || model_from_params(effect_info.params),
+      intelligence: intelligence_from_params(effect_info.params),
+      finish_reason: finish_reason_from_response(result_data),
+      generation_mode: "llm"
+    })
+
+    :ok
+  end
+
+  defp update_current_run_from_effect(_run_id, _effect_info, _result_data), do: :ok
+
+  defp update_current_run_error(nil, _effect_info, _reason), do: :ok
+
+  defp update_current_run_error(run_id, %{type: :llm_call} = effect_info, reason) do
+    Agents.update_agent_run(run_id, %{
+      resolved_model: model_from_params(effect_info.params),
+      intelligence: intelligence_from_params(effect_info.params),
+      finish_reason: "error",
+      generation_mode: "error",
+      error: inspect(reason)
+    })
+
+    :ok
+  end
+
+  defp update_current_run_error(_run_id, _effect_info, _reason), do: :ok
+
+  defp complete_current_run(%{current_run_id: nil} = data, _event_type, _payload), do: data
+
+  defp complete_current_run(data, event_type, payload) do
+    status = if to_string(event_type) == "agent_error", do: "failed", else: "completed"
+
+    attrs =
+      %{
+        status: status,
+        metadata: %{"terminal_event" => to_string(event_type)}
+      }
+      |> maybe_put_error(payload)
+
+    case Agents.complete_agent_run(data.current_run_id, attrs) do
+      {:ok, _run} ->
+        %{data | current_run_id: nil}
+
+      {:error, reason} ->
+        Logger.error("Failed to complete agent run",
+          agent_id: data.agent_id,
+          run_id: data.current_run_id,
+          reason: inspect(reason)
+        )
+
+        %{data | current_run_id: nil}
+    end
+  end
+
+  defp fail_current_run(%{current_run_id: nil} = data, _reason), do: data
+
+  defp fail_current_run(data, reason) do
+    _ =
+      Agents.fail_agent_run(data.current_run_id, %{
+        finish_reason: "error",
+        generation_mode: "error",
+        error: inspect(reason)
+      })
+
+    %{data | current_run_id: nil}
+  end
+
+  defp update_run_step(nil, _attrs), do: :ok
+
+  defp update_run_step(step_id, attrs) do
+    case Agents.update_agent_run_step(step_id, attrs) do
+      {:ok, _step} -> :ok
+      {:error, reason} -> Logger.error("Failed to update run step", reason: inspect(reason))
+    end
+  end
+
   defp build_context(data) do
     %{
       agent_id: data.agent_id,
       user_id: data.user_id,
+      project_id: data.project_id,
+      agent_package_id: data.agent_package_id,
+      agent_package_version_id: data.agent_package_version_id,
+      run_id: data.current_run_id,
+      harness_manifest: data.config["_harness_manifest"],
       timestamp: DateTime.utc_now(),
       budget: data.budget,
       # TODO: Load recent events
@@ -587,6 +830,65 @@ defmodule Maraithon.Runtime.Agent do
     data
   end
 
+  defp trigger_type(%{type: type}), do: to_string(type)
+  defp trigger_type(%{"type" => type}), do: to_string(type)
+  defp trigger_type(_trigger), do: nil
+
+  defp step_type(:llm_call), do: "llm_call"
+  defp step_type(:tool_call), do: "tool_call"
+  defp step_type(effect_type), do: to_string(effect_type)
+
+  defp generation_mode_for_effect(:llm_call), do: "llm"
+  defp generation_mode_for_effect(:tool_call), do: "tool"
+  defp generation_mode_for_effect(effect_type), do: to_string(effect_type)
+
+  defp model_from_params(params) when is_map(params),
+    do: params["model"] || params[:model]
+
+  defp model_from_params(_params), do: nil
+
+  defp intelligence_from_params(params) when is_map(params),
+    do:
+      params["reasoning_effort"] || params[:reasoning_effort] || params["intelligence"] ||
+        params[:intelligence]
+
+  defp intelligence_from_params(_params), do: nil
+
+  defp model_from_response(response) when is_map(response),
+    do: response[:model] || response["model"]
+
+  defp model_from_response(_response), do: nil
+
+  defp finish_reason_from_response(response) when is_map(response),
+    do: response[:finish_reason] || response["finish_reason"]
+
+  defp finish_reason_from_response(_response), do: nil
+
+  defp maybe_put_error(attrs, payload) when is_map(payload) do
+    case payload["error"] || payload[:error] do
+      error when is_binary(error) -> Map.put(attrs, :error, error)
+      nil -> attrs
+      error -> Map.put(attrs, :error, inspect(error))
+    end
+  end
+
+  defp maybe_put_error(attrs, _payload), do: attrs
+
+  defp to_jsonable(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp to_jsonable(%Date{} = value), do: Date.to_iso8601(value)
+  defp to_jsonable(%Time{} = value), do: Time.to_iso8601(value)
+  defp to_jsonable(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+
+  defp to_jsonable(value) when is_map(value) do
+    value
+    |> maybe_struct_to_map()
+    |> Map.new(fn {key, val} -> {to_string(key), to_jsonable(val)} end)
+  end
+
+  defp to_jsonable(value) when is_list(value), do: Enum.map(value, &to_jsonable/1)
+  defp to_jsonable(value) when is_atom(value), do: to_string(value)
+  defp to_jsonable(value), do: value
+
   defp normalize_message_metadata(nil), do: %{}
   defp normalize_message_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_message_metadata(_metadata), do: %{}
@@ -625,8 +927,45 @@ defmodule Maraithon.Runtime.Agent do
     end
   end
 
+  defp maybe_struct_to_map(%_{} = value), do: Map.from_struct(value)
+  defp maybe_struct_to_map(value), do: value
+
   defp get_config(key, default) do
     Maraithon.Runtime.Config.get(key, default)
+  end
+
+  defp enrich_config_with_package_manifest(agent) do
+    config = agent.config || %{}
+
+    case package_version_id(agent, config) do
+      nil ->
+        config
+
+      version_id ->
+        case Agents.get_agent_package_version(version_id) do
+          nil ->
+            Map.put(config, "_harness_manifest_error", {:package_version_not_found, version_id})
+
+          version ->
+            case Manifest.build(version) do
+              {:ok, manifest} ->
+                config
+                |> Map.put("_harness_manifest", manifest)
+                |> Map.put("agent_package_version_id", version.id)
+
+              {:error, reason} ->
+                Map.put(config, "_harness_manifest_error", reason)
+            end
+        end
+    end
+  end
+
+  defp package_version_id(%{agent_package_version_id: id}, _config) when is_binary(id), do: id
+  defp package_version_id(_agent, %{"agent_package_version_id" => id}) when is_binary(id), do: id
+  defp package_version_id(_agent, _config), do: nil
+
+  defp redact_runtime_config(config) when is_map(config) do
+    Map.drop(config, ["_harness_manifest"])
   end
 
   defp acknowledge_wakeup(job_id) do
@@ -638,6 +977,7 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp stop_agent(reason, data) do
+    data = fail_current_run(data, reason)
     data = emit_event(data, "agent_stopped", %{reason: reason})
     {:stop, :normal, data}
   end

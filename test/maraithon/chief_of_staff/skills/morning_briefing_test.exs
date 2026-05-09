@@ -75,6 +75,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "subject" => "New login to Instagram",
             "snippet" => "We noticed a new login.",
             "internal_date" => now
+          },
+          %{
+            "message_id" => "msg-2",
+            "thread_id" => "thread-2",
+            "labels" => ["INBOX", "UNREAD"],
+            "from" => "SKIMS <no-reply@emails.skims.com>",
+            "subject" => "Dive Into SKIMS Swim",
+            "snippet" => "Limited time offer.",
+            "internal_date" => now
           }
         ],
         "status" => "ready",
@@ -132,18 +141,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
+    assert params["max_tokens"] == 3200
+    assert params["reasoning_effort"] == "high"
+
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
-    assert prompt =~ "Briefing contract"
+    assert prompt =~ "Skill instructions"
+    assert prompt =~ ~s({"title":"...","summary":"...","body":"..."})
     assert prompt =~ "Write like a sharp Chief of Staff"
+    assert prompt =~ "This is not a digest"
     assert prompt =~ "## Needs Your Attention"
-    assert prompt =~ "## Open Commitments"
+    assert prompt =~ "## Decisions / Follow-ups"
     assert prompt =~ "never include internal scores, thresholds"
     assert prompt =~ "Today's move:"
     assert prompt =~ "Instagram"
+    assert prompt =~ "SKIMS"
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
-    assert prompt =~ "## News"
+    assert prompt =~ "Include news only when it affects Runner"
 
     response = %{
       content:
@@ -163,15 +178,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title =~ "Check the security alert"
     assert brief.metadata["source_backed"] == true
-    assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 1
+    assert brief.metadata["generation_mode"] == "llm"
+    assert get_in(brief.metadata, ["brief_input", "counts", "gmail_recent_unread"]) == 2
     assert get_in(brief.metadata, ["brief_input", "counts", "slack_key_threads"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "news_items"]) == 1
   end
 
-  test "fallback brief keeps the chief-of-staff morning briefing shape", %{
-    user_id: user_id,
-    agent: agent
-  } do
+  test "invalid model output records an explicit generation error instead of a heuristic fallback",
+       %{
+         user_id: user_id,
+         agent: agent
+       } do
     now = ~U[2026-05-07 14:00:00Z]
 
     {:ok, _commitment} =
@@ -198,28 +215,96 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       timestamp: now,
       trigger: %{type: :wakeup},
       source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
-      assistant_cycle_id: "cycle-fallback"
+      assistant_cycle_id: "cycle-error"
     }
 
     {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    {:emit, {:briefs_recorded, _payload}, _state} =
+    {:emit, {:brief_generation_failed, payload}, _state} =
       MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
+
+    assert payload.generation_mode == "error"
+    assert payload.error_message =~ "model_response_invalid"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
 
-    assert brief.title =~ "Thursday, May 7"
-    assert brief.title =~ "overdue"
-    assert brief.body =~ "## Needs Your Attention"
-    assert brief.body =~ "## Today's Schedule"
-    assert brief.body =~ "## Open Commitments"
-    assert brief.body =~ "Today's move:"
-    assert brief.body =~ "1 overdue commitment"
-    assert brief.body =~ "Notify Justin Dean"
-    assert brief.body =~ "Runner"
-    assert brief.body =~ "owed to Justin Dean"
-    assert brief.body =~ "Send the email today."
-    refute brief.body =~ "score="
-    refute brief.body =~ "threshold"
+    assert brief.title == "Morning briefing generation failed"
+    assert brief.status == "pending"
+    assert brief.error_message =~ "model_response_invalid"
+    assert brief.metadata["generation_mode"] == "error"
+    assert brief.metadata["error_message"] =~ "model_response_invalid"
+    assert brief.body =~ "No heuristic or keyword-based fallback was used."
+    refute brief.body =~ "## Inbox"
+    refute brief.body =~ "## Slack"
+    refute brief.body =~ "## News"
+    refute brief.body =~ "Notify Justin Dean"
+  end
+
+  test "model provider errors record an explicit generation error", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-provider-error"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    {:emit, {:brief_generation_failed, payload}, _state} =
+      MorningBriefing.handle_effect_error(
+        :llm_call,
+        {:incomplete_response, %{"reason" => "max_output_tokens"}},
+        state,
+        context
+      )
+
+    assert payload.generation_mode == "error"
+    assert payload.error_message =~ "max_output_tokens"
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Morning briefing generation failed"
+    assert brief.error_message =~ "max_output_tokens"
+    assert brief.metadata["llm_finish_reason"] == "error"
+    assert brief.body =~ "No heuristic or keyword-based fallback was used."
+  end
+
+  test "lets skill config override the LLM budget and intelligence", %{user_id: user_id} do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_model" => "gpt-5.4",
+        "llm_max_tokens" => 4096,
+        "llm_reasoning_effort" => "xhigh"
+      })
+
+    context = %{
+      agent_id: "agent-llm-config",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["model"] == "gpt-5.4"
+    assert params["max_tokens"] == 4096
+    assert params["reasoning_effort"] == "xhigh"
   end
 end

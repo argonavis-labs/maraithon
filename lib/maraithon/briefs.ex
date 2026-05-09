@@ -50,7 +50,10 @@ defmodule Maraithon.Briefs do
             if(brief.status == "sent", do: brief.provider_message_id)
           )
           |> Map.put("sent_at", if(brief.status == "sent", do: brief.sent_at))
-          |> Map.put("error_message", if(brief.status == "failed", do: brief.error_message))
+          |> Map.put(
+            "error_message",
+            normalized["error_message"] || if(brief.status == "failed", do: brief.error_message)
+          )
 
         brief
         |> Brief.changeset(update_attrs)
@@ -230,6 +233,7 @@ defmodule Maraithon.Briefs do
       "status" => read_string(attrs, "status", "pending"),
       "scheduled_for" => read_datetime(attrs, "scheduled_for") || DateTime.utc_now(),
       "dedupe_key" => read_string(attrs, "dedupe_key", Ecto.UUID.generate()),
+      "error_message" => read_string(attrs, "error_message", nil),
       "metadata" => read_map(attrs, "metadata")
     }
   end

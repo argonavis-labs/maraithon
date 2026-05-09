@@ -76,6 +76,24 @@ defmodule Maraithon.Runtime.Scheduler do
     end
   end
 
+  @doc """
+  Cancel all pending or dispatched jobs for an agent.
+  """
+  def cancel_all(agent_id) when is_binary(agent_id) do
+    case DbResilience.with_database("scheduler cancel all agent jobs", fn ->
+           from(j in ScheduledJob,
+             where: j.agent_id == ^agent_id,
+             where: j.status in ["pending", "dispatched"]
+           )
+           |> Repo.update_all(
+             set: [status: "cancelled", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+           )
+         end) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   def pending_payload?(agent_id, job_type, payload_key, payload_value)
       when is_binary(agent_id) and is_binary(job_type) and is_binary(payload_key) and
              is_binary(payload_value) do

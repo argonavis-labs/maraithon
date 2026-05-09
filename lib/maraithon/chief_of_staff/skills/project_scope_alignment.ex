@@ -21,6 +21,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   def id, do: "project_scope_alignment"
 
   @impl true
+  def label, do: "Project scope alignment"
+
+  @impl true
+  def description, do: "Checks whether active work is aligned with the current project scope."
+
+  @impl true
   def default_config do
     %{
       "assistant_behavior" => "ai_chief_of_staff",

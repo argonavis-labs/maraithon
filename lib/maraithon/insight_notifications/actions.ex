@@ -753,7 +753,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       "reasoning_effort" => "low"
     }
 
-    with {:ok, response} <- LLM.provider().complete(params),
+    with {:ok, response} <- LLM.complete(params),
          {:ok, parsed} <- decode_json(response.content) do
       {:ok, parsed}
     else

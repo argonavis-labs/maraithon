@@ -154,7 +154,7 @@ defmodule Maraithon.TelegramInterpreter do
       "reasoning_effort" => "medium"
     }
 
-    with {:ok, response} <- LLM.provider().complete(params) do
+    with {:ok, response} <- LLM.complete(params) do
       {:ok, response.content}
     end
   end

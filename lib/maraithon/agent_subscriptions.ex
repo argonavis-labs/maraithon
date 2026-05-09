@@ -31,6 +31,17 @@ defmodule Maraithon.AgentSubscriptions do
 
   def list_topics_for_agent(_agent_id), do: []
 
+  def deactivate_for_agent(agent_id) when is_binary(agent_id) do
+    now = DateTime.utc_now()
+
+    AgentSubscription
+    |> where([subscription], subscription.agent_id == ^agent_id)
+    |> where([subscription], subscription.status == "active")
+    |> Repo.update_all(set: [status: "inactive", updated_at: now])
+  end
+
+  def deactivate_for_agent(_agent_id), do: {0, nil}
+
   def sync_for_agent(%Agent{} = agent) do
     desired_topics = normalized_topics(get_in(agent.config || %{}, ["subscribe"]))
     now = DateTime.utc_now()

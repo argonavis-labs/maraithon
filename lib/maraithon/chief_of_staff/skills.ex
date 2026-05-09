@@ -35,8 +35,16 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   end
 
   def modules do
-    config()
+    configured = config()
+
+    configured
     |> Keyword.get(:skill_modules, @default_skill_modules)
+    |> normalize_module_map()
+    |> Map.merge(
+      configured
+      |> Keyword.get(:extra_skill_modules, %{})
+      |> normalize_module_map()
+    )
   end
 
   def list_ids do
@@ -54,6 +62,18 @@ defmodule Maraithon.ChiefOfStaff.Skills do
       nil -> raise ArgumentError, "Unknown Chief of Staff skill: #{id}"
       module -> module
     end
+  end
+
+  def label(id) when is_binary(id) do
+    id
+    |> get()
+    |> module_label(id)
+  end
+
+  def description(id) when is_binary(id) do
+    id
+    |> get()
+    |> module_description()
   end
 
   def default_enabled_ids do
@@ -135,6 +155,35 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   defp normalize_id(id) when is_binary(id), do: String.trim(id)
   defp normalize_id(id) when is_atom(id), do: id |> Atom.to_string() |> normalize_id()
   defp normalize_id(id), do: id |> to_string() |> normalize_id()
+
+  defp normalize_module_map(modules) when is_map(modules) do
+    Map.new(modules, fn {id, module} -> {normalize_id(id), module} end)
+  end
+
+  defp normalize_module_map(_modules), do: %{}
+
+  defp module_label(nil, id), do: humanize_id(id)
+
+  defp module_label(module, id) do
+    if function_exported?(module, :label, 0), do: module.label(), else: humanize_id(id)
+  end
+
+  defp module_description(nil), do: "Runs as part of the Chief of Staff cycle."
+
+  defp module_description(module) do
+    if function_exported?(module, :description, 0) do
+      module.description()
+    else
+      "Runs as part of the Chief of Staff cycle."
+    end
+  end
+
+  defp humanize_id(id) when is_binary(id) do
+    id
+    |> String.replace("_", " ")
+    |> String.split()
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
 
   defp config do
     Process.get(@process_override_key) || Application.get_env(:maraithon, __MODULE__, [])

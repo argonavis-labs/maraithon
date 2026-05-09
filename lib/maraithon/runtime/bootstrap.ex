@@ -41,6 +41,7 @@ defmodule Maraithon.Runtime.Bootstrap do
     Logger.info("Bootstrapping runtime")
 
     case DbResilience.with_database("runtime bootstrap", fn ->
+           {:ok, _installations} = Maraithon.AgentMarketplace.ensure_default_installations()
            Maraithon.Runtime.resume_all_agents()
          end) do
       {:ok, _} ->

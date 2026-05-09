@@ -22,8 +22,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     )
 
     try do
-      provider = LLM.provider()
-      result = provider.complete(params)
+      result = LLM.complete(params)
 
       case result do
         {:ok, data} ->

@@ -26,6 +26,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   def id, do: "holiday_radar"
 
   @impl true
+  def label, do: "Holiday radar"
+
+  @impl true
+  def description,
+    do: "Surfaces upcoming family, holiday, and gift reminders before they become urgent."
+
+  @impl true
   def default_config do
     %{
       "assistant_behavior" => "ai_chief_of_staff",

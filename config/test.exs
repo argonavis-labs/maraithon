@@ -30,6 +30,14 @@ config :maraithon, allow_insecure_vault: true
 # Tests should start these explicitly if needed
 config :maraithon, start_background_workers: false
 
+config :maraithon, Maraithon.Runtime,
+  llm_provider: Maraithon.LLM.MockProvider,
+  llm_provider_name: "mock",
+  llm_model: "mock-v1",
+  anthropic_model: "claude-sonnet-4-20250514",
+  openai_model: "gpt-5.4",
+  openai_reasoning_effort: "high"
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

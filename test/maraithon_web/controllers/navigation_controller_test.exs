@@ -11,11 +11,11 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Connectors"
-      assert html =~ "Apps"
+      assert html =~ "Maraithon needs a Telegram chat"
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
       assert html =~ "Slack"
-      assert html =~ "Telegram is required before other connectors."
+      assert html =~ "Telegram required"
       assert html =~ "Connect Telegram first"
     end
 
@@ -153,9 +153,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user() |> get("/connectors/github")
       html = html_response(conn, 200)
 
-      assert html =~ "Connector Detail"
+      assert html =~ "Connectors"
       assert html =~ "GitHub"
-      assert html =~ "OAuth Setup"
+      assert html =~ "OAuth setup"
     end
 
     test "GET /connectors/slack renders slack setup details", %{conn: conn} do
@@ -163,7 +163,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      assert html =~ "OAuth Setup"
+      assert html =~ "OAuth setup"
       assert html =~ "SLACK_SIGNING_SECRET"
       assert html =~ "/webhooks/slack"
     end
@@ -299,8 +299,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "How it works"
-      assert html =~ "Execution Flow"
-      assert html =~ "Engineering Principles"
+      assert html =~ "Execution flow"
+      assert html =~ "Engineering principles"
     end
 
     test "GET /settings renders settings page", %{conn: conn} do
@@ -308,8 +308,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Settings"
-      assert html =~ "Security Secrets"
-      assert html =~ "OAuth Provider Readiness"
+      assert html =~ "Security secrets"
+      assert html =~ "OAuth provider readiness"
     end
 
     test "GET /conenctors redirects to /connectors", %{conn: conn} do

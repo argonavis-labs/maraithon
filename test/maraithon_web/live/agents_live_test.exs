@@ -26,15 +26,15 @@ defmodule MaraithonWeb.AgentsLiveTest do
   test "highlights the Agents tab on /agents", %{conn: conn} do
     {:ok, view, html} = live(conn, "/agents")
 
-    assert html =~ "Agents Workspace"
-    assert has_element?(view, "a[href='/agents'].bg-zinc-950", "Agents")
+    assert html =~ "Agents"
+    assert has_element?(view, "a[href='/agents'][aria-current='page']", "Agents")
   end
 
   test "renders empty registry and empty workspace states", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "No agents exist yet."
-    assert html =~ "No agent selected."
+    assert html =~ "No agents yet."
+    assert html =~ "Start with a template"
   end
 
   test "registry rows describe what agents do and which connectors they inspect", %{conn: conn} do
@@ -47,7 +47,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "Choose an agent"
+    assert html =~ "Agents"
     assert html =~ "Watches inbox and calendar context"
     assert html =~ "Google Gmail"
     assert html =~ "Slack Channels"
@@ -72,7 +72,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert_patch(view, "/agents?id=#{agent.id}")
 
     html = render(view)
-    assert html =~ "Agent details"
+    assert html =~ "Overview"
     assert html =~ "inspect-me"
   end
 
@@ -87,14 +87,14 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
 
     view
-    |> element("a[href='/agents?id=#{agent.id}&panel=edit']", "Edit Settings")
+    |> element("a[href='/agents?id=#{agent.id}&panel=edit']", "Settings")
     |> render_click()
 
     assert_patch(view, "/agents?id=#{agent.id}&panel=edit")
 
     html = render(view)
-    assert html =~ "Edit Agent"
-    assert html =~ "Save Changes"
+    assert html =~ "Prompt"
+    assert html =~ "Save changes"
   end
 
   test "start action updates the visible status", %{conn: conn} do
@@ -175,7 +175,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     html = render(view)
     refute html =~ agent.id
-    assert html =~ "No agent selected."
+    assert html =~ "No agents yet."
   end
 
   test "selected inspection shows logs, events, queue, spend, and config", %{conn: conn} do
@@ -286,17 +286,20 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
-    {:ok, view, html} = live(conn, "/agents?id=#{agent.id}")
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
 
     assert html =~ "Overview"
     assert html =~ "Connected apps"
-    assert html =~ "Actual accounts this agent can read from or deliver to."
+
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}&panel=apps")
     assert html =~ "founder@example.com"
     assert html =~ "Agora"
     assert html =~ "@kentfenwick"
+
+    {:ok, view, html} = live(conn, "/agents?id=#{agent.id}&panel=skills")
+
     assert html =~ "Attached Skills"
     assert html =~ "Morning briefing"
-    assert html =~ "8:00 AM"
     assert html =~ "Send each morning at"
     assert has_element?(view, "#morning-brief-time-form")
 

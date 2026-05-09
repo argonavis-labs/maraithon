@@ -87,6 +87,46 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
   end
 
   @impl true
+  def handle_effect_error(effect_type, reason, state, context) do
+    case state.pending_effect_skill_id do
+      nil ->
+        {:idle, state}
+
+      skill_id ->
+        module = Skills.get!(skill_id)
+        skill_state = Map.fetch!(state.skill_states, skill_id)
+        index = skill_index(state, skill_id)
+        skill_context = skill_context(state, context, skill_id, index)
+
+        if function_exported?(module, :handle_effect_error, 4) do
+          case module.handle_effect_error(effect_type, reason, skill_state, skill_context) do
+            {:effect, effect, next_skill_state} ->
+              {:effect, effect, put_skill_state(state, skill_id, next_skill_state)}
+
+            {:emit, emit, next_skill_state} ->
+              state =
+                state
+                |> put_skill_state(skill_id, next_skill_state)
+                |> Map.put(:pending_effect_skill_id, nil)
+                |> stash_emit(emit, skill_id, index)
+
+              run_from_index(state.resume_index || 0, state, context)
+
+            {:idle, next_skill_state} ->
+              state =
+                state
+                |> put_skill_state(skill_id, next_skill_state)
+                |> Map.put(:pending_effect_skill_id, nil)
+
+              run_from_index(state.resume_index || 0, state, context)
+          end
+        else
+          {:idle, %{state | pending_effect_skill_id: nil}}
+        end
+    end
+  end
+
+  @impl true
   def next_wakeup(state) do
     state.enabled_skill_ids
     |> Enum.reduce(:none, fn skill_id, schedule ->

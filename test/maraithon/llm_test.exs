@@ -6,6 +6,15 @@ defmodule Maraithon.LLMTest do
   setup do
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime)
 
+    Application.put_env(:maraithon, Maraithon.Runtime,
+      llm_provider: Maraithon.LLM.MockProvider,
+      llm_provider_name: "mock",
+      llm_model: "mock-v1",
+      anthropic_model: "claude-sonnet-4-20250514",
+      openai_model: "gpt-5.4",
+      openai_reasoning_effort: "high"
+    )
+
     on_exit(fn ->
       if original_runtime do
         Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
@@ -18,16 +27,14 @@ defmodule Maraithon.LLMTest do
   end
 
   describe "provider/0" do
-    test "returns MockProvider by default" do
+    test "returns the configured test MockProvider" do
       assert LLM.provider() == Maraithon.LLM.MockProvider
     end
   end
 
   describe "model/0" do
-    test "returns default model" do
-      model = LLM.model()
-      assert is_binary(model)
-      assert String.contains?(model, "claude")
+    test "returns the configured test model" do
+      assert LLM.model() == "mock-v1"
     end
 
     test "returns the active OpenAI model when configured" do

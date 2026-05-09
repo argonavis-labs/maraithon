@@ -4,7 +4,10 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.Admin
   alias Maraithon.AgentArchitecture
   alias Maraithon.AgentBuilder
+  alias Maraithon.AgentMarketplace
   alias Maraithon.Agents
+  alias Maraithon.Agents.AgentPackage
+  alias Maraithon.Agents.AgentPackageVersion
   alias Maraithon.BriefingSchedules
   alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
   alias Maraithon.Connections
@@ -35,7 +38,8 @@ defmodule MaraithonWeb.AgentsLive do
         launch: default_launch_params(),
         launch_error: nil,
         route_state: nil,
-        library: AgentBuilder.library_specs(),
+        library: [],
+        marketplace_error: nil,
         provider_status: %{}
       )
 
@@ -117,11 +121,12 @@ defmodule MaraithonWeb.AgentsLive do
 
   def handle_event("install_library_agent", %{"behavior" => behavior_id}, socket) do
     user_id = current_user_id(socket)
-    launch = Map.put(default_launch_params(), "behavior", behavior_id)
 
-    case build_agent_start_params(launch, user_id) do
-      {:ok, params} ->
-        case Runtime.start_agent(params) do
+    package = ensure_marketplace_package(behavior_id)
+
+    case package do
+      %{slug: slug} ->
+        case Runtime.install_agent_package(user_id, slug) do
           {:ok, agent} ->
             {:noreply,
              socket
@@ -142,11 +147,38 @@ defmodule MaraithonWeb.AgentsLive do
             {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
         end
 
-      {:error, message} when is_binary(message) ->
-        {:noreply, put_flash(socket, :error, message)}
+      _ ->
+        launch = Map.put(default_launch_params(), "behavior", behavior_id)
 
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+        case build_agent_start_params(launch, user_id) do
+          {:ok, params} ->
+            case Runtime.start_agent(params) do
+              {:ok, agent} ->
+                {:noreply,
+                 socket
+                 |> refresh_registry()
+                 |> put_flash(:info, "Installed #{agent_display_name(agent)}")
+                 |> push_patch(
+                   to: agents_path(socket.assigns.filters, %{id: agent.id, panel: :inspect})
+                 )}
+
+              {:error, message} when is_binary(message) ->
+                {:noreply, put_flash(socket, :error, "Could not install: #{message}")}
+
+              {:error, %Ecto.Changeset{} = changeset} ->
+                {:noreply,
+                 put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+
+              {:error, reason} ->
+                {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+            end
+
+          {:error, message} when is_binary(message) ->
+            {:noreply, put_flash(socket, :error, message)}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+        end
     end
   end
 
@@ -249,20 +281,23 @@ defmodule MaraithonWeb.AgentsLive do
     surface = action_surface(Map.get(params, "surface"))
 
     if agent_owned_by_current_user?(socket, id) do
-      case Runtime.delete_agent(id) do
+      agent = Agents.get_agent_for_user(id, current_user_id(socket))
+      {action, success_message, result} = remove_or_delete_agent(agent, id)
+
+      case result do
         :ok ->
-          emit_action_telemetry("delete", surface, id, :ok)
+          emit_action_telemetry(action, surface, id, :ok)
 
           socket =
             socket
             |> refresh_registry()
             |> assign(launch_error: nil)
-            |> put_flash(:info, "Agent deleted")
+            |> put_flash(:info, success_message)
 
           {:noreply, clear_missing_selection(socket, id)}
 
         {:error, :not_found} ->
-          emit_action_telemetry("delete", surface, id, :error)
+          emit_action_telemetry(action, surface, id, :error)
 
           {:noreply,
            socket
@@ -271,7 +306,7 @@ defmodule MaraithonWeb.AgentsLive do
            |> put_flash(:error, "Agent not found")}
 
         {:error, reason} ->
-          emit_action_telemetry("delete", surface, id, :error)
+          emit_action_telemetry(action, surface, id, :error)
 
           {:noreply,
            socket
@@ -528,6 +563,14 @@ defmodule MaraithonWeb.AgentsLive do
               </.table_body>
             </.table>
         </div>
+
+        <section
+          :if={@marketplace_error}
+          class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900"
+        >
+          <p class="font-medium">Agent marketplace needs model configuration.</p>
+          <p class="mt-1"><%= @marketplace_error %></p>
+        </section>
 
         <section :if={@library != []}>
           <div class="flex flex-wrap items-end justify-between gap-2 border-b border-zinc-950/10 pb-1">
@@ -1295,7 +1338,7 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp apply_selection(socket, id, panel, _raw_panel) do
-    case Agents.get_agent_for_user(id, current_user_id(socket)) do
+    case Agents.get_agent_for_user(id, current_user_id(socket), preload: agent_display_preloads()) do
       nil ->
         {:sanitize, clear_selection(socket), filters_path(socket), {:error, "Agent not found"}}
 
@@ -1316,7 +1359,7 @@ defmodule MaraithonWeb.AgentsLive do
         {:ok,
          assign(socket,
            selected_agent_id: agent.id,
-           selected_agent: snapshot.agent,
+           selected_agent: preload_agent_display_data(snapshot.agent),
            selected_architecture: architecture_for_agent(snapshot.agent),
            selected_panel: panel,
            events: snapshot.events,
@@ -1365,13 +1408,16 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp refresh_registry(socket) do
     user_id = current_user_id(socket)
-    agents = Agents.list_agents(user_id: user_id, preload: [:project])
+    agents = Agents.list_agents(user_id: user_id, preload: agent_display_preloads())
     filtered_agents = filter_agents(agents, socket.assigns.filters)
     provider_status = library_provider_status(user_id)
+    {library, marketplace_error} = marketplace_library(user_id)
 
     assign(socket,
       all_agents: agents,
       agents: filtered_agents,
+      library: library,
+      marketplace_error: marketplace_error,
       provider_status: provider_status
     )
   end
@@ -1429,7 +1475,9 @@ defmodule MaraithonWeb.AgentsLive do
         {:ok, socket}
 
       id ->
-        case Agents.get_agent_for_user(id, current_user_id(socket)) do
+        case Agents.get_agent_for_user(id, current_user_id(socket),
+               preload: agent_display_preloads()
+             ) do
           nil ->
             {:sanitize, clear_selection(socket), filters_path(socket),
              {:error, "Agent not found"}}
@@ -1666,6 +1714,109 @@ defmodule MaraithonWeb.AgentsLive do
     |> Enum.sort()
   end
 
+  defp marketplace_library(user_id) do
+    case AgentMarketplace.sync_builtin_packages() do
+      {:ok, _packages} ->
+        library =
+          user_id
+          |> Agents.list_marketplace_packages()
+          |> Enum.map(&marketplace_entry_to_spec/1)
+
+        {library, nil}
+
+      {:error, reason} ->
+        {[],
+         "Configured agents require an explicit model and intelligence setting. #{inspect(reason)}"}
+    end
+  end
+
+  defp marketplace_entry_to_spec(%{package: package, installation: installation}) do
+    behavior = package_behavior(package)
+    spec = package_behavior_spec(behavior, package)
+
+    spec
+    |> Map.put(:id, package.slug)
+    |> Map.put(:label, package.name)
+    |> Map.put(:summary, package.summary || spec.summary)
+    |> Map.put(:category, package.category || spec.category)
+    |> Map.put(:installed?, not is_nil(installation))
+    |> Map.put(:installed_agent_id, installation && installation.id)
+  end
+
+  defp package_behavior(%{latest_version: %{behavior: behavior}}) when is_binary(behavior),
+    do: behavior
+
+  defp package_behavior(%{slug: slug}), do: slug
+
+  defp package_behavior_spec("manifest_agent", package) do
+    %{
+      id: package.slug,
+      label: package.name,
+      category: package.category || "Marketplace",
+      summary:
+        package.summary ||
+          "A package-defined agent assembled from a manifest and markdown skills.",
+      requirements: package_requirements(package),
+      fields: [],
+      simple_fields: [],
+      defaults: %{},
+      suggestions: []
+    }
+  end
+
+  defp package_behavior_spec(behavior, _package), do: AgentBuilder.behavior_spec(behavior)
+
+  defp package_requirements(%{latest_version: %{required_connectors: connectors}})
+       when is_map(connectors) do
+    requirements_from_connector_map(connectors)
+  end
+
+  defp package_requirements(_package), do: []
+
+  defp requirements_from_connector_map(connectors) when is_map(connectors) do
+    connectors
+    |> Enum.flat_map(fn {provider, requirements} ->
+      requirements
+      |> List.wrap()
+      |> Enum.map(fn requirement ->
+        %{
+          kind: :provider,
+          provider: provider,
+          label: Map.get(requirement, "label") || provider,
+          required?: true
+        }
+      end)
+    end)
+  end
+
+  defp requirements_from_connector_map(_connectors), do: []
+
+  defp ensure_marketplace_package(behavior_id) when is_binary(behavior_id) do
+    _ = AgentMarketplace.sync_builtin_packages()
+    Agents.get_agent_package_by_slug(behavior_id, preload: [:latest_version])
+  end
+
+  defp ensure_marketplace_package(_behavior_id), do: nil
+
+  defp remove_or_delete_agent(%{agent_package_id: package_id}, id)
+       when is_binary(package_id) do
+    {:remove, "Agent removed", Runtime.remove_agent_installation(id)}
+  end
+
+  defp remove_or_delete_agent(_agent, id) do
+    {:delete, "Agent deleted", Runtime.delete_agent(id)}
+  end
+
+  defp agent_display_preloads do
+    [:project, :agent_package_version, agent_package: [:latest_version]]
+  end
+
+  defp preload_agent_display_data(nil), do: nil
+
+  defp preload_agent_display_data(agent) do
+    Agents.get_agent(agent.id, preload: agent_display_preloads()) || agent
+  end
+
   defp default_launch_params do
     AgentBuilder.default_launch_params()
   end
@@ -1793,47 +1944,13 @@ defmodule MaraithonWeb.AgentsLive do
     |> Enum.map(fn id ->
       %{
         id: id,
-        label: chief_skill_label(id),
-        description: chief_skill_description(id)
+        label: ChiefOfStaffSkills.label(id),
+        description: ChiefOfStaffSkills.description(id)
       }
     end)
   end
 
   defp chief_skill_rows(_agent), do: []
-
-  defp chief_skill_label("followthrough"), do: "Follow-through"
-  defp chief_skill_label("travel_logistics"), do: "Travel logistics"
-  defp chief_skill_label("morning_briefing"), do: "Morning briefing"
-  defp chief_skill_label("briefing"), do: "Briefing"
-  defp chief_skill_label("project_scope_alignment"), do: "Project scope alignment"
-  defp chief_skill_label("holiday_radar"), do: "Holiday radar"
-
-  defp chief_skill_label(id) when is_binary(id) do
-    id
-    |> String.replace("_", " ")
-    |> String.split()
-    |> Enum.map_join(" ", &String.capitalize/1)
-  end
-
-  defp chief_skill_description("followthrough"),
-    do: "Finds commitments, unanswered threads, and replies that need action."
-
-  defp chief_skill_description("travel_logistics"),
-    do: "Tracks flights, hotels, local timing, and calendar-sensitive travel work."
-
-  defp chief_skill_description("morning_briefing"),
-    do: "Builds the daily Chief of Staff briefing and sends it through Telegram."
-
-  defp chief_skill_description("briefing"),
-    do: "Prepares scheduled operator summaries from the configured source bundle."
-
-  defp chief_skill_description("project_scope_alignment"),
-    do: "Checks whether active work is aligned with the current project scope."
-
-  defp chief_skill_description("holiday_radar"),
-    do: "Surfaces upcoming family, holiday, and gift reminders before they become urgent."
-
-  defp chief_skill_description(_id), do: "Runs as part of the Chief of Staff cycle."
 
   defp chief_source_labels, do: ["Gmail", "Calendar", "Slack", "News"]
 
@@ -1976,7 +2093,77 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp library_requirement_summary(_spec), do: ""
 
-  defp behavior_spec(agent), do: AgentBuilder.behavior_spec(agent.behavior)
+  defp behavior_spec(agent) do
+    case package_version_for_agent(agent) do
+      %AgentPackageVersion{} = version ->
+        package_behavior_spec_from_version(agent, version)
+
+      _ ->
+        AgentBuilder.behavior_spec(agent.behavior)
+    end
+  end
+
+  defp package_version_for_agent(%{agent_package_version: %AgentPackageVersion{} = version}),
+    do: version
+
+  defp package_version_for_agent(%{agent_package_version_id: id}) when is_binary(id),
+    do: Agents.get_agent_package_version(id)
+
+  defp package_version_for_agent(_agent), do: nil
+
+  defp package_behavior_spec_from_version(agent, %AgentPackageVersion{} = version) do
+    base = behavior_spec_base(version.behavior)
+    package = loaded_package(agent)
+
+    requirements =
+      case requirements_from_connector_map(version.required_connectors || %{}) do
+        [] -> Map.get(base, :requirements, [])
+        values -> values
+      end
+
+    base
+    |> Map.put(:id, version.behavior)
+    |> Map.put(:label, package_label(package, base.label))
+    |> Map.put(:category, package_category(package, base.category))
+    |> Map.put(:summary, package_summary(package, base.summary))
+    |> Map.put(:requirements, requirements)
+  end
+
+  defp behavior_spec_base("manifest_agent") do
+    %{
+      id: "manifest_agent",
+      label: "Manifest agent",
+      category: "Marketplace",
+      summary: "Runs from an installed package manifest and markdown skills.",
+      requirements: [],
+      fields: [],
+      simple_fields: [],
+      defaults: %{},
+      suggestions: []
+    }
+  end
+
+  defp behavior_spec_base(behavior), do: AgentBuilder.behavior_spec(behavior)
+
+  defp loaded_package(%{agent_package: %AgentPackage{} = package}), do: package
+  defp loaded_package(_agent), do: nil
+
+  defp package_label(%AgentPackage{name: name}, _fallback) when is_binary(name) and name != "",
+    do: name
+
+  defp package_label(_package, fallback), do: fallback
+
+  defp package_category(%AgentPackage{category: category}, _fallback)
+       when is_binary(category) and category != "",
+       do: category
+
+  defp package_category(_package, fallback), do: fallback
+
+  defp package_summary(%AgentPackage{summary: summary}, _fallback)
+       when is_binary(summary) and summary != "",
+       do: summary
+
+  defp package_summary(_package, fallback), do: fallback
 
   defp connector_requirement?(%{kind: kind, provider: provider})
        when kind in [:provider, :provider_service] and is_binary(provider),

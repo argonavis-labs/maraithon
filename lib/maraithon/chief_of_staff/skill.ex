@@ -10,6 +10,8 @@ defmodule Maraithon.ChiefOfStaff.Skill do
   alias Maraithon.Behaviors.Behavior
 
   @callback id() :: String.t()
+  @callback label() :: String.t()
+  @callback description() :: String.t()
   @callback default_config() :: map()
   @callback requirements() :: [map()]
   @callback subscriptions(config :: map(), user_id :: String.t()) :: [String.t()]
@@ -31,7 +33,17 @@ defmodule Maraithon.ChiefOfStaff.Skill do
               | {:effect, Behavior.effect(), Behavior.state()}
               | {:idle, Behavior.state()}
 
+  @callback handle_effect_error(
+              :llm_call | :tool_call,
+              reason :: any(),
+              Behavior.state(),
+              Behavior.context()
+            ) ::
+              {:emit, {atom(), map()}, Behavior.state()}
+              | {:effect, Behavior.effect(), Behavior.state()}
+              | {:idle, Behavior.state()}
+
   @callback next_wakeup(Behavior.state()) :: Behavior.wakeup_schedule()
 
-  @optional_callbacks interested_in?: 2
+  @optional_callbacks interested_in?: 2, label: 0, description: 0, handle_effect_error: 4
 end

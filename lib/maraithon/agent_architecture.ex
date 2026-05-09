@@ -9,7 +9,12 @@ defmodule Maraithon.AgentArchitecture do
   """
 
   alias Maraithon.AgentBuilder
+  alias Maraithon.AgentHarness.Manifest
+  alias Maraithon.AgentHarness.ToolCatalog
+  alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.Agents.AgentPackage
+  alias Maraithon.Agents.AgentPackageVersion
   alias Maraithon.Behaviors
   alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
   alias Maraithon.Tools
@@ -66,12 +71,21 @@ defmodule Maraithon.AgentArchitecture do
   Build a manifest from a persisted agent row, including its project binding.
   """
   def for_agent(%Agent{} = agent) do
-    {:ok,
-     build_manifest(agent.behavior,
-       config: agent.config || %{},
-       project_id: agent.project_id,
-       agent: agent
-     )}
+    case package_architecture(agent) do
+      {:ok, architecture} ->
+        {:ok, architecture}
+
+      :no_package ->
+        {:ok,
+         build_manifest(agent.behavior,
+           config: agent.config || %{},
+           project_id: agent.project_id,
+           agent: agent
+         )}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def for_agent(agent) when is_map(agent) do
@@ -187,6 +201,173 @@ defmodule Maraithon.AgentArchitecture do
       },
       binding: binding(agent, project_id)
     }
+  end
+
+  defp package_architecture(%Agent{agent_package_version_id: nil}), do: :no_package
+
+  defp package_architecture(%Agent{} = agent) do
+    with {:ok, version} <- package_version_for_agent(agent),
+         {:ok, manifest} <- Manifest.build(version) do
+      package = package_for_agent(agent, version)
+      {:ok, build_package_manifest(agent, package, version, manifest)}
+    end
+  end
+
+  defp package_version_for_agent(%Agent{agent_package_version: %AgentPackageVersion{} = version}) do
+    {:ok, version}
+  end
+
+  defp package_version_for_agent(%Agent{agent_package_version_id: version_id})
+       when is_binary(version_id) do
+    case Agents.get_agent_package_version(version_id, preload: [:agent_package]) do
+      %AgentPackageVersion{} = version -> {:ok, version}
+      nil -> {:error, :package_version_not_found}
+    end
+  end
+
+  defp package_version_for_agent(_agent), do: :no_package
+
+  defp package_for_agent(%Agent{agent_package: %AgentPackage{} = package}, _version), do: package
+
+  defp package_for_agent(_agent, %AgentPackageVersion{agent_package: %AgentPackage{} = package}),
+    do: package
+
+  defp package_for_agent(_agent, _version), do: nil
+
+  defp build_package_manifest(agent, package, version, manifest) do
+    components =
+      [
+        @runtime_component,
+        behavior_component(
+          version.behavior,
+          Behaviors.get(version.behavior),
+          package_behavior_spec(package, version)
+        )
+      ] ++
+        package_skill_components(manifest) ++
+        package_tool_components(manifest) ++
+        package_connector_components(manifest) ++
+        @memory_components ++
+        project_components(agent.project_id)
+
+    %{
+      id: package_slug(package, version),
+      label: package_name(package, version),
+      category: package_category(package),
+      summary: package_summary(package, version),
+      behavior_module: inspect_module(Behaviors.get(version.behavior)),
+      runtime: %{
+        process_module: "Maraithon.Runtime.Agent",
+        supervisor_module: "Maraithon.Runtime.AgentSupervisor",
+        registry_module: "Maraithon.Runtime.AgentRegistry",
+        dispatch_module: "Maraithon.Runtime.Dispatch",
+        scheduler_module: "Maraithon.Runtime.Scheduler"
+      },
+      contract: %{
+        behaviour: "Maraithon.Behaviors.Behavior",
+        callbacks: ~w(init handle_wakeup handle_effect_result next_wakeup),
+        effect_types: ~w(llm_call tool_call)
+      },
+      manifest: package_manifest_envelope(version, manifest),
+      components: components,
+      capabilities: %{
+        tools: component_ids(components, :tool),
+        skills: component_ids(components, :skill),
+        subscriptions: component_ids(components, :subscription),
+        requirements: Manifest.get(manifest, :required_connectors, %{}),
+        inputs: [],
+        outputs: []
+      },
+      controls: %{
+        fields: [],
+        simple_fields: [],
+        defaults: version.default_config || %{}
+      },
+      binding: binding(agent, agent.project_id)
+    }
+  end
+
+  defp package_behavior_spec(package, version) do
+    %{
+      label: package_name(package, version),
+      summary: package_summary(package, version)
+    }
+  end
+
+  defp package_manifest_envelope(version, manifest) do
+    %{
+      package_version_id: version.id,
+      version: version.version,
+      behavior: version.behavior,
+      system_prompt: version.system_prompt,
+      model: Manifest.get(manifest, :model),
+      intelligence: Manifest.get(manifest, :intelligence),
+      goals: Manifest.get(manifest, :goals, []),
+      skills: Enum.map(Manifest.get(manifest, :skills, []), &skill_envelope/1),
+      required_connectors: Manifest.get(manifest, :required_connectors, %{}),
+      tool_allowlist: Manifest.get(manifest, :tool_allowlist, []),
+      mcp_allowlist: Manifest.get(manifest, :mcp_allowlist, []),
+      default_config: Manifest.get(manifest, :default_config, %{})
+    }
+  end
+
+  defp skill_envelope(skill) do
+    %{
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      path: skill.path,
+      connectors: skill.connectors,
+      tools: skill.tools
+    }
+  end
+
+  defp package_skill_components(manifest) do
+    manifest
+    |> Manifest.get(:skills, [])
+    |> Enum.map(fn skill ->
+      %{
+        kind: :skill,
+        id: skill.id,
+        label: skill.name,
+        path: skill.path,
+        enabled_by_default?: true,
+        requirements: skill.connectors,
+        tools: skill.tools,
+        description: skill.description
+      }
+    end)
+  end
+
+  defp package_tool_components(manifest) do
+    manifest
+    |> Manifest.get(:tool_allowlist, [])
+    |> ToolCatalog.describe()
+    |> Enum.map(fn descriptor ->
+      %{
+        kind: :tool,
+        id: descriptor.name,
+        label: descriptor.name,
+        connector: descriptor.connector,
+        action: descriptor.action,
+        available?: ToolCatalog.known_tool?(descriptor.name),
+        description: "Allowed by the package manifest."
+      }
+    end)
+  end
+
+  defp package_connector_components(manifest) do
+    manifest
+    |> Manifest.get(:required_connectors, %{})
+    |> Enum.map(fn {provider, requirements} ->
+      %{
+        kind: :connector,
+        id: provider,
+        label: humanize_id(provider),
+        requirements: requirements,
+        responsibility: "Required connector declared by the package manifest."
+      }
+    end)
   end
 
   defp behavior_component(behavior_id, behavior_module, spec) do
@@ -414,10 +595,28 @@ defmodule Maraithon.AgentArchitecture do
 
   defp humanize_id(id) do
     id
+    |> to_string()
     |> String.replace("_", " ")
     |> String.split(" ")
     |> Enum.map_join(" ", &String.capitalize/1)
   end
+
+  defp package_slug(%AgentPackage{slug: slug}, _version), do: slug
+  defp package_slug(_package, version), do: "package:#{version.id}"
+
+  defp package_name(%AgentPackage{name: name}, _version) when is_binary(name) and name != "",
+    do: name
+
+  defp package_name(_package, version), do: humanize_id(version.behavior)
+
+  defp package_category(%AgentPackage{category: category}), do: category
+  defp package_category(_package), do: "Agent"
+
+  defp package_summary(%AgentPackage{summary: summary}, _version)
+       when is_binary(summary) and summary != "",
+       do: summary
+
+  defp package_summary(_package, version), do: "Package version #{version.version}"
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(value), do: not is_nil(value)

@@ -18,22 +18,18 @@ defmodule MaraithonWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, "/dashboard")
     html = render(view)
 
-    assert has_element?(view, "h1", "Agent Fleet Operations")
-    assert has_element?(view, "h2", "Connected Apps")
-    assert has_element?(view, "h2", "Memory")
-    assert html =~ "Todos"
-    assert has_element?(view, "h2", "Add Project")
-    assert has_element?(view, "h2", "Project Memory")
+    assert has_element?(view, "h2", "Overview")
+    assert has_element?(view, "h2", "Today")
+    assert has_element?(view, "h2", "Workspace")
+    assert html =~ "New project"
+    assert html =~ "Memory"
     assert has_element?(view, "h2", "Projects")
-    assert has_element?(view, "h2", "Actionable Insights")
-    assert has_element?(view, "h2", "Agent Activity")
-    assert has_element?(view, "h2", "Health & Monitoring")
-    assert has_element?(view, "h3", "Operational Logs")
-    assert has_element?(view, "h3", "Failures & Stale Work")
-    assert has_element?(view, "h3", "Raw Logs")
-    assert has_element?(view, "h3", "Fly.io Platform Logs")
-    assert has_element?(view, "a[href='/agents']", "Manage Agents")
-    assert has_element?(view, "a[href='/agents/new']", "New Agent")
+    assert has_element?(view, "h2", "Health")
+    assert html =~ "Operational activity"
+    assert html =~ "Failures &amp; stale work"
+    assert html =~ "Raw logs"
+    assert html =~ "Fly.io platform logs"
+    assert has_element?(view, "a[href='/agents/new']", "New agent")
     refute html =~ "Agent Registry"
     refute html =~ "Agent Details"
   end
@@ -328,14 +324,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, "/dashboard")
     html = render(view)
 
-    assert html =~ "Total Agents"
-    assert html =~ "Running"
-    assert html =~ "Degraded"
-    assert html =~ "LLM Calls"
-    assert html =~ "Total Spend"
-    assert html =~ "Agent Activity"
+    assert html =~ "Agents"
+    assert html =~ "running"
+    assert html =~ "degraded"
+    assert html =~ "LLM calls"
+    assert html =~ "Spend"
     assert html =~ "Prompt agent"
-    assert html =~ "No recent logs captured."
   end
 
   test "shows todos and lets the user complete them from the dashboard", %{conn: conn} do

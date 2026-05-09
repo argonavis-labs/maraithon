@@ -39,7 +39,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
           "reasoning_effort" => "medium"
         }
 
-        with {:ok, response} <- LLM.provider().complete(params),
+        with {:ok, response} <- LLM.complete(params),
              {:ok, decoded} <- decode_json(response.content) do
           {:ok, normalize(decoded)}
         end

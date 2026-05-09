@@ -2,6 +2,7 @@ defmodule Maraithon.AgentArchitectureTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.AgentArchitecture
+  alias Maraithon.Agents
   alias Maraithon.Agents.Agent
 
   describe "list/1" do
@@ -97,6 +98,52 @@ defmodule Maraithon.AgentArchitectureTest do
       assert Enum.any?(
                manifest.components,
                &(&1.kind == :scope and &1.id == "project:#{agent.project_id}")
+             )
+    end
+
+    test "includes manifest envelope for package-backed agents" do
+      slug = "architecture-package-#{System.unique_integer([:positive])}"
+
+      assert {:ok, package} =
+               Agents.sync_agent_package_manifest(%{
+                 "slug" => slug,
+                 "name" => "Architecture Package",
+                 "summary" => "Inspected from package metadata",
+                 "category" => "Operations",
+                 "version" => "1.0.0",
+                 "behavior" => "manifest_agent",
+                 "system_prompt" => "Operate from the manifest.",
+                 "model" => "gpt-5.4",
+                 "intelligence" => "high",
+                 "goals" => ["Explain the package architecture"],
+                 "skill_paths" => ["priv/agents/skills/chief_of_staff/morning_briefing.md"],
+                 "required_connectors" => %{"google" => %{"gmail" => true}},
+                 "tool_allowlist" => ["llm.complete", "gmail.search"],
+                 "mcp_allowlist" => ["google"]
+               })
+
+      agent = %Agent{
+        id: Ecto.UUID.generate(),
+        user_id: "operator@example.com",
+        behavior: "manifest_agent",
+        status: "running",
+        agent_package_id: package.id,
+        agent_package_version_id: package.latest_version.id,
+        config: %{"agent_package_version_id" => package.latest_version.id}
+      }
+
+      assert {:ok, architecture} = AgentArchitecture.for_agent(agent)
+
+      assert architecture.id == slug
+      assert architecture.manifest.model == "gpt-5.4"
+      assert architecture.manifest.intelligence == "high"
+      assert [%{id: "morning_briefing"}] = architecture.manifest.skills
+      assert "llm.complete" in architecture.capabilities.tools
+      assert "gmail.search" in architecture.capabilities.tools
+
+      assert Enum.any?(
+               architecture.components,
+               &(&1.kind == :connector and &1.id == "google")
              )
     end
   end

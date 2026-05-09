@@ -35,6 +35,7 @@ defmodule Maraithon.TelegramAssistantTest do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
     original_capturing = Application.get_env(:maraithon, :capturing_telegram, [])
     original_user_memory = Application.get_env(:maraithon, :user_memory, [])
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
     Application.put_env(
       :maraithon,
@@ -67,6 +68,17 @@ defmodule Maraithon.TelegramAssistantTest do
       )
     )
 
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.merge(original_runtime,
+        llm_provider: Maraithon.TestSupport.ActionDraftLLM,
+        llm_provider_name: "test-action-draft",
+        llm_model: "test-action-draft",
+        llm_intelligence: "medium"
+      )
+    )
+
     Application.put_env(:maraithon, :capturing_telegram, original_capturing)
 
     assert Maraithon.TelegramAssistant.enabled?()
@@ -78,6 +90,7 @@ defmodule Maraithon.TelegramAssistantTest do
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, :capturing_telegram, original_capturing)
       Application.put_env(:maraithon, :user_memory, original_user_memory)
+      Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
     end)
 
     user_id = "telegram-assistant@example.com"

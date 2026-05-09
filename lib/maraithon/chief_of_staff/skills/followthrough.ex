@@ -22,6 +22,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
   def id, do: "followthrough"
 
   @impl true
+  def label, do: "Follow-through"
+
+  @impl true
+  def description, do: "Finds commitments, unanswered threads, and replies that need action."
+
+  @impl true
   def default_config do
     %{
       "email_scan_limit" => @default_email_scan_limit,

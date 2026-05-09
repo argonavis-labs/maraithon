@@ -5,10 +5,12 @@ defmodule Maraithon.Runtime do
   """
 
   alias Maraithon.Agents
+  alias Maraithon.AgentSubscriptions
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Events
+  alias Maraithon.Runtime.Scheduler
 
   require Logger
 
@@ -22,7 +24,16 @@ defmodule Maraithon.Runtime do
       behavior: params["behavior"] || params[:behavior],
       config: params["config"] || params[:config] || %{},
       status: "running",
-      started_at: DateTime.utc_now()
+      started_at: DateTime.utc_now(),
+      install_status: params["install_status"] || params[:install_status] || "enabled",
+      installed_at: params["installed_at"] || params[:installed_at] || DateTime.utc_now(),
+      agent_package_id: params["agent_package_id"] || params[:agent_package_id],
+      agent_package_version_id:
+        params["agent_package_version_id"] || params[:agent_package_version_id],
+      connector_grants: params["connector_grants"] || params[:connector_grants] || %{},
+      schedule_policy: params["schedule_policy"] || params[:schedule_policy] || %{},
+      delivery_policy: params["delivery_policy"] || params[:delivery_policy] || %{},
+      memory_scope: params["memory_scope"] || params[:memory_scope] || %{}
     }
 
     # Add budget to config if provided
@@ -45,6 +56,32 @@ defmodule Maraithon.Runtime do
   end
 
   @doc """
+  Install the latest package version for a user and start its runtime process.
+  """
+  def install_agent_package(user_id, package_slug, opts \\ [])
+      when is_binary(user_id) and is_binary(package_slug) do
+    opts =
+      opts
+      |> Keyword.put_new(:runtime_status, "running")
+      |> Keyword.put_new(:install_status, "enabled")
+
+    with {:ok, agent} <- Agents.install_agent_package(user_id, package_slug, opts),
+         {:ok, _pid} <- start_agent_process(agent) do
+      Logger.info("Installed package agent #{agent.id}",
+        agent_id: agent.id,
+        package_slug: package_slug,
+        behavior: agent.behavior
+      )
+
+      {:ok, agent}
+    else
+      {:error, reason} = error ->
+        Logger.error("Failed to install package #{package_slug}: #{inspect(reason)}")
+        error
+    end
+  end
+
+  @doc """
   Start an existing persisted agent by ID.
   """
   def start_existing_agent(id) when is_binary(id) do
@@ -54,6 +91,15 @@ defmodule Maraithon.Runtime do
 
       %{status: status} when status in ["running", "degraded"] ->
         {:error, :already_running}
+
+      %{install_status: "removed"} ->
+        {:error, :agent_removed}
+
+      %{install_status: "paused"} ->
+        {:error, :agent_paused}
+
+      %{install_status: "setup_required"} ->
+        {:error, :agent_setup_required}
 
       agent ->
         running_attrs = %{status: "running", started_at: DateTime.utc_now(), stopped_at: nil}
@@ -84,11 +130,7 @@ defmodule Maraithon.Runtime do
         {:error, :not_found}
 
       agent ->
-        # Ask agent to stop across the cluster, then stop local process if present.
-        Dispatch.dispatch(id, {:control, :stop, reason})
-        stop_agent_process(id)
-
-        # Update database
+        stop_running_agent(agent, reason)
         {:ok, agent} = Agents.mark_stopped(agent)
 
         Logger.info("Stopped agent #{id}", agent_id: id, reason: reason)
@@ -129,12 +171,7 @@ defmodule Maraithon.Runtime do
         {:error, :not_found}
 
       agent ->
-        was_running = agent.status in ["running", "degraded"]
-
-        if was_running do
-          Dispatch.dispatch(id, {:control, :stop, "deleted_from_admin"})
-          stop_agent_process(id)
-        end
+        stop_running_agent(agent, "deleted_from_admin")
 
         case Agents.delete_agent(agent) do
           {:ok, _agent} ->
@@ -144,6 +181,82 @@ defmodule Maraithon.Runtime do
           {:error, reason} = error ->
             Logger.error("Failed to delete agent #{id}: #{inspect(reason)}", agent_id: id)
             error
+        end
+    end
+  end
+
+  @doc """
+  Soft-remove an installed agent from the user's marketplace workspace.
+  """
+  def remove_agent_installation(id) when is_binary(id) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        deactivate_agent_installation(agent, "removed_from_marketplace")
+
+        with {:ok, _agent} <- Agents.remove_agent_installation(agent) do
+          Logger.info("Removed agent installation #{id}", agent_id: id)
+          :ok
+        end
+    end
+  end
+
+  @doc """
+  Pause an installed marketplace agent and cancel all scheduled work.
+  """
+  def pause_agent_installation(id) when is_binary(id) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      %{install_status: "removed"} ->
+        {:error, :agent_removed}
+
+      agent ->
+        deactivate_agent_installation(agent, "paused_from_marketplace")
+        Agents.pause_agent_installation(agent)
+    end
+  end
+
+  @doc """
+  Resume a paused installed marketplace agent and start its runtime process.
+  """
+  def resume_agent_installation(id) when is_binary(id) do
+    case Agents.get_agent(id, include_removed: true) do
+      nil ->
+        {:error, :not_found}
+
+      %{install_status: "removed"} ->
+        {:error, :agent_removed}
+
+      agent ->
+        with {:ok, enabled_agent} <- Agents.resume_agent_installation(agent),
+             {:ok, running_agent} <- start_existing_agent(enabled_agent.id) do
+          {:ok, running_agent}
+        end
+    end
+  end
+
+  @doc """
+  Upgrade an installed marketplace agent to a newer package version.
+  """
+  def upgrade_agent_installation(id, version_id \\ :latest) when is_binary(id) do
+    case Agents.get_agent(id, preload: [:agent_package]) do
+      nil ->
+        {:error, :not_found}
+
+      %{install_status: "removed"} ->
+        {:error, :agent_removed}
+
+      agent ->
+        was_running = agent.status in ["running", "degraded"]
+
+        with {:ok, stopped_agent} <- stop_for_update(agent, was_running),
+             {:ok, upgraded_agent} <- upgrade_agent_version(stopped_agent, version_id),
+             {:ok, final_agent} <- maybe_restart(upgraded_agent, was_running) do
+          {:ok, final_agent}
         end
     end
   end
@@ -253,6 +366,25 @@ defmodule Maraithon.Runtime do
     end
   end
 
+  defp deactivate_agent_installation(agent, reason) do
+    stop_running_agent(agent, reason)
+    Scheduler.cancel_all(agent.id)
+    AgentSubscriptions.deactivate_for_agent(agent.id)
+    :ok
+  end
+
+  defp stop_running_agent(agent, reason) do
+    if running_agent?(agent) do
+      Dispatch.dispatch(agent.id, {:control, :stop, reason})
+      stop_agent_process(agent.id)
+    end
+
+    :ok
+  end
+
+  defp running_agent?(%{status: status}), do: status in ["running", "degraded"]
+  defp running_agent?(_agent), do: false
+
   defp lookup_agent_process(id) do
     case Registry.lookup(AgentRegistry, id) do
       [{pid, _}] -> {:ok, pid}
@@ -315,8 +447,7 @@ defmodule Maraithon.Runtime do
   defp stop_for_update(agent, false), do: {:ok, agent}
 
   defp stop_for_update(agent, true) do
-    Dispatch.dispatch(agent.id, {:control, :stop, "restarting_with_updated_config"})
-    stop_agent_process(agent.id)
+    stop_running_agent(agent, "restarting_with_updated_config")
     Agents.mark_stopped(agent)
   end
 
@@ -374,6 +505,12 @@ defmodule Maraithon.Runtime do
         {:error, reason}
     end
   end
+
+  defp upgrade_agent_version(agent, :latest),
+    do: Agents.upgrade_agent_installation_to_latest(agent)
+
+  defp upgrade_agent_version(agent, version_id) when is_binary(version_id),
+    do: Agents.upgrade_agent_installation(agent, version_id)
 
   defp wait_for_agent_response(
          id,

@@ -62,8 +62,15 @@ defmodule Maraithon.Behaviors.Behavior do
               | {:effect, effect(), state()}
               | {:idle, state()}
 
+  @callback handle_effect_error(:llm_call | :tool_call, reason :: any(), state(), context()) ::
+              {:emit, {atom(), map()}, state()}
+              | {:effect, effect(), state()}
+              | {:idle, state()}
+
   @doc """
   Determine when to schedule the next wakeup.
   """
   @callback next_wakeup(state()) :: wakeup_schedule()
+
+  @optional_callbacks handle_effect_error: 4
 end

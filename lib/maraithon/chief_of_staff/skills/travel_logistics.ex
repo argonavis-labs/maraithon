@@ -18,6 +18,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
   def id, do: "travel_logistics"
 
   @impl true
+  def label, do: "Travel logistics"
+
+  @impl true
+  def description, do: "Tracks flights, hotels, local timing, and calendar-sensitive travel work."
+
+  @impl true
   def default_config do
     %{
       "email_scan_limit" => @default_email_scan_limit,

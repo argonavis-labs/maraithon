@@ -21,20 +21,20 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "highlights the Agents tab and links back to the agents workspace", %{conn: conn} do
       {:ok, view, html} = live(conn, "/agents/new")
 
-      assert has_element?(view, "a[href='/agents'].bg-zinc-950", "Agents")
-      assert html =~ "Back to agents"
+      assert has_element?(view, "a[href='/agents'][aria-current='page']", "Agents")
+      assert html =~ "Agents"
     end
 
     test "shows clear inputs, outputs, and readiness guidance", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new")
 
-      assert html =~ "Create a new agent"
+      assert html =~ "New agent"
       assert html =~ "What goes in"
       assert html =~ "What comes out"
       assert html =~ "Architecture"
       assert html =~ "OTP Agent Runtime"
       assert html =~ "Permission readiness"
-      assert html =~ "Prompt Agent"
+      assert html =~ "Chief of Staff"
       assert html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
     end
@@ -50,7 +50,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Architecture"
-      assert html =~ "AI Chief of Staff"
+      assert html =~ "Chief of Staff"
       assert html =~ "Followthrough"
       assert html =~ "Travel Logistics"
       assert html =~ "Morning Briefing"
@@ -66,16 +66,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     end
 
     test "shows blockers when inbox advisor permissions are missing", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/agents/new")
-
-      _html =
-        view
-        |> element(
-          "button[phx-click=choose_behavior][phx-value-behavior=\"inbox_calendar_advisor\"]"
-        )
-        |> render_click()
-
-      html = render(view)
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff Agent"
       assert html =~ "Google Gmail"
@@ -96,7 +87,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "AI Chief of Staff"
+      assert html =~ "Chief of Staff"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
@@ -117,7 +108,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "GitHub Product Planner"
+      assert html =~ "PM Agent"
       assert html =~ "GitHub"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
@@ -125,16 +116,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     end
 
     test "shows blockers when slack followthrough permissions are missing", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/agents/new")
-
-      _html =
-        view
-        |> element(
-          "button[phx-click=choose_behavior][phx-value-behavior=\"slack_followthrough_agent\"]"
-        )
-        |> render_click()
-
-      html = render(view)
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=slack_followthrough_agent")
 
       assert html =~ "Slack Followthrough Agent"
       assert html =~ "Slack Channels"
@@ -143,16 +125,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     end
 
     test "shows blockers when personal assistant permissions are missing", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/agents/new")
-
-      _html =
-        view
-        |> element(
-          "button[phx-click=choose_behavior][phx-value-behavior=\"personal_assistant_agent\"]"
-        )
-        |> render_click()
-
-      html = render(view)
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
 
       assert html =~ "Personal Assistant Agent"
       assert html =~ "Google Gmail"

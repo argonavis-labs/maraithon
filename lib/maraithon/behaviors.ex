@@ -8,6 +8,7 @@ defmodule Maraithon.Behaviors do
     "watchdog_summarizer" => Maraithon.Behaviors.WatchdogSummarizer,
     "repo_planner" => Maraithon.Behaviors.RepoPlanner,
     "github_product_planner" => Maraithon.Behaviors.GitHubProductPlanner,
+    "manifest_agent" => Maraithon.Behaviors.ManifestAgent,
     "prompt_agent" => Maraithon.Behaviors.PromptAgent,
     "ai_chief_of_staff" => Maraithon.Behaviors.AIChiefOfStaff,
     "personal_assistant_agent" => Maraithon.Behaviors.PersonalAssistantAgent,

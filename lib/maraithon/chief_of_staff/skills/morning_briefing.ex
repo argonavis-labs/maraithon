@@ -5,6 +5,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   @behaviour Maraithon.ChiefOfStaff.Skill
 
+  alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
@@ -18,9 +19,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
+  @default_llm_max_tokens 3200
+  @default_llm_reasoning_effort "high"
+  @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
 
   @impl true
   def id, do: "morning_briefing"
+
+  @impl true
+  def label, do: "Morning briefing"
+
+  @impl true
+  def description, do: "Builds the daily Chief of Staff briefing and sends it through Telegram."
 
   @impl true
   def default_config do
@@ -44,6 +54,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         }
       ],
       "lookback_hours" => @default_lookback_hours,
+      "llm_max_tokens" => @default_llm_max_tokens,
+      "llm_reasoning_effort" => @default_llm_reasoning_effort,
       "slack_key_channels" => [
         "runner-general",
         "runner-leads",
@@ -127,6 +139,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           100
         ),
       lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 168),
+      llm_model: normalize_string(config["llm_model"]),
+      llm_max_tokens:
+        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 12_000),
+      llm_reasoning_effort:
+        normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       pending_brief_input: nil,
       pending_dedupe_key: nil,
       last_generated_keys: %{}
@@ -153,20 +170,32 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       true ->
         brief_input = build_brief_input(user_id, now, state, context)
 
-        {:effect, {:llm_call, llm_params(brief_input)},
-         %{
-           state
-           | user_id: user_id,
-             pending_brief_input: brief_input,
-             pending_dedupe_key: dedupe_key
-         }}
+        pending_state = %{
+          state
+          | user_id: user_id,
+            pending_brief_input: brief_input,
+            pending_dedupe_key: dedupe_key
+        }
+
+        case llm_params(brief_input, state) do
+          {:ok, params} ->
+            {:effect, {:llm_call, params}, pending_state}
+
+          {:error, reason} ->
+            handle_effect_result(
+              {:llm_call, %{content: "", error: inspect(reason), finish_reason: "error"}},
+              pending_state,
+              context
+            )
+        end
     end
   end
 
   @impl true
   def handle_effect_result({:llm_call, response}, state, context) do
     brief_input = state.pending_brief_input || %{}
-    brief = parse_llm_brief(response) || fallback_brief(brief_input)
+    parsed_brief = parse_llm_brief(response)
+    {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
 
     attrs = %{
       "cadence" => "morning",
@@ -175,14 +204,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "dedupe_key" =>
         state.pending_dedupe_key ||
           "morning_briefing:#{read_string(brief_input, "date", "unknown")}",
+      "status" => "pending",
       "title" => read_string(brief, "title", "Morning briefing"),
       "summary" =>
         read_string(brief, "summary", "Review today's schedule, inbox, Slack, and commitments."),
       "body" => read_string(brief, "body", "No briefing body was generated."),
+      "error_message" => error_message,
       "metadata" => %{
         "agent_behavior" => state.assistant_behavior,
         "assistant_behavior" => state.assistant_behavior,
         "assistant_cycle_id" => context[:assistant_cycle_id],
+        "error_message" => error_message,
+        "generation_mode" => generation_mode,
+        "llm_finish_reason" => llm_finish_reason(response),
         "origin_skill_id" => id(),
         "source_backed" => true,
         "brief_input" => compact_brief_input_for_metadata(brief_input),
@@ -194,10 +228,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {:ok, _brief} ->
         period_key = read_string(brief_input, "date", nil)
 
+        event_type =
+          if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+
         {:emit,
-         {:briefs_recorded,
+         {event_type,
           %{
             count: 1,
+            error_message: error_message,
+            generation_mode: generation_mode,
             user_id: context[:user_id] || state.user_id,
             cadences: ["morning"],
             source_backed: true
@@ -215,6 +254,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   def handle_effect_result(_effect_result, state, _context), do: {:idle, state}
+
+  @impl true
+  def handle_effect_error(:llm_call, reason, state, context) do
+    handle_effect_result(
+      {:llm_call,
+       %{
+         content: "",
+         error: inspect(reason),
+         finish_reason: "error"
+       }},
+      state,
+      context
+    )
+  end
+
+  def handle_effect_error(_effect_type, _reason, state, _context), do: {:idle, state}
 
   @impl true
   def next_wakeup(state) do
@@ -312,66 +367,53 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
   end
 
-  defp llm_params(brief_input) do
-    %{
-      "messages" => [
+  defp llm_params(brief_input, state) do
+    with {:ok, prompt} <- morning_prompt(brief_input) do
+      params =
         %{
-          "role" => "user",
-          "content" => morning_prompt(brief_input)
+          "messages" => [
+            %{
+              "role" => "user",
+              "content" => prompt
+            }
+          ],
+          "max_tokens" => state.llm_max_tokens,
+          "temperature" => 0.2,
+          "reasoning_effort" => state.llm_reasoning_effort
         }
-      ],
-      "max_tokens" => 1800,
-      "temperature" => 0.2,
-      "reasoning_effort" => "medium"
-    }
+        |> maybe_put("model", state.llm_model)
+
+      {:ok, params}
+    end
   end
 
   defp morning_prompt(brief_input) do
-    """
-    You are Kent's Chief of Staff. Write a source-backed morning briefing.
+    with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
+         {:ok, input_json} <- Jason.encode(brief_input) do
+      {:ok,
+       """
+       Execute the loaded Markdown skill against the supplied connector context.
 
-    Return ONLY valid JSON:
-    {"title":"...","summary":"...","body":"..."}
+       Skill: #{skill.name}
+       Skill path: #{@skill_path}
 
-    Briefing contract:
-    - Write like a sharp Chief of Staff, not a generic digest bot.
-    - Make the title specific: "<Weekday>, <Month> <day> — <plain-English read on the day>".
-    - Open the body with a one-sentence temperature read that says what today's real move is.
-    - Use these sections when supported by the source data: "## Needs Your Attention", "## Today's Schedule", "## Inbox", "## Slack", "## Open Commitments", "## Look Ahead".
-    - Include a short "## News" section when news items are available. Keep it relevant and action-light unless it affects a real decision today.
-    - Keep it action-first. For anything that needs action, say what it is and the next move in the same bullet.
-    - For reply loops, include a concrete suggested reply or ETA language when source data supports it.
-    - Surface counts only when useful, like "25 in last 18h", "4 need response", "8 overdue"; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
-    - Use simple status markers such as 🔴, 🟡, ⚠️, ✅ only when they help scanning.
-    - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
-    - Do not claim a source was checked if source_health marks it unavailable.
-    - Separate "needs action" from FYI/closed items. Do not bury required action under preamble.
-    - End with a short "Today's move:" sentence that names the block of time or first sitting to clear the highest-leverage work.
-    - 500-900 words max.
+       Skill instructions:
+       #{skill.instructions}
 
-    Shape to emulate:
-    # Thursday, May 7 — Light meeting day, but you owe people. Today's the day to clear the Runner ambassador backlog.
-
-    ## Needs Your Attention
-    - **Charlie's waiting on you in #runner-gtm**: "Ready to GA heartbeat, did you want to record a video?" → Yes/no this morning so the team can ship.
-
-    ## Today's Schedule
-    - **1:00** — Runner standup. Push for the heartbeat video decision live.
-
-    ## Inbox
-    **25 in last 18h** · 4 need response · rest are FYI/closed
-    - 🟡 **Ivan Tolkunov** — He said yes, he can help. Send Jeff's actual question.
-
-    ## Open Commitments
-    🔴 **Overdue — mostly Runner ambassador/customer threads going cold**
-    - Notify Justin Dean — Gmail connector send-bug fix shipped. Send the email today.
-
-    Brief input JSON:
-    #{Jason.encode!(brief_input)}
-    """
+       Brief input JSON:
+       #{input_json}
+       """}
+    end
   end
 
   defp parse_llm_brief(response) do
+    error =
+      case response do
+        %{error: error} -> error
+        %{"error" => error} -> error
+        _ -> nil
+      end
+
     content =
       case response do
         %{content: content} -> content
@@ -380,261 +422,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         _ -> nil
       end
 
-    with content when is_binary(content) <- content,
-         {:ok, %{} = data} <- decode_json(content),
-         title when is_binary(title) <- read_string(data, "title", nil),
-         summary when is_binary(summary) <- read_string(data, "summary", nil),
-         body when is_binary(body) <- read_string(data, "body", nil) do
-      %{"title" => title, "summary" => summary, "body" => body}
+    if error do
+      {:error, to_string(error)}
     else
-      _ -> nil
+      with content when is_binary(content) and content != "" <- content,
+           {:ok, %{} = data} <- decode_json(content),
+           title when is_binary(title) <- read_string(data, "title", nil),
+           summary when is_binary(summary) <- read_string(data, "summary", nil),
+           body when is_binary(body) <- read_string(data, "body", nil) do
+        {:ok, %{"title" => title, "summary" => summary, "body" => body}}
+      else
+        _ -> {:error, "model_response_invalid_or_missing_required_brief_json"}
+      end
     end
   end
 
-  defp fallback_brief(brief_input) do
-    date = read_string(brief_input, "date", "Today")
-    gmail = read_map(brief_input, "gmail")
-    slack = read_map(brief_input, "slack")
-    news = read_map(brief_input, "news")
-    calendar = read_map(brief_input, "calendar")
-    commitments = read_map(brief_input, "commitments")
-    open_work = read_map(brief_input, "open_work")
+  defp brief_or_error_notice({:ok, brief}, _response), do: {brief, "llm", nil}
 
-    attention_items =
-      []
-      |> maybe_add_fallback_item(
-        "🔴 #{length(commitments["overdue"] || [])} overdue #{commitment_word(length(commitments["overdue"] || []))}",
-        (commitments["overdue"] || []) != []
-      )
-      |> maybe_add_fallback_item(
-        "🟡 #{length(commitments["due_today"] || [])} #{commitment_word(length(commitments["due_today"] || []))} due today",
-        (commitments["due_today"] || []) != []
-      )
-      |> maybe_add_fallback_item(
-        "⚠️ #{length(read_list(open_work, "insights"))} open act-now insights",
-        read_list(open_work, "insights") != []
-      )
-      |> case do
-        [] -> ["Nothing high-confidence needs immediate action right now."]
-        items -> items
-      end
-
-    body = """
-    #{fallback_temperature_read(date, commitments, open_work)}
-
-    ## Needs Your Attention
-    #{Enum.map_join(attention_items, "\n", &"- #{&1}")}
-
-    ## Today's Schedule
-    #{fallback_event_lines(read_list(calendar, "today_events"))}
-
-    ## Inbox
-    #{fallback_email_lines(read_list(gmail, "recent_unread"))}
-
-    ## Slack
-    #{fallback_slack_lines(read_list(slack, "key_threads"))}
-
-    ## News
-    #{fallback_news_lines(read_list(news, "items"))}
-
-    ## Open Commitments
-    #{fallback_commitment_lines(commitments)}
-
-    ## Look Ahead
-    #{fallback_tomorrow_line(read_map(calendar, "tomorrow_first_event"))}
-
-    Today's move: #{fallback_today_move(commitments, open_work)}
-    """
-
-    %{
-      "title" => "#{fallback_title_date(date)} — #{fallback_title_read(commitments, open_work)}",
-      "summary" =>
-        "#{length(read_list(gmail, "recent_unread"))} recent unread emails, #{length(read_list(slack, "key_threads"))} Slack items, #{length(read_list(news, "items"))} news items, #{read_integer(commitments, "active_count", 0)} active commitments.",
-      "body" => String.trim(body)
-    }
-  end
-
-  defp fallback_event_lines([]), do: "- No calendar events found for today."
-
-  defp fallback_event_lines(events) do
-    events
-    |> Enum.map_join("\n", fn event ->
-      "- **#{read_string(event, "start", "Time TBD")}** — #{read_string(event, "summary", "Untitled event")}"
-    end)
-  end
-
-  defp fallback_email_lines([]), do: "- No recent unread inbox messages surfaced."
-
-  defp fallback_email_lines(messages) do
-    messages
-    |> Enum.take(7)
-    |> Enum.map_join("\n", fn message ->
-      "- **#{read_string(message, "from", "Unknown")}** — \"#{read_string(message, "subject", "No subject")}\" — #{read_string(message, "classification", "review")}"
-    end)
-  end
-
-  defp fallback_slack_lines([]), do: "- No key Slack messages surfaced."
-
-  defp fallback_slack_lines(messages) do
-    messages
-    |> Enum.take(7)
-    |> Enum.map_join("\n", fn message ->
-      "- **##{read_string(message, "channel_name", "slack")}** — #{truncate(read_string(message, "text", ""), 140)}"
-    end)
-  end
-
-  defp fallback_news_lines([]), do: "- No configured news feeds surfaced items."
-
-  defp fallback_news_lines(items) do
-    items
-    |> Enum.take(5)
-    |> Enum.map_join("\n", fn item ->
-      source = read_string(item, "source", "News")
-      title = read_string(item, "title", "Untitled")
-      summary = read_string(item, "summary", nil)
-
+  defp brief_or_error_notice({:error, reason}, response) do
+    error_message =
       [
-        "- **#{source}** — #{title}",
-        if(summary, do: ": #{truncate(summary, 140)}")
+        "Morning briefing model synthesis failed",
+        reason,
+        llm_finish_reason(response) && "finish_reason=#{llm_finish_reason(response)}"
       ]
       |> Enum.reject(&is_nil/1)
-      |> Enum.join("")
-    end)
+      |> Enum.join(": ")
+
+    {%{
+       "title" => "Morning briefing generation failed",
+       "summary" =>
+         "Maraithon could not generate the morning briefing with the configured model.",
+       "body" =>
+         "Morning briefing generation failed because the configured model did not return a valid synthesized brief. No heuristic or keyword-based fallback was used.\n\nError: #{error_message}"
+     }, "error", error_message}
   end
-
-  defp fallback_commitment_lines(commitments) do
-    overdue = read_list(commitments, "overdue")
-    due_today = read_list(commitments, "due_today")
-    coming_up = read_list(commitments, "coming_up")
-    active_count = read_integer(commitments, "active_count", length(overdue) + length(due_today))
-
-    cond do
-      overdue != [] ->
-        """
-        **#{active_count} active** · 🔴 **#{length(overdue)} overdue**
-        #{overdue |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "🔴"))}
-        """
-        |> String.trim()
-
-      due_today != [] ->
-        """
-        **#{active_count} active** · 🟡 **#{length(due_today)} due today**
-        #{due_today |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "🟡"))}
-        """
-        |> String.trim()
-
-      coming_up != [] ->
-        """
-        **#{active_count} active** · 📋 **#{length(coming_up)} coming up**
-        #{coming_up |> Enum.take(8) |> Enum.map_join("\n", &fallback_commitment_line(&1, "📋"))}
-        """
-        |> String.trim()
-
-      true ->
-        "- No open commitments surfaced."
-    end
-  end
-
-  defp fallback_commitment_line(commitment, marker) do
-    title = read_string(commitment, "title", "Open commitment")
-    project = read_string(commitment, "project", nil)
-    owed_to = read_string(commitment, "owed_to", nil)
-    metadata = read_map(commitment, "metadata")
-
-    action =
-      read_string(commitment, "next_action", nil) ||
-        read_string(metadata, "next_action", nil) ||
-        read_string(read_map(metadata, "record"), "next_action", nil)
-
-    context =
-      [project, owed_to && "owed to #{owed_to}"]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.join(" · ")
-
-    [
-      "- #{marker} #{title}",
-      if(context != "", do: " · #{context}"),
-      if(action, do: " → #{action}")
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join("")
-  end
-
-  defp fallback_temperature_read(date, commitments, open_work) do
-    overdue_count = length(read_list(commitments, "overdue"))
-    due_today_count = length(read_list(commitments, "due_today"))
-
-    open_work_count =
-      length(read_list(open_work, "insights")) + length(read_list(open_work, "todos"))
-
-    cond do
-      overdue_count > 0 ->
-        "#{fallback_title_date(date)} has #{overdue_count} overdue commitment#{plural_suffix(overdue_count)}. Start there before the inbox gets louder."
-
-      due_today_count > 0 ->
-        "#{fallback_title_date(date)} has #{due_today_count} commitment#{plural_suffix(due_today_count)} due today. Clear or reset those first."
-
-      open_work_count > 0 ->
-        "#{fallback_title_date(date)} has #{open_work_count} open action item#{plural_suffix(open_work_count)}. Pick the one with a real person waiting."
-
-      true ->
-        "#{fallback_title_date(date)} looks clear. Use the first focused block to prevent new open loops."
-    end
-  end
-
-  defp fallback_today_move(commitments, open_work) do
-    cond do
-      read_list(commitments, "overdue") != [] ->
-        "clear the oldest overdue commitment, then send short ETA resets for anything that cannot be finished today."
-
-      read_list(commitments, "due_today") != [] ->
-        "handle the commitments due today before opening new work."
-
-      read_list(open_work, "insights") != [] ->
-        "resolve the highest-priority act-now insight, then refresh the list."
-
-      read_list(open_work, "todos") != [] ->
-        "close the highest-priority todo with a human counterparty."
-
-      true ->
-        "protect the first focused block and keep the day from accumulating reply debt."
-    end
-  end
-
-  defp fallback_title_read(commitments, open_work) do
-    cond do
-      read_list(commitments, "overdue") != [] ->
-        "Clear the oldest overdue commitments first."
-
-      read_list(commitments, "due_today") != [] ->
-        "Due-today commitments set the pace."
-
-      read_list(open_work, "insights") != [] or read_list(open_work, "todos") != [] ->
-        "Action list is manageable if you start with the human loops."
-
-      true ->
-        "Clean slate, but protect the focus block."
-    end
-  end
-
-  defp fallback_title_date(date) when is_binary(date) do
-    case Date.from_iso8601(date) do
-      {:ok, parsed} -> Calendar.strftime(parsed, "%A, %B %-d")
-      _ -> date
-    end
-  end
-
-  defp plural_suffix(1), do: ""
-  defp plural_suffix(_count), do: "s"
-
-  defp commitment_word(1), do: "commitment"
-  defp commitment_word(_count), do: "commitments"
-
-  defp fallback_tomorrow_line(%{} = event) when event != %{} do
-    "- Tomorrow starts with #{read_string(event, "summary", "an event")} at #{read_string(event, "start", "time TBD")}."
-  end
-
-  defp fallback_tomorrow_line(_event), do: "- No first event for tomorrow was found."
 
   defp calendar_event_for_prompt(nil), do: nil
 
@@ -663,8 +485,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" =>
         prompt_time(read_any(message, "internal_date")) || read_string(message, "date", nil),
       "labels" => read_list(message, "labels"),
-      "snippet" => truncate(read_string(message, "snippet", ""), 240),
-      "classification" => classify_email(message)
+      "snippet" => truncate(read_string(message, "snippet", ""), 240)
     }
   end
 
@@ -756,25 +577,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp classify_email(message) do
-    text =
-      [
-        read_string(message, "from", ""),
-        read_string(message, "subject", ""),
-        read_string(message, "snippet", "")
-      ]
-      |> Enum.join(" ")
-      |> String.downcase()
-
-    cond do
-      String.contains?(text, ["login", "security", "verification", "password"]) -> "security"
-      String.contains?(text, ["invoice", "billing", "price", "plan", "subscription"]) -> "billing"
-      String.contains?(text, ["urgent", "today", "asap", "deadline"]) -> "time-sensitive"
-      String.contains?(text, ["newsletter", "sale", "promo", "discount"]) -> "promotional"
-      true -> "review"
-    end
-  end
-
   defp compact_brief_input_for_metadata(input) do
     %{
       "date" => read_string(input, "date", nil),
@@ -789,6 +591,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       }
     }
   end
+
+  defp llm_finish_reason(%{finish_reason: reason}) when is_binary(reason), do: reason
+  defp llm_finish_reason(%{"finish_reason" => reason}) when is_binary(reason), do: reason
+  defp llm_finish_reason(_response), do: nil
 
   defp due_now?(now, state) do
     local_now = DateTime.add(now, state.timezone_offset_hours, :hour)
@@ -854,9 +660,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> String.trim()
     |> Jason.decode()
   end
-
-  defp maybe_add_fallback_item(list, item, true), do: list ++ [item]
-  defp maybe_add_fallback_item(list, _item, false), do: list
 
   defp prompt_time(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp prompt_time(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
@@ -989,6 +792,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp normalize_reasoning_effort(value, default) do
+    case normalize_string(value) do
+      effort when is_binary(effort) ->
+        normalized = String.downcase(effort)
+        if normalized in ["low", "medium", "high", "xhigh"], do: normalized, else: default
+
+      _ ->
+        default
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp integer_in_range(value, default, min, max) do
     value

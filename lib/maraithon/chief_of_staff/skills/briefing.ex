@@ -18,6 +18,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.Briefing do
   def id, do: "briefing"
 
   @impl true
+  def label, do: "Briefing"
+
+  @impl true
+  def description, do: "Prepares scheduled operator summaries from the configured source bundle."
+
+  @impl true
   def default_config do
     %{
       "assistant_behavior" => "ai_chief_of_staff",
