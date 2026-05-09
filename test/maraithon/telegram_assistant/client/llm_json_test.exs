@@ -49,6 +49,80 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
            ]
   end
 
+  test "specific newsletter questions search Gmail before answering" do
+    assert {:ok, response} = LLMJson.next_step(payload("What's the 4M finance newsletter?"))
+
+    assert response["status"] == "tool_calls"
+
+    assert response["tool_calls"] == [
+             %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 5}}
+           ]
+
+    assert {:ok, response} =
+             LLMJson.next_step(
+               payload("What's the 4M finance newsletter?", [
+                 %{
+                   "tool" => "get_open_work_summary",
+                   "result" => %{"source_health" => %{"gmail" => %{"status" => "ok"}}}
+                 }
+               ])
+             )
+
+    assert response["status"] == "tool_calls"
+
+    assert [
+             %{
+               "tool" => "gmail_search_messages",
+               "arguments" => %{"query" => query, "max_results" => 15}
+             }
+           ] = response["tool_calls"]
+
+    assert query =~ "newer_than:180d"
+    assert query =~ "4M finance newsletter"
+  end
+
+  test "specific newsletter questions fetch the full Gmail body before answering" do
+    tool_history = [
+      %{
+        "tool" => "get_open_work_summary",
+        "result" => %{"source_health" => %{"gmail" => %{"status" => "ok"}}}
+      },
+      %{
+        "tool" => "gmail_search_messages",
+        "result" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-4m",
+              "thread_id" => "thread-4m",
+              "from" => "Marla Maharaj <teacher@example.com>",
+              "subject" => "4M Weekly Newsletter May 11-15",
+              "snippet" => "A note from class.",
+              "internal_date" => "2026-05-08T20:00:00Z",
+              "google_provider" => "google:kent@example.com",
+              "google_account_email" => "kent@example.com"
+            }
+          ]
+        }
+      }
+    ]
+
+    assert {:ok, response} =
+             LLMJson.next_step(payload("What's the 4M finance newsletter?", tool_history))
+
+    assert response["status"] == "tool_calls"
+
+    assert response["tool_calls"] == [
+             %{
+               "tool" => "gmail_get_message",
+               "arguments" => %{
+                 "message_id" => "msg-4m",
+                 "google_provider" => "google:kent@example.com",
+                 "google_account_email" => "kent@example.com"
+               }
+             }
+           ]
+  end
+
   test "build_prompt instructs the model to persist and resolve todos" do
     prompt =
       LLMJson.build_prompt(
@@ -72,6 +146,8 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
       )
 
     assert prompt =~ "Persist actionable work as todos."
+    assert prompt =~ "do not infer from the sender, subject, snippet"
+    assert prompt =~ "Only summarize or explain an email after `gmail_get_message`"
     assert prompt =~ "\"todo_digest\""
     assert prompt =~ "one Telegram message per todo"
     assert prompt =~ "call `list_todos` with a narrow `query` first"

@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   @live_inbox_search_max_results 15
   @live_inbox_lookback_days 14
   @live_latest_lookback_days 7
+  @specific_email_lookback_days 180
   @fallback_response %{
     "status" => "final",
     "assistant_message" =>
@@ -69,6 +70,9 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     - The assistant is a single operator assistant for one linked user. No cross-user access.
     - For inbox or Gmail questions about "today", "latest", "new", "what should I triage", or "what changed", do not answer from stored open insights alone.
     - For those recency-sensitive inbox questions, call `get_open_work_summary` first. If `source_health.gmail.insights_stale` is true or the user wants live inbox items, call `gmail_search_messages` before answering.
+    - For questions about a specific email, message, thread, sender, or newsletter, do not infer from the sender, subject, snippet, linked insight, or briefing text alone.
+    - For those specific email questions, call `gmail_search_messages` if you do not already have the exact message id, then call `gmail_get_message` before giving a final answer.
+    - Only summarize or explain an email after `gmail_get_message` returns `message.text_body` or `message.html_body`. If the full body is unavailable, say you could not fetch the full body and do not guess.
     - If `source_health` says Gmail is `not_connected` or `error`, say that plainly instead of pretending you can see the inbox.
     - Persist actionable work as todos. Use `upsert_todos` to create or refresh durable todos, `list_todos` to inspect them, and `resolve_todo` when the user says they handled or closed something.
     - Treat todos as the operator's durable object layer. Final replies about work should usually reflect the current todo state, not transient message summaries.
@@ -102,6 +106,7 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
     Examples:
     - If live Gmail results include a billing thread and an OAuth thread that both need action, your next response should usually be `tool_calls` for `upsert_todos`, not a final prose answer.
+    - If the user says `What's the 4M finance newsletter?`, your next response should usually be `tool_calls` for `gmail_search_messages`, followed by `gmail_get_message`, then answer from the full body only.
     - After `upsert_todos` or `resolve_todo` returns the actionable todo objects you want surfaced separately, your next response should usually be `final` with `message_class:"todo_digest"` so Maraithon sends one message per item.
     - If the user says `add renew domain this week to my todo list`, your next response should usually be `tool_calls` for `upsert_todos` with one general todo sourced from Telegram.
     - If the user says `what's on my todo list?`, your next response should usually be `tool_calls` for `list_todos` with a fuller open limit, followed by a `final` response with `message_class:"todo_digest"`.
@@ -218,6 +223,9 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
           live_gmail_triage_request?(message) ->
             {:ok, :triage, message}
 
+          specific_gmail_message_request?(message) ->
+            {:ok, :specific_message, message}
+
           true ->
             :error
         end
@@ -278,11 +286,47 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
            }
          )}
 
+      %{} = search_result when request_type == :specific_message ->
+        continue_specific_gmail_message_request(tool_history, search_result)
+
       %{} = search_result when request_type == :latest_visible ->
         {:ok, build_live_gmail_final_response(request_type, gmail_health, search_result)}
 
       %{} when request_type == :triage ->
         :continue
+    end
+  end
+
+  defp continue_specific_gmail_message_request(tool_history, search_result) do
+    case latest_tool_result(tool_history, "gmail_get_message") do
+      nil ->
+        case List.first(sort_live_messages(search_messages(search_result))) do
+          nil ->
+            {:ok,
+             final_response(
+               "I searched Gmail, but I couldn't find a matching email to inspect.",
+               "Specific Gmail search returned no matching messages."
+             )}
+
+          message ->
+            {:ok,
+             tool_call_response(
+               "Need the full Gmail message body before explaining this email.",
+               "gmail_get_message",
+               gmail_get_message_args(message)
+             )}
+        end
+
+      %{} = message_result ->
+        if gmail_message_body_available?(message_result) do
+          :continue
+        else
+          {:ok,
+           final_response(
+             "I found the email metadata, but I couldn't fetch the full body, so I won't guess from the subject or snippet.",
+             "Specific Gmail message body was unavailable."
+           )}
+        end
     end
   end
 
@@ -331,11 +375,39 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
          contains_any?(normalized, ["email", "gmail", "inbox"]))
   end
 
+  defp specific_gmail_message_request?(message) when is_binary(message) do
+    normalized = String.downcase(message)
+
+    contains_any?(normalized, [
+      "what's",
+      "what is",
+      "read",
+      "summarize",
+      "summary",
+      "tell me about",
+      "show me",
+      "open"
+    ]) and
+      contains_any?(normalized, ["email", "gmail", "message", "thread", "newsletter"])
+  end
+
   defp build_live_gmail_query(:latest_visible, _message_text),
     do: "newer_than:#{@live_latest_lookback_days}d"
 
   defp build_live_gmail_query(:triage, _message_text),
     do: "in:inbox newer_than:#{@live_inbox_lookback_days}d -category:promotions -category:social"
+
+  defp build_live_gmail_query(:specific_message, message_text) do
+    query =
+      message_text
+      |> specific_email_search_terms()
+      |> case do
+        "" -> message_text
+        terms -> terms
+      end
+
+    "newer_than:#{@specific_email_lookback_days}d #{query}"
+  end
 
   defp tool_call_response(summary, tool_name, arguments) do
     %{
@@ -416,6 +488,32 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     end
   end
 
+  defp gmail_get_message_args(message) do
+    %{"message_id" => string_value(message, "message_id")}
+    |> maybe_put_arg("google_provider", string_value(message, "google_provider"))
+    |> maybe_put_arg("google_account_email", string_value(message, "google_account_email"))
+  end
+
+  defp gmail_message_body_available?(message_result) do
+    message = map_value(message_result, "message", message_result)
+
+    [string_value(message, "text_body"), string_value(message, "html_body")]
+    |> Enum.any?(&present?/1)
+  end
+
+  defp specific_email_search_terms(message) do
+    message
+    |> String.replace(~r/['’]s\b/i, " ")
+    |> String.replace(
+      ~r/\b(what|is|the|a|an|email|gmail|message|thread|read|summarize|summary|tell|me|about|show|open|can|you|please)\b/i,
+      " "
+    )
+    |> String.replace(~r/[^\p{L}\p{N}@._+-]+/u, " ")
+    |> String.split()
+    |> Enum.reject(&(String.length(&1) <= 1))
+    |> Enum.join(" ")
+  end
+
   defp live_message_unix(message) do
     case live_message_datetime(message) do
       %DateTime{} = datetime -> DateTime.to_unix(datetime, :second)
@@ -471,6 +569,13 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
 
   defp present_or(value, _fallback) when is_binary(value) and value != "", do: value
   defp present_or(_value, fallback), do: fallback
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
+  defp maybe_put_arg(map, _key, nil), do: map
+  defp maybe_put_arg(map, _key, ""), do: map
+  defp maybe_put_arg(map, key, value), do: Map.put(map, key, value)
 
   defp contains_any?(value, needles) when is_binary(value) and is_list(needles) do
     Enum.any?(needles, &String.contains?(value, &1))

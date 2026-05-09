@@ -22,12 +22,13 @@ defmodule Maraithon.Tools.GmailHelpers do
     fetch_messages_from_providers(user_id, providers, max_results, query, label_ids)
   end
 
-  def get_message(user_id, message_id) when is_binary(user_id) and is_binary(message_id) do
-    providers = providers_for_search(user_id, nil)
+  def get_message(user_id, message_id, opts \\ [])
+      when is_binary(user_id) and is_binary(message_id) do
+    providers = providers_for_search(user_id, Keyword.get(opts, :provider))
 
     providers
     |> Enum.reduce_while({:error, :no_token}, fn provider, _acc ->
-      case Gmail.fetch_message(user_id, message_id, provider: provider) do
+      case Gmail.fetch_message_content(user_id, message_id, provider: provider) do
         {:ok, message} ->
           {:halt,
            {:ok,

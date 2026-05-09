@@ -232,11 +232,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "gmail_get_message",
-        "Fetch one Gmail message by message id.",
+        "Fetch one Gmail message by message id, including decoded full body content when available.",
         %{
           "type" => "object",
           "required" => ["message_id"],
-          "properties" => %{"message_id" => %{"type" => "string"}}
+          "properties" => %{
+            "message_id" => %{"type" => "string"},
+            "google_provider" => %{"type" => "string"},
+            "google_account_email" => %{"type" => "string"}
+          }
         }
       ),
       tool_definition(

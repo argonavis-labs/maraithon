@@ -244,6 +244,8 @@ defmodule Maraithon.Tools.GoogleToolsTest do
              OAuth.store_tokens("google-tool-user-3", "google", %{access_token: "google-token-3"})
 
     Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/m-42", fn conn ->
+      assert Plug.Conn.Query.decode(conn.query_string)["format"] == "full"
+
       conn
       |> Plug.Conn.put_resp_content_type("application/json")
       |> Plug.Conn.resp(
@@ -253,7 +255,11 @@ defmodule Maraithon.Tools.GoogleToolsTest do
           "threadId" => "t-42",
           "snippet" => "One message",
           "labelIds" => ["INBOX"],
-          "payload" => %{"headers" => [%{"name" => "Subject", "value" => "One"}]}
+          "payload" => %{
+            "headers" => [%{"name" => "Subject", "value" => "One"}],
+            "mimeType" => "text/plain",
+            "body" => %{"data" => Base.url_encode64("Full body text", padding: false)}
+          }
         })
       )
     end)
@@ -268,6 +274,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert result.message_id == "m-42"
     assert result.message.message_id == "m-42"
     assert result.message.subject == "One"
+    assert result.message.text_body == "Full body text"
   end
 
   test "GmailGetMessage can find a message across connected Google accounts" do
@@ -292,6 +299,8 @@ defmodule Maraithon.Tools.GoogleToolsTest do
              })
 
     Bypass.stub(bypass, "GET", "/gmail/v1/users/me/messages/m-42", fn conn ->
+      assert Plug.Conn.Query.decode(conn.query_string)["format"] == "full"
+
       case Plug.Conn.get_req_header(conn, "authorization") do
         ["Bearer personal-token-3b"] ->
           conn
@@ -309,7 +318,9 @@ defmodule Maraithon.Tools.GoogleToolsTest do
               "snippet" => "One message",
               "labelIds" => ["INBOX"],
               "payload" => %{
-                "headers" => [%{"name" => "Subject", "value" => "Cross-account"}]
+                "headers" => [%{"name" => "Subject", "value" => "Cross-account"}],
+                "mimeType" => "text/plain",
+                "body" => %{"data" => Base.url_encode64("Cross-account body", padding: false)}
               }
             })
           )
@@ -325,6 +336,7 @@ defmodule Maraithon.Tools.GoogleToolsTest do
     assert result.message.message_id == "m-42"
     assert result.message.google_provider == "google:work@example.com"
     assert result.message.subject == "Cross-account"
+    assert result.message.text_body == "Cross-account body"
   end
 
   test "GoogleCalendarListEvents returns parsed events for connected user" do
