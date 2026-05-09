@@ -215,16 +215,7 @@ defmodule Maraithon.Briefs do
     |> String.trim()
   end
 
-  def todo_digest_prefix_text(%Brief{} = brief, todo) do
-    case {normalize_cadence(brief.cadence), todo_digest_bucket(brief, todo)} do
-      {"end_of_day", :new_today} -> "<b>Opened Today</b>"
-      {"end_of_day", _} -> "<b>Still Open Tonight</b>"
-      {"morning", :new_today} -> "<b>For Today</b>"
-      {"morning", _} -> "<b>Carried Over</b>"
-      {_, :new_today} -> "<b>New Today</b>"
-      _ -> "<b>Still Open</b>"
-    end
-  end
+  def todo_digest_prefix_text(%Brief{} = _brief, _todo), do: nil
 
   defp normalize_attrs(attrs, user_id, agent_id) do
     %{

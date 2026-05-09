@@ -1363,12 +1363,12 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text ==
              "Hey Kent, checking on these today.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
 
-    assert first_todo_message.text =~ "New Today"
+    refute first_todo_message.text =~ "New Today"
     assert first_todo_message.text =~ "Reply in-thread and close the loop."
     refute first_todo_message.text =~ "Reply to Charlie about the budget"
     refute first_todo_message.text =~ "Maraithon Todo"
     refute first_todo_message.text =~ "About:"
-    assert second_todo_message.text =~ "Still Open"
+    refute second_todo_message.text =~ "Still Open"
     assert second_todo_message.text =~ "Reply in-thread and close the loop."
     refute second_todo_message.text =~ "Confirm the old shipping ETA"
     refute second_todo_message.text =~ "Maraithon Todo"
@@ -1449,12 +1449,12 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text ==
              "Hey Kent, these still need movement tonight.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
 
-    assert first_todo_message.text =~ "Opened Today"
+    refute first_todo_message.text =~ "Opened Today"
     assert first_todo_message.text =~ "Reply in-thread and close the loop."
     refute first_todo_message.text =~ "Reply to David about the laptop"
     refute first_todo_message.text =~ "Maraithon Todo"
     refute first_todo_message.text =~ "About:"
-    assert second_todo_message.text =~ "Still Open Tonight"
+    refute second_todo_message.text =~ "Still Open Tonight"
     assert second_todo_message.text =~ "Reply in-thread and close the loop."
     refute second_todo_message.text =~ "Close the Cowrie status loop"
     refute second_todo_message.text =~ "Maraithon Todo"

@@ -137,8 +137,8 @@ defmodule Maraithon.BriefsTest do
     assert intro =~ "checking on these today"
     assert intro =~ "1 new today"
     assert intro =~ "1 still open from earlier"
-    assert Briefs.todo_digest_prefix_text(brief, first_todo) == "<b>New Today</b>"
-    assert Briefs.todo_digest_prefix_text(brief, second_todo) == "<b>Still Open</b>"
+    assert is_nil(Briefs.todo_digest_prefix_text(brief, first_todo))
+    assert is_nil(Briefs.todo_digest_prefix_text(brief, second_todo))
   end
 
   defp todo_attrs(thread_id, title, overrides) when is_list(overrides) do
