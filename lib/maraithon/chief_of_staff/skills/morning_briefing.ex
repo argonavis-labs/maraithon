@@ -9,6 +9,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Insights
   alias Maraithon.Todos
 
@@ -160,6 +161,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     cond do
       is_nil(user_id) ->
         {:idle, state}
+
+      ConnectedAccounts.telegram_destination(user_id) == nil ->
+        {:idle, %{state | user_id: user_id}}
 
       Map.get(state.last_generated_keys, "morning") == period_key ->
         {:idle, %{state | user_id: user_id}}

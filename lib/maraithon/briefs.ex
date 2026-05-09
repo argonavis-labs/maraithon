@@ -17,7 +17,7 @@ defmodule Maraithon.Briefs do
 
   require Logger
 
-  @open_statuses ["pending", "failed"]
+  @terminal_delivery_errors [":missing_chat_id", "missing_chat_id", ":telegram_not_connected"]
 
   def record_many(user_id, agent_id, briefs)
       when is_binary(user_id) and is_binary(agent_id) and is_list(briefs) do
@@ -63,7 +63,12 @@ defmodule Maraithon.Briefs do
 
   def list_pending(limit \\ 20) when is_integer(limit) and limit > 0 do
     Brief
-    |> where([b], b.status in ^@open_statuses)
+    |> where(
+      [b],
+      b.status == "pending" or
+        (b.status == "failed" and
+           (is_nil(b.error_message) or b.error_message not in ^@terminal_delivery_errors))
+    )
     |> order_by([b], asc: b.scheduled_for, asc: b.inserted_at)
     |> limit(^limit)
     |> Repo.all()
@@ -242,18 +247,7 @@ defmodule Maraithon.Briefs do
   defp preserve_status(_), do: "pending"
 
   defp telegram_destination(user_id) do
-    case ConnectedAccounts.get(user_id, "telegram") do
-      %{status: "connected", external_account_id: destination}
-      when is_binary(destination) and destination != "" ->
-        destination
-
-      %{status: "connected", metadata: %{"chat_id" => destination}}
-      when is_binary(destination) and destination != "" ->
-        destination
-
-      _ ->
-        nil
-    end
+    ConnectedAccounts.telegram_destination(user_id)
   end
 
   defp render_telegram_text(%Brief{} = brief) do

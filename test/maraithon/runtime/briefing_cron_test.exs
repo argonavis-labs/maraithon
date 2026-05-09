@@ -7,6 +7,7 @@ defmodule Maraithon.Runtime.BriefingCronTest do
   alias Maraithon.AgentMarketplace
   alias Maraithon.Agents
   alias Maraithon.Briefs
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.Runtime.BriefingCron
   alias Maraithon.Runtime.ScheduledJob
@@ -27,6 +28,12 @@ defmodule Maraithon.Runtime.BriefingCronTest do
           "news_enabled" => true,
           "news_feeds" => [%{"name" => "Test", "url" => "https://example.com/rss.xml"}]
         }
+      })
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "777#{System.unique_integer([:positive])}",
+        metadata: %{"chat_id" => "777#{System.unique_integer([:positive])}"}
       })
 
     %{user_id: user_id, agent: agent}
@@ -77,9 +84,38 @@ defmodule Maraithon.Runtime.BriefingCronTest do
              |> Repo.all()
   end
 
+  test "does not schedule briefing agents without Telegram delivery" do
+    user_id = "briefing-cron-no-telegram-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        status: "running",
+        config: %{
+          "enabled_skills" => ["morning_briefing"],
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        }
+      })
+
+    now = ~U[2026-05-08 13:05:00Z]
+    assert %{scheduled: scheduled} = BriefingCron.schedule_due_morning_briefings(now)
+    assert scheduled >= 0
+
+    assert [] =
+             ScheduledJob
+             |> where([j], j.agent_id == ^agent.id and j.job_type == "wakeup")
+             |> Repo.all()
+  end
+
   test "schedules manifest-installed Chief of Staff packages" do
     user_id = "manifest-briefing-cron-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "888123"})
 
     assert {:ok, [agent]} = AgentMarketplace.ensure_default_installations(user_id: user_id)
     assert agent.behavior == "manifest_agent"

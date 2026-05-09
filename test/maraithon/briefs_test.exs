@@ -80,6 +80,24 @@ defmodule Maraithon.BriefsTest do
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 
+  test "terminal missing-chat failures are not retried", %{user_id: user_id, agent: agent} do
+    scheduled_for = DateTime.utc_now()
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief with no chat",
+               "summary" => "This failed because no Telegram chat was available.",
+               "body" => "No retry should happen for a terminal chat routing failure.",
+               "scheduled_for" => scheduled_for,
+               "dedupe_key" => "brief:morning:missing-chat",
+               "status" => "failed",
+               "error_message" => ":missing_chat_id"
+             })
+
+    refute brief in Briefs.list_pending(10)
+  end
+
   test "check-in todo digests group new and older items for delivery", %{
     user_id: user_id,
     agent: agent

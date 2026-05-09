@@ -7,6 +7,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
+  alias Maraithon.ConnectedAccounts
 
   setup do
     user_id = "morning-briefing-#{System.unique_integer([:positive])}@example.com"
@@ -18,6 +19,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         behavior: "ai_chief_of_staff",
         config: %{}
       })
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "444123"})
 
     %{user_id: user_id, agent: agent}
   end
@@ -306,5 +310,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["model"] == "gpt-5.4"
     assert params["max_tokens"] == 4096
     assert params["reasoning_effort"] == "xhigh"
+  end
+
+  test "does not generate a morning brief when Telegram is not connected", %{agent: agent} do
+    user_id = "morning-briefing-no-telegram-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      trigger: %{type: :wakeup},
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    assert {:idle, _state} = MorningBriefing.handle_wakeup(state, context)
+    assert [] = Briefs.list_recent_for_user(user_id, limit: 1)
   end
 end

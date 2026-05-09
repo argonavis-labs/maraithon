@@ -10,6 +10,7 @@ defmodule Maraithon.Runtime.BriefingCron do
   use GenServer
 
   alias Maraithon.BriefingSchedules
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.Scheduler
 
@@ -55,6 +56,7 @@ defmodule Maraithon.Runtime.BriefingCron do
     now = DateTime.truncate(now, :second)
 
     BriefingSchedules.list_due_morning_agents(now)
+    |> Enum.filter(&telegram_deliverable?/1)
     |> Enum.reduce(%{scheduled: 0, skipped: 0}, fn due, acc ->
       payload = %{
         "source" => "briefing_cron",
@@ -88,4 +90,10 @@ defmodule Maraithon.Runtime.BriefingCron do
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
     Process.send_after(self(), :tick, delay_ms)
   end
+
+  defp telegram_deliverable?(%{user_id: user_id}) when is_binary(user_id) do
+    ConnectedAccounts.telegram_destination(user_id) != nil
+  end
+
+  defp telegram_deliverable?(_due), do: false
 end

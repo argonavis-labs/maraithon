@@ -442,35 +442,21 @@ defmodule Maraithon.ConnectedAccounts do
     not (is_binary(sent_at) and sent_at != "" and sent_reason == reason)
   end
 
-  defp telegram_destination(user_id) when is_binary(user_id) do
-    if telegram_notifications_enabled?() do
-      case get(user_id, "telegram") do
-        %ConnectedAccount{status: "connected"} = account ->
-          value =
-            account.external_account_id ||
-              fetch_map_value(normalize_metadata(account.metadata), "chat_id")
+  def telegram_destination(user_id) when is_binary(user_id) do
+    case get(user_id, "telegram") do
+      %ConnectedAccount{status: "connected"} = account ->
+        value =
+          account.external_account_id ||
+            fetch_map_value(normalize_metadata(account.metadata), "chat_id")
 
-          normalize_destination(value)
+        normalize_destination(value)
 
-        _ ->
-          nil
-      end
-    else
-      nil
+      _ ->
+        nil
     end
   end
 
-  defp telegram_destination(_user_id), do: nil
-
-  defp telegram_notifications_enabled? do
-    module = telegram_module()
-
-    if function_exported?(module, :configured?, 0) do
-      module.configured?()
-    else
-      true
-    end
-  end
+  def telegram_destination(_user_id), do: nil
 
   defp telegram_module do
     Application.get_env(:maraithon, :connected_accounts, [])

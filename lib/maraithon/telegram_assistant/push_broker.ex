@@ -7,6 +7,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
@@ -221,18 +222,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp telegram_destination(user_id) when is_binary(user_id) do
-    case Maraithon.ConnectedAccounts.get(user_id, "telegram") do
-      %{status: "connected", external_account_id: destination}
-      when is_binary(destination) and destination != "" ->
-        destination
-
-      %{status: "connected", metadata: %{"chat_id" => destination}}
-      when is_binary(destination) and destination != "" ->
-        destination
-
-      _ ->
-        nil
-    end
+    ConnectedAccounts.telegram_destination(user_id)
   end
 
   defp telegram_destination(_user_id), do: nil
