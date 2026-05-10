@@ -182,105 +182,135 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp execute_tool_calls(run, runtime_context, tool_calls, state, started_monotonic_ms) do
-    if state.tool_steps + length(tool_calls) > max_tool_steps() do
-      {:error, run, :tool_step_limit, state}
-    else
-      Enum.reduce_while(tool_calls, {:ok, state}, fn tool_call, {:ok, acc_state} ->
-        tool_name = Map.get(tool_call, "tool")
-        arguments = Map.get(tool_call, "arguments", %{})
-        now = DateTime.utc_now()
+    cond do
+      state.tool_steps + length(tool_calls) > max_tool_steps() ->
+        {:error, run, :tool_step_limit, state}
 
-        with {:ok, tool_step} <-
-               build_step(
-                 run,
-                 "tool_call",
-                 acc_state.sequence + 1,
-                 %{"tool" => tool_name, "arguments" => arguments},
-                 now
-               ) do
-          _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
+      tool_calls == [] ->
+        run_loop(
+          run,
+          runtime_context,
+          %{state | iteration: state.iteration + 1},
+          started_monotonic_ms
+        )
 
-          case Toolbox.execute(tool_name, arguments, runtime_context) do
-            {:ok, result} ->
-              {:ok, _completed_tool_step} =
-                TelegramAssistant.complete_step(tool_step, %{
-                  response_payload: stringify_map(result),
-                  finished_at: DateTime.utc_now()
-                })
+      true ->
+        run_tool_calls_in_parallel(
+          run,
+          runtime_context,
+          tool_calls,
+          state,
+          started_monotonic_ms
+        )
+    end
+  end
 
-              next_state =
-                acc_state
-                |> Map.update!(:tool_steps, &(&1 + 1))
-                |> Map.update!(:sequence, &(&1 + 1))
-                |> Map.update!(:tool_history, fn history ->
-                  history ++
-                    [
-                      %{
-                        "tool" => tool_name,
-                        "arguments" => arguments,
-                        "result" => stringify_map(result)
-                      }
-                    ]
-                end)
+  defp run_tool_calls_in_parallel(run, runtime_context, tool_calls, state, started_monotonic_ms) do
+    base_sequence = state.sequence
 
-              case AssistantHarness.guard_tool_history(
-                     next_state.tool_history,
-                     runner_policy_opts()
-                   ) do
-                :ok -> {:cont, {:ok, next_state}}
-                {:error, reason} -> {:halt, {:error, run, reason, next_state}}
-              end
+    indexed_calls =
+      tool_calls
+      |> Enum.with_index()
+      |> Enum.map(fn {call, index} -> {call, base_sequence + 1 + index} end)
 
-            {:error, reason} ->
-              {:ok, _completed_tool_step} =
-                TelegramAssistant.complete_step(tool_step, %{
-                  status: "failed",
-                  response_payload: %{"error" => normalize_error(reason)},
-                  error: normalize_error(reason),
-                  finished_at: DateTime.utc_now()
-                })
+    results =
+      indexed_calls
+      |> Task.async_stream(
+        fn {tool_call, sequence} ->
+          run_single_tool_call(run, runtime_context, tool_call, sequence)
+        end,
+        ordered: true,
+        timeout: :infinity,
+        max_concurrency: max(length(tool_calls), 1)
+      )
+      |> Enum.to_list()
 
-              next_state =
-                acc_state
-                |> Map.update!(:tool_steps, &(&1 + 1))
-                |> Map.update!(:sequence, &(&1 + 1))
-                |> Map.update!(:tool_history, fn history ->
-                  history ++
-                    [
-                      %{
-                        "tool" => tool_name,
-                        "arguments" => arguments,
-                        "error" => normalize_error(reason)
-                      }
-                    ]
-                end)
+    case collect_tool_results(results) do
+      {:ok, history_entries} ->
+        next_state =
+          state
+          |> Map.update!(:tool_steps, &(&1 + length(history_entries)))
+          |> Map.update!(:sequence, &(&1 + length(history_entries)))
+          |> Map.update!(:tool_history, fn history -> history ++ history_entries end)
 
-              case AssistantHarness.guard_tool_history(
-                     next_state.tool_history,
-                     runner_policy_opts()
-                   ) do
-                :ok -> {:cont, {:ok, next_state}}
-                {:error, reason} -> {:halt, {:error, run, reason, next_state}}
-              end
-          end
-        else
+        case AssistantHarness.guard_tool_history(next_state.tool_history, runner_policy_opts()) do
+          :ok ->
+            run_loop(
+              run,
+              runtime_context,
+              %{next_state | iteration: next_state.iteration + 1},
+              started_monotonic_ms
+            )
+
           {:error, reason} ->
-            {:halt, {:error, run, reason, acc_state}}
+            {:error, run, reason, next_state}
         end
-      end)
-      |> case do
-        {:ok, next_state} ->
-          run_loop(
-            run,
-            runtime_context,
-            %{next_state | iteration: next_state.iteration + 1},
-            started_monotonic_ms
-          )
 
-        other ->
-          other
+      {:error, reason} ->
+        {:error, run, reason, state}
+    end
+  end
+
+  defp run_single_tool_call(run, runtime_context, tool_call, sequence) do
+    tool_name = Map.get(tool_call, "tool")
+    arguments = Map.get(tool_call, "arguments", %{})
+    now = DateTime.utc_now()
+
+    with {:ok, tool_step} <-
+           build_step(
+             run,
+             "tool_call",
+             sequence,
+             %{"tool" => tool_name, "arguments" => arguments},
+             now
+           ) do
+      _ = TelegramAssistant.note_liveness_tool(run.id, tool_name, arguments)
+
+      case Toolbox.execute(tool_name, arguments, runtime_context) do
+        {:ok, result} ->
+          {:ok, _completed_tool_step} =
+            TelegramAssistant.complete_step(tool_step, %{
+              response_payload: stringify_map(result),
+              finished_at: DateTime.utc_now()
+            })
+
+          {:ok,
+           %{
+             "tool" => tool_name,
+             "arguments" => arguments,
+             "result" => stringify_map(result)
+           }}
+
+        {:error, reason} ->
+          {:ok, _completed_tool_step} =
+            TelegramAssistant.complete_step(tool_step, %{
+              status: "failed",
+              response_payload: %{"error" => normalize_error(reason)},
+              error: normalize_error(reason),
+              finished_at: DateTime.utc_now()
+            })
+
+          {:ok,
+           %{
+             "tool" => tool_name,
+             "arguments" => arguments,
+             "error" => normalize_error(reason)
+           }}
       end
     end
+  end
+
+  defp collect_tool_results(results) do
+    Enum.reduce_while(results, {:ok, []}, fn
+      {:ok, {:ok, entry}}, {:ok, acc} ->
+        {:cont, {:ok, acc ++ [entry]}}
+
+      {:ok, {:error, reason}}, _acc ->
+        {:halt, {:error, reason}}
+
+      {:exit, reason}, _acc ->
+        {:halt, {:error, reason}}
+    end)
   end
 
   defp deliver_final_response(

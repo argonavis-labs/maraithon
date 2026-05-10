@@ -1,3 +1,6 @@
+---
+status: planning
+---
 # Fast & Context-Aware Telegram Answers — Implementation Plan
 
 **Goal:** Cut Telegram-perceived latency and improve answer quality across the eight gaps identified in the audit.
