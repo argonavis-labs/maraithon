@@ -111,6 +111,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       id: conversation.id,
       status: conversation.status,
       summary: conversation.summary,
+      historical_summary: get_in(conversation.metadata || %{}, ["historical_summary"]),
       mode: get_in(conversation.metadata || %{}, ["mode"]),
       linked_delivery_id: conversation.linked_delivery_id,
       linked_insight_id: conversation.linked_insight_id,

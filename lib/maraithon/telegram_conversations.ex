@@ -214,6 +214,114 @@ defmodule Maraithon.TelegramConversations do
     |> Enum.reverse()
   end
 
+  @doc """
+  When a conversation grows past `keep_recent + threshold_extra` turns, fold
+  the oldest turns into a single text summary stored in
+  `conversation.metadata["historical_summary"]`. The recent N turns are still
+  returned by `recent_turns/2`.
+
+  This is best-effort and silent on failure: any LLM/DB error keeps the
+  conversation as-is so the assistant loop never blocks on summarization.
+  """
+  def compact_old_turns(%Conversation{} = conversation, opts \\ []) do
+    keep_recent = Keyword.get(opts, :keep_recent, 12)
+    threshold_extra = Keyword.get(opts, :threshold_extra, 12)
+    threshold = keep_recent + threshold_extra
+    llm_complete = Keyword.get(opts, :llm_complete, &default_summary_llm/1)
+
+    total = count_turns(conversation.id)
+
+    if total > threshold do
+      do_compact_old_turns(conversation, total, keep_recent, llm_complete)
+    else
+      {:ok, conversation}
+    end
+  end
+
+  def compact_old_turns(_conversation, _opts), do: {:error, :invalid_conversation}
+
+  defp do_compact_old_turns(conversation, total, keep_recent, llm_complete) do
+    drop_count = max(total - keep_recent, 0)
+
+    older_turns =
+      Turn
+      |> where([t], t.conversation_id == ^conversation.id)
+      |> order_by([t], asc: t.inserted_at)
+      |> limit(^drop_count)
+      |> Repo.all()
+
+    case build_history_summary(older_turns, conversation, llm_complete) do
+      {:ok, summary_text} when is_binary(summary_text) and summary_text != "" ->
+        through =
+          case List.last(older_turns) do
+            nil -> nil
+            %Turn{inserted_at: at} -> DateTime.to_iso8601(at)
+          end
+
+        update_metadata(conversation, %{
+          "historical_summary" => summary_text,
+          "historical_summary_through" => through
+        })
+
+      _other ->
+        {:ok, conversation}
+    end
+  end
+
+  defp count_turns(conversation_id) do
+    Turn
+    |> where([t], t.conversation_id == ^conversation_id)
+    |> select([t], count(t.id))
+    |> Repo.one()
+    |> Kernel.||(0)
+  end
+
+  defp build_history_summary([], _conversation, _llm_complete), do: {:ok, nil}
+
+  defp build_history_summary(turns, conversation, llm_complete) do
+    transcript =
+      Enum.map_join(turns, "\n", fn turn ->
+        "#{turn.role}: #{String.slice(turn.text || "", 0, 400)}"
+      end)
+
+    prior_summary =
+      conversation.metadata
+      |> Kernel.||(%{})
+      |> Map.get("historical_summary", "")
+
+    prompt = """
+    You are summarizing the older portion of a Telegram chat between Kent and his assistant.
+    Produce a tight 4-6 sentence summary of facts, decisions, and unresolved threads from this transcript.
+    Preserve names, dates, and outstanding requests. Do not editorialize. Do not add fluff.
+
+    Existing prior summary (may be empty):
+    #{prior_summary}
+
+    New older transcript:
+    #{transcript}
+
+    Return only the summary text.
+    """
+
+    params = %{
+      "messages" => [%{"role" => "user", "content" => prompt}],
+      "max_tokens" => 400,
+      "temperature" => 0.0
+    }
+
+    case llm_complete.(params) do
+      {:ok, %{content: content}} when is_binary(content) and content != "" ->
+        {:ok, String.trim(content)}
+
+      _other ->
+        {:error, :summary_failed}
+    end
+  rescue
+    _ -> {:error, :summary_failed}
+  end
+
+  defp default_summary_llm(params), do: Maraithon.LLM.complete_routing(params)
+
   def preload(%Conversation{} = conversation),
     do: Repo.preload(conversation, [:turns, :linked_delivery, :linked_insight])
 

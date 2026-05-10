@@ -552,6 +552,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           |> Map.put(:todo_ids, Enum.map(todos, &Map.get(&1, "id")))
 
         _ = maybe_refresh_user_memory(attrs)
+        _ = maybe_compact_conversation_async(final_conversation)
 
         {:ok, todo_digest_status(final_conversation, prepared_action_id), summary}
       else
@@ -615,6 +616,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       {:ok, updated_conversation, _turn, _telegram_result} ->
         summary = build_result_summary(message_class, prepared_action_id, state, liveness_summary)
         _ = maybe_refresh_user_memory(attrs)
+        _ = maybe_compact_conversation_async(updated_conversation)
 
         {:ok, todo_digest_status(updated_conversation, prepared_action_id, message_class),
          summary}
@@ -792,6 +794,24 @@ defmodule Maraithon.TelegramAssistant.Runner do
       true -> "inbound_message"
     end
   end
+
+  defp maybe_compact_conversation_async(%Conversation{} = conversation) do
+    Task.start(fn ->
+      try do
+        TelegramConversations.compact_old_turns(conversation)
+      rescue
+        error ->
+          Logger.warning("Telegram conversation compaction failed",
+            conversation_id: conversation.id,
+            reason: Exception.message(error)
+          )
+      end
+    end)
+
+    :ok
+  end
+
+  defp maybe_compact_conversation_async(_conversation), do: :ok
 
   defp maybe_refresh_user_memory(attrs) do
     case Map.get(attrs, :user_id) do
