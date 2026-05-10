@@ -98,6 +98,75 @@ defmodule Maraithon.Crm do
 
   def upsert_person(_user_id, _attrs), do: {:error, :invalid_person_attrs}
 
+  @doc """
+  Look up a person for the user by a single inbound identifier or upsert a stub.
+
+  `identifier` is a map like `%{email: "charlie@example.com"}`,
+  `%{slack_id: "U123"}`, `%{phone: "+1..."}`, or `%{telegram_id: "987"}`.
+  When no existing person matches, a minimal `Person` is created with the
+  identifier in `contact_details` and a `display_name` derived from the
+  caller-supplied option, the email local-part, or the raw identifier value.
+
+  Used by the CRM ingestion loop to resolve participants synchronously without
+  invoking the LLM.
+  """
+  def resolve_contact(user_id, identifier, opts \\ [])
+
+  def resolve_contact(user_id, identifier, opts)
+      when is_binary(user_id) and is_map(identifier) do
+    attrs =
+      identifier
+      |> identifier_to_person_attrs(Keyword.get(opts, :display_name))
+      |> stringify_keys()
+
+    if attrs == %{} or person_changeset_blank?(attrs) do
+      {:error, :unresolvable_contact}
+    else
+      case find_existing_person(user_id, attrs) do
+        %Person{} = person -> {:ok, person}
+        nil -> create_person(user_id, attrs)
+      end
+    end
+  end
+
+  def resolve_contact(_user_id, _identifier, _opts), do: {:error, :invalid_identifier}
+
+  @doc """
+  Atomically increment `interaction_count` and advance `last_interaction_at`
+  forward (never backward) for the given person.
+
+  Called from the synchronous CRM ingestion path so that "Charlie just emailed
+  me" is reflected in the CRM the moment a webhook arrives, before any LLM
+  pass runs.
+  """
+  def bump_interaction(person_id, %DateTime{} = occurred_at, source)
+      when is_binary(person_id) and is_binary(source) do
+    now = DateTime.utc_now()
+
+    query =
+      from(p in Person, where: p.id == ^person_id)
+      |> update([p],
+        inc: [interaction_count: 1],
+        set: [
+          last_interaction_at:
+            fragment(
+              "GREATEST(COALESCE(?, ?), ?)",
+              p.last_interaction_at,
+              ^DateTime.from_unix!(0),
+              ^occurred_at
+            ),
+          updated_at: ^now
+        ]
+      )
+
+    case Repo.update_all(query, []) do
+      {1, _} -> {:ok, :bumped}
+      {0, _} -> {:error, :person_not_found}
+    end
+  end
+
+  def bump_interaction(_person_id, _occurred_at, _source), do: {:error, :invalid_bump}
+
   def delete_person(user_id, person_id)
       when is_binary(user_id) and is_binary(person_id) do
     case get_person_for_user(user_id, person_id) do
@@ -675,4 +744,73 @@ defmodule Maraithon.Crm do
   end
 
   defp clamp_limit(_value, min_value, _max_value), do: min_value
+
+  defp identifier_to_person_attrs(identifier, override_display_name) do
+    {kind, value} = pick_identifier(identifier)
+    trimmed = trim_identifier(value)
+
+    case {kind, trimmed} do
+      {nil, _} ->
+        %{}
+
+      {_, nil} ->
+        %{}
+
+      {kind, value} ->
+        contact_details = %{normalize_contact_kind(to_string(kind)) => [value]}
+
+        %{
+          "contact_details" => contact_details,
+          "display_name" => infer_display_name(override_display_name, kind, value)
+        }
+    end
+  end
+
+  defp pick_identifier(identifier) when is_map(identifier) do
+    candidates = ~w(email slack_id phone phone_number telegram_id)a
+
+    Enum.reduce_while(candidates, {nil, nil}, fn key, _acc ->
+      case Map.get(identifier, key) || Map.get(identifier, to_string(key)) do
+        nil -> {:cont, {nil, nil}}
+        "" -> {:cont, {nil, nil}}
+        value -> {:halt, {key, value}}
+      end
+    end)
+  end
+
+  defp trim_identifier(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      v -> v
+    end
+  end
+
+  defp trim_identifier(_), do: nil
+
+  defp infer_display_name(override, _kind, _value)
+       when is_binary(override) and override != "",
+       do: override
+
+  defp infer_display_name(_override, :email, value) do
+    case String.split(value, "@", parts: 2) do
+      [local, _domain] when local != "" ->
+        local
+        |> String.replace(~r/[._]+/, " ")
+        |> String.split(" ", trim: true)
+        |> Enum.map_join(" ", &String.capitalize/1)
+
+      _ ->
+        value
+    end
+  end
+
+  defp infer_display_name(_override, _kind, value) when is_binary(value), do: value
+  defp infer_display_name(_override, _kind, _value), do: nil
+
+  defp person_changeset_blank?(attrs) do
+    case normalize_display_name(attrs) do
+      nil -> contact_identifiers(attrs) == []
+      _ -> false
+    end
+  end
 end
