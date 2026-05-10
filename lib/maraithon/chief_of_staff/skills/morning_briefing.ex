@@ -461,23 +461,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       nil ->
         {:error, :no_telegram_destination}
 
-      %{chat_id: chat_id} ->
+      destination ->
+        chat_id =
+          case destination do
+            %{chat_id: id} -> id
+            %{"chat_id" => id} -> id
+            id when is_binary(id) -> id
+            other -> to_string(other)
+          end
+
         title = read_string(brief, "title", "Morning briefing")
         summary = read_string(brief, "summary", "")
         body = read_string(brief, "body", "")
 
         text =
           [
-            "*#{title}*",
+            title,
             summary,
             body,
             "",
-            "_smoke-test • #{diagnostics.tokens_out} out tokens • #{diagnostics.elapsed_ms}ms_"
+            "[smoke-test • #{diagnostics.tokens_out} out tokens • #{diagnostics.elapsed_ms}ms]"
           ]
           |> Enum.reject(&(&1 == ""))
           |> Enum.join("\n\n")
 
-        Maraithon.TelegramResponder.send(chat_id, text, parse_mode: "Markdown")
+        Maraithon.TelegramResponder.send(chat_id, text)
     end
   end
 
