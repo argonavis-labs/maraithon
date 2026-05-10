@@ -9,6 +9,7 @@ defmodule Maraithon.AssistantHarness do
   until the model returns a final answer.
   """
 
+  alias Maraithon.AssistantHarness.PromptStability
   alias Maraithon.LLM
 
   @contract_version 2
@@ -363,19 +364,19 @@ defmodule Maraithon.AssistantHarness do
     - If `list_implementation_runs` shows a run id and the user says `the PR is up` or gives a GitHub PR URL, your next response should usually be `tool_calls` for `update_implementation_run`.
 
     Context snapshot JSON:
-    #{Jason.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
+    #{PromptStability.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
 
     Available tools JSON:
-    #{Jason.encode!(Map.get(payload, :tools) || Map.get(payload, "tools") || [])}
+    #{PromptStability.encode!(Map.get(payload, :tools) || Map.get(payload, "tools") || [])}
 
     Tool/result history JSON:
-    #{Jason.encode!(Map.get(payload, :tool_history) || Map.get(payload, "tool_history") || [])}
+    #{PromptStability.encode!(Map.get(payload, :tool_history) || Map.get(payload, "tool_history") || [])}
 
     Runtime policy JSON:
-    #{Jason.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
+    #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
 
     Iteration JSON:
-    #{Jason.encode!(%{iteration: Map.get(payload, :iteration) || Map.get(payload, "iteration") || 1, llm_turns: Map.get(payload, :llm_turns) || Map.get(payload, "llm_turns") || 0, tool_steps: Map.get(payload, :tool_steps) || Map.get(payload, "tool_steps") || 0})}
+    #{PromptStability.encode!(%{iteration: Map.get(payload, :iteration) || Map.get(payload, "iteration") || 1, llm_turns: Map.get(payload, :llm_turns) || Map.get(payload, "llm_turns") || 0, tool_steps: Map.get(payload, :tool_steps) || Map.get(payload, "tool_steps") || 0})}
     """
   end
 
@@ -417,16 +418,16 @@ defmodule Maraithon.AssistantHarness do
     - Use `assistant_push` for a normal proactive check-in.
 
     Proactive trigger JSON:
-    #{Jason.encode!(Map.get(payload, :trigger) || Map.get(payload, "trigger") || %{})}
+    #{PromptStability.encode!(Map.get(payload, :trigger) || Map.get(payload, "trigger") || %{})}
 
     Context snapshot JSON:
-    #{Jason.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
+    #{PromptStability.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
 
     Recent proactive push receipts JSON:
-    #{Jason.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
+    #{PromptStability.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
 
     Runtime policy JSON:
-    #{Jason.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
+    #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
     """
   end
 
