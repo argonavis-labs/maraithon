@@ -47,6 +47,14 @@ config :maraithon, :memory_intelligence, mock_llm_when_unconfigured: true
 # Ecto sandbox during teardown.
 config :maraithon, Maraithon.Crm.PersonEmbeddings, async_enabled: false
 
+# Same reason: keep post-reply async work synchronous in tests so the spawned
+# Task doesn't outlive the sandbox checkout.
+config :maraithon, Maraithon.TelegramAssistant.Runner,
+  user_memory_async_enabled: false,
+  compaction_async_enabled: false
+
+config :maraithon, Maraithon.ContextCache.Builder, async_enabled: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

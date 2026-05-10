@@ -44,8 +44,12 @@ defmodule Maraithon.LLM.Embeddings do
         provider = Keyword.get(opts, :provider, configured_provider())
 
         case provider do
-          :openai -> embed_via_openai(text, opts)
-          :mock -> {:ok, deterministic_mock(text, dimension())}
+          :openai ->
+            embed_via_openai(text, opts)
+
+          :mock ->
+            {:ok, deterministic_mock(text, dimension())}
+
           {module, fun, extra} when is_atom(module) and is_atom(fun) and is_list(extra) ->
             apply(module, fun, [text | extra])
 

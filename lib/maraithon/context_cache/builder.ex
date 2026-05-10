@@ -74,19 +74,31 @@ defmodule Maraithon.ContextCache.Builder do
   end
 
   defp spawn_refresh(user_id) do
-    Task.start(fn ->
-      try do
-        refresh(user_id)
-      rescue
-        error ->
-          Logger.warning("ContextCache refresh failed",
-            user_id: user_id,
-            reason: Exception.message(error)
-          )
-      end
-    end)
+    if async_enabled?() do
+      Task.start(fn ->
+        try do
+          refresh(user_id)
+        rescue
+          error ->
+            Logger.warning("ContextCache refresh failed",
+              user_id: user_id,
+              reason: Exception.message(error)
+            )
+        end
+      end)
+    end
 
     :ok
+  end
+
+  defp async_enabled? do
+    case Application.get_env(:maraithon, __MODULE__, []) do
+      keyword when is_list(keyword) ->
+        Keyword.get(keyword, :async_enabled, true)
+
+      _other ->
+        true
+    end
   end
 
   defp stale?(%DateTime{} = generated_at) do

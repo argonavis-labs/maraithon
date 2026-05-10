@@ -41,6 +41,16 @@ repo_config =
 Application.put_env(:maraithon, Maraithon.Repo, repo_config)
 Application.put_env(:maraithon, :start_background_workers, false)
 
+# Keep post-reply async work synchronous in tests so spawned Tasks don't
+# outlive the Ecto sandbox checkout.
+Application.put_env(:maraithon, Maraithon.TelegramAssistant.Runner,
+  user_memory_async_enabled: false,
+  compaction_async_enabled: false
+)
+
+Application.put_env(:maraithon, Maraithon.ContextCache.Builder, async_enabled: false)
+Application.put_env(:maraithon, Maraithon.Crm.PersonEmbeddings, async_enabled: false)
+
 Application.put_env(
   :maraithon,
   :todos,

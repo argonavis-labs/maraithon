@@ -99,14 +99,21 @@ defmodule Maraithon.LLM.AnthropicProvider do
     model = response["model"] || "unknown"
     input_tokens = get_in(response, ["usage", "input_tokens"]) || 0
     output_tokens = get_in(response, ["usage", "output_tokens"]) || 0
+    cache_read = get_in(response, ["usage", "cache_read_input_tokens"]) || 0
+    cache_write = get_in(response, ["usage", "cache_creation_input_tokens"]) || 0
 
     # Calculate cost using the Spend module
-    usage = Maraithon.Spend.calculate_cost(model, input_tokens, output_tokens)
+    usage =
+      Maraithon.Spend.calculate_cost(model, input_tokens, output_tokens)
+      |> Map.put(:cache_read_input_tokens, cache_read)
+      |> Map.put(:cache_creation_input_tokens, cache_write)
 
     Logger.info("LLM call completed",
       model: model,
       input_tokens: input_tokens,
       output_tokens: output_tokens,
+      cache_read_input_tokens: cache_read,
+      cache_creation_input_tokens: cache_write,
       cost_usd: usage.total_cost
     )
 

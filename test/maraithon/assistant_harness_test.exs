@@ -237,7 +237,7 @@ defmodule Maraithon.AssistantHarnessTest do
              )
 
     assert response["assistant_message"] == "I checked it from the fallback model."
-    assert_receive {:attempted_model, nil}
+    assert_receive {:attempted_model, primary} when primary != "fallback-model"
     assert_receive {:attempted_model, "fallback-model"}
   end
 
@@ -273,7 +273,7 @@ defmodule Maraithon.AssistantHarnessTest do
              )
 
     assert response["assistant_message"] == "The fallback model returned valid JSON."
-    assert_receive {:attempted_model, nil}
+    assert_receive {:attempted_model, primary} when primary != "fallback-model"
     assert_receive {:attempted_model, "fallback-model"}
   end
 

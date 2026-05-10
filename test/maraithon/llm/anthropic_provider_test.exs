@@ -379,6 +379,43 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       assert result.model == "unknown"
     end
 
+    test "surfaces cache_read_input_tokens and cache_creation_input_tokens in usage" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "ok"}],
+            "model" => "claude-sonnet-4-20250514",
+            "stop_reason" => "end_turn",
+            "usage" => %{
+              "input_tokens" => 12,
+              "output_tokens" => 4,
+              "cache_creation_input_tokens" => 9_000,
+              "cache_read_input_tokens" => 2_500
+            }
+          })
+        )
+      end)
+
+      {:ok, result} =
+        AnthropicProvider.complete(%{
+          "messages" => [%{"role" => "user", "content" => "ping"}]
+        })
+
+      assert result.usage.cache_read_input_tokens == 2_500
+      assert result.usage.cache_creation_input_tokens == 9_000
+    end
+
     test "lifts long system message into a cached top-level system block" do
       bypass = Bypass.open()
 

@@ -797,43 +797,77 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp maybe_compact_conversation_async(%Conversation{} = conversation) do
-    Task.start(fn ->
-      try do
-        TelegramConversations.compact_old_turns(conversation)
-      rescue
-        error ->
-          Logger.warning("Telegram conversation compaction failed",
-            conversation_id: conversation.id,
-            reason: Exception.message(error)
-          )
-      end
-    end)
+    if compaction_async_enabled?() do
+      Task.start(fn ->
+        try do
+          TelegramConversations.compact_old_turns(conversation)
+        rescue
+          error ->
+            Logger.warning("Telegram conversation compaction failed",
+              conversation_id: conversation.id,
+              reason: Exception.message(error)
+            )
+        end
+      end)
+    end
 
     :ok
   end
 
   defp maybe_compact_conversation_async(_conversation), do: :ok
 
+  defp compaction_async_enabled? do
+    case Application.get_env(:maraithon, __MODULE__, []) do
+      keyword when is_list(keyword) ->
+        Keyword.get(keyword, :compaction_async_enabled, true)
+
+      _other ->
+        true
+    end
+  end
+
   defp maybe_refresh_user_memory(attrs) do
     case Map.get(attrs, :user_id) do
       user_id when is_binary(user_id) ->
-        Task.start(fn ->
-          try do
-            UserMemory.refresh_if_stale(user_id)
-          rescue
-            error ->
-              Logger.warning("Telegram assistant user-memory refresh failed",
-                user_id: user_id,
-                reason: Exception.message(error)
-              )
-          end
-        end)
+        if user_memory_async_enabled?() do
+          Task.start(fn ->
+            try do
+              UserMemory.refresh_if_stale(user_id)
+            rescue
+              error ->
+                Logger.warning("Telegram assistant user-memory refresh failed",
+                  user_id: user_id,
+                  reason: Exception.message(error)
+                )
+            end
+          end)
+        else
+          UserMemory.refresh_if_stale(user_id)
+        end
 
       _ ->
         :ok
     end
 
     :ok
+  rescue
+    error ->
+      Logger.warning("Telegram assistant user-memory refresh failed",
+        user_id: inspect(Map.get(attrs, :user_id)),
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp user_memory_async_enabled? do
+    case Application.get_env(:maraithon, __MODULE__, []) do
+      keyword when is_list(keyword) ->
+        Keyword.get(keyword, :user_memory_async_enabled, true)
+
+      _other ->
+        true
+    end
   end
 
   defp max_tool_steps do
