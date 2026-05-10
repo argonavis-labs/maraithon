@@ -18,8 +18,10 @@ defmodule Maraithon.Crm.Ingest.WindowPolicy do
   @max_age_minutes 15
   @max_flushes_per_hour 6
 
-  @type window_input :: %{required(:observation_count) => non_neg_integer(),
-                           required(:opened_at) => DateTime.t()}
+  @type window_input :: %{
+          required(:observation_count) => non_neg_integer(),
+          required(:opened_at) => DateTime.t()
+        }
 
   def max_observations, do: @max_observations
   def max_age_minutes, do: @max_age_minutes
@@ -47,8 +49,12 @@ defmodule Maraithon.Crm.Ingest.WindowPolicy do
       when is_integer(count) and count >= @max_observations,
       do: true
 
-  def ready?(%{observation_count: count, opened_at: %DateTime{} = opened_at}, %DateTime{} = now,
-        _flush_count, _force)
+  def ready?(
+        %{observation_count: count, opened_at: %DateTime{} = opened_at},
+        %DateTime{} = now,
+        _flush_count,
+        _force
+      )
       when is_integer(count) and count > 0 do
     DateTime.diff(now, opened_at, :second) >= @max_age_minutes * 60
   end

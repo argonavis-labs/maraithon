@@ -745,7 +745,10 @@ defmodule Maraithon.Connectors.Gmail do
           :skip
         else
           direction = direction_for(participants, user_email)
-          occurred_at = Map.get(message, :internal_date) || Map.get(message, "internal_date") || DateTime.utc_now()
+
+          occurred_at =
+            Map.get(message, :internal_date) || Map.get(message, "internal_date") ||
+              DateTime.utc_now()
 
           {:ok,
            Observation.new(%{

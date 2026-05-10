@@ -141,7 +141,8 @@ defmodule Maraithon.Crm.Ingest do
 
   See `Maraithon.Runtime.BackgroundJobs.enqueue_relationship_backfill/3`.
   """
-  def enqueue_backfill(user_id, source, opts \\ []) when is_binary(user_id) and is_binary(source) do
+  def enqueue_backfill(user_id, source, opts \\ [])
+      when is_binary(user_id) and is_binary(source) do
     BackgroundJobs.enqueue_relationship_backfill(user_id, source, opts)
   end
 

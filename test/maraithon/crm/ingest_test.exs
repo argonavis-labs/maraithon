@@ -109,7 +109,10 @@ defmodule Maraithon.Crm.IngestTest do
   describe "sweep_stale_windows/1" do
     test "force-flushes open windows older than the stale threshold", %{user_id: user_id} do
       assert {:ok, :buffered, _id} =
-               Ingest.observe(user_id, sample_changeset(user_id, "s-1", "stale@example.com", "Stale"))
+               Ingest.observe(
+                 user_id,
+                 sample_changeset(user_id, "s-1", "stale@example.com", "Stale")
+               )
 
       window =
         Repo.one(
@@ -117,7 +120,8 @@ defmodule Maraithon.Crm.IngestTest do
             where: w.user_id == ^user_id and w.source == "gmail" and w.status == "open"
         )
 
-      old_opened_at = DateTime.add(DateTime.utc_now(), -(Ingest.stale_window_minutes() + 5) * 60, :second)
+      old_opened_at =
+        DateTime.add(DateTime.utc_now(), -(Ingest.stale_window_minutes() + 5) * 60, :second)
 
       Repo.update_all(from(w in Window, where: w.id == ^window.id),
         set: [opened_at: old_opened_at]

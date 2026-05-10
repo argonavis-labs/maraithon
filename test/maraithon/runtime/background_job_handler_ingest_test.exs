@@ -60,7 +60,10 @@ defmodule Maraithon.Runtime.BackgroundJobHandlerIngestTest do
   end
 
   test "completes the window after both passes succeed", %{user_id: user_id} do
-    install_relationship_stub(~s|{"summary":"learned charlie","people":[],"memories":[],"links":[]}|)
+    install_relationship_stub(
+      ~s|{"summary":"learned charlie","people":[],"memories":[],"links":[]}|
+    )
+
     install_open_loop_stub(~s|{"candidates":[]}|)
 
     job = seed_window_with_observation(user_id)
