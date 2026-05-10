@@ -10,6 +10,7 @@ defmodule Maraithon.MobileNodes do
 
   alias Maraithon.ActionLedger
   alias Maraithon.MobileNodes.{Device, Pairing}
+  alias Maraithon.Normalization
   alias Maraithon.Repo
 
   @allowed_commands ~w(notify open_url capture_text device_status)
@@ -253,12 +254,7 @@ defmodule Maraithon.MobileNodes do
   defp normalize_allowed_commands(nil), do: {:ok, @allowed_commands}
 
   defp normalize_allowed_commands(commands) when is_list(commands) do
-    commands =
-      commands
-      |> Enum.map(&to_string/1)
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.uniq()
+    commands = Normalization.string_list(commands)
 
     cond do
       commands == [] ->
@@ -320,52 +316,13 @@ defmodule Maraithon.MobileNodes do
     end
   end
 
-  defp read_string(attrs, key, default \\ nil) when is_map(attrs) do
-    attrs = stringify_keys(attrs)
+  defp read_string(attrs, key, default \\ nil),
+    do: Normalization.read_string(attrs, key, default)
 
-    case Map.get(attrs, key, default) do
-      nil -> default
-      "" -> default
-      value when is_binary(value) -> value |> String.trim() |> blank_to_default(default)
-      value -> value |> to_string() |> String.trim() |> blank_to_default(default)
-    end
-  end
+  defp read_datetime(attrs, key), do: Normalization.read_datetime(attrs, key)
 
-  defp read_datetime(attrs, key) when is_map(attrs) do
-    attrs = stringify_keys(attrs)
+  defp clamp_limit(value), do: Normalization.clamp_limit(value, @default_limit, @max_limit)
 
-    case Map.get(attrs, key) do
-      %DateTime{} = datetime ->
-        datetime
-
-      value when is_binary(value) ->
-        case DateTime.from_iso8601(value) do
-          {:ok, datetime, _offset} -> datetime
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp blank_to_default("", default), do: default
-  defp blank_to_default(value, _default), do: value
-
-  defp clamp_limit(value) when is_integer(value), do: min(max(value, 1), @max_limit)
-  defp clamp_limit(_value), do: @default_limit
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), stringify_value(value)}
-      {key, value} when is_binary(key) -> {key, stringify_value(value)}
-      {key, value} -> {to_string(key), stringify_value(value)}
-    end)
-  end
-
+  defp stringify_keys(value) when is_map(value), do: Normalization.stringify_keys(value)
   defp stringify_keys(_value), do: %{}
-
-  defp stringify_value(value) when is_map(value), do: stringify_keys(value)
-  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
-  defp stringify_value(value), do: value
 end

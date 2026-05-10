@@ -7,6 +7,7 @@ defmodule Maraithon.ScheduledTasks do
   import Ecto.Query
 
   alias Maraithon.ActionLedger
+  alias Maraithon.Normalization
   alias Maraithon.Repo
   alias Maraithon.ScheduledTasks.{Run, Task}
 
@@ -393,26 +394,7 @@ defmodule Maraithon.ScheduledTasks do
     _error -> :ok
   end
 
-  defp parse_datetime(nil), do: {:error, :invalid_datetime}
-
-  defp parse_datetime(%DateTime{} = datetime), do: {:ok, DateTime.truncate(datetime, :second)}
-
-  defp parse_datetime(value) when is_binary(value) do
-    value = String.trim(value)
-
-    case DateTime.from_iso8601(value) do
-      {:ok, datetime, _offset} ->
-        {:ok, DateTime.truncate(datetime, :second)}
-
-      _ ->
-        case NaiveDateTime.from_iso8601(value) do
-          {:ok, naive} -> DateTime.from_naive(naive, "Etc/UTC")
-          _ -> {:error, :invalid_datetime}
-        end
-    end
-  end
-
-  defp parse_datetime(_value), do: {:error, :invalid_datetime}
+  defp parse_datetime(value), do: Normalization.parse_datetime(value)
 
   defp parse_time(nil), do: {:error, :invalid_time}
 
@@ -480,48 +462,14 @@ defmodule Maraithon.ScheduledTasks do
     end
   end
 
-  defp read_string(attrs, key, default \\ nil) when is_map(attrs) do
-    case Map.get(attrs, key, default) do
-      nil -> default
-      "" -> default
-      value when is_binary(value) -> value |> String.trim() |> blank_to_default(default)
-      value -> value |> to_string() |> String.trim() |> blank_to_default(default)
-    end
-  end
+  defp read_string(attrs, key, default \\ nil),
+    do: Normalization.read_string(attrs, key, default)
 
-  defp read_map(attrs, key) when is_map(attrs) do
-    case Map.get(stringify_keys(attrs), key) do
-      value when is_map(value) -> stringify_keys(value)
-      _ -> %{}
-    end
-  end
+  defp read_map(attrs, key), do: Normalization.read_map(attrs, key)
 
-  defp read_datetime(attrs, key) when is_map(attrs) do
-    attrs
-    |> stringify_keys()
-    |> Map.get(key)
-    |> parse_datetime()
-    |> case do
-      {:ok, datetime} -> datetime
-      {:error, _reason} -> nil
-    end
-  end
+  defp read_datetime(attrs, key), do: Normalization.read_datetime(attrs, key)
 
-  defp blank_to_default("", default), do: default
-  defp blank_to_default(value, _default), do: value
+  defp clamp_limit(value), do: Normalization.clamp_limit(value, @default_limit, @max_limit)
 
-  defp clamp_limit(value) when is_integer(value), do: min(max(value, 1), @max_limit)
-  defp clamp_limit(_value), do: @default_limit
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), stringify_value(value)}
-      {key, value} when is_binary(key) -> {key, stringify_value(value)}
-      {key, value} -> {to_string(key), stringify_value(value)}
-    end)
-  end
-
-  defp stringify_value(value) when is_map(value), do: stringify_keys(value)
-  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
-  defp stringify_value(value), do: value
+  defp stringify_keys(value), do: Normalization.stringify_keys(value)
 end

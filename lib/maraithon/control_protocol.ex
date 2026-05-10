@@ -8,6 +8,7 @@ defmodule Maraithon.ControlProtocol do
   alias Maraithon.ControlCalls
   alias Maraithon.Health
   alias Maraithon.MobileNodes
+  alias Maraithon.Normalization
   alias Maraithon.ScheduledTasks
   alias Maraithon.ToolPolicy
   alias Maraithon.Tools
@@ -368,7 +369,7 @@ defmodule Maraithon.ControlProtocol do
     %{
       "jsonrpc" => "2.0",
       "id" => id,
-      "error" => compact(%{"code" => code, "message" => message, "data" => data})
+      "error" => Normalization.compact(%{"code" => code, "message" => message, "data" => data})
     }
   end
 
@@ -379,76 +380,21 @@ defmodule Maraithon.ControlProtocol do
     }
   end
 
-  defp normalize(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp normalize(%Date{} = value), do: Date.to_iso8601(value)
-  defp normalize(%Time{} = value), do: Time.to_iso8601(value)
-  defp normalize(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
-  defp normalize(value) when is_struct(value), do: value |> Map.from_struct() |> normalize()
-  defp normalize(value) when is_list(value), do: Enum.map(value, &normalize/1)
+  defp normalize(value), do: Normalization.normalize_json_value(value)
 
-  defp normalize(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), normalize(nested)} end)
-  end
+  defp read_string(map, key), do: Normalization.read_string(map, key)
 
-  defp normalize(value), do: value
+  defp read_list(map, key), do: Normalization.read_list(map, key)
 
-  defp read_string(map, key) when is_map(map) do
-    case Map.get(map, key) do
-      nil -> nil
-      "" -> nil
-      value when is_binary(value) -> String.trim(value)
-      value -> to_string(value)
-    end
-  end
+  defp read_list_if_present(map, key), do: Normalization.read_list_if_present(map, key)
 
-  defp read_string(_map, _key), do: nil
-
-  defp read_list(map, key) when is_map(map) do
-    case Map.get(map, key) do
-      values when is_list(values) ->
-        values
-        |> Enum.filter(&is_binary/1)
-        |> Enum.map(&String.trim/1)
-        |> Enum.reject(&(&1 == ""))
-        |> Enum.uniq()
-
-      _other ->
-        []
-    end
-  end
-
-  defp read_list(_map, _key), do: []
-
-  defp read_list_if_present(map, key) when is_map(map) do
-    if Map.has_key?(map, key), do: read_list(map, key), else: nil
-  end
-
-  defp read_list_if_present(_map, _key), do: nil
-
-  defp read_integer(map, key) when is_map(map) do
-    case Map.get(map, key) do
-      value when is_integer(value) -> value
-      value when is_binary(value) -> value |> Integer.parse() |> integer_parse_result()
-      _ -> nil
-    end
-  end
-
-  defp read_integer(_map, _key), do: nil
-
-  defp integer_parse_result({value, ""}), do: value
-  defp integer_parse_result(_result), do: nil
+  defp read_integer(map, key), do: Normalization.read_integer(map, key)
 
   defp maybe_put_opt(opts, _key, nil), do: opts
   defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp truthy?(value) when value in [true, "true", "1", 1], do: true
   defp truthy?(_value), do: false
-
-  defp compact(map) do
-    map
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
-  end
 
   defp app_version do
     Application.spec(:maraithon, :vsn)

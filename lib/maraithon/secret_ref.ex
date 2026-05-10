@@ -15,6 +15,8 @@ defmodule Maraithon.SecretRef do
   @type ref :: binary()
   @type parsed_ref :: %{kind: binary(), source: binary(), raw_ref: binary()}
 
+  alias Maraithon.Normalization
+
   def resolve(ref, opts \\ [])
 
   def resolve(ref, opts) when is_binary(ref) and is_list(opts) do
@@ -37,7 +39,7 @@ defmodule Maraithon.SecretRef do
 
   def resolve_map(refs, opts) when is_map(refs) and is_list(opts) do
     refs
-    |> stringify_keys()
+    |> Normalization.stringify_keys()
     |> Map.new(fn {name, ref} -> {name, resolve_ref_value(ref, opts)} end)
   end
 
@@ -299,19 +301,14 @@ defmodule Maraithon.SecretRef do
   defp reason_code({reason, _, _}), do: reason_code(reason)
   defp reason_code(reason), do: inspect(reason)
 
-  defp normalize_surfaces(surfaces) when is_map(surfaces), do: stringify_keys(surfaces)
+  defp normalize_surfaces(surfaces) when is_map(surfaces),
+    do: Normalization.stringify_keys(surfaces)
+
   defp normalize_surfaces(_surfaces), do: %{}
 
-  defp normalize_refs(refs) when is_map(refs), do: stringify_keys(refs)
+  defp normalize_refs(refs) when is_map(refs), do: Normalization.stringify_keys(refs)
   defp normalize_refs(ref) when is_binary(ref), do: %{"default" => ref}
   defp normalize_refs(_refs), do: %{}
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {key, value} ->
-      value = if is_map(value), do: stringify_keys(value), else: value
-      {to_string(key), value}
-    end)
-  end
 
   defp snapshot?(value) when is_map(value) do
     Enum.any?(value, fn {_surface, entries} ->

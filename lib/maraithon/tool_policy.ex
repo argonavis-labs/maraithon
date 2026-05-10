@@ -4,6 +4,7 @@ defmodule Maraithon.ToolPolicy do
   """
 
   alias Maraithon.ActionLedger
+  alias Maraithon.Normalization
   alias Maraithon.ToolPolicy.Decision
 
   @confirmation_surfaces MapSet.new(~w(telegram mcp runtime agent_harness control))
@@ -273,33 +274,15 @@ defmodule Maraithon.ToolPolicy do
 
   defp agent_policy_block(_context), do: nil
 
-  defp read_value(attrs, key) when is_map(attrs) and is_atom(key) do
-    Map.get(attrs, key, Map.get(attrs, Atom.to_string(key)))
-  end
+  defp read_value(attrs, key) when is_map(attrs) and is_atom(key),
+    do: attrs |> Normalization.stringify_keys() |> Map.get(Atom.to_string(key))
 
   defp read_value(_attrs, _key), do: nil
 
-  defp read_string(attrs, key, default \\ nil)
+  defp read_string(attrs, key, default \\ nil),
+    do: Normalization.read_string(attrs, key, default)
 
-  defp read_string(attrs, key, default) when is_map(attrs) and is_atom(key) do
-    case read_value(attrs, key) do
-      nil -> default
-      "" -> default
-      value when is_binary(value) -> String.trim(value)
-      value -> to_string(value)
-    end
-  end
-
-  defp read_string(_attrs, _key, default), do: default
-
-  defp read_map(attrs, key) when is_map(attrs) and is_atom(key) do
-    case read_value(attrs, key) do
-      value when is_map(value) -> value
-      _ -> %{}
-    end
-  end
-
-  defp read_map(_attrs, _key), do: %{}
+  defp read_map(attrs, key), do: Normalization.read_map(attrs, key)
 
   defp valid_user_id?(user_id) when is_binary(user_id), do: String.trim(user_id) != ""
   defp valid_user_id?(_user_id), do: false
@@ -307,15 +290,9 @@ defmodule Maraithon.ToolPolicy do
   defp truthy?(value) when value in [true, "true", "1", 1, true], do: true
   defp truthy?(_value), do: false
 
-  defp normalize_string_list(value) when is_list(value), do: Enum.map(value, &to_string/1)
-  defp normalize_string_list(_value), do: []
+  defp normalize_string_list(value), do: Normalization.string_list(value)
 
-  defp stringify_keys(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), stringify_keys(nested)} end)
-  end
-
-  defp stringify_keys(value) when is_list(value), do: Enum.map(value, &stringify_keys/1)
-  defp stringify_keys(value), do: value
+  defp stringify_keys(value), do: Normalization.stringify_keys(value)
 
   defp argument_keys(arguments) when is_map(arguments) do
     arguments

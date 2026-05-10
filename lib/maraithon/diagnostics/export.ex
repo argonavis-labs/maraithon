@@ -20,6 +20,7 @@ defmodule Maraithon.Diagnostics.Export do
   alias Maraithon.LogBuffer
   alias Maraithon.MobileNodes
   alias Maraithon.MobileNodes.{Device, Pairing}
+  alias Maraithon.Normalization
   alias Maraithon.Redaction
   alias Maraithon.Repo
   alias Maraithon.Runtime.{BackgroundJob, ScheduledJob}
@@ -505,49 +506,12 @@ defmodule Maraithon.Diagnostics.Export do
   defp normalize_for_json(value) do
     value
     |> redacted()
-    |> normalize_value()
+    |> Normalization.normalize_json_value()
   end
 
-  defp normalize_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp normalize_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
-  defp normalize_value(%Date{} = value), do: Date.to_iso8601(value)
-  defp normalize_value(%Time{} = value), do: Time.to_iso8601(value)
-  defp normalize_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp normalize_value(value) when is_list(value), do: Enum.map(value, &normalize_value/1)
+  defp normalize_limit(limit), do: Normalization.clamp_limit(limit, @default_limit, @max_limit)
 
-  defp normalize_value(%_{} = struct) do
-    struct
-    |> Map.from_struct()
-    |> normalize_value()
-  end
-
-  defp normalize_value(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), normalize_value(nested)} end)
-  end
-
-  defp normalize_value(value), do: value
-
-  defp normalize_limit(limit) when is_integer(limit), do: max(1, min(limit, @max_limit))
-
-  defp normalize_limit(limit) when is_binary(limit) do
-    case Integer.parse(String.trim(limit)) do
-      {parsed, ""} -> normalize_limit(parsed)
-      _ -> @default_limit
-    end
-  end
-
-  defp normalize_limit(_limit), do: @default_limit
-
-  defp normalize_blank(nil), do: nil
-
-  defp normalize_blank(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      trimmed -> trimmed
-    end
-  end
-
-  defp normalize_blank(value), do: to_string(value)
+  defp normalize_blank(value), do: Normalization.blank_to_nil(value)
 
   defp app_version do
     case Application.spec(:maraithon, :vsn) do

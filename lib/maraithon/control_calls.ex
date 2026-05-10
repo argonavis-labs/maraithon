@@ -6,6 +6,7 @@ defmodule Maraithon.ControlCalls do
   import Ecto.Query
 
   alias Maraithon.ControlCalls.ControlCall
+  alias Maraithon.Normalization
   alias Maraithon.Repo
 
   @default_ttl_seconds 24 * 60 * 60
@@ -175,16 +176,7 @@ defmodule Maraithon.ControlCalls do
   defp normalize_error(reason) when is_binary(reason), do: %{"message" => reason}
   defp normalize_error(reason), do: %{"message" => inspect(reason)}
 
-  defp read_string(attrs, key) when is_map(attrs) and is_atom(key) do
-    case Map.get(attrs, key, Map.get(attrs, Atom.to_string(key))) do
-      nil -> nil
-      "" -> nil
-      value when is_binary(value) -> String.trim(value)
-      value -> to_string(value)
-    end
-  end
-
-  defp read_string(_attrs, _key), do: nil
+  defp read_string(attrs, key), do: Normalization.read_string(attrs, key)
 
   defp unique_conflict?(changeset) do
     Enum.any?(changeset.errors, fn
@@ -196,8 +188,8 @@ defmodule Maraithon.ControlCalls do
   defp normalize_positive_integer(value, _default) when is_integer(value) and value > 0, do: value
 
   defp normalize_positive_integer(value, default) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} when parsed > 0 -> parsed
+    case Normalization.parse_integer(value) do
+      parsed when is_integer(parsed) and parsed > 0 -> parsed
       _other -> default
     end
   end

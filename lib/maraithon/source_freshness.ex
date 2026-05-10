@@ -11,6 +11,7 @@ defmodule Maraithon.SourceFreshness do
   import Ecto.Query
 
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Normalization
   alias Maraithon.Repo
 
   @default_stale_after_hours 24
@@ -251,22 +252,14 @@ defmodule Maraithon.SourceFreshness do
 
   defp metadata_datetime(_metadata, _key), do: nil
 
-  defp parse_datetime(%DateTime{} = value), do: value
-
-  defp parse_datetime(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do
-      {:ok, datetime, _offset} -> datetime
-      _ -> nil
+  defp parse_datetime(value) do
+    case Normalization.parse_datetime(value) do
+      {:ok, datetime} -> datetime
+      {:error, _reason} -> nil
     end
   end
 
-  defp parse_datetime(_value), do: nil
-
-  defp read_datetime(attrs, key) do
-    attrs
-    |> Map.get(key, Map.get(attrs, Atom.to_string(key)))
-    |> parse_datetime()
-  end
+  defp read_datetime(attrs, key), do: Normalization.read_datetime(attrs, key)
 
   defp put_iso(map, key, %DateTime{} = value) do
     Map.put(map, key, DateTime.to_iso8601(DateTime.truncate(value, :second)))

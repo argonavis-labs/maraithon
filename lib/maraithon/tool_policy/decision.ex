@@ -4,6 +4,8 @@ defmodule Maraithon.ToolPolicy.Decision do
   """
 
   @enforce_keys [:status, :reason_code, :message]
+  alias Maraithon.Normalization
+
   defstruct status: :deny,
             reason_code: "policy_denied",
             message: "The tool call was denied by policy.",
@@ -25,7 +27,7 @@ defmodule Maraithon.ToolPolicy.Decision do
       status: status,
       reason_code: reason_code,
       message: message,
-      metadata: stringify_keys(metadata)
+      metadata: Normalization.stringify_keys(metadata)
     }
   end
 
@@ -34,14 +36,7 @@ defmodule Maraithon.ToolPolicy.Decision do
       "status" => Atom.to_string(decision.status),
       "reason_code" => decision.reason_code,
       "message" => decision.message,
-      "metadata" => stringify_keys(decision.metadata)
+      "metadata" => Normalization.stringify_keys(decision.metadata)
     }
   end
-
-  defp stringify_keys(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), stringify_keys(nested)} end)
-  end
-
-  defp stringify_keys(value) when is_list(value), do: Enum.map(value, &stringify_keys/1)
-  defp stringify_keys(value), do: value
 end

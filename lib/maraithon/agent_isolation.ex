@@ -10,6 +10,7 @@ defmodule Maraithon.AgentIsolation do
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.AgentIsolation.{Binding, Session}
+  alias Maraithon.Normalization
   alias Maraithon.Repo
 
   @default_limit 50
@@ -246,62 +247,15 @@ defmodule Maraithon.AgentIsolation do
     where(query, [binding], field(binding, ^field) == ^value)
   end
 
-  defp clamp_limit(value) when is_integer(value), do: min(max(value, 1), @max_limit)
-  defp clamp_limit(_value), do: @default_limit
+  defp clamp_limit(value), do: Normalization.clamp_limit(value, @default_limit, @max_limit)
 
-  defp read_string(attrs, key, default) when is_map(attrs) do
-    attrs = stringify_keys(attrs)
+  defp read_string(attrs, key, default), do: Normalization.read_string(attrs, key, default)
 
-    case Map.get(attrs, key, default) do
-      nil -> default
-      "" -> default
-      value when is_binary(value) -> value |> String.trim() |> blank_to_default(default)
-      value -> value |> to_string() |> String.trim() |> blank_to_default(default)
-    end
-  end
+  defp read_map(attrs, key, default \\ %{}), do: Normalization.read_map(attrs, key, default)
 
-  defp read_map(attrs, key, default \\ %{}) when is_map(attrs) do
-    attrs = stringify_keys(attrs)
+  defp read_datetime(attrs, key), do: Normalization.read_datetime(attrs, key)
 
-    case Map.get(attrs, key, default) do
-      value when is_map(value) -> stringify_keys(value)
-      _ -> default
-    end
-  end
+  defp normalize_list(value), do: Normalization.string_list(value)
 
-  defp read_datetime(attrs, key) when is_map(attrs) do
-    attrs = stringify_keys(attrs)
-
-    case Map.get(attrs, key) do
-      %DateTime{} = datetime ->
-        datetime
-
-      value when is_binary(value) ->
-        case DateTime.from_iso8601(value) do
-          {:ok, datetime, _offset} -> datetime
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp blank_to_default("", default), do: default
-  defp blank_to_default(value, _default), do: value
-
-  defp normalize_list(value) when is_list(value), do: Enum.map(value, &to_string/1)
-  defp normalize_list(_value), do: []
-
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) -> {Atom.to_string(key), stringify_value(value)}
-      {key, value} when is_binary(key) -> {key, stringify_value(value)}
-      {key, value} -> {to_string(key), stringify_value(value)}
-    end)
-  end
-
-  defp stringify_value(value) when is_map(value), do: stringify_keys(value)
-  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
-  defp stringify_value(value), do: value
+  defp stringify_keys(value), do: Normalization.stringify_keys(value)
 end

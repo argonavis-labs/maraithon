@@ -10,6 +10,7 @@ defmodule Maraithon.ActionLedger do
   import Ecto.Query
 
   alias Maraithon.ActionLedger.Action
+  alias Maraithon.Normalization
   alias Maraithon.Redaction
   alias Maraithon.Repo
 
@@ -192,51 +193,21 @@ defmodule Maraithon.ActionLedger do
   defp redacted_string(value) when is_binary(value), do: Redaction.redact_string(value)
   defp redacted_string(value), do: value |> to_string() |> Redaction.redact_string()
 
-  defp read_string(attrs, key, default \\ nil) do
-    string_key = Atom.to_string(key)
+  defp read_string(attrs, key, default \\ nil),
+    do: Normalization.read_string(attrs, key, default)
 
-    case Map.get(attrs, key, Map.get(attrs, string_key, default)) do
-      nil -> default
-      "" -> default
-      value when is_binary(value) -> String.trim(value)
-      value -> to_string(value)
-    end
-  end
+  defp read_map(attrs, key), do: Normalization.read_map(attrs, key)
 
-  defp read_map(attrs, key) do
-    string_key = Atom.to_string(key)
+  defp stringify_keys(value), do: Normalization.stringify_keys(value)
 
-    case Map.get(attrs, key, Map.get(attrs, string_key, %{})) do
-      value when is_map(value) -> stringify_keys(value)
-      _ -> %{}
-    end
-  end
-
-  defp stringify_keys(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {to_string(key), stringify_keys(nested)} end)
-  end
-
-  defp stringify_keys(value) when is_list(value), do: Enum.map(value, &stringify_keys/1)
-  defp stringify_keys(value), do: value
-
-  defp normalize_limit(limit) when is_integer(limit), do: max(1, min(limit, @max_limit))
-
-  defp normalize_limit(limit) when is_binary(limit) do
-    case Integer.parse(String.trim(limit)) do
-      {parsed, ""} -> normalize_limit(parsed)
-      _ -> @default_limit
-    end
-  end
-
-  defp normalize_limit(_limit), do: @default_limit
+  defp normalize_limit(limit), do: Normalization.clamp_limit(limit, @default_limit, @max_limit)
 
   defp normalize_retention_days(days) when is_integer(days) and days > 0, do: days
 
   defp normalize_retention_days(days) when is_binary(days) do
-    case Integer.parse(String.trim(days)) do
-      {parsed, ""} -> normalize_retention_days(parsed)
-      _ -> @default_retention_days
-    end
+    days
+    |> Normalization.parse_integer()
+    |> normalize_retention_days()
   end
 
   defp normalize_retention_days(_days), do: @default_retention_days
