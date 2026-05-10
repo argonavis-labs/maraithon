@@ -159,6 +159,73 @@ defmodule Maraithon.LLM.OpenAIProviderTest do
                })
     end
 
+    test "stream_complete invokes the callback per delta and returns full response" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        openai_api_key: "test_api_key",
+        openai_model: "gpt-5.4"
+      )
+
+      Application.put_env(:maraithon, :openai,
+        base_url: "http://localhost:#{bypass.port}/v1/responses"
+      )
+
+      events = [
+        %{"type" => "response.created", "response" => %{}},
+        %{"type" => "response.output_text.delta", "delta" => "Hello "},
+        %{"type" => "response.output_text.delta", "delta" => "world"},
+        %{
+          "type" => "response.completed",
+          "response" => %{
+            "model" => "gpt-5.4-2026-03-05",
+            "status" => "completed",
+            "output" => [
+              %{
+                "type" => "message",
+                "content" => [%{"type" => "output_text", "text" => "Hello world"}]
+              }
+            ],
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 2, "total_tokens" => 7}
+          }
+        }
+      ]
+
+      sse_body =
+        Enum.map_join(events, "\n", fn ev -> "data: #{Jason.encode!(ev)}\n" end) <>
+          "\ndata: [DONE]\n\n"
+
+      Bypass.expect_once(bypass, "POST", "/v1/responses", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Jason.decode!(body)
+
+        assert params["stream"] == true
+        assert params["model"] == "gpt-5.4"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("text/event-stream")
+        |> Plug.Conn.resp(200, sse_body)
+      end)
+
+      test_pid = self()
+
+      on_chunk = fn delta ->
+        send(test_pid, {:delta, delta})
+      end
+
+      assert {:ok, result} =
+               Maraithon.LLM.OpenAIProvider.stream_complete(
+                 %{"messages" => [%{"role" => "user", "content" => "Hi"}]},
+                 on_chunk
+               )
+
+      assert_receive {:delta, "Hello "}
+      assert_receive {:delta, "world"}
+      assert result.content == "Hello world"
+      assert result.tokens_in == 5
+      assert result.tokens_out == 2
+    end
+
     test "handles rate limiting" do
       bypass = Bypass.open()
 

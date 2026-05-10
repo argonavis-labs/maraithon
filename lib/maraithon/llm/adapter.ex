@@ -19,4 +19,9 @@ defmodule Maraithon.LLM.Adapter do
         }
 
   @callback complete(params()) :: {:ok, response()} | {:error, term()}
+
+  @callback stream_complete(params(), on_chunk :: (String.t() -> any())) ::
+              {:ok, response()} | {:error, term()}
+
+  @optional_callbacks stream_complete: 2
 end

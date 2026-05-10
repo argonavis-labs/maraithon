@@ -144,6 +144,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           runtime_context
           |> Map.put(:tools, Toolbox.tool_definitions(runtime_context.context))
           |> AssistantHarness.build_loop_request_payload(state, runner_policy_opts())
+          |> Map.put(:_stream_target, runtime_context.run_id)
 
         now = DateTime.utc_now()
 

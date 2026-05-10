@@ -206,6 +206,7 @@ config :maraithon, Maraithon.Runtime,
   openai_chat_model: openai_chat_model,
   llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
+  openai_stream_replies: System.get_env("OPENAI_STREAM_REPLIES", "true") == "true",
   # Timing
   heartbeat_interval_ms: heartbeat_interval_ms,
   checkpoint_interval_ms: checkpoint_interval_ms,

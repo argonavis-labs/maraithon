@@ -148,4 +148,43 @@ defmodule Maraithon.LLM do
       true -> complete(Map.put(params, "model", chat_model()))
     end
   end
+
+  @doc """
+  Stream-complete a request, calling on_chunk for each output_text delta.
+
+  Falls back to `complete/1` when the configured provider does not
+  implement `stream_complete/2` or when the streaming feature is disabled.
+  """
+  def stream_complete(params, on_chunk) when is_map(params) and is_function(on_chunk, 1) do
+    cond do
+      not stream_replies_enabled?() ->
+        complete(params)
+
+      is_nil(provider()) ->
+        complete(params)
+
+      function_exported?(provider(), :stream_complete, 2) ->
+        provider().stream_complete(params, on_chunk)
+
+      true ->
+        complete(params)
+    end
+  end
+
+  @doc """
+  Stream-complete via the chat-tier model.
+  """
+  def stream_complete_chat(params, on_chunk)
+      when is_map(params) and is_function(on_chunk, 1) do
+    if is_map_key(params, "model") do
+      stream_complete(params, on_chunk)
+    else
+      stream_complete(Map.put(params, "model", chat_model()), on_chunk)
+    end
+  end
+
+  defp stream_replies_enabled? do
+    runtime_config()
+    |> Keyword.get(:openai_stream_replies, true)
+  end
 end

@@ -24,6 +24,17 @@ defmodule Maraithon.LLM.OpenAIProvider do
     end
   end
 
+  @impl true
+  def stream_complete(params, on_chunk) when is_function(on_chunk, 1) do
+    api_key = Maraithon.LLM.openai_api_key()
+
+    unless api_key do
+      {:error, "OPENAI_API_KEY not configured"}
+    else
+      do_stream_complete(params, api_key, on_chunk)
+    end
+  end
+
   defp do_complete(params, api_key) do
     model = params["model"] || Maraithon.LLM.openai_model()
     timeout = params["timeout_ms"] || 120_000
@@ -75,6 +86,169 @@ defmodule Maraithon.LLM.OpenAIProvider do
         {:error, {:network_error, reason}}
     end
   end
+
+  defp do_stream_complete(params, api_key, on_chunk) do
+    model = params["model"] || Maraithon.LLM.openai_model()
+    timeout = params["timeout_ms"] || 120_000
+
+    base_body = %{
+      model: model,
+      input: build_input(params["messages"] || []),
+      max_output_tokens: params["max_tokens"] || params["max_output_tokens"] || 2048,
+      stream: true
+    }
+
+    body =
+      case effective_reasoning_effort(params, model) do
+        nil -> base_body
+        effort -> Map.put(base_body, :reasoning, %{effort: effort})
+      end
+
+    Logger.info("Calling OpenAI Responses API (streaming)",
+      model: model,
+      message_count: length(params["messages"] || []),
+      reasoning_effort: Map.get(body, :reasoning, %{}) |> Map.get(:effort, "none")
+    )
+
+    request =
+      Req.post(base_url(),
+        json: body,
+        headers: [
+          {"authorization", "Bearer #{api_key}"},
+          {"content-type", "application/json"},
+          {"accept", "text/event-stream"}
+        ],
+        receive_timeout: timeout,
+        into: stream_collector(on_chunk)
+      )
+
+    case request do
+      {:ok, %{status: 200, private: %{stream_acc: acc}}} ->
+        finalize_stream(acc, model)
+
+      {:ok, %{status: 429, headers: headers, body: body}} ->
+        retry_after = extract_retry_after(headers, body)
+        Logger.warning("Rate limited (stream), retry after #{retry_after}ms")
+        {:error, {:rate_limited, retry_after}}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("OpenAI API stream error", status: status, body: inspect(body))
+        {:error, {:api_error, status, body}}
+
+      {:error, %{reason: :timeout}} ->
+        Logger.warning("OpenAI API stream timeout")
+        {:error, :timeout}
+
+      {:error, reason} ->
+        Logger.error("OpenAI API stream network error", reason: inspect(reason))
+        {:error, {:network_error, reason}}
+    end
+  end
+
+  defp stream_collector(on_chunk) do
+    fn {:data, data}, {req, resp} ->
+      acc =
+        Map.get(resp.private, :stream_acc, %{
+          buffer: "",
+          text: "",
+          response: nil
+        })
+
+      next_acc =
+        acc
+        |> Map.update!(:buffer, &(&1 <> data))
+        |> drain_events(on_chunk)
+
+      {:cont, {req, Req.Response.put_private(resp, :stream_acc, next_acc)}}
+    end
+  end
+
+  defp drain_events(%{buffer: buffer} = acc, on_chunk) do
+    case :binary.split(buffer, "\n\n") do
+      [event_block, rest] ->
+        next_acc =
+          acc
+          |> Map.put(:buffer, rest)
+          |> apply_event(event_block, on_chunk)
+
+        drain_events(next_acc, on_chunk)
+
+      [_partial] ->
+        acc
+    end
+  end
+
+  defp apply_event(acc, event_block, on_chunk) do
+    data_lines =
+      event_block
+      |> String.split("\n", trim: true)
+      |> Enum.flat_map(fn
+        "data: " <> rest -> [rest]
+        "data:" <> rest -> [String.trim_leading(rest)]
+        _ -> []
+      end)
+
+    case data_lines do
+      [] ->
+        acc
+
+      lines ->
+        payload = Enum.join(lines, "\n")
+
+        cond do
+          payload == "[DONE]" ->
+            acc
+
+          true ->
+            case Jason.decode(payload) do
+              {:ok, json} -> apply_decoded_event(acc, json, on_chunk)
+              {:error, _} -> acc
+            end
+        end
+    end
+  end
+
+  defp apply_decoded_event(acc, %{"type" => "response.output_text.delta"} = event, on_chunk) do
+    delta = event["delta"] || ""
+
+    if delta != "" do
+      try do
+        on_chunk.(delta)
+      rescue
+        error ->
+          Logger.warning("Stream chunk callback raised", reason: Exception.message(error))
+      end
+    end
+
+    Map.update!(acc, :text, &(&1 <> delta))
+  end
+
+  defp apply_decoded_event(acc, %{"type" => "response.completed", "response" => response}, _on_chunk) do
+    Map.put(acc, :response, response)
+  end
+
+  defp apply_decoded_event(acc, _event, _on_chunk), do: acc
+
+  defp finalize_stream(%{response: nil} = acc, model) do
+    Logger.warning("Stream ended without response.completed event")
+
+    if acc.text != "" do
+      synth_response = %{
+        "model" => model,
+        "status" => "completed",
+        "output" => [
+          %{"type" => "message", "content" => [%{"type" => "output_text", "text" => acc.text}]}
+        ],
+        "usage" => %{"input_tokens" => 0, "output_tokens" => 0}
+      }
+
+      parse_response(synth_response)
+    else
+      {:error, {:invalid_response, %{reason: "stream_incomplete"}}}
+    end
+  end
+
+  defp finalize_stream(%{response: response}, _model), do: parse_response(response)
 
   defp parse_response(response) do
     model = response["model"] || "unknown"

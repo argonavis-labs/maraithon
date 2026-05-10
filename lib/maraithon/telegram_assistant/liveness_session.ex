@@ -11,6 +11,8 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   @registry Maraithon.TelegramAssistant.LivenessRegistry
   @default_timeout_text "I'm still checking this, and it's taking longer than it should. I won't guess from partial context. I'll update this if the lookup finishes."
+  @stream_flush_interval_ms 1_000
+  @stream_placeholder "…"
 
   def start_link(attrs) when is_map(attrs) do
     GenServer.start_link(__MODULE__, attrs, name: via(Map.fetch!(attrs, :run_id)))
@@ -63,6 +65,16 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     cast(run_id, :cancel)
   end
 
+  def stream_chunk(run_id, delta) when is_binary(run_id) and is_binary(delta) and delta != "" do
+    cast(run_id, {:stream_chunk, delta})
+  end
+
+  def stream_chunk(_run_id, _delta), do: :ok
+
+  def stream_done(run_id) when is_binary(run_id) do
+    cast(run_id, :stream_done)
+  end
+
   def timed_out?(run_id) when is_binary(run_id) do
     case lookup(run_id) do
       nil -> false
@@ -95,7 +107,11 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         started_monotonic_ms: System.monotonic_time(:millisecond),
         typing_timer_ref: nil,
         progress_timer_ref: nil,
-        timeout_timer_ref: nil
+        timeout_timer_ref: nil,
+        stream_buffer: "",
+        stream_active?: false,
+        stream_flush_timer_ref: nil,
+        stream_last_flushed_at_ms: nil
       }
       |> schedule_initial_timers()
 
@@ -113,6 +129,21 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   def handle_cast(:cancel, state) do
     {:stop, :normal, cancel_timers(state)}
+  end
+
+  def handle_cast({:stream_chunk, delta}, state) do
+    state = ensure_stream_message(state)
+    state = %{state | stream_buffer: state.stream_buffer <> delta, stream_active?: true}
+    {:noreply, schedule_stream_flush(state)}
+  end
+
+  def handle_cast(:stream_done, state) do
+    state =
+      state
+      |> cancel_stream_flush_timer()
+      |> Map.put(:stream_active?, false)
+
+    {:noreply, state}
   end
 
   @impl true
@@ -223,6 +254,16 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     end
   end
 
+  def handle_info(:flush_stream, state) do
+    state = %{state | stream_flush_timer_ref: nil}
+
+    if state.stream_active? and is_binary(state.progress_message_id) and state.stream_buffer != "" do
+      flush_stream_buffer(state)
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info(:timeout, state) do
     if terminal?(state) do
       {:noreply, %{state | timeout_timer_ref: nil}}
@@ -283,6 +324,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     |> cancel_timer(:typing_timer_ref)
     |> cancel_timer(:progress_timer_ref)
     |> cancel_timer(:timeout_timer_ref)
+    |> cancel_timer(:stream_flush_timer_ref)
   end
 
   defp cancel_timer(state, key) do
@@ -482,6 +524,9 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
       not is_binary(next_state.progress_message_id) ->
         next_state
 
+      next_state.stream_active? ->
+        next_state
+
       progress_text(next_state) == progress_text(prev_state) ->
         next_state
 
@@ -515,6 +560,72 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
 
   defp hint_specific?("thinking", []), do: false
   defp hint_specific?(_category, _labels), do: true
+
+  defp ensure_stream_message(%{progress_message_id: id} = state) when is_binary(id), do: state
+
+  defp ensure_stream_message(state) do
+    state
+    |> cancel_timer(:progress_timer_ref)
+    |> case do
+      st ->
+        case TelegramResponder.send(st.chat_id, @stream_placeholder) do
+          {:ok, response} ->
+            message_id = normalize_id(Map.get(response, "message_id"))
+
+            %{
+              st
+              | progress_message_id: message_id,
+                progress_note_sent: true,
+                phase: "stream_visible"
+            }
+
+          {:error, reason} ->
+            Logger.warning("Telegram stream placeholder failed", reason: inspect(reason))
+            st
+        end
+    end
+  end
+
+  defp schedule_stream_flush(%{stream_flush_timer_ref: ref} = state) when is_reference(ref) do
+    state
+  end
+
+  defp schedule_stream_flush(state) do
+    delay = stream_flush_delay_ms(state)
+    ref = Process.send_after(self(), :flush_stream, delay)
+    %{state | stream_flush_timer_ref: ref}
+  end
+
+  defp stream_flush_delay_ms(%{stream_last_flushed_at_ms: nil}), do: 0
+
+  defp stream_flush_delay_ms(%{stream_last_flushed_at_ms: last}) do
+    elapsed = System.monotonic_time(:millisecond) - last
+    max(@stream_flush_interval_ms - elapsed, 0)
+  end
+
+  defp cancel_stream_flush_timer(%{stream_flush_timer_ref: nil} = state), do: state
+
+  defp cancel_stream_flush_timer(%{stream_flush_timer_ref: ref} = state) when is_reference(ref) do
+    Process.cancel_timer(ref)
+    %{state | stream_flush_timer_ref: nil}
+  end
+
+  defp flush_stream_buffer(state) do
+    text = state.stream_buffer
+
+    case TelegramResponder.edit(state.chat_id, state.progress_message_id, text) do
+      {:ok, _response} ->
+        emit(:stream_flush, %{count: 1, bytes: byte_size(text)}, base_metadata(state))
+
+        {:noreply,
+         %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
+
+      {:error, reason} ->
+        Logger.debug("Telegram stream flush failed", reason: inspect(reason))
+        {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
+    end
+  end
+
 
   defp progress_text(%{hint_category: "open_work"}) do
     "Still reviewing your open work."
