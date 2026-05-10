@@ -151,10 +151,10 @@ defmodule Maraithon.TelegramInterpreter do
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" => 1200,
       "temperature" => 0.1,
-      "reasoning_effort" => "medium"
+      "reasoning_effort" => "low"
     }
 
-    with {:ok, response} <- LLM.complete(params) do
+    with {:ok, response} <- LLM.complete_routing(params) do
       {:ok, response.content}
     end
   end

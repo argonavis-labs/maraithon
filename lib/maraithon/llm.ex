@@ -32,6 +32,17 @@ defmodule Maraithon.LLM do
   end
 
   @doc """
+  Get the active fast/routing model.
+
+  Returns nil when no routing model is configured. Callers should fall back
+  to `complete/1` (which uses the main model) when this is nil.
+  """
+  def routing_model do
+    runtime_config()
+    |> Keyword.get(:llm_routing_model)
+  end
+
+  @doc """
   Get the active reasoning/intelligence setting for model calls.
   """
   def intelligence do
@@ -86,6 +97,26 @@ defmodule Maraithon.LLM do
 
       module ->
         module.complete(params)
+    end
+  end
+
+  @doc """
+  Complete a request using the routing/fast model when configured.
+
+  This is for cheap, latency-sensitive calls such as intent classification.
+  Falls back to the primary model when no routing model is configured or
+  when the caller already pinned a model in the params.
+  """
+  def complete_routing(params) when is_map(params) do
+    case routing_model() do
+      nil ->
+        complete(params)
+
+      _ when is_map_key(params, "model") ->
+        complete(params)
+
+      routing ->
+        complete(Map.put(params, "model", routing))
     end
   end
 end

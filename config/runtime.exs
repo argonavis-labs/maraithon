@@ -65,6 +65,18 @@ openai_api_key = System.get_env("OPENAI_API_KEY")
 openai_model = System.get_env("OPENAI_MODEL", "gpt-5.4")
 openai_reasoning_effort = System.get_env("OPENAI_REASONING_EFFORT", "high")
 
+anthropic_routing_model =
+  case System.get_env("ANTHROPIC_ROUTING_MODEL", "") |> String.trim() do
+    "" -> "claude-haiku-4-5-20251001"
+    value -> value
+  end
+
+openai_routing_model =
+  case System.get_env("OPENAI_ROUTING_MODEL", "") |> String.trim() do
+    "" -> "gpt-4o-mini"
+    value -> value
+  end
+
 llm_model_fallbacks =
   System.get_env("LLM_MODEL_FALLBACKS", "")
   |> String.split(",", trim: true)
@@ -128,6 +140,14 @@ llm_model =
     _ -> openai_model
   end
 
+llm_routing_model =
+  case llm_provider_name do
+    "anthropic" -> anthropic_routing_model
+    "openai" -> openai_routing_model
+    "mock" -> "mock-v1"
+    _ -> nil
+  end
+
 llm_api_key =
   case llm_provider_name do
     "anthropic" -> anthropic_api_key
@@ -153,11 +173,14 @@ config :maraithon, Maraithon.Runtime,
   llm_provider_name: llm_provider_name,
   llm_provider: llm_provider,
   llm_model: llm_model,
+  llm_routing_model: llm_routing_model,
   llm_api_key: llm_api_key,
   anthropic_api_key: anthropic_api_key,
   anthropic_model: anthropic_model,
+  anthropic_routing_model: anthropic_routing_model,
   openai_api_key: openai_api_key,
   openai_model: openai_model,
+  openai_routing_model: openai_routing_model,
   llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
   # Timing
