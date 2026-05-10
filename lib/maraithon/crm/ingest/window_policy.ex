@@ -14,9 +14,9 @@ defmodule Maraithon.Crm.Ingest.WindowPolicy do
   …subject to a per-(user, source) hourly flush cap.
   """
 
-  @max_observations 50
+  @max_observations 25
   @max_age_minutes 15
-  @max_flushes_per_hour 6
+  @max_flushes_per_hour 12
 
   @type window_input :: %{
           required(:observation_count) => non_neg_integer(),

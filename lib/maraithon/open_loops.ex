@@ -251,7 +251,7 @@ defmodule Maraithon.OpenLoops do
     {:ok,
      %{
        "messages" => [%{"role" => "user", "content" => prompt}],
-       "max_tokens" => Keyword.get(opts, :max_tokens, 3_000),
+       "max_tokens" => Keyword.get(opts, :max_tokens, 8_000),
        "temperature" => Keyword.get(opts, :temperature, 0.1),
        "reasoning_effort" => Keyword.get(opts, :reasoning_effort, Maraithon.LLM.intelligence())
      }}
