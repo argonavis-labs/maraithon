@@ -65,6 +65,46 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     enqueue("open_loop_check", attrs)
   end
 
+  @doc """
+  Enqueue the `relationship_ingestion` job that runs once a `Crm.Ingest.Window`
+  has been guarded into `flushed` status. Idempotent on `window_id`.
+  """
+  def enqueue_relationship_ingestion(window_id) when is_binary(window_id) do
+    enqueue("relationship_ingestion", %{
+      "queue" => "relationships",
+      "payload" => %{"window_id" => window_id},
+      "dedupe_key" => "crm_ingest:flush:#{window_id}"
+    })
+  end
+
+  @doc """
+  Enqueue a one-shot bounded backfill chain for a (user, source). Subsequent
+  pages re-enqueue themselves; the dedupe key blocks parallel chains for the
+  same (user, source).
+  """
+  def enqueue_relationship_backfill(user_id, source, opts \\ [])
+      when is_binary(user_id) and is_binary(source) do
+    days_back = Keyword.get(opts, :days_back, 30)
+    max_observations = Keyword.get(opts, :max_observations, 5_000)
+    page_token = Keyword.get(opts, :page_token)
+    observations_so_far = Keyword.get(opts, :observations_so_far, 0)
+    scheduled_at = Keyword.get(opts, :scheduled_at, DateTime.utc_now())
+
+    enqueue("relationship_backfill", %{
+      "user_id" => user_id,
+      "queue" => "relationships",
+      "payload" => %{
+        "source" => source,
+        "days_back" => days_back,
+        "max_observations" => max_observations,
+        "page_token" => page_token,
+        "observations_so_far" => observations_so_far
+      },
+      "dedupe_key" => "crm_backfill:#{user_id}:#{source}",
+      "scheduled_at" => scheduled_at
+    })
+  end
+
   def list(opts \\ []) do
     limit = opts |> Keyword.get(:limit, @default_limit) |> clamp_limit()
     status = Keyword.get(opts, :status)
@@ -178,6 +218,8 @@ defmodule Maraithon.Runtime.BackgroundJobs do
 
   defp default_queue("email_processing"), do: "email"
   defp default_queue("relationship_learning"), do: "relationships"
+  defp default_queue("relationship_ingestion"), do: "relationships"
+  defp default_queue("relationship_backfill"), do: "relationships"
   defp default_queue("open_loop_check"), do: "open_loops"
   defp default_queue("insight_refresh"), do: "open_loops"
   defp default_queue(_job_type), do: "default"
