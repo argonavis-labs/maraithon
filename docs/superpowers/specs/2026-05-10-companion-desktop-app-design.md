@@ -13,11 +13,12 @@ A companion daemon closes that gap by treating the user's machine as another con
 ## v1 scope
 
 **In:**
-- macOS-only, signed + notarized menubar app.
+- macOS-only, signed + notarized desktop app with a real window (not menubar-only).
 - Device-pair login flow with Maraithon (one-time consent).
 - iMessage sync: append-only, polled, plain text + handle metadata.
 - CRM person resolution by phone/email handle.
-- Menubar UI: status, pause, last-sync, sign-out.
+- Window UI: per-source sync status, controls, debug log.
+- Menubar status item as a secondary affordance (last-sync glance + show-window).
 
 **Out (designed-for, deferred):**
 - File sync (separate spec, same daemon).
@@ -29,38 +30,84 @@ A companion daemon closes that gap by treating the user's machine as another con
 ## Architecture
 
 ```
-                                  ┌───────────────────────────────┐
-                                  │  macOS menubar app (Swift)    │
-                                  │                               │
-   user logs in once  ────────►   │  • Auth: device token (Keychain) │
-                                  │  • Sources:                   │
-   System Settings →               │     • iMessageSource          │
-   Full Disk Access  ────────►    │       (chat.db poller)        │
-                                  │     • [later] FilesSource     │
-                                  │  • Sync engine (batched push) │
-                                  │  • Menubar UI                 │
-                                  └──────────────┬────────────────┘
-                                                 │ HTTPS
-                                                 ▼
-                  ┌────────────────────────────────────────────────┐
-                  │ POST /api/v1/companion/messages                │
-                  │   (bearer: device token)                       │
-                  │                                                │
-                  │ Maraithon (Phoenix)                            │
-                  │   • CompanionController                        │
-                  │   • LocalMessages context                       │
-                  │   • CRM handle resolver                        │
-                  │   • Memory/insight pipeline ingest             │
-                  └────────────────────────────────────────────────┘
+                                  ┌────────────────────────────────────────┐
+                                  │  macOS desktop app (Swift / SwiftUI)   │
+                                  │                                        │
+                                  │  ┌────────────┬───────────────────────┐ │
+                                  │  │ Sidebar    │  Detail pane          │ │
+                                  │  │            │                       │ │
+   user logs in once  ─────────►  │  │ • Account  │  Selected source:     │ │
+                                  │  │ • iMessage │   • Status card       │ │
+   System Settings →              │  │ • Files…   │   • Controls          │ │
+   Full Disk Access  ─────────►   │  │ • Logs     │   • Recent activity   │ │
+                                  │  └────────────┴───────────────────────┘ │
+                                  │                                        │
+                                  │  Core (headless):                      │
+                                  │    • Auth: device token (Keychain)     │
+                                  │    • Sources: IMessageSource…          │
+                                  │    • Sync engine (batched push)        │
+                                  │    • EventLog (ring buffer + file)     │
+                                  │                                        │
+                                  │  Optional menubar status item          │
+                                  │    (glance: last sync, click → window) │
+                                  └─────────────────┬──────────────────────┘
+                                                    │ HTTPS
+                                                    ▼
+                  ┌──────────────────────────────────────────────────────┐
+                  │ POST /api/v1/companion/messages                       │
+                  │   (bearer: device token)                              │
+                  │                                                       │
+                  │ Maraithon (Phoenix)                                   │
+                  │   • CompanionController                               │
+                  │   • LocalMessages context                             │
+                  │   • CRM handle resolver                               │
+                  │   • Memory/insight pipeline ingest                    │
+                  └──────────────────────────────────────────────────────┘
 ```
 
 The companion app is a **simple sync daemon, not a smart agent.** It does not interpret messages, run LLMs, or make decisions — that all happens server-side in Maraithon's existing pipelines. The app is responsible for: read locally, push reliably, expose a few controls.
 
-## Platform choice: native Swift, not Electron / Tauri
+## Platform choice: native Swift + SwiftUI
 
 - The app's value is reading macOS-specific data (`~/Library/Messages/chat.db`, FSEvents, Keychain, login items, Full Disk Access entitlement). Native Swift makes all of that idiomatic.
-- A web-tech wrapper (Electron, Tauri) buys cross-platform but iMessages are Apple-only anyway, so we'd still need Mac-specific code paths. Net: zero portability win, larger binary, more friction with notarization.
-- Single Xcode project, ~500–800 LOC for v1. Distribute as signed `.app` in a DMG; auto-update with Sparkle.
+- SwiftUI for window UI is fast to build and grows well as we add sources — `NavigationSplitView` for the sidebar pattern, `Form` for status cards, `Table` for logs.
+- A web-tech wrapper (Electron, Tauri) buys cross-platform but iMessages are Apple-only, so we'd still need Mac-specific code paths. Net: zero portability win, larger binary, more friction with notarization.
+- Single Xcode project, ~1,000–1,500 LOC for v1 (more than a menubar-only app because of the proper window UI). Distribute as signed `.app` in a DMG; auto-update with Sparkle.
+
+## UI surface
+
+The window is a `NavigationSplitView` with three regions:
+
+### Sidebar — "Sources"
+- **Account** (top): user email, device name, "Sign out" link, last cloud handshake.
+- **iMessage** — primary row in v1. Status icon (●/◐/⏸/⚠), label, "12m ago" subtitle.
+- **Files**, **Voice memos**, **Notes** — disabled rows in v1 with "Coming soon" tag, so the shape is visible.
+- **Logs** (bottom) — opens the debug log pane.
+
+### Detail pane — selected source
+For iMessage:
+- **Status card** at the top: "● Syncing" / "⏸ Paused" / "⚠ Needs Full Disk Access" / "⚠ Connection issue", with a one-line subtitle (e.g. "Last sync 14:23 — 47 new, 0 errors").
+- **Stats grid**: Messages synced today / This week / Total. Cursor position (rowid). Backfill progress bar when initial sync is running.
+- **Controls**:
+  - Pause / Resume toggle.
+  - "Sync now" button (manual nudge).
+  - "Backfill more…" → sheet to extend the historical window.
+  - "Clear cloud data for this device" (destructive, confirm).
+- **Recent activity** — last 20 batches: timestamp, count, accepted/duplicate split, latency.
+
+### Logs pane
+- Live tail of the `EventLog` ring buffer, with level filter (Debug / Info / Warn / Error), source filter (Auth / iMessage / Sync / Cloud), and a search field.
+- Each entry: timestamp, level, source, message, optional structured context (expandable).
+- "Copy all" and "Reveal log file in Finder" buttons. Persistent log at `~/Library/Logs/Maraithon/companion.log` rotated at 10 MB × 5 files.
+
+### Menubar status item (secondary)
+- Always-visible glance: ●/⏸/⚠ icon + click-to-open-window.
+- Quick actions: Pause/Resume, Sync now, Show window, Quit.
+- The menubar is the affordance for "I forgot if it's running"; the window is where actual work happens.
+
+### Window lifecycle
+- Default: open on first launch and after auth. After that, `closing` the window only hides it (app keeps running headless, menubar item stays). Quitting from `⌘Q` or the menubar's "Quit" actually exits the process.
+- "Open at login" toggle in the Account section, backed by `SMAppService` so the launch agent registers cleanly.
 
 ## Auth: device-pair flow
 
@@ -208,29 +255,46 @@ maraithon-companion/
   Maraithon.xcodeproj
   Maraithon/
     App/
-      MaraithonApp.swift          // @main, app delegate, menubar item
+      MaraithonApp.swift            // @main, scene + menubar wiring
+      AppEnvironment.swift          // shared services (DI container)
+    UI/
+      RootWindow.swift              // NavigationSplitView host
+      Sidebar/
+        SidebarView.swift
+        AccountRow.swift
+        SourceRow.swift
+      Sources/
+        IMessageDetailView.swift    // status card + controls + recent activity
+        ComingSoonDetailView.swift
+      Logs/
+        LogsView.swift              // table + filters + search
+        LogEntryRow.swift
       Onboarding/
-        ConnectViewController.swift
-        FullDiskAccessGuide.swift
-        BackfillSetupViewController.swift
+        ConnectView.swift
+        FullDiskAccessView.swift
+        BackfillSetupView.swift
+      Menubar/
+        MenubarController.swift     // status item, quick menu
     Auth/
-      DeviceAuth.swift            // URL scheme handler, Keychain wrapper
+      DeviceAuth.swift              // URL scheme handler, Keychain wrapper
       DeviceToken.swift
     Sources/
-      SourceProtocol.swift        // pollable + cursor-aware
+      SourceProtocol.swift          // pollable + cursor-aware + status publisher
+      SourceStatus.swift            // shared status enum/model
       iMessage/
-        IMessageDatabase.swift    // SQLite + AttributedBody decoder
-        IMessageSource.swift      // poller, cursor, payload builder
+        IMessageDatabase.swift      // SQLite + AttributedBody decoder
+        IMessageSource.swift        // poller, cursor, payload builder
     Sync/
-      SyncEngine.swift            // batching, retry, backoff
-      MaraithonClient.swift       // HTTP client
-    Menubar/
-      MenubarController.swift
-      StatusItemBuilder.swift
-    Info.plist                    // url scheme, full disk access usage description
+      SyncEngine.swift              // batching, retry, backoff
+      MaraithonClient.swift         // HTTP client
+    Logging/
+      EventLog.swift                // ring buffer + file rotation, Combine publisher
+      LogLevel.swift
+    Info.plist                      // url scheme, FDA usage, login-item entitlements
   MaraithonTests/
-    IMessageDatabaseTests.swift   // golden chat.db fixtures
+    IMessageDatabaseTests.swift     // golden chat.db fixtures
     SyncEngineTests.swift
+    EventLogTests.swift
 ```
 
 ## Server-side files (Maraithon)
@@ -261,8 +325,8 @@ test/maraithon/companion/
 **M1 — server scaffold (1–2 days)**
 - Migrations, schemas, controller, device-pair auth flow with a stub HTML "approve / deny" page. End-to-end pair flow verifiable by hand-curling the endpoint with a fake batch.
 
-**M2 — companion app skeleton (2–3 days)**
-- Xcode project, menubar item, deep-link auth, Keychain token storage, "Connected" / "Disconnected" states. No data sync yet.
+**M2 — companion app skeleton (3–4 days)**
+- Xcode project, SwiftUI `NavigationSplitView` shell with Sidebar / Detail / Logs, EventLog ring buffer wired to the Logs view, menubar status item. Deep-link auth + Keychain token storage. "Connected" / "Disconnected" states with no data sync yet.
 
 **M3 — iMessage source (3–5 days)**
 - Full Disk Access onboarding, chat.db reader with attributedBody decoder, cursor, polling, push to server. Ship to Kent for daily use.
@@ -270,10 +334,10 @@ test/maraithon/companion/
 **M4 — pipeline integration (2–3 days)**
 - CRM resolve, deep-memory ingest, source-health surface in morning brief. First brief that cites an iMessage thread.
 
-**M5 — controls + polish (1–2 days)**
-- Pause, blocklist, clear-data, Sparkle auto-update, signed DMG.
+**M5 — controls + polish (2–3 days)**
+- Pause, blocklist, clear-data, "Sync now", "Backfill more…" sheet, open-at-login (`SMAppService`), Sparkle auto-update, signed DMG.
 
-Total: ~9–15 working days for a private-use v1.
+Total: ~11–17 working days for a private-use v1.
 
 ## Open questions explicitly deferred
 
