@@ -76,7 +76,9 @@ defmodule Maraithon.TelegramAssistant.Context do
       {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
       {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
       {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
-      {:deep_memory, fn -> Memory.prompt_context(user_id, query: user_text, limit: 8) end},
+      # Skip the LLM-filter on the hot path (it added 2-6s per turn). The
+      # model can call recall_memory when it needs query-filtered memories.
+      {:deep_memory, fn -> Memory.prompt_context(user_id, limit: 8) end},
       {:open_loops,
        fn ->
          OpenLoops.snapshot(user_id, query: user_text, limit: 8, include_memory?: false)
