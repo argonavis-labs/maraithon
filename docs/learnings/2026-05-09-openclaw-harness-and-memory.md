@@ -88,6 +88,64 @@ chief of staff) reuse the context rules.
 - Replayable agent event log: Maraithon already has richer event-sourced
   state (operator_events, memory feedback, open loops).
 
+## Pass 2 — additional ports
+
+A second deep-dive surfaced 25+ patterns the first pass didn't cover.
+Two were ported on the same day:
+
+### A. Credential redaction in logs — shipped
+
+**Openclaw:** `src/agents/payload-redaction.ts` redacts sensitive
+field-name suffixes (apikey, password, token, etc.) plus regex
+scanners for Bearer/Basic headers, JWTs, OpenAI/Anthropic/Slack/GitHub
+keys, Set-Cookie pairs.
+
+**Maraithon today:** new `Maraithon.Redaction` module wired through
+`LogBufferBackend` so any log line that lands in the operator's
+in-memory buffer is scrubbed first. The console-backed Logger is
+unchanged.
+
+### B. Phase-aligned heartbeat scheduling — shipped
+
+**Openclaw:** `src/infra/heartbeat-schedule.ts` uses
+`SHA256(seed + agentId) % interval` to derive a per-agent phase
+offset, then walks slot boundaries to find the next active fire
+time.
+
+**Maraithon today:** new `Maraithon.Runtime.HeartbeatSchedule.next_fire_at/3`
+does the same in Elixir using `:erlang.phash2(agent_id, interval_ms)`.
+Existing schedulers can opt in by calling
+`HeartbeatSchedule.schedule_next_heartbeat/4` instead of computing a
+naive `now + interval`. Prevents thundering-herd at every :00 / :10.
+
+### Pass 2 patterns NOT ported (with reasons)
+
+- **Per-session cost-usage tracking with cache-aware pricing** — useful
+  but requires deeper plumbing through Spend; defer until we need
+  per-call cost feedback for routing decisions.
+- **Stream assembly with thinking/content separation** — relevant for
+  TUI/web clients that stream model output; Maraithon's Telegram path
+  uses `editMessageText` for live progress instead.
+- **Tool descriptor caching with config-keyed memoization** — Maraithon's
+  tool catalog is small enough that introspection isn't a hotspot.
+- **Memory flush planning with token budgets** — our compaction is
+  already token-aware; marginal gain.
+- **Voicewake routing, device Ed25519 identity, QR encoding,
+  multi-node exec approvals** — out of scope for a Telegram-first
+  single-user app.
+
+### Pass 2 deferred-but-noted
+
+- **Provider replay policy with reasoning preservation** (Claude 4.5+
+  thinking blocks). Worth re-checking when we re-enable the Anthropic
+  provider in production.
+- **OpenAI reasoning-effort capability gating** per model. Currently
+  hardcoded; will matter when adding new GPT variants.
+- **Stateful schema migration detector with channel hooks**. Adopt if
+  we ever break the conversation/turn schema.
+- **QA scenario suite** — large effort; revisit when regression bugs
+  warrant structured scenario testing.
+
 ## Things Maraithon has that openclaw lacks
 
 - OTP supervision tree for crash recovery without state loss.
