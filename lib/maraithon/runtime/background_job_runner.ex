@@ -310,6 +310,26 @@ defmodule Maraithon.Runtime.BackgroundJobRunner do
     if count > 0 do
       Logger.info("Reclaimed stale background jobs", count: count)
     end
+
+    sweep_stale_ingest_windows(now)
+  end
+
+  defp sweep_stale_ingest_windows(now) do
+    case Maraithon.Crm.Ingest.sweep_stale_windows(now) do
+      {:ok, 0} ->
+        :ok
+
+      {:ok, count} ->
+        Logger.info("Force-flushed stale CRM ingest windows", count: count)
+    end
+  rescue
+    exception ->
+      Logger.warning(
+        "CRM ingest window sweep failed: #{Exception.format(:error, exception, __STACKTRACE__)}"
+      )
+  catch
+    kind, reason ->
+      Logger.warning("CRM ingest window sweep crashed: #{kind} #{inspect(reason)}")
   end
 
   defp calculate_backoff(attempts) when is_integer(attempts) and attempts > 0 do

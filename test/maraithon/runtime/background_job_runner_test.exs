@@ -1,7 +1,12 @@
 defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
   use Maraithon.DataCase, async: false
 
+  import Ecto.Query
+
   alias Maraithon.Accounts
+  alias Maraithon.Crm.Ingest
+  alias Maraithon.Crm.Ingest.Window
+  alias Maraithon.Crm.Observation
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.Runtime.BackgroundJobRunner
@@ -113,6 +118,60 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
     assert failed.attempts == 1
     assert failed.failed_at
     assert failed.last_error =~ "execute/1 is undefined"
+
+    GenServer.stop(pid, :normal)
+  end
+
+  test "drain_once force-flushes stale CRM ingest windows", %{user_id: user_id} do
+    {:ok, :buffered, _id} =
+      Ingest.observe(
+        user_id,
+        Observation.new(%{
+          "user_id" => user_id,
+          "source" => "gmail",
+          "source_account" => "primary",
+          "source_item_id" => "stale-#{System.unique_integer([:positive])}",
+          "occurred_at" => DateTime.utc_now(),
+          "direction" => "inbound",
+          "participants" => [
+            %{"role" => "from", "identifier" => %{"email" => "stale@example.com"}}
+          ]
+        })
+      )
+
+    window =
+      Repo.one(
+        from w in Window,
+          where: w.user_id == ^user_id and w.source == "gmail" and w.status == "open"
+      )
+
+    old_opened_at =
+      DateTime.add(DateTime.utc_now(), -(Ingest.stale_window_minutes() + 5) * 60, :second)
+
+    Repo.update_all(from(w in Window, where: w.id == ^window.id),
+      set: [opened_at: old_opened_at]
+    )
+
+    {:ok, pid} =
+      BackgroundJobRunner.start_link(
+        name: :background_job_runner_window_sweep_test,
+        poll_interval_ms: 60_000,
+        batch_size: 1
+      )
+
+    assert {:ok, _} = BackgroundJobRunner.drain_once(pid)
+
+    reloaded = Repo.get!(Window, window.id)
+
+    # Sweep moved the window out of `open` (the resulting job may then
+    # complete or fail depending on whether downstream LLM stubs are wired,
+    # but we only care that the runner triggered the flush here).
+    assert reloaded.status in ["flushed", "completed", "failed"]
+
+    assert Repo.exists?(
+             from j in BackgroundJob,
+               where: j.dedupe_key == ^"crm_ingest:flush:#{window.id}"
+           )
 
     GenServer.stop(pid, :normal)
   end
