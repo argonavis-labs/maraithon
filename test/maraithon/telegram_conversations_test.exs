@@ -98,6 +98,39 @@ defmodule Maraithon.TelegramConversationsTest do
       assert is_binary(updated.metadata["historical_summary_through"])
     end
 
+    test "fires before the turn budget when token estimate exceeds the threshold",
+         %{conversation: conversation} do
+      # Only 6 turns — well under the 12-keep + 12-extra default — but each
+      # turn is large enough that the prompt token estimate crosses the
+      # threshold. Compaction should still trigger.
+      large_text = String.duplicate("token-heavy turn ", 200)
+
+      Enum.each(1..6, fn index ->
+        {:ok, _} =
+          TelegramConversations.append_turn(conversation, %{
+            "role" => if(rem(index, 2) == 0, do: "assistant", else: "user"),
+            "telegram_message_id" => "m-#{System.unique_integer([:positive])}",
+            "text" => large_text
+          })
+      end)
+
+      conversation = TelegramConversations.preload(conversation)
+
+      llm = fn _params ->
+        {:ok, %{content: "Compact summary."}}
+      end
+
+      assert {:ok, updated} =
+               TelegramConversations.compact_old_turns(conversation,
+                 keep_recent: 2,
+                 threshold_extra: 100,
+                 token_threshold: 200,
+                 llm_complete: llm
+               )
+
+      assert updated.metadata["historical_summary"] == "Compact summary."
+    end
+
     test "returns the conversation unchanged when the LLM fails",
          %{conversation: conversation} do
       Enum.each(1..30, fn index ->

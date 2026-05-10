@@ -228,19 +228,38 @@ defmodule Maraithon.TelegramConversations do
   def compact_old_turns(%Conversation{} = conversation, opts) do
     keep_recent = Keyword.get(opts, :keep_recent, 12)
     threshold_extra = Keyword.get(opts, :threshold_extra, 12)
-    threshold = keep_recent + threshold_extra
+    turn_threshold = keep_recent + threshold_extra
+    token_threshold = Keyword.get(opts, :token_threshold, 30_000)
     llm_complete = Keyword.get(opts, :llm_complete, &default_summary_llm/1)
 
     total = count_turns(conversation.id)
+    tokens_estimate = estimate_conversation_tokens(conversation.id)
 
-    if total > threshold do
-      do_compact_old_turns(conversation, total, keep_recent, llm_complete)
-    else
-      {:ok, conversation}
+    over_turn_budget? = total > turn_threshold
+    over_token_budget? = total > keep_recent and tokens_estimate >= token_threshold
+
+    cond do
+      over_turn_budget? or over_token_budget? ->
+        do_compact_old_turns(conversation, total, keep_recent, llm_complete)
+
+      true ->
+        {:ok, conversation}
     end
   end
 
   def compact_old_turns(_conversation, _opts), do: {:error, :invalid_conversation}
+
+  defp estimate_conversation_tokens(conversation_id) do
+    Turn
+    |> where([t], t.conversation_id == ^conversation_id)
+    |> select([t], sum(fragment("octet_length(coalesce(?, ''))", t.text)))
+    |> Repo.one()
+    |> case do
+      nil -> 0
+      bytes when is_integer(bytes) -> div(bytes, 4)
+      _other -> 0
+    end
+  end
 
   defp do_compact_old_turns(conversation, total, keep_recent, llm_complete) do
     drop_count = max(total - keep_recent, 0)
