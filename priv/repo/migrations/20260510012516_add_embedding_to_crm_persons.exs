@@ -3,6 +3,9 @@ defmodule Maraithon.Repo.Migrations.AddEmbeddingToCrmPersons do
 
   require Logger
 
+  @disable_ddl_transaction true
+  @disable_migration_lock true
+
   @embedding_dim 1536
 
   def up do
@@ -73,6 +76,6 @@ defmodule Maraithon.Repo.Migrations.AddEmbeddingToCrmPersons do
     repo().query!("CREATE EXTENSION IF NOT EXISTS vector")
     true
   rescue
-    Postgrex.Error -> false
+    _error -> false
   end
 end
