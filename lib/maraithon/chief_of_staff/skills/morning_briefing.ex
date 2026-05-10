@@ -385,6 +385,102 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
   end
 
+  @doc """
+  Smoke-test the morning briefing pipeline end-to-end without an agent
+  process. Loads the named agent's morning_briefing config, builds the
+  prompt against current connector state, calls the LLM, validates the
+  response, and returns `{:ok, brief}` or `{:error, reason, diagnostics}`.
+
+  When `send: true` is passed in opts, the validated brief is delivered
+  to the user's Telegram destination so we can confirm end-to-end.
+  """
+  def smoke_test(agent_id, opts \\ []) when is_binary(agent_id) and is_list(opts) do
+    agent = Maraithon.Repo.get!(Maraithon.Agents.Agent, agent_id)
+    skill_config = get_in(agent.config, ["skill_configs", "morning_briefing"]) || %{}
+    user_id = Map.get(skill_config, "user_id") || agent.user_id
+
+    if is_nil(user_id) do
+      {:error, :no_user_id, %{}}
+    else
+      state = init(Map.put(skill_config, "user_id", user_id))
+      now = DateTime.utc_now()
+      brief_input = build_brief_input(user_id, now, state, %{})
+
+      case llm_params(brief_input, state) do
+        {:ok, params} ->
+          started_ms = System.monotonic_time(:millisecond)
+
+          case Maraithon.LLM.complete(params) do
+            {:ok, response} ->
+              elapsed_ms = System.monotonic_time(:millisecond) - started_ms
+              parsed = parse_llm_brief(response)
+
+              diagnostics = %{
+                model: response.model,
+                tokens_in: response.tokens_in,
+                tokens_out: response.tokens_out,
+                finish_reason: response.finish_reason,
+                elapsed_ms: elapsed_ms,
+                max_tokens_used: state.llm_max_tokens,
+                reasoning_effort_used: state.llm_reasoning_effort
+              }
+
+              case parsed do
+                {:ok, brief} ->
+                  result = {:ok, brief, diagnostics}
+
+                  if Keyword.get(opts, :send, false) do
+                    deliver_smoke_brief(user_id, brief, diagnostics)
+                  end
+
+                  result
+
+                {:error, reason} ->
+                  {:error, {:invalid_brief, reason}, diagnostics}
+              end
+
+            {:error, reason} ->
+              elapsed_ms = System.monotonic_time(:millisecond) - started_ms
+
+              {:error, {:llm_call_failed, reason},
+               %{
+                 elapsed_ms: elapsed_ms,
+                 max_tokens_used: state.llm_max_tokens,
+                 reasoning_effort_used: state.llm_reasoning_effort
+               }}
+          end
+
+        {:error, reason} ->
+          {:error, {:llm_params_failed, reason}, %{}}
+      end
+    end
+  end
+
+  defp deliver_smoke_brief(user_id, brief, diagnostics) do
+    case ConnectedAccounts.telegram_destination(user_id) do
+      nil ->
+        {:error, :no_telegram_destination}
+
+      %{chat_id: chat_id} ->
+        title = read_string(brief, "title", "Morning briefing")
+        summary = read_string(brief, "summary", "")
+        body = read_string(brief, "body", "")
+
+        text =
+          [
+            "*#{title}*",
+            summary,
+            body,
+            "",
+            "_smoke-test • #{diagnostics.tokens_out} out tokens • #{diagnostics.elapsed_ms}ms_"
+          ]
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.join("\n\n")
+
+        Maraithon.TelegramResponder.send(chat_id, text, parse_mode: "Markdown")
+    end
+  end
+
   defp llm_params(brief_input, state) do
     with {:ok, prompt} <- morning_prompt(brief_input) do
       params =
