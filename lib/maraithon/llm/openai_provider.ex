@@ -28,19 +28,22 @@ defmodule Maraithon.LLM.OpenAIProvider do
     model = params["model"] || Maraithon.LLM.openai_model()
     timeout = params["timeout_ms"] || 120_000
 
-    body = %{
+    base_body = %{
       model: model,
       input: build_input(params["messages"] || []),
-      max_output_tokens: params["max_tokens"] || params["max_output_tokens"] || 2048,
-      reasoning: %{
-        effort: reasoning_effort(params)
-      }
+      max_output_tokens: params["max_tokens"] || params["max_output_tokens"] || 2048
     }
+
+    body =
+      case effective_reasoning_effort(params, model) do
+        nil -> base_body
+        effort -> Map.put(base_body, :reasoning, %{effort: effort})
+      end
 
     Logger.info("Calling OpenAI Responses API",
       model: model,
       message_count: length(params["messages"] || []),
-      reasoning_effort: body.reasoning.effort
+      reasoning_effort: Map.get(body, :reasoning, %{}) |> Map.get(:effort, "none")
     )
 
     case Req.post(base_url(),
@@ -172,6 +175,35 @@ defmodule Maraithon.LLM.OpenAIProvider do
   end
 
   defp normalize_content(content), do: inspect(content)
+
+  defp effective_reasoning_effort(params, model) do
+    cond do
+      not reasoning_capable_model?(model) ->
+        nil
+
+      Map.get(params, "reasoning_effort") in ["none", "off", false, nil] and
+          Map.has_key?(params, "reasoning_effort") ->
+        nil
+
+      true ->
+        reasoning_effort(params)
+    end
+  end
+
+  # gpt-4o, gpt-4.1 and the chat-completions style models in the Responses API
+  # reject `reasoning.effort`. Only the o-series and gpt-5 reasoning models
+  # accept it.
+  defp reasoning_capable_model?(model) when is_binary(model) do
+    cond do
+      String.starts_with?(model, "gpt-5") -> true
+      String.starts_with?(model, "o1") -> true
+      String.starts_with?(model, "o3") -> true
+      String.starts_with?(model, "o4") -> true
+      true -> false
+    end
+  end
+
+  defp reasoning_capable_model?(_model), do: false
 
   defp reasoning_effort(%{"reasoning_effort" => effort}), do: validate_reasoning_effort(effort)
 
