@@ -43,6 +43,23 @@ defmodule Maraithon.LLM do
   end
 
   @doc """
+  Get the active chat-tier model. This is the model used by the user-facing
+  Telegram assistant runner — favors low latency over deep reasoning. The
+  reasoning-tier `model/0` stays for chief of staff and complex agent work.
+
+  Falls back to `model/0` when not configured.
+  """
+  def chat_model do
+    runtime_config()
+    |> Keyword.get(:llm_chat_model)
+    |> case do
+      nil -> model()
+      "" -> model()
+      other -> other
+    end
+  end
+
+  @doc """
   Get the active reasoning/intelligence setting for model calls.
   """
   def intelligence do
@@ -117,6 +134,18 @@ defmodule Maraithon.LLM do
 
       routing ->
         complete(Map.put(params, "model", routing))
+    end
+  end
+
+  @doc """
+  Complete a request using the chat-tier model. Used by the Telegram
+  assistant chat runner so user-facing answers stay fast. Reasoning-heavy
+  callers should keep using `complete/1`.
+  """
+  def complete_chat(params) when is_map(params) do
+    cond do
+      is_map_key(params, "model") -> complete(params)
+      true -> complete(Map.put(params, "model", chat_model()))
     end
   end
 end

@@ -77,6 +77,18 @@ openai_routing_model =
     value -> value
   end
 
+anthropic_chat_model =
+  case System.get_env("ANTHROPIC_CHAT_MODEL", "") |> String.trim() do
+    "" -> "claude-sonnet-4-20250514"
+    value -> value
+  end
+
+openai_chat_model =
+  case System.get_env("OPENAI_CHAT_MODEL", "") |> String.trim() do
+    "" -> "gpt-4.1"
+    value -> value
+  end
+
 llm_model_fallbacks =
   System.get_env("LLM_MODEL_FALLBACKS", "")
   |> String.split(",", trim: true)
@@ -148,6 +160,14 @@ llm_routing_model =
     _ -> nil
   end
 
+llm_chat_model =
+  case llm_provider_name do
+    "anthropic" -> anthropic_chat_model
+    "openai" -> openai_chat_model
+    "mock" -> "mock-v1"
+    _ -> nil
+  end
+
 llm_api_key =
   case llm_provider_name do
     "anthropic" -> anthropic_api_key
@@ -174,13 +194,16 @@ config :maraithon, Maraithon.Runtime,
   llm_provider: llm_provider,
   llm_model: llm_model,
   llm_routing_model: llm_routing_model,
+  llm_chat_model: llm_chat_model,
   llm_api_key: llm_api_key,
   anthropic_api_key: anthropic_api_key,
   anthropic_model: anthropic_model,
   anthropic_routing_model: anthropic_routing_model,
+  anthropic_chat_model: anthropic_chat_model,
   openai_api_key: openai_api_key,
   openai_model: openai_model,
   openai_routing_model: openai_routing_model,
+  openai_chat_model: openai_chat_model,
   llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
   # Timing

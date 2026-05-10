@@ -18,7 +18,7 @@ defmodule Maraithon.AssistantHarness do
   @default_chat_max_tokens 1_800
   @default_proactive_max_tokens 1_200
   @default_temperature 0.2
-  @default_reasoning_effort "medium"
+  @default_reasoning_effort "low"
   @max_tool_calls_per_step 3
   @default_tool_repeat_guard_window 3
   @default_tool_history_limit 12
@@ -195,7 +195,7 @@ defmodule Maraithon.AssistantHarness do
     policy = runtime_policy(opts)
     prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_prompt()
 
-    %{
+    base = %{
       "messages" => [
         %{"role" => "system", "content" => system_prompt()},
         %{"role" => "user", "content" => prompt}
@@ -204,6 +204,12 @@ defmodule Maraithon.AssistantHarness do
       "temperature" => policy.chat_request.temperature,
       "reasoning_effort" => policy.chat_request.reasoning_effort
     }
+
+    case Keyword.get(opts, :chat_model, LLM.chat_model()) do
+      nil -> base
+      "" -> base
+      model -> Map.put(base, "model", model)
+    end
   end
 
   def build_proactive_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
