@@ -102,7 +102,7 @@ defmodule Maraithon.Memory.Intelligence do
       "messages" => [%{"role" => "user", "content" => prompt}],
       "max_tokens" => 1_000,
       "temperature" => 0.1,
-      "reasoning_effort" => "medium"
+      "reasoning_effort" => "low"
     }
 
     if mock_when_unconfigured?() and is_nil(LLM.provider()) do
@@ -110,7 +110,7 @@ defmodule Maraithon.Memory.Intelligence do
         {:ok, response.content}
       end
     else
-      case LLM.complete(params) do
+      case LLM.complete_routing(params) do
         {:ok, response} -> {:ok, response.content}
         {:error, _reason} = error -> error
       end
