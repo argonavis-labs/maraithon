@@ -34,11 +34,14 @@ defmodule MaraithonWeb.SessionController do
   def consume_magic_link(conn, %{"token" => token}) do
     case Accounts.consume_magic_link(token, request_metadata(conn)) do
       {:ok, %{user: user, token: session_token}} ->
+        return_to = get_session(conn, :return_to)
+
         conn
         |> configure_session(renew: true)
         |> put_session(@session_key, session_token)
+        |> delete_session(:return_to)
         |> put_flash(:info, "Signed in as #{user.email}")
-        |> redirect(to: post_sign_in_path(user.id))
+        |> redirect(to: return_to || post_sign_in_path(user.id))
 
       {:error, :invalid_or_expired_link} ->
         conn
