@@ -171,6 +171,53 @@ defmodule Maraithon.CrmTest do
     end
   end
 
+  describe "fuzzy person lookup" do
+    setup do
+      user_id = "crm-fuzzy-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, charlie} =
+        Crm.upsert_person(user_id, %{
+          "first_name" => "Charlie",
+          "last_name" => "Smith",
+          "display_name" => "Charlie Smith"
+        })
+
+      {:ok, _daniel} =
+        Crm.upsert_person(user_id, %{
+          "first_name" => "Daniel",
+          "last_name" => "Bourke",
+          "display_name" => "Daniel Bourke"
+        })
+
+      {:ok, charles} =
+        Crm.upsert_person(user_id, %{
+          "first_name" => "Charles",
+          "last_name" => "Williams",
+          "display_name" => "Charles Williams"
+        })
+
+      %{user_id: user_id, charlie: charlie, charles: charles}
+    end
+
+    test "list_people query returns the closest match by trigram similarity",
+         %{user_id: user_id, charlie: charlie} do
+      [first | _] = Crm.list_people(user_id, query: "Charlie", limit: 5)
+      assert first.id == charlie.id
+    end
+
+    test "list_people query matches a first-name nickname", %{user_id: user_id} do
+      results = Crm.list_people(user_id, query: "Dan", limit: 5)
+      assert Enum.any?(results, &(&1.display_name == "Daniel Bourke"))
+    end
+
+    test "upsert_person matches an existing record by fuzzy display_name",
+         %{user_id: user_id, charlie: charlie} do
+      {:ok, found} = Crm.upsert_person(user_id, %{"display_name" => "Charlie"})
+      assert found.id == charlie.id
+    end
+  end
+
   describe "bump_interaction/3" do
     setup do
       user_id = "crm-bump-#{System.unique_integer([:positive])}@example.com"

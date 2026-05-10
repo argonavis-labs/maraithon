@@ -30,14 +30,7 @@ defmodule Maraithon.Crm do
     |> maybe_filter_text(:preferred_communication_method, method)
     |> maybe_filter_text(:communication_frequency, frequency)
     |> maybe_filter_contact(contact_kind, contact_value)
-    |> order_by(
-      [person],
-      desc: person.relationship_strength,
-      desc: person.affinity_score,
-      desc_nulls_last: person.last_interaction_at,
-      desc: person.updated_at,
-      asc: fragment("lower(?)", person.display_name)
-    )
+    |> order_people(query_text)
     |> limit(^limit)
     |> Repo.all()
   end
@@ -540,19 +533,54 @@ defmodule Maraithon.Crm do
         |> Repo.one()
 
       is_binary(display_name) ->
-        Person
-        |> where([person], person.user_id == ^user_id)
-        |> where(
-          [person],
-          fragment("lower(?)", person.display_name) == ^String.downcase(display_name)
-        )
-        |> limit(1)
-        |> Repo.one()
+        exact =
+          Person
+          |> where([person], person.user_id == ^user_id)
+          |> where(
+            [person],
+            fragment("lower(?)", person.display_name) == ^String.downcase(display_name)
+          )
+          |> limit(1)
+          |> Repo.one()
+
+        exact || fuzzy_find_person(user_id, display_name)
 
       true ->
         nil
     end
   end
+
+  defp fuzzy_find_person(user_id, query_text) when is_binary(query_text) do
+    Person
+    |> where([person], person.user_id == ^user_id)
+    |> where(
+      [person],
+      fragment(
+        "similarity(coalesce(?, '') || ' ' || coalesce(?, '') || ' ' || coalesce(?, ''), ?) > 0.3",
+        person.display_name,
+        person.first_name,
+        person.last_name,
+        ^query_text
+      )
+    )
+    |> order_by(
+      [person],
+      desc:
+        fragment(
+          "similarity(coalesce(?, '') || ' ' || coalesce(?, '') || ' ' || coalesce(?, ''), ?)",
+          person.display_name,
+          person.first_name,
+          person.last_name,
+          ^query_text
+        ),
+      desc: person.relationship_strength,
+      desc: person.affinity_score
+    )
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  defp fuzzy_find_person(_user_id, _query_text), do: nil
 
   defp contact_identifiers(attrs) do
     contact_details =
@@ -665,7 +693,46 @@ defmodule Maraithon.Crm do
       ilike(person.first_name, ^pattern) or ilike(person.last_name, ^pattern) or
         ilike(person.display_name, ^pattern) or ilike(person.relationship, ^pattern) or
         ilike(person.notes, ^pattern) or
-        fragment("?::text ILIKE ?", person.contact_details, ^pattern)
+        fragment("?::text ILIKE ?", person.contact_details, ^pattern) or
+        fragment(
+          "similarity(coalesce(?, '') || ' ' || coalesce(?, '') || ' ' || coalesce(?, ''), ?) > 0.3",
+          person.display_name,
+          person.first_name,
+          person.last_name,
+          ^query_text
+        )
+    )
+  end
+
+  defp order_people(query, nil) do
+    order_by(
+      query,
+      [person],
+      desc: person.relationship_strength,
+      desc: person.affinity_score,
+      desc_nulls_last: person.last_interaction_at,
+      desc: person.updated_at,
+      asc: fragment("lower(?)", person.display_name)
+    )
+  end
+
+  defp order_people(query, query_text) do
+    order_by(
+      query,
+      [person],
+      desc:
+        fragment(
+          "similarity(coalesce(?, '') || ' ' || coalesce(?, '') || ' ' || coalesce(?, ''), ?)",
+          person.display_name,
+          person.first_name,
+          person.last_name,
+          ^query_text
+        ),
+      desc: person.relationship_strength,
+      desc: person.affinity_score,
+      desc_nulls_last: person.last_interaction_at,
+      desc: person.updated_at,
+      asc: fragment("lower(?)", person.display_name)
     )
   end
 
