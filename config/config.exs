@@ -11,6 +11,9 @@ config :maraithon,
   ecto_repos: [Maraithon.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Use a custom Postgrex types module so pgvector types are registered.
+config :maraithon, Maraithon.Repo, types: Maraithon.PostgrexTypes
+
 # Maraithon runtime configuration
 config :maraithon, Maraithon.Runtime,
   # Intervals

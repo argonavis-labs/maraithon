@@ -72,6 +72,8 @@ defmodule Maraithon.MixProject do
       {:cloak, "~> 1.1"},
       # Ecto integration for Cloak
       {:cloak_ecto, "~> 1.3"},
+      # pgvector Ecto type for embedding-based search
+      {:pgvector, "~> 0.3"},
       # Testing
       {:excoveralls, "~> 0.18", only: :test},
       {:mox, "~> 1.1", only: :test},
