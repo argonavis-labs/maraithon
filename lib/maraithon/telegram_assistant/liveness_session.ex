@@ -470,9 +470,44 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
     {hint_category, hint_labels} = classify_tool(tool_name, args)
 
     if hint_specific?(hint_category, hint_labels) do
-      %{state | hint_category: hint_category, hint_labels: hint_labels}
+      next_state = %{state | hint_category: hint_category, hint_labels: hint_labels}
+      maybe_refresh_progress_message(next_state, state)
     else
       state
+    end
+  end
+
+  defp maybe_refresh_progress_message(next_state, prev_state) do
+    cond do
+      not is_binary(next_state.progress_message_id) ->
+        next_state
+
+      progress_text(next_state) == progress_text(prev_state) ->
+        next_state
+
+      terminal?(next_state) ->
+        next_state
+
+      true ->
+        chat_id = next_state.chat_id
+        message_id = next_state.progress_message_id
+        text = progress_text(next_state)
+        metadata = Map.merge(base_metadata(next_state), %{
+          hint_category: next_state.hint_category,
+          delivery_mode: "edit"
+        })
+
+        Task.start(fn ->
+          case TelegramResponder.edit(chat_id, message_id, text) do
+            {:ok, _response} ->
+              emit(:progress_update, %{count: 1}, metadata)
+
+            {:error, reason} ->
+              Logger.warning("Telegram assistant progress update failed", reason: inspect(reason))
+          end
+        end)
+
+        next_state
     end
   end
 
