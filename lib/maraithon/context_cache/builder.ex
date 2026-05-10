@@ -74,29 +74,19 @@ defmodule Maraithon.ContextCache.Builder do
   end
 
   defp spawn_refresh(user_id) do
-    Task.Supervisor.start_child(
-      task_supervisor(),
-      fn ->
-        try do
-          refresh(user_id)
-        rescue
-          error ->
-            Logger.warning("ContextCache refresh failed",
-              user_id: user_id,
-              reason: Exception.message(error)
-            )
-        end
+    Task.start(fn ->
+      try do
+        refresh(user_id)
+      rescue
+        error ->
+          Logger.warning("ContextCache refresh failed",
+            user_id: user_id,
+            reason: Exception.message(error)
+          )
       end
-    )
+    end)
 
     :ok
-  end
-
-  defp task_supervisor do
-    case Process.whereis(Maraithon.TaskSupervisor) do
-      nil -> :unsupervised
-      pid -> pid
-    end
   end
 
   defp stale?(%DateTime{} = generated_at) do

@@ -37,6 +37,9 @@ defmodule Maraithon.TelegramAssistant.Context do
 
     today_digest = ContextCache.get_digest(user_id)
     _ = Maraithon.ContextCache.Builder.maybe_refresh_async(user_id)
+    user_text = latest_user_text(conversation)
+
+    fetched = parallel_fetch(user_id, user_text)
 
     %{
       user: %{id: user_id},
@@ -51,27 +54,54 @@ defmodule Maraithon.TelegramAssistant.Context do
           linked_project
         ),
       recent_turns: serialize_recent_turns(conversation),
-      preference_memory: PreferenceMemory.prompt_context(user_id),
-      operator_memory: OperatorMemory.summaries_for_prompt(user_id),
-      user_memory: UserMemory.prompt_context(user_id),
-      deep_memory:
-        Memory.prompt_context(user_id, query: latest_user_text(conversation), limit: 8),
-      open_loops:
-        OpenLoops.snapshot(user_id,
-          query: latest_user_text(conversation),
-          limit: 8,
-          include_memory?: false
-        ),
-      relationships: serialize_relationships(user_id),
-      open_insights: serialize_open_insights(user_id),
-      todos: serialize_todos(user_id),
-      briefing_schedule: BriefingSchedules.summarize_for_prompt(user_id),
-      connected_accounts: serialize_connected_accounts(user_id),
-      projects: serialize_projects(user_id),
-      active_agents: serialize_agents(user_id),
-      defaults: tool_defaults(user_id),
+      preference_memory: fetched.preference_memory,
+      operator_memory: fetched.operator_memory,
+      user_memory: fetched.user_memory,
+      deep_memory: fetched.deep_memory,
+      open_loops: fetched.open_loops,
+      relationships: fetched.relationships,
+      open_insights: fetched.open_insights,
+      todos: fetched.todos,
+      briefing_schedule: fetched.briefing_schedule,
+      connected_accounts: fetched.connected_accounts,
+      projects: fetched.projects,
+      active_agents: fetched.active_agents,
+      defaults: fetched.defaults,
       today_digest: today_digest
     }
+  end
+
+  defp parallel_fetch(user_id, user_text) do
+    fetchers = [
+      {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
+      {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
+      {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
+      {:deep_memory, fn -> Memory.prompt_context(user_id, query: user_text, limit: 8) end},
+      {:open_loops,
+       fn ->
+         OpenLoops.snapshot(user_id, query: user_text, limit: 8, include_memory?: false)
+       end},
+      {:relationships, fn -> serialize_relationships(user_id) end},
+      {:open_insights, fn -> serialize_open_insights(user_id) end},
+      {:todos, fn -> serialize_todos(user_id) end},
+      {:briefing_schedule, fn -> BriefingSchedules.summarize_for_prompt(user_id) end},
+      {:connected_accounts, fn -> serialize_connected_accounts(user_id) end},
+      {:projects, fn -> serialize_projects(user_id) end},
+      {:active_agents, fn -> serialize_agents(user_id) end},
+      {:defaults, fn -> tool_defaults(user_id) end}
+    ]
+
+    fetchers
+    |> Task.async_stream(
+      fn {key, fun} -> {key, fun.()} end,
+      ordered: false,
+      timeout: :infinity,
+      max_concurrency: length(fetchers)
+    )
+    |> Enum.reduce(%{}, fn
+      {:ok, {key, value}}, acc -> Map.put(acc, key, value)
+      {:exit, reason}, _acc -> raise "context fetch failed: #{inspect(reason)}"
+    end)
   end
 
   def prompt_snapshot(context) when is_map(context), do: context
