@@ -27,6 +27,10 @@ defmodule MaraithonWeb.Router do
     plug MaraithonWeb.Plugs.RequireApiToken
   end
 
+  pipeline :companion_auth do
+    plug MaraithonWeb.Plugs.CompanionDeviceAuth
+  end
+
   # Health check endpoint
   scope "/health", MaraithonWeb do
     get "/", HealthController, :index
@@ -70,6 +74,11 @@ defmodule MaraithonWeb.Router do
     post "/connectors/:provider/disconnect", ConnectorsController, :disconnect
     get "/conenctors", ConnectorsController, :legacy_redirect
     get "/how-it-works", HowItWorksController, :index
+
+    # Companion desktop app pairing flow
+    get "/companion/auth", CompanionAuthController, :show
+    post "/companion/auth/approve", CompanionAuthController, :approve
+    get "/companion/auth/denied", CompanionAuthController, :deny
   end
 
   # Web UI - admin-only pages
@@ -134,6 +143,15 @@ defmodule MaraithonWeb.Router do
 
     # Integration sync endpoints
     post "/integrations/notaui/sync", NotauiController, :sync
+  end
+
+  # Companion desktop app endpoints (bearer auth via per-device token).
+  scope "/api/v1/companion", MaraithonWeb do
+    pipe_through [:api, :companion_auth]
+
+    post "/messages", CompanionController, :ingest
+    get "/whoami", CompanionController, :whoami
+    delete "/devices/:id/messages", CompanionController, :purge_messages
   end
 
   # Hosted MCP endpoint for tool-capable clients.
