@@ -708,8 +708,16 @@ defmodule Maraithon.Connectors.Gmail do
     Enum.each(messages, fn message ->
       case to_observation(message, user_id, user_email) do
         {:ok, changeset} ->
-          case Ingest.observe(user_id, changeset) do
+          result = Ingest.observe(user_id, changeset)
+
+          case result do
             {:ok, _} ->
+              :ok
+
+            {:ok, _, _} ->
+              :ok
+
+            {:ok, _, _, _} ->
               :ok
 
             {:error, reason} ->
@@ -717,6 +725,13 @@ defmodule Maraithon.Connectors.Gmail do
                 user_id: user_id,
                 source_item_id: message[:message_id],
                 reason: inspect(reason)
+              )
+
+            other ->
+              Logger.warning("CRM ingest unexpected result for Gmail message",
+                user_id: user_id,
+                source_item_id: message[:message_id],
+                result: inspect(other)
               )
           end
 

@@ -168,7 +168,7 @@ defmodule Maraithon.Connectors.Slack do
 
   defp ingest_slack_message(team_id, event, event_type) when is_binary(team_id) do
     if event_type == "message" do
-      case Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id) do
+      case lookup_slack_account(team_id) do
         %{user_id: user_id, external_account_id: account_id} ->
           maybe_observe_slack_message(user_id, account_id || team_id, event)
 
@@ -181,6 +181,18 @@ defmodule Maraithon.Connectors.Slack do
   end
 
   defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
+
+  defp lookup_slack_account(team_id) do
+    Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id)
+  rescue
+    exception ->
+      Logger.debug("CRM ingest skipped Slack lookup: #{Exception.message(exception)}")
+      nil
+  catch
+    kind, reason ->
+      Logger.debug("CRM ingest skipped Slack lookup: #{kind} #{inspect(reason)}")
+      nil
+  end
 
   defp maybe_observe_slack_message(user_id, source_account, event) do
     sender_id = event["user"]

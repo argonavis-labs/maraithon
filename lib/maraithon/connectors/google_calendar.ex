@@ -423,11 +423,24 @@ defmodule Maraithon.Connectors.GoogleCalendar do
             {:ok, _} ->
               :ok
 
+            {:ok, _, _} ->
+              :ok
+
+            {:ok, _, _, _} ->
+              :ok
+
             {:error, reason} ->
               Logger.warning("CRM ingest skipped a calendar event",
                 user_id: user_id,
                 event_id: Map.get(event, :event_id),
                 reason: inspect(reason)
+              )
+
+            other ->
+              Logger.warning("CRM ingest unexpected result for calendar event",
+                user_id: user_id,
+                event_id: Map.get(event, :event_id),
+                result: inspect(other)
               )
           end
 
