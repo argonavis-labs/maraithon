@@ -23,8 +23,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 12_000
-  @default_llm_reasoning_effort "high"
+  @default_llm_max_tokens 32_000
+  @default_llm_reasoning_effort "medium"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
 
   @impl true
@@ -145,7 +145,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 168),
       llm_model: normalize_string(config["llm_model"]),
       llm_max_tokens:
-        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 12_000),
+        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 64_000),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       pending_brief_input: nil,
