@@ -954,17 +954,70 @@ defmodule Maraithon.AssistantHarness do
         :ok
 
       %{tool: tool} = observation ->
-        count =
-          Enum.count(tool_history, fn entry ->
-            tool_observation(entry) == observation
-          end)
+        observations =
+          tool_history
+          |> Enum.map(&tool_observation/1)
+          |> Enum.reject(&is_nil/1)
 
-        if count >= window_size do
-          {:error, {:assistant_harness_tool_loop_detected, tool, count}}
-        else
-          :ok
+        same_count = Enum.count(observations, &(&1 == observation))
+
+        same_tool_outcome_count =
+          Enum.count(
+            observations,
+            &(&1.tool == observation.tool and &1.outcome_hash == observation.outcome_hash)
+          )
+
+        cond do
+          ping_pong?(observations, tool) ->
+            emit_tool_loop_telemetry(tool, :ping_pong, length(observations))
+            {:error, {:assistant_harness_tool_loop_detected, tool, length(observations)}}
+
+          same_count >= window_size ->
+            emit_tool_loop_telemetry(tool, :generic_repeat, same_count)
+            {:error, {:assistant_harness_tool_loop_detected, tool, same_count}}
+
+          same_tool_outcome_count >= window_size and
+              poll_no_progress?(observations, observation, window_size) ->
+            emit_tool_loop_telemetry(tool, :poll_no_progress, same_tool_outcome_count)
+            {:error, {:assistant_harness_tool_loop_detected, tool, same_tool_outcome_count}}
+
+          true ->
+            :ok
         end
     end
+  end
+
+  defp ping_pong?(observations, tool) do
+    recent = observations |> Enum.reverse() |> Enum.take(4)
+
+    case recent do
+      [%{tool: ^tool}, %{tool: other_a}, %{tool: ^tool}, %{tool: other_b}]
+      when other_a != tool and other_a == other_b ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp poll_no_progress?(observations, %{tool: tool, outcome_hash: outcome_hash}, window_size) do
+    same_tool =
+      observations
+      |> Enum.filter(&(&1.tool == tool))
+      |> Enum.take(-window_size)
+
+    distinct_args = same_tool |> Enum.map(& &1.arguments_hash) |> Enum.uniq() |> length()
+
+    distinct_args > 1 and
+      same_tool |> Enum.map(& &1.outcome_hash) |> Enum.uniq() == [outcome_hash]
+  end
+
+  defp emit_tool_loop_telemetry(tool, classification, count) do
+    :telemetry.execute(
+      [:maraithon, :assistant_harness, :tool_loop],
+      %{count: count},
+      %{tool: tool, classification: classification}
+    )
   end
 
   defp tool_observation(entry) when is_map(entry) do

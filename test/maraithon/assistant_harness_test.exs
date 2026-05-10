@@ -3,6 +3,72 @@ defmodule Maraithon.AssistantHarnessTest do
 
   alias Maraithon.AssistantHarness
 
+  describe "guard_tool_history/2 classification" do
+    setup do
+      test_pid = self()
+      handler_id = "loop-classification-test-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:maraithon, :assistant_harness, :tool_loop],
+        fn _event, measurements, metadata, _ ->
+          send(test_pid, {:tool_loop, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    test "classifies a same-tool/same-args/same-outcome repeat as generic_repeat" do
+      history =
+        for _ <- 1..3 do
+          %{
+            "tool" => "list_todos",
+            "arguments" => %{"limit" => 5},
+            "result" => %{"todos" => []}
+          }
+        end
+
+      assert {:error,
+              {:assistant_harness_tool_loop_detected, "list_todos", 3}} =
+               AssistantHarness.guard_tool_history(history)
+
+      assert_receive {:tool_loop, %{count: 3},
+                      %{tool: "list_todos", classification: :generic_repeat}}
+    end
+
+    test "classifies an A→B→A→B alternation as ping_pong" do
+      history = [
+        %{"tool" => "list_todos", "arguments" => %{}, "result" => %{"todos" => []}},
+        %{"tool" => "get_open_loops", "arguments" => %{}, "result" => %{"buckets" => %{}}},
+        %{"tool" => "list_todos", "arguments" => %{}, "result" => %{"todos" => []}},
+        %{"tool" => "get_open_loops", "arguments" => %{}, "result" => %{"buckets" => %{}}},
+        %{"tool" => "list_todos", "arguments" => %{}, "result" => %{"todos" => []}}
+      ]
+
+      assert {:error, {:assistant_harness_tool_loop_detected, "list_todos", _}} =
+               AssistantHarness.guard_tool_history(history)
+
+      assert_receive {:tool_loop, _, %{classification: :ping_pong}}
+    end
+
+    test "classifies same-outcome with varying args as poll_no_progress" do
+      outcome = %{"status" => "pending"}
+
+      history = [
+        %{"tool" => "get_status", "arguments" => %{"id" => 1}, "result" => outcome},
+        %{"tool" => "get_status", "arguments" => %{"id" => 2}, "result" => outcome},
+        %{"tool" => "get_status", "arguments" => %{"id" => 3}, "result" => outcome}
+      ]
+
+      assert {:error, _} = AssistantHarness.guard_tool_history(history)
+      assert_receive {:tool_loop, _, %{classification: :poll_no_progress}}
+    end
+
+  end
+
   test "exposes the executable runtime contract used by the loop" do
     policy = AssistantHarness.runtime_policy(max_llm_turns: 8, max_tool_steps: 12)
 
