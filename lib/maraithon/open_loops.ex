@@ -135,6 +135,180 @@ defmodule Maraithon.OpenLoops do
     %{person_links: [], memories: [], errors: []}
   end
 
+  @reconcile_sentinel "OPEN_LOOP_RECONCILE_JSON_V1"
+  @reconcile_max_observations 50
+
+  @doc """
+  Reconcile open-loop state against a window of source observations.
+
+  Asks the model to read the observations and propose new or updated todo
+  candidates (commitments made, asks received, time-bound follow-ups).
+  Routes the proposed candidates through `ingest_todos/3` so semantic dedup
+  and existing CRM/memory enrichment happen automatically.
+
+  Used by the `relationship_ingestion` background job. Designed so tests can
+  override the LLM call via `opts[:llm_complete]`.
+  """
+  def reconcile_from_observations(user_id, observations, opts \\ [])
+
+  def reconcile_from_observations(user_id, observations, opts)
+      when is_binary(user_id) and is_list(observations) and is_list(opts) do
+    normalized = normalize_reconcile_observations(observations)
+
+    if normalized == [] do
+      {:ok, %{candidates: [], todo_changes: [], skipped: :no_observations}}
+    else
+      with {:ok, params} <- reconcile_llm_params(user_id, normalized, opts),
+           {:ok, response} <- reconcile_complete(params, opts),
+           {:ok, content} <- reconcile_response_content(response),
+           {:ok, decoded} <- reconcile_decode(content),
+           candidates when is_list(candidates) <- Map.get(decoded, "candidates", []) do
+        case candidates do
+          [] ->
+            {:ok, %{candidates: [], todo_changes: [], skipped: :no_candidates}}
+
+          [_ | _] = list ->
+            ingest_opts = Keyword.put_new(opts, :source, "crm_ingest")
+
+            case ingest_todos(user_id, list, ingest_opts) do
+              {:ok, result} ->
+                {:ok,
+                 %{
+                   candidates: list,
+                   todo_changes: Map.get(result, :decisions, []),
+                   ingested: result
+                 }}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+        end
+      else
+        {:error, _} = err -> err
+        _ -> {:error, :reconcile_invalid_response}
+      end
+    end
+  end
+
+  def reconcile_from_observations(_user_id, _observations, _opts),
+    do: {:error, :invalid_reconcile_input}
+
+  def reconcile_sentinel, do: @reconcile_sentinel
+
+  defp reconcile_llm_params(user_id, observations, opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    payload = %{
+      "user_id" => user_id,
+      "generated_at" => format_datetime(now),
+      "observations" => observations
+    }
+
+    prompt = """
+    #{@reconcile_sentinel}
+
+    You are Maraithon's open-loop reconciliation layer.
+
+    The app already runs a separate relationship-learning pass over these same
+    observations to update CRM people. Your job is narrower: decide which
+    observations imply a NEW or UPDATED durable todo for the user.
+
+    Hard rules:
+    - Only propose a candidate when the observation clearly implies a
+      commitment Kent made, an ask Kent received, or a time-bound follow-up
+      Kent should not forget. Casual chatter, automated receipts, FYIs,
+      newsletters, and pure social greetings do not become todos.
+    - Prefer fewer, sharper candidates over many speculative ones.
+    - Keep titles short and human ("Reply to Charlie about pricing"), not
+      a paste of the source body.
+    - Set due_at only when the source body genuinely communicates a time.
+    - Set source/source_account/source_item_id from the originating
+      observation so existing semantic dedup can collapse repeats.
+
+    Return JSON shaped exactly like:
+    {
+      "candidates": [
+        {
+          "title": "Short imperative title",
+          "summary": "One-paragraph context the user can scan.",
+          "due_at": null,
+          "source": "gmail | google_calendar | slack",
+          "source_account": "primary",
+          "source_item_id": "<ref from observation>",
+          "person_hints": [{"display_name": "Charlie", "email": "charlie@example.com"}],
+          "evidence": "Short quote or paraphrase from the observation",
+          "rationale": "Why this is durable open-loop work, not noise"
+        }
+      ]
+    }
+
+    Return ONLY valid JSON. No markdown.
+
+    Payload:
+    #{Jason.encode!(payload)}
+    """
+
+    {:ok,
+     %{
+       "messages" => [%{"role" => "user", "content" => prompt}],
+       "max_tokens" => Keyword.get(opts, :max_tokens, 3_000),
+       "temperature" => Keyword.get(opts, :temperature, 0.1),
+       "reasoning_effort" => Keyword.get(opts, :reasoning_effort, Maraithon.LLM.intelligence())
+     }}
+  end
+
+  defp reconcile_complete(params, opts) do
+    cond do
+      is_function(Keyword.get(opts, :llm_complete), 1) ->
+        Keyword.fetch!(opts, :llm_complete).(params)
+
+      is_function(configured_reconcile_llm_complete(), 1) ->
+        configured_reconcile_llm_complete().(params)
+
+      true ->
+        Maraithon.LLM.complete(params)
+    end
+  end
+
+  defp configured_reconcile_llm_complete do
+    :maraithon
+    |> Application.get_env(:open_loop_reconciliation, [])
+    |> Keyword.get(:llm_complete)
+  end
+
+  defp reconcile_response_content(%{content: content}) when is_binary(content),
+    do: {:ok, content}
+
+  defp reconcile_response_content(%{"content" => content}) when is_binary(content),
+    do: {:ok, content}
+
+  defp reconcile_response_content(content) when is_binary(content), do: {:ok, content}
+  defp reconcile_response_content(_), do: {:error, :reconcile_missing_content}
+
+  defp reconcile_decode(content) do
+    trimmed =
+      content
+      |> String.trim()
+      |> String.trim_leading("```json")
+      |> String.trim_leading("```")
+      |> String.trim_trailing("```")
+      |> String.trim()
+
+    case Jason.decode(trimmed) do
+      {:ok, %{} = decoded} -> {:ok, decoded}
+      _ -> {:error, :reconcile_invalid_json}
+    end
+  end
+
+  defp normalize_reconcile_observations(observations) do
+    observations
+    |> Enum.filter(&is_map/1)
+    |> Enum.take(@reconcile_max_observations)
+  end
+
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_datetime(other), do: other
+
   def enrich_context(context) when is_map(context) do
     user_id = Map.get(context, :user_id) || Map.get(context, "user_id")
 
