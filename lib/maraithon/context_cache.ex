@@ -77,13 +77,11 @@ defmodule Maraithon.ContextCache do
 
   @doc false
   def reset do
-    case ensure_table() do
-      :ok ->
-        :ets.delete_all_objects(@table)
-        :ok
-
-      :error ->
-        :ok
+    try do
+      :ets.delete_all_objects(@table)
+      :ok
+    rescue
+      ArgumentError -> :ok
     end
   end
 

@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Agents
   alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.ContextCache
   alias Maraithon.Crm
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
@@ -33,6 +34,9 @@ defmodule Maraithon.TelegramAssistant.Context do
     linked_travel = linked_travel_itinerary(conversation, user_id)
     linked_todo = linked_todo(attrs, user_id)
     linked_project = linked_project(attrs, user_id)
+
+    today_digest = ContextCache.get_digest(user_id)
+    _ = Maraithon.ContextCache.Builder.maybe_refresh_async(user_id)
 
     %{
       user: %{id: user_id},
@@ -65,7 +69,8 @@ defmodule Maraithon.TelegramAssistant.Context do
       connected_accounts: serialize_connected_accounts(user_id),
       projects: serialize_projects(user_id),
       active_agents: serialize_agents(user_id),
-      defaults: tool_defaults(user_id)
+      defaults: tool_defaults(user_id),
+      today_digest: today_digest
     }
   end
 
