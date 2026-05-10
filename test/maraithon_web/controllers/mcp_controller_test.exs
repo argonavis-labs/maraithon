@@ -258,6 +258,38 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "structuredContent", "count"]) == 0
   end
 
+  test "returns structured policy errors for confirmation-required MCP calls", %{conn: conn} do
+    user_id = "mcp-policy-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => 41,
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "gmail_send_message",
+          "arguments" => %{
+            "user_id" => user_id,
+            "to" => "someone@example.com",
+            "subject" => "Policy test",
+            "body" => "This should not send."
+          }
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["error", "code"]) == -32071
+
+    assert get_in(response, ["error", "data", "policy_decision", "reason_code"]) ==
+             "confirmation_required"
+
+    assert [entry] = Maraithon.ActionLedger.list_recent(user_id, limit: 1)
+    assert entry.event_type == "tool.needs_confirmation"
+    assert entry.metadata["tool_name"] == "gmail_send_message"
+  end
+
   test "handles JSON-RPC batch calls concurrently", %{conn: conn} do
     user_id = "mcp-batch-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

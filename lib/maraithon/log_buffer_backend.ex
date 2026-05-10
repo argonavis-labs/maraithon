@@ -30,7 +30,8 @@ defmodule Maraithon.LogBufferBackend do
         timestamp: to_iso8601(timestamp),
         level: level,
         message: message |> format_message() |> Maraithon.Redaction.redact_string(),
-        metadata: metadata |> Enum.into(%{}) |> stringify_metadata() |> Maraithon.Redaction.redact()
+        metadata:
+          metadata |> Enum.into(%{}) |> stringify_metadata() |> Maraithon.Redaction.redact()
       })
     end
 

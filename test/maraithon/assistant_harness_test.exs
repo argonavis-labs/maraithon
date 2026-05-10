@@ -21,7 +21,7 @@ defmodule Maraithon.AssistantHarnessTest do
       :ok
     end
 
-    test "classifies a same-tool/same-args/same-outcome repeat as generic_repeat" do
+    test "classifies a same-tool/same-args/same-outcome repeat as same_tool_args" do
       history =
         for _ <- 1..3 do
           %{
@@ -32,11 +32,11 @@ defmodule Maraithon.AssistantHarnessTest do
         end
 
       assert {:error,
-              {:assistant_harness_tool_loop_detected, "list_todos", 3}} =
+              {:assistant_harness_tool_loop_detected, "list_todos", 3, "same_tool_args", _}} =
                AssistantHarness.guard_tool_history(history)
 
       assert_receive {:tool_loop, %{count: 3},
-                      %{tool: "list_todos", classification: :generic_repeat}}
+                      %{tool: "list_todos", classification: "same_tool_args"}}
     end
 
     test "classifies an A→B→A→B alternation as ping_pong" do
@@ -48,10 +48,10 @@ defmodule Maraithon.AssistantHarnessTest do
         %{"tool" => "list_todos", "arguments" => %{}, "result" => %{"todos" => []}}
       ]
 
-      assert {:error, {:assistant_harness_tool_loop_detected, "list_todos", _}} =
+      assert {:error, {:assistant_harness_tool_loop_detected, "list_todos", _, "ping_pong", _}} =
                AssistantHarness.guard_tool_history(history)
 
-      assert_receive {:tool_loop, _, %{classification: :ping_pong}}
+      assert_receive {:tool_loop, _, %{classification: "ping_pong"}}
     end
 
     test "classifies same-outcome with varying args as poll_no_progress" do
@@ -64,9 +64,8 @@ defmodule Maraithon.AssistantHarnessTest do
       ]
 
       assert {:error, _} = AssistantHarness.guard_tool_history(history)
-      assert_receive {:tool_loop, _, %{classification: :poll_no_progress}}
+      assert_receive {:tool_loop, _, %{classification: "polling_no_progress"}}
     end
-
   end
 
   test "exposes the executable runtime contract used by the loop" do
@@ -164,7 +163,9 @@ defmodule Maraithon.AssistantHarnessTest do
 
     assert :ok = AssistantHarness.guard_tool_history([entry, entry], tool_repeat_guard_window: 3)
 
-    assert {:error, {:assistant_harness_tool_loop_detected, "gmail_search_messages", 3}} =
+    assert {:error,
+            {:assistant_harness_tool_loop_detected, "gmail_search_messages", 3, "same_tool_args",
+             _}} =
              AssistantHarness.guard_tool_history([entry, entry, entry],
                tool_repeat_guard_window: 3
              )

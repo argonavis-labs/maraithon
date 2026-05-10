@@ -223,7 +223,11 @@ defmodule Maraithon.LLM.OpenAIProvider do
     Map.update!(acc, :text, &(&1 <> delta))
   end
 
-  defp apply_decoded_event(acc, %{"type" => "response.completed", "response" => response}, _on_chunk) do
+  defp apply_decoded_event(
+         acc,
+         %{"type" => "response.completed", "response" => response},
+         _on_chunk
+       ) do
     Map.put(acc, :response, response)
   end
 

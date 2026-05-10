@@ -5,12 +5,19 @@ defmodule Maraithon.LLM.EmbeddingsTest do
 
   setup do
     original = Application.get_env(:maraithon, Embeddings)
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime)
 
     on_exit(fn ->
       if original do
         Application.put_env(:maraithon, Embeddings, original)
       else
         Application.delete_env(:maraithon, Embeddings)
+      end
+
+      if original_runtime do
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
+      else
+        Application.delete_env(:maraithon, Maraithon.Runtime)
       end
     end)
 
@@ -64,7 +71,14 @@ defmodule Maraithon.LLM.EmbeddingsTest do
 
   describe "auto-selection" do
     test "falls back to mock when no OpenAI key configured" do
-      Application.put_env(:maraithon, Maraithon.Runtime, openai_api_key: nil)
+      runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(runtime, :openai_api_key, nil)
+      )
+
       assert {:ok, vec} = Embeddings.embed("hello world")
       assert is_list(vec)
     end

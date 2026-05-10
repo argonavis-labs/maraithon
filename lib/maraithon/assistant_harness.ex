@@ -9,7 +9,7 @@ defmodule Maraithon.AssistantHarness do
   until the model returns a final answer.
   """
 
-  alias Maraithon.AssistantHarness.PromptStability
+  alias Maraithon.AssistantHarness.{PromptStability, ToolLoopClassifier}
   alias Maraithon.LLM
 
   @contract_version 2
@@ -162,7 +162,16 @@ defmodule Maraithon.AssistantHarness do
     repeat_guard = policy.tool_calls.repeat_guard
 
     if repeat_guard.enabled do
-      detect_repeated_tool_result(tool_history, repeat_guard.window_size)
+      case ToolLoopClassifier.classify(tool_history, window_size: repeat_guard.window_size) do
+        :ok ->
+          :ok
+
+        {:loop, loop} ->
+          emit_tool_loop_telemetry(loop)
+
+          {:error,
+           {:assistant_harness_tool_loop_detected, loop.tool, loop.count, loop.class, loop}}
+      end
     else
       :ok
     end
@@ -186,6 +195,10 @@ defmodule Maraithon.AssistantHarness do
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
     "I got the same result from #{human_tool_name(tool)} too many times, so I stopped instead of looping. Ask me to narrow the source or try again."
+  end
+
+  def failure_message({:assistant_harness_tool_loop_detected, tool, _count, class, _loop}) do
+    "I hit a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}, so I stopped instead of repeating it. Ask me to narrow the source or try again."
   end
 
   def failure_message(_reason) do
@@ -942,136 +955,13 @@ defmodule Maraithon.AssistantHarness do
   defp compact_tool_value(value, _policy) when is_function(value), do: inspect(value)
   defp compact_tool_value(value, _policy), do: value
 
-  defp detect_repeated_tool_result(_tool_history, window_size) when window_size <= 1, do: :ok
-
-  defp detect_repeated_tool_result(tool_history, window_size) do
-    latest_observation =
-      tool_history
-      |> Enum.reverse()
-      |> Enum.find_value(&tool_observation/1)
-
-    case latest_observation do
-      nil ->
-        :ok
-
-      %{tool: tool} = observation ->
-        observations =
-          tool_history
-          |> Enum.map(&tool_observation/1)
-          |> Enum.reject(&is_nil/1)
-
-        same_count = Enum.count(observations, &(&1 == observation))
-
-        same_tool_outcome_count =
-          Enum.count(
-            observations,
-            &(&1.tool == observation.tool and &1.outcome_hash == observation.outcome_hash)
-          )
-
-        cond do
-          ping_pong?(observations, tool) ->
-            emit_tool_loop_telemetry(tool, :ping_pong, length(observations))
-            {:error, {:assistant_harness_tool_loop_detected, tool, length(observations)}}
-
-          same_count >= window_size ->
-            emit_tool_loop_telemetry(tool, :generic_repeat, same_count)
-            {:error, {:assistant_harness_tool_loop_detected, tool, same_count}}
-
-          same_tool_outcome_count >= window_size and
-              poll_no_progress?(observations, observation, window_size) ->
-            emit_tool_loop_telemetry(tool, :poll_no_progress, same_tool_outcome_count)
-            {:error, {:assistant_harness_tool_loop_detected, tool, same_tool_outcome_count}}
-
-          true ->
-            :ok
-        end
-    end
-  end
-
-  defp ping_pong?(observations, tool) do
-    recent = observations |> Enum.reverse() |> Enum.take(4)
-
-    case recent do
-      [%{tool: ^tool}, %{tool: other_a}, %{tool: ^tool}, %{tool: other_b}]
-      when other_a != tool and other_a == other_b ->
-        true
-
-      _ ->
-        false
-    end
-  end
-
-  defp poll_no_progress?(observations, %{tool: tool, outcome_hash: outcome_hash}, window_size) do
-    same_tool =
-      observations
-      |> Enum.filter(&(&1.tool == tool))
-      |> Enum.take(-window_size)
-
-    distinct_args = same_tool |> Enum.map(& &1.arguments_hash) |> Enum.uniq() |> length()
-
-    distinct_args > 1 and
-      same_tool |> Enum.map(& &1.outcome_hash) |> Enum.uniq() == [outcome_hash]
-  end
-
-  defp emit_tool_loop_telemetry(tool, classification, count) do
+  defp emit_tool_loop_telemetry(loop) do
     :telemetry.execute(
       [:maraithon, :assistant_harness, :tool_loop],
-      %{count: count},
-      %{tool: tool, classification: classification}
+      %{count: loop.count},
+      %{tool: loop.tool, classification: loop.class}
     )
   end
-
-  defp tool_observation(entry) when is_map(entry) do
-    tool = Map.get(entry, "tool") || Map.get(entry, :tool)
-    arguments = Map.get(entry, "arguments") || Map.get(entry, :arguments) || %{}
-    result = Map.get(entry, "result") || Map.get(entry, :result)
-    error = Map.get(entry, "error") || Map.get(entry, :error)
-
-    if is_binary(tool) and (not is_nil(result) or not is_nil(error)) do
-      %{
-        tool: tool,
-        arguments_hash: stable_hash(arguments),
-        outcome_hash: stable_hash(if(is_nil(result), do: %{"error" => error}, else: result))
-      }
-    end
-  end
-
-  defp tool_observation(_entry), do: nil
-
-  defp stable_hash(value) do
-    value
-    |> stable_json()
-    |> then(&:crypto.hash(:sha256, &1))
-    |> Base.encode16(case: :lower)
-  end
-
-  defp stable_json(value) do
-    case Jason.encode(compact_hash_value(value)) do
-      {:ok, json} -> json
-      {:error, _reason} -> inspect(value)
-    end
-  end
-
-  defp compact_hash_value(value) when is_map(value) do
-    value
-    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-    |> Map.new(fn {key, nested_value} -> {to_string(key), compact_hash_value(nested_value)} end)
-  end
-
-  defp compact_hash_value(value) when is_list(value), do: Enum.map(value, &compact_hash_value/1)
-  defp compact_hash_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
-  defp compact_hash_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
-  defp compact_hash_value(%Date{} = value), do: Date.to_iso8601(value)
-  defp compact_hash_value(%Time{} = value), do: Time.to_iso8601(value)
-
-  defp compact_hash_value(value) when is_struct(value),
-    do: value |> Map.from_struct() |> compact_hash_value()
-
-  defp compact_hash_value(value) when is_tuple(value), do: inspect(value)
-  defp compact_hash_value(value) when is_pid(value), do: inspect(value)
-  defp compact_hash_value(value) when is_reference(value), do: inspect(value)
-  defp compact_hash_value(value) when is_function(value), do: inspect(value)
-  defp compact_hash_value(value), do: value
 
   defp normalize_score(value) when is_float(value), do: min(max(value, 0.0), 1.0)
   defp normalize_score(value) when is_integer(value), do: normalize_score(value / 1)

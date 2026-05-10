@@ -41,7 +41,9 @@ defmodule Maraithon.RedactionTest do
     end
 
     test "scrubs JWTs" do
-      jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+      jwt =
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+
       assert Redaction.redact_string(jwt) == "<redacted-jwt>"
     end
 

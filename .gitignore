@@ -70,6 +70,7 @@ gcloud-service-key.json
 .idea/
 *.iml
 .vscode/
+.claude/*.lock
 *.swp
 *.swo
 *~

@@ -1,0 +1,34 @@
+{
+  "protocol": "maraithon.control",
+  "version": "2026-05-10",
+  "transport": "json-rpc-2.0/http",
+  "payload_policy": {
+    "max_bytes": 262144,
+    "idempotency_required_for": [
+      "write",
+      "destructive",
+      "external_send",
+      "credential",
+      "system"
+    ]
+  },
+  "methods": {
+    "connect": {"roles": ["operator"], "scopes": ["control:read"]},
+    "health": {"roles": ["operator"], "scopes": ["control:read"]},
+    "status": {"roles": ["operator"], "scopes": ["control:read"]},
+    "tools.list": {"roles": ["operator"], "scopes": ["tools:read"]},
+    "tools.call": {"roles": ["operator"], "scopes": ["tools:call"]},
+    "agents.list": {"roles": ["operator"], "scopes": ["agents:read"]},
+    "agents.inspect": {"roles": ["operator"], "scopes": ["agents:read"]},
+    "scheduled_tasks.list": {"roles": ["operator"], "scopes": ["scheduled_tasks:read"]},
+    "scheduled_tasks.create": {"roles": ["operator"], "scopes": ["scheduled_tasks:write"]},
+    "mobile_nodes.commands": {"roles": ["operator"], "scopes": ["mobile_nodes:read"]},
+    "mobile_nodes.pair": {"roles": ["operator"], "scopes": ["mobile_nodes:write"]},
+    "events.subscribe": {"roles": ["operator"], "scopes": ["events:read"]}
+  },
+  "standard_error": {
+    "code": "integer",
+    "message": "safe string",
+    "data": "redacted object"
+  }
+}

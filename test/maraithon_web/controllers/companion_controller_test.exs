@@ -7,6 +7,8 @@ defmodule MaraithonWeb.CompanionControllerTest do
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.Repo
 
+  import Ecto.Query
+
   defp pair_device(email \\ nil) do
     email = email || "companion-#{System.unique_integer([:positive])}@example.com"
     {:ok, user} = Accounts.get_or_create_user_by_email(email)
@@ -37,6 +39,16 @@ defmodule MaraithonWeb.CompanionControllerTest do
     )
   end
 
+  defp message_count(user_id, device_id) do
+    Repo.aggregate(
+      from(message in LocalMessage,
+        where: message.user_id == ^user_id and message.device_id == ^device_id
+      ),
+      :count,
+      :id
+    )
+  end
+
   describe "POST /api/v1/companion/messages" do
     test "401 without bearer token", %{conn: conn} do
       conn = post(conn, "/api/v1/companion/messages", %{messages: []})
@@ -56,7 +68,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
     end
 
     test "200 happy path: inserts messages and reports counts", %{conn: conn} do
-      %{token: token} = pair_device()
+      %{user: user, device: device, token: token} = pair_device()
 
       conn =
         conn
@@ -69,7 +81,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       body = json_response(conn, 200)
       assert body["accepted"] == 2
       assert body["duplicate"] == 0
-      assert Repo.aggregate(LocalMessage, :count, :id) == 2
+      assert message_count(user.id, device.device_id) == 2
     end
 
     test "dedupes on the second send", %{conn: conn} do
@@ -136,7 +148,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
           sample_message("g2")
         ])
 
-      assert Repo.aggregate(LocalMessage, :count, :id) == 2
+      assert message_count(user.id, device.device_id) == 2
 
       conn =
         conn
@@ -145,7 +157,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
       body = json_response(conn, 200)
       assert body["deleted"] == 2
-      assert Repo.aggregate(LocalMessage, :count, :id) == 0
+      assert message_count(user.id, device.device_id) == 0
     end
   end
 end

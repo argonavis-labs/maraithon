@@ -617,15 +617,13 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
       {:ok, _response} ->
         emit(:stream_flush, %{count: 1, bytes: byte_size(text)}, base_metadata(state))
 
-        {:noreply,
-         %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
+        {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
 
       {:error, reason} ->
         Logger.debug("Telegram stream flush failed", reason: inspect(reason))
         {:noreply, %{state | stream_last_flushed_at_ms: System.monotonic_time(:millisecond)}}
     end
   end
-
 
   defp progress_text(%{hint_category: "open_work"}) do
     "Still reviewing your open work."

@@ -9,6 +9,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   import Ecto.Query
 
+  alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
@@ -97,6 +98,17 @@ defmodule Maraithon.TelegramAssistant.Proactive do
         deliver_plan(user_id, chat_id, plan, opts)
 
       {:ok, %{"decision" => "hold"} = plan} ->
+        record_proactive_decision(
+          user_id,
+          nil,
+          plan,
+          proactive_trigger(user_id, chat_id, opts),
+          %{
+            event_type: "proactive.held",
+            status: "held"
+          }
+        )
+
         {:ok, Map.put(plan, "decision", "hold")}
 
       {:error, reason} ->
@@ -137,9 +149,21 @@ defmodule Maraithon.TelegramAssistant.Proactive do
             result
           end
 
+        record_proactive_decision(user_id, dedupe_key, plan, trigger, %{
+          event_type: "proactive.sent",
+          status: "sent",
+          result: result
+        })
+
         {:ok, Map.merge(plan, stringify_result(result))}
 
       {:ok, %{decision: decision} = result} ->
+        record_proactive_decision(user_id, dedupe_key, plan, trigger, %{
+          event_type: "proactive.held",
+          status: "held",
+          result: result
+        })
+
         {:ok, plan |> Map.put("decision", decision) |> Map.merge(stringify_result(result))}
 
       {:fallback, reason} ->
@@ -227,5 +251,41 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   defp stringify_result(result) when is_map(result) do
     Map.new(result, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp record_proactive_decision(user_id, dedupe_key, plan, trigger, opts) do
+    result = Map.get(opts, :result, %{})
+
+    attrs = %{
+      user_id: user_id,
+      surface: "telegram",
+      event_type: Map.fetch!(opts, :event_type),
+      status: Map.fetch!(opts, :status),
+      source_evidence: %{
+        trigger: trigger,
+        dedupe_key: dedupe_key || Map.get(plan, "dedupe_key"),
+        todo_ids: Map.get(plan, "todo_ids", [])
+      },
+      model_summary: Map.get(plan, "summary"),
+      result_object_refs: %{
+        dedupe_key: dedupe_key || Map.get(plan, "dedupe_key"),
+        conversation_id: Map.get(result, :conversation_id),
+        turn_id: Map.get(result, :turn_id),
+        message_id: Map.get(result, :message_id)
+      },
+      metadata: %{
+        decision: Map.get(plan, "decision"),
+        message_class: Map.get(plan, "message_class"),
+        interrupt_now: Map.get(plan, "interrupt_now"),
+        urgency: Map.get(plan, "urgency")
+      }
+    }
+
+    case ActionLedger.record(attrs) do
+      {:ok, _action} -> :ok
+      {:error, _reason} -> :ok
+    end
+  rescue
+    _error -> :ok
   end
 end

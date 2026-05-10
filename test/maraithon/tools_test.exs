@@ -12,9 +12,9 @@ defmodule Maraithon.ToolsTest do
     end
 
     test "returns error for unknown tool" do
-      {:error, message} = Tools.execute("nonexistent_tool", %{})
+      {:error, {:tool_policy_denied, decision}} = Tools.execute("nonexistent_tool", %{})
 
-      assert message =~ "unknown_tool"
+      assert decision["reason_code"] == "unknown_tool"
     end
   end
 
@@ -74,10 +74,25 @@ defmodule Maraithon.ToolsTest do
       assert "todos" in descriptor.input_schema["required"]
       assert descriptor.annotations["readOnlyHint"] == false
       assert descriptor.annotations["idempotentHint"] == true
+      assert descriptor.annotations["sideEffect"] == "write"
 
       [review_descriptor] = Tools.describe(["review_connected_context"])
       assert review_descriptor.annotations["readOnlyHint"] == true
+      assert review_descriptor.annotations["sideEffect"] == "read"
       assert get_in(review_descriptor.input_schema, ["properties", "query", "type"]) == "string"
+    end
+
+    test "every registered tool has policy metadata" do
+      Enum.each(Tools.list(), fn tool_name ->
+        metadata = Tools.policy_metadata_for(tool_name)
+
+        assert is_map(metadata)
+        assert metadata.side_effect in ~w(read write destructive external_send credential system)
+
+        if metadata.destructive? or metadata.side_effect == "external_send" do
+          refute metadata.read_only?
+        end
+      end)
     end
   end
 

@@ -4,6 +4,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
   import Ecto.Query
 
   alias Maraithon.Accounts
+  alias Maraithon.ActionLedger
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
@@ -110,6 +111,12 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
 
     assert receipt.decision == "sent_now"
     assert receipt.dedupe_key == "proactive:rippling:#{todo.id}"
+
+    [ledger_entry] = ActionLedger.list_recent(user_id, event_type: "proactive.sent", limit: 1)
+    assert ledger_entry.status == "sent"
+    assert ledger_entry.model_summary == "The open todo is high priority and timely."
+    assert ledger_entry.source_evidence["todo_ids"] == [todo.id]
+    assert ledger_entry.result_object_refs["dedupe_key"] == "proactive:rippling:#{todo.id}"
   end
 
   test "model hold decisions do not send Telegram messages", %{user_id: user_id} do
@@ -137,6 +144,11 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
              )
 
     assert telegram_messages() == []
+
+    [ledger_entry] = ActionLedger.list_recent(user_id, event_type: "proactive.held", limit: 1)
+    assert ledger_entry.status == "held"
+    assert ledger_entry.model_summary == "Nothing needs a proactive interruption."
+    assert ledger_entry.source_evidence["dedupe_key"] == "proactive:hold"
   end
 
   defp telegram_messages do

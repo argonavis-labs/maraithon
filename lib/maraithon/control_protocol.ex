@@ -1,0 +1,457 @@
+defmodule Maraithon.ControlProtocol do
+  @moduledoc """
+  JSON-RPC control protocol for first-party operator clients.
+  """
+
+  alias Maraithon.Agents
+  alias Maraithon.Capabilities
+  alias Maraithon.ControlCalls
+  alias Maraithon.Health
+  alias Maraithon.MobileNodes
+  alias Maraithon.ScheduledTasks
+  alias Maraithon.ToolPolicy
+  alias Maraithon.Tools
+
+  @version "2026-05-10"
+  @max_payload_bytes 256 * 1024
+
+  @methods %{
+    "connect" => %{roles: ["operator"], scopes: ["control:read"]},
+    "health" => %{roles: ["operator"], scopes: ["control:read"]},
+    "status" => %{roles: ["operator"], scopes: ["control:read"]},
+    "tools.list" => %{roles: ["operator"], scopes: ["tools:read"]},
+    "tools.call" => %{roles: ["operator"], scopes: ["tools:call"]},
+    "agents.list" => %{roles: ["operator"], scopes: ["agents:read"]},
+    "agents.inspect" => %{roles: ["operator"], scopes: ["agents:read"]},
+    "scheduled_tasks.list" => %{roles: ["operator"], scopes: ["scheduled_tasks:read"]},
+    "scheduled_tasks.create" => %{roles: ["operator"], scopes: ["scheduled_tasks:write"]},
+    "mobile_nodes.commands" => %{roles: ["operator"], scopes: ["mobile_nodes:read"]},
+    "mobile_nodes.pair" => %{roles: ["operator"], scopes: ["mobile_nodes:write"]},
+    "events.subscribe" => %{roles: ["operator"], scopes: ["events:read"]}
+  }
+
+  def max_payload_bytes, do: @max_payload_bytes
+
+  def contract do
+    %{
+      protocol: "maraithon.control",
+      version: @version,
+      transport: "json-rpc-2.0/http",
+      payload_policy: payload_policy(),
+      standard_error: %{
+        code: "integer",
+        message: "safe string",
+        data: "redacted object"
+      },
+      methods: @methods
+    }
+  end
+
+  def response_for(%{"jsonrpc" => "2.0", "method" => method} = request) do
+    id = Map.get(request, "id")
+
+    case dispatch(method, Map.get(request, "params", %{}), request) do
+      {:ok, result} ->
+        %{"jsonrpc" => "2.0", "id" => id, "result" => result}
+
+      {:error, code, message, data} ->
+        error_response(id, code, message, data)
+    end
+  end
+
+  def response_for(_request), do: error_response(nil, -32600, "Invalid JSON-RPC request", nil)
+
+  defp dispatch("connect", params, _request) do
+    {:ok,
+     %{
+       protocol: "maraithon.control",
+       version: @version,
+       connection_id: read_string(params, "connection_id") || Ecto.UUID.generate(),
+       contract: contract()
+     }}
+  end
+
+  defp dispatch("health", _params, _request), do: {:ok, Health.check()}
+
+  defp dispatch("status", _params, _request) do
+    {:ok,
+     %{
+       app: "maraithon",
+       version: app_version(),
+       protocol_version: @version,
+       capabilities: %{
+         tools: length(Capabilities.list_capabilities(:tool)),
+         connectors: length(Capabilities.list_capabilities(:connector)),
+         providers: length(Capabilities.list_capabilities(:provider))
+       }
+     }}
+  end
+
+  defp dispatch("tools.list", params, _request) do
+    names = if is_map(params), do: Map.get(params, "names"), else: nil
+    {:ok, %{"tools" => Enum.map(Tools.describe(names), &tool_descriptor/1)}}
+  end
+
+  defp dispatch("tools.call", %{"name" => name} = params, request) when is_binary(name) do
+    arguments = Map.get(params, "arguments", %{})
+    idempotency_key = read_string(params, "idempotency_key")
+    user_id = read_string(params, "user_id") || read_string(arguments, "user_id")
+    metadata = Capabilities.policy_metadata_for(name)
+
+    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil},
+         :ok <- require_idempotency_for_side_effect(name, metadata, idempotency_key) do
+      ControlCalls.run(
+        %{
+          method: "tools.call:#{name}",
+          idempotency_key: idempotency_key,
+          user_id: user_id,
+          request: request
+        },
+        fn ->
+          execute_tool_call(name, arguments, params, metadata)
+        end
+      )
+      |> control_call_response()
+    else
+      {:error, code, message, data} -> {:error, code, message, data}
+    end
+  end
+
+  defp dispatch("tools.call", _params, _request),
+    do: {:error, -32602, "Tool name is required", nil}
+
+  defp dispatch("agents.list", params, _request) do
+    user_id = read_string(params, "user_id")
+
+    agents =
+      Agents.list_agents(user_id: user_id)
+      |> Enum.map(&serialize_agent/1)
+
+    {:ok, %{agents: agents, count: length(agents)}}
+  end
+
+  defp dispatch("agents.inspect", %{"agent_id" => agent_id}, _request)
+       when is_binary(agent_id) do
+    case Agents.get_agent(agent_id, preload: [:project]) do
+      nil -> {:error, -32044, "Agent not found", nil}
+      agent -> {:ok, %{agent: serialize_agent(agent)}}
+    end
+  end
+
+  defp dispatch("agents.inspect", _params, _request),
+    do: {:error, -32602, "agent_id is required", nil}
+
+  defp dispatch("scheduled_tasks.list", params, _request) do
+    user_id = read_string(params, "user_id")
+
+    if user_id do
+      tasks =
+        user_id
+        |> ScheduledTasks.list_tasks(limit: 100)
+        |> Enum.map(&ScheduledTasks.serialize_task/1)
+        |> normalize()
+
+      {:ok, %{"tasks" => tasks, "count" => length(tasks)}}
+    else
+      {:error, -32602, "user_id is required", nil}
+    end
+  end
+
+  defp dispatch("scheduled_tasks.create", params, request) do
+    user_id = read_string(params, "user_id")
+    idempotency_key = read_string(params, "idempotency_key")
+    task_attrs = Map.get(params, "task", params)
+
+    with true <- is_binary(user_id) || {:error, -32602, "user_id is required", nil},
+         true <-
+           is_binary(idempotency_key) ||
+             {:error, -32072, "idempotency_key is required for scheduled_tasks.create", nil},
+         true <- is_map(task_attrs) || {:error, -32602, "task must be an object", nil} do
+      ControlCalls.run(
+        %{
+          method: "scheduled_tasks.create",
+          idempotency_key: idempotency_key,
+          user_id: user_id,
+          request: request
+        },
+        fn ->
+          case ScheduledTasks.create_task(user_id, task_attrs) do
+            {:ok, task} ->
+              {:ok, %{"task" => task |> ScheduledTasks.serialize_task() |> normalize()}}
+
+            {:error, reason} ->
+              {:error, %{"code" => "scheduled_task_error", "message" => inspect(reason)}}
+          end
+        end
+      )
+      |> control_call_response()
+    else
+      {:error, code, message, data} -> {:error, code, message, data}
+    end
+  end
+
+  defp dispatch("mobile_nodes.commands", _params, _request) do
+    {:ok, MobileNodes.command_contract() |> normalize()}
+  end
+
+  defp dispatch("mobile_nodes.pair", params, request) do
+    user_id = read_string(params, "user_id")
+    idempotency_key = read_string(params, "idempotency_key")
+
+    with true <- is_binary(user_id) || {:error, -32602, "user_id is required", nil},
+         true <-
+           is_binary(idempotency_key) ||
+             {:error, -32072, "idempotency_key is required for mobile_nodes.pair", nil} do
+      opts =
+        [
+          metadata: Map.get(params, "metadata", %{})
+        ]
+        |> maybe_put_opt(:allowed_commands, read_list_if_present(params, "allowed_commands"))
+        |> maybe_put_opt(:ttl_seconds, read_integer(params, "ttl_seconds"))
+
+      ControlCalls.run(
+        %{
+          method: "mobile_nodes.pair",
+          idempotency_key: idempotency_key,
+          user_id: user_id,
+          request: request
+        },
+        fn ->
+          case MobileNodes.create_pairing(user_id, opts) do
+            {:ok, %{pairing: pairing, code: code, expires_at: expires_at}} ->
+              {:ok,
+               %{
+                 "pairing" => pairing |> MobileNodes.redacted_pairing() |> normalize(),
+                 "code" => code,
+                 "expires_at" => DateTime.to_iso8601(expires_at)
+               }}
+
+            {:error, reason} ->
+              {:error, %{"code" => "mobile_pairing_error", "message" => inspect(reason)}}
+          end
+        end
+      )
+      |> control_call_response()
+    else
+      {:error, code, message, data} -> {:error, code, message, data}
+    end
+  end
+
+  defp dispatch("events.subscribe", params, _request) do
+    topics = params |> read_list("topics") |> Enum.take(20)
+
+    {:ok,
+     %{
+       status: "accepted",
+       mode: "snapshot",
+       topics: topics,
+       message:
+         "HTTP control protocol accepted the subscription request; stream delivery is not held open on this endpoint."
+     }}
+  end
+
+  defp dispatch(method, _params, _request),
+    do: {:error, -32601, "Method not found: #{method}", nil}
+
+  defp execute_tool_call(name, arguments, params, metadata) do
+    context = %{
+      surface: "control",
+      confirmed?: truthy?(Map.get(params, "confirmed")),
+      user_id: read_string(params, "user_id") || read_string(arguments, "user_id"),
+      source_context: %{"control_method" => "tools.call"},
+      tool_metadata: metadata
+    }
+
+    case Tools.execute(name, arguments, context) do
+      {:ok, result} ->
+        {:ok, %{"result" => normalize(result), "is_error" => false}}
+
+      {:error, {:tool_policy_denied, decision}} ->
+        {:error, policy_error("tool_policy_denied", decision)}
+
+      {:error, {:tool_policy_needs_confirmation, decision}} ->
+        {:error, policy_error("tool_policy_needs_confirmation", decision)}
+
+      {:error, reason} ->
+        {:error, %{"code" => "tool_error", "message" => ToolPolicy.error_message(reason)}}
+    end
+  end
+
+  defp require_idempotency_for_side_effect(name, metadata, idempotency_key) do
+    if ToolPolicy.material_side_effect?(metadata || %{side_effect: "read"}) and
+         is_nil(idempotency_key) do
+      {:error, -32072, "idempotency_key is required for side-effecting tools.call",
+       %{"tool" => name}}
+    else
+      :ok
+    end
+  end
+
+  defp control_call_response({:ok, result, replay?: replay?}) do
+    {:ok, Map.put(result, "idempotency_replay", replay?)}
+  end
+
+  defp control_call_response(
+         {:error, %{"code" => "tool_policy_denied"} = error, replay?: replay?}
+       ) do
+    {:error, -32070, error["message"] || "Tool call denied",
+     Map.put(error, "idempotency_replay", replay?)}
+  end
+
+  defp control_call_response(
+         {:error, %{"code" => "tool_policy_needs_confirmation"} = error, replay?: replay?}
+       ) do
+    {:error, -32071, error["message"] || "Tool call requires confirmation",
+     Map.put(error, "idempotency_replay", replay?)}
+  end
+
+  defp control_call_response({:error, :idempotency_key_conflict, replay?: _replay?}) do
+    {:error, -32073, "idempotency_key was reused with a different payload", nil}
+  end
+
+  defp control_call_response({:error, :idempotency_key_in_progress, replay?: _replay?}) do
+    {:error, -32074, "idempotency_key is already in progress", nil}
+  end
+
+  defp control_call_response({:error, error, replay?: replay?}) when is_map(error) do
+    {:ok, %{"is_error" => true, "error" => Map.put(error, "idempotency_replay", replay?)}}
+  end
+
+  defp control_call_response({:error, error, replay?: replay?}) do
+    {:ok,
+     %{
+       "is_error" => true,
+       "error" => %{"message" => inspect(error), "idempotency_replay" => replay?}
+     }}
+  end
+
+  defp policy_error(code, decision) do
+    %{
+      "code" => code,
+      "message" => Map.get(decision, "message", "Tool policy blocked this call."),
+      "policy_decision" => decision
+    }
+  end
+
+  defp tool_descriptor(%{
+         name: name,
+         description: description,
+         input_schema: input_schema,
+         annotations: annotations
+       }) do
+    %{
+      "name" => name,
+      "description" => description,
+      "inputSchema" => input_schema,
+      "annotations" => annotations
+    }
+  end
+
+  defp serialize_agent(agent) do
+    %{
+      "id" => agent.id,
+      "user_id" => agent.user_id,
+      "behavior" => agent.behavior,
+      "status" => agent.status,
+      "install_status" => agent.install_status,
+      "name" => get_in(agent.config || %{}, ["name"]),
+      "project_id" => agent.project_id,
+      "project_name" => project_name(agent),
+      "updated_at" => agent.updated_at && DateTime.to_iso8601(agent.updated_at)
+    }
+  end
+
+  defp project_name(%{project: %{name: name}}), do: name
+  defp project_name(_agent), do: nil
+
+  defp error_response(id, code, message, data) do
+    %{
+      "jsonrpc" => "2.0",
+      "id" => id,
+      "error" => compact(%{"code" => code, "message" => message, "data" => data})
+    }
+  end
+
+  defp payload_policy do
+    %{
+      max_bytes: @max_payload_bytes,
+      idempotency_required_for: ["write", "destructive", "external_send", "credential", "system"]
+    }
+  end
+
+  defp normalize(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp normalize(%Date{} = value), do: Date.to_iso8601(value)
+  defp normalize(%Time{} = value), do: Time.to_iso8601(value)
+  defp normalize(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp normalize(value) when is_struct(value), do: value |> Map.from_struct() |> normalize()
+  defp normalize(value) when is_list(value), do: Enum.map(value, &normalize/1)
+
+  defp normalize(value) when is_map(value) do
+    Map.new(value, fn {key, nested} -> {to_string(key), normalize(nested)} end)
+  end
+
+  defp normalize(value), do: value
+
+  defp read_string(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      nil -> nil
+      "" -> nil
+      value when is_binary(value) -> String.trim(value)
+      value -> to_string(value)
+    end
+  end
+
+  defp read_string(_map, _key), do: nil
+
+  defp read_list(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.uniq()
+
+      _other ->
+        []
+    end
+  end
+
+  defp read_list(_map, _key), do: []
+
+  defp read_list_if_present(map, key) when is_map(map) do
+    if Map.has_key?(map, key), do: read_list(map, key), else: nil
+  end
+
+  defp read_list_if_present(_map, _key), do: nil
+
+  defp read_integer(map, key) when is_map(map) do
+    case Map.get(map, key) do
+      value when is_integer(value) -> value
+      value when is_binary(value) -> value |> Integer.parse() |> integer_parse_result()
+      _ -> nil
+    end
+  end
+
+  defp read_integer(_map, _key), do: nil
+
+  defp integer_parse_result({value, ""}), do: value
+  defp integer_parse_result(_result), do: nil
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_value), do: false
+
+  defp compact(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp app_version do
+    Application.spec(:maraithon, :vsn)
+    |> to_string()
+  end
+end

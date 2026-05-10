@@ -65,6 +65,20 @@ defmodule Maraithon.Runtime.BackgroundJobs do
     enqueue("open_loop_check", attrs)
   end
 
+  def enqueue_user_scheduled_task(user_id, task_id, attrs \\ %{})
+      when is_binary(user_id) and is_binary(task_id) do
+    attrs = normalize_map(attrs)
+
+    attrs =
+      attrs
+      |> Map.put("user_id", user_id)
+      |> Map.put_new("queue", "scheduled_tasks")
+      |> Map.put("payload", Map.put(read_map(attrs, "payload"), "task_id", task_id))
+      |> Map.put_new("dedupe_key", user_scheduled_task_dedupe_key(user_id, task_id, attrs))
+
+    enqueue("user_scheduled_task", attrs)
+  end
+
   @doc """
   Enqueue the `relationship_ingestion` job that runs once a `Crm.Ingest.Window`
   has been guarded into `flushed` status. Idempotent on `window_id`.
@@ -222,7 +236,21 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   defp default_queue("relationship_backfill"), do: "relationships"
   defp default_queue("open_loop_check"), do: "open_loops"
   defp default_queue("insight_refresh"), do: "open_loops"
+  defp default_queue("user_scheduled_task"), do: "scheduled_tasks"
   defp default_queue(_job_type), do: "default"
+
+  defp user_scheduled_task_dedupe_key(user_id, task_id, attrs) do
+    scheduled_at =
+      attrs
+      |> normalize_map()
+      |> read_datetime("scheduled_at")
+      |> case do
+        %DateTime{} = datetime -> DateTime.to_iso8601(datetime)
+        _ -> "now"
+      end
+
+    "scheduled_task:#{user_id}:#{task_id}:#{scheduled_at}"
+  end
 
   defp dedupe_key(user_id, job_type, attrs) do
     attrs = normalize_map(attrs)

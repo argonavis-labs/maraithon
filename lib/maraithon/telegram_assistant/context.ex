@@ -20,6 +20,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.Repo
+  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
@@ -64,6 +65,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       todos: fetched.todos,
       briefing_schedule: fetched.briefing_schedule,
       connected_accounts: fetched.connected_accounts,
+      source_freshness: fetched.source_freshness,
       projects: fetched.projects,
       active_agents: fetched.active_agents,
       defaults: fetched.defaults,
@@ -88,6 +90,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       {:todos, fn -> serialize_todos(user_id) end},
       {:briefing_schedule, fn -> BriefingSchedules.summarize_for_prompt(user_id) end},
       {:connected_accounts, fn -> serialize_connected_accounts(user_id) end},
+      {:source_freshness, fn -> SourceFreshness.compact_for_prompt(user_id) end},
       {:projects, fn -> serialize_projects(user_id) end},
       {:active_agents, fn -> serialize_agents(user_id) end},
       {:defaults, fn -> tool_defaults(user_id) end}

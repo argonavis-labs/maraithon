@@ -1,0 +1,97 @@
+[
+  {
+    "id": "relationship_learning_001",
+    "category": "relationship_learning",
+    "summary": "Repeated human collaborator becomes a CRM person.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Breck", "evidence_count": 4},
+    "mock_output": {"decision": "upsert_person", "person_name": "Breck", "link_type": "collaborator"},
+    "expected": {
+      "output": {"decision": "upsert_person", "person_name": "Breck"},
+      "policy": {"surface": "agent_harness", "tool_name": "learn_relationship_context", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "relationship_learning_002",
+    "category": "relationship_learning",
+    "summary": "Machine-only sender is ignored.",
+    "input": {"user_id": "assistant-eval@example.com", "sender": "buildbot@example.com"},
+    "mock_output": {"decision": "ignore_machine_sender"},
+    "expected": {"output": {"decision": "ignore_machine_sender"}}
+  },
+  {
+    "id": "relationship_learning_003",
+    "category": "relationship_learning",
+    "summary": "Known person is linked to a new project only with explicit evidence.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Charlie", "project": "Atlas"},
+    "mock_output": {"decision": "link_person_project", "person_name": "Charlie", "project": "Atlas"},
+    "expected": {
+      "output": {"decision": "link_person_project", "project": "Atlas"},
+      "policy": {"surface": "agent_harness", "tool_name": "link_person_data", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "relationship_learning_004",
+    "category": "relationship_learning",
+    "summary": "One-off sales email does not create a person.",
+    "input": {"user_id": "assistant-eval@example.com", "sender": "sales@example.com"},
+    "mock_output": {"decision": "ignore_low_signal"},
+    "expected": {"output": {"decision": "ignore_low_signal"}}
+  },
+  {
+    "id": "relationship_learning_005",
+    "category": "relationship_learning",
+    "summary": "Correction to a person's role updates CRM context.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Dana", "correction": "Dana is the PM, not the designer."},
+    "mock_output": {"decision": "upsert_person", "person_name": "Dana", "role": "PM"},
+    "expected": {
+      "output": {"decision": "upsert_person", "role": "PM"},
+      "policy": {"surface": "agent_harness", "tool_name": "upsert_person", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "relationship_learning_006",
+    "category": "relationship_learning",
+    "summary": "Observed follow-up preference is written as memory, not guessed.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Lee", "evidence": "prefers Slack for urgent items"},
+    "mock_output": {"decision": "write_memory", "memory_kind": "relationship_preference"},
+    "expected": {
+      "output": {"decision": "write_memory", "memory_kind": "relationship_preference"},
+      "policy": {"surface": "agent_harness", "tool_name": "write_memory", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "relationship_learning_007",
+    "category": "relationship_learning",
+    "summary": "Alias evidence merges with existing person.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Alex / AJ"},
+    "mock_output": {"decision": "merge_alias", "person_name": "Alex"},
+    "expected": {"output": {"decision": "merge_alias", "person_name": "Alex"}}
+  },
+  {
+    "id": "relationship_learning_008",
+    "category": "relationship_learning",
+    "summary": "Insufficient evidence stays as a candidate.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Sam", "evidence_count": 1},
+    "mock_output": {"decision": "hold_candidate", "confidence": 0.48},
+    "expected": {"output": {"decision": "hold_candidate"}}
+  },
+  {
+    "id": "relationship_learning_009",
+    "category": "relationship_learning",
+    "summary": "Todo owner link is created when the email directly names responsibility.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Mina", "todo_id": "todo-009"},
+    "mock_output": {"decision": "link_person_todo", "person_name": "Mina", "todo_id": "todo-009"},
+    "expected": {
+      "output": {"decision": "link_person_todo", "todo_id": "todo-009"},
+      "policy": {"surface": "agent_harness", "tool_name": "link_person_data", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "relationship_learning_010",
+    "category": "relationship_learning",
+    "summary": "Conflicting relationship evidence is held.",
+    "input": {"user_id": "assistant-eval@example.com", "person_hint": "Jordan", "conflict": true},
+    "mock_output": {"decision": "hold_conflict"},
+    "expected": {"output": {"decision": "hold_conflict"}}
+  }
+]

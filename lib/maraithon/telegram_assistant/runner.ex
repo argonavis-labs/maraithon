@@ -4,10 +4,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
   """
 
   alias Maraithon.AssistantHarness
+  alias Maraithon.ActionLedger
+  alias Maraithon.ContextEngine
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Context, Run, TodoActions, Toolbox}
+  alias Maraithon.TelegramAssistant.{Run, TodoActions, Toolbox}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
@@ -17,7 +19,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   require Logger
 
   def run_inbound(attrs) when is_map(attrs) do
-    context = Context.build(attrs)
+    context = ContextEngine.build_context(attrs)
     conversation = Map.get(attrs, :conversation)
 
     case start_run(attrs, context) do
@@ -115,7 +117,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       status: "running",
       model_provider: TelegramAssistant.model_provider_name(),
       model_name: TelegramAssistant.model_name(),
-      prompt_snapshot: Context.prompt_snapshot(context),
+      prompt_snapshot: ContextEngine.prompt_snapshot(context),
       result_summary: %{},
       started_at: DateTime.utc_now()
     })
@@ -142,7 +144,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       :ok ->
         request_payload =
           runtime_context
-          |> Map.put(:tools, Toolbox.tool_definitions(runtime_context.context))
+          |> Map.put(:tools, ContextEngine.tool_catalog(runtime_context.context))
           |> AssistantHarness.build_loop_request_payload(state, runner_policy_opts())
           |> Map.put(:_stream_target, runtime_context.run_id)
 
@@ -356,6 +358,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
       TelegramAssistant.prepare_final_delivery(run.id)
 
+    _ = maybe_record_loop_failure(run, reason, state)
+
     summary =
       build_result_summary(
         "system_notice",
@@ -395,6 +399,36 @@ defmodule Maraithon.TelegramAssistant.Runner do
         :ok
     end
   end
+
+  defp maybe_record_loop_failure(
+         run,
+         {:assistant_harness_tool_loop_detected, tool, count, class, loop},
+         state
+       ) do
+    ActionLedger.record(%{
+      user_id: run.user_id,
+      surface: "telegram",
+      event_type: "model.uncertainty",
+      status: "failed",
+      source_evidence: %{
+        tool_history_length: length(state.tool_history || []),
+        latest_tool: tool
+      },
+      model_summary: "Assistant tool loop stopped before repeating work.",
+      remediation_hint: "Ask a narrower question or inspect the source/tool result manually.",
+      metadata: %{
+        run_id: run.id,
+        tool_name: tool,
+        loop_class: class,
+        repeat_count: count,
+        loop: normalize_payload(loop)
+      }
+    })
+  rescue
+    _error -> :ok
+  end
+
+  defp maybe_record_loop_failure(_run, _reason, _state), do: :ok
 
   defp record_llm_response(run, sequence, response) do
     now = DateTime.utc_now()
@@ -915,7 +949,14 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp execute_tool_action(tool_name, payload, success_message) do
-    case Tools.execute(tool_name, payload) do
+    policy_context = %{
+      surface: "telegram",
+      user_id: Map.get(payload, "user_id") || Map.get(payload, :user_id),
+      confirmed?: true,
+      confirmation_state: "confirmed"
+    }
+
+    case Tools.execute(tool_name, payload, policy_context) do
       {:ok, result} ->
         {:ok,
          result |> normalize_payload() |> ensure_map() |> Map.put("message", success_message)}

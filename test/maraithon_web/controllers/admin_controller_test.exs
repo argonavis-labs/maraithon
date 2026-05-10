@@ -5,6 +5,7 @@ defmodule MaraithonWeb.AdminControllerTest do
   alias Maraithon.AgentSubscriptions
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
+  alias Maraithon.ActionLedger
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Effects.Effect
   alias Maraithon.Events
@@ -71,6 +72,43 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert Map.has_key?(response, "total_spend")
       assert Enum.any?(response["recent_activity"], &(&1["event_type"] == "dashboard_event"))
       assert Enum.any?(response["recent_logs"], &(&1["message"] == "dashboard log entry"))
+    end
+  end
+
+  describe "POST /api/v1/admin/diagnostics/export" do
+    test "generates a redacted diagnostics bundle and ledgers the export", %{conn: conn} do
+      user_id = "diagnostics-admin-#{System.unique_integer([:positive])}@example.com"
+
+      output_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "maraithon-diagnostics-#{System.unique_integer([:positive])}"
+        )
+
+      on_exit(fn -> File.rm_rf(output_dir) end)
+
+      conn =
+        post(conn, "/api/v1/admin/diagnostics/export", %{
+          "user_id" => user_id,
+          "limit" => "5",
+          "output_dir" => output_dir
+        })
+
+      response = json_response(conn, 200)
+
+      assert response["output_dir"] == output_dir
+      assert "manifest.json" in response["files"]
+      assert "trust_metrics.json" in response["files"]
+      assert File.exists?(Path.join(output_dir, "redaction_manifest.json"))
+
+      assert [action | _] =
+               ActionLedger.list_recent(user_id,
+                 event_type: "external_action.changed",
+                 limit: 5
+               )
+
+      assert action.surface == "admin_api"
+      assert action.metadata["file_count"] == length(response["files"])
     end
   end
 

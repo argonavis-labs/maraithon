@@ -712,21 +712,25 @@ defmodule Maraithon.TelegramRouter do
           get_in(metadata || %{}, ["default_team_id"]) || get_in(metadata || %{}, ["team_id"])
 
         if is_binary(team_id) and String.trim(team_id) != "" do
-          Maraithon.Tools.execute("linear_create_issue", %{
-            "user_id" => delivery.user_id,
-            "team_id" => team_id,
-            "title" => delivery.insight.title,
-            "description" =>
-              Enum.join(
-                [
-                  delivery.insight.summary,
-                  "",
-                  "Recommended action:",
-                  delivery.insight.recommended_action
-                ],
-                "\n"
-              )
-          })
+          Maraithon.Tools.execute(
+            "linear_create_issue",
+            %{
+              "user_id" => delivery.user_id,
+              "team_id" => team_id,
+              "title" => delivery.insight.title,
+              "description" =>
+                Enum.join(
+                  [
+                    delivery.insight.summary,
+                    "",
+                    "Recommended action:",
+                    delivery.insight.recommended_action
+                  ],
+                  "\n"
+                )
+            },
+            %{surface: "telegram", user_id: delivery.user_id, confirmed?: true}
+          )
         else
           {:error, "linear_default_team_missing"}
         end

@@ -25,6 +25,23 @@ defmodule Maraithon.LocalMessagesTest do
     )
   end
 
+  defp messages_for(user_id, device_id) do
+    Repo.all(
+      from message in LocalMessage,
+        where: message.user_id == ^user_id and message.device_id == ^device_id
+    )
+  end
+
+  defp message_count(user_id, device_id) do
+    Repo.aggregate(
+      from(message in LocalMessage,
+        where: message.user_id == ^user_id and message.device_id == ^device_id
+      ),
+      :count,
+      :id
+    )
+  end
+
   describe "ingest_batch/3" do
     test "inserts a fresh batch and reports accepted counts" do
       user_id = "ingest-#{System.unique_integer([:positive])}@example.com"
@@ -38,7 +55,7 @@ defmodule Maraithon.LocalMessagesTest do
       {:ok, %{accepted: 3, duplicate: 0}} =
         LocalMessages.ingest_batch(user_id, device_id, messages)
 
-      stored = Repo.all(LocalMessage)
+      stored = messages_for(user_id, device_id)
       assert length(stored) == 3
       assert Enum.all?(stored, &(&1.user_id == user_id))
       assert Enum.all?(stored, &(&1.device_id == device_id))
@@ -57,7 +74,7 @@ defmodule Maraithon.LocalMessagesTest do
       {:ok, %{accepted: 0, duplicate: 2}} =
         LocalMessages.ingest_batch(user_id, device_id, messages)
 
-      assert Repo.aggregate(LocalMessage, :count, :id) == 2
+      assert message_count(user_id, device_id) == 2
     end
 
     test "derives chat_key from chat_handles when not provided" do
@@ -69,7 +86,7 @@ defmodule Maraithon.LocalMessagesTest do
           sample_message("guid-1", %{"chat_handles" => ["+14165550199", "+14165550111"]})
         ])
 
-      [stored] = Repo.all(LocalMessage)
+      [stored] = messages_for(user_id, device_id)
       assert stored.chat_key == "+14165550111,+14165550199"
     end
   end
@@ -85,11 +102,11 @@ defmodule Maraithon.LocalMessagesTest do
           sample_message("guid-2")
         ])
 
-      assert Repo.aggregate(LocalMessage, :count, :id) == 2
+      assert message_count(user_id, device_id) == 2
 
       {:ok, %{deleted: 2}} = LocalMessages.purge_device(user_id, device_id)
 
-      assert Repo.aggregate(LocalMessage, :count, :id) == 0
+      assert message_count(user_id, device_id) == 0
     end
   end
 

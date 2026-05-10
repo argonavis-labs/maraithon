@@ -59,9 +59,8 @@ defmodule MaraithonWeb.McpController do
   defp dispatch("tools/call", %{"name" => name} = params) when is_binary(name) do
     arguments = Map.get(params, "arguments", %{})
 
-    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil},
-         {:ok, module} <- Tools.fetch(name) do
-      case module.execute(arguments) do
+    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil} do
+      case Tools.execute(name, arguments, %{surface: "mcp"}) do
         {:ok, result} ->
           normalized = normalize(result)
 
@@ -74,6 +73,14 @@ defmodule MaraithonWeb.McpController do
              "isError" => false
            }}
 
+        {:error, {:tool_policy_denied, decision}} ->
+          {:error, -32070, Map.get(decision, "message", "Tool call denied"),
+           %{"policy_decision" => decision}}
+
+        {:error, {:tool_policy_needs_confirmation, decision}} ->
+          {:error, -32071, Map.get(decision, "message", "Tool call requires confirmation"),
+           %{"policy_decision" => decision}}
+
         {:error, reason} ->
           {:ok,
            %{
@@ -83,7 +90,6 @@ defmodule MaraithonWeb.McpController do
       end
     else
       {:error, code, message, data} -> {:error, code, message, data}
-      {:error, reason} -> {:error, -32602, reason, nil}
     end
   end
 
@@ -142,6 +148,11 @@ defmodule MaraithonWeb.McpController do
   defp normalize(value), do: value
 
   defp error_text(reason) when is_binary(reason), do: reason
+  defp error_text({:tool_policy_denied, decision}), do: Map.get(decision, "message", "Denied")
+
+  defp error_text({:tool_policy_needs_confirmation, decision}),
+    do: Map.get(decision, "message", "Confirmation required")
+
   defp error_text(reason), do: inspect(reason)
 
   defp encode_tool_text(result, params) do

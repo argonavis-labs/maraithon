@@ -2,7 +2,9 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.ActionLedger
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
@@ -113,6 +115,38 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert get_in(result, [:source_health, :gmail, :recommended_next_step]) =~
              "Use gmail_search_messages"
+  end
+
+  test "explain_action_ledger returns redacted why path and source freshness" do
+    user_id = "toolbox-explain-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "12345"})
+
+    {:ok, action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "proactive.sent",
+        status: "sent",
+        source_evidence: %{"dedupe_key" => "why:123", "authorization" => "Bearer secret12345"},
+        model_summary: "The todo was due today.",
+        result_object_refs: %{"dedupe_key" => "why:123"}
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "explain_action_ledger",
+               %{"action_id" => action.id},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.explanation.id == action.id
+    assert result.explanation.model_summary == "The todo was due today."
+    assert result.message =~ "The todo was due today."
+    assert [%{provider: "telegram", status: "fresh"}] = result.source_freshness
+    assert result.explanation.source_evidence["authorization"] == "<redacted>"
   end
 
   test "todo tools can persist, search, and resolve durable work" do

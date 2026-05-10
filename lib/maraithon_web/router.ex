@@ -117,7 +117,9 @@ defmodule MaraithonWeb.Router do
     post "/agents/:id/stop", AgentController, :stop
     get "/agents/:id/events", AgentController, :events
     get "/agents/:id/spend", AgentController, :spend
+    post "/control", ControlController, :handle
     get "/admin/dashboard", AdminController, :dashboard
+    post "/admin/diagnostics/export", AdminController, :diagnostics_export
     get "/admin/agents/:id/inspection", AdminController, :agent_inspection
     get "/admin/fly/logs", AdminController, :fly_logs
     get "/admin/connections", AdminController, :connections

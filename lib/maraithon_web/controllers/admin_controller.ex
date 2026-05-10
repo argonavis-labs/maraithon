@@ -6,10 +6,12 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Admin
   alias Maraithon.AgentSubscriptions
   alias Maraithon.Agents
+  alias Maraithon.ActionLedger
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
+  alias Maraithon.Diagnostics.Export, as: DiagnosticsExport
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Insights.Insight
@@ -41,6 +43,32 @@ defmodule MaraithonWeb.AdminController do
         end
 
       json(conn, serialize_dashboard_snapshot(snapshot))
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
+  def diagnostics_export(conn, params) do
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 100, "limit") do
+      user_id = blank_to_nil(params["user_id"])
+
+      opts =
+        [user_id: user_id, limit: limit]
+        |> maybe_put_output_dir(blank_to_nil(params["output_dir"]))
+
+      case DiagnosticsExport.run(opts) do
+        {:ok, result} ->
+          _ = record_diagnostics_export(user_id, result)
+          json(conn, result)
+
+        {:error, reason} ->
+          conn
+          |> put_status(:bad_gateway)
+          |> json(%{error: "diagnostics_export_failed", message: inspect(reason)})
+      end
     else
       {:error, message} ->
         conn
@@ -543,6 +571,26 @@ defmodule MaraithonWeb.AdminController do
       "" -> Connections.default_user_id()
       trimmed -> trimmed
     end
+  end
+
+  defp maybe_put_output_dir(opts, nil), do: opts
+  defp maybe_put_output_dir(opts, output_dir), do: Keyword.put(opts, :output_dir, output_dir)
+
+  defp record_diagnostics_export(user_id, result) do
+    ActionLedger.record(%{
+      user_id: user_id,
+      surface: "admin_api",
+      event_type: "external_action.changed",
+      status: "completed",
+      model_summary: "Admin diagnostics export generated.",
+      result_object_refs: %{"diagnostics_output_dir" => result.output_dir},
+      metadata: %{
+        file_count: length(result.files || []),
+        generated_at: result.generated_at
+      }
+    })
+  rescue
+    _error -> :ok
   end
 
   defp blank_to_nil(nil), do: nil

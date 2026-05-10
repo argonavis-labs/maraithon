@@ -39,6 +39,11 @@ defmodule Maraithon.Redaction do
     authorization
     cookie
     bearer
+    promptsnapshot
+    rawprompt
+    systemprompt
+    webhookbody
+    tooloutput
   )
 
   @scanners [

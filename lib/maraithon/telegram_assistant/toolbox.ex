@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Admin
   alias Maraithon.AgentBuilder
   alias Maraithon.Agents
+  alias Maraithon.ActionLedger
   alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
@@ -20,10 +21,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.Runtime
+  alias Maraithon.ScheduledTasks
+  alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
+  alias Maraithon.ToolPolicy
   alias Maraithon.Tools
   alias Maraithon.UserMemory
 
@@ -60,6 +64,26 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     }
   }
 
+  @toolbox_read_tools MapSet.new(~w(
+    get_open_work_summary get_open_loops inspect_open_insight list_preferences
+    list_memories recall_memory list_todos list_people get_person get_relationship_context
+    review_connected_context gmail_search_messages gmail_get_message calendar_list_events
+    slack_search_messages slack_get_thread_context linear_list_or_lookup notaui_list_tasks
+    list_projects inspect_project list_implementation_runs list_agents inspect_agent
+    list_scheduled_tasks
+    explain_action_ledger
+  ))
+
+  @toolbox_write_tools MapSet.new(~w(
+    update_briefing_schedule remember_preferences forget_preference write_memory
+    record_memory_feedback forget_memory upsert_todos resolve_todo upsert_person
+    link_person_data learn_relationship_context delete_person update_project_scope
+    decide_project_recommendation grant_project_repo_access start_implementation_run
+    update_implementation_run prepare_project_action prepare_agent_action
+    prepare_external_action query_agent create_scheduled_task pause_scheduled_task
+    cancel_scheduled_task
+  ))
+
   def tool_definitions(_context) do
     [
       tool_definition(
@@ -94,6 +118,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "explain_action_ledger",
+        "Explain a recent Maraithon action from the redacted action ledger.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "action_id" => %{"type" => "string"},
+            "object_type" => %{"type" => "string"},
+            "object_id" => %{"type" => "string"},
+            "event_type" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
         "update_briefing_schedule",
         "Update the user's recurring briefing schedule in local time.",
         %{
@@ -110,6 +147,56 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             },
             "agent_id" => %{"type" => "string"}
           }
+        }
+      ),
+      tool_definition(
+        "list_scheduled_tasks",
+        "List the linked user's scheduled tasks.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "status" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "create_scheduled_task",
+        "Create a user-facing scheduled task from a Telegram turn.",
+        %{
+          "type" => "object",
+          "required" => ["title"],
+          "properties" => %{
+            "title" => %{"type" => "string"},
+            "description" => %{"type" => "string"},
+            "once_at" => %{"type" => "string"},
+            "daily_at" => %{"type" => "string"},
+            "weekly_day" => %{"type" => "string"},
+            "weekly_at" => %{"type" => "string"},
+            "schedule" => %{"type" => "object"},
+            "prompt" => %{"type" => "string"},
+            "command" => %{"type" => "object"},
+            "failure_destination" => %{"type" => "object"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "pause_scheduled_task",
+        "Pause one linked user's scheduled task.",
+        %{
+          "type" => "object",
+          "required" => ["task_id"],
+          "properties" => %{"task_id" => %{"type" => "string"}}
+        }
+      ),
+      tool_definition(
+        "cancel_scheduled_task",
+        "Cancel one linked user's scheduled task.",
+        %{
+          "type" => "object",
+          "required" => ["task_id"],
+          "properties" => %{"task_id" => %{"type" => "string"}}
         }
       ),
       tool_definition(
@@ -772,6 +859,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   def execute(tool_name, args, runtime_context)
       when is_binary(tool_name) and is_map(args) and is_map(runtime_context) do
+    policy_context = toolbox_policy_context(tool_name, args, runtime_context)
+
+    ToolPolicy.enforce(policy_context, fn ->
+      do_execute(tool_name, args, runtime_context)
+    end)
+  end
+
+  defp do_execute(tool_name, args, runtime_context) do
     case tool_name do
       "get_open_work_summary" ->
         get_open_work_summary(runtime_context, args)
@@ -782,8 +877,23 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "inspect_open_insight" ->
         inspect_open_insight(runtime_context, args)
 
+      "explain_action_ledger" ->
+        explain_action_ledger(runtime_context, args)
+
       "update_briefing_schedule" ->
         update_briefing_schedule(runtime_context, args)
+
+      "list_scheduled_tasks" ->
+        list_scheduled_tasks(runtime_context, args)
+
+      "create_scheduled_task" ->
+        create_scheduled_task(runtime_context, args)
+
+      "pause_scheduled_task" ->
+        pause_scheduled_task(runtime_context, args)
+
+      "cancel_scheduled_task" ->
+        cancel_scheduled_task(runtime_context, args)
 
       "list_preferences" ->
         list_preferences(runtime_context)
@@ -910,6 +1020,63 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp toolbox_policy_context(tool_name, args, runtime_context) do
+    %{
+      surface: "telegram",
+      tool_name: tool_name,
+      arguments: args,
+      user_id: Map.get(runtime_context, :user_id) || Map.get(runtime_context, "user_id"),
+      agent_id: Map.get(runtime_context, :agent_id) || Map.get(runtime_context, "agent_id"),
+      source_context: %{
+        run_id: Map.get(runtime_context, :run_id),
+        conversation_id: Map.get(runtime_context, :conversation_id),
+        chat_id: Map.get(runtime_context, :chat_id)
+      },
+      tool_metadata: toolbox_policy_metadata(tool_name)
+    }
+  end
+
+  defp toolbox_policy_metadata(tool_name) do
+    cond do
+      MapSet.member?(@toolbox_read_tools, tool_name) ->
+        %{
+          side_effect: "read",
+          read_only?: true,
+          destructive?: false,
+          idempotent?: true,
+          user_required?: true,
+          confirmation_required?: false
+        }
+
+      MapSet.member?(@toolbox_write_tools, tool_name) ->
+        %{
+          side_effect: toolbox_side_effect(tool_name),
+          read_only?: false,
+          destructive?: false,
+          idempotent?: toolbox_idempotent?(tool_name),
+          user_required?: true,
+          confirmation_required?: false
+        }
+
+      true ->
+        Tools.policy_metadata_for(tool_name)
+    end
+  end
+
+  defp toolbox_side_effect(tool_name) when tool_name in ["query_agent", "prepare_agent_action"],
+    do: "system"
+
+  defp toolbox_side_effect(_tool_name), do: "write"
+
+  defp toolbox_idempotent?(tool_name) do
+    tool_name in ~w(
+      update_briefing_schedule remember_preferences write_memory record_memory_feedback
+      upsert_todos resolve_todo upsert_person link_person_data learn_relationship_context
+      update_project_scope decide_project_recommendation update_implementation_run
+      create_scheduled_task pause_scheduled_task cancel_scheduled_task
+    )
+  end
+
   defp get_open_work_summary(runtime_context, args) do
     user_id = runtime_context.user_id
     limit = normalize_limit(Map.get(args, "limit"), 5, 10)
@@ -1028,6 +1195,43 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       {:error, reason} ->
         {:error, normalize_error(reason)}
+    end
+  end
+
+  defp list_scheduled_tasks(runtime_context, args) do
+    limit = normalize_limit(Map.get(args, "limit"), 20, 50)
+
+    tasks =
+      ScheduledTasks.list_tasks(runtime_context.user_id,
+        status: Map.get(args, "status"),
+        limit: limit
+      )
+
+    {:ok,
+     %{
+       count: length(tasks),
+       tasks: Enum.map(tasks, &ScheduledTasks.serialize_task/1)
+     }}
+  end
+
+  defp create_scheduled_task(runtime_context, args) do
+    case ScheduledTasks.create_from_telegram(runtime_context.user_id, args) do
+      {:ok, task} -> {:ok, %{task: ScheduledTasks.serialize_task(task)}}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp pause_scheduled_task(runtime_context, args) do
+    case ScheduledTasks.pause_task(runtime_context.user_id, Map.get(args, "task_id")) do
+      {:ok, task} -> {:ok, %{task: ScheduledTasks.serialize_task(task)}}
+      {:error, reason} -> {:error, normalize_error(reason)}
+    end
+  end
+
+  defp cancel_scheduled_task(runtime_context, args) do
+    case ScheduledTasks.cancel_task(runtime_context.user_id, Map.get(args, "task_id")) do
+      {:ok, task} -> {:ok, %{task: ScheduledTasks.serialize_task(task)}}
+      {:error, reason} -> {:error, normalize_error(reason)}
     end
   end
 
@@ -1454,13 +1658,95 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp explain_action_ledger(runtime_context, args) do
+    user_id = runtime_context.user_id
+
+    case resolve_action_explanation(user_id, args) do
+      {:ok, explanation} ->
+        freshness = SourceFreshness.compact_for_prompt(user_id)
+
+        {:ok,
+         %{
+           explanation: explanation,
+           source_freshness: freshness,
+           message: action_explanation_message(explanation, freshness)
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp resolve_action_explanation(user_id, args) do
+    action_id = optional_string(args, "action_id")
+    object_type = optional_string(args, "object_type")
+    object_id = optional_string(args, "object_id")
+    event_type = optional_string(args, "event_type")
+
+    cond do
+      action_id ->
+        ActionLedger.explain(user_id, action_id)
+
+      object_type && object_id ->
+        user_id
+        |> ActionLedger.find_by_object(object_type, object_id)
+        |> maybe_filter_action_event_type(event_type)
+        |> explain_first_action()
+
+      event_type ->
+        user_id
+        |> ActionLedger.list_recent(event_type: event_type, limit: 1)
+        |> explain_first_action()
+
+      true ->
+        user_id
+        |> ActionLedger.list_recent(limit: 1)
+        |> explain_first_action()
+    end
+  end
+
+  defp maybe_filter_action_event_type(actions, nil), do: actions
+
+  defp maybe_filter_action_event_type(actions, event_type),
+    do: Enum.filter(actions, &(&1.event_type == event_type))
+
+  defp explain_first_action([action | _actions]), do: {:ok, ActionLedger.explain_action(action)}
+  defp explain_first_action([]), do: {:error, "action_not_found"}
+
+  defp action_explanation_message(explanation, freshness) do
+    summary =
+      explanation.model_summary ||
+        explanation.message ||
+        "I found the ledger entry, but it did not include a model summary."
+
+    stale =
+      freshness
+      |> Enum.filter(&(&1.status in ["stale", "reauth_required", "error", "unknown"]))
+      |> Enum.map_join(", ", fn source -> "#{source.provider}: #{source.status}" end)
+
+    basis =
+      case explanation.reason_code do
+        nil -> "No policy reason was recorded."
+        reason -> "Policy reason: #{reason}."
+      end
+
+    freshness_line =
+      if stale == "" do
+        "Sources were not marked stale in the current freshness snapshot."
+      else
+        "Source freshness issues: #{stale}."
+      end
+
+    "#{summary} #{basis} #{freshness_line}"
+  end
+
   defp slack_search(runtime_context, args) do
     args =
       args
       |> Map.put("user_id", runtime_context.user_id)
       |> maybe_put_default("team_id", runtime_context.default_slack_team_id)
 
-    Tools.execute("slack_search_messages", args)
+    Tools.execute("slack_search_messages", args, checked_tool_context(runtime_context))
   end
 
   defp slack_thread_context(runtime_context, args) do
@@ -1469,7 +1755,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       |> Map.put("user_id", runtime_context.user_id)
       |> maybe_put_default("team_id", runtime_context.default_slack_team_id)
 
-    Tools.execute("slack_get_thread_replies", args)
+    Tools.execute("slack_get_thread_replies", args, checked_tool_context(runtime_context))
   end
 
   defp linear_list_or_lookup(runtime_context, args) do
@@ -1910,8 +2196,20 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp inject_user_and_execute(tool_name, runtime_context, args) do
     tool_name
-    |> Tools.execute(Map.put(args, "user_id", runtime_context.user_id))
+    |> Tools.execute(
+      Map.put(args, "user_id", runtime_context.user_id),
+      checked_tool_context(runtime_context)
+    )
     |> normalize_tool_result()
+  end
+
+  defp checked_tool_context(runtime_context) do
+    %{
+      surface: "telegram",
+      user_id: runtime_context.user_id,
+      agent_id: Map.get(runtime_context, :agent_id),
+      policy_checked?: true
+    }
   end
 
   defp normalize_tool_result({:ok, result}), do: {:ok, result}
@@ -2470,6 +2768,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     case Map.get(args, key) do
       value when is_binary(value) and value != "" -> {:ok, value}
       _ -> {:error, "missing_#{key}"}
+    end
+  end
+
+  defp optional_string(args, key) do
+    case Map.get(args, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
     end
   end
 

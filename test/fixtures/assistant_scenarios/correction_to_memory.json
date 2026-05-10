@@ -1,0 +1,94 @@
+[
+  {
+    "id": "correction_to_memory_001",
+    "category": "correction_to_memory",
+    "summary": "User correction becomes durable memory.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "Charlie is my lawyer, not my accountant."},
+    "mock_output": {"decision": "write_memory", "memory_kind": "correction", "subject": "Charlie"},
+    "expected": {
+      "output": {"decision": "write_memory", "memory_kind": "correction"},
+      "policy": {"surface": "telegram", "tool_name": "write_memory", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "correction_to_memory_002",
+    "category": "correction_to_memory",
+    "summary": "Preference correction updates operator memory.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "Do not remind me about newsletters."},
+    "mock_output": {"decision": "remember_preference", "preference": "ignore newsletters"},
+    "expected": {"output": {"decision": "remember_preference"}}
+  },
+  {
+    "id": "correction_to_memory_003",
+    "category": "correction_to_memory",
+    "summary": "Bad inferred todo is dismissed with feedback.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_id": "todo-003", "correction": "That is not my task."},
+    "mock_output": {"decision": "dismiss_todo", "todo_id": "todo-003"},
+    "expected": {
+      "output": {"decision": "dismiss_todo", "todo_id": "todo-003"},
+      "policy": {"surface": "telegram", "tool_name": "resolve_todo", "user_id": "assistant-eval@example.com", "expected_status": "needs_confirmation"}
+    }
+  },
+  {
+    "id": "correction_to_memory_004",
+    "category": "correction_to_memory",
+    "summary": "Wrong project scope is corrected.",
+    "input": {"user_id": "assistant-eval@example.com", "project": "Renovation", "correction": "This is home, not work."},
+    "mock_output": {"decision": "update_project_scope", "life_domain": "home"},
+    "expected": {"output": {"decision": "update_project_scope", "life_domain": "home"}}
+  },
+  {
+    "id": "correction_to_memory_005",
+    "category": "correction_to_memory",
+    "summary": "Misidentified sender is corrected in CRM.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "The Alex from Slack is not the Alex from Gmail."},
+    "mock_output": {"decision": "split_identity", "subject": "Alex"},
+    "expected": {"output": {"decision": "split_identity", "subject": "Alex"}}
+  },
+  {
+    "id": "correction_to_memory_006",
+    "category": "correction_to_memory",
+    "summary": "User says a source is stale; source basis is disclosed.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "That email is old."},
+    "mock_output": {"decision": "acknowledge_stale_source", "source_status": "stale"},
+    "expected": {"output": {"decision": "acknowledge_stale_source", "source_status": "stale"}}
+  },
+  {
+    "id": "correction_to_memory_007",
+    "category": "correction_to_memory",
+    "summary": "False positive relationship inference is rejected.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "Do not save that relationship."},
+    "mock_output": {"decision": "reject_relationship_candidate"},
+    "expected": {"output": {"decision": "reject_relationship_candidate"}}
+  },
+  {
+    "id": "correction_to_memory_008",
+    "category": "correction_to_memory",
+    "summary": "Priority correction updates todo metadata.",
+    "input": {"user_id": "assistant-eval@example.com", "todo_id": "todo-008", "correction": "This can wait until next week."},
+    "mock_output": {"decision": "update_todo", "urgency": "low"},
+    "expected": {
+      "output": {"decision": "update_todo", "urgency": "low"},
+      "policy": {"surface": "telegram", "tool_name": "upsert_todos", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "correction_to_memory_009",
+    "category": "correction_to_memory",
+    "summary": "User feedback records memory relevance.",
+    "input": {"user_id": "assistant-eval@example.com", "feedback": "That memory was relevant."},
+    "mock_output": {"decision": "record_memory_feedback", "feedback": "relevant"},
+    "expected": {
+      "output": {"decision": "record_memory_feedback", "feedback": "relevant"},
+      "policy": {"surface": "telegram", "tool_name": "record_memory_feedback", "user_id": "assistant-eval@example.com", "expected_status": "allow"}
+    }
+  },
+  {
+    "id": "correction_to_memory_010",
+    "category": "correction_to_memory",
+    "summary": "Ambiguous correction asks for clarification.",
+    "input": {"user_id": "assistant-eval@example.com", "correction": "No, not that one."},
+    "mock_output": {"decision": "ask_clarification"},
+    "expected": {"output": {"decision": "ask_clarification"}}
+  }
+]
