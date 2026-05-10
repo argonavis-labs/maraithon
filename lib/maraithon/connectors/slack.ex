@@ -154,6 +154,8 @@ defmodule Maraithon.Connectors.Slack do
 
       normalized = Connector.build_event(event_type, "slack", data, params)
 
+      _ = ingest_slack_message(team_id, event, event_type)
+
       Logger.info("Slack message received",
         team_id: team_id,
         channel: channel,
@@ -163,6 +165,97 @@ defmodule Maraithon.Connectors.Slack do
       {:ok, topic, normalized}
     end
   end
+
+  defp ingest_slack_message(team_id, event, event_type) when is_binary(team_id) do
+    if event_type == "message" do
+      case Maraithon.ConnectedAccounts.get_connected_by_external_account("slack", team_id) do
+        %{user_id: user_id, external_account_id: account_id} ->
+          maybe_observe_slack_message(user_id, account_id || team_id, event)
+
+        _ ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp ingest_slack_message(_team_id, _event, _event_type), do: :ok
+
+  defp maybe_observe_slack_message(user_id, source_account, event) do
+    sender_id = event["user"]
+    ts = event["ts"]
+
+    cond do
+      not is_binary(sender_id) or sender_id == "" ->
+        :ok
+
+      not is_binary(ts) or ts == "" ->
+        :ok
+
+      true ->
+        occurred_at = parse_slack_ts(ts)
+
+        participant = %{
+          "role" => "from",
+          "identifier" => %{"slack_id" => sender_id},
+          "display_name" => nil
+        }
+
+        changeset =
+          Maraithon.Crm.Observation.new(%{
+            "user_id" => user_id,
+            "source" => "slack",
+            "source_account" => source_account,
+            "source_item_id" => "#{event["channel"]}:#{ts}",
+            "occurred_at" => occurred_at,
+            "direction" => "inbound",
+            "participants" => [participant],
+            "subject" => nil,
+            "excerpt" => clip_text(event["text"]),
+            "metadata" => %{
+              "team_id" => event["team"] || nil,
+              "channel" => event["channel"],
+              "thread_ts" => event["thread_ts"]
+            }
+          })
+
+        case Maraithon.Crm.Ingest.observe(user_id, changeset) do
+          {:ok, _} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("CRM ingest skipped a Slack message",
+              user_id: user_id,
+              ts: ts,
+              reason: inspect(reason)
+            )
+        end
+    end
+  end
+
+  defp parse_slack_ts(ts) when is_binary(ts) do
+    case Float.parse(ts) do
+      {seconds, _} ->
+        microseconds = round(seconds * 1_000_000)
+        DateTime.from_unix!(microseconds, :microsecond)
+
+      :error ->
+        DateTime.utc_now()
+    end
+  end
+
+  defp parse_slack_ts(_), do: DateTime.utc_now()
+
+  defp clip_text(nil), do: nil
+
+  defp clip_text(text) when is_binary(text) do
+    text
+    |> String.trim()
+    |> String.slice(0, 2_000)
+  end
+
+  defp clip_text(_), do: nil
 
   defp handle_app_mention(team_id, event, params) do
     channel = event["channel"]

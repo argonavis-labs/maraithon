@@ -34,6 +34,8 @@ defmodule Maraithon.Connectors.Gmail do
 
   @behaviour Maraithon.Connectors.Connector
 
+  alias Maraithon.Crm.Ingest
+  alias Maraithon.Crm.Observation
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Connectors.Connector
@@ -119,6 +121,8 @@ defmodule Maraithon.Connectors.Gmail do
         # Fetch the actual email changes
         case sync_mail_changes(user_id, history_id) do
           {:ok, messages} ->
+            ingest_messages(user_id, messages)
+
             event =
               Connector.build_event("email_sync", "gmail", %{
                 user_id: user_id,
@@ -687,5 +691,131 @@ defmodule Maraithon.Connectors.Gmail do
   defp api_base_url do
     Application.get_env(:maraithon, :gmail, [])
     |> Keyword.get(:api_base_url, @default_api_base)
+  end
+
+  # ===========================================================================
+  # CRM ingestion
+  # ===========================================================================
+
+  defp ingest_messages(user_id, messages) when is_list(messages) do
+    user_email = String.downcase(user_id)
+
+    Enum.each(messages, fn message ->
+      case to_observation(message, user_id, user_email) do
+        {:ok, changeset} ->
+          case Ingest.observe(user_id, changeset) do
+            {:ok, _} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("CRM ingest skipped a Gmail message",
+                user_id: user_id,
+                source_item_id: message[:message_id],
+                reason: inspect(reason)
+              )
+          end
+
+        :skip ->
+          :ok
+      end
+    end)
+  end
+
+  defp ingest_messages(_user_id, _messages), do: :ok
+
+  defp to_observation(message, user_id, user_email) when is_map(message) do
+    case Map.get(message, :message_id) || Map.get(message, "message_id") do
+      nil ->
+        :skip
+
+      message_id ->
+        from_value = Map.get(message, :from) || Map.get(message, "from")
+        to_value = Map.get(message, :to) || Map.get(message, "to")
+        cc_value = Map.get(message, :cc) || Map.get(message, "cc")
+
+        from_participants = parse_address_list(from_value, :from)
+        to_participants = parse_address_list(to_value, :to)
+        cc_participants = parse_address_list(cc_value, :cc)
+
+        participants =
+          (from_participants ++ to_participants ++ cc_participants)
+          |> Enum.uniq_by(& &1["identifier"])
+
+        if participants == [] do
+          :skip
+        else
+          direction = direction_for(participants, user_email)
+          occurred_at = Map.get(message, :internal_date) || Map.get(message, "internal_date") || DateTime.utc_now()
+
+          {:ok,
+           Observation.new(%{
+             "user_id" => user_id,
+             "source" => "gmail",
+             "source_account" => user_email,
+             "source_item_id" => to_string(message_id),
+             "occurred_at" => occurred_at,
+             "direction" => Atom.to_string(direction),
+             "participants" => participants,
+             "subject" => Map.get(message, :subject) || Map.get(message, "subject"),
+             "excerpt" => Map.get(message, :snippet) || Map.get(message, "snippet"),
+             "metadata" => %{
+               "thread_id" => Map.get(message, :thread_id) || Map.get(message, "thread_id"),
+               "labels" => Map.get(message, :labels) || Map.get(message, "labels") || []
+             }
+           })}
+        end
+    end
+  end
+
+  defp to_observation(_message, _user_id, _user_email), do: :skip
+
+  defp parse_address_list(nil, _role), do: []
+  defp parse_address_list("", _role), do: []
+
+  defp parse_address_list(raw, role) when is_binary(raw) do
+    raw
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&parse_address(&1, role))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp parse_address_list(_raw, _role), do: []
+
+  defp parse_address(address, role) do
+    case Regex.run(~r/^\s*(?:"?([^"<]*)"?\s*)?<([^>]+)>\s*$/, address) do
+      [_, name, email] ->
+        %{
+          "role" => Atom.to_string(role),
+          "identifier" => %{"email" => String.trim(email) |> String.downcase()},
+          "display_name" => name |> String.trim() |> presence_or_nil()
+        }
+
+      _ ->
+        case Regex.run(~r/^\s*([^\s<>]+@[^\s<>]+)\s*$/, address) do
+          [_, email] ->
+            %{
+              "role" => Atom.to_string(role),
+              "identifier" => %{"email" => String.downcase(email)},
+              "display_name" => nil
+            }
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp presence_or_nil(""), do: nil
+  defp presence_or_nil(value), do: value
+
+  defp direction_for(participants, user_email) do
+    self_in_from? =
+      Enum.any?(participants, fn %{"role" => role, "identifier" => identifier} ->
+        role == "from" and String.downcase(Map.get(identifier, "email", "")) == user_email
+      end)
+
+    if self_in_from?, do: :outbound, else: :inbound
   end
 end

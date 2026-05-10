@@ -184,7 +184,14 @@ defmodule Maraithon.Connectors.GoogleCalendar do
 
     case OAuth.get_valid_access_token(user_id, provider) do
       {:ok, token} ->
-        fetch_events(token, opts)
+        case fetch_events(token, opts) do
+          {:ok, events} = ok ->
+            ingest_events(user_id, events)
+            ok
+
+          other ->
+            other
+        end
 
       {:error, reason} ->
         {:error, reason}
@@ -387,4 +394,147 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     Application.get_env(:maraithon, :google_calendar, [])
     |> Keyword.get(:api_base_url, @default_api_base)
   end
+
+  # ===========================================================================
+  # CRM ingestion
+  # ===========================================================================
+
+  defp ingest_events(user_id, events) when is_binary(user_id) and is_list(events) do
+    user_email = String.downcase(user_id)
+    source_account = "primary"
+
+    Enum.each(events, fn event ->
+      case to_calendar_observation(event, user_id, user_email, source_account) do
+        {:ok, changeset} ->
+          case Maraithon.Crm.Ingest.observe(user_id, changeset) do
+            {:ok, _} ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning("CRM ingest skipped a calendar event",
+                user_id: user_id,
+                event_id: Map.get(event, :event_id),
+                reason: inspect(reason)
+              )
+          end
+
+        :skip ->
+          :ok
+      end
+    end)
+
+    case Maraithon.Crm.Ingest.flush_pending(user_id, "google_calendar") do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
+  end
+
+  defp ingest_events(_user_id, _events), do: :ok
+
+  defp to_calendar_observation(event, user_id, user_email, source_account) when is_map(event) do
+    case Map.get(event, :event_id) do
+      nil ->
+        :skip
+
+      event_id ->
+        attendees = Map.get(event, :attendees, [])
+        organizer_email = Map.get(event, :organizer)
+
+        attendee_participants =
+          attendees
+          |> Enum.flat_map(fn a ->
+            email = Map.get(a, :email)
+
+            cond do
+              is_nil(email) or email == "" ->
+                []
+
+              String.downcase(email) == user_email ->
+                []
+
+              true ->
+                role = if Map.get(a, :organizer, false), do: "organizer", else: "attendee"
+
+                [
+                  %{
+                    "role" => role,
+                    "identifier" => %{"email" => String.downcase(email)},
+                    "display_name" => presence_or_nil(Map.get(a, :display_name))
+                  }
+                ]
+            end
+          end)
+
+        organizer_participant =
+          if is_binary(organizer_email) and String.downcase(organizer_email) != user_email and
+               not Enum.any?(attendee_participants, fn p ->
+                 get_in(p, ["identifier", "email"]) == String.downcase(organizer_email)
+               end) do
+            [
+              %{
+                "role" => "organizer",
+                "identifier" => %{"email" => String.downcase(organizer_email)},
+                "display_name" => nil
+              }
+            ]
+          else
+            []
+          end
+
+        participants = organizer_participant ++ attendee_participants
+
+        if participants == [] do
+          :skip
+        else
+          occurred_at = calendar_event_occurred_at(event)
+          direction = if Map.get(event, :organizer) == user_email, do: "outbound", else: "inbound"
+
+          {:ok,
+           Maraithon.Crm.Observation.new(%{
+             "user_id" => user_id,
+             "source" => "google_calendar",
+             "source_account" => source_account,
+             "source_item_id" => to_string(event_id),
+             "occurred_at" => occurred_at,
+             "direction" => direction,
+             "participants" => participants,
+             "subject" => Map.get(event, :summary),
+             "excerpt" =>
+               event
+               |> Map.get(:description, "")
+               |> case do
+                 nil -> nil
+                 "" -> nil
+                 desc when is_binary(desc) -> String.slice(desc, 0, 2_000)
+                 _ -> nil
+               end,
+             "metadata" => %{
+               "html_link" => Map.get(event, :html_link),
+               "status" => Map.get(event, :status),
+               "location" => Map.get(event, :location),
+               "attendee_count" => length(attendees)
+             }
+           })}
+        end
+    end
+  end
+
+  defp to_calendar_observation(_event, _user_id, _user_email, _source_account), do: :skip
+
+  defp calendar_event_occurred_at(event) do
+    cond do
+      match?(%DateTime{}, Map.get(event, :start)) ->
+        Map.get(event, :start)
+
+      match?(%DateTime{}, Map.get(event, :updated)) ->
+        Map.get(event, :updated)
+
+      true ->
+        DateTime.utc_now()
+    end
+  end
+
+  defp presence_or_nil(nil), do: nil
+  defp presence_or_nil(""), do: nil
+  defp presence_or_nil(value), do: value
 end
