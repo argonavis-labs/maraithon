@@ -43,6 +43,10 @@ config :maraithon, :todos, mock_llm_when_unconfigured: true
 
 config :maraithon, :memory_intelligence, mock_llm_when_unconfigured: true
 
+# Disable post-write async embedding refresh in tests so we don't race the
+# Ecto sandbox during teardown.
+config :maraithon, Maraithon.Crm.PersonEmbeddings, async_enabled: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

@@ -57,6 +57,7 @@ defmodule Maraithon.Crm do
     %Person{user_id: user_id}
     |> Person.changeset(apply_relationship_metric_growth(attrs, nil))
     |> Repo.insert()
+    |> tap_refresh_embedding()
   end
 
   def create_person(_user_id, _attrs), do: {:error, :invalid_person_attrs}
@@ -65,9 +66,59 @@ defmodule Maraithon.Crm do
     person
     |> Person.changeset(apply_relationship_metric_growth(attrs, person))
     |> Repo.update()
+    |> tap_refresh_embedding()
   end
 
   def update_person(_person, _attrs), do: {:error, :invalid_person_attrs}
+
+  defp tap_refresh_embedding({:ok, %Person{} = person} = result) do
+    Maraithon.Crm.PersonEmbeddings.refresh_async(person)
+    result
+  end
+
+  defp tap_refresh_embedding(result), do: result
+
+  @doc """
+  Find the closest CRM person to `query` by embedding-based cosine similarity.
+
+  Falls back gracefully (returns nil) when no embeddings are stored, or when
+  embedding generation isn't available.
+  """
+  def semantic_find_person(user_id, query, opts \\ [])
+
+  def semantic_find_person(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    threshold = Keyword.get(opts, :threshold, 0.45)
+
+    with {:ok, vector} <- Maraithon.LLM.Embeddings.embed(query, opts) do
+      do_semantic_find_person(user_id, vector, threshold)
+    else
+      _other -> nil
+    end
+  end
+
+  def semantic_find_person(_user_id, _query, _opts), do: nil
+
+  defp do_semantic_find_person(user_id, vector, threshold) do
+    pgvector = Pgvector.new(vector)
+
+    Person
+    |> where([p], p.user_id == ^user_id and not is_nil(p.embedding))
+    |> select([p], {p, fragment("1 - (? <=> ?)", p.embedding, ^pgvector)})
+    |> order_by([p], asc: fragment("? <=> ?", p.embedding, ^pgvector))
+    |> limit(1)
+    |> Repo.one()
+    |> case do
+      nil ->
+        nil
+
+      {%Person{} = person, similarity} when similarity >= threshold ->
+        person
+
+      _other ->
+        nil
+    end
+  end
 
   def upsert_person(user_id, attrs \\ %{})
 
@@ -543,7 +594,9 @@ defmodule Maraithon.Crm do
           |> limit(1)
           |> Repo.one()
 
-        exact || fuzzy_find_person(user_id, display_name)
+        exact ||
+          fuzzy_find_person(user_id, display_name) ||
+          semantic_find_person(user_id, display_name)
 
       true ->
         nil

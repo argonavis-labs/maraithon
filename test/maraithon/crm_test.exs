@@ -218,6 +218,48 @@ defmodule Maraithon.CrmTest do
     end
   end
 
+  describe "semantic_find_person/3" do
+    test "returns the person whose embedding is closest to the query" do
+      user_id = "crm-semantic-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, charlie} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Charlie Smith",
+          "relationship" => "Runner GTM teammate"
+        })
+
+      {:ok, dan} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Daniel Bourke",
+          "relationship" => "Australian product founder, ex-Mac AI"
+        })
+
+      # Synchronously prime embeddings using the deterministic mock provider.
+      assert {:ok, _} =
+               Maraithon.Crm.PersonEmbeddings.refresh(charlie, provider: :mock)
+
+      assert {:ok, _} =
+               Maraithon.Crm.PersonEmbeddings.refresh(dan, provider: :mock)
+
+      result =
+        Crm.semantic_find_person(user_id, "Australian product founder ex-Mac AI",
+          provider: :mock,
+          threshold: 0.0
+        )
+
+      assert result && result.id == dan.id
+    end
+
+    test "returns nil when no embeddings are stored" do
+      user_id = "crm-semantic-empty-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      {:ok, _person} = Crm.upsert_person(user_id, %{"display_name" => "Charlie Smith"})
+
+      assert is_nil(Crm.semantic_find_person(user_id, "the runner gtm guy", provider: :mock))
+    end
+  end
+
   describe "bump_interaction/3" do
     setup do
       user_id = "crm-bump-#{System.unique_integer([:positive])}@example.com"
