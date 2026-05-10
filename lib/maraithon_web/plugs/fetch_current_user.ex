@@ -37,13 +37,19 @@ defmodule MaraithonWeb.Plugs.FetchCurrentUser do
   defp log_diag(conn, outcome, email \\ nil) do
     if String.starts_with?(conn.request_path, "/companion") or
          String.starts_with?(conn.request_path, "/auth") do
-      Logger.info("FetchCurrentUser",
-        path: conn.request_path,
-        query: conn.query_string,
-        outcome: outcome,
-        email: email,
-        cookie_header_present: get_req_header(conn, "cookie") != [],
-        session_keys: get_session(conn) |> Map.keys()
+      cookie_header? = get_req_header(conn, "cookie") != []
+      session_key_count = get_session(conn) |> map_size()
+      maraithon_cookie? =
+        get_req_header(conn, "cookie")
+        |> List.first()
+        |> Kernel.||("")
+        |> String.contains?("_maraithon_key=")
+
+      Logger.info(
+        "FetchCurrentUser path=#{conn.request_path}?#{conn.query_string} " <>
+          "outcome=#{outcome} email=#{email || "-"} " <>
+          "cookie_hdr=#{cookie_header?} maraithon_cookie=#{maraithon_cookie?} " <>
+          "session_keys=#{session_key_count}"
       )
     end
   end
