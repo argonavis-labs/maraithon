@@ -816,19 +816,24 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp maybe_refresh_user_memory(attrs) do
     case Map.get(attrs, :user_id) do
-      user_id when is_binary(user_id) -> UserMemory.refresh_if_stale(user_id)
-      _ -> {:error, :invalid_user}
+      user_id when is_binary(user_id) ->
+        Task.start(fn ->
+          try do
+            UserMemory.refresh_if_stale(user_id)
+          rescue
+            error ->
+              Logger.warning("Telegram assistant user-memory refresh failed",
+                user_id: user_id,
+                reason: Exception.message(error)
+              )
+          end
+        end)
+
+      _ ->
+        :ok
     end
 
     :ok
-  rescue
-    error ->
-      Logger.warning("Telegram assistant user-memory refresh failed",
-        user_id: inspect(Map.get(attrs, :user_id)),
-        reason: Exception.message(error)
-      )
-
-      :ok
   end
 
   defp max_tool_steps do
