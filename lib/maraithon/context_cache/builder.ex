@@ -98,7 +98,15 @@ defmodule Maraithon.ContextCache.Builder do
   defp compact_todo(todo) when is_map(todo) do
     Map.take(todo, [:id, :title, :summary, :next_action, :due_at, :priority, :attention_mode])
     |> Map.merge(
-      Map.take(todo, ["id", "title", "summary", "next_action", "due_at", "priority", "attention_mode"])
+      Map.take(todo, [
+        "id",
+        "title",
+        "summary",
+        "next_action",
+        "due_at",
+        "priority",
+        "attention_mode"
+      ])
     )
   end
 
@@ -106,9 +114,7 @@ defmodule Maraithon.ContextCache.Builder do
 
   defp compact_relationship(rel) when is_map(rel) do
     Map.take(rel, [:person_id, :person_name, :summary, :last_interaction_at])
-    |> Map.merge(
-      Map.take(rel, ["person_id", "person_name", "summary", "last_interaction_at"])
-    )
+    |> Map.merge(Map.take(rel, ["person_id", "person_name", "summary", "last_interaction_at"]))
   end
 
   defp compact_relationship(other), do: other

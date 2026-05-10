@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.{Context, Run, TodoActions, Toolbox}
+  alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
   alias Maraithon.Tools

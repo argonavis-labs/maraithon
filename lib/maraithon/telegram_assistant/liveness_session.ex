@@ -492,10 +492,12 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         chat_id = next_state.chat_id
         message_id = next_state.progress_message_id
         text = progress_text(next_state)
-        metadata = Map.merge(base_metadata(next_state), %{
-          hint_category: next_state.hint_category,
-          delivery_mode: "edit"
-        })
+
+        metadata =
+          Map.merge(base_metadata(next_state), %{
+            hint_category: next_state.hint_category,
+            delivery_mode: "edit"
+          })
 
         Task.start(fn ->
           case TelegramResponder.edit(chat_id, message_id, text) do

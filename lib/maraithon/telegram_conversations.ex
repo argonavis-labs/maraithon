@@ -223,7 +223,9 @@ defmodule Maraithon.TelegramConversations do
   This is best-effort and silent on failure: any LLM/DB error keeps the
   conversation as-is so the assistant loop never blocks on summarization.
   """
-  def compact_old_turns(%Conversation{} = conversation, opts \\ []) do
+  def compact_old_turns(conversation, opts \\ [])
+
+  def compact_old_turns(%Conversation{} = conversation, opts) do
     keep_recent = Keyword.get(opts, :keep_recent, 12)
     threshold_extra = Keyword.get(opts, :threshold_extra, 12)
     threshold = keep_recent + threshold_extra

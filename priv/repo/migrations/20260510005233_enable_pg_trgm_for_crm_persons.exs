@@ -29,9 +29,7 @@ defmodule Maraithon.Repo.Migrations.EnablePgTrgmForCrmPersons do
   def down do
     drop_if_exists index(:crm_people, [:display_name], name: :crm_people_display_name_trgm_index)
 
-    drop_if_exists index(:crm_people, [:display_name],
-                     name: :crm_people_full_name_trgm_index
-                   )
+    drop_if_exists index(:crm_people, [:display_name], name: :crm_people_full_name_trgm_index)
 
     # Leave pg_trgm extension installed; other queries may depend on it.
   end
