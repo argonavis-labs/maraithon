@@ -124,4 +124,105 @@ defmodule Maraithon.CrmTest do
     assert batched_context.open_todo_count == 1
     assert [%{id: ^todo_id}] = batched_context.todos
   end
+
+  describe "resolve_contact/3" do
+    setup do
+      user_id = "crm-resolve-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      %{user_id: user_id}
+    end
+
+    test "returns the existing person when an email matches", %{user_id: user_id} do
+      {:ok, original} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Charlie Smith",
+          "email" => "charlie@example.com"
+        })
+
+      assert {:ok, found} = Crm.resolve_contact(user_id, %{email: "charlie@example.com"})
+      assert found.id == original.id
+    end
+
+    test "creates a stub person from an email when none matches", %{user_id: user_id} do
+      assert {:ok, person} = Crm.resolve_contact(user_id, %{email: "Dana.Lee@example.com"})
+
+      assert person.user_id == user_id
+      assert person.display_name == "Dana Lee"
+      assert person.contact_details["emails"] == ["Dana.Lee@example.com"]
+      assert person.interaction_count == 0
+    end
+
+    test "honours an explicit display_name override", %{user_id: user_id} do
+      assert {:ok, person} =
+               Crm.resolve_contact(user_id, %{email: "x@y.com"}, display_name: "Custom Name")
+
+      assert person.display_name == "Custom Name"
+    end
+
+    test "creates a stub from a slack id", %{user_id: user_id} do
+      assert {:ok, person} = Crm.resolve_contact(user_id, %{slack_id: "U7XQ"})
+      assert person.contact_details["slack_ids"] == ["U7XQ"]
+      assert person.display_name == "U7XQ"
+    end
+
+    test "rejects an empty identifier", %{user_id: user_id} do
+      assert {:error, :unresolvable_contact} = Crm.resolve_contact(user_id, %{email: ""})
+      assert {:error, :unresolvable_contact} = Crm.resolve_contact(user_id, %{})
+    end
+  end
+
+  describe "bump_interaction/3" do
+    setup do
+      user_id = "crm-bump-#{System.unique_integer([:positive])}@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, person} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Charlie",
+          "email" => "charlie@example.com"
+        })
+
+      %{user_id: user_id, person: person}
+    end
+
+    test "increments interaction_count and sets last_interaction_at on first bump",
+         %{person: person} do
+      occurred_at = DateTime.add(DateTime.utc_now(), -10, :minute)
+      assert {:ok, :bumped} = Crm.bump_interaction(person.id, occurred_at, "gmail")
+
+      reloaded = Maraithon.Repo.get!(Maraithon.Crm.Person, person.id)
+      assert reloaded.interaction_count == 1
+      assert DateTime.compare(reloaded.last_interaction_at, occurred_at) == :eq
+    end
+
+    test "second bump increments and only advances last_interaction_at forward",
+         %{person: person} do
+      first = DateTime.add(DateTime.utc_now(), -2, :hour)
+      older = DateTime.add(first, -1, :day)
+
+      assert {:ok, :bumped} = Crm.bump_interaction(person.id, first, "gmail")
+      assert {:ok, :bumped} = Crm.bump_interaction(person.id, older, "gmail")
+
+      reloaded = Maraithon.Repo.get!(Maraithon.Crm.Person, person.id)
+      assert reloaded.interaction_count == 2
+      assert DateTime.compare(reloaded.last_interaction_at, first) == :eq
+    end
+
+    test "later occurred_at advances last_interaction_at", %{person: person} do
+      first = DateTime.add(DateTime.utc_now(), -2, :hour)
+      later = DateTime.add(first, 30, :minute)
+
+      assert {:ok, :bumped} = Crm.bump_interaction(person.id, first, "gmail")
+      assert {:ok, :bumped} = Crm.bump_interaction(person.id, later, "slack")
+
+      reloaded = Maraithon.Repo.get!(Maraithon.Crm.Person, person.id)
+      assert reloaded.interaction_count == 2
+      assert DateTime.compare(reloaded.last_interaction_at, later) == :eq
+    end
+
+    test "returns :person_not_found for an unknown id" do
+      assert {:error, :person_not_found} =
+               Crm.bump_interaction(Ecto.UUID.generate(), DateTime.utc_now(), "gmail")
+    end
+  end
 end
