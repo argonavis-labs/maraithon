@@ -100,24 +100,44 @@ defmodule Maraithon.Crm do
   def semantic_find_person(_user_id, _query, _opts), do: nil
 
   defp do_semantic_find_person(user_id, vector, threshold) do
-    pgvector = Pgvector.new(vector)
+    if pgvector_available?() do
+      pgvector = Pgvector.new(vector)
 
-    Person
-    |> where([p], p.user_id == ^user_id and not is_nil(p.embedding))
-    |> select([p], {p, fragment("1 - (? <=> ?)", p.embedding, ^pgvector)})
-    |> order_by([p], asc: fragment("? <=> ?", p.embedding, ^pgvector))
-    |> limit(1)
-    |> Repo.one()
-    |> case do
-      nil ->
-        nil
+      result =
+        Repo.query!(
+          """
+          SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+          FROM crm_people
+          WHERE user_id = $2 AND embedding IS NOT NULL
+          ORDER BY embedding <=> $1::vector
+          LIMIT 1
+          """,
+          [pgvector, user_id]
+        )
 
-      {%Person{} = person, similarity} when similarity >= threshold ->
-        person
+      case result.rows do
+        [[uuid_bin, similarity]] when similarity >= threshold ->
+          {:ok, uuid} = Ecto.UUID.load(uuid_bin)
+          get_person_for_user(user_id, uuid)
 
-      _other ->
-        nil
+        _other ->
+          nil
+      end
+    else
+      nil
     end
+  end
+
+  defp pgvector_available? do
+    %{rows: rows} =
+      Repo.query!(
+        "SELECT 1 FROM information_schema.columns " <>
+          "WHERE table_name = 'crm_people' AND column_name = 'embedding'"
+      )
+
+    rows != []
+  rescue
+    _ -> false
   end
 
   def upsert_person(user_id, attrs \\ %{})

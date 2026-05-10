@@ -55,6 +55,15 @@ defmodule Maraithon.Crm.PersonEmbeddingsTest do
       assert refreshed.embedding_source_hash == PersonEmbeddings.source_hash(person)
       assert refreshed.embedding_refreshed_at
       refute is_nil(refreshed.embedding)
+
+      # And the row really did get the embedding written.
+      %{rows: [[hash]]} =
+        Maraithon.Repo.query!(
+          "SELECT embedding_source_hash FROM crm_people WHERE id = $1",
+          [Ecto.UUID.dump!(person.id)]
+        )
+
+      assert hash == PersonEmbeddings.source_hash(person)
     end
 
     test "skips when source is unchanged", %{user_id: user_id} do

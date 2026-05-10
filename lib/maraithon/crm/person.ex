@@ -28,9 +28,6 @@ defmodule Maraithon.Crm.Person do
     field :last_interaction_at, :utc_datetime_usec
     field :notes, :string
     field :metadata, :map, default: %{}
-    field :embedding, Pgvector.Ecto.Vector
-    field :embedding_source_hash, :string
-    field :embedding_refreshed_at, :utc_datetime_usec
 
     belongs_to :user, User, type: :string
     has_many :links, PersonLink, foreign_key: :person_id
@@ -51,10 +48,7 @@ defmodule Maraithon.Crm.Person do
     :affinity_score,
     :last_interaction_at,
     :notes,
-    :metadata,
-    :embedding,
-    :embedding_source_hash,
-    :embedding_refreshed_at
+    :metadata
   ]
 
   def changeset(person, attrs) do

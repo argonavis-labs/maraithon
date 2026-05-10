@@ -6,6 +6,11 @@ defmodule Maraithon.Crm.PersonEmbeddings do
   relationship facts + a few normalized contact identifiers + the first
   chunk of notes) so cheap embeddings stay accurate without leaking long
   free-text bodies.
+
+  All write operations are no-ops when the `crm_people.embedding` column
+  isn't present (e.g. on Fly Managed Postgres before pgvector has been
+  enabled by a superuser). That lets the rest of the CRM keep working
+  without semantic resolve until the extension is installed.
   """
 
   import Ecto.Query
@@ -64,12 +69,16 @@ defmodule Maraithon.Crm.PersonEmbeddings do
     text = source_text(person)
     hash = source_hash(text)
     force? = Keyword.get(opts, :force, false)
+    current_hash = current_embedding_hash(person)
 
     cond do
       text == "" ->
         {:ok, :empty}
 
-      not force? and hash == person.embedding_source_hash ->
+      not embedding_storage_available?() ->
+        {:ok, :pgvector_unavailable}
+
+      not force? and hash == current_hash ->
         {:ok, :unchanged}
 
       true ->
@@ -153,14 +162,68 @@ defmodule Maraithon.Crm.PersonEmbeddings do
   end
 
   defp store(person, vector, hash) do
-    person
-    |> Person.changeset(%{
-      embedding: Pgvector.new(vector),
-      embedding_source_hash: hash,
-      embedding_refreshed_at: DateTime.utc_now()
-    })
-    |> Repo.update()
+    pgvector = Pgvector.new(vector)
+    now = DateTime.utc_now()
+
+    Repo.query!(
+      """
+      UPDATE crm_people
+      SET embedding = $1::vector,
+          embedding_source_hash = $2,
+          embedding_refreshed_at = $3
+      WHERE id = $4
+      """,
+      [pgvector, hash, now, Ecto.UUID.dump!(person.id)]
+    )
+
+    {:ok,
+     %{
+       person
+       | __meta__: person.__meta__
+     }
+     |> Map.put(:embedding, pgvector)
+     |> Map.put(:embedding_source_hash, hash)
+     |> Map.put(:embedding_refreshed_at, now)}
   end
+
+  defp embedding_storage_available? do
+    case Process.get(:maraithon_pgvector_available) do
+      nil ->
+        available =
+          try do
+            %{rows: rows} =
+              Repo.query!(
+                "SELECT 1 FROM information_schema.columns " <>
+                  "WHERE table_name = 'crm_people' AND column_name = 'embedding'"
+              )
+
+            rows != []
+          rescue
+            _ -> false
+          end
+
+        Process.put(:maraithon_pgvector_available, available)
+        available
+
+      cached when is_boolean(cached) ->
+        cached
+    end
+  end
+
+  defp current_embedding_hash(%Person{id: id}) when is_binary(id) do
+    if embedding_storage_available?() do
+      case Repo.query!("SELECT embedding_source_hash FROM crm_people WHERE id = $1", [
+             Ecto.UUID.dump!(id)
+           ]) do
+        %{rows: [[hash]]} when is_binary(hash) -> hash
+        _ -> nil
+      end
+    else
+      nil
+    end
+  end
+
+  defp current_embedding_hash(_other), do: nil
 
   defp contact_summary(%{} = contact_details) do
     [
