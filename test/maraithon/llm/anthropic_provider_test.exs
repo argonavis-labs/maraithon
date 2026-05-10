@@ -379,6 +379,91 @@ defmodule Maraithon.LLM.AnthropicProviderTest do
       assert result.model == "unknown"
     end
 
+    test "lifts long system message into a cached top-level system block" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
+
+      long_system = String.duplicate("system policy text. ", 80)
+
+      Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert is_list(decoded["system"])
+        assert [block] = decoded["system"]
+        assert block["type"] == "text"
+        assert block["text"] == String.trim(long_system)
+        assert block["cache_control"] == %{"type" => "ephemeral"}
+
+        # The user message should remain in the messages array, system stripped out.
+        assert decoded["messages"] == [%{"role" => "user", "content" => "Hi"}]
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "Hi back"}],
+            "model" => "claude-sonnet-4-20250514",
+            "stop_reason" => "end_turn",
+            "usage" => %{"input_tokens" => 5, "output_tokens" => 5}
+          })
+        )
+      end)
+
+      {:ok, _result} =
+        AnthropicProvider.complete(%{
+          "messages" => [
+            %{"role" => "system", "content" => long_system},
+            %{"role" => "user", "content" => "Hi"}
+          ]
+        })
+    end
+
+    test "short system message is not marked for cache" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime, anthropic_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :anthropic,
+        base_url: "http://localhost:#{bypass.port}/v1/messages"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/messages", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        decoded = Jason.decode!(body)
+
+        assert [block] = decoded["system"]
+        assert block["text"] == "You are a helper."
+        refute Map.has_key?(block, "cache_control")
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "content" => [%{"type" => "text", "text" => "ok"}],
+            "model" => "claude-sonnet-4-20250514",
+            "stop_reason" => "end_turn",
+            "usage" => %{"input_tokens" => 1, "output_tokens" => 1}
+          })
+        )
+      end)
+
+      {:ok, _result} =
+        AnthropicProvider.complete(%{
+          "messages" => [
+            %{"role" => "system", "content" => "You are a helper."},
+            %{"role" => "user", "content" => "Hi"}
+          ]
+        })
+    end
+
     test "handles missing stop_reason in response" do
       bypass = Bypass.open()
 

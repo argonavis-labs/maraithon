@@ -9,6 +9,7 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
   @default_base_url "https://api.anthropic.com/v1/messages"
   @anthropic_version "2023-06-01"
+  @cache_min_chars 1024
 
   @impl true
   def complete(params) do
@@ -21,18 +22,31 @@ defmodule Maraithon.LLM.AnthropicProvider do
     end
   end
 
-  defp do_complete(params, api_key) do
+  @doc false
+  def build_body(params) when is_map(params) do
     model = params["model"] || Maraithon.LLM.anthropic_model()
-    messages = params["messages"] || []
+    raw_messages = params["messages"] || []
     max_tokens = params["max_tokens"] || 2048
     temperature = params["temperature"] || 0.7
 
-    body = %{
+    {system_blocks, conversation_messages} = split_system_messages(raw_messages)
+
+    base = %{
       model: model,
-      messages: messages,
+      messages: conversation_messages,
       max_tokens: max_tokens,
       temperature: temperature
     }
+
+    case system_blocks do
+      [] -> base
+      blocks -> Map.put(base, :system, blocks)
+    end
+  end
+
+  defp do_complete(params, api_key) do
+    body = build_body(params)
+    model = body.model
 
     headers = [
       {"x-api-key", api_key},
@@ -44,7 +58,8 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
     Logger.info("Calling Anthropic API",
       model: model,
-      message_count: length(messages)
+      message_count: length(body.messages),
+      cache_blocks: count_cache_blocks(body)
     )
 
     case Req.post(base_url(),
@@ -123,4 +138,89 @@ defmodule Maraithon.LLM.AnthropicProvider do
     Application.get_env(:maraithon, :anthropic, [])
     |> Keyword.get(:base_url, @default_base_url)
   end
+
+  defp split_system_messages(messages) when is_list(messages) do
+    {system_text_parts, conversation} =
+      Enum.reduce(messages, {[], []}, fn message, {sys_acc, conv_acc} ->
+        case classify_message(message) do
+          {:system, text} when is_binary(text) and text != "" ->
+            {[text | sys_acc], conv_acc}
+
+          {:keep, normalized} ->
+            {sys_acc, [normalized | conv_acc]}
+
+          :skip ->
+            {sys_acc, conv_acc}
+        end
+      end)
+
+    system_blocks =
+      system_text_parts
+      |> Enum.reverse()
+      |> build_system_blocks()
+
+    {system_blocks, Enum.reverse(conversation)}
+  end
+
+  defp classify_message(%{"role" => "system", "content" => content}),
+    do: {:system, message_text(content)}
+
+  defp classify_message(%{role: "system", content: content}),
+    do: {:system, message_text(content)}
+
+  defp classify_message(%{"role" => role, "content" => _} = message)
+       when role in ["user", "assistant"],
+       do: {:keep, message}
+
+  defp classify_message(%{role: role, content: content}) when role in ["user", "assistant"] do
+    {:keep, %{"role" => role, "content" => content}}
+  end
+
+  defp classify_message(_other), do: :skip
+
+  defp message_text(content) when is_binary(content), do: content
+
+  defp message_text(content) when is_list(content) do
+    content
+    |> Enum.map_join("\n", fn
+      %{"text" => text} when is_binary(text) -> text
+      %{text: text} when is_binary(text) -> text
+      text when is_binary(text) -> text
+      _other -> ""
+    end)
+  end
+
+  defp message_text(_other), do: ""
+
+  defp build_system_blocks([]), do: []
+
+  defp build_system_blocks(parts) do
+    text = parts |> Enum.join("\n\n") |> String.trim()
+
+    cond do
+      text == "" ->
+        []
+
+      String.length(text) >= @cache_min_chars ->
+        [
+          %{
+            type: "text",
+            text: text,
+            cache_control: %{type: "ephemeral"}
+          }
+        ]
+
+      true ->
+        [%{type: "text", text: text}]
+    end
+  end
+
+  defp count_cache_blocks(%{system: system}) when is_list(system) do
+    Enum.count(system, fn
+      %{cache_control: _} -> true
+      _ -> false
+    end)
+  end
+
+  defp count_cache_blocks(_body), do: 0
 end
