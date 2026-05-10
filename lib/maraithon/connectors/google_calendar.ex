@@ -282,17 +282,26 @@ defmodule Maraithon.Connectors.GoogleCalendar do
       if sync_token do
         URI.encode_query(%{syncToken: sync_token})
       else
-        # Initial full sync - get recent events
-        time_min =
-          DateTime.utc_now()
-          |> DateTime.add(-7, :day)
-          |> DateTime.to_iso8601()
+        max_results = Keyword.get(opts, :max_results, 100)
 
-        URI.encode_query(%{
+        time_min =
+          opts
+          |> Keyword.get(:time_min)
+          |> normalize_iso_time(fn ->
+            DateTime.utc_now() |> DateTime.add(-7, :day) |> DateTime.to_iso8601()
+          end)
+
+        time_max = opts |> Keyword.get(:time_max) |> normalize_iso_time(fn -> nil end)
+
+        base = %{
           timeMin: time_min,
           singleEvents: true,
-          maxResults: 100
-        })
+          maxResults: max_results
+        }
+
+        base = if time_max, do: Map.put(base, :timeMax, time_max), else: base
+
+        URI.encode_query(base)
       end
 
     url = "#{api_base_url()}/calendars/primary/events?#{params}"
@@ -399,7 +408,11 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   # CRM ingestion
   # ===========================================================================
 
-  defp ingest_events(user_id, events) when is_binary(user_id) and is_list(events) do
+  @doc """
+  Fan a list of parsed calendar events into `Crm.Ingest.observe/2` calls and
+  flush any pending window. Used by the live sync path and by the backfill seed.
+  """
+  def ingest_events(user_id, events) when is_binary(user_id) and is_list(events) do
     user_email = String.downcase(user_id)
     source_account = "primary"
 
@@ -429,7 +442,7 @@ defmodule Maraithon.Connectors.GoogleCalendar do
     end
   end
 
-  defp ingest_events(_user_id, _events), do: :ok
+  def ingest_events(_user_id, _events), do: :ok
 
   defp to_calendar_observation(event, user_id, user_email, source_account) when is_map(event) do
     case Map.get(event, :event_id) do
@@ -537,4 +550,10 @@ defmodule Maraithon.Connectors.GoogleCalendar do
   defp presence_or_nil(nil), do: nil
   defp presence_or_nil(""), do: nil
   defp presence_or_nil(value), do: value
+
+  defp normalize_iso_time(%DateTime{} = dt, _default), do: DateTime.to_iso8601(dt)
+
+  defp normalize_iso_time(value, _default) when is_binary(value) and value != "", do: value
+
+  defp normalize_iso_time(_, default) when is_function(default, 0), do: default.()
 end

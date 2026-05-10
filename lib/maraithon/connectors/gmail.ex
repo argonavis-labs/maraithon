@@ -697,7 +697,12 @@ defmodule Maraithon.Connectors.Gmail do
   # CRM ingestion
   # ===========================================================================
 
-  defp ingest_messages(user_id, messages) when is_list(messages) do
+  @doc """
+  Fan a list of parsed Gmail messages into `Crm.Ingest.observe/2` calls.
+
+  Used by the webhook handler and by the backfill seed.
+  """
+  def ingest_messages(user_id, messages) when is_binary(user_id) and is_list(messages) do
     user_email = String.downcase(user_id)
 
     Enum.each(messages, fn message ->
@@ -719,9 +724,11 @@ defmodule Maraithon.Connectors.Gmail do
           :ok
       end
     end)
+
+    :ok
   end
 
-  defp ingest_messages(_user_id, _messages), do: :ok
+  def ingest_messages(_user_id, _messages), do: :ok
 
   defp to_observation(message, user_id, user_email) when is_map(message) do
     case Map.get(message, :message_id) || Map.get(message, "message_id") do
