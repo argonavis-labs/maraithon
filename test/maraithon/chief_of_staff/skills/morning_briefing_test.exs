@@ -213,7 +213,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
     assert params["max_tokens"] == 64_000
-    assert params["reasoning_effort"] == "high"
+    assert params["reasoning_effort"] == "xhigh"
     assert params["timeout_ms"] == 600_000
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -221,6 +221,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"
     assert prompt =~ "Treat meeting prep as CRM-first"
+    assert prompt =~ "source pages as the"
+    assert prompt =~ "meeting dossier"
     assert prompt =~ "Fresh external commercial threads from close teammates"
     assert prompt =~ "Treat gmail.commercial_threads as a coverage list"
     assert prompt =~ "Required external meetings are a hard coverage contract"
@@ -562,7 +564,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
            ] = get_in(input, ["schedule_coverage", "required_meetings"])
   end
 
-  test "keeps morning briefing on the high-reasoning path", %{user_id: user_id} do
+  test "keeps morning briefing on the highest-reasoning path", %{user_id: user_id} do
     state =
       MorningBriefing.init(%{
         "user_id" => user_id,
@@ -581,7 +583,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["reasoning_effort"] == "high"
+    assert params["reasoning_effort"] == "xhigh"
   end
 
   test "does not generate a morning brief when Telegram is not connected", %{agent: agent} do

@@ -41,4 +41,40 @@ defmodule Maraithon.WebSearchTest do
   test "search can be disabled by configuration or options" do
     assert {:error, :web_search_disabled} = WebSearch.search("Glossier", enabled: false)
   end
+
+  test "fetch_page extracts readable source text" do
+    bypass = Bypass.open()
+
+    Bypass.expect_once(bypass, "GET", "/", fn conn ->
+      body = """
+      <html>
+        <head>
+          <title>Kiln Studio</title>
+          <meta name="description" content="AI adoption, made practical">
+          <style>.hidden { display: none; }</style>
+        </head>
+        <body>
+          <h1>AI adoption, made practical</h1>
+          <p>Workshops and training on AI tools, agents, and automation.</p>
+          <p>Scoped agent builds start at $5K.</p>
+          <script>window.noisy = true;</script>
+        </body>
+      </html>
+      """
+
+      Plug.Conn.resp(conn, 200, body)
+    end)
+
+    assert {:ok, page} =
+             WebSearch.fetch_page("http://localhost:#{bypass.port}/",
+               enabled: true,
+               allow_private: true
+             )
+
+    assert page["title"] == "Kiln Studio"
+    assert page["description"] == "AI adoption, made practical"
+    assert page["text"] =~ "Workshops and training"
+    assert page["text"] =~ "Scoped agent builds start at $5K"
+    refute page["text"] =~ "window.noisy"
+  end
 end

@@ -36,7 +36,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_news_limit 6
   @default_lookback_hours 18
   @default_llm_max_tokens 64_000
-  @default_llm_reasoning_effort "high"
+  @default_llm_reasoning_effort "xhigh"
   @default_llm_timeout_ms 600_000
   @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
@@ -883,6 +883,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
        before public web context. Use web snippets only as fallback evidence for attendees
        or companies missing from CRM, and keep uncertainty visible when the evidence is thin.
+       When meeting_prep.web_context includes page_contexts, treat those source pages as the
+       meeting dossier. For each required external meeting, synthesize the executive read:
+       who the person is, what the company or practice does, why the meeting likely matters
+       to Runner or Agora, what fit or risk Kent should test, and the concrete pre/post-call
+       next step. Do not collapse a source-backed external meeting into a generic "creative
+       vendor" or "intro chat" label when the page context supports a richer prep note.
 
        Commercial thread rule:
        Fresh external commercial threads from close teammates are not inbox noise. Use model

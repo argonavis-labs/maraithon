@@ -11,8 +11,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   @max_candidates_per_meeting 8
   @max_web_queries 8
   @max_web_queries_per_meeting 3
+  @max_web_pages_per_candidate 2
   @web_result_limit 3
-  @web_timeout_ms 8_000
+  @web_page_text_limit 1_800
+  @web_timeout_ms 15_000
 
   @internal_terms ~w(
     agora calendar chief crm gmail google kent maraithon meet reclaim runner slack telegram zoom
@@ -87,6 +89,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         "required_schedule_meetings" => Enum.count(meetings, &schedule_required?/1),
         "crm_contexts" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "crm_context")))),
         "web_searches" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "web_context")))),
+        "web_pages" => Enum.sum(Enum.map(meetings, &web_page_context_count/1)),
         "data_gaps" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "data_gaps"))))
       }
     }
@@ -102,6 +105,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         "required_schedule_meetings" => 0,
         "crm_contexts" => 0,
         "web_searches" => 0,
+        "web_pages" => 0,
         "data_gaps" => 0
       }
     }
@@ -218,6 +222,12 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp fetch_web_context(candidates, opts, remaining_queries, org_hint) do
     search_fun = Keyword.get(opts, :web_search_fun, &WebSearch.search/2)
     web_opts = Keyword.get(opts, :web_search_opts, [])
+    page_fetch_fun = Keyword.get(opts, :web_page_fetch_fun, &WebSearch.fetch_page/2)
+
+    page_opts =
+      opts
+      |> Keyword.get(:web_page_opts, [])
+      |> Keyword.put_new(:text_limit, @web_page_text_limit)
 
     search_candidates =
       candidates
@@ -230,28 +240,29 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         fn candidate ->
           query = web_query(candidate, org_hint)
 
-          result =
+          {status, results, error} =
             case search_fun.(query, Keyword.merge([limit: @web_result_limit], web_opts)) do
               {:ok, %{} = response} ->
-                %{
-                  "candidate" => public_candidate(candidate),
-                  "candidate_key" => candidate_key(candidate),
-                  "query" => query,
-                  "status" => "ok",
-                  "results" => response |> Map.get("results", []) |> compact_web_results()
-                }
+                {"ok", response |> Map.get("results", []) |> compact_web_results(), nil}
 
               {:error, reason} ->
-                %{
-                  "candidate" => public_candidate(candidate),
-                  "candidate_key" => candidate_key(candidate),
-                  "query" => query,
-                  "status" => "error",
-                  "error" => normalize_error(reason)
-                }
+                {"error", [], normalize_error(reason)}
             end
 
-          compact_map(result)
+          page_contexts =
+            candidate
+            |> fetch_page_contexts(results, page_fetch_fun, page_opts)
+
+          %{
+            "candidate" => public_candidate(candidate),
+            "candidate_key" => candidate_key(candidate),
+            "query" => query,
+            "status" => status,
+            "results" => results,
+            "page_contexts" => page_contexts,
+            "error" => error
+          }
+          |> compact_map()
         end,
         max_concurrency: 3,
         ordered: true,
@@ -280,6 +291,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       cond do
         is_nil(context) ->
           "No CRM match for #{label}; web fallback was not attempted."
+
+        read_list(context, "page_contexts") != [] ->
+          "No CRM match for #{label}; public web search fallback returned source page context."
 
         read_list(context, "results") != [] ->
           "No CRM match for #{label}; public web search fallback returned context."
@@ -324,6 +338,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp attendee_candidates(attendee) when is_map(attendee) do
     email = read_string(attendee, "email")
+    domain = email_domain(email)
 
     name =
       read_string(attendee, "display_name") ||
@@ -332,13 +347,14 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         name_from_email(email)
 
     [
-      %{query: name, kind: "person", source: "attendee", email: email},
+      %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
       company_candidate_from_email(email)
     ]
   end
 
   defp attendee_candidates(attendee) when is_binary(attendee) do
     email = extract_email(attendee)
+    domain = email_domain(email)
     name = attendee |> String.replace(~r/<[^>]+>/, "") |> normalize_string()
 
     name =
@@ -354,7 +370,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       end
 
     [
-      %{query: name, kind: "person", source: "attendee", email: email},
+      %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
       company_candidate_from_email(email)
     ]
   end
@@ -388,8 +404,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         domain
         |> String.split(".")
         |> List.first()
-        |> titleize_token()
-        |> then(&%{query: &1, kind: "organization", source: "attendee_email_domain"})
+        |> humanize_domain_label()
+        |> then(
+          &%{query: &1, kind: "organization", source: "attendee_email_domain", domain: domain}
+        )
 
       _ ->
         nil
@@ -443,6 +461,16 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     downcased in @title_stopwords or
       downcased in @internal_terms or
       Enum.all?(words, &(&1 in @title_stopwords or &1 in @internal_terms))
+  end
+
+  defp web_query(%{kind: kind, query: query, domain: domain}, _org_hint)
+       when kind in ["person", "person_or_org"] and is_binary(domain) do
+    "#{query} #{domain}"
+  end
+
+  defp web_query(%{kind: kind, query: query, domain: domain}, _org_hint)
+       when kind in ["organization", "attendee_email_domain"] and is_binary(domain) do
+    "#{query} #{domain}"
   end
 
   defp web_query(%{kind: kind, query: query}, org_hint)
@@ -740,7 +768,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp public_candidate(candidate) when is_map(candidate) do
     candidate
-    |> Map.take([:query, :kind, :source, :email])
+    |> Map.take([:query, :kind, :source, :email, :domain])
     |> normalize_json_value()
     |> compact_map()
   end
@@ -844,6 +872,76 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp compact_web_result(_result), do: %{}
 
+  defp fetch_page_contexts(candidate, results, page_fetch_fun, page_opts) do
+    candidate
+    |> page_urls_for_candidate(results)
+    |> Enum.take(@max_web_pages_per_candidate)
+    |> Enum.map(fn url ->
+      case page_fetch_fun.(url, page_opts) do
+        {:ok, %{} = page} ->
+          page
+          |> Map.put_new("source_url", url)
+          |> compact_page_context()
+
+        {:error, _reason} ->
+          %{}
+      end
+    end)
+    |> Enum.reject(&(&1 == %{}))
+  end
+
+  defp page_urls_for_candidate(candidate, results) do
+    homepage =
+      candidate
+      |> candidate_domain()
+      |> case do
+        nil -> []
+        domain -> ["https://#{domain}/"]
+      end
+
+    result_urls =
+      results
+      |> Enum.map(&read_string(&1, "url"))
+      |> Enum.reject(&is_nil/1)
+
+    (homepage ++ result_urls)
+    |> Enum.uniq_by(&normalize_url_key/1)
+  end
+
+  defp candidate_domain(%{domain: domain}) when is_binary(domain), do: String.downcase(domain)
+  defp candidate_domain(%{email: email}) when is_binary(email), do: email_domain(email)
+  defp candidate_domain(_candidate), do: nil
+
+  defp normalize_url_key(url) when is_binary(url) do
+    url
+    |> String.trim()
+    |> String.trim_trailing("/")
+    |> String.downcase()
+  end
+
+  defp normalize_url_key(url), do: inspect(url)
+
+  defp compact_page_context(page) when is_map(page) do
+    %{
+      "url" => read_string(page, "url") || read_string(page, "source_url"),
+      "title" => read_string(page, "title") |> truncate_text(180),
+      "description" => read_string(page, "description") |> truncate_text(360),
+      "text" => read_string(page, "text") |> truncate_text(@web_page_text_limit)
+    }
+    |> compact_map()
+  end
+
+  defp compact_page_context(_page), do: %{}
+
+  defp web_page_context_count(meeting) when is_map(meeting) do
+    meeting
+    |> read_list("web_context")
+    |> Enum.map(&(read_list(&1, "page_contexts") |> length()))
+    |> Enum.sum()
+  end
+
+  defp web_page_context_count(_meeting), do: 0
+
   defp candidate_key(%{email: email}) when is_binary(email),
     do: "email:" <> String.downcase(email)
 
@@ -890,6 +988,34 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> Enum.join(" ")
     |> normalize_string()
   end
+
+  defp humanize_domain_label(label) when is_binary(label) do
+    label
+    |> String.replace(~r/[-_]+/, " ")
+    |> split_known_domain_suffix()
+    |> titleize_token()
+  end
+
+  defp humanize_domain_label(_label), do: nil
+
+  defp split_known_domain_suffix(label) when is_binary(label) do
+    normalized = String.downcase(label)
+
+    suffix =
+      Enum.find(~w(studio labs lab agency group ai ops automation design media), fn suffix ->
+        String.ends_with?(normalized, suffix) and
+          String.length(normalized) > String.length(suffix) + 2
+      end)
+
+    if suffix && not String.contains?(normalized, " ") do
+      prefix = String.slice(normalized, 0, String.length(normalized) - String.length(suffix))
+      prefix <> " " <> suffix
+    else
+      label
+    end
+  end
+
+  defp split_known_domain_suffix(label), do: label
 
   defp strip_surrounding_noise(query) do
     query

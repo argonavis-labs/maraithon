@@ -81,13 +81,13 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     refute Map.has_key?(crm_context["person"], "metadata")
     refute Map.has_key?(crm_context["person"], "inserted_at")
 
-    assert Enum.any?(meeting["web_context"], &(&1["query"] == "Dawn Nguyen Cogniate"))
-    assert Enum.any?(meeting["web_context"], &(&1["query"] == "Cogniate company"))
+    assert Enum.any?(meeting["web_context"], &(&1["query"] == "Dawn Nguyen cogniate.com"))
+    assert Enum.any?(meeting["web_context"], &(&1["query"] == "Cogniate cogniate.com"))
     refute Enum.any?(meeting["web_context"], &String.contains?(&1["query"], "Charlie Feng"))
 
     assert Enum.any?(meeting["data_gaps"], &String.contains?(&1, "Dawn Nguyen"))
-    assert_received {:web_search, "Dawn Nguyen Cogniate", [limit: 3]}
-    assert_received {:web_search, "Cogniate company", [limit: 3]}
+    assert_received {:web_search, "Dawn Nguyen cogniate.com", [limit: 3]}
+    assert_received {:web_search, "Cogniate cogniate.com", [limit: 3]}
   end
 
   test "keeps external attendee meetings when reminder-like calendar blocks fill the day", %{
@@ -159,6 +159,19 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
        }}
     end
 
+    page_fetch = fn url, opts ->
+      send(parent, {:page_fetch, url, opts})
+
+      {:ok,
+       %{
+         "url" => url,
+         "title" => "Kiln Studio",
+         "description" => "AI adoption, made practical",
+         "text" =>
+           "Solo AI Ops & Automation consultancy. Workshops and training on AI tools, agents, and automation. Scoped agent builds start at $5K. Dawn Nguyen's background includes IBM Watson, LogicGate, and Hyde Park Venture Partners."
+       }}
+    end
+
     school_meet = %{
       "event_id" => "evt-school",
       "summary" => "Emma/Frankie - school cross country meet",
@@ -195,11 +208,13 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     result =
       MeetingEnrichment.enrich(user_id, [school_meet, dawn_meeting, soccer_practice],
         web_search_fun: web_search,
+        web_page_fetch_fun: page_fetch,
         max_web_queries: 8
       )
 
     assert get_in(result, ["counts", "required_schedule_meetings"]) == 1
     assert get_in(result, ["counts", "web_searches"]) == 2
+    assert get_in(result, ["counts", "web_pages"]) == 4
 
     school = Enum.find(result["meetings"], &(&1["event_id"] == "evt-school"))
     soccer = Enum.find(result["meetings"], &(&1["event_id"] == "evt-soccer"))
@@ -209,11 +224,19 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     assert soccer["schedule_required"] == false
     assert dawn["schedule_required"] == true
 
-    assert Enum.any?(dawn["web_context"], &(&1["query"] == "Dawn Nguyen Kilnstudio"))
-    assert Enum.any?(dawn["web_context"], &(&1["query"] == "Kilnstudio company"))
+    assert Enum.any?(dawn["web_context"], &(&1["query"] == "Dawn Nguyen kilnstudio.io"))
+    assert Enum.any?(dawn["web_context"], &(&1["query"] == "Kiln Studio kilnstudio.io"))
 
-    assert_received {:web_search, "Dawn Nguyen Kilnstudio", [limit: 3]}
-    assert_received {:web_search, "Kilnstudio company", [limit: 3]}
+    assert Enum.any?(dawn["web_context"], fn context ->
+             Enum.any?(context["page_contexts"] || [], fn page ->
+               page["title"] == "Kiln Studio" and
+                 page["text"] =~ "Scoped agent builds start at $5K"
+             end)
+           end)
+
+    assert_received {:web_search, "Dawn Nguyen kilnstudio.io", [limit: 3]}
+    assert_received {:web_search, "Kiln Studio kilnstudio.io", [limit: 3]}
+    assert_received {:page_fetch, "https://kilnstudio.io/", [text_limit: 1800]}
     refute_received {:web_search, "Coach School", _opts}
     refute_received {:web_search, "School company", _opts}
     refute_received {:web_search, "Coach Club Soccer", _opts}
