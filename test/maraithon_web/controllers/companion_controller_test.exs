@@ -769,6 +769,155 @@ defmodule MaraithonWeb.CompanionControllerTest do
     )
   end
 
+  describe "GET /api/v1/companion/devices" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = get(conn, "/api/v1/companion/devices")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "lists devices with per-source counts and flags current", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      {:ok, %{device: other_device}} =
+        Devices.register(user.id, Ecto.UUID.generate(), device_name: "Old MBP")
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user.id, device.device_id, [
+          sample_message("dev-g1"),
+          sample_message("dev-g2")
+        ])
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/v1/companion/devices")
+
+      body = json_response(conn, 200)
+      assert body["current_device_id"] == device.id
+
+      devices = body["devices"]
+      assert length(devices) == 2
+
+      current = Enum.find(devices, & &1["is_current"])
+      assert current["device_id"] == device.device_id
+      assert current["counts"]["messages_count"] == 2
+
+      other = Enum.find(devices, &(&1["device_id"] == other_device.device_id))
+      assert other["is_current"] == false
+      assert other["counts"]["messages_count"] == 0
+    end
+
+    test "only shows devices that belong to the calling user", %{conn: conn} do
+      %{token: token} = pair_device("companion-list-a-#{System.unique_integer([:positive])}@x.io")
+
+      %{user: stranger} =
+        pair_device("companion-list-b-#{System.unique_integer([:positive])}@x.io")
+
+      assert length(Devices.list_for_user(stranger.id)) == 1
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/v1/companion/devices")
+
+      body = json_response(conn, 200)
+      device_ids = Enum.map(body["devices"], & &1["device_id"])
+      refute Enum.any?(Devices.list_for_user(stranger.id), &(&1.device_id in device_ids))
+    end
+  end
+
+  describe "POST /api/v1/companion/devices/:id/revoke" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = post(conn, "/api/v1/companion/devices/x/revoke")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "revokes a device that belongs to the user", %{conn: conn} do
+      %{user: user, token: token} = pair_device()
+
+      {:ok, %{device: target}} =
+        Devices.register(user.id, Ecto.UUID.generate(), device_name: "Spare Mac")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/devices/#{target.id}/revoke")
+
+      body = json_response(conn, 200)
+      assert body["status"] == "revoked"
+      assert body["id"] == target.id
+      assert body["device_id"] == target.device_id
+
+      reloaded = Devices.get(user.id, target.id)
+      assert reloaded.revoked_at
+    end
+
+    test "404 when the device does not belong to the user", %{conn: conn} do
+      %{token: token} = pair_device("companion-revoke-a-#{System.unique_integer([:positive])}@x.io")
+
+      %{user: stranger} =
+        pair_device("companion-revoke-b-#{System.unique_integer([:positive])}@x.io")
+
+      [other_device] = Devices.list_for_user(stranger.id)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/devices/#{other_device.id}/revoke")
+
+      assert json_response(conn, 404)["error"] =~ "device not found"
+    end
+  end
+
+  describe "DELETE /api/v1/companion/devices/:id" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = delete(conn, "/api/v1/companion/devices/x")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "purges device data and removes the row", %{conn: conn} do
+      %{user: user, token: token} = pair_device()
+
+      {:ok, %{device: target}} =
+        Devices.register(user.id, Ecto.UUID.generate(), device_name: "Spare Mac")
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user.id, target.device_id, [
+          sample_message("dev-del-1"),
+          sample_message("dev-del-2")
+        ])
+
+      assert message_count(user.id, target.device_id) == 2
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{target.id}")
+
+      body = json_response(conn, 200)
+      assert body["status"] == "deleted"
+      assert body["deleted"]["messages"] == 2
+      assert message_count(user.id, target.device_id) == 0
+      refute Devices.get(user.id, target.id)
+    end
+
+    test "404 when the device belongs to another user", %{conn: conn} do
+      %{token: token} = pair_device("companion-del-a-#{System.unique_integer([:positive])}@x.io")
+
+      %{user: stranger} =
+        pair_device("companion-del-b-#{System.unique_integer([:positive])}@x.io")
+
+      [other_device] = Devices.list_for_user(stranger.id)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{other_device.id}")
+
+      assert json_response(conn, 404)["error"] =~ "device not found"
+    end
+  end
+
   describe "POST /api/v1/companion/browser-history" do
     test "401 without bearer token", %{conn: conn} do
       conn = post(conn, "/api/v1/companion/browser-history", %{visits: []})
@@ -846,6 +995,222 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> post("/api/v1/companion/browser-history", %{})
 
       assert json_response(conn, 400)["error"] =~ "visits"
+    end
+  end
+
+  describe "POST /api/v1/companion/device-keys" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = post(conn, "/api/v1/companion/device-keys", %{})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 happy path: stores the device's public key", %{conn: conn} do
+      %{device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{
+          "key_id" => "k-2026",
+          "public_key" => "base64-curve25519-bytes"
+        })
+
+      body = json_response(conn, 200)
+      assert body["key_id"] == "k-2026"
+      assert body["public_key"] == "base64-curve25519-bytes"
+      assert body["device_id"] == device.device_id
+    end
+
+    test "400 when key_id is missing", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{"public_key" => "p"})
+
+      assert json_response(conn, 400)["error"] =~ "key_id"
+    end
+
+    test "400 when public_key is missing", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{"key_id" => "k1"})
+
+      assert json_response(conn, 400)["error"] =~ "public_key"
+    end
+
+    test "refreshing the same key_id returns the same payload (idempotent)", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      _ =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{
+          "key_id" => "k1",
+          "public_key" => "first"
+        })
+
+      conn2 =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{
+          "key_id" => "k1",
+          "public_key" => "second"
+        })
+
+      body = json_response(conn2, 200)
+      assert body["public_key"] == "second"
+    end
+  end
+
+  describe "GET /api/v1/companion/device-keys/me" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = get(conn, "/api/v1/companion/device-keys/me")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "returns the latest non-revoked key for the device", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      _ =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{
+          "key_id" => "k-current",
+          "public_key" => "current-pub"
+        })
+
+      conn2 =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/v1/companion/device-keys/me")
+
+      body = json_response(conn2, 200)
+      assert body["key"]["key_id"] == "k-current"
+      assert body["key"]["public_key"] == "current-pub"
+    end
+
+    test "returns key: null when no key is registered", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> get("/api/v1/companion/device-keys/me")
+
+      assert json_response(conn, 200) == %{"key" => nil}
+    end
+  end
+
+  describe "ingest with encrypted_with_device_key" do
+    test "sets the encryption flag + key_id on messages", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/messages", %{
+          "messages" => [
+            sample_message("enc-1", %{
+              "text" => "Y2lwaGVydGV4dA==",
+              "encrypted_with_device_key" => true,
+              "key_id" => "k1"
+            })
+          ]
+        })
+
+      assert json_response(conn, 200)["accepted"] == 1
+
+      msg =
+        Repo.one(
+          from m in LocalMessage,
+            where: m.user_id == ^user.id and m.device_id == ^device.device_id
+        )
+
+      assert msg.encrypted_with_device_key == true
+      assert msg.key_id == "k1"
+    end
+
+    test "sets the encryption flag + key_id on notes", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/notes", %{
+          "notes" => [
+            sample_note("enc-n1", %{
+              "title" => "Y2lwaGVy",
+              "body" => "Y2lwaGVy",
+              "encrypted_with_device_key" => true,
+              "key_id" => "k1"
+            })
+          ]
+        })
+
+      assert json_response(conn, 200)["accepted"] == 1
+
+      note =
+        Repo.one(
+          from n in LocalNote,
+            where: n.user_id == ^user.id and n.device_id == ^device.device_id
+        )
+
+      assert note.encrypted_with_device_key == true
+      assert note.key_id == "k1"
+    end
+  end
+
+  describe "POST /api/v1/companion/recall" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = post(conn, "/api/v1/companion/recall", %{"query" => "wedding"})
+      assert json_response(conn, 401)
+    end
+
+    test "400 when query is missing", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/recall", %{})
+
+      body = json_response(conn, 400)
+      assert body["error"] =~ "query is required"
+    end
+
+    test "200 returns ranked recall results scoped to the calling user", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      {:ok, _} =
+        Maraithon.LocalNotes.ingest_batch(user.id, device.device_id, [
+          %{
+            "local_id" => "n-rc1",
+            "guid" => "n-rc1",
+            "title" => "Wedding planning",
+            "snippet" => "venue, catering, music",
+            "folder" => "Personal",
+            "is_pinned" => false,
+            "created_at" => "2026-05-09T08:00:00Z",
+            "modified_at" => "2026-05-10T13:14:22Z"
+          }
+        ])
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/recall", %{"query" => "wedding"})
+
+      body = json_response(conn, 200)
+      assert body["source"] == "recall_anywhere"
+      assert body["query"] == "wedding"
+      assert is_list(body["results"])
+      assert body["count"] >= 0
+      assert is_list(body["sources_searched"])
     end
   end
 end

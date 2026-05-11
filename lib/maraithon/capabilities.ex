@@ -91,7 +91,14 @@ defmodule Maraithon.Capabilities do
     "browser_history_by_host" => Maraithon.Tools.BrowserHistoryByHost,
     "browser_history_search" => Maraithon.Tools.BrowserHistorySearch,
     "browser_history_get" => Maraithon.Tools.BrowserHistoryGet,
-    "recall_anywhere" => Maraithon.Tools.RecallAnywhere
+    "recall_anywhere" => Maraithon.Tools.RecallAnywhere,
+    "companion_devices_list" => Maraithon.Tools.CompanionDevicesList,
+    "notes_semantic_search" => Maraithon.Tools.NotesSemanticSearch,
+    "voice_memos_semantic_search" => Maraithon.Tools.VoiceMemosSemanticSearch,
+    "messages_semantic_search" => Maraithon.Tools.MessagesSemanticSearch,
+    "calendar_semantic_search" => Maraithon.Tools.CalendarSemanticSearch,
+    "reminders_semantic_search" => Maraithon.Tools.RemindersSemanticSearch,
+    "files_semantic_search" => Maraithon.Tools.FilesSemanticSearch
   }
 
   @tool_descriptions %{
@@ -210,7 +217,21 @@ defmodule Maraithon.Capabilities do
     "browser_history_get" =>
       "Fetch one browser visit by its source GUID, including the full URL and title.",
     "recall_anywhere" =>
-      "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'."
+      "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
+    "companion_devices_list" =>
+      "List the Macs (and other companion devices) the user has paired, with last-seen timestamps and per-source mirrored-row counts. Use when the user asks 'what Macs am I paired on?' or wants to audit which devices are sending data.",
+    "notes_semantic_search" =>
+      "Semantic search of the user's mirrored macOS Notes by meaning (cosine similarity over embeddings), not exact substring. Pairs with `notes_search`: prefer this tool when the user asks 'find the note about something like X' or 'what was that idea I wrote down about ...' and won't recall the exact words.",
+    "voice_memos_semantic_search" =>
+      "Semantic search of the user's mirrored macOS Voice Memos by meaning, not exact substring. Pairs with `voice_memos_search`: prefer this tool when the user asks 'find the memo where I talked about something similar' and won't recall the exact words.",
+    "messages_semantic_search" =>
+      "Semantic search of the user's mirrored iMessage history by meaning, not exact substring. Pairs with `messages_search`: prefer this tool when the user asks 'find the text where we talked about something like X' and won't recall the exact wording. Substring `messages_search` is still right for exact phrase or sender lookups.",
+    "calendar_semantic_search" =>
+      "Semantic search of the user's mirrored macOS Calendar events by meaning, not exact substring. Pairs with `calendar_search`: prefer this tool when the user asks 'when's the meeting about something similar' and won't recall the exact title.",
+    "reminders_semantic_search" =>
+      "Semantic search of the user's mirrored macOS Reminders by meaning, not exact substring. Pairs with `reminders_search`: prefer this tool when the user asks 'do I have a reminder about something like X' and won't recall the exact title.",
+    "files_semantic_search" =>
+      "Semantic search of the user's mirrored macOS files (Documents / Desktop / Downloads) by meaning across filename, path, and extracted text content. Pairs with `files_search`: prefer this tool when the user asks 'find the doc where I wrote about something similar' and won't recall the exact filename or words."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -231,6 +252,9 @@ defmodule Maraithon.Capabilities do
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
     browser_history_recent browser_history_by_host browser_history_search browser_history_get
     recall_anywhere
+    companion_devices_list
+    notes_semantic_search voice_memos_semantic_search messages_semantic_search
+    calendar_semantic_search reminders_semantic_search files_semantic_search
   ))
 
   @destructive_tools MapSet.new(~w(

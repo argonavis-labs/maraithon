@@ -1,0 +1,73 @@
+<Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
+  <div class="space-y-8">
+    <header>
+      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+        Paired devices
+      </h1>
+      <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
+        Macs you have signed in with the Maraithon companion app. Per-source counts come from each
+        device's mirrored data — revoking removes the bearer token; deleting also purges the data.
+      </p>
+    </header>
+
+    <%= if @devices == [] do %>
+      <p class="text-sm/6 text-zinc-500">No devices are paired to this account yet.</p>
+    <% else %>
+      <section>
+        <div class="overflow-x-auto">
+          <.table>
+            <.table_head>
+              <tr>
+                <.table_header>Device</.table_header>
+                <.table_header>Status</.table_header>
+                <.table_header>Last seen</.table_header>
+                <.table_header>Paired</.table_header>
+                <%= for {_key, label} <- MaraithonWeb.AdminPageHTML.source_labels() do %>
+                  <.table_header><%= label %></.table_header>
+                <% end %>
+                <.table_header>
+                  <span class="sr-only">Actions</span>
+                </.table_header>
+              </tr>
+            </.table_head>
+            <.table_body>
+              <%= for {device, stats} <- @devices do %>
+                <.table_row>
+                  <.table_cell class="font-medium">
+                    <span class="block text-sm/6 text-zinc-950">
+                      <%= device.device_name || "Untitled Mac" %>
+                    </span>
+                    <span class="block font-mono text-xs/5 text-zinc-500">
+                      <%= device.device_id %>
+                    </span>
+                  </.table_cell>
+                  <.table_cell>
+                    <span class={[device_state_badge_class(device.revoked_at), "whitespace-nowrap"]}>
+                      <%= device_state_label(device.revoked_at) %>
+                    </span>
+                  </.table_cell>
+                  <.table_cell class="text-zinc-600">
+                    <%= relative_time(device.last_seen_at) %>
+                  </.table_cell>
+                  <.table_cell class="text-zinc-600">
+                    <%= relative_time(device.inserted_at) %>
+                  </.table_cell>
+                  <%= for {key, _label} <- MaraithonWeb.AdminPageHTML.source_labels() do %>
+                    <.table_cell class="text-zinc-600 tabular-nums">
+                      <%= Map.get(stats, key, 0) %>
+                    </.table_cell>
+                  <% end %>
+                  <.table_cell class="text-right">
+                    <span class="font-mono text-xs/5 text-zinc-500">
+                      <%= String.slice(device.id, 0, 8) %>
+                    </span>
+                  </.table_cell>
+                </.table_row>
+              <% end %>
+            </.table_body>
+          </.table>
+        </div>
+      </section>
+    <% end %>
+  </div>
+</Layouts.app>

@@ -11,7 +11,26 @@ defmodule Maraithon.Companion.Devices do
   import Ecto.Query
 
   alias Maraithon.Companion.Device
+  alias Maraithon.LocalBrowserHistory.LocalVisit
+  alias Maraithon.LocalCalendar.LocalEvent
+  alias Maraithon.LocalFiles.LocalFile
+  alias Maraithon.LocalMessages.LocalMessage
+  alias Maraithon.LocalNotes.LocalNote
+  alias Maraithon.LocalReminders.LocalReminder
+  alias Maraithon.LocalVoiceMemos.LocalVoiceMemo
   alias Maraithon.Repo
+
+  @stat_sources [
+    {LocalMessage, :messages_count},
+    {LocalNote, :notes_count},
+    {LocalVoiceMemo, :voice_memos_count},
+    {LocalEvent, :calendar_events_count},
+    {LocalReminder, :reminders_count},
+    {LocalFile, :files_count},
+    {LocalVisit, :browser_visits_count}
+  ]
+
+  @empty_stats Enum.into(@stat_sources, %{}, fn {_schema, key} -> {key, 0} end)
 
   @doc """
   Registers (or refreshes) a paired companion device for a user.
@@ -86,7 +105,40 @@ defmodule Maraithon.Companion.Devices do
   end
 
   @doc """
-  Lists active (non-revoked) devices for a user, most recently seen first.
+  Fetches one device row for the user. Returns `nil` if no row matches.
+  """
+  def get(user_id, id) when is_binary(user_id) and is_binary(id) do
+    Repo.get_by(Device, id: id, user_id: user_id)
+  end
+
+  def get(_user_id, _id), do: nil
+
+  @doc """
+  Deletes one device row and purges all `local_*` rows for that
+  `(user_id, device_id)`. Returns `{:ok, %{device: device, deleted: counts}}`
+  on success, where `counts` maps each source table key (e.g. `:messages`)
+  to the number of rows deleted.
+  """
+  def delete(user_id, id) when is_binary(user_id) and is_binary(id) do
+    case Repo.get_by(Device, id: id, user_id: user_id) do
+      nil ->
+        {:error, :not_found}
+
+      %Device{} = device ->
+        deleted = purge_device_data(user_id, device.device_id)
+
+        case Repo.delete(device) do
+          {:ok, deleted_device} -> {:ok, %{device: deleted_device, deleted: deleted}}
+          error -> error
+        end
+    end
+  end
+
+  @doc """
+  Lists every device row for a user (including revoked), most recently
+  seen first. Callers that want only active rows should filter on
+  `revoked_at` themselves — the admin UI and `enrich_with_stats/1`
+  expect to see revoked rows too so users can audit their pairings.
   """
   def list_for_user(user_id) when is_binary(user_id) do
     Repo.all(
@@ -95,6 +147,72 @@ defmodule Maraithon.Companion.Devices do
         order_by: [desc: coalesce(device.last_seen_at, device.inserted_at)]
     )
   end
+
+  @doc """
+  Returns `[{device, stats_map}]` for the given devices, where `stats_map`
+  carries the per-source row counts pulled from each `local_*` table.
+
+  Implementation note: we issue one grouped `count(*) … GROUP BY device_id`
+  query per source schema rather than per-device round-trips. With seven
+  source tables and a single fan-in `Map.merge/2`, this is `O(sources)`
+  queries — independent of how many devices the user has paired.
+
+  Counts are scoped to the device owner's `user_id` so cross-user noise
+  cannot leak in.
+  """
+  def enrich_with_stats(devices) when is_list(devices) do
+    device_ids = Enum.map(devices, & &1.device_id)
+    user_ids = devices |> Enum.map(& &1.user_id) |> Enum.uniq()
+
+    counts_by_device =
+      if device_ids == [] do
+        %{}
+      else
+        @stat_sources
+        |> Enum.reduce(%{}, fn {schema, key}, acc ->
+          schema
+          |> count_query(user_ids, device_ids)
+          |> Repo.all()
+          |> Enum.reduce(acc, fn {device_id, count}, inner ->
+            inner
+            |> Map.put_new(device_id, %{})
+            |> Map.update!(device_id, &Map.put(&1, key, count))
+          end)
+        end)
+      end
+
+    Enum.map(devices, fn device ->
+      counts = Map.get(counts_by_device, device.device_id, %{})
+      {device, Map.merge(@empty_stats, counts)}
+    end)
+  end
+
+  defp count_query(schema, user_ids, device_ids) do
+    from row in schema,
+      where: row.user_id in ^user_ids and row.device_id in ^device_ids,
+      group_by: row.device_id,
+      select: {row.device_id, count(row.id)}
+  end
+
+  defp purge_device_data(user_id, device_id) do
+    Enum.into(@stat_sources, %{}, fn {schema, key} ->
+      {count, _} =
+        Repo.delete_all(
+          from row in schema,
+            where: row.user_id == ^user_id and row.device_id == ^device_id
+        )
+
+      {stat_key_to_table_key(key), count}
+    end)
+  end
+
+  defp stat_key_to_table_key(:messages_count), do: :messages
+  defp stat_key_to_table_key(:notes_count), do: :notes
+  defp stat_key_to_table_key(:voice_memos_count), do: :voice_memos
+  defp stat_key_to_table_key(:calendar_events_count), do: :calendar_events
+  defp stat_key_to_table_key(:reminders_count), do: :reminders
+  defp stat_key_to_table_key(:files_count), do: :files
+  defp stat_key_to_table_key(:browser_visits_count), do: :browser_visits
 
   @doc """
   Verifies a plaintext bearer token. Returns the device if it exists,

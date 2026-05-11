@@ -92,6 +92,7 @@ defmodule MaraithonWeb.Router do
     pipe_through [:browser, :browser_admin]
 
     get "/admin", AdminPageController, :index
+    get "/admin/companion-devices", AdminPageController, :companion_devices
     get "/settings", SettingsController, :index
   end
 
@@ -164,7 +165,13 @@ defmodule MaraithonWeb.Router do
     post "/reminders", CompanionController, :ingest_reminders
     post "/files", CompanionController, :ingest_files
     post "/browser-history", CompanionController, :ingest_browser_history
+    post "/recall", CompanionController, :recall
+    post "/device-keys", CompanionController, :upload_device_key
+    get "/device-keys/me", CompanionController, :current_device_key
     get "/whoami", CompanionController, :whoami
+    get "/devices", CompanionController, :list_devices
+    post "/devices/:id/revoke", CompanionController, :revoke_device
+    delete "/devices/:id", CompanionController, :delete_device
     delete "/devices/:id/messages", CompanionController, :purge_messages
   end
 

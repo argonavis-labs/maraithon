@@ -10,6 +10,8 @@ defmodule MaraithonWeb.CompanionController do
   require Logger
 
   alias Maraithon.Accounts
+  alias Maraithon.Companion.DeviceKeys
+  alias Maraithon.Companion.Devices
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalFiles
@@ -17,9 +19,12 @@ defmodule MaraithonWeb.CompanionController do
   alias Maraithon.LocalNotes
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
+  alias Maraithon.Tools.RecallAnywhere
 
   @max_batch_size 500
   @max_files_batch_size 200
+  @recall_default_limit 20
+  @recall_max_limit 50
 
   @doc """
   POST /api/v1/companion/messages
@@ -198,6 +203,43 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   @doc """
+  POST /api/v1/companion/recall
+
+  Cross-source semantic + substring recall for the desktop Recall panel.
+  Wraps `Maraithon.Tools.RecallAnywhere.execute/1` so the Mac app can
+  surface the same unified search the assistant uses, without going
+  through the chat surface.
+
+  Body:
+    * `query` (required) — the user's natural-language question
+    * `limit` (optional) — clamp result count (default 20, max 50)
+    * `sources` (optional) — list of source ids to restrict to
+  """
+  def recall(conn, params) do
+    user_id = conn.assigns.current_user_id
+
+    case extract_recall_args(params, user_id) do
+      {:ok, args} ->
+        case RecallAnywhere.execute(args) do
+          {:ok, result} ->
+            json(conn, result)
+
+          {:error, reason} ->
+            Logger.warning("companion recall failed", reason: inspect(reason))
+
+            conn
+            |> put_status(:bad_request)
+            |> json(%{error: format_error(reason)})
+        end
+
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: message})
+    end
+  end
+
+  @doc """
   GET /api/v1/companion/whoami
 
   Returns the email + device metadata the current bearer token is bound to.
@@ -221,6 +263,86 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   @doc """
+  GET /api/v1/companion/devices
+
+  Returns the list of devices paired to the calling user with last-seen
+  metadata and per-source row counts. The current device is flagged so
+  the desktop app can render a "This Mac" badge.
+  """
+  def list_devices(conn, _params) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    devices_with_stats =
+      user_id
+      |> Devices.list_for_user()
+      |> Devices.enrich_with_stats()
+
+    json(conn, %{
+      current_device_id: device.id,
+      devices: Enum.map(devices_with_stats, &serialize_device(&1, device))
+    })
+  end
+
+  @doc """
+  POST /api/v1/companion/devices/:id/revoke
+
+  Revokes a paired device's bearer token. The device must belong to the
+  calling user. Idempotent: a second call returns the already-revoked row.
+  """
+  def revoke_device(conn, %{"id" => id}) do
+    user_id = conn.assigns.current_user_id
+
+    case Devices.revoke(user_id, id) do
+      {:ok, device} ->
+        json(conn, %{
+          status: "revoked",
+          device_id: device.device_id,
+          id: device.id,
+          revoked_at: device.revoked_at
+        })
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "device not found"})
+    end
+  end
+
+  @doc """
+  DELETE /api/v1/companion/devices/:id
+
+  Deletes a paired device and purges every `local_*` row that belongs to
+  it. Returns the per-source delete counts so the caller can show a
+  receipt. The device must belong to the calling user.
+  """
+  def delete_device(conn, %{"id" => id}) do
+    user_id = conn.assigns.current_user_id
+
+    case Devices.delete(user_id, id) do
+      {:ok, %{device: device, deleted: counts}} ->
+        json(conn, %{
+          status: "deleted",
+          device_id: device.device_id,
+          id: device.id,
+          deleted: counts
+        })
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "device not found"})
+
+      {:error, reason} ->
+        Logger.warning("companion device delete failed", reason: inspect(reason))
+
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "delete_failed"})
+    end
+  end
+
+  @doc """
   DELETE /api/v1/companion/devices/:id/messages
 
   Purges all local messages for a given device row id. The device must
@@ -240,6 +362,103 @@ defmodule MaraithonWeb.CompanionController do
         conn
         |> put_status(:not_found)
         |> json(%{error: "device not found"})
+    end
+  end
+
+  @doc """
+  POST /api/v1/companion/device-keys
+
+  Uploads (or refreshes) a Curve25519 public key for the calling device.
+  The device retains the matching private half in its Keychain and uses
+  it to derive per-record content-encryption keys for opt-in client-side
+  encryption.
+
+  Body:
+
+      {
+        "key_id": "<short, client-chosen identifier>",
+        "public_key": "<base64-encoded Curve25519 public key>"
+      }
+  """
+  def upload_device_key(conn, params) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    with {:ok, key_id} <- fetch_key_id(params),
+         {:ok, public_key} <- fetch_public_key(params),
+         {:ok, key} <-
+           DeviceKeys.upsert(user_id, device.device_id, %{
+             key_id: key_id,
+             public_key: public_key
+           }) do
+      json(conn, %{
+        key_id: key.key_id,
+        public_key: key.public_key,
+        device_id: device.device_id
+      })
+    else
+      {:error, :missing_key_id} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "key_id is required"})
+
+      {:error, :missing_public_key} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "public_key is required"})
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        Logger.warning("device_key upload invalid",
+          errors: inspect(changeset.errors)
+        )
+
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_device_key"})
+    end
+  end
+
+  @doc """
+  GET /api/v1/companion/device-keys/me
+
+  Returns the newest non-revoked public key currently on file for the
+  calling device. The device uses this to detect server-side drift —
+  e.g. another paired Mac uploaded a different key against the same
+  `device_id` — so it can decide whether to re-pair or keep encrypting
+  with the local Keychain key.
+
+  Returns `{"key": null}` when the device has not yet uploaded a key.
+  """
+  def current_device_key(conn, _params) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    case DeviceKeys.current_for(user_id, device.device_id) do
+      nil ->
+        json(conn, %{key: nil})
+
+      key ->
+        json(conn, %{
+          key: %{
+            key_id: key.key_id,
+            public_key: key.public_key,
+            inserted_at: key.inserted_at
+          }
+        })
+    end
+  end
+
+  defp fetch_key_id(params) do
+    case params["key_id"] do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, :missing_key_id}
+    end
+  end
+
+  defp fetch_public_key(params) do
+    case params["public_key"] do
+      value when is_binary(value) and value != "" -> {:ok, value}
+      _ -> {:error, :missing_public_key}
     end
   end
 
@@ -331,6 +550,19 @@ defmodule MaraithonWeb.CompanionController do
     end
   end
 
+  defp serialize_device({device, stats}, current_device) do
+    %{
+      id: device.id,
+      device_id: device.device_id,
+      device_name: device.device_name,
+      last_seen_at: device.last_seen_at,
+      paired_at: device.inserted_at,
+      revoked_at: device.revoked_at,
+      is_current: device.id == current_device.id,
+      counts: stats
+    }
+  end
+
   defp stringify(map) when is_map(map) do
     Map.new(map, fn
       {k, v} when is_atom(k) -> {Atom.to_string(k), v}
@@ -339,4 +571,41 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   defp stringify(other), do: other
+
+  defp extract_recall_args(params, user_id) do
+    case params["query"] do
+      query when is_binary(query) and query != "" ->
+        limit = normalize_recall_limit(params["limit"])
+
+        args =
+          %{"user_id" => user_id, "query" => query, "limit" => limit}
+          |> maybe_add_sources(params["sources"])
+
+        {:ok, args}
+
+      _ ->
+        {:error, "query is required"}
+    end
+  end
+
+  defp normalize_recall_limit(value) when is_integer(value) and value > 0,
+    do: min(value, @recall_max_limit)
+
+  defp normalize_recall_limit(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> min(parsed, @recall_max_limit)
+      _ -> @recall_default_limit
+    end
+  end
+
+  defp normalize_recall_limit(_), do: @recall_default_limit
+
+  defp maybe_add_sources(args, sources) when is_list(sources) do
+    Map.put(args, "sources", sources)
+  end
+
+  defp maybe_add_sources(args, _), do: args
+
+  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason), do: inspect(reason)
 end

@@ -538,6 +538,47 @@ defmodule Maraithon.Tools.InputSchemas do
           ["query"]
         )
 
+      "companion_devices_list" ->
+        user_object(%{})
+
+      "notes_semantic_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "folder" => @string},
+          ["query"]
+        )
+
+      "voice_memos_semantic_search" ->
+        user_object(%{"query" => @string, "limit" => @integer}, ["query"])
+
+      "messages_semantic_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "from_handle" => @string},
+          ["query"]
+        )
+
+      "calendar_semantic_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "since" => @string},
+          ["query"]
+        )
+
+      "reminders_semantic_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "list_name" => @string},
+          ["query"]
+        )
+
+      "files_semantic_search" ->
+        user_object(
+          %{
+            "query" => @string,
+            "limit" => @integer,
+            "extension" => @string,
+            "path_substring" => @string
+          },
+          ["query"]
+        )
+
       _ ->
         object(%{})
     end
