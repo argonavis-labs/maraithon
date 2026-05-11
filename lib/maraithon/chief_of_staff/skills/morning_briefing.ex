@@ -33,9 +33,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 18_000
+  @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "high"
-  @default_llm_timeout_ms 300_000
+  @default_llm_timeout_ms 600_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
   @prompt_gmail_body_limit 900
@@ -200,7 +200,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       llm_timeout_ms:
-        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 300_000),
+        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 600_000),
       pending_brief_input: nil,
       pending_dedupe_key: nil,
       last_generated_keys: %{}

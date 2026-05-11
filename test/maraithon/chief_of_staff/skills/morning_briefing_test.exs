@@ -197,9 +197,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 18_000
+    assert params["max_tokens"] == 64_000
     assert params["reasoning_effort"] == "high"
-    assert params["timeout_ms"] == 300_000
+    assert params["timeout_ms"] == 600_000
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
@@ -476,7 +476,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 18_000
+    assert params["max_tokens"] == 64_000
   end
 
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
