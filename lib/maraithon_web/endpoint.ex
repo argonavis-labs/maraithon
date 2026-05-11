@@ -16,6 +16,14 @@ defmodule MaraithonWeb.Endpoint do
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
 
+  # Realtime ingest channel for the Maraithon Companion macOS app.
+  # Authentication happens inside `MaraithonWeb.CompanionSocket.connect/3`
+  # via the bearer token supplied as the `"token"` connect param — the
+  # same plaintext token clients use against `/api/v1/companion/*`.
+  socket "/companion/socket", MaraithonWeb.CompanionSocket,
+    websocket: [connect_info: [peer_data: true, user_agent: true]],
+    longpoll: false
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),
