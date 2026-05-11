@@ -16,6 +16,18 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_slack_channel_limit 12
   @default_slack_message_limit 8
   @default_lookback_hours 24 * 14
+  @commercial_gmail_lookback_days 7
+  @commercial_gmail_query_limit 5
+  @commercial_gmail_queries [
+    "newer_than:7d Cogniate",
+    "newer_than:7d Glossier",
+    "newer_than:7d \"team plan\"",
+    "newer_than:7d \"Ultra plan\"",
+    "newer_than:7d Enterprise",
+    "newer_than:7d discount",
+    "newer_than:7d intro",
+    "newer_than:7d availability"
+  ]
   @default_forward_days 14
   @default_slack_key_channels [
     "runner-general",
@@ -411,7 +423,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       bundle = SourceBundle.mark_unavailable(bundle, "gmail", "google_gmail_not_connected")
       {put_source_summary(telemetry, "gmail", %{"status" => "unavailable"}), bundle}
     else
-      lookback_days = max(div(plan.lookback_hours, 24), 1)
+      lookback_days = max(div(plan.lookback_hours, 24), @commercial_gmail_lookback_days)
       query = "newer_than:#{lookback_days}d"
 
       {messages_by_provider, fetches} =
@@ -424,8 +436,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
+              commercial_messages = fetch_commercial_gmail_messages(user_id, provider)
+
               annotated =
-                messages
+                (messages ++ commercial_messages)
+                |> dedupe_messages()
                 |> annotate_google_items(source_scope, provider)
                 |> enrich_gmail_messages(user_id, provider)
 
@@ -438,6 +453,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "mode" => "connector",
                     "status" => "ok",
                     "count" => length(annotated),
+                    "commercial_search_count" => length(commercial_messages),
                     "full_body_count" => count_full_body_messages(annotated),
                     "body_missing_count" => count_body_missing_messages(annotated)
                   }
@@ -474,6 +490,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         messages_by_provider
         |> Map.values()
         |> List.flatten()
+        |> dedupe_messages()
         |> sort_messages()
         |> Enum.take(plan.gmail_message_limit)
 
@@ -885,6 +902,32 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp enrich_gmail_messages(_messages, _user_id, _default_provider), do: []
 
+  defp fetch_commercial_gmail_messages(user_id, provider) do
+    @commercial_gmail_queries
+    |> Enum.flat_map(fn query ->
+      case gmail_module().fetch_messages(user_id,
+             max_results: @commercial_gmail_query_limit,
+             label_ids: [],
+             query: query,
+             provider: provider
+           ) do
+        {:ok, messages} ->
+          messages
+
+        {:error, reason} ->
+          Logger.debug("ChiefOfStaff commercial Gmail search failed",
+            user_id: user_id,
+            provider: provider,
+            query: query,
+            reason: inspect(reason)
+          )
+
+          []
+      end
+    end)
+    |> dedupe_messages()
+  end
+
   defp enrich_gmail_message(user_id, message, default_provider) do
     metadata = stringify_keys(message)
     provider = Map.get(metadata, "google_provider") || default_provider
@@ -1150,6 +1193,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp sort_messages(messages) when is_list(messages) do
     Enum.sort_by(messages, &message_sort_key/1, :desc)
+  end
+
+  defp dedupe_messages(messages) when is_list(messages) do
+    Enum.uniq_by(messages, fn message ->
+      Map.get(message, "message_id") ||
+        Map.get(message, :message_id) ||
+        Map.get(message, "id") ||
+        Map.get(message, :id) ||
+        :erlang.phash2(message)
+    end)
   end
 
   defp sort_events(events) when is_list(events) do

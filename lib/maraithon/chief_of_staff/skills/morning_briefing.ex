@@ -36,6 +36,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "high"
   @default_llm_timeout_ms 600_000
+  @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
   @prompt_gmail_body_limit 900
@@ -348,6 +349,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     local_date = local_date(now, state)
     tomorrow = Date.add(local_date, 1)
     lookback_start = DateTime.add(now, -state.lookback_hours, :hour)
+    commercial_lookback_start = DateTime.add(now, -@commercial_thread_lookback_hours, :hour)
     email_prompt_limit = min(state.email_scan_limit, 30)
     slack_prompt_limit = min(max(state.slack_message_scan_limit, 20), 60)
 
@@ -382,7 +384,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         true -> "none"
       end
 
-    gmail_messages = SourceBundle.gmail_inbox_messages(source_bundle)
+    gmail_messages = SourceBundle.gmail_messages(source_bundle)
+    gmail_inbox_messages = SourceBundle.gmail_inbox_messages(source_bundle)
     slack_messages = SourceBundle.slack_messages(source_bundle)
     news_items = SourceBundle.news_items(source_bundle)
 
@@ -527,31 +530,32 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "gmail" => %{
         "commercial_threads" =>
           gmail_messages
-          |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+          |> Enum.filter(&recent_gmail_message?(&1, commercial_lookback_start))
           |> Enum.filter(&commercial_thread_candidate?/1)
           |> Enum.map(&gmail_message_for_prompt/1)
           |> Enum.take(@commercial_thread_limit),
         "recent_inbox" =>
-          gmail_messages
+          gmail_inbox_messages
           |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
           |> Enum.map(&gmail_message_for_prompt/1)
           |> Enum.take(email_prompt_limit),
         "recent_unread" =>
-          gmail_messages
+          gmail_inbox_messages
           |> Enum.filter(&recent_unread_message?(&1, lookback_start))
           |> Enum.map(&gmail_message_for_prompt/1)
           |> Enum.take(email_prompt_limit),
         "counts" => %{
-          "inbox" => length(gmail_messages),
+          "messages" => length(gmail_messages),
+          "inbox" => length(gmail_inbox_messages),
           "commercial_threads" =>
             Enum.count(gmail_messages, fn message ->
-              recent_gmail_message?(message, lookback_start) and
+              recent_gmail_message?(message, commercial_lookback_start) and
                 commercial_thread_candidate?(message)
             end),
           "recent_inbox" =>
-            Enum.count(gmail_messages, &recent_gmail_message?(&1, lookback_start)),
+            Enum.count(gmail_inbox_messages, &recent_gmail_message?(&1, lookback_start)),
           "recent_unread" =>
-            Enum.count(gmail_messages, &recent_unread_message?(&1, lookback_start))
+            Enum.count(gmail_inbox_messages, &recent_unread_message?(&1, lookback_start))
         }
       },
       "slack" => %{

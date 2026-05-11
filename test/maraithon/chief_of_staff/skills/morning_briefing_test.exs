@@ -82,6 +82,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "body_available" => true,
             "body_status" => "available",
             "internal_date" => now
+          },
+          %{
+            "message_id" => "msg-3",
+            "thread_id" => "thread-3",
+            "labels" => [],
+            "from" => "Charlie Feng <charlie@runner.now>",
+            "subject" => "Cogniate Enterprise plan discussion",
+            "snippet" => "Looping Kent for pricing guidance.",
+            "text_body" => "Charlie looped Kent into the Cogniate Enterprise plan discussion.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => DateTime.add(now, -3, :day)
           }
         ],
         "inbox_messages" => [
@@ -105,18 +117,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "subject" => "Dive Into SKIMS Swim",
             "snippet" => "Limited time offer.",
             "text_body" => "Promotional retail offer for swimwear.",
-            "body_available" => true,
-            "body_status" => "available",
-            "internal_date" => now
-          },
-          %{
-            "message_id" => "msg-3",
-            "thread_id" => "thread-3",
-            "labels" => ["INBOX"],
-            "from" => "Charlie Feng <charlie@runner.now>",
-            "subject" => "Cogniate Enterprise plan discussion",
-            "snippet" => "Looping Kent for pricing guidance.",
-            "text_body" => "Charlie looped Kent into the Cogniate Enterprise plan discussion.",
             "body_available" => true,
             "body_status" => "available",
             "internal_date" => now
