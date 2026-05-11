@@ -36,6 +36,12 @@ defmodule MaraithonWeb.Router do
     get "/", HealthController, :index
   end
 
+  # Sparkle appcast for the Mac companion app. Public by design — every
+  # installed app must be able to read it without device credentials.
+  scope "/companion", MaraithonWeb do
+    get "/appcast.xml", AppcastController, :show
+  end
+
   # Public auth routes
   scope "/", MaraithonWeb do
     pipe_through :browser
