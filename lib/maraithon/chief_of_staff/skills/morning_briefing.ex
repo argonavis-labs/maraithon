@@ -34,7 +34,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_news_limit 6
   @default_lookback_hours 18
   @default_llm_max_tokens 64_000
-  @default_llm_reasoning_effort "medium"
+  @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @local_imessage_chat_limit 8
   @local_notes_limit 10
@@ -428,6 +428,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         max_web_queries: 8
       )
 
+    schedule_coverage = schedule_coverage_contract(meeting_prep)
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
@@ -442,6 +444,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.take(@local_calendar_limit)
       },
       "meeting_prep" => meeting_prep,
+      "schedule_coverage" => schedule_coverage,
       "imessage" => %{
         "chats" =>
           imessage_chats
@@ -792,6 +795,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
        before public web context. Use web snippets only as fallback evidence for attendees
        or companies missing from CRM, and keep uncertainty visible when the evidence is thin.
+
+       Schedule coverage contract:
+       Required external meetings are a hard coverage contract, not a ranking hint. If
+       schedule_coverage.required_meetings is non-empty, Today's Schedule must include
+       every item in that list. Use model judgment for what the meeting means and how Kent
+       should prepare; do not write a heuristic digest. Do not say the calendar is open
+       when calendar.today_events or schedule_coverage.required_meetings is non-empty.
+       Before returning JSON, perform a final model review that the body includes every
+       required external meeting with time, attendee or organization, why it matters, and
+       the prep point, decision, or risk Kent should carry into it.
 
        Brief input JSON:
        #{input_json}
@@ -1292,6 +1305,46 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp event_on_date?(_event, _date, _offset_hours), do: false
 
+  defp schedule_coverage_contract(meeting_prep) when is_map(meeting_prep) do
+    required_meetings =
+      meeting_prep
+      |> read_list("meetings")
+      |> Enum.filter(&truthy?(read_any(&1, "schedule_required")))
+      |> Enum.map(&required_schedule_meeting_for_prompt/1)
+
+    %{
+      "policy" =>
+        "Every required_meetings item must appear in Today's Schedule. The model still decides the executive read, prep, risk, and wording.",
+      "required_meetings" => required_meetings,
+      "counts" => %{"required_meetings" => length(required_meetings)}
+    }
+  end
+
+  defp schedule_coverage_contract(_meeting_prep) do
+    %{
+      "policy" =>
+        "Every required_meetings item must appear in Today's Schedule. The model still decides the executive read, prep, risk, and wording.",
+      "required_meetings" => [],
+      "counts" => %{"required_meetings" => 0}
+    }
+  end
+
+  defp required_schedule_meeting_for_prompt(meeting) when is_map(meeting) do
+    %{
+      "event_id" => read_string(meeting, "event_id", nil),
+      "summary" => read_string(meeting, "summary", nil),
+      "start" => read_any(meeting, "start"),
+      "end" => read_any(meeting, "end"),
+      "external_attendees" => read_list(meeting, "external_attendees"),
+      "candidate_people_and_orgs" => read_list(meeting, "candidate_people_and_orgs"),
+      "crm_context" => read_list(meeting, "crm_context"),
+      "web_context" => read_list(meeting, "web_context"),
+      "data_gaps" => read_list(meeting, "data_gaps"),
+      "briefing_reason" => read_string(meeting, "briefing_reason", nil)
+    }
+    |> compact_map()
+  end
+
   defp event_sort_key(event) when is_map(event) do
     case read_any(event, "start") do
       %DateTime{} = value -> DateTime.to_unix(value, :microsecond)
@@ -1322,6 +1375,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "browser_top_hosts" => length(get_in(input, ["browser_history", "top_hosts"]) || []),
         "calendar_local_upcoming" => length(get_in(input, ["calendar", "upcoming_local"]) || []),
         "meeting_prep_meetings" => get_in(input, ["meeting_prep", "counts", "meetings"]) || 0,
+        "meeting_prep_required_schedule_meetings" =>
+          get_in(input, ["meeting_prep", "counts", "required_schedule_meetings"]) || 0,
+        "schedule_coverage_required_meetings" =>
+          get_in(input, ["schedule_coverage", "counts", "required_meetings"]) || 0,
         "meeting_prep_crm_contexts" =>
           get_in(input, ["meeting_prep", "counts", "crm_contexts"]) || 0,
         "meeting_prep_web_searches" =>
@@ -1471,6 +1528,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp read_integer(_map, _key, default), do: default
 
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_value), do: false
+
   defp read_datetime(map, key) when is_map(map) do
     case read_any(map, key) do
       %DateTime{} = value ->
@@ -1544,7 +1606,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     case normalize_string(value) do
       effort when is_binary(effort) ->
         normalized = String.downcase(effort)
-        if normalized in ["low", "medium", "high", "xhigh"], do: normalized, else: default
+
+        case normalized do
+          effort when effort in ["high", "xhigh"] -> effort
+          effort when effort in ["low", "medium"] -> "high"
+          _other -> default
+        end
 
       _ ->
         default

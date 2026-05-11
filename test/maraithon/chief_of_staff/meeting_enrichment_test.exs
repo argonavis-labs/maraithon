@@ -58,10 +58,20 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
       )
 
     assert get_in(result, ["counts", "meetings"]) == 1
+    assert get_in(result, ["counts", "required_schedule_meetings"]) == 1
     assert get_in(result, ["counts", "crm_contexts"]) == 1
     assert get_in(result, ["counts", "web_searches"]) == 2
 
     [meeting] = result["meetings"]
+    assert meeting["schedule_required"] == true
+    assert meeting["briefing_priority"] == "required_external_meeting"
+    assert meeting["briefing_reason"] =~ "must be covered"
+
+    assert Enum.any?(meeting["external_attendees"], fn attendee ->
+             attendee["display_name"] == "Dawn Nguyen" and
+               attendee["email"] == "dawn@cogniate.com" and
+               attendee["domain"] == "cogniate.com"
+           end)
 
     assert Enum.any?(meeting["crm_context"], fn context ->
              get_in(context, ["person", "display_name"]) == "Charlie Feng" and
@@ -109,5 +119,12 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
 
     assert "Dawn Nguyen and Charlie Feng" in summaries
     assert get_in(result, ["counts", "meetings"]) == 10
+    assert get_in(result, ["counts", "required_schedule_meetings"]) == 1
+
+    assert Enum.any?(result["meetings"], fn meeting ->
+             meeting["summary"] == "Dawn Nguyen and Charlie Feng" and
+               meeting["schedule_required"] == true and
+               Enum.any?(meeting["external_attendees"], &(&1["email"] == "dawn@kilnstudio.io"))
+           end)
   end
 end

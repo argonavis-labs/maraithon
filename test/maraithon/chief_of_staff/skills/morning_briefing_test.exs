@@ -186,13 +186,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
     assert params["max_tokens"] == 64_000
-    assert params["reasoning_effort"] == "medium"
+    assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"
     assert prompt =~ "Treat meeting prep as CRM-first"
+    assert prompt =~ "Required external meetings are a hard coverage contract"
+    assert prompt =~ "\"schedule_coverage\""
+    assert prompt =~ "\"required_meetings\""
     assert prompt =~ "body_available"
     assert prompt =~ "meeting_prep"
     assert prompt =~ "Instagram reported a new login"
@@ -240,6 +243,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert get_in(brief.metadata, ["brief_input", "counts", "relationships"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "deep_memory"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "meeting_prep_meetings"]) == 1
+
+    assert get_in(brief.metadata, [
+             "brief_input",
+             "counts",
+             "meeting_prep_required_schedule_meetings"
+           ]) == 1
+
+    assert get_in(brief.metadata, ["brief_input", "counts", "schedule_coverage_required_meetings"]) ==
+             1
   end
 
   test "persists model-emitted morning todos through todo intelligence", %{
@@ -424,6 +436,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["model"] == "gpt-5.4"
     assert params["max_tokens"] == 4096
     assert params["reasoning_effort"] == "xhigh"
+  end
+
+  test "keeps morning briefing on the high-reasoning path", %{user_id: user_id} do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_reasoning_effort" => "medium"
+      })
+
+    context = %{
+      agent_id: "agent-llm-minimum-reasoning",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["reasoning_effort"] == "high"
   end
 
   test "does not generate a morning brief when Telegram is not connected", %{agent: agent} do

@@ -53,6 +53,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "meetings" => meetings,
       "counts" => %{
         "meetings" => length(meetings),
+        "required_schedule_meetings" => Enum.count(meetings, &schedule_required?/1),
         "crm_contexts" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "crm_context")))),
         "web_searches" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "web_context")))),
         "data_gaps" => Enum.sum(Enum.map(meetings, &length(read_list(&1, "data_gaps"))))
@@ -65,7 +66,13 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "policy" =>
         "CRM-first meeting prep: use CRM/open-work context first; when CRM has no match for a participant or company, use bounded public web search as fallback and keep uncertainty visible.",
       "meetings" => [],
-      "counts" => %{"meetings" => 0, "crm_contexts" => 0, "web_searches" => 0, "data_gaps" => 0}
+      "counts" => %{
+        "meetings" => 0,
+        "required_schedule_meetings" => 0,
+        "crm_contexts" => 0,
+        "web_searches" => 0,
+        "data_gaps" => 0
+      }
     }
   end
 
@@ -407,6 +414,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp event_core(event) when is_map(event) do
+    external_attendees = external_attendee_details(event)
+    schedule_required? = external_attendees != []
+
     %{
       "event_id" => read_string(event, "event_id"),
       "summary" => read_string(event, "summary"),
@@ -414,10 +424,24 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "end" => read_any(event, "end"),
       "location" => read_string(event, "location"),
       "attendees" => read_list(event, "attendees") |> Enum.take(12),
+      "external_attendees" => external_attendees,
+      "schedule_required" => schedule_required?,
+      "briefing_priority" =>
+        if(schedule_required?, do: "required_external_meeting", else: "standard_meeting"),
+      "briefing_reason" =>
+        if(schedule_required?,
+          do: "External attendee meeting; must be covered in Today's Schedule.",
+          else: nil
+        ),
       "organizer" => read_string(event, "organizer"),
       "html_link" => read_string(event, "html_link")
     }
   end
+
+  defp schedule_required?(meeting) when is_map(meeting),
+    do: Map.get(meeting, "schedule_required") == true
+
+  defp schedule_required?(_meeting), do: false
 
   defp meeting_like?(event) when is_map(event) do
     read_string(event, "summary") != nil and
@@ -457,6 +481,57 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       |> external_email?()
     end)
   end
+
+  defp external_attendee_details(event) do
+    event
+    |> read_list("attendees")
+    |> Enum.flat_map(&external_attendee_detail/1)
+  end
+
+  defp external_attendee_detail(%{} = attendee) do
+    email = attendee_email(attendee)
+
+    if external_email?(email) do
+      [
+        %{
+          "display_name" =>
+            read_string(attendee, "display_name") ||
+              read_string(attendee, "displayName") ||
+              read_string(attendee, "name") ||
+              name_from_email(email),
+          "email" => email,
+          "domain" => email_domain(email)
+        }
+        |> compact_map()
+      ]
+    else
+      []
+    end
+  end
+
+  defp external_attendee_detail(attendee) when is_binary(attendee) do
+    email = attendee_email(attendee)
+
+    if external_email?(email) do
+      name =
+        attendee
+        |> String.replace(~r/<[^>]+>/, "")
+        |> normalize_string()
+
+      [
+        %{
+          "display_name" => name || name_from_email(email),
+          "email" => email,
+          "domain" => email_domain(email)
+        }
+        |> compact_map()
+      ]
+    else
+      []
+    end
+  end
+
+  defp external_attendee_detail(_attendee), do: []
 
   defp attendee_email(%{} = attendee), do: read_string(attendee, "email")
   defp attendee_email(attendee) when is_binary(attendee), do: extract_email(attendee)

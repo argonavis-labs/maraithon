@@ -127,5 +127,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
 
     assert prompt =~ "Dawn Nguyen and Charlie Feng"
     assert prompt =~ "\"meeting_prep\""
+    assert prompt =~ "\"schedule_coverage\""
+    assert prompt =~ "\"schedule_required\":true"
+    assert prompt =~ "Required external meetings are a hard coverage contract"
   end
 end
