@@ -88,12 +88,27 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "thread_id" => "thread-3",
             "labels" => [],
             "from" => "Charlie Feng <charlie@runner.now>",
+            "to" => "Morne <morne@cogniate.ai>, Kent Fenwick <kent@runner.now>",
             "subject" => "Cogniate Enterprise plan discussion",
             "snippet" => "Looping Kent for pricing guidance.",
             "text_body" => "Charlie looped Kent into the Cogniate Enterprise plan discussion.",
             "body_available" => true,
             "body_status" => "available",
             "internal_date" => DateTime.add(now, -3, :day)
+          },
+          %{
+            "message_id" => "msg-4",
+            "thread_id" => "thread-4",
+            "labels" => [],
+            "from" => "Vanta <vantateam@vanta.com>",
+            "to" => "Kent Fenwick <kent@runner.now>",
+            "subject" => "Vanta enterprise security discount",
+            "snippet" => "Enterprise AI security promotion.",
+            "text_body" =>
+              "A generic enterprise discount marketing email sent to a Runner address.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
           }
         ],
         "inbox_messages" => [
@@ -214,6 +229,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "if there are ten material items"
     assert prompt =~ "\"schedule_coverage\""
     assert prompt =~ "\"required_meetings\""
+    assert prompt =~ "Commercial coverage contract"
     assert prompt =~ "body_available"
     assert prompt =~ "meeting_prep"
     assert prompt =~ "Instagram reported a new login"
@@ -228,6 +244,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Instagram"
     assert prompt =~ "SKIMS"
     assert prompt =~ "Cogniate Enterprise plan discussion"
+    refute prompt =~ "Vanta enterprise security discount"
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
     assert prompt =~ "Include news only when it affects Runner"
