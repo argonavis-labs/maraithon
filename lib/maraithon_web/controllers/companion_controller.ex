@@ -11,6 +11,8 @@ defmodule MaraithonWeb.CompanionController do
 
   alias Maraithon.Accounts
   alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalVoiceMemos
 
   @max_batch_size 500
 
@@ -58,6 +60,30 @@ defmodule MaraithonWeb.CompanionController do
         |> put_status(:bad_request)
         |> json(%{error: "device_id does not match this token"})
     end
+  end
+
+  @doc """
+  POST /api/v1/companion/notes
+
+  Accepts a batch of macOS Notes.app notes from a paired device.
+  """
+  def ingest_notes(conn, params) do
+    ingest_collection(conn, params, "notes", "notes", &LocalNotes.ingest_batch/3)
+  end
+
+  @doc """
+  POST /api/v1/companion/voice-memos
+
+  Accepts a batch of macOS Voice Memos recordings from a paired device.
+  """
+  def ingest_voice_memos(conn, params) do
+    ingest_collection(
+      conn,
+      params,
+      "voice_memos",
+      "voice_memos",
+      &LocalVoiceMemos.ingest_batch/3
+    )
   end
 
   @doc """
@@ -119,6 +145,63 @@ defmodule MaraithonWeb.CompanionController do
 
       true ->
         {:ok, messages, source}
+    end
+  end
+
+  defp ingest_collection(conn, params, batch_key, default_source, ingest_fun) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    with {:ok, items, source} <- extract_collection(params, batch_key, default_source),
+         :ok <- validate_device(device, params) do
+      items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
+
+      case ingest_fun.(user_id, device.device_id, items) do
+        {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
+          json(conn, %{
+            accepted: accepted,
+            duplicate: duplicate,
+            invalid: invalid
+          })
+
+        {:error, reason} ->
+          Logger.warning("companion #{batch_key} ingest failed", reason: inspect(reason))
+
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "invalid_batch"})
+      end
+    else
+      {:error, :missing_items} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "#{batch_key} array is required"})
+
+      {:error, :too_many_items} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "batch exceeds maximum of #{@max_batch_size}"})
+
+      {:error, :device_mismatch} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "device_id does not match this token"})
+    end
+  end
+
+  defp extract_collection(params, batch_key, default_source) do
+    source = params["source"] || default_source
+    items = params[batch_key]
+
+    cond do
+      not is_list(items) ->
+        {:error, :missing_items}
+
+      length(items) > @max_batch_size ->
+        {:error, :too_many_items}
+
+      true ->
+        {:ok, items, source}
     end
   end
 

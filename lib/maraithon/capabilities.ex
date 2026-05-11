@@ -65,7 +65,13 @@ defmodule Maraithon.Capabilities do
     "notion_query_database" => Maraithon.Tools.NotionQueryDatabase,
     "notion_create_page" => Maraithon.Tools.NotionCreatePage,
     "notion_update_page" => Maraithon.Tools.NotionUpdatePage,
-    "notion_blocks" => Maraithon.Tools.NotionBlocks
+    "notion_blocks" => Maraithon.Tools.NotionBlocks,
+    "notes_search" => Maraithon.Tools.NotesSearch,
+    "notes_get" => Maraithon.Tools.NotesGet,
+    "notes_list_recent" => Maraithon.Tools.NotesListRecent,
+    "voice_memos_search" => Maraithon.Tools.VoiceMemosSearch,
+    "voice_memos_get" => Maraithon.Tools.VoiceMemosGet,
+    "voice_memos_list_recent" => Maraithon.Tools.VoiceMemosListRecent
   }
 
   @tool_descriptions %{
@@ -136,7 +142,18 @@ defmodule Maraithon.Capabilities do
     "notion_query_database" => "Query a Notion database.",
     "notion_create_page" => "Create a Notion page under a parent page or database.",
     "notion_update_page" => "Update a Notion page.",
-    "notion_blocks" => "List, append, update, or archive Notion blocks."
+    "notion_blocks" => "List, append, update, or archive Notion blocks.",
+    "notes_search" =>
+      "Search the user's mirrored macOS Notes for a substring in title or snippet.",
+    "notes_get" => "Fetch one mirrored macOS Note by its source GUID.",
+    "notes_list_recent" =>
+      "List the user's most recently modified mirrored macOS Notes.",
+    "voice_memos_search" =>
+      "Search the user's mirrored macOS Voice Memos by title substring.",
+    "voice_memos_get" =>
+      "Fetch one mirrored macOS Voice Memo by its source GUID.",
+    "voice_memos_list_recent" =>
+      "List the user's most recently created mirrored macOS Voice Memos."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -149,6 +166,8 @@ defmodule Maraithon.Capabilities do
     linear_get_issue linear_list_issues linear_list_teams
     notaui_list_tasks
     notion_search notion_get_page notion_query_database
+    notes_search notes_get notes_list_recent
+    voice_memos_search voice_memos_get voice_memos_list_recent
   ))
 
   @destructive_tools MapSet.new(~w(

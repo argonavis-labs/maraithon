@@ -402,6 +402,27 @@ defmodule Maraithon.Tools.InputSchemas do
           ["block_id"]
         )
 
+      "notes_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "folder" => @string},
+          ["query"]
+        )
+
+      "notes_get" ->
+        user_object(%{"note_id" => @string}, ["note_id"])
+
+      "notes_list_recent" ->
+        user_object(%{"limit" => @integer, "folder" => @string})
+
+      "voice_memos_search" ->
+        user_object(%{"query" => @string, "limit" => @integer}, ["query"])
+
+      "voice_memos_get" ->
+        user_object(%{"memo_id" => @string}, ["memo_id"])
+
+      "voice_memos_list_recent" ->
+        user_object(%{"limit" => @integer})
+
       _ ->
         object(%{})
     end

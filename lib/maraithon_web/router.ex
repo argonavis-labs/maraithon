@@ -152,6 +152,8 @@ defmodule MaraithonWeb.Router do
     pipe_through [:api, :companion_auth]
 
     post "/messages", CompanionController, :ingest
+    post "/notes", CompanionController, :ingest_notes
+    post "/voice-memos", CompanionController, :ingest_voice_memos
     get "/whoami", CompanionController, :whoami
     delete "/devices/:id/messages", CompanionController, :purge_messages
   end

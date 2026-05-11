@@ -72,6 +72,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     list_projects inspect_project list_implementation_runs list_agents inspect_agent
     list_scheduled_tasks
     explain_action_ledger
+    notes_search notes_get notes_list_recent
+    voice_memos_search voice_memos_get voice_memos_list_recent
   ))
 
   @toolbox_write_tools MapSet.new(~w(
@@ -853,6 +855,74 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "timeout_ms" => %{"type" => "integer", "minimum" => 1000, "maximum" => 30000}
           }
         }
+      ),
+      tool_definition(
+        "notes_search",
+        "Search the user's Apple Notes for a substring in title or body. Use when the user references a note by topic, name, or content they remember writing down.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "folder" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "notes_get",
+        "Fetch a single Apple Note by its id. Use after notes_search returns candidates and you need the full snippet/folder/timestamps.",
+        %{
+          "type" => "object",
+          "required" => ["note_id"],
+          "properties" => %{
+            "note_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "notes_list_recent",
+        "List the user's Apple Notes ordered by most recently modified. Use when the user asks what they wrote down recently or wants a sweep of fresh notes.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "folder" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "voice_memos_search",
+        "Search the user's Apple Voice Memos by title substring. Use when the user mentions a recording they made or asks about a past dictation.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "voice_memos_get",
+        "Fetch a single Apple Voice Memo by its id. Use after voice_memos_search returns candidates and you need duration, size, and timestamps.",
+        %{
+          "type" => "object",
+          "required" => ["memo_id"],
+          "properties" => %{
+            "memo_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "voice_memos_list_recent",
+        "List the user's Apple Voice Memos ordered by most recently created. Use when the user asks about recent recordings or wants a sweep of fresh dictations.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
       )
     ]
   end
@@ -1014,6 +1084,24 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "query_agent" ->
         query_agent(runtime_context, args)
+
+      "notes_search" ->
+        inject_user_and_execute("notes_search", runtime_context, args)
+
+      "notes_get" ->
+        inject_user_and_execute("notes_get", runtime_context, args)
+
+      "notes_list_recent" ->
+        inject_user_and_execute("notes_list_recent", runtime_context, args)
+
+      "voice_memos_search" ->
+        inject_user_and_execute("voice_memos_search", runtime_context, args)
+
+      "voice_memos_get" ->
+        inject_user_and_execute("voice_memos_get", runtime_context, args)
+
+      "voice_memos_list_recent" ->
+        inject_user_and_execute("voice_memos_list_recent", runtime_context, args)
 
       _ ->
         {:error, "unknown_telegram_tool: #{tool_name}"}
