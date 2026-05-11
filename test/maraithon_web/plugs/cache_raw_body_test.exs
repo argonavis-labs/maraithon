@@ -202,5 +202,55 @@ defmodule MaraithonWeb.Plugs.CacheRawBodyTest do
       assert byte_size(read_body) == byte_size(body)
       assert :crypto.hash(:sha256, read_body) == :crypto.hash(:sha256, body)
     end
+
+    @doc """
+    Verifies gzipped bodies are transparently inflated when the request
+    carries `Content-Encoding: gzip`. The macOS companion app sends every
+    ingest batch this way to cut bandwidth; without inflation Plug.Parsers
+    would choke on the compressed bytes and Phoenix would return a generic
+    400 to the client.
+    """
+    test "inflates gzip-encoded bodies" do
+      body = ~s({"notes":[{"guid":"abc","title":"hello"}]})
+      gzipped = :zlib.gzip(body)
+
+      conn =
+        :post
+        |> conn("/test", gzipped)
+        |> Plug.Conn.put_req_header("content-encoding", "gzip")
+
+      {:ok, read_body, conn} = CacheRawBody.read_body(conn, [])
+
+      assert read_body == body
+      assert conn.assigns[:raw_body] == body
+    end
+
+    @doc """
+    Bodies without Content-Encoding are returned as-is — the gunzip path
+    only kicks in for explicitly-gzipped requests.
+    """
+    test "leaves non-gzip bodies untouched" do
+      body = ~s({"plain":"json"})
+      conn = conn(:post, "/test", body)
+
+      {:ok, read_body, _conn} = CacheRawBody.read_body(conn, [])
+
+      assert read_body == body
+    end
+
+    @doc """
+    Bogus gzip bytes return an error tuple — Plug.Parsers will surface
+    the failure as a 400 instead of crashing the connection process.
+    """
+    test "returns :invalid_gzip on malformed gzip body" do
+      bogus = <<0, 1, 2, 3, 4, 5>>
+
+      conn =
+        :post
+        |> conn("/test", bogus)
+        |> Plug.Conn.put_req_header("content-encoding", "gzip")
+
+      assert {:error, :invalid_gzip} = CacheRawBody.read_body(conn, [])
+    end
   end
 end
