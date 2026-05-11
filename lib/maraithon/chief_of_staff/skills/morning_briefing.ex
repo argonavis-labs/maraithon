@@ -26,6 +26,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.OpenLoops
   alias Maraithon.Todos
 
+  require Logger
+
   @default_timezone_offset_hours -5
   @default_morning_hour 8
   @default_email_scan_limit 30
@@ -361,14 +363,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     google_calendar_events = SourceBundle.calendar_events(source_bundle)
     bundle_local_calendar = SourceBundle.calendar_local_events(source_bundle)
 
-    local_calendar_events =
-      maybe_fetch_local(user_id, bundle_local_calendar, fn id ->
+    {local_calendar_events, local_calendar_error} =
+      fetch_local_source(user_id, :calendar_local, bundle_local_calendar, fn id ->
         LocalCalendar.events_around(id,
           since: now,
           until: DateTime.add(now, 48 * 3_600, :second),
           limit: @local_calendar_limit
         )
       end)
+
+    local_calendar_events =
+      local_calendar_events
       |> Enum.map(&local_event_to_prompt/1)
 
     calendar_events =
@@ -394,29 +399,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     bundle_imessage_chats = SourceBundle.imessage_chats(source_bundle)
 
-    imessage_chats =
-      maybe_fetch_local(user_id, bundle_imessage_chats, fn id ->
+    {imessage_chats, imessage_error} =
+      fetch_local_source(user_id, :imessage, bundle_imessage_chats, fn id ->
         LocalMessages.chats_recent(id, limit: @local_imessage_chat_limit, now: now)
       end)
 
     bundle_notes = SourceBundle.notes(source_bundle)
 
-    notes =
-      maybe_fetch_local(user_id, bundle_notes, fn id ->
+    {notes, notes_error} =
+      fetch_local_source(user_id, :notes, bundle_notes, fn id ->
         LocalNotes.recent_for_user(id, limit: @local_notes_limit)
       end)
 
     bundle_memos = SourceBundle.voice_memos(source_bundle)
 
-    voice_memos =
-      maybe_fetch_local(user_id, bundle_memos, fn id ->
+    {voice_memos, voice_memos_error} =
+      fetch_local_source(user_id, :voice_memos, bundle_memos, fn id ->
         LocalVoiceMemos.recent_for_user(id, limit: @local_voice_memo_limit)
       end)
 
     bundle_reminders = SourceBundle.reminders(source_bundle)
 
-    reminders =
-      maybe_fetch_local(user_id, bundle_reminders, fn id ->
+    {reminders, reminders_error} =
+      fetch_local_source(user_id, :reminders, bundle_reminders, fn id ->
         LocalReminders.due_soon(id,
           days_ahead: @local_reminders_days_ahead,
           limit: @local_reminders_limit
@@ -425,8 +430,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     bundle_files = SourceBundle.files(source_bundle)
 
-    files =
-      maybe_fetch_local(user_id, bundle_files, fn id ->
+    {files, files_error} =
+      fetch_local_source(user_id, :files, bundle_files, fn id ->
         id
         |> LocalFiles.recent_for_user(limit: @local_files_limit * 6)
         |> Enum.filter(&allowed_file_extension?/1)
@@ -435,12 +440,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     bundle_visits = SourceBundle.browser_visits(source_bundle)
 
-    visits =
-      maybe_fetch_local(user_id, bundle_visits, fn id ->
+    {visits, browser_history_error} =
+      fetch_local_source(user_id, :browser_history, bundle_visits, fn id ->
         LocalBrowserHistory.recent_visits(id, limit: @local_browser_visits_limit)
       end)
 
     top_hosts = top_browser_hosts(visits, now, @local_browser_top_hosts)
+
+    local_source_errors =
+      [
+        calendar_local: local_calendar_error,
+        imessage: imessage_error,
+        notes: notes_error,
+        voice_memos: voice_memos_error,
+        reminders: reminders_error,
+        files: files_error,
+        browser_history: browser_history_error
+      ]
+      |> Enum.reject(fn {_source, error} -> is_nil(error) end)
+      |> Map.new()
 
     today_events =
       calendar_events
@@ -607,14 +625,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "source_health" =>
         source_bundle
         |> SourceBundle.freshness()
-        |> merge_local_source_health(user_id, now,
-          imessage: imessage_chats,
-          notes: notes,
-          voice_memos: voice_memos,
-          calendar_local: local_calendar_events,
-          reminders: reminders,
-          files: files,
-          browser_history: visits
+        |> merge_local_source_health(
+          user_id,
+          now,
+          [
+            imessage: imessage_chats,
+            notes: notes,
+            voice_memos: voice_memos,
+            calendar_local: local_calendar_events,
+            reminders: reminders,
+            files: files,
+            browser_history: visits
+          ],
+          local_source_errors
         )
     }
   end
@@ -1260,35 +1283,67 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp reminder_due_today?(_reminder, _now), do: false
 
-  defp maybe_fetch_local(user_id, bundle_items, fetch_fun)
+  defp fetch_local_source(user_id, source, bundle_items, fetch_fun)
        when is_binary(user_id) and is_list(bundle_items) and is_function(fetch_fun, 1) do
-    case bundle_items do
-      [] -> fetch_fun.(user_id)
-      items -> items
+    try do
+      items =
+        case bundle_items do
+          [] -> fetch_fun.(user_id)
+          items -> items
+        end
+
+      {items, nil}
+    rescue
+      exception ->
+        error = Exception.message(exception)
+
+        Logger.warning("morning_briefing local source fetch failed",
+          source: to_string(source),
+          error: error,
+          exception: inspect(exception.__struct__)
+        )
+
+        {[], error}
+    catch
+      kind, reason ->
+        error = "#{kind}: #{inspect(reason)}"
+
+        Logger.warning("morning_briefing local source fetch failed",
+          source: to_string(source),
+          error: error
+        )
+
+        {[], error}
     end
   end
 
-  defp maybe_fetch_local(_user_id, _bundle_items, _fetch_fun), do: []
+  defp fetch_local_source(_user_id, _source, _bundle_items, _fetch_fun), do: {[], "invalid_user"}
 
-  defp merge_local_source_health(freshness, user_id, now, sources) when is_map(freshness) do
+  defp merge_local_source_health(freshness, user_id, now, sources, errors)
+       when is_map(freshness) do
     devices_last_seen = latest_device_seen_at(user_id)
 
     Enum.reduce(sources, freshness, fn {source, items}, acc ->
-      status = local_source_status(items, devices_last_seen, now)
+      error = Map.get(errors, source)
+
+      status =
+        if is_nil(error), do: local_source_status(items, devices_last_seen, now), else: "error"
 
       health =
-        Map.merge(Map.get(acc, to_string(source), %{}), %{
+        Map.get(acc, to_string(source), %{})
+        |> Map.merge(%{
           "source" => to_string(source),
           "status" => status,
           "device_last_seen_at" => prompt_time(devices_last_seen),
           "item_count" => length(items)
         })
+        |> maybe_put("fetch_error", error)
 
       Map.put(acc, to_string(source), health)
     end)
   end
 
-  defp merge_local_source_health(freshness, _user_id, _now, _sources), do: freshness
+  defp merge_local_source_health(freshness, _user_id, _now, _sources, _errors), do: freshness
 
   defp local_source_status(items, %DateTime{} = devices_last_seen, %DateTime{} = now)
        when is_list(items) do
