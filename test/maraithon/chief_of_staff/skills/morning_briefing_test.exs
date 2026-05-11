@@ -192,7 +192,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Brief input JSON"
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"
+    assert prompt =~ "Treat meeting prep as CRM-first"
     assert prompt =~ "body_available"
+    assert prompt =~ "meeting_prep"
     assert prompt =~ "Instagram reported a new login"
     assert prompt =~ "Promotional retail offer"
     assert prompt =~ ~s({"title":"...","summary":"...","body":"...","todos":[)
@@ -237,6 +239,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert get_in(brief.metadata, ["brief_input", "counts", "news_items"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "relationships"]) == 1
     assert get_in(brief.metadata, ["brief_input", "counts", "deep_memory"]) == 1
+    assert get_in(brief.metadata, ["brief_input", "counts", "meeting_prep_meetings"]) == 1
   end
 
   test "persists model-emitted morning todos through todo intelligence", %{
@@ -782,6 +785,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "MacBook Pro")
 
       stale_at = DateTime.add(now, -3 * 3_600, :second)
+
       Maraithon.Repo.update_all(
         Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
         set: [last_seen_at: stale_at]
@@ -803,6 +807,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "Stale Mac")
 
       stale_at = DateTime.add(now, -4 * 3_600, :second)
+
       Maraithon.Repo.update_all(
         Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
         set: [last_seen_at: stale_at]

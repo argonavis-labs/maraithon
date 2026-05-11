@@ -22,6 +22,9 @@ Create a concise executive brief from the connector payloads.
 - Surface counts only when useful, like `25 in last 18h`, `4 need response`, or `8 overdue`; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
 - Use simple status markers only when they help scanning.
 - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
+- Use `meeting_prep` when writing `Today's Schedule`. For each meeting you choose to include, state what the meeting appears to be, who or which organization is involved, why it matters today, and the prep point, decision, or risk Kent should carry into it.
+- Treat meeting prep as CRM-first: prefer CRM relationship context and linked open work over public web. When CRM has no useful match for an attendee or company and `meeting_prep.web_context` exists, use the web result titles/snippets/URLs as external context, keep uncertainty visible, and do not invent facts beyond the source snippets.
+- If CRM and web context still leave a meeting ambiguous, call that out as a data gap and give the best operational prep from the event title, attendees, email, Slack, todos, and memory.
 - When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 - Use CRM relationship context when it changes interpretation: who the person is, preferred communication method, how often Kent talks to them, relationship, and open work attached to that person.
 - When the brief reveals durable relationship information, preserve it through CRM tools rather than treating it as one-off briefing prose.

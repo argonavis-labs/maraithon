@@ -80,6 +80,11 @@ config :maraithon, Maraithon.FlyLogs,
   region: nil,
   receive_timeout_ms: 3_000
 
+config :maraithon, Maraithon.WebSearch,
+  enabled: true,
+  base_url: "https://duckduckgo.com/html/",
+  limit: 3
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

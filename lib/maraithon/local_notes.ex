@@ -16,9 +16,9 @@ defmodule Maraithon.LocalNotes do
   Ingests a batch of note maps from a device for the given user.
 
   Each entry should be a string-keyed or atom-keyed map matching the
-  payload defined in the companion spec. Inserts are idempotent via the
-  `(user_id, device_id, source, guid)` unique constraint — re-sending the
-  same payload is a no-op.
+  payload defined in the companion spec. Re-sends are counted as duplicates
+  via the `(user_id, device_id, source, guid)` unique constraint while still
+  refreshing mutable fields on the stored note.
 
   Returns `{:ok, %{accepted: integer, duplicate: integer, invalid: integer}}`.
   """
@@ -34,25 +34,39 @@ defmodule Maraithon.LocalNotes do
       |> Enum.split_with(&match?({:ok, _row}, &1))
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
+    existing_keys = existing_note_keys(user_id, device_id, rows)
+    {accepted_count, duplicate_count} = ingest_counts(rows, existing_keys)
 
-    {inserted_count, inserted_rows} =
+    returned_rows =
       if rows == [] do
-        {0, []}
+        []
       else
         # Replace mutable fields on re-sync so later body decodes
         # (NotesBodyDecoder fallback path) backfill into existing rows
         # instead of being silently dropped by `on_conflict: :nothing`.
-        Repo.insert_all(LocalNote, rows,
-          on_conflict: {:replace, [:title, :snippet, :body, :body_format, :folder, :is_pinned, :modified_at, :updated_at]},
-          conflict_target: [:user_id, :device_id, :source, :guid],
-          returning: [:id]
-        )
+        {_affected_count, returned_rows} =
+          Repo.insert_all(LocalNote, rows,
+            on_conflict:
+              {:replace,
+               [
+                 :title,
+                 :snippet,
+                 :body,
+                 :body_format,
+                 :folder,
+                 :is_pinned,
+                 :modified_at,
+                 :updated_at
+               ]},
+            conflict_target: [:user_id, :device_id, :source, :guid],
+            returning: [:id]
+          )
+
+        returned_rows
       end
 
-    enqueue_embed_jobs(user_id, inserted_rows)
+    enqueue_embed_jobs(user_id, returned_rows)
 
-    total = length(rows)
-    duplicate_count = total - inserted_count
     invalid_count = length(invalid)
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
@@ -60,7 +74,7 @@ defmodule Maraithon.LocalNotes do
       [:maraithon, :companion, :notes_ingested],
       %{
         count: length(notes),
-        accepted: inserted_count,
+        accepted: accepted_count,
         duplicate: duplicate_count,
         invalid: invalid_count,
         latency_ms: latency_ms
@@ -70,7 +84,7 @@ defmodule Maraithon.LocalNotes do
 
     {:ok,
      %{
-       accepted: inserted_count,
+       accepted: accepted_count,
        duplicate: duplicate_count,
        invalid: invalid_count
      }}
@@ -208,6 +222,57 @@ defmodule Maraithon.LocalNotes do
   end
 
   # -- internals ---------------------------------------------------------
+
+  defp existing_note_keys(_user_id, _device_id, []), do: MapSet.new()
+
+  defp existing_note_keys(user_id, device_id, rows) do
+    keys =
+      rows
+      |> Enum.map(&note_key/1)
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    if MapSet.size(keys) == 0 do
+      MapSet.new()
+    else
+      sources = keys |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+      guids = keys |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+      LocalNote
+      |> where([note], note.user_id == ^user_id)
+      |> where([note], note.device_id == ^device_id)
+      |> where([note], note.source in ^sources)
+      |> where([note], note.guid in ^guids)
+      |> select([note], {note.source, note.guid})
+      |> Repo.all()
+      |> MapSet.new()
+    end
+  end
+
+  defp ingest_counts(rows, existing_keys) do
+    {accepted, duplicate, _seen} =
+      Enum.reduce(rows, {0, 0, MapSet.new()}, fn row, {accepted, duplicate, seen} ->
+        key = note_key(row)
+
+        cond do
+          is_nil(key) ->
+            {accepted + 1, duplicate, seen}
+
+          MapSet.member?(existing_keys, key) or MapSet.member?(seen, key) ->
+            {accepted, duplicate + 1, seen}
+
+          true ->
+            {accepted + 1, duplicate, MapSet.put(seen, key)}
+        end
+      end)
+
+    {accepted, duplicate}
+  end
+
+  defp note_key(%{source: source, guid: guid}) when is_binary(source) and is_binary(guid),
+    do: {source, guid}
+
+  defp note_key(_row), do: nil
 
   defp prepare_row(note, user_id, device_id, now) when is_map(note) do
     attrs = %{

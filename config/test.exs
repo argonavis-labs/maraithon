@@ -55,6 +55,8 @@ config :maraithon, Maraithon.TelegramAssistant.Runner,
 
 config :maraithon, Maraithon.ContextCache.Builder, async_enabled: false
 
+config :maraithon, Maraithon.WebSearch, enabled: false
+
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
 

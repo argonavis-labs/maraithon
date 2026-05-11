@@ -8,6 +8,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.ChiefOfStaff.MeetingEnrichment
   alias Maraithon.Commitments
   alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
@@ -405,28 +406,40 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     top_hosts = top_browser_hosts(visits, now, @local_browser_top_hosts)
 
+    today_events =
+      calendar_events
+      |> Enum.filter(&event_on_date?(&1, local_date, offset_hours))
+      |> Enum.map(&calendar_event_for_prompt/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(18)
+
+    tomorrow_first_event =
+      calendar_events
+      |> Enum.filter(&event_on_date?(&1, tomorrow, offset_hours))
+      |> Enum.sort_by(&event_sort_key/1)
+      |> List.first()
+      |> calendar_event_for_prompt()
+
+    meeting_prep =
+      MeetingEnrichment.enrich(user_id, today_events,
+        now: now,
+        max_web_queries: 8
+      )
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
       "timezone_offset_hours" => offset_hours,
       "calendar" => %{
         "preferred_source" => calendar_source,
-        "today_events" =>
-          calendar_events
-          |> Enum.filter(&event_on_date?(&1, local_date, offset_hours))
-          |> Enum.map(&calendar_event_for_prompt/1)
-          |> Enum.take(18),
-        "tomorrow_first_event" =>
-          calendar_events
-          |> Enum.filter(&event_on_date?(&1, tomorrow, offset_hours))
-          |> Enum.sort_by(&event_sort_key/1)
-          |> List.first()
-          |> calendar_event_for_prompt(),
+        "today_events" => today_events,
+        "tomorrow_first_event" => tomorrow_first_event,
         "upcoming_local" =>
           local_calendar_events
           |> Enum.map(&calendar_event_for_prompt/1)
           |> Enum.take(@local_calendar_limit)
       },
+      "meeting_prep" => meeting_prep,
       "imessage" => %{
         "chats" =>
           imessage_chats
@@ -693,6 +706,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
+
+       Meeting enrichment rule:
+       The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
+       before public web context. Use web snippets only as fallback evidence for attendees
+       or companies missing from CRM, and keep uncertainty visible when the evidence is thin.
 
        Brief input JSON:
        #{input_json}
@@ -1038,7 +1056,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp within_last_24h?(_dt, _now), do: false
 
-  defp reminder_due_today?(%Maraithon.LocalReminders.LocalReminder{due_at: %DateTime{} = due}, now) do
+  defp reminder_due_today?(
+         %Maraithon.LocalReminders.LocalReminder{due_at: %DateTime{} = due},
+         now
+       ) do
     DateTime.compare(due, now) != :gt or
       DateTime.diff(due, now, :second) <= 24 * 3_600
   end
@@ -1047,8 +1068,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     due = Map.get(reminder, "due_at") || Map.get(reminder, :due_at)
 
     case due do
-      %DateTime{} = dt -> reminder_due_today?(%Maraithon.LocalReminders.LocalReminder{due_at: dt}, now)
-      _ -> false
+      %DateTime{} = dt ->
+        reminder_due_today?(%Maraithon.LocalReminders.LocalReminder{due_at: dt}, now)
+
+      _ ->
+        false
     end
   end
 
@@ -1215,7 +1239,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "reminders_due_soon" => length(get_in(input, ["reminders", "due_soon"]) || []),
         "files_recent" => length(get_in(input, ["files", "items"]) || []),
         "browser_top_hosts" => length(get_in(input, ["browser_history", "top_hosts"]) || []),
-        "calendar_local_upcoming" => length(get_in(input, ["calendar", "upcoming_local"]) || [])
+        "calendar_local_upcoming" => length(get_in(input, ["calendar", "upcoming_local"]) || []),
+        "meeting_prep_meetings" => get_in(input, ["meeting_prep", "counts", "meetings"]) || 0,
+        "meeting_prep_crm_contexts" =>
+          get_in(input, ["meeting_prep", "counts", "crm_contexts"]) || 0,
+        "meeting_prep_web_searches" =>
+          get_in(input, ["meeting_prep", "counts", "web_searches"]) || 0
       },
       "calendar_preferred_source" => get_in(input, ["calendar", "preferred_source"])
     }
