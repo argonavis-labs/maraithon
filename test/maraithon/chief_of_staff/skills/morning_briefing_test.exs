@@ -187,6 +187,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert params["max_tokens"] == 64_000
     assert params["reasoning_effort"] == "xhigh"
+    assert params["timeout_ms"] == 240_000
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"

@@ -20,6 +20,9 @@ defmodule Maraithon.Runtime.Agent do
 
   require Logger
 
+  @default_effect_timeout_ms 120_000
+  @effect_timeout_buffer_ms 10_000
+
   defstruct [
     :agent_id,
     :user_id,
@@ -347,8 +350,10 @@ defmodule Maraithon.Runtime.Agent do
   # ==========================================================================
 
   def waiting_effect(:enter, _old_state, data) do
-    Logger.debug("Entering waiting_effect state")
-    {:keep_state, data, [{:state_timeout, 120_000, :effect_timeout}]}
+    timeout_ms = pending_effect_timeout_ms(data.pending_effects)
+
+    Logger.debug("Entering waiting_effect state", timeout_ms: timeout_ms)
+    {:keep_state, data, [{:state_timeout, timeout_ms, :effect_timeout}]}
   end
 
   def waiting_effect(:info, {:agent_dispatch, msg}, data) do
@@ -554,6 +559,29 @@ defmodule Maraithon.Runtime.Agent do
 
     data = %{data | pending_effects: Map.put(data.pending_effects, effect_id, effect_info)}
     {:next_state, :waiting_effect, data}
+  end
+
+  defp pending_effect_timeout_ms(pending_effects) when is_map(pending_effects) do
+    pending_effects
+    |> Map.values()
+    |> Enum.map(&effect_timeout_ms/1)
+    |> Enum.max(fn -> @default_effect_timeout_ms end)
+  end
+
+  defp effect_timeout_ms(%{params: params}) when is_map(params) do
+    case read_timeout_ms(params) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+        timeout_ms + @effect_timeout_buffer_ms
+
+      _other ->
+        @default_effect_timeout_ms
+    end
+  end
+
+  defp effect_timeout_ms(_effect_info), do: @default_effect_timeout_ms
+
+  defp read_timeout_ms(params) do
+    Map.get(params, "timeout_ms") || Map.get(params, :timeout_ms)
   end
 
   defp ensure_current_run(%{current_run_id: run_id} = data) when is_binary(run_id), do: data

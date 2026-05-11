@@ -35,6 +35,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_lookback_hours 18
   @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "xhigh"
+  @default_llm_timeout_ms 240_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @local_imessage_chat_limit 8
   @local_notes_limit 10
@@ -82,6 +83,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "lookback_hours" => @default_lookback_hours,
       "llm_max_tokens" => @default_llm_max_tokens,
       "llm_reasoning_effort" => @default_llm_reasoning_effort,
+      "llm_timeout_ms" => @default_llm_timeout_ms,
       "slack_key_channels" => [
         "runner-general",
         "runner-leads",
@@ -176,6 +178,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         ),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
+      llm_timeout_ms:
+        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 300_000),
       pending_brief_input: nil,
       pending_dedupe_key: nil,
       last_generated_keys: %{}
@@ -769,7 +773,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           ],
           "max_tokens" => effective_llm_max_tokens(state),
           "temperature" => 0.2,
-          "reasoning_effort" => state.llm_reasoning_effort
+          "reasoning_effort" => state.llm_reasoning_effort,
+          "timeout_ms" => state.llm_timeout_ms
         }
         |> maybe_put("model", state.llm_model || Maraithon.LLM.model())
 
