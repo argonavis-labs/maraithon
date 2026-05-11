@@ -10,6 +10,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   @max_meetings 10
   @max_candidates_per_meeting 8
   @max_web_queries 8
+  @max_web_queries_per_meeting 3
   @web_result_limit 3
   @web_timeout_ms 8_000
 
@@ -27,6 +28,36 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     aol.com gmail.com googlemail.com hey.com hotmail.com icloud.com live.com mac.com me.com
     msn.com outlook.com proton.me protonmail.com yahoo.com
   )
+
+  @internal_email_domains ~w(runner.now voteagora.com agora.xyz)
+
+  @personal_calendar_terms [
+    "anniversary",
+    "birthday",
+    "camp",
+    "childcare",
+    "cross country",
+    "daycare",
+    "dentist",
+    "doctor",
+    "dropoff",
+    "drop-off",
+    "family",
+    "frankie",
+    "gym",
+    "haircut",
+    "holiday",
+    "kids",
+    "orthodontist",
+    "personal",
+    "pickup",
+    "pick-up",
+    "practice",
+    "school",
+    "soccer",
+    "vacation",
+    "workout"
+  ]
 
   def enrich(user_id, events, opts \\ [])
 
@@ -77,20 +108,36 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp enrich_event(user_id, event, opts, remaining_queries) do
-    candidates = event |> candidates_for_event() |> Enum.take(@max_candidates_per_meeting)
-    {crm_contexts, unmatched_candidates} = resolve_crm_contexts(user_id, candidates)
+    core = event_core(event)
+    personal_logistics? = personal_logistics_event?(event)
+
+    candidates =
+      if personal_logistics? do
+        []
+      else
+        event |> candidates_for_event() |> Enum.take(@max_candidates_per_meeting)
+      end
+
+    {crm_contexts, unmatched_candidates} =
+      if personal_logistics? do
+        {[], []}
+      else
+        resolve_crm_contexts(user_id, candidates)
+      end
+
+    core = maybe_promote_schedule_required(core, event, crm_contexts)
+    web_budget = web_budget_for_event(core, remaining_queries)
 
     {web_contexts, used_queries} =
       unmatched_candidates
-      |> fetch_web_context(opts, remaining_queries, organization_hint(candidates))
+      |> fetch_web_context(opts, web_budget, organization_hint(candidates))
 
     meeting =
-      event
-      |> event_core()
+      core
       |> Map.put("candidate_people_and_orgs", Enum.map(candidates, &public_candidate/1))
       |> Map.put("crm_context", crm_contexts)
       |> Map.put("web_context", web_contexts)
-      |> Map.put("data_gaps", data_gaps(unmatched_candidates, web_contexts))
+      |> Map.put("data_gaps", data_gaps(unmatched_candidates, web_contexts, web_budget > 0))
       |> compact_map()
 
     {meeting, max(remaining_queries - used_queries, 0)}
@@ -101,13 +148,17 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       Enum.reduce(candidates, {%{}, []}, fn candidate, {contexts, unmatched_acc} ->
         case crm_context_for_candidate(user_id, candidate) do
           {:ok, context} ->
-            serialized =
+            normalized =
               context
               |> PersonHelpers.serialize_relationship_context()
               |> normalize_json_value()
-              |> Map.put("matched_candidate", public_candidate(candidate))
 
-            person_id = get_in(serialized, ["person", "id"]) || candidate_key(candidate)
+            person_id = get_in(normalized, ["person", "id"]) || candidate_key(candidate)
+
+            serialized =
+              normalized
+              |> compact_crm_context()
+              |> Map.put("matched_candidate", public_candidate(candidate))
 
             contexts =
               Map.update(contexts, person_id, serialized, fn existing ->
@@ -187,7 +238,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
                   "candidate_key" => candidate_key(candidate),
                   "query" => query,
                   "status" => "ok",
-                  "results" => Map.get(response, "results", [])
+                  "results" => response |> Map.get("results", []) |> compact_web_results()
                 }
 
               {:error, reason} ->
@@ -217,7 +268,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     {contexts, length(search_candidates)}
   end
 
-  defp data_gaps(unmatched_candidates, web_contexts) do
+  defp data_gaps(_unmatched_candidates, _web_contexts, false), do: []
+
+  defp data_gaps(unmatched_candidates, web_contexts, true) do
     Enum.map(unmatched_candidates, fn candidate ->
       context =
         Enum.find(web_contexts, &(Map.get(&1, "candidate_key") == candidate_key(candidate)))
@@ -415,7 +468,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp event_core(event) when is_map(event) do
     external_attendees = external_attendee_details(event)
-    schedule_required? = external_attendees != []
+    schedule_required? = executive_external_meeting?(event, external_attendees)
 
     %{
       "event_id" => read_string(event, "event_id"),
@@ -423,18 +476,25 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "start" => read_any(event, "start"),
       "end" => read_any(event, "end"),
       "location" => read_string(event, "location"),
-      "attendees" => read_list(event, "attendees") |> Enum.take(12),
+      "attendees" =>
+        event
+        |> read_list("attendees")
+        |> Enum.take(8)
+        |> Enum.map(&compact_attendee/1)
+        |> Enum.reject(&is_nil/1),
       "external_attendees" => external_attendees,
       "schedule_required" => schedule_required?,
       "briefing_priority" =>
         if(schedule_required?, do: "required_external_meeting", else: "standard_meeting"),
       "briefing_reason" =>
         if(schedule_required?,
-          do: "External attendee meeting; must be covered in Today's Schedule.",
+          do: "Executive external meeting; must be covered in Today's Schedule.",
           else: nil
         ),
       "organizer" => read_string(event, "organizer"),
-      "html_link" => read_string(event, "html_link")
+      "html_link" => read_string(event, "html_link"),
+      "calendar_name" => read_string(event, "calendar_name"),
+      "source" => read_string(event, "source")
     }
   end
 
@@ -465,14 +525,112 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp meeting_priority(event) do
     attendees = read_list(event, "attendees")
+    external_attendees = external_attendee_details(event)
 
     cond do
-      external_attendees?(attendees) -> 0
+      executive_external_meeting?(event, external_attendees) -> 0
+      external_attendees?(attendees) -> 1
       attendees != [] -> 1
       read_string(event, "organizer") != nil -> 2
       true -> 3
     end
   end
+
+  defp web_budget_for_event(%{"schedule_required" => true}, remaining_queries),
+    do: min(remaining_queries, @max_web_queries_per_meeting)
+
+  defp web_budget_for_event(_core, _remaining_queries), do: 0
+
+  defp executive_external_meeting?(_event, []), do: false
+
+  defp executive_external_meeting?(event, external_attendees) do
+    cond do
+      personal_logistics_event?(event) ->
+        false
+
+      Enum.any?(external_attendees, &business_attendee?/1) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp maybe_promote_schedule_required(%{"schedule_required" => true} = core, _event, _contexts),
+    do: core
+
+  defp maybe_promote_schedule_required(core, event, crm_contexts) do
+    if read_list(core, "external_attendees") != [] and not personal_logistics_event?(event) and
+         Enum.any?(crm_contexts, &executive_crm_context?/1) do
+      core
+      |> Map.put("schedule_required", true)
+      |> Map.put("briefing_priority", "required_external_meeting")
+      |> Map.put(
+        "briefing_reason",
+        "CRM-linked executive external meeting; must be covered in Today's Schedule."
+      )
+    else
+      core
+    end
+  end
+
+  defp executive_crm_context?(context) when is_map(context) do
+    person = read_any(context, "person") || %{}
+
+    text =
+      [
+        read_string(person, "relationship"),
+        read_string(person, "notes")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    text != "" and
+      String.contains?(text, [
+        "agora",
+        "advisor",
+        "client",
+        "commercial",
+        "customer",
+        "enterprise",
+        "founder",
+        "gtm",
+        "investor",
+        "partner",
+        "pricing",
+        "runner",
+        "sales",
+        "teammate",
+        "vendor",
+        "work"
+      ])
+  end
+
+  defp executive_crm_context?(_context), do: false
+
+  defp personal_logistics_event?(event) do
+    text =
+      [
+        read_string(event, "summary"),
+        read_string(event, "calendar_name")
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    text != "" and Enum.any?(@personal_calendar_terms, &String.contains?(text, &1))
+  end
+
+  defp business_attendee?(%{"domain" => domain}) when is_binary(domain),
+    do: business_domain?(domain)
+
+  defp business_attendee?(_attendee), do: false
+
+  defp business_domain?(domain) when is_binary(domain),
+    do: domain not in @free_email_domains and domain not in @internal_email_domains
+
+  defp business_domain?(_domain), do: false
 
   defp external_attendees?(attendees) do
     Enum.any?(attendees, fn attendee ->
@@ -533,6 +691,25 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp external_attendee_detail(_attendee), do: []
 
+  defp compact_attendee(%{} = attendee) do
+    email = attendee_email(attendee)
+
+    %{
+      "display_name" =>
+        read_string(attendee, "display_name") ||
+          read_string(attendee, "displayName") ||
+          read_string(attendee, "name") ||
+          name_from_email(email),
+      "email" => email,
+      "domain" => email_domain(email),
+      "response_status" => read_string(attendee, "response_status")
+    }
+    |> compact_map()
+  end
+
+  defp compact_attendee(attendee) when is_binary(attendee), do: attendee
+  defp compact_attendee(_attendee), do: nil
+
   defp attendee_email(%{} = attendee), do: read_string(attendee, "email")
   defp attendee_email(attendee) when is_binary(attendee), do: extract_email(attendee)
   defp attendee_email(_attendee), do: nil
@@ -563,6 +740,105 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> normalize_json_value()
     |> compact_map()
   end
+
+  defp compact_crm_context(context) when is_map(context) do
+    %{
+      "person" => compact_crm_person(read_any(context, "person")),
+      "link_count" => read_any(context, "link_count"),
+      "open_todo_count" => read_any(context, "open_todo_count"),
+      "links" => context |> read_list("links") |> Enum.take(3) |> Enum.map(&compact_crm_link/1),
+      "todos" => context |> read_list("todos") |> Enum.take(3) |> Enum.map(&compact_crm_todo/1)
+    }
+    |> compact_map()
+  end
+
+  defp compact_crm_context(_context), do: %{}
+
+  defp compact_crm_person(person) when is_map(person) do
+    %{
+      "display_name" =>
+        read_string(person, "display_name") ||
+          [read_string(person, "first_name"), read_string(person, "last_name")]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(" ")
+          |> normalize_string(),
+      "first_name" => read_string(person, "first_name"),
+      "last_name" => read_string(person, "last_name"),
+      "relationship" => read_string(person, "relationship"),
+      "preferred_communication_method" => read_string(person, "preferred_communication_method"),
+      "communication_frequency" => read_string(person, "communication_frequency"),
+      "notes" => read_string(person, "notes") |> truncate_text(360),
+      "contact_details" => compact_contact_details(read_any(person, "contact_details"))
+    }
+    |> compact_map()
+  end
+
+  defp compact_crm_person(_person), do: nil
+
+  defp compact_contact_details(details) when is_map(details) do
+    details
+    |> Map.take([
+      "email",
+      "emails",
+      "phone",
+      "phones",
+      "website",
+      "url",
+      "linkedin",
+      "twitter"
+    ])
+    |> normalize_json_value()
+    |> compact_map()
+  end
+
+  defp compact_contact_details(_details), do: nil
+
+  defp compact_crm_link(link) when is_map(link) do
+    %{
+      "resource_type" => read_string(link, "resource_type"),
+      "resource_source" => read_string(link, "resource_source"),
+      "title" => read_string(link, "title") |> truncate_text(180),
+      "summary" => read_string(link, "summary") |> truncate_text(280),
+      "relationship_note" => read_string(link, "relationship_note") |> truncate_text(280)
+    }
+    |> compact_map()
+  end
+
+  defp compact_crm_link(_link), do: %{}
+
+  defp compact_crm_todo(todo) when is_map(todo) do
+    %{
+      "title" => read_string(todo, "title") |> truncate_text(180),
+      "summary" => read_string(todo, "summary") |> truncate_text(280),
+      "next_action" => read_string(todo, "next_action") |> truncate_text(280),
+      "due_at" => read_string(todo, "due_at"),
+      "status" => read_string(todo, "status"),
+      "source" => read_string(todo, "source")
+    }
+    |> compact_map()
+  end
+
+  defp compact_crm_todo(_todo), do: %{}
+
+  defp compact_web_results(results) when is_list(results) do
+    results
+    |> Enum.take(@web_result_limit)
+    |> Enum.map(&compact_web_result/1)
+    |> Enum.reject(&(&1 == %{}))
+  end
+
+  defp compact_web_results(_results), do: []
+
+  defp compact_web_result(result) when is_map(result) do
+    %{
+      "title" => read_string(result, "title") |> truncate_text(180),
+      "url" => read_string(result, "url"),
+      "snippet" => read_string(result, "snippet") |> truncate_text(320)
+    }
+    |> compact_map()
+  end
+
+  defp compact_web_result(_result), do: %{}
 
   defp candidate_key(%{email: email}) when is_binary(email),
     do: "email:" <> String.downcase(email)
@@ -675,6 +951,21 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp truncate_text(nil, _limit), do: nil
+
+  defp truncate_text(value, limit) when is_binary(value) and is_integer(limit) do
+    if String.length(value) <= limit do
+      value
+    else
+      value
+      |> String.slice(0, limit)
+      |> String.trim()
+      |> Kernel.<>("...")
+    end
+  end
+
+  defp truncate_text(value, _limit), do: value
 
   defp clamp_integer(value, min_value, max_value) when is_integer(value) do
     value |> max(min_value) |> min(max_value)

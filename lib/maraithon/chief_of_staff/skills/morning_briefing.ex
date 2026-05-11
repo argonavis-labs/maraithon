@@ -767,7 +767,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "temperature" => 0.2,
           "reasoning_effort" => state.llm_reasoning_effort
         }
-        |> maybe_put("model", state.llm_model)
+        |> maybe_put("model", state.llm_model || Maraithon.LLM.model())
 
       {:ok, params}
     end
@@ -940,7 +940,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "location" => read_string(event, "location", nil),
       "attendees" => read_list(event, "attendees") |> Enum.take(12),
       "organizer" => read_string(event, "organizer", nil),
-      "html_link" => read_string(event, "html_link", nil)
+      "html_link" => read_string(event, "html_link", nil),
+      "calendar_name" => read_string(event, "calendar_name", nil),
+      "is_all_day" => read_any(event, "is_all_day"),
+      "source" => read_string(event, "source", nil)
     }
   end
 
