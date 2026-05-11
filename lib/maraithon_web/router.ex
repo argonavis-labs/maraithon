@@ -157,6 +157,7 @@ defmodule MaraithonWeb.Router do
     post "/calendar-events", CompanionController, :ingest_calendar_events
     post "/reminders", CompanionController, :ingest_reminders
     post "/files", CompanionController, :ingest_files
+    post "/browser-history", CompanionController, :ingest_browser_history
     get "/whoami", CompanionController, :whoami
     delete "/devices/:id/messages", CompanionController, :purge_messages
   end

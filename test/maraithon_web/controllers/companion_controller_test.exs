@@ -3,6 +3,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Companion.Devices
+  alias Maraithon.LocalBrowserHistory.LocalVisit
   alias Maraithon.LocalCalendar.LocalEvent
   alias Maraithon.LocalFiles.LocalFile
   alias Maraithon.LocalMessages
@@ -738,6 +739,113 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> post("/api/v1/companion/files", %{"files" => files})
 
       assert json_response(conn, 400)["error"] =~ "200"
+    end
+  end
+
+  defp sample_visit(guid, overrides \\ %{}) do
+    Map.merge(
+      %{
+        "local_id" => "v:#{guid}",
+        "guid" => guid,
+        "browser" => "chrome",
+        "url" => "https://example.com/post-#{guid}",
+        "title" => "Post #{guid}",
+        "host" => "example.com",
+        "visit_count" => 1,
+        "is_typed_url" => false,
+        "last_visited_at" => "2026-05-10T13:14:22Z"
+      },
+      overrides
+    )
+  end
+
+  defp visit_count(user_id, device_id) do
+    Repo.aggregate(
+      from(visit in LocalVisit,
+        where: visit.user_id == ^user_id and visit.device_id == ^device_id
+      ),
+      :count,
+      :id
+    )
+  end
+
+  describe "POST /api/v1/companion/browser-history" do
+    test "401 without bearer token", %{conn: conn} do
+      conn = post(conn, "/api/v1/companion/browser-history", %{visits: []})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 happy path inserts visits and reports counts", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{
+          "source" => "browser_history",
+          "visits" => [sample_visit("g1"), sample_visit("g2")]
+        })
+
+      body = json_response(conn, 200)
+      assert body["accepted"] == 2
+      assert body["duplicate"] == 0
+      assert body["invalid"] == 0
+      assert body["filtered"] == 0
+      assert visit_count(user.id, device.device_id) == 2
+    end
+
+    test "dedupes on re-send", %{conn: conn} do
+      %{token: token} = pair_device()
+      visits = [sample_visit("g1"), sample_visit("g2")]
+
+      conn1 =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{"visits" => visits})
+
+      assert json_response(conn1, 200)["accepted"] == 2
+
+      conn2 =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{"visits" => visits})
+
+      body = json_response(conn2, 200)
+      assert body["accepted"] == 0
+      assert body["duplicate"] == 2
+    end
+
+    test "filters private hosts at ingest", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{
+          "visits" => [
+            sample_visit("ok", %{"host" => "example.com"}),
+            sample_visit("bad", %{
+              "host" => "myaccount.somebank.com",
+              "url" => "https://myaccount.somebank.com/dashboard"
+            })
+          ]
+        })
+
+      body = json_response(conn, 200)
+      assert body["accepted"] == 1
+      assert body["filtered"] == 1
+      assert visit_count(user.id, device.device_id) == 1
+    end
+
+    test "400 when visits array is missing", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{})
+
+      assert json_response(conn, 400)["error"] =~ "visits"
     end
   end
 end

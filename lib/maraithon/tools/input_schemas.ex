@@ -510,6 +510,24 @@ defmodule Maraithon.Tools.InputSchemas do
       "calendar_event_get" ->
         user_object(%{"event_id" => @string}, ["event_id"])
 
+      "browser_history_recent" ->
+        user_object(%{"limit" => @integer, "browser" => @string})
+
+      "browser_history_by_host" ->
+        user_object(
+          %{"host" => @string, "limit" => @integer, "browser" => @string},
+          ["host"]
+        )
+
+      "browser_history_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "browser" => @string},
+          ["query"]
+        )
+
+      "browser_history_get" ->
+        user_object(%{"visit_id" => @string}, ["visit_id"])
+
       _ ->
         object(%{})
     end

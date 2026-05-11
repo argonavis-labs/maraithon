@@ -77,6 +77,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     files_search files_get files_list_recent
     reminders_open reminders_due_soon reminders_search reminders_get
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
+    browser_history_recent browser_history_by_host browser_history_search browser_history_get
   ))
 
   @toolbox_write_tools MapSet.new(~w(
@@ -1105,6 +1106,54 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "event_id" => %{"type" => "string"}
           }
         }
+      ),
+      tool_definition(
+        "browser_history_recent",
+        "List the user's most recently visited URLs across Chrome / Safari / Arc / Brave, newest first. Use as the entry point for sweeping 'what have I been looking at?' questions.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "browser" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "browser_history_by_host",
+        "Filter the user's browser history by host substring (e.g. 'techmeme'). Use when the user asks about an article from a specific site.",
+        %{
+          "type" => "object",
+          "required" => ["host"],
+          "properties" => %{
+            "host" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "browser" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "browser_history_search",
+        "Search the user's browser history for a substring in title, URL, or host. Use when the user references something they were reading or researching online by topic.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "browser" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "browser_history_get",
+        "Fetch a single browser visit by its source GUID. Use after browser_history_search / browser_history_by_host returns candidates and you need the full URL and title.",
+        %{
+          "type" => "object",
+          "required" => ["visit_id"],
+          "properties" => %{
+            "visit_id" => %{"type" => "string"}
+          }
+        }
       )
     ]
   end
@@ -1329,6 +1378,18 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "calendar_event_get" ->
         inject_user_and_execute("calendar_event_get", runtime_context, args)
+
+      "browser_history_recent" ->
+        inject_user_and_execute("browser_history_recent", runtime_context, args)
+
+      "browser_history_by_host" ->
+        inject_user_and_execute("browser_history_by_host", runtime_context, args)
+
+      "browser_history_search" ->
+        inject_user_and_execute("browser_history_search", runtime_context, args)
+
+      "browser_history_get" ->
+        inject_user_and_execute("browser_history_get", runtime_context, args)
 
       _ ->
         {:error, "unknown_telegram_tool: #{tool_name}"}

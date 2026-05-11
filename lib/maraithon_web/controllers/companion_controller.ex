@@ -10,6 +10,7 @@ defmodule MaraithonWeb.CompanionController do
   require Logger
 
   alias Maraithon.Accounts
+  alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalFiles
   alias Maraithon.LocalMessages
@@ -143,6 +144,57 @@ defmodule MaraithonWeb.CompanionController do
       &LocalFiles.ingest_batch/3,
       max_batch: @max_files_batch_size
     )
+  end
+
+  @doc """
+  POST /api/v1/companion/browser-history
+
+  Accepts a batch of browser visits (Chrome, Safari, Arc, Brave) from a
+  paired device. Rows whose host matches the server-side privacy
+  deny-list are dropped before insert and reported as `filtered`.
+  """
+  def ingest_browser_history(conn, params) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    with {:ok, items, source} <-
+           extract_collection(params, "visits", "browser_history", @max_batch_size),
+         :ok <- validate_device(device, params) do
+      items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
+
+      case LocalBrowserHistory.ingest_batch(user_id, device.device_id, items) do
+        {:ok,
+         %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
+          json(conn, %{
+            accepted: accepted,
+            duplicate: duplicate,
+            invalid: invalid,
+            filtered: filtered
+          })
+
+        {:error, reason} ->
+          Logger.warning("companion browser-history ingest failed", reason: inspect(reason))
+
+          conn
+          |> put_status(:bad_request)
+          |> json(%{error: "invalid_batch"})
+      end
+    else
+      {:error, :missing_items} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "visits array is required"})
+
+      {:error, :too_many_items} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "batch exceeds maximum of #{@max_batch_size}"})
+
+      {:error, :device_mismatch} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "device_id does not match this token"})
+    end
   end
 
   @doc """

@@ -86,7 +86,11 @@ defmodule Maraithon.Capabilities do
     "calendar_events_around" => Maraithon.Tools.CalendarEventsAround,
     "calendar_events_for_person" => Maraithon.Tools.CalendarEventsForPerson,
     "calendar_search" => Maraithon.Tools.CalendarSearch,
-    "calendar_event_get" => Maraithon.Tools.CalendarEventGet
+    "calendar_event_get" => Maraithon.Tools.CalendarEventGet,
+    "browser_history_recent" => Maraithon.Tools.BrowserHistoryRecent,
+    "browser_history_by_host" => Maraithon.Tools.BrowserHistoryByHost,
+    "browser_history_search" => Maraithon.Tools.BrowserHistorySearch,
+    "browser_history_get" => Maraithon.Tools.BrowserHistoryGet
   }
 
   @tool_descriptions %{
@@ -195,7 +199,15 @@ defmodule Maraithon.Capabilities do
     "calendar_search" =>
       "Substring-search the user's mirrored macOS Calendar events on title, notes, and location. Use for topic-based questions like 'when's the launch review?'.",
     "calendar_event_get" =>
-      "Fetch one mirrored macOS Calendar event by its EventKit GUID."
+      "Fetch one mirrored macOS Calendar event by its EventKit GUID.",
+    "browser_history_recent" =>
+      "List the user's most recently visited URLs across Chrome / Safari / Arc / Brave, newest first. Optional browser filter.",
+    "browser_history_by_host" =>
+      "Filter the user's browser history by host substring (e.g. 'techmeme'). Use when the user asks about an article from a specific site.",
+    "browser_history_search" =>
+      "Search the user's browser history for a substring in title, URL, or host. Use when the user references something they were reading or researching online by topic.",
+    "browser_history_get" =>
+      "Fetch one browser visit by its source GUID, including the full URL and title."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -214,6 +226,7 @@ defmodule Maraithon.Capabilities do
     messages_search messages_get messages_list_recent messages_chats_recent
     reminders_open reminders_due_soon reminders_search reminders_get
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
+    browser_history_recent browser_history_by_host browser_history_search browser_history_get
   ))
 
   @destructive_tools MapSet.new(~w(

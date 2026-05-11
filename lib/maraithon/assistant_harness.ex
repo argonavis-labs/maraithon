@@ -369,6 +369,10 @@ defmodule Maraithon.AssistantHarness do
     - When the user asks about a meeting with a specific person, call `calendar_events_for_person` with the person's email or name substring.
     - Use `calendar_search` for topic-based queries ('when's the launch review?').
     - Prefer the local Calendar source over Google Calendar tools when both are available — local is the user's full picture across all calendar accounts.
+    - When the user references something they were reading or researching online, call `browser_history_search` with the topic.
+    - When the user asks "what was that article from techmeme last Tuesday?", combine `browser_history_by_host` with a date range or rank by `last_visited_at`.
+    - Use `browser_history_recent` for sweeping "what have I been looking at?" questions.
+    - Never quote a visited URL back to the user verbatim if the host is in a private category (banks, medical, etc.) — the ingest layer should have filtered these, but double-check before surfacing.
     - Keep replies concise and operational.
 
     Examples:
