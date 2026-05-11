@@ -33,10 +33,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 64_000
+  @default_llm_max_tokens 24_000
   @default_llm_reasoning_effort "xhigh"
   @default_llm_timeout_ms 240_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
+  @prompt_string_limit 1_500
+  @prompt_gmail_body_limit 1_500
+  @prompt_gmail_message_limit 18
+  @prompt_slack_message_limit 18
+  @prompt_context_limit 8
+  @prompt_default_list_limit 24
   @local_imessage_chat_limit 8
   @local_notes_limit 10
   @local_voice_memo_limit 5
@@ -784,7 +790,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp morning_prompt(brief_input) do
     with {:ok, skill} <- MarkdownSkill.load_file(@skill_path),
-         {:ok, input_json} <- Jason.encode(brief_input) do
+         {:ok, input_json} <- Jason.encode(compact_brief_input_for_prompt(brief_input)) do
       {:ok,
        """
        Execute the loaded Markdown skill against the supplied connector context.
@@ -1387,6 +1393,196 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp compact_brief_input_for_prompt(input) when is_map(input) do
+    input
+    |> Map.update("calendar", %{}, &compact_calendar_for_prompt/1)
+    |> Map.update("meeting_prep", %{}, &compact_meeting_prep_for_prompt/1)
+    |> Map.update("schedule_coverage", %{}, &compact_schedule_coverage_for_prompt/1)
+    |> Map.update("gmail", %{}, &compact_gmail_for_prompt/1)
+    |> Map.update("slack", %{}, &compact_slack_for_prompt/1)
+    |> Map.update("news", %{}, &compact_news_for_prompt/1)
+    |> Map.update("commitments", %{}, &compact_prompt_value/1)
+    |> Map.update("open_work", %{}, &compact_prompt_value/1)
+    |> Map.update("relationships", [], &compact_relationships_for_prompt/1)
+    |> Map.update("deep_memory", %{}, &compact_prompt_value/1)
+    |> Map.update("imessage", %{}, &compact_prompt_value/1)
+    |> Map.update("notes", %{}, &compact_prompt_value/1)
+    |> Map.update("voice_memos", %{}, &compact_prompt_value/1)
+    |> Map.update("reminders", %{}, &compact_prompt_value/1)
+    |> Map.update("files", %{}, &compact_prompt_value/1)
+    |> Map.update("browser_history", %{}, &compact_prompt_value/1)
+    |> Map.update("source_health", %{}, &compact_prompt_value/1)
+    |> compact_prompt_value()
+  end
+
+  defp compact_brief_input_for_prompt(input), do: input
+
+  defp compact_calendar_for_prompt(calendar) when is_map(calendar) do
+    calendar
+    |> Map.update("today_events", [], fn events ->
+      events
+      |> read_list()
+      |> Enum.take(@today_calendar_limit)
+      |> Enum.map(&compact_calendar_event_for_prompt/1)
+    end)
+    |> Map.update("upcoming_local", [], fn events ->
+      events
+      |> read_list()
+      |> Enum.take(@local_calendar_limit)
+      |> Enum.map(&compact_calendar_event_for_prompt/1)
+    end)
+    |> Map.update("tomorrow_first_event", nil, &compact_calendar_event_for_prompt/1)
+    |> compact_prompt_value()
+  end
+
+  defp compact_calendar_for_prompt(calendar), do: compact_prompt_value(calendar)
+
+  defp compact_calendar_event_for_prompt(event) when is_map(event) do
+    event
+    |> Map.update("attendees", [], &(read_list(&1) |> Enum.take(8)))
+    |> compact_prompt_value()
+  end
+
+  defp compact_calendar_event_for_prompt(event), do: compact_prompt_value(event)
+
+  defp compact_meeting_prep_for_prompt(meeting_prep) when is_map(meeting_prep) do
+    meeting_prep
+    |> Map.update("meetings", [], fn meetings ->
+      meetings
+      |> read_list()
+      |> prioritize_required_prompt_items()
+      |> Enum.take(@prompt_context_limit)
+      |> Enum.map(&compact_meeting_for_prompt/1)
+    end)
+    |> compact_prompt_value()
+  end
+
+  defp compact_meeting_prep_for_prompt(meeting_prep), do: compact_prompt_value(meeting_prep)
+
+  defp compact_schedule_coverage_for_prompt(schedule_coverage) when is_map(schedule_coverage) do
+    schedule_coverage
+    |> Map.update("required_meetings", [], fn meetings ->
+      meetings
+      |> read_list()
+      |> Enum.map(&compact_meeting_for_prompt/1)
+    end)
+    |> compact_prompt_value()
+  end
+
+  defp compact_schedule_coverage_for_prompt(schedule_coverage),
+    do: compact_prompt_value(schedule_coverage)
+
+  defp compact_meeting_for_prompt(meeting) when is_map(meeting) do
+    meeting
+    |> Map.update("attendees", [], &(read_list(&1) |> Enum.take(8)))
+    |> Map.update("external_attendees", [], &(read_list(&1) |> Enum.take(8)))
+    |> Map.update("candidate_people_and_orgs", [], &(read_list(&1) |> Enum.take(8)))
+    |> Map.update("crm_context", [], &(read_list(&1) |> Enum.take(6) |> compact_prompt_value()))
+    |> Map.update("web_context", [], &(read_list(&1) |> Enum.take(6) |> compact_prompt_value()))
+    |> Map.update("data_gaps", [], &(read_list(&1) |> Enum.take(6)))
+    |> compact_prompt_value()
+  end
+
+  defp compact_meeting_for_prompt(meeting), do: compact_prompt_value(meeting)
+
+  defp compact_gmail_for_prompt(gmail) when is_map(gmail) do
+    gmail
+    |> Map.update("recent_unread", [], fn messages ->
+      messages
+      |> read_list()
+      |> Enum.take(@prompt_gmail_message_limit)
+      |> Enum.map(&compact_gmail_message_for_prompt/1)
+    end)
+    |> compact_prompt_value()
+  end
+
+  defp compact_gmail_for_prompt(gmail), do: compact_prompt_value(gmail)
+
+  defp compact_gmail_message_for_prompt(message) when is_map(message) do
+    message
+    |> Map.update("body", "", &truncate(to_string(&1), @prompt_gmail_body_limit))
+    |> Map.update("snippet", "", &truncate(to_string(&1), 360))
+    |> compact_prompt_value()
+  end
+
+  defp compact_gmail_message_for_prompt(message), do: compact_prompt_value(message)
+
+  defp compact_slack_for_prompt(slack) when is_map(slack) do
+    slack
+    |> Map.update("key_threads", [], fn messages ->
+      messages
+      |> read_list()
+      |> Enum.take(@prompt_slack_message_limit)
+      |> Enum.map(&compact_prompt_value/1)
+    end)
+    |> Map.update("mentions", [], &(read_list(&1) |> Enum.take(@prompt_context_limit)))
+    |> compact_prompt_value()
+  end
+
+  defp compact_slack_for_prompt(slack), do: compact_prompt_value(slack)
+
+  defp compact_news_for_prompt(news) when is_map(news) do
+    news
+    |> Map.update("items", [], &(read_list(&1) |> Enum.take(@default_news_limit)))
+    |> compact_prompt_value()
+  end
+
+  defp compact_news_for_prompt(news), do: compact_prompt_value(news)
+
+  defp compact_relationships_for_prompt(relationships) do
+    relationships
+    |> read_list()
+    |> Enum.take(16)
+    |> compact_prompt_value()
+  end
+
+  defp compact_prompt_value(value) do
+    compact_prompt_value(value, @prompt_default_list_limit, @prompt_string_limit)
+  end
+
+  defp compact_prompt_value(%DateTime{} = value, _list_limit, _string_limit),
+    do: DateTime.to_iso8601(value)
+
+  defp compact_prompt_value(%NaiveDateTime{} = value, _list_limit, _string_limit),
+    do: NaiveDateTime.to_iso8601(value)
+
+  defp compact_prompt_value(%Date{} = value, _list_limit, _string_limit),
+    do: Date.to_iso8601(value)
+
+  defp compact_prompt_value(%Time{} = value, _list_limit, _string_limit),
+    do: Time.to_iso8601(value)
+
+  defp compact_prompt_value(%{__struct__: _struct} = value, _list_limit, string_limit),
+    do: value |> inspect() |> truncate(string_limit)
+
+  defp compact_prompt_value(value, list_limit, string_limit) when is_map(value) do
+    Map.new(value, fn {key, item} ->
+      {key, compact_prompt_value(item, list_limit, string_limit)}
+    end)
+  end
+
+  defp compact_prompt_value(value, list_limit, string_limit) when is_list(value) do
+    value
+    |> Enum.take(list_limit)
+    |> Enum.map(&compact_prompt_value(&1, list_limit, string_limit))
+  end
+
+  defp compact_prompt_value(value, _list_limit, string_limit) when is_binary(value),
+    do: truncate(value, string_limit)
+
+  defp compact_prompt_value(value, _list_limit, _string_limit), do: value
+
+  defp prioritize_required_prompt_items(items) do
+    {required, rest} =
+      Enum.split_with(items, fn
+        %{"schedule_required" => true} -> true
+        %{schedule_required: true} -> true
+        _item -> false
+      end)
+
+    required ++ rest
+  end
+
   defp compact_brief_input_for_metadata(input) do
     %{
       "date" => read_string(input, "date", nil),
@@ -1706,6 +1902,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp read_list(_map, _key), do: []
+  defp read_list(list) when is_list(list), do: list
+  defp read_list(_value), do: []
 
   defp read_string(map, key, default) when is_map(map) do
     case read_any(map, key) do

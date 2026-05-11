@@ -185,7 +185,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 64_000
+    assert params["max_tokens"] == 24_000
     assert params["reasoning_effort"] == "xhigh"
     assert params["timeout_ms"] == 240_000
 
@@ -460,7 +460,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 64_000
+    assert params["max_tokens"] == 24_000
   end
 
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
