@@ -33,7 +33,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 64_000
+  @default_llm_max_tokens 8_000
   @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @local_imessage_chat_limit 8
@@ -167,7 +167,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 168),
       llm_model: normalize_string(config["llm_model"]),
       llm_max_tokens:
-        integer_in_range(config["llm_max_tokens"], @default_llm_max_tokens, 256, 64_000),
+        integer_in_range(
+          config["llm_max_tokens"],
+          @default_llm_max_tokens,
+          256,
+          @default_llm_max_tokens
+        ),
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       pending_brief_input: nil,
@@ -602,7 +607,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                 tokens_out: response.tokens_out,
                 finish_reason: response.finish_reason,
                 elapsed_ms: elapsed_ms,
-                max_tokens_used: state.llm_max_tokens,
+                max_tokens_used: effective_llm_max_tokens(state),
                 reasoning_effort_used: state.llm_reasoning_effort,
                 calendar_today_events:
                   length(get_in(brief_input, ["calendar", "today_events"]) || []),
@@ -634,7 +639,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               {:error, {:llm_call_failed, reason},
                %{
                  elapsed_ms: elapsed_ms,
-                 max_tokens_used: state.llm_max_tokens,
+                 max_tokens_used: effective_llm_max_tokens(state),
                  reasoning_effort_used: state.llm_reasoning_effort
                }}
           end
@@ -758,7 +763,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               "content" => prompt
             }
           ],
-          "max_tokens" => state.llm_max_tokens,
+          "max_tokens" => effective_llm_max_tokens(state),
           "temperature" => 0.2,
           "reasoning_effort" => state.llm_reasoning_effort
         }
@@ -1616,6 +1621,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       _ ->
         default
     end
+  end
+
+  defp effective_llm_max_tokens(state) do
+    state
+    |> Map.get(:llm_max_tokens)
+    |> integer_in_range(@default_llm_max_tokens, 256, @default_llm_max_tokens)
   end
 
   defp maybe_put(map, _key, nil), do: map

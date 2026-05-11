@@ -185,7 +185,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 64_000
+    assert params["max_tokens"] == 8_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -436,6 +436,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["model"] == "gpt-5.4"
     assert params["max_tokens"] == 4096
     assert params["reasoning_effort"] == "xhigh"
+  end
+
+  test "caps oversized morning briefing output budgets", %{user_id: user_id} do
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8,
+        "llm_max_tokens" => 64_000
+      })
+
+    context = %{
+      agent_id: "agent-llm-max-token-cap",
+      user_id: user_id,
+      timestamp: ~U[2026-05-07 14:00:00Z],
+      source_bundle:
+        SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: ~U[2026-05-07 14:00:00Z]})
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    assert params["max_tokens"] == 8_000
   end
 
   test "keeps morning briefing on the high-reasoning path", %{user_id: user_id} do
