@@ -150,12 +150,9 @@ defmodule Maraithon.Capabilities do
     "notes_search" =>
       "Search the user's mirrored macOS Notes for a substring in title or snippet.",
     "notes_get" => "Fetch one mirrored macOS Note by its source GUID.",
-    "notes_list_recent" =>
-      "List the user's most recently modified mirrored macOS Notes.",
-    "voice_memos_search" =>
-      "Search the user's mirrored macOS Voice Memos by title substring.",
-    "voice_memos_get" =>
-      "Fetch one mirrored macOS Voice Memo by its source GUID.",
+    "notes_list_recent" => "List the user's most recently modified mirrored macOS Notes.",
+    "voice_memos_search" => "Search the user's mirrored macOS Voice Memos by title substring.",
+    "voice_memos_get" => "Fetch one mirrored macOS Voice Memo by its source GUID.",
     "voice_memos_list_recent" =>
       "List the user's most recently created mirrored macOS Voice Memos.",
     "messages_search" =>

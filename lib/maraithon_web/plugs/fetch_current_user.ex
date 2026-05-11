@@ -19,6 +19,7 @@ defmodule MaraithonWeb.Plugs.FetchCurrentUser do
         case Accounts.get_user_by_session_token(token) do
           nil ->
             log_diag(conn, "token_present_lookup_nil")
+
             conn
             |> delete_session(@session_key)
             |> assign(:current_user, nil)
@@ -39,6 +40,7 @@ defmodule MaraithonWeb.Plugs.FetchCurrentUser do
          String.starts_with?(conn.request_path, "/auth") do
       cookie_header? = get_req_header(conn, "cookie") != []
       session_key_count = get_session(conn) |> map_size()
+
       maraithon_cookie? =
         get_req_header(conn, "cookie")
         |> List.first()

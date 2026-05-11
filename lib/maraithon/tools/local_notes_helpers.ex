@@ -28,13 +28,10 @@ defmodule Maraithon.Tools.LocalNotesHelpers do
       note_id: Map.get(note, :guid) || Map.get(note, "guid"),
       guid: Map.get(note, :guid) || Map.get(note, "guid"),
       title: Map.get(note, :title) || Map.get(note, "title"),
-      snippet:
-        truncate_snippet(Map.get(note, :snippet) || Map.get(note, "snippet")),
-      body_snippet:
-        body_snippet(Map.get(note, :body) || Map.get(note, "body")),
+      snippet: truncate_snippet(Map.get(note, :snippet) || Map.get(note, "snippet")),
+      body_snippet: body_snippet(Map.get(note, :body) || Map.get(note, "body")),
       folder: Map.get(note, :folder) || Map.get(note, "folder"),
-      modified_at:
-        iso8601(Map.get(note, :modified_at) || Map.get(note, "modified_at"))
+      modified_at: iso8601(Map.get(note, :modified_at) || Map.get(note, "modified_at"))
     }
   end
 

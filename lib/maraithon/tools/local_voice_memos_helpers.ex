@@ -37,10 +37,8 @@ defmodule Maraithon.Tools.LocalVoiceMemosHelpers do
       memo_id: Map.get(memo, :guid) || Map.get(memo, "guid"),
       guid: Map.get(memo, :guid) || Map.get(memo, "guid"),
       title: Map.get(memo, :title) || Map.get(memo, "title"),
-      duration_seconds:
-        Map.get(memo, :duration_seconds) || Map.get(memo, "duration_seconds"),
-      file_size_bytes:
-        Map.get(memo, :file_size_bytes) || Map.get(memo, "file_size_bytes"),
+      duration_seconds: Map.get(memo, :duration_seconds) || Map.get(memo, "duration_seconds"),
+      file_size_bytes: Map.get(memo, :file_size_bytes) || Map.get(memo, "file_size_bytes"),
       created_at: iso8601(Map.get(memo, :created_at) || Map.get(memo, "created_at"))
     }
   end
