@@ -545,8 +545,16 @@ defmodule MaraithonWeb.CompanionController do
       "" ->
         :ok
 
-      provided ->
-        if provided == device.device_id, do: :ok, else: {:error, :device_mismatch}
+      provided when is_binary(provided) ->
+        # Swift encodes `UUID` as uppercase, Ecto.UUID round-trips to
+        # lowercase — compare case-insensitively so the macOS companion
+        # doesn't 400 against its own device's lowercased identifier.
+        if String.downcase(provided) == String.downcase(device.device_id || ""),
+          do: :ok,
+          else: {:error, :device_mismatch}
+
+      _ ->
+        {:error, :device_mismatch}
     end
   end
 

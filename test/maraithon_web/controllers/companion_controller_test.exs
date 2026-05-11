@@ -226,6 +226,22 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
       assert json_response(conn, 400)["error"] =~ "messages"
     end
+
+    test "accepts uppercase device_id (Swift UUID encoding)", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+      uppercase_id = String.upcase(device.device_id)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/messages", %{
+          "device_id" => uppercase_id,
+          "messages" => [sample_message("g1")]
+        })
+
+      assert json_response(conn, 200)["accepted"] == 1
+      assert message_count(user.id, device.device_id) == 1
+    end
   end
 
   describe "GET /api/v1/companion/whoami" do
