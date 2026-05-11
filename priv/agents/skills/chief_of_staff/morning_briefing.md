@@ -23,6 +23,7 @@ Create a concise executive brief from the connector payloads.
 - Use simple status markers only when they help scanning.
 - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
 - Use `meeting_prep` and `schedule_coverage` when writing `Today's Schedule`. If `schedule_coverage.required_meetings` is non-empty, include every required meeting; this is a hard coverage contract, not a ranking hint.
+- Use `display_start` and `display_end` exactly when present for schedule times. Do not recompute local clock times from UTC fields; if a display time is absent, cite UTC rather than guessing.
 - For every required external meeting, state the time, what the meeting appears to be, who or which organization is involved, why it matters today, and the prep point, decision, or risk Kent should carry into it.
 - Treat meeting prep as CRM-first: prefer CRM relationship context and linked open work over public web. When CRM has no useful match for an attendee or company and `meeting_prep.web_context` exists, use the web result titles/snippets/URLs as external context, keep uncertainty visible, and do not invent facts beyond the source snippets.
 - If CRM and web context still leave a meeting ambiguous, call that out as a data gap and give the best operational prep from the event title, attendees, email, Slack, todos, and memory.

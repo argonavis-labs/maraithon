@@ -185,7 +185,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 8_000
+    assert params["max_tokens"] == 5_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -194,6 +194,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Email review rule"
     assert prompt =~ "Treat meeting prep as CRM-first"
     assert prompt =~ "Required external meetings are a hard coverage contract"
+    assert prompt =~ "Use display_start and display_end exactly"
     assert prompt =~ "\"schedule_coverage\""
     assert prompt =~ "\"required_meetings\""
     assert prompt =~ "body_available"
@@ -457,7 +458,73 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 8_000
+    assert params["max_tokens"] == 5_000
+  end
+
+  test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
+    now = ~U[2026-05-11 15:00:00Z]
+
+    {:ok, _person} =
+      Crm.upsert_person(user_id, %{
+        "first_name" => "Dawn",
+        "last_name" => "Nguyen",
+        "email" => "dawn@gmail.com",
+        "relationship" => "Runner enterprise design partner",
+        "notes" => "External partner context for executive meeting prep."
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Los_Angeles",
+        "timezone_offset_hours" => -5,
+        "morning_brief_hour_local" => 8
+      })
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_calendar(%{
+        "events" => [
+          %{
+            "event_id" => "evt-dawn",
+            "summary" => "Dawn Nguyen",
+            "start" => ~U[2026-05-11 19:00:00Z],
+            "end" => ~U[2026-05-11 19:30:00Z],
+            "attendees" => [
+              %{"display_name" => "Dawn Nguyen", "email" => "dawn@gmail.com"}
+            ]
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+    assert input["timezone"] == "PT"
+
+    assert [
+             %{
+               "summary" => "Dawn Nguyen",
+               "display_start" => "12:00 PM PT",
+               "display_end" => "12:30 PM PT",
+               "display_timezone" => "PT"
+             }
+           ] = input["calendar"]["today_events"]
+
+    assert get_in(input, ["meeting_prep", "counts", "required_schedule_meetings"]) == 1
+    assert get_in(input, ["meeting_prep", "counts", "web_searches"]) == 0
+
+    assert [
+             %{
+               "summary" => "Dawn Nguyen",
+               "display_start" => "12:00 PM PT",
+               "display_end" => "12:30 PM PT",
+               "display_timezone" => "PT"
+             }
+           ] = get_in(input, ["schedule_coverage", "required_meetings"])
   end
 
   test "keeps morning briefing on the high-reasoning path", %{user_id: user_id} do

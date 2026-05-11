@@ -33,7 +33,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 8_000
+  @default_llm_max_tokens 5_000
   @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @local_imessage_chat_limit 8
@@ -151,6 +151,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       user_id: normalize_string(config["user_id"]),
       assistant_behavior: normalize_string(config["assistant_behavior"]) || "ai_chief_of_staff",
+      timezone: normalize_timezone(config["timezone"] || config["timezone_name"]),
       timezone_offset_hours:
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       morning_hour:
@@ -185,7 +186,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   def handle_wakeup(state, context) do
     user_id = state.user_id || normalize_string(context[:user_id])
     now = context[:timestamp] || DateTime.utc_now()
-    period_key = local_period_key(now, state.timezone_offset_hours)
+    period_key = local_period_key(now, state)
     dedupe_key = "morning_briefing:#{period_key}"
 
     cond do
@@ -319,7 +320,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   def build_brief_input(user_id, now, state, context) do
     source_bundle = context[:source_bundle] || %{}
     offset_hours = state.timezone_offset_hours
-    local_date = local_date(now, offset_hours)
+    local_date = local_date(now, state)
     tomorrow = Date.add(local_date, 1)
     lookback_start = DateTime.add(now, -state.lookback_hours, :hour)
     email_prompt_limit = min(state.email_scan_limit, 30)
@@ -415,17 +416,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     today_events =
       calendar_events
-      |> Enum.filter(&event_on_date?(&1, local_date, offset_hours))
-      |> Enum.map(&calendar_event_for_prompt/1)
+      |> Enum.filter(&event_on_date?(&1, local_date, state))
+      |> Enum.map(&calendar_event_for_prompt(&1, state))
       |> Enum.reject(&is_nil/1)
       |> Enum.take(@today_calendar_limit)
 
     tomorrow_first_event =
       calendar_events
-      |> Enum.filter(&event_on_date?(&1, tomorrow, offset_hours))
+      |> Enum.filter(&event_on_date?(&1, tomorrow, state))
       |> Enum.sort_by(&event_sort_key/1)
       |> List.first()
-      |> calendar_event_for_prompt()
+      |> calendar_event_for_prompt(state)
 
     meeting_prep =
       MeetingEnrichment.enrich(user_id, today_events,
@@ -439,13 +440,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
       "timezone_offset_hours" => offset_hours,
+      "timezone" => timezone_label(state, now),
       "calendar" => %{
         "preferred_source" => calendar_source,
         "today_events" => today_events,
         "tomorrow_first_event" => tomorrow_first_event,
         "upcoming_local" =>
           local_calendar_events
-          |> Enum.map(&calendar_event_for_prompt/1)
+          |> Enum.map(&calendar_event_for_prompt(&1, state))
           |> Enum.take(@local_calendar_limit)
       },
       "meeting_prep" => meeting_prep,
@@ -677,6 +679,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "news_limit",
         "news_feeds",
         "lookback_hours",
+        "timezone",
+        "timezone_name",
         "llm_model",
         "llm_max_tokens",
         "llm_reasoning_effort",
@@ -807,6 +811,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        every item in that list. Use model judgment for what the meeting means and how Kent
        should prepare; do not write a heuristic digest. Do not say the calendar is open
        when calendar.today_events or schedule_coverage.required_meetings is non-empty.
+       Use display_start and display_end exactly when present for schedule times; do not
+       recompute local clock times from UTC fields. If a display time is absent, cite UTC
+       rather than guessing a local time.
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
        the prep point, decision, or risk Kent should carry into it.
@@ -929,14 +936,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
   end
 
-  defp calendar_event_for_prompt(nil), do: nil
+  defp calendar_event_for_prompt(nil, _state), do: nil
 
-  defp calendar_event_for_prompt(event) when is_map(event) do
+  defp calendar_event_for_prompt(event, state) when is_map(event) do
+    start_value = read_any(event, "start")
+    end_value = read_any(event, "end")
+
     %{
       "event_id" => read_string(event, "event_id", nil),
       "summary" => read_string(event, "summary", "Untitled event"),
-      "start" => prompt_time(read_any(event, "start")),
-      "end" => prompt_time(read_any(event, "end")),
+      "start" => prompt_time(start_value),
+      "end" => prompt_time(end_value),
+      "display_start" => display_time(start_value, state),
+      "display_end" => display_time(end_value, state),
+      "display_date" => display_date(start_value, state),
+      "display_timezone" => timezone_label(state, datetime_from_value(start_value)),
       "location" => read_string(event, "location", nil),
       "attendees" => read_list(event, "attendees") |> Enum.take(12),
       "organizer" => read_string(event, "organizer", nil),
@@ -1301,17 +1315,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp recent_slack_message?(_message, _lookback_start), do: false
 
-  defp event_on_date?(event, date, offset_hours) when is_map(event) do
+  defp event_on_date?(event, date, state) when is_map(event) do
     event
     |> read_any("start")
-    |> local_date_from_value(offset_hours)
+    |> local_date_from_value(state)
     |> case do
       ^date -> true
       _ -> false
     end
   end
 
-  defp event_on_date?(_event, _date, _offset_hours), do: false
+  defp event_on_date?(_event, _date, _state), do: false
 
   defp schedule_coverage_contract(meeting_prep) when is_map(meeting_prep) do
     required_meetings =
@@ -1343,6 +1357,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "summary" => read_string(meeting, "summary", nil),
       "start" => read_any(meeting, "start"),
       "end" => read_any(meeting, "end"),
+      "display_start" => read_string(meeting, "display_start", nil),
+      "display_end" => read_string(meeting, "display_end", nil),
+      "display_date" => read_string(meeting, "display_date", nil),
+      "display_timezone" => read_string(meeting, "display_timezone", nil),
       "external_attendees" => read_list(meeting, "external_attendees"),
       "candidate_people_and_orgs" => read_list(meeting, "candidate_people_and_orgs"),
       "crm_context" => read_list(meeting, "crm_context"),
@@ -1409,12 +1427,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp llm_finish_reason(_response), do: nil
 
   defp due_now?(now, state) do
-    local_now = DateTime.add(now, state.timezone_offset_hours, :hour)
+    local_now = local_datetime(now, state)
     local_now.hour >= state.morning_hour
   end
 
   defp next_morning_occurrence(now, state) do
-    local_now = DateTime.add(now, state.timezone_offset_hours, :hour)
+    local_now = local_datetime(now, state)
     local_date = DateTime.to_date(local_now)
 
     scheduled_today =
@@ -1429,39 +1447,39 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> DateTime.new!(Time.new!(state.morning_hour, 0, 0), "Etc/UTC")
       end
 
-    DateTime.add(target_local, -state.timezone_offset_hours, :hour)
+    DateTime.add(target_local, -local_timezone_offset_hours(target_local, state), :hour)
   end
 
-  defp local_period_key(now, offset_hours) do
+  defp local_period_key(now, state) do
     now
-    |> local_date(offset_hours)
+    |> local_date(state)
     |> Date.to_iso8601()
   end
 
-  defp local_date(%DateTime{} = now, offset_hours) do
+  defp local_date(%DateTime{} = now, state) do
     now
-    |> DateTime.add(offset_hours, :hour)
+    |> local_datetime(state)
     |> DateTime.to_date()
   end
 
-  defp local_date_from_value(%DateTime{} = value, offset_hours),
-    do: local_date(value, offset_hours)
+  defp local_date_from_value(%DateTime{} = value, state),
+    do: local_date(value, state)
 
-  defp local_date_from_value(%{"date" => date}, _offset_hours) when is_binary(date) do
+  defp local_date_from_value(%{"date" => date}, _state) when is_binary(date) do
     case Date.from_iso8601(date) do
       {:ok, parsed} -> parsed
       _ -> nil
     end
   end
 
-  defp local_date_from_value(value, offset_hours) when is_binary(value) do
+  defp local_date_from_value(value, state) when is_binary(value) do
     case DateTime.from_iso8601(value) do
-      {:ok, datetime, _offset} -> local_date(datetime, offset_hours)
+      {:ok, datetime, _offset} -> local_date(datetime, state)
       _ -> nil
     end
   end
 
-  defp local_date_from_value(_value, _offset_hours), do: nil
+  defp local_date_from_value(_value, _state), do: nil
 
   defp decode_json(content) when is_binary(content) do
     content
@@ -1478,6 +1496,186 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp prompt_time(%{"date" => date}) when is_binary(date), do: date
   defp prompt_time(value) when is_binary(value), do: value
   defp prompt_time(_value), do: nil
+
+  defp display_date(value, state) do
+    case local_date_from_value(value, state) do
+      %Date{} = date -> Date.to_iso8601(date)
+      _ -> nil
+    end
+  end
+
+  defp display_time(%{"date" => date}, _state) when is_binary(date), do: date
+
+  defp display_time(%DateTime{} = value, state) do
+    local = local_datetime(value, state)
+    "#{format_clock(local)} #{timezone_label(state, value)}"
+  end
+
+  defp display_time(value, state) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> display_time(datetime, state)
+      _ -> value
+    end
+  end
+
+  defp display_time(_value, _state), do: nil
+
+  defp datetime_from_value(%DateTime{} = value), do: value
+
+  defp datetime_from_value(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _ -> nil
+    end
+  end
+
+  defp datetime_from_value(_value), do: nil
+
+  defp local_datetime(%DateTime{} = datetime, state) do
+    DateTime.add(datetime, timezone_offset_hours_at(datetime, state), :hour)
+  end
+
+  defp timezone_offset_hours_at(%DateTime{} = datetime, state) do
+    case timezone_config(state) do
+      {:us, standard, daylight, _label} ->
+        if us_dst_active_utc?(datetime, standard, daylight), do: daylight, else: standard
+
+      {:fixed, offset, _label} ->
+        offset
+
+      :unknown ->
+        state.timezone_offset_hours
+    end
+  end
+
+  defp local_timezone_offset_hours(%DateTime{} = local_datetime, state) do
+    case timezone_config(state) do
+      {:us, standard, daylight, _label} ->
+        if us_dst_active_local?(local_datetime), do: daylight, else: standard
+
+      {:fixed, offset, _label} ->
+        offset
+
+      :unknown ->
+        state.timezone_offset_hours
+    end
+  end
+
+  defp timezone_label(state, nil), do: timezone_label(state, DateTime.utc_now())
+
+  defp timezone_label(state, %DateTime{} = _datetime) do
+    case timezone_config(state) do
+      {:us, _standard, _daylight, label} -> label
+      {:fixed, _offset, label} -> label
+      :unknown -> timezone_offset_label(state.timezone_offset_hours)
+    end
+  end
+
+  defp timezone_config(%{timezone: timezone}) when is_binary(timezone) do
+    case String.downcase(String.trim(timezone)) do
+      value
+      when value in ["america/los_angeles", "us/pacific", "pacific", "pacific time", "pt"] ->
+        {:us, -8, -7, "PT"}
+
+      value when value in ["america/denver", "us/mountain", "mountain", "mountain time", "mt"] ->
+        {:us, -7, -6, "MT"}
+
+      value when value in ["america/chicago", "us/central", "central", "central time", "ct"] ->
+        {:us, -6, -5, "CT"}
+
+      value
+      when value in [
+             "america/new_york",
+             "america/toronto",
+             "us/eastern",
+             "eastern",
+             "eastern time",
+             "et"
+           ] ->
+        {:us, -5, -4, "ET"}
+
+      value when value in ["utc", "etc/utc", "z"] ->
+        {:fixed, 0, "UTC"}
+
+      _ ->
+        :unknown
+    end
+  end
+
+  defp timezone_config(_state), do: :unknown
+
+  defp normalize_timezone(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" -> nil
+      timezone -> timezone
+    end
+  end
+
+  defp normalize_timezone(_value), do: nil
+
+  defp us_dst_active_utc?(%DateTime{} = utc_datetime, standard_offset, daylight_offset) do
+    year = utc_datetime.year
+    starts_at = us_dst_boundary_utc(year, 3, :second, standard_offset)
+    ends_at = us_dst_boundary_utc(year, 11, :first, daylight_offset)
+
+    DateTime.compare(utc_datetime, starts_at) != :lt and
+      DateTime.compare(utc_datetime, ends_at) == :lt
+  end
+
+  defp us_dst_active_local?(%DateTime{} = local_datetime) do
+    year = local_datetime.year
+    starts_at = us_dst_boundary_local(year, 3, :second)
+    ends_at = us_dst_boundary_local(year, 11, :first)
+
+    DateTime.compare(local_datetime, starts_at) != :lt and
+      DateTime.compare(local_datetime, ends_at) == :lt
+  end
+
+  defp us_dst_boundary_utc(year, month, ordinal, offset_hours) do
+    year
+    |> us_dst_boundary_local(month, ordinal)
+    |> DateTime.add(-offset_hours, :hour)
+  end
+
+  defp us_dst_boundary_local(year, month, ordinal) do
+    year
+    |> nth_sunday(month, ordinal)
+    |> DateTime.new!(~T[02:00:00], "Etc/UTC")
+  end
+
+  defp nth_sunday(year, month, ordinal) do
+    first = Date.new!(year, month, 1)
+    days_until_sunday = rem(7 - Date.day_of_week(first), 7)
+    first_sunday = Date.add(first, days_until_sunday)
+
+    case ordinal do
+      :first -> first_sunday
+      :second -> Date.add(first_sunday, 7)
+    end
+  end
+
+  defp format_clock(%DateTime{} = datetime) do
+    hour =
+      case rem(datetime.hour, 12) do
+        0 -> 12
+        value -> value
+      end
+
+    minute = datetime.minute |> Integer.to_string() |> String.pad_leading(2, "0")
+    meridiem = if datetime.hour < 12, do: "AM", else: "PM"
+
+    "#{hour}:#{minute} #{meridiem}"
+  end
+
+  defp timezone_offset_label(offset) when is_integer(offset) do
+    sign = if offset < 0, do: "-", else: "+"
+    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
+    "UTC#{sign}#{hours}:00"
+  end
+
+  defp timezone_offset_label(_offset), do: "UTC"
 
   defp read_any(map, key) when is_map(map),
     do: Map.get(map, key, Map.get(map, to_existing_atom(key)))

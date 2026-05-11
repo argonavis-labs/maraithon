@@ -475,6 +475,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "summary" => read_string(event, "summary"),
       "start" => read_any(event, "start"),
       "end" => read_any(event, "end"),
+      "display_start" => read_string(event, "display_start"),
+      "display_end" => read_string(event, "display_end"),
+      "display_date" => read_string(event, "display_date"),
+      "display_timezone" => read_string(event, "display_timezone"),
       "location" => read_string(event, "location"),
       "attendees" =>
         event
