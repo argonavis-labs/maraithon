@@ -108,6 +108,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "body_available" => true,
             "body_status" => "available",
             "internal_date" => now
+          },
+          %{
+            "message_id" => "msg-3",
+            "thread_id" => "thread-3",
+            "labels" => ["INBOX"],
+            "from" => "Charlie Feng <charlie@runner.now>",
+            "subject" => "Cogniate Enterprise plan discussion",
+            "snippet" => "Looping Kent for pricing guidance.",
+            "text_body" => "Charlie looped Kent into the Cogniate Enterprise plan discussion.",
+            "body_available" => true,
+            "body_status" => "available",
+            "internal_date" => now
           }
         ],
         "status" => "ready",
@@ -185,7 +197,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 24_000
+    assert params["max_tokens"] == 18_000
     assert params["reasoning_effort"] == "high"
     assert params["timeout_ms"] == 240_000
 
@@ -212,6 +224,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Today's move:"
     assert prompt =~ "Instagram"
     assert prompt =~ "SKIMS"
+    assert prompt =~ "Cogniate Enterprise plan discussion"
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
     assert prompt =~ "Include news only when it affects Runner"
@@ -460,7 +473,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 24_000
+    assert params["max_tokens"] == 18_000
   end
 
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do

@@ -33,13 +33,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 24_000
+  @default_llm_max_tokens 18_000
   @default_llm_reasoning_effort "high"
   @default_llm_timeout_ms 240_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
-  @prompt_gmail_body_limit 1_500
-  @prompt_gmail_message_limit 18
+  @prompt_gmail_body_limit 900
+  @prompt_gmail_message_limit 16
   @prompt_slack_message_limit 18
   @prompt_context_limit 8
   @prompt_default_list_limit 24
@@ -510,6 +510,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         }
       },
       "gmail" => %{
+        "recent_inbox" =>
+          gmail_messages
+          |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+          |> Enum.map(&gmail_message_for_prompt/1)
+          |> Enum.take(email_prompt_limit),
         "recent_unread" =>
           gmail_messages
           |> Enum.filter(&recent_unread_message?(&1, lookback_start))
@@ -517,6 +522,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.take(email_prompt_limit),
         "counts" => %{
           "inbox" => length(gmail_messages),
+          "recent_inbox" =>
+            Enum.count(gmail_messages, &recent_gmail_message?(&1, lookback_start)),
           "recent_unread" =>
             Enum.count(gmail_messages, &recent_unread_message?(&1, lookback_start))
         }
@@ -1319,6 +1326,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       (is_nil(internal_date) or DateTime.compare(internal_date, lookback_start) != :lt)
   end
 
+  defp recent_gmail_message?(message, lookback_start) when is_map(message) do
+    case read_datetime(message, "internal_date") do
+      nil -> true
+      internal_date -> DateTime.compare(internal_date, lookback_start) != :lt
+    end
+  end
+
+  defp recent_gmail_message?(_message, _lookback_start), do: false
+
   defp recent_slack_message?(message, lookback_start) when is_map(message) do
     case read_slack_datetime(message, "ts") do
       nil -> true
@@ -1487,6 +1503,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_gmail_for_prompt(gmail) when is_map(gmail) do
     gmail
+    |> Map.update("recent_inbox", [], fn messages ->
+      messages
+      |> read_list()
+      |> Enum.take(@prompt_gmail_message_limit)
+      |> Enum.map(&compact_gmail_message_for_prompt/1)
+    end)
     |> Map.update("recent_unread", [], fn messages ->
       messages
       |> read_list()
@@ -1588,6 +1610,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" => read_string(input, "date", nil),
       "generated_at" => read_string(input, "generated_at", nil),
       "counts" => %{
+        "gmail_recent_inbox" => length(get_in(input, ["gmail", "recent_inbox"]) || []),
         "gmail_recent_unread" => length(get_in(input, ["gmail", "recent_unread"]) || []),
         "slack_key_threads" => length(get_in(input, ["slack", "key_threads"]) || []),
         "news_items" => length(get_in(input, ["news", "items"]) || []),
