@@ -33,7 +33,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 8
   @default_news_limit 6
   @default_lookback_hours 18
-  @default_llm_max_tokens 5_000
+  @default_llm_max_tokens 8_000
   @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @local_imessage_chat_limit 8
@@ -817,6 +817,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
        the prep point, decision, or risk Kent should carry into it.
+       Keep the JSON compact enough to complete: body 250-450 words, at most six todos,
+       and no todo should contain a long narrative or project plan.
 
        Brief input JSON:
        #{input_json}

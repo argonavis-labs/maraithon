@@ -185,7 +185,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 5_000
+    assert params["max_tokens"] == 8_000
     assert params["reasoning_effort"] == "high"
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -195,6 +195,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Treat meeting prep as CRM-first"
     assert prompt =~ "Required external meetings are a hard coverage contract"
     assert prompt =~ "Use display_start and display_end exactly"
+    assert prompt =~ "Keep the JSON compact enough to complete"
     assert prompt =~ "\"schedule_coverage\""
     assert prompt =~ "\"required_meetings\""
     assert prompt =~ "body_available"
@@ -458,7 +459,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
 
-    assert params["max_tokens"] == 5_000
+    assert params["max_tokens"] == 8_000
   end
 
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
