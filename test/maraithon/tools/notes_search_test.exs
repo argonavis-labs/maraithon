@@ -95,6 +95,35 @@ defmodule Maraithon.Tools.NotesSearchTest do
       assert {:error, _} = Tools.execute("notes_search", %{"query" => "hello"})
     end
 
+    test "matches body content and returns body_snippet on hits" do
+      {user_id, device_id} = seed_user("body")
+
+      long_body = String.duplicate("alpha ", 60) <> "needle " <> String.duplicate("omega ", 60)
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("g1", %{
+            "title" => "Diary",
+            "snippet" => "an ordinary day",
+            "body" => long_body
+          })
+        ])
+
+      assert {:ok, result} =
+               Tools.execute("notes_search", %{
+                 "user_id" => user_id,
+                 "query" => "needle"
+               })
+
+      assert result.count == 1
+      [note] = result.notes
+      assert note.title == "Diary"
+      assert is_binary(note.body_snippet)
+      # 200-char cap + ellipsis suffix.
+      assert String.length(note.body_snippet) <= 203
+      assert String.ends_with?(note.body_snippet, "...")
+    end
+
     test "honors limit argument and clamps to max 50" do
       {user_id, device_id} = seed_user("limit")
 

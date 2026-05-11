@@ -148,6 +148,91 @@ defmodule Maraithon.LocalVoiceMemosTest do
     end
   end
 
+  describe "audio + transcript ingest (v1.5)" do
+    test "stores base64-encoded audio bytes under the cap" do
+      user_id = "vm-audio-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      raw = :crypto.strong_rand_bytes(2048)
+      b64 = Base.encode64(raw)
+
+      {:ok, %{accepted: 1}} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("g-aud", %{
+            "audio_bytes" => b64,
+            "audio_mime" => "audio/m4a",
+            "transcript" => "hello world this is a test transcript",
+            "transcript_engine" => "sf_speech",
+            "transcript_lang" => "en-US"
+          })
+        ])
+
+      [stored] = memos_for(user_id, device_id)
+      assert stored.audio_bytes == raw
+      assert stored.audio_truncated == false
+      assert stored.audio_mime == "audio/m4a"
+      assert stored.transcript == "hello world this is a test transcript"
+      assert stored.transcript_engine == "sf_speech"
+      assert stored.transcript_lang == "en-US"
+    end
+
+    test "truncates oversize audio and flags audio_truncated" do
+      user_id = "vm-trunc-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      oversized = :crypto.strong_rand_bytes(5 * 1024 * 1024 + 1)
+      b64 = Base.encode64(oversized)
+
+      {:ok, %{accepted: 1}} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("g-big", %{"audio_bytes" => b64})
+        ])
+
+      [stored] = memos_for(user_id, device_id)
+      assert is_nil(stored.audio_bytes)
+      assert stored.audio_truncated == true
+    end
+
+    test "tolerates missing audio + transcript fields (backwards-compat)" do
+      user_id = "vm-bc-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, %{accepted: 1}} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("g-bc")
+        ])
+
+      [stored] = memos_for(user_id, device_id)
+      assert is_nil(stored.audio_bytes)
+      assert stored.audio_truncated == false
+      assert stored.audio_mime == "audio/m4a"
+      assert is_nil(stored.transcript)
+    end
+
+    test "search/3 matches on transcript text" do
+      user_id = "vm-tx-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("g-tx1", %{
+            "title" => nil,
+            "snippet" => nil,
+            "transcript" => "remember to ship the audio feature on friday"
+          }),
+          sample_memo("g-tx2", %{
+            "title" => nil,
+            "snippet" => nil,
+            "transcript" => "groceries: milk, eggs, bread"
+          })
+        ])
+
+      results = LocalVoiceMemos.search(user_id, "friday")
+      assert length(results) == 1
+      assert hd(results).guid == "g-tx1"
+    end
+  end
+
   describe "purge_device/2" do
     test "removes all rows for the (user, device) pair" do
       user_id = "vm-purge-#{System.unique_integer([:positive])}@example.com"

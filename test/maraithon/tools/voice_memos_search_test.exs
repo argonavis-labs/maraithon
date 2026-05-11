@@ -71,6 +71,32 @@ defmodule Maraithon.Tools.VoiceMemosSearchTest do
                })
     end
 
+    test "matches on transcript text and exposes transcript_snippet" do
+      user_id = "vm-tx-search-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("v-tx", %{
+            "title" => nil,
+            "snippet" => nil,
+            "transcript" => "remember the avocado toast investor pitch on monday"
+          })
+        ])
+
+      assert {:ok, result} =
+               Tools.execute("voice_memos_search", %{
+                 "user_id" => user_id,
+                 "query" => "avocado"
+               })
+
+      assert result.count == 1
+      [memo] = result.voice_memos
+      assert memo.guid == "v-tx"
+      assert is_binary(memo.transcript_snippet)
+      assert memo.transcript_snippet =~ "avocado"
+    end
+
     test "rejects missing query" do
       assert {:error, message} =
                Tools.execute("voice_memos_search", %{"user_id" => "u"})

@@ -423,6 +423,27 @@ defmodule Maraithon.Tools.InputSchemas do
       "voice_memos_list_recent" ->
         user_object(%{"limit" => @integer})
 
+      "messages_search" ->
+        user_object(
+          %{
+            "query" => @string,
+            "limit" => @integer,
+            "from_handle" => @string,
+            "since" => @string,
+            "before" => @string
+          },
+          ["query"]
+        )
+
+      "messages_get" ->
+        user_object(%{"message_id" => @string}, ["message_id"])
+
+      "messages_list_recent" ->
+        user_object(%{"limit" => @integer, "chat_key" => @string})
+
+      "messages_chats_recent" ->
+        user_object(%{"limit" => @integer})
+
       _ ->
         object(%{})
     end

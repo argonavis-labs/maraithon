@@ -87,6 +87,142 @@ defmodule Maraithon.LocalMessages do
   end
 
   @doc """
+  Returns the most recent messages across every chat for a user, newest first.
+
+  Accepts optional `:limit` (default 50) and `:chat_key` (to restrict to a
+  single thread).
+  """
+  def recent_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    limit = Keyword.get(opts, :limit, 50)
+    chat_key = Keyword.get(opts, :chat_key)
+
+    query =
+      from msg in LocalMessage,
+        where: msg.user_id == ^user_id,
+        order_by: [desc: msg.sent_at],
+        limit: ^limit
+
+    query =
+      if is_binary(chat_key) and chat_key != "" do
+        from msg in query, where: msg.chat_key == ^chat_key
+      else
+        query
+      end
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Searches messages for a user using a substring match on the encrypted
+  `text` and `sender_handle` fields. Since these columns are encrypted at
+  rest, we decrypt in memory and filter — fine for the per-user volumes we
+  expect today.
+
+  Options:
+    * `:limit` — max rows to return (default 50)
+    * `:from_handle` — restrict to messages whose `sender_handle`
+      substring-matches the value
+    * `:since` — only include messages with `sent_at >= since`
+    * `:before` — only include messages with `sent_at <= before`
+  """
+  def search(user_id, term, opts \\ [])
+      when is_binary(user_id) and is_binary(term) do
+    limit = Keyword.get(opts, :limit, 50)
+    from_handle = Keyword.get(opts, :from_handle)
+    since = Keyword.get(opts, :since)
+    before_ts = Keyword.get(opts, :before)
+    needle = String.downcase(term)
+    handle_needle = if is_binary(from_handle), do: String.downcase(from_handle), else: nil
+
+    base_query =
+      from msg in LocalMessage,
+        where: msg.user_id == ^user_id,
+        order_by: [desc: msg.sent_at]
+
+    base_query =
+      base_query
+      |> maybe_where_since(since)
+      |> maybe_where_before(before_ts)
+
+    base_query
+    |> Repo.all()
+    |> Enum.filter(&matches_text?(&1, needle))
+    |> Enum.filter(&matches_handle?(&1, handle_needle))
+    |> Enum.take(limit)
+  end
+
+  @doc """
+  Fetches one message for a user by its source GUID. Returns `nil` when no
+  matching message exists.
+  """
+  def get_by_guid(user_id, guid) when is_binary(user_id) and is_binary(guid) do
+    Repo.one(
+      from msg in LocalMessage,
+        where: msg.user_id == ^user_id and msg.guid == ^guid,
+        limit: 1
+    )
+  end
+
+  def get_by_guid(_user_id, _guid), do: nil
+
+  @doc """
+  Returns the top-N most recently active chats for a user along with the
+  latest message in each chat and a count of messages in that chat over the
+  last 7 days.
+
+  Each entry is a map of:
+
+      %{
+        chat_key: binary,
+        chat_display_name: binary | nil,
+        latest_message: %LocalMessage{},
+        message_count_last_7d: non_neg_integer
+      }
+  """
+  def chats_recent(user_id, opts \\ []) when is_binary(user_id) do
+    limit = Keyword.get(opts, :limit, 12)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    seven_days_ago = DateTime.add(now, -7 * 24 * 60 * 60, :second)
+
+    latest_per_chat_query =
+      from msg in LocalMessage,
+        where: msg.user_id == ^user_id and not is_nil(msg.chat_key),
+        group_by: msg.chat_key,
+        select: %{chat_key: msg.chat_key, latest_sent_at: max(msg.sent_at)},
+        order_by: [desc: max(msg.sent_at)],
+        limit: ^limit
+
+    latest_rows = Repo.all(latest_per_chat_query)
+
+    Enum.map(latest_rows, fn %{chat_key: chat_key, latest_sent_at: latest_sent_at} ->
+      latest_message =
+        Repo.one(
+          from msg in LocalMessage,
+            where:
+              msg.user_id == ^user_id and msg.chat_key == ^chat_key and
+                msg.sent_at == ^latest_sent_at,
+            limit: 1
+        )
+
+      count_7d =
+        Repo.one(
+          from msg in LocalMessage,
+            where:
+              msg.user_id == ^user_id and msg.chat_key == ^chat_key and
+                msg.sent_at >= ^seven_days_ago,
+            select: count(msg.id)
+        ) || 0
+
+      %{
+        chat_key: chat_key,
+        chat_display_name: latest_message && latest_message.chat_display_name,
+        latest_message: latest_message,
+        message_count_last_7d: count_7d
+      }
+    end)
+  end
+
+  @doc """
   Purges every message for a (user, device) pair. Returns
   `{:ok, %{deleted: count}}`.
   """
@@ -188,4 +324,51 @@ defmodule Maraithon.LocalMessages do
   end
 
   defp parse_datetime(_), do: nil
+
+  defp maybe_where_since(query, nil), do: query
+
+  defp maybe_where_since(query, %DateTime{} = since) do
+    from msg in query, where: msg.sent_at >= ^since
+  end
+
+  defp maybe_where_since(query, value) when is_binary(value) do
+    case parse_datetime(value) do
+      %DateTime{} = dt -> from(msg in query, where: msg.sent_at >= ^dt)
+      _ -> query
+    end
+  end
+
+  defp maybe_where_since(query, _other), do: query
+
+  defp maybe_where_before(query, nil), do: query
+
+  defp maybe_where_before(query, %DateTime{} = before_ts) do
+    from msg in query, where: msg.sent_at <= ^before_ts
+  end
+
+  defp maybe_where_before(query, value) when is_binary(value) do
+    case parse_datetime(value) do
+      %DateTime{} = dt -> from(msg in query, where: msg.sent_at <= ^dt)
+      _ -> query
+    end
+  end
+
+  defp maybe_where_before(query, _other), do: query
+
+  defp matches_text?(%LocalMessage{text: nil}, _needle), do: false
+
+  defp matches_text?(%LocalMessage{text: text}, needle) when is_binary(text) do
+    String.contains?(String.downcase(text), needle)
+  end
+
+  defp matches_text?(_msg, _needle), do: false
+
+  defp matches_handle?(_msg, nil), do: true
+
+  defp matches_handle?(%LocalMessage{sender_handle: handle}, needle)
+       when is_binary(handle) do
+    String.contains?(String.downcase(handle), needle)
+  end
+
+  defp matches_handle?(_msg, _needle), do: false
 end

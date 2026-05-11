@@ -86,9 +86,9 @@ defmodule Maraithon.LocalNotes do
 
   @doc """
   Searches notes for a user using a substring match on the encrypted
-  `title` and `snippet` fields. Since these columns are encrypted at
-  rest, we decrypt in memory and filter — fine for the small,
-  device-bounded note volumes we expect today.
+  `title`, `snippet`, and `body` fields. Since these columns are
+  encrypted at rest, we decrypt in memory and filter — fine for the
+  small, device-bounded note volumes we expect today.
   """
   def search(user_id, term, opts \\ [])
       when is_binary(user_id) and is_binary(term) do
@@ -143,6 +143,8 @@ defmodule Maraithon.LocalNotes do
       local_id: fetch(note, :local_id),
       title: fetch(note, :title),
       snippet: fetch(note, :snippet),
+      body: fetch(note, :body),
+      body_format: fetch(note, :body_format) || "plain",
       folder: fetch(note, :folder),
       is_pinned: truthy?(fetch(note, :is_pinned)),
       created_at: parse_datetime(fetch(note, :created_at)),
@@ -190,9 +192,9 @@ defmodule Maraithon.LocalNotes do
 
   defp parse_datetime(_), do: nil
 
-  defp matches_term?(%LocalNote{title: title, snippet: snippet}, needle) do
+  defp matches_term?(%LocalNote{title: title, snippet: snippet, body: body}, needle) do
     haystack =
-      [title, snippet]
+      [title, snippet, body]
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&String.downcase/1)
       |> Enum.join(" ")

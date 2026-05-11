@@ -71,7 +71,11 @@ defmodule Maraithon.Capabilities do
     "notes_list_recent" => Maraithon.Tools.NotesListRecent,
     "voice_memos_search" => Maraithon.Tools.VoiceMemosSearch,
     "voice_memos_get" => Maraithon.Tools.VoiceMemosGet,
-    "voice_memos_list_recent" => Maraithon.Tools.VoiceMemosListRecent
+    "voice_memos_list_recent" => Maraithon.Tools.VoiceMemosListRecent,
+    "messages_search" => Maraithon.Tools.MessagesSearch,
+    "messages_get" => Maraithon.Tools.MessagesGet,
+    "messages_list_recent" => Maraithon.Tools.MessagesListRecent,
+    "messages_chats_recent" => Maraithon.Tools.MessagesChatsRecent
   }
 
   @tool_descriptions %{
@@ -153,7 +157,15 @@ defmodule Maraithon.Capabilities do
     "voice_memos_get" =>
       "Fetch one mirrored macOS Voice Memo by its source GUID.",
     "voice_memos_list_recent" =>
-      "List the user's most recently created mirrored macOS Voice Memos."
+      "List the user's most recently created mirrored macOS Voice Memos.",
+    "messages_search" =>
+      "Search the user's mirrored iMessage history for a substring, optionally filtered by sender handle and date range.",
+    "messages_get" =>
+      "Fetch one mirrored iMessage by its source GUID, including full text and chat metadata.",
+    "messages_list_recent" =>
+      "List the user's most recent mirrored iMessages, newest first. Optionally restrict to one chat by chat_key.",
+    "messages_chats_recent" =>
+      "List the user's most recently active iMessage chats with the latest message in each and a 7-day message count."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -168,6 +180,7 @@ defmodule Maraithon.Capabilities do
     notion_search notion_get_page notion_query_database
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
+    messages_search messages_get messages_list_recent messages_chats_recent
   ))
 
   @destructive_tools MapSet.new(~w(

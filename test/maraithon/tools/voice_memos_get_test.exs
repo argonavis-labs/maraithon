@@ -59,6 +59,40 @@ defmodule Maraithon.Tools.VoiceMemosGetTest do
       assert is_binary(memo.created_at)
     end
 
+    test "exposes transcript + audio metadata, never raw bytes" do
+      user_id = "vm-tx-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      raw = :crypto.strong_rand_bytes(1500)
+      b64 = Base.encode64(raw)
+
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          sample_memo("memo-tx", %{
+            "audio_bytes" => b64,
+            "transcript" => "on-device transcript text",
+            "transcript_engine" => "sf_speech",
+            "transcript_lang" => "en-US"
+          })
+        ])
+
+      assert {:ok, %{voice_memo: memo}} =
+               Tools.execute("voice_memos_get", %{
+                 "user_id" => user_id,
+                 "memo_id" => "memo-tx"
+               })
+
+      assert memo.transcript == "on-device transcript text"
+      assert memo.transcript_engine == "sf_speech"
+      assert memo.transcript_lang == "en-US"
+      assert memo.has_audio == true
+      assert memo.audio_bytes_size == 1500
+      assert memo.audio_truncated == false
+      assert memo.audio_mime == "audio/m4a"
+      # Tool output must not leak raw bytes.
+      refute Map.has_key?(memo, :audio_bytes)
+    end
+
     test "returns voice_memo_not_found when missing" do
       user_id = "vm-get-miss-#{System.unique_integer([:positive])}@example.com"
 

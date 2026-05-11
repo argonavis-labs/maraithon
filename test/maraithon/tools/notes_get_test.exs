@@ -58,6 +58,34 @@ defmodule Maraithon.Tools.NotesGetTest do
       assert note.folder == "Family"
       assert note.is_pinned == true
       assert is_binary(note.modified_at)
+      # Body fields ship even when no body was synced — body is nil,
+      # body_format defaults to "plain" so renderers can branch safely.
+      assert Map.has_key?(note, :body)
+      assert note.body_format == "plain"
+    end
+
+    test "returns the decoded body when present" do
+      user_id = "notes-get-body-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+      body = "First line of the note.\n\nSecond paragraph here."
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("note-body", %{
+            "title" => "With body",
+            "body" => body,
+            "body_format" => "plain"
+          })
+        ])
+
+      assert {:ok, result} =
+               Tools.execute("notes_get", %{
+                 "user_id" => user_id,
+                 "note_id" => "note-body"
+               })
+
+      assert result.note.body == body
+      assert result.note.body_format == "plain"
     end
 
     test "returns note_not_found when guid is missing" do

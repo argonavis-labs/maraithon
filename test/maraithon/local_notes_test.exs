@@ -139,6 +139,74 @@ defmodule Maraithon.LocalNotesTest do
       assert length(results_case) == 1
       assert hd(results_case).title == "Shopping list"
     end
+
+    test "matches substring on body content" do
+      user_id = "notes-search-body-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("g1", %{
+            "title" => "Shopping list",
+            "snippet" => "milk",
+            "body" => "Pick up sourdough on the way home"
+          }),
+          sample_note("g2", %{
+            "title" => "Random",
+            "snippet" => "stuff",
+            "body" => "totally unrelated content here"
+          })
+        ])
+
+      results = LocalNotes.search(user_id, "sourdough")
+      assert length(results) == 1
+      assert hd(results).title == "Shopping list"
+    end
+  end
+
+  describe "body persistence" do
+    test "stores body and body_format on ingest" do
+      user_id = "notes-body-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      body = "Multi-line\nplain text body\nwith details."
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("body-g1", %{"body" => body, "body_format" => "plain"})
+        ])
+
+      [stored] = notes_for(user_id, device_id)
+      assert stored.body == body
+      assert stored.body_format == "plain"
+    end
+
+    test "defaults body_format to plain when omitted" do
+      user_id = "notes-body-fmt-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("body-g1", %{"body" => "anything"})
+        ])
+
+      [stored] = notes_for(user_id, device_id)
+      assert stored.body_format == "plain"
+    end
+
+    test "allows nil body for legacy / undecoded rows" do
+      user_id = "notes-body-nil-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          sample_note("body-nil") |> Map.delete("body")
+        ])
+
+      [stored] = notes_for(user_id, device_id)
+      assert stored.body == nil
+      assert stored.body_format == "plain"
+    end
   end
 
   describe "purge_device/2" do

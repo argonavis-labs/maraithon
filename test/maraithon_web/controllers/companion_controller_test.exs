@@ -269,6 +269,33 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
       assert json_response(conn, 400)["error"] =~ "notes"
     end
+
+    test "persists body and body_format end-to-end", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+      body = "Line one.\nLine two."
+
+      note =
+        sample_note("nb1", %{
+          "body" => body,
+          "body_format" => "plain"
+        })
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/notes", %{"notes" => [note]})
+
+      assert json_response(conn, 200)["accepted"] == 1
+
+      stored =
+        Repo.one(
+          from n in LocalNote,
+            where: n.user_id == ^user.id and n.device_id == ^device.device_id
+        )
+
+      assert stored.body == body
+      assert stored.body_format == "plain"
+    end
   end
 
   describe "POST /api/v1/companion/voice-memos" do
@@ -325,6 +352,41 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> post("/api/v1/companion/voice-memos", %{})
 
       assert json_response(conn, 400)["error"] =~ "voice_memos"
+    end
+
+    test "ingests base64 audio + transcript fields end-to-end", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      raw = :crypto.strong_rand_bytes(1024)
+      b64 = Base.encode64(raw)
+
+      memo =
+        sample_voice_memo("v-audio", %{
+          "audio_bytes" => b64,
+          "audio_mime" => "audio/m4a",
+          "transcript" => "this is the on-device transcript",
+          "transcript_engine" => "sf_speech",
+          "transcript_lang" => "en-US"
+        })
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/voice-memos", %{"voice_memos" => [memo]})
+
+      body = json_response(conn, 200)
+      assert body["accepted"] == 1
+
+      [stored] =
+        Repo.all(
+          from m in LocalVoiceMemo,
+            where: m.user_id == ^user.id and m.device_id == ^device.device_id
+        )
+
+      assert stored.audio_bytes == raw
+      assert stored.transcript == "this is the on-device transcript"
+      assert stored.transcript_engine == "sf_speech"
+      assert stored.audio_truncated == false
     end
   end
 end

@@ -8,6 +8,10 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
     voice_memos_search voice_memos_get voice_memos_list_recent
   )
 
+  @messages_tools ~w(
+    messages_search messages_get messages_list_recent messages_chats_recent
+  )
+
   describe "tool_definitions/1" do
     test "exposes the six Apple Notes and Voice Memos tools" do
       names =
@@ -19,12 +23,24 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
       end
     end
 
+    test "exposes the four iMessage tools" do
+      names =
+        Toolbox.tool_definitions(%{})
+        |> Enum.map(&Map.get(&1, "name"))
+
+      for tool <- @messages_tools do
+        assert tool in names, "expected #{tool} to be registered in the toolbox"
+      end
+    end
+
     test "each new tool exposes a non-empty description and input schema" do
+      all_new = @new_tools ++ @messages_tools
+
       definitions =
         Toolbox.tool_definitions(%{})
-        |> Enum.filter(fn definition -> definition["name"] in @new_tools end)
+        |> Enum.filter(fn definition -> definition["name"] in all_new end)
 
-      assert length(definitions) == length(@new_tools)
+      assert length(definitions) == length(all_new)
 
       for definition <- definitions do
         description = definition["description"]
@@ -47,6 +63,8 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
       assert "note_id" in definitions["notes_get"]["parameters"]["required"]
       assert "query" in definitions["voice_memos_search"]["parameters"]["required"]
       assert "memo_id" in definitions["voice_memos_get"]["parameters"]["required"]
+      assert "query" in definitions["messages_search"]["parameters"]["required"]
+      assert "message_id" in definitions["messages_get"]["parameters"]["required"]
     end
   end
 end

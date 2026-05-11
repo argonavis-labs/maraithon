@@ -7,8 +7,12 @@ defmodule Maraithon.LocalVoiceMemos do
 
   import Ecto.Query
 
+  require Logger
+
   alias Maraithon.LocalVoiceMemos.LocalVoiceMemo
   alias Maraithon.Repo
+
+  @max_audio_bytes 5 * 1024 * 1024
 
   @doc """
   Ingests a batch of voice memo maps from a device for the given user.
@@ -135,17 +139,28 @@ defmodule Maraithon.LocalVoiceMemos do
   # -- internals ---------------------------------------------------------
 
   defp prepare_row(memo, user_id, device_id, now) when is_map(memo) do
+    guid = fetch(memo, :guid)
+
+    {audio_bytes, audio_truncated} =
+      decode_audio(fetch(memo, :audio_bytes), user_id, device_id, guid)
+
     attrs = %{
       user_id: user_id,
       device_id: device_id,
       source: fetch(memo, :source) || "voice_memos",
-      guid: fetch(memo, :guid),
+      guid: guid,
       local_id: fetch(memo, :local_id),
       title: fetch(memo, :title),
       snippet: fetch(memo, :snippet),
       duration_seconds: parse_integer(fetch(memo, :duration_seconds)),
       file_size_bytes: parse_integer(fetch(memo, :file_size_bytes)),
-      created_at: parse_datetime(fetch(memo, :created_at))
+      created_at: parse_datetime(fetch(memo, :created_at)),
+      audio_bytes: audio_bytes,
+      audio_truncated: audio_truncated,
+      audio_mime: fetch(memo, :audio_mime) || "audio/m4a",
+      transcript: fetch(memo, :transcript),
+      transcript_engine: fetch(memo, :transcript_engine),
+      transcript_lang: fetch(memo, :transcript_lang)
     }
 
     changeset = LocalVoiceMemo.changeset(%LocalVoiceMemo{}, attrs)
@@ -195,13 +210,71 @@ defmodule Maraithon.LocalVoiceMemos do
 
   defp parse_datetime(_), do: nil
 
-  defp matches_term?(%LocalVoiceMemo{title: title, snippet: snippet}, needle) do
+  defp matches_term?(
+         %LocalVoiceMemo{title: title, snippet: snippet, transcript: transcript},
+         needle
+       ) do
     haystack =
-      [title, snippet]
+      [title, snippet, transcript]
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&String.downcase/1)
       |> Enum.join(" ")
 
     String.contains?(haystack, needle)
+  end
+
+  # Accepts audio as raw binary (already decoded) or as a base64 string,
+  # then caps at `@max_audio_bytes`. Oversize payloads return
+  # `{nil, true}` so the caller stores `audio_truncated = true` with no
+  # bytes; the server never persists more than the cap, regardless of
+  # what the client uploaded. Returns `{nil, false}` when no audio was
+  # provided at all.
+  defp decode_audio(nil, _user_id, _device_id, _guid), do: {nil, false}
+  defp decode_audio("", _user_id, _device_id, _guid), do: {nil, false}
+
+  defp decode_audio(value, user_id, device_id, guid) when is_binary(value) do
+    case maybe_decode_base64(value) do
+      {:ok, bytes} -> cap_audio(bytes, user_id, device_id, guid)
+      :error -> {nil, false}
+    end
+  end
+
+  defp decode_audio(_other, _user_id, _device_id, _guid), do: {nil, false}
+
+  defp maybe_decode_base64(value) do
+    cond do
+      # Already raw bytes: keep as-is.
+      not String.printable?(value) ->
+        {:ok, value}
+
+      true ->
+        case Base.decode64(value, ignore: :whitespace) do
+          {:ok, decoded} -> {:ok, decoded}
+          :error -> :error
+        end
+    end
+  end
+
+  defp cap_audio(bytes, user_id, device_id, guid) when is_binary(bytes) do
+    if byte_size(bytes) > @max_audio_bytes do
+      :telemetry.execute(
+        [:maraithon, :companion, :voice_memos_audio_truncated],
+        %{bytes: byte_size(bytes)},
+        %{user_id: user_id, device_id: device_id, guid: guid}
+      )
+
+      Logger.warning(
+        "voice_memos audio over cap, storing truncated",
+        user_id: user_id,
+        device_id: device_id,
+        guid: guid,
+        bytes: byte_size(bytes),
+        cap: @max_audio_bytes
+      )
+
+      {nil, true}
+    else
+      {bytes, false}
+    end
   end
 end

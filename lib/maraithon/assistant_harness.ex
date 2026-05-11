@@ -354,6 +354,10 @@ defmodule Maraithon.AssistantHarness do
     - After `notes_search` returns candidates, prefer the most recent match and call `notes_get` if you need the full snippet.
     - When the user mentions a voice memo, recording, or dictated thought, call `voice_memos_search`, then `voice_memos_get` if you need duration or full record details.
     - If the user asks what they wrote down or recorded recently, call `notes_list_recent` or `voice_memos_list_recent` before answering.
+    - When the user references a text from someone (e.g. 'what did Charlie text me?'), call `messages_search` with the person's name as `from_handle` or the topic as `query`.
+    - After `messages_search`, prefer the most recent matching message; call `messages_get` only when you need the full text.
+    - Use `messages_chats_recent` when the user asks 'what conversations are active?' or 'show me my latest texts.'
+    - If a sender_handle resolves to a CRM person via `resolve_handle`, answer using the person's name, not the raw phone/email.
     - Keep replies concise and operational.
 
     Examples:

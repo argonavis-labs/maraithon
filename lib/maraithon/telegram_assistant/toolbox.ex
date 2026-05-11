@@ -923,6 +923,53 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
+      ),
+      tool_definition(
+        "messages_search",
+        "Search the user's iMessage history for a substring in the message text. Use when the user references a text from someone, by topic, by sender, or within a date range.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "from_handle" => %{"type" => "string"},
+            "since" => %{"type" => "string"},
+            "before" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "messages_get",
+        "Fetch a single iMessage by its id. Use after messages_search returns candidates and you need the full text body and chat metadata.",
+        %{
+          "type" => "object",
+          "required" => ["message_id"],
+          "properties" => %{
+            "message_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "messages_list_recent",
+        "List the user's most recent iMessages, newest first. Optionally restrict to one chat by chat_key.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "chat_key" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "messages_chats_recent",
+        "List the user's most recently active iMessage chats with the latest message in each and a 7-day message count. Use as the entry point when the user asks what conversations are active or wants a sweep of recent texts.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
       )
     ]
   end
@@ -1102,6 +1149,18 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "voice_memos_list_recent" ->
         inject_user_and_execute("voice_memos_list_recent", runtime_context, args)
+
+      "messages_search" ->
+        inject_user_and_execute("messages_search", runtime_context, args)
+
+      "messages_get" ->
+        inject_user_and_execute("messages_get", runtime_context, args)
+
+      "messages_list_recent" ->
+        inject_user_and_execute("messages_list_recent", runtime_context, args)
+
+      "messages_chats_recent" ->
+        inject_user_and_execute("messages_chats_recent", runtime_context, args)
 
       _ ->
         {:error, "unknown_telegram_tool: #{tool_name}"}
