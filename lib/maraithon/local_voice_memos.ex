@@ -9,6 +9,8 @@ defmodule Maraithon.LocalVoiceMemos do
 
   require Logger
 
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.LocalVoiceMemos.EmbedJob
   alias Maraithon.LocalVoiceMemos.LocalVoiceMemo
   alias Maraithon.Repo
 
@@ -37,15 +39,18 @@ defmodule Maraithon.LocalVoiceMemos do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, _returned} =
+    {inserted_count, inserted_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalVoiceMemo, rows,
           on_conflict: :nothing,
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    enqueue_embed_jobs(user_id, inserted_rows)
 
     total = length(rows)
     duplicate_count = total - inserted_count
@@ -105,6 +110,69 @@ defmodule Maraithon.LocalVoiceMemos do
   end
 
   @doc """
+  Semantic search for voice memos whose title, snippet, or transcript
+  are semantically similar to `query`. Pairs with `search/3`
+  (substring) — use `semantic_search/3` when the user asks "find the
+  memo where I talked about ..." or "that voice memo about a similar
+  idea" and won't remember the exact words used.
+
+  See `Maraithon.LocalSemanticSearch` for the in-memory ranker.
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 200)
+
+    user_id
+    |> recent_for_user(limit: pool_size)
+    |> Maraithon.LocalSemanticSearch.rank_by_similarity(
+      query,
+      &memo_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    pgvector_semantic_search(user_id, query_vector, opts)
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp pgvector_semantic_search(user_id, query_vector, opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_voice_memos", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        memos =
+          Repo.all(
+            from memo in LocalVoiceMemo,
+              where: memo.user_id == ^user_id and memo.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        memos
+        |> Enum.map(fn memo -> {memo, Map.get(sim_by_id, memo.id, 0.0)} end)
+        |> Enum.sort_by(fn {_memo, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  defp memo_text(%LocalVoiceMemo{title: title, snippet: snippet, transcript: transcript}) do
+    [title, snippet, transcript]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @doc """
   Fetches one voice memo for a user by its source GUID. Returns `nil`
   when no matching memo exists.
 
@@ -160,7 +228,9 @@ defmodule Maraithon.LocalVoiceMemos do
       audio_mime: fetch(memo, :audio_mime) || "audio/m4a",
       transcript: fetch(memo, :transcript),
       transcript_engine: fetch(memo, :transcript_engine),
-      transcript_lang: fetch(memo, :transcript_lang)
+      transcript_lang: fetch(memo, :transcript_lang),
+      encrypted_with_device_key: truthy?(fetch(memo, :encrypted_with_device_key)),
+      key_id: fetch(memo, :key_id)
     }
 
     changeset = LocalVoiceMemo.changeset(%LocalVoiceMemo{}, attrs)
@@ -198,6 +268,11 @@ defmodule Maraithon.LocalVoiceMemos do
   end
 
   defp parse_integer(_), do: nil
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_other), do: false
 
   defp parse_datetime(%DateTime{} = dt), do: DateTime.truncate(dt, :microsecond)
 
@@ -276,5 +351,19 @@ defmodule Maraithon.LocalVoiceMemos do
     else
       {bytes, false}
     end
+  end
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, inserted_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_voice_memos") do
+      Enum.each(inserted_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalVoiceMemo{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
   end
 end

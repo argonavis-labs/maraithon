@@ -2,32 +2,36 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
   @moduledoc """
   Scoring, normalization, and source dispatch for `recall_anywhere`.
 
-  ## Scoring formula
+  ## Scoring formula (v5: blended semantic + substring + recency + trust)
 
   Each hit gets a score in `[0, 1]` computed as:
 
-      score = @recency_weight * recency_score
-            + @substring_quality_weight * substring_quality
+      score = @semantic_weight     * semantic_score
+            + @substring_weight    * substring_quality
+            + @recency_weight      * recency_score
             + @source_trust_weight * source_trust
 
   Where (defaults documented as module attributes so they're easy to tune):
 
-    * `@recency_weight` (#{0.6})
-    * `@substring_quality_weight` (#{0.3})
-    * `@source_trust_weight` (#{0.1})
+    * `@semantic_weight` (#{0.5}) — cosine similarity of the pgvector hit
+      against the query embedding (`0.0` for hits that only matched via
+      substring or for sources without embeddings)
+    * `@substring_weight` (#{0.3}) — substring-match quality bucket
+      (title 1.0 → snippet 0.6 → body 0.4 → none 0.2)
+    * `@recency_weight` (#{0.15}) — linear decay from today (1.0) to
+      `@recency_horizon_days` (90) days old (0.0)
+    * `@source_trust_weight` (#{0.05}) — per-source authority prior, see
+      the `@source_trust` table
 
-  And components are bounded:
+  Sources fan out to **both** substring search and pgvector semantic
+  search. The two lists are merged by record id: when both produced the
+  same id, the higher substring-quality is kept and the semantic score
+  is attached. Hits that only the semantic search produced default to
+  `match_field: :none` so they still get the floor 0.2 substring score.
 
-    * `recency_score` — 1.0 for today, decaying linearly to 0 at
-      `@recency_horizon_days` (90) days old; > horizon clamps to 0.
-    * `substring_quality` — title hit = 1.0, snippet hit = 0.6,
-      body hit = 0.4, fallback (no substring match) = 0.2.
-    * `source_trust` — see `@source_trust` table:
-        * iMessage / Notes / Voice Memos / Reminders = 1.0 (user-authored)
-        * Gmail / Slack = 0.8
-        * Files / CRM people = 0.7
-        * Calendar / Memory = 0.9
-        * Browser History = 0.5
+  Failures or missing pgvector columns make `semantic_score` default to
+  `0.0` — the blend gracefully degrades to the v4 substring-only ranking
+  in that case.
 
   Override the source-call dispatch table via:
 
@@ -45,8 +49,13 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
         title: "...",
         snippet: "...",
         timestamp: %DateTime{} | nil,
-        match_field: :title | :snippet | :body | :none
+        match_field: :title | :snippet | :body | :none,
+        semantic_score: 0.0..1.0  # optional; defaults to 0.0
       }
+
+  Opts may include `:query_embedding` (a list of floats); when present
+  the per-source function should also fan out the pgvector
+  semantic_search and merge those hits in.
   """
 
   alias Maraithon.Crm
@@ -68,9 +77,10 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
   alias Maraithon.Memory
 
   # Ranking weights (sum to 1.0 by convention; tune freely).
-  @recency_weight 0.6
-  @substring_quality_weight 0.3
-  @source_trust_weight 0.1
+  @semantic_weight 0.5
+  @substring_weight 0.3
+  @recency_weight 0.15
+  @source_trust_weight 0.05
 
   # Horizon for recency decay, in days.
   @recency_horizon_days 90
@@ -104,8 +114,9 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
   @doc "Return the configured per-source weights so callers can inspect them."
   def weights do
     %{
+      semantic: @semantic_weight,
+      substring_quality: @substring_weight,
       recency: @recency_weight,
-      substring_quality: @substring_quality_weight,
       source_trust: @source_trust_weight,
       recency_horizon_days: @recency_horizon_days
     }
@@ -150,16 +161,29 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
 
   Returns a `:score` float, plus the component breakdown stored on the hit for
   observability and tunability.
+
+  The blend formula is:
+
+      score = 0.5 * semantic_score
+            + 0.3 * substring_quality
+            + 0.15 * recency_score
+            + 0.05 * source_trust
+
+  When a hit has no `:semantic_score` (substring-only fan-out, or pgvector
+  unavailable), it defaults to 0.0 and the blend degrades to the v4
+  substring-only behaviour rescaled by the new weight slate.
   """
   def score_hit(%{} = hit, %DateTime{} = now) do
     source = Map.get(hit, :source) || "unknown"
     recency = recency_score(Map.get(hit, :timestamp), now)
     substring = substring_quality(Map.get(hit, :match_field))
+    semantic = clamp_unit(Map.get(hit, :semantic_score, 0.0))
     trust = Map.get(@source_trust, source, 0.5)
 
     total =
-      @recency_weight * recency +
-        @substring_quality_weight * substring +
+      @semantic_weight * semantic +
+        @substring_weight * substring +
+        @recency_weight * recency +
         @source_trust_weight * trust
 
     %{
@@ -169,11 +193,22 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
       snippet: Map.get(hit, :snippet),
       timestamp: Map.get(hit, :timestamp),
       score: Float.round(total, 4),
+      semantic_score: Float.round(semantic, 4),
       recency_score: Float.round(recency, 4),
       substring_quality: Float.round(substring, 4),
       source_trust: trust
     }
   end
+
+  defp clamp_unit(value) when is_number(value) do
+    cond do
+      value < 0.0 -> 0.0
+      value > 1.0 -> 1.0
+      true -> value * 1.0
+    end
+  end
+
+  defp clamp_unit(_other), do: 0.0
 
   @doc """
   Sort uniform hits by descending score, deterministic ties broken by
@@ -242,43 +277,130 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
 
   defp default_source_function("local_messages") do
     fn user_id, query, opts ->
-      LocalMessages.search(user_id, query, opts)
-      |> Enum.map(&message_to_hit(&1, query))
+      substring =
+        LocalMessages.search(user_id, query, opts) |> Enum.map(&message_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalMessages.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> message_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
   defp default_source_function("local_notes") do
     fn user_id, query, opts ->
-      LocalNotes.search(user_id, query, opts)
-      |> Enum.map(&note_to_hit(&1, query))
+      substring = LocalNotes.search(user_id, query, opts) |> Enum.map(&note_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalNotes.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> note_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
   defp default_source_function("local_voice_memos") do
     fn user_id, query, opts ->
-      LocalVoiceMemos.search(user_id, query, opts)
-      |> Enum.map(&voice_memo_to_hit(&1, query))
+      substring =
+        LocalVoiceMemos.search(user_id, query, opts) |> Enum.map(&voice_memo_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalVoiceMemos.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> voice_memo_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
   defp default_source_function("local_calendar") do
     fn user_id, query, opts ->
-      LocalCalendar.search(user_id, query, opts)
-      |> Enum.map(&event_to_hit(&1, query))
+      substring = LocalCalendar.search(user_id, query, opts) |> Enum.map(&event_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalCalendar.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> event_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
   defp default_source_function("local_reminders") do
     fn user_id, query, opts ->
-      LocalReminders.search(user_id, query, opts)
-      |> Enum.map(&reminder_to_hit(&1, query))
+      substring =
+        LocalReminders.search(user_id, query, opts) |> Enum.map(&reminder_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalReminders.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> reminder_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
   defp default_source_function("local_files") do
     fn user_id, query, opts ->
-      LocalFiles.search(user_id, query, opts)
-      |> Enum.map(&file_to_hit(&1, query))
+      substring = LocalFiles.search(user_id, query, opts) |> Enum.map(&file_to_hit(&1, query))
+
+      semantic =
+        case Keyword.get(opts, :query_embedding) do
+          vector when is_list(vector) ->
+            user_id
+            |> LocalFiles.semantic_search(vector, opts)
+            |> Enum.map(fn {record, sim} ->
+              record |> file_to_hit(query) |> Map.put(:semantic_score, sim)
+            end)
+
+          _ ->
+            []
+        end
+
+      merge_hits(substring, semantic)
     end
   end
 
@@ -310,85 +432,221 @@ defmodule Maraithon.Tools.RecallAnywhereHelpers do
 
   defp default_source_function(_), do: fn _, _, _ -> [] end
 
+  @doc """
+  Merge a substring-search hit list with a semantic-search hit list.
+
+  Hits are deduped by `{source, id}`. When both lists produced the same
+  record we prefer the substring hit's `:match_field` (because it
+  reflects which field literally contained the query) and copy across
+  the semantic hit's `:semantic_score` so the blend formula in
+  `score_hit/2` can use it. Records that only the semantic search
+  produced are kept as-is with their `:semantic_score` and a
+  `match_field: :none` default.
+  """
+  def merge_hits(substring_hits, semantic_hits)
+      when is_list(substring_hits) and is_list(semantic_hits) do
+    substring_by_key = Enum.into(substring_hits, %{}, &{hit_key(&1), &1})
+    semantic_by_key = Enum.into(semantic_hits, %{}, &{hit_key(&1), &1})
+
+    all_keys =
+      (Map.keys(substring_by_key) ++ Map.keys(semantic_by_key))
+      |> Enum.uniq()
+
+    Enum.map(all_keys, fn key ->
+      sub = Map.get(substring_by_key, key)
+      sem = Map.get(semantic_by_key, key)
+
+      case {sub, sem} do
+        {nil, %{} = sem_hit} ->
+          Map.put_new(sem_hit, :match_field, :none)
+
+        {%{} = sub_hit, nil} ->
+          Map.put_new(sub_hit, :semantic_score, 0.0)
+
+        {%{} = sub_hit, %{} = sem_hit} ->
+          sub_hit
+          |> Map.put(:semantic_score, Map.get(sem_hit, :semantic_score, 0.0))
+      end
+    end)
+  end
+
+  defp hit_key(%{source: source, id: id}), do: {source, id}
+  defp hit_key(_), do: {nil, nil}
+
+  # Placeholder shown in place of any content field on a row whose
+  # `encrypted_with_device_key` flag is true. The assistant sees this and
+  # knows the record exists (and what its metadata is) but the actual
+  # content is sealed under a key only the device holds — nothing on the
+  # server can render it, deliberately.
+  @encrypted_placeholder "[encrypted_with_device_key]"
+
+  @doc """
+  The string the assistant sees for any title/snippet/body field on a
+  record that was sealed under the device key. Returned as a public
+  helper so other tools that render records (per-source `notes_get`,
+  `messages_get`, etc.) can reuse the same placeholder.
+  """
+  def encrypted_placeholder, do: @encrypted_placeholder
+
   # --- Per-source normalizers ---------------------------------------------
 
   defp message_to_hit(%LocalMessage{} = msg, query) do
-    snippet = truncate(msg.text)
+    if encrypted?(msg) do
+      %{
+        source: "local_messages",
+        id: msg.guid,
+        title: msg.chat_display_name,
+        snippet: @encrypted_placeholder,
+        timestamp: msg.sent_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(msg.text)
 
-    %{
-      source: "local_messages",
-      id: msg.guid,
-      title: msg.chat_display_name || msg.sender_handle,
-      snippet: snippet,
-      timestamp: msg.sent_at,
-      match_field: classify_match(query, msg.chat_display_name, snippet, msg.text)
-    }
+      %{
+        source: "local_messages",
+        id: msg.guid,
+        title: msg.chat_display_name || msg.sender_handle,
+        snippet: snippet,
+        timestamp: msg.sent_at,
+        match_field: classify_match(query, msg.chat_display_name, snippet, msg.text)
+      }
+    end
   end
 
   defp note_to_hit(%LocalNote{} = note, query) do
-    snippet = truncate(note.snippet || note.body)
+    if encrypted?(note) do
+      %{
+        source: "local_notes",
+        id: note.guid,
+        title: @encrypted_placeholder,
+        snippet: @encrypted_placeholder,
+        timestamp: note.modified_at || note.created_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(note.snippet || note.body)
 
-    %{
-      source: "local_notes",
-      id: note.guid,
-      title: note.title,
-      snippet: snippet,
-      timestamp: note.modified_at || note.created_at,
-      match_field: classify_match(query, note.title, snippet, note.body)
-    }
+      %{
+        source: "local_notes",
+        id: note.guid,
+        title: note.title,
+        snippet: snippet,
+        timestamp: note.modified_at || note.created_at,
+        match_field: classify_match(query, note.title, snippet, note.body)
+      }
+    end
   end
 
   defp voice_memo_to_hit(%LocalVoiceMemo{} = memo, query) do
-    snippet = truncate(memo.snippet || memo.transcript)
+    if encrypted?(memo) do
+      %{
+        source: "local_voice_memos",
+        id: memo.guid,
+        title: @encrypted_placeholder,
+        snippet: @encrypted_placeholder,
+        timestamp: memo.created_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(memo.snippet || memo.transcript)
 
-    %{
-      source: "local_voice_memos",
-      id: memo.guid,
-      title: memo.title,
-      snippet: snippet,
-      timestamp: memo.created_at,
-      match_field: classify_match(query, memo.title, snippet, memo.transcript)
-    }
+      %{
+        source: "local_voice_memos",
+        id: memo.guid,
+        title: memo.title,
+        snippet: snippet,
+        timestamp: memo.created_at,
+        match_field: classify_match(query, memo.title, snippet, memo.transcript)
+      }
+    end
   end
 
   defp event_to_hit(%LocalEvent{} = event, query) do
-    snippet = truncate(event.notes) || truncate(event.location)
+    if encrypted?(event) do
+      %{
+        source: "local_calendar",
+        id: event.guid,
+        title: @encrypted_placeholder,
+        # `location` is plaintext metadata; we still expose it.
+        snippet: truncate(event.location) || @encrypted_placeholder,
+        timestamp: event.start_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(event.notes) || truncate(event.location)
 
-    %{
-      source: "local_calendar",
-      id: event.guid,
-      title: event.title,
-      snippet: snippet,
-      timestamp: event.start_at,
-      match_field: classify_match(query, event.title, snippet, event.notes)
-    }
+      %{
+        source: "local_calendar",
+        id: event.guid,
+        title: event.title,
+        snippet: snippet,
+        timestamp: event.start_at,
+        match_field: classify_match(query, event.title, snippet, event.notes)
+      }
+    end
   end
 
   defp reminder_to_hit(%LocalReminder{} = reminder, query) do
-    snippet = truncate(reminder.notes)
+    if encrypted?(reminder) do
+      %{
+        source: "local_reminders",
+        id: reminder.guid,
+        title: @encrypted_placeholder,
+        snippet: @encrypted_placeholder,
+        timestamp:
+          reminder.modified_at || reminder.due_at || reminder.completed_at || reminder.created_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(reminder.notes)
 
-    %{
-      source: "local_reminders",
-      id: reminder.guid,
-      title: reminder.title,
-      snippet: snippet,
-      timestamp:
-        reminder.modified_at || reminder.due_at || reminder.completed_at || reminder.created_at,
-      match_field: classify_match(query, reminder.title, snippet, reminder.notes)
-    }
+      %{
+        source: "local_reminders",
+        id: reminder.guid,
+        title: reminder.title,
+        snippet: snippet,
+        timestamp:
+          reminder.modified_at || reminder.due_at || reminder.completed_at || reminder.created_at,
+        match_field: classify_match(query, reminder.title, snippet, reminder.notes)
+      }
+    end
   end
 
   defp file_to_hit(%LocalFile{} = file, query) do
-    snippet = truncate(file.text_content)
+    if encrypted?(file) do
+      %{
+        source: "local_files",
+        id: file.guid,
+        # `path` is intentionally stored plain on the row (the client redacts
+        # `$HOME` to `~/`), so we still show it as a useful breadcrumb.
+        title: file.path || @encrypted_placeholder,
+        snippet: @encrypted_placeholder,
+        timestamp: file.modified_at || file.created_at,
+        match_field: :none
+      }
+    else
+      snippet = truncate(file.text_content)
 
-    %{
-      source: "local_files",
-      id: file.guid,
-      title: file.filename || file.path,
-      snippet: snippet,
-      timestamp: file.modified_at || file.created_at,
-      match_field: classify_match(query, file.filename, snippet, file.text_content)
-    }
+      %{
+        source: "local_files",
+        id: file.guid,
+        title: file.filename || file.path,
+        snippet: snippet,
+        timestamp: file.modified_at || file.created_at,
+        match_field: classify_match(query, file.filename, snippet, file.text_content)
+      }
+    end
+  end
+
+  # `encrypted_with_device_key` is a stable column on every encrypted
+  # source schema; the `Map.get/2` form lets this helper tolerate old
+  # records that pre-date the column (default false).
+  defp encrypted?(row) do
+    case Map.get(row, :encrypted_with_device_key) do
+      true -> true
+      _ -> false
+    end
   end
 
   defp visit_to_hit(%LocalVisit{} = visit, query) do

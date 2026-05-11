@@ -7,6 +7,8 @@ defmodule Maraithon.LocalNotes do
 
   import Ecto.Query
 
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.LocalNotes.EmbedJob
   alias Maraithon.LocalNotes.LocalNote
   alias Maraithon.Repo
 
@@ -33,15 +35,18 @@ defmodule Maraithon.LocalNotes do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, _returned} =
+    {inserted_count, inserted_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalNote, rows,
           on_conflict: :nothing,
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    enqueue_embed_jobs(user_id, inserted_rows)
 
     total = length(rows)
     duplicate_count = total - inserted_count
@@ -102,6 +107,73 @@ defmodule Maraithon.LocalNotes do
   end
 
   @doc """
+  Semantic search for notes whose title, snippet, or body are
+  semantically similar to `query`. Pairs with `search/3` (substring)
+  for narrow lookups — `semantic_search/3` is the right call when the
+  user asks "find that note about a similar idea" or "what was that
+  thing I jotted down about ..." and exact-substring search would
+  miss synonyms.
+
+  Implementation: overfetch a recency window of rows then rank them
+  in-memory by cosine similarity (notes are Cloak-encrypted at rest
+  so a pure pgvector pushdown is not yet possible). See
+  `Maraithon.LocalSemanticSearch` for the ranker.
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 200)
+
+    user_id
+    |> recent_for_user(limit: pool_size)
+    |> Maraithon.LocalSemanticSearch.rank_by_similarity(
+      query,
+      &note_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    pgvector_semantic_search(user_id, query_vector, opts)
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp pgvector_semantic_search(user_id, query_vector, opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_notes", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        notes =
+          Repo.all(
+            from note in LocalNote,
+              where: note.user_id == ^user_id and note.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        notes
+        |> Enum.map(fn note -> {note, Map.get(sim_by_id, note.id, 0.0)} end)
+        |> Enum.sort_by(fn {_note, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  defp note_text(%LocalNote{title: title, snippet: snippet, body: body}) do
+    [title, snippet, body]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @doc """
   Fetches one note for a user by its source GUID. Returns `nil` when no
   matching note exists.
 
@@ -148,7 +220,9 @@ defmodule Maraithon.LocalNotes do
       folder: fetch(note, :folder),
       is_pinned: truthy?(fetch(note, :is_pinned)),
       created_at: parse_datetime(fetch(note, :created_at)),
-      modified_at: parse_datetime(fetch(note, :modified_at))
+      modified_at: parse_datetime(fetch(note, :modified_at)),
+      encrypted_with_device_key: truthy?(fetch(note, :encrypted_with_device_key)),
+      key_id: fetch(note, :key_id)
     }
 
     changeset = LocalNote.changeset(%LocalNote{}, attrs)
@@ -200,5 +274,19 @@ defmodule Maraithon.LocalNotes do
       |> Enum.join(" ")
 
     String.contains?(haystack, needle)
+  end
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, inserted_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_notes") do
+      Enum.each(inserted_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalNote{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
   end
 end

@@ -14,6 +14,8 @@ defmodule Maraithon.LocalFiles do
 
   require Logger
 
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.LocalFiles.EmbedJob
   alias Maraithon.LocalFiles.LocalFile
   alias Maraithon.Repo
 
@@ -42,15 +44,18 @@ defmodule Maraithon.LocalFiles do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, _returned} =
+    {inserted_count, inserted_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalFile, rows,
           on_conflict: :nothing,
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    enqueue_embed_jobs(user_id, inserted_rows)
 
     total = length(rows)
     duplicate_count = total - inserted_count
@@ -134,6 +139,87 @@ defmodule Maraithon.LocalFiles do
   end
 
   @doc """
+  Semantic search for files whose filename, path, or extracted text
+  content is semantically similar to `query`. Pairs with `search/3`
+  (substring) — use `semantic_search/3` when the user asks "find the
+  PDF about something similar" or "what was that doc where I wrote
+  about X" and won't recall an exact filename or words.
+
+  Options:
+    * `:limit` — max rows to return (default 12)
+    * `:extension` — restrict to one file extension (e.g. "pdf")
+    * `:path_substring` — additionally require `path` to contain this
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 200)
+    extension = normalize_extension(Keyword.get(opts, :extension))
+    path_substring = optional_substring(Keyword.get(opts, :path_substring))
+
+    pool =
+      user_id
+      |> recent_for_user(limit: pool_size, extension: extension)
+      |> Enum.filter(&path_filter?(&1, path_substring))
+
+    Maraithon.LocalSemanticSearch.rank_by_similarity(
+      pool,
+      query,
+      &file_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    pgvector_semantic_search(user_id, query_vector, opts)
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp pgvector_semantic_search(user_id, query_vector, opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_files", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        files =
+          Repo.all(
+            from file in LocalFile,
+              where: file.user_id == ^user_id and file.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        files
+        |> Enum.map(fn file -> {file, Map.get(sim_by_id, file.id, 0.0)} end)
+        |> Enum.sort_by(fn {_file, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  defp file_text(%LocalFile{filename: filename, path: path, text_content: text}) do
+    [filename, path, text]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  defp path_filter?(_file, nil), do: true
+
+  defp path_filter?(%LocalFile{path: path}, needle)
+       when is_binary(path) and is_binary(needle) do
+    String.contains?(String.downcase(path), needle)
+  end
+
+  defp path_filter?(_file, _needle), do: false
+
+  @doc """
   Fetches one file for a user by its source GUID. Returns `nil` when
   no matching file exists.
   """
@@ -194,7 +280,9 @@ defmodule Maraithon.LocalFiles do
       text_content: text_content,
       text_truncated: text_truncated,
       created_at: parse_datetime(fetch(file, :created_at)),
-      modified_at: parse_datetime(fetch(file, :modified_at))
+      modified_at: parse_datetime(fetch(file, :modified_at)),
+      encrypted_with_device_key: truthy?(fetch(file, :encrypted_with_device_key)),
+      key_id: fetch(file, :key_id)
     }
 
     changeset = LocalFile.changeset(%LocalFile{}, attrs)
@@ -232,6 +320,11 @@ defmodule Maraithon.LocalFiles do
   end
 
   defp parse_integer(_), do: nil
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_other), do: false
 
   defp parse_datetime(%DateTime{} = dt), do: DateTime.truncate(dt, :microsecond)
 
@@ -355,5 +448,19 @@ defmodule Maraithon.LocalFiles do
     else
       {bytes, truncated_flag}
     end
+  end
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, inserted_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_files") do
+      Enum.each(inserted_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalFile{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
   end
 end

@@ -13,7 +13,9 @@ defmodule Maraithon.LocalCalendar do
 
   import Ecto.Query
 
+  alias Maraithon.LocalCalendar.EmbedJob
   alias Maraithon.LocalCalendar.LocalEvent
+  alias Maraithon.LocalEmbeddings
   alias Maraithon.Repo
 
   @doc """
@@ -39,15 +41,18 @@ defmodule Maraithon.LocalCalendar do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, _returned} =
+    {inserted_count, inserted_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalEvent, rows,
           on_conflict: :nothing,
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    enqueue_embed_jobs(user_id, inserted_rows)
 
     total = length(rows)
     duplicate_count = total - inserted_count
@@ -147,6 +152,74 @@ defmodule Maraithon.LocalCalendar do
   end
 
   @doc """
+  Semantic search for events whose title, notes, or location are
+  semantically similar to `query`. Pairs with `search/3` (substring) —
+  use `semantic_search/3` when the user asks "when's the launch
+  meeting" or "find the meeting about something similar" and won't
+  recall the exact title.
+
+  Options:
+    * `:since` — lower bound for `start_at` (default 90 days ago)
+    * `:limit` — max rows to return (default 12)
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    since = parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -90 * 86_400, :second))
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 300)
+
+    user_id
+    |> recent_events_query(since: since, limit: pool_size)
+    |> Repo.all()
+    |> Maraithon.LocalSemanticSearch.rank_by_similarity(
+      query,
+      &event_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    pgvector_semantic_search(user_id, query_vector, opts)
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp pgvector_semantic_search(user_id, query_vector, opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_calendar_events", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        events =
+          Repo.all(
+            from event in LocalEvent,
+              where: event.user_id == ^user_id and event.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        events
+        |> Enum.map(fn event -> {event, Map.get(sim_by_id, event.id, 0.0)} end)
+        |> Enum.sort_by(fn {_event, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  defp event_text(%LocalEvent{title: title, notes: notes, location: location}) do
+    [title, notes, location]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @doc """
   Fetches one event for a user by its source GUID. Returns `nil` when no
   matching event exists.
   """
@@ -217,7 +290,9 @@ defmodule Maraithon.LocalCalendar do
       attendees_count: attendees_count,
       attendee_emails: attendee_emails,
       created_at: parse_datetime(fetch(event, :created_at)),
-      modified_at: parse_datetime(fetch(event, :modified_at))
+      modified_at: parse_datetime(fetch(event, :modified_at)),
+      encrypted_with_device_key: truthy?(fetch(event, :encrypted_with_device_key)),
+      key_id: fetch(event, :key_id)
     }
 
     changeset = LocalEvent.changeset(%LocalEvent{}, attrs)
@@ -312,5 +387,19 @@ defmodule Maraithon.LocalCalendar do
       |> Enum.join(" ")
 
     String.contains?(haystack, needle)
+  end
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, inserted_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_calendar_events") do
+      Enum.each(inserted_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalEvent{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
   end
 end

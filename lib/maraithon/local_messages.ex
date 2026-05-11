@@ -7,6 +7,8 @@ defmodule Maraithon.LocalMessages do
 
   import Ecto.Query
 
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.LocalMessages.EmbedJob
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.Repo
 
@@ -33,15 +35,18 @@ defmodule Maraithon.LocalMessages do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, _returned} =
+    {inserted_count, inserted_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalMessage, rows,
           on_conflict: :nothing,
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    enqueue_embed_jobs(user_id, inserted_rows)
 
     total = length(rows)
     duplicate_count = total - inserted_count
@@ -152,6 +157,83 @@ defmodule Maraithon.LocalMessages do
   end
 
   @doc """
+  Pgvector-backed semantic lookup over messages.
+
+  The caller is responsible for computing the embedding (typically via
+  `Maraithon.LLM.Embeddings.embed/2`) so that fan-out callers like
+  `Maraithon.Tools.RecallAnywhere` only pay the embedding cost once and
+  reuse the same vector across every source.
+
+  Returns `[{%LocalMessage{}, similarity}, ...]` ordered by descending
+  cosine similarity, or `[]` when the `embedding` column hasn't been
+  migrated yet — callers should treat that as a soft-fail and fall back
+  to substring search.
+
+  Options:
+    * `:limit` — max results (default 10)
+    * `:min_similarity` — discard rows below this value (default 0.0)
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 200)
+    from_handle = Keyword.get(opts, :from_handle)
+    handle_needle = if is_binary(from_handle), do: String.downcase(from_handle), else: nil
+
+    pool =
+      from(msg in LocalMessage,
+        where: msg.user_id == ^user_id,
+        order_by: [desc: msg.sent_at],
+        limit: ^pool_size
+      )
+      |> Repo.all()
+      |> Enum.filter(&matches_handle?(&1, handle_needle))
+
+    Maraithon.LocalSemanticSearch.rank_by_similarity(
+      pool,
+      query,
+      &message_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_messages", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        messages =
+          Repo.all(
+            from msg in LocalMessage,
+              where: msg.user_id == ^user_id and msg.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        messages
+        |> Enum.map(fn msg -> {msg, Map.get(sim_by_id, msg.id, 0.0)} end)
+        |> Enum.sort_by(fn {_msg, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp message_text(%LocalMessage{text: text, chat_display_name: chat}) do
+    [text, chat]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @doc """
   Fetches one message for a user by its source GUID. Returns `nil` when no
   matching message exists.
   """
@@ -253,7 +335,9 @@ defmodule Maraithon.LocalMessages do
       text: fetch(message, :text),
       sent_at: parse_datetime(fetch(message, :sent_at)),
       has_attachments: truthy?(fetch(message, :has_attachments)),
-      attachments: normalize_attachments(fetch(message, :attachments))
+      attachments: normalize_attachments(fetch(message, :attachments)),
+      encrypted_with_device_key: truthy?(fetch(message, :encrypted_with_device_key)),
+      key_id: fetch(message, :key_id)
     }
 
     changeset = LocalMessage.changeset(%LocalMessage{}, attrs)
@@ -371,4 +455,18 @@ defmodule Maraithon.LocalMessages do
   end
 
   defp matches_handle?(_msg, _needle), do: false
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, inserted_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_messages") do
+      Enum.each(inserted_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalMessage{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
+  end
 end

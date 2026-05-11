@@ -26,7 +26,10 @@ defmodule Maraithon.Tools.RecallAnywhere do
 
   import Maraithon.Tools.ActionHelpers
 
+  alias Maraithon.LLM.Embeddings
   alias Maraithon.Tools.RecallAnywhereHelpers
+
+  require Logger
 
   @default_limit 20
   @max_limit 50
@@ -44,7 +47,10 @@ defmodule Maraithon.Tools.RecallAnywhere do
       started_at = System.monotonic_time(:millisecond)
       now = DateTime.utc_now()
 
-      {hits, completed_sources, partial_sources} = run_sources(user_id, query, sources)
+      query_embedding = compute_query_embedding(query)
+
+      {hits, completed_sources, partial_sources} =
+        run_sources(user_id, query, sources, query_embedding)
 
       scored = Enum.map(hits, &RecallAnywhereHelpers.score_hit(&1, now))
 
@@ -84,10 +90,19 @@ defmodule Maraithon.Tools.RecallAnywhere do
 
   def execute(_args), do: {:error, "invalid_args"}
 
-  defp run_sources(user_id, query, sources) do
+  defp run_sources(user_id, query, sources, query_embedding) do
     # Per-source opts: keep a generous over-fetch ceiling so ranking has
-    # enough candidates, but the response still clamps to `limit`.
-    opts = [limit: @max_limit]
+    # enough candidates, but the response still clamps to `limit`. When
+    # we have a query embedding we pass it through so per-source
+    # functions can fan out the pgvector semantic_search alongside the
+    # substring search.
+    base_opts = [limit: @max_limit]
+
+    opts =
+      case query_embedding do
+        vector when is_list(vector) -> Keyword.put(base_opts, :query_embedding, vector)
+        _ -> base_opts
+      end
 
     stream =
       Task.async_stream(
@@ -127,6 +142,35 @@ defmodule Maraithon.Tools.RecallAnywhere do
         {hits_acc, completed_acc, partial}
     end)
     |> finalize_sources(sources)
+  end
+
+  # Compute the query embedding once so per-source semantic_search calls
+  # share the same vector. Failures (no API key, network blip, OpenAI 5xx)
+  # fall back to `nil` so the blend gracefully degrades to substring +
+  # recency + trust — semantic_score defaults to 0.0 in that case.
+  defp compute_query_embedding(query) do
+    case safe_embed(query) do
+      {:ok, vector} when is_list(vector) ->
+        vector
+
+      {:error, reason} ->
+        Logger.debug("recall_anywhere query embed failed; falling back to substring rank",
+          reason: inspect(reason)
+        )
+
+        nil
+
+      _other ->
+        nil
+    end
+  end
+
+  defp safe_embed(query) do
+    Embeddings.embed(query)
+  rescue
+    error -> {:error, Exception.message(error)}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   # We can't know which source the exit-reason belongs to inside async_stream

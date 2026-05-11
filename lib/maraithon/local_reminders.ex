@@ -15,6 +15,8 @@ defmodule Maraithon.LocalReminders do
 
   import Ecto.Query
 
+  alias Maraithon.LocalEmbeddings
+  alias Maraithon.LocalReminders.EmbedJob
   alias Maraithon.LocalReminders.LocalReminder
   alias Maraithon.Repo
 
@@ -63,15 +65,22 @@ defmodule Maraithon.LocalReminders do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {affected_count, _returned} =
+    {affected_count, affected_rows} =
       if rows == [] do
-        {0, nil}
+        {0, []}
       else
         Repo.insert_all(LocalReminder, rows,
           on_conflict: {:replace, @upsert_fields},
-          conflict_target: [:user_id, :device_id, :source, :guid]
+          conflict_target: [:user_id, :device_id, :source, :guid],
+          returning: [:id]
         )
       end
+
+    # Reminders are mutable: every accepted row may have a different
+    # title / notes from last time, so we re-enqueue on every batch.
+    # `LocalEmbeddings.refresh/4` short-circuits via the source-text
+    # hash check when nothing changed, so the OpenAI cost stays bounded.
+    enqueue_embed_jobs(user_id, affected_rows)
 
     total = length(rows)
     # Conservative reporting: when on_conflict replaces an existing
@@ -206,6 +215,78 @@ defmodule Maraithon.LocalReminders do
   end
 
   @doc """
+  Semantic search for reminders whose title or notes are semantically
+  similar to `query`. Pairs with `search/3` (substring) — use
+  `semantic_search/3` when the user asks "do I have a reminder about
+  something like ..." and won't recall the exact title.
+
+  Options:
+    * `:limit` — max rows to return (default 12)
+    * `:list_name` — restrict to one Reminders.app list
+  """
+  def semantic_search(user_id, query, opts \\ [])
+
+  def semantic_search(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 12)
+    pool_size = Keyword.get(opts, :pool_size, 200)
+    list_name = Keyword.get(opts, :list_name)
+
+    base =
+      from(reminder in LocalReminder,
+        where: reminder.user_id == ^user_id,
+        order_by: [desc: reminder.modified_at],
+        limit: ^pool_size
+      )
+
+    pool =
+      base
+      |> maybe_filter_list(list_name)
+      |> Repo.all()
+
+    Maraithon.LocalSemanticSearch.rank_by_similarity(
+      pool,
+      query,
+      &reminder_text/1,
+      Keyword.put(opts, :limit, limit)
+    )
+  end
+
+  def semantic_search(user_id, query_vector, opts)
+      when is_binary(user_id) and is_list(query_vector) and is_list(opts) do
+    limit = Keyword.get(opts, :limit, 10)
+
+    case LocalEmbeddings.semantic_search("local_reminders", user_id, query_vector, opts) do
+      [] ->
+        []
+
+      rows ->
+        ids = Enum.map(rows, fn {id, _sim} -> id end)
+
+        reminders =
+          Repo.all(
+            from reminder in LocalReminder,
+              where: reminder.user_id == ^user_id and reminder.id in ^ids
+          )
+
+        sim_by_id = Map.new(rows)
+
+        reminders
+        |> Enum.map(fn reminder -> {reminder, Map.get(sim_by_id, reminder.id, 0.0)} end)
+        |> Enum.sort_by(fn {_reminder, sim} -> -sim end)
+        |> Enum.take(limit)
+    end
+  end
+
+  def semantic_search(_user_id, _query, _opts), do: []
+
+  defp reminder_text(%LocalReminder{title: title, notes: notes, list_name: list_name}) do
+    [title, notes, list_name]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  @doc """
   Fetches one reminder for a user by its source GUID. Returns `nil`
   when no matching reminder exists.
   """
@@ -266,7 +347,9 @@ defmodule Maraithon.LocalReminders do
       has_alarm: truthy?(fetch(reminder, :has_alarm)),
       url_attachment: fetch(reminder, :url_attachment),
       created_at: parse_datetime(fetch(reminder, :created_at)),
-      modified_at: parse_datetime(fetch(reminder, :modified_at))
+      modified_at: parse_datetime(fetch(reminder, :modified_at)),
+      encrypted_with_device_key: truthy?(fetch(reminder, :encrypted_with_device_key)),
+      key_id: fetch(reminder, :key_id)
     }
 
     changeset = LocalReminder.changeset(%LocalReminder{}, attrs)
@@ -337,5 +420,19 @@ defmodule Maraithon.LocalReminders do
       |> Enum.join(" ")
 
     String.contains?(haystack, needle)
+  end
+
+  defp enqueue_embed_jobs(_user_id, []), do: :ok
+
+  defp enqueue_embed_jobs(user_id, affected_rows) do
+    if LocalEmbeddings.embedding_storage_available?("local_reminders") do
+      Enum.each(affected_rows, fn
+        %{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        %LocalReminder{id: id} when is_binary(id) -> EmbedJob.enqueue(user_id, id)
+        _ -> :ok
+      end)
+    end
+
+    :ok
   end
 end

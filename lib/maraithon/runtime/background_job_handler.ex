@@ -106,8 +106,42 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
     end
   end
 
+  def execute(%BackgroundJob{job_type: "local_messages_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalMessages.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_notes_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalNotes.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_voice_memos_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalVoiceMemos.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_calendar_events_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalCalendar.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_reminders_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalReminders.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_files_embed"} = job) do
+    dispatch_local_embed_job(job, Maraithon.LocalFiles.EmbedJob)
+  end
+
   def execute(%BackgroundJob{job_type: job_type}),
     do: {:error, {:unknown_background_job, job_type}}
+
+  defp dispatch_local_embed_job(%BackgroundJob{} = job, module) do
+    case payload_string(job, "record_id", nil) do
+      record_id when is_binary(record_id) ->
+        module.run(record_id)
+
+      _ ->
+        {:error, :missing_record_id}
+    end
+  end
 
   defp process_ingestion_window(window_id) do
     case Repo.get(Window, window_id) do
