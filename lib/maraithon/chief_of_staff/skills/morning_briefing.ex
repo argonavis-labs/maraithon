@@ -7,6 +7,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
+  alias Maraithon.ChiefOfStaff.Acquisition
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.ChiefOfStaff.MeetingEnrichment
   alias Maraithon.Commitments
@@ -39,6 +40,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @local_notes_limit 10
   @local_voice_memo_limit 5
   @local_calendar_limit 12
+  @today_calendar_limit 32
   @local_reminders_days_ahead 7
   @local_reminders_limit 25
   @local_files_limit 6
@@ -411,7 +413,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Enum.filter(&event_on_date?(&1, local_date, offset_hours))
       |> Enum.map(&calendar_event_for_prompt/1)
       |> Enum.reject(&is_nil/1)
-      |> Enum.take(18)
+      |> Enum.take(@today_calendar_limit)
 
     tomorrow_first_event =
       calendar_events
@@ -571,15 +573,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   """
   def smoke_test(agent_id, opts \\ []) when is_binary(agent_id) and is_list(opts) do
     agent = Maraithon.Repo.get!(Maraithon.Agents.Agent, agent_id)
-    skill_config = get_in(agent.config, ["skill_configs", "morning_briefing"]) || %{}
-    user_id = Map.get(skill_config, "user_id") || agent.user_id
+    user_id = smoke_test_user_id(agent)
 
     if is_nil(user_id) do
       {:error, :no_user_id, %{}}
     else
-      state = init(Map.put(skill_config, "user_id", user_id))
-      now = DateTime.utc_now()
-      brief_input = build_brief_input(user_id, now, state, %{})
+      skill_config = smoke_test_skill_config(agent, user_id)
+      state = init(skill_config)
+      now = Keyword.get(opts, :now, DateTime.utc_now())
+      context = smoke_test_context(agent, user_id, skill_config, now, opts)
+      brief_input = build_brief_input(user_id, now, state, context)
 
       case llm_params(brief_input, state) do
         {:ok, params} ->
@@ -597,7 +600,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                 finish_reason: response.finish_reason,
                 elapsed_ms: elapsed_ms,
                 max_tokens_used: state.llm_max_tokens,
-                reasoning_effort_used: state.llm_reasoning_effort
+                reasoning_effort_used: state.llm_reasoning_effort,
+                calendar_today_events:
+                  length(get_in(brief_input, ["calendar", "today_events"]) || []),
+                meeting_prep_counts: get_in(brief_input, ["meeting_prep", "counts"]),
+                source_acquisition:
+                  if(Map.has_key?(context, :assistant_fetch_telemetry),
+                    do: "acquired",
+                    else: "provided"
+                  )
               }
 
               case parsed do
@@ -628,6 +639,76 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:error, reason} ->
           {:error, {:llm_params_failed, reason}, %{}}
       end
+    end
+  end
+
+  defp smoke_test_user_id(agent) do
+    agent_config = agent.config || %{}
+    skill_config = get_in(agent_config, ["skill_configs", "morning_briefing"]) || %{}
+
+    normalize_string(Map.get(skill_config, "user_id")) ||
+      normalize_string(agent.user_id) ||
+      normalize_string(Map.get(agent_config, "user_id"))
+  end
+
+  defp smoke_test_skill_config(agent, user_id) do
+    agent_config = agent.config || %{}
+    skill_config = get_in(agent_config, ["skill_configs", "morning_briefing"]) || %{}
+
+    default_config()
+    |> Map.merge(
+      Map.take(agent_config, [
+        "source_policy",
+        "source_scope",
+        "timezone_offset_hours",
+        "morning_brief_hour_local",
+        "email_scan_limit",
+        "slack_channel_scan_limit",
+        "slack_message_scan_limit",
+        "news_enabled",
+        "news_limit",
+        "news_feeds",
+        "lookback_hours",
+        "llm_model",
+        "llm_max_tokens",
+        "llm_reasoning_effort",
+        "slack_key_channels"
+      ])
+    )
+    |> Map.merge(skill_config)
+    |> Map.put("user_id", user_id)
+  end
+
+  defp smoke_test_context(agent, user_id, skill_config, now, opts) do
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      budget: %{},
+      recent_events: [],
+      trigger: %{type: :manual, source: "morning_briefing_smoke_test"},
+      event: nil
+    }
+
+    case Keyword.get(opts, :source_bundle, :acquire) do
+      %{} = source_bundle ->
+        Map.put(context, :source_bundle, source_bundle)
+
+      false ->
+        context
+
+      _ ->
+        {source_bundle, telemetry} =
+          Acquisition.build(
+            user_id,
+            [id()],
+            %{id() => skill_config},
+            context
+          )
+
+        context
+        |> Map.put(:source_bundle, source_bundle)
+        |> Map.put(:assistant_fetch_telemetry, telemetry)
     end
   end
 

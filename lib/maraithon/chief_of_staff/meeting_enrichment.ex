@@ -38,7 +38,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
     {meetings, _remaining_queries} =
       events
-      |> Enum.filter(&meeting_like?/1)
+      |> prioritize_meeting_events()
       |> Enum.take(@max_meetings)
       |> Enum.reduce({[], max_web_queries}, fn event, {meeting_acc, remaining_queries} ->
         {meeting, next_remaining} = enrich_event(user_id, event, opts, remaining_queries)
@@ -427,6 +427,61 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp meeting_like?(_event), do: false
 
+  defp prioritize_meeting_events(events) do
+    events
+    |> Enum.with_index()
+    |> Enum.filter(fn {event, _index} -> meeting_like?(event) end)
+    |> Enum.sort_by(fn {event, index} ->
+      {meeting_priority(event), event_start_sort_key(event), index}
+    end)
+    |> Enum.take(@max_meetings)
+    |> Enum.sort_by(fn {_event, index} -> index end)
+    |> Enum.map(fn {event, _index} -> event end)
+  end
+
+  defp meeting_priority(event) do
+    attendees = read_list(event, "attendees")
+
+    cond do
+      external_attendees?(attendees) -> 0
+      attendees != [] -> 1
+      read_string(event, "organizer") != nil -> 2
+      true -> 3
+    end
+  end
+
+  defp external_attendees?(attendees) do
+    Enum.any?(attendees, fn attendee ->
+      attendee
+      |> attendee_email()
+      |> external_email?()
+    end)
+  end
+
+  defp attendee_email(%{} = attendee), do: read_string(attendee, "email")
+  defp attendee_email(attendee) when is_binary(attendee), do: extract_email(attendee)
+  defp attendee_email(_attendee), do: nil
+
+  defp external_email?(email) when is_binary(email) do
+    case email_domain(email) do
+      nil -> false
+      "runner.now" -> false
+      "voteagora.com" -> false
+      "agora.xyz" -> false
+      _domain -> true
+    end
+  end
+
+  defp external_email?(_email), do: false
+
+  defp event_start_sort_key(event) when is_map(event) do
+    event
+    |> read_any("start")
+    |> normalize_sort_value()
+  end
+
+  defp event_start_sort_key(_event), do: ""
+
   defp public_candidate(candidate) when is_map(candidate) do
     candidate
     |> Map.take([:query, :kind, :source, :email])
@@ -522,6 +577,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp normalize_json_value(value), do: value
+
+  defp normalize_sort_value(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
+  defp normalize_sort_value(%Date{} = date), do: Date.to_iso8601(date)
+  defp normalize_sort_value(value) when is_binary(value), do: value
+  defp normalize_sort_value(_value), do: ""
 
   defp compact_map(map) when is_map(map) do
     map
