@@ -823,6 +823,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        before public web context. Use web snippets only as fallback evidence for attendees
        or companies missing from CRM, and keep uncertainty visible when the evidence is thin.
 
+       Commercial thread rule:
+       Fresh external commercial threads from close teammates are not inbox noise. Use model
+       judgment to scan gmail.recent_inbox, commitments, todos, and CRM context for teammate-led
+       customer, prospect, intro, plan, pricing, discount, availability, or launch-video threads.
+       If Charlie or another close teammate has looped Kent into an external commercial thread,
+       include a concise readiness note even when no immediate decision is forced. Say who or
+       which organization is involved, the live ask, and what guidance Kent should have ready.
+
        Schedule coverage contract:
        Required external meetings are a hard coverage contract, not a ranking hint. If
        schedule_coverage.required_meetings is non-empty, Today's Schedule must include

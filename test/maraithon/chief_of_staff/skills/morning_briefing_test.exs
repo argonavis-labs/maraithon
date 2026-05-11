@@ -206,6 +206,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"
     assert prompt =~ "Treat meeting prep as CRM-first"
+    assert prompt =~ "Fresh external commercial threads from close teammates"
     assert prompt =~ "Required external meetings are a hard coverage contract"
     assert prompt =~ "Use display_start and display_end exactly"
     assert prompt =~ "Keep the JSON executive-grade and bounded"
