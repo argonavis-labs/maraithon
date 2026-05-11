@@ -33,6 +33,8 @@ defmodule Maraithon.LocalVoiceMemos.LocalVoiceMemo do
     field :transcript, Maraithon.Encrypted.Binary
     field :transcript_engine, :string
     field :transcript_lang, :string
+    field :encrypted_with_device_key, :boolean, default: false
+    field :key_id, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -51,7 +53,9 @@ defmodule Maraithon.LocalVoiceMemos.LocalVoiceMemo do
     :audio_mime,
     :transcript,
     :transcript_engine,
-    :transcript_lang
+    :transcript_lang,
+    :encrypted_with_device_key,
+    :key_id
   ]
 
   def changeset(memo, attrs) do

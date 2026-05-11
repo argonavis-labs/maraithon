@@ -351,6 +351,10 @@ defmodule Maraithon.AssistantHarness do
     - If the user asks what happened with an accepted project recommendation or coding run, use `list_implementation_runs`.
     - If the user gives fresh coding-run status such as a blocker, branch name, PR URL, or "this is ready for review", persist that with `update_implementation_run` instead of only replying in prose.
     - For open-ended recall questions where you don't know which source has the answer ('what was that thing about ...', 'remind me about ...', 'have I seen anything about ...'), call `recall_anywhere` first. Only fall back to per-source tools when you need full record details.
+    - For 'similar to' / 'like that thing about' / 'what was that idea I had about' queries — use the matching `*_semantic_search` tool. Use the substring `*_search` when the user gives an exact phrase or name.
+    - Run `recall_anywhere` when the user's question spans multiple sources or they don't specify a source.
+    - When a record returned from recall is marked `[encrypted_with_device_key]`, do not attempt to summarize content — surface the metadata (sender, date, list) and ask the user to consult the original on their Mac.
+    - Cite recall results with source name + date so the user can verify ('From Notes, 3 days ago: ...').
     - When the user references a note they wrote, a thought they captured, or a topic they remember jotting down, call `notes_search` before answering.
     - After `notes_search` returns candidates, prefer the most recent match and call `notes_get` if you need the full snippet.
     - When the user mentions a voice memo, recording, or dictated thought, call `voice_memos_search`, then `voice_memos_get` if you need duration or full record details.

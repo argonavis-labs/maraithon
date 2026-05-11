@@ -28,6 +28,8 @@ defmodule Maraithon.LocalNotes.LocalNote do
     field :is_pinned, :boolean, default: false
     field :created_at, :utc_datetime_usec
     field :modified_at, :utc_datetime_usec
+    field :encrypted_with_device_key, :boolean, default: false
+    field :key_id, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -43,7 +45,9 @@ defmodule Maraithon.LocalNotes.LocalNote do
     :folder,
     :is_pinned,
     :created_at,
-    :modified_at
+    :modified_at,
+    :encrypted_with_device_key,
+    :key_id
   ]
 
   def changeset(note, attrs) do

@@ -44,6 +44,8 @@ defmodule Maraithon.LocalReminders.LocalReminder do
     field :url_attachment, :string
     field :created_at, :utc_datetime_usec
     field :modified_at, :utc_datetime_usec
+    field :encrypted_with_device_key, :boolean, default: false
+    field :key_id, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -63,7 +65,9 @@ defmodule Maraithon.LocalReminders.LocalReminder do
     :has_alarm,
     :url_attachment,
     :created_at,
-    :modified_at
+    :modified_at,
+    :encrypted_with_device_key,
+    :key_id
   ]
 
   def changeset(reminder, attrs) do

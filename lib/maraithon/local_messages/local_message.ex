@@ -26,6 +26,8 @@ defmodule Maraithon.LocalMessages.LocalMessage do
     field :sent_at, :utc_datetime_usec
     field :has_attachments, :boolean, default: false
     field :attachments, :map, default: %{}
+    field :encrypted_with_device_key, :boolean, default: false
+    field :key_id, :string
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -42,7 +44,9 @@ defmodule Maraithon.LocalMessages.LocalMessage do
     :text,
     :sent_at,
     :has_attachments,
-    :attachments
+    :attachments,
+    :encrypted_with_device_key,
+    :key_id
   ]
 
   def changeset(message, attrs) do
