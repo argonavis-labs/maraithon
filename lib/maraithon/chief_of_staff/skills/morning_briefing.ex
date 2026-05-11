@@ -34,7 +34,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_news_limit 6
   @default_lookback_hours 18
   @default_llm_max_tokens 24_000
-  @default_llm_reasoning_effort "xhigh"
+  @default_llm_reasoning_effort "high"
   @default_llm_timeout_ms 240_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
@@ -2019,8 +2019,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         normalized = String.downcase(effort)
 
         case normalized do
-          effort when effort in ["xhigh"] -> effort
-          effort when effort in ["low", "medium", "high"] -> default
+          effort when effort in ["high", "xhigh"] -> effort
+          effort when effort in ["low", "medium"] -> default
           _other -> default
         end
 
