@@ -35,7 +35,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_lookback_hours 18
   @default_llm_max_tokens 18_000
   @default_llm_reasoning_effort "high"
-  @default_llm_timeout_ms 240_000
+  @default_llm_timeout_ms 300_000
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
   @prompt_gmail_body_limit 900
@@ -854,9 +854,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, todos, and
        CRM context for teammate-led customer, prospect, intro, plan, pricing, discount,
        availability, or launch-video threads.
-       If Charlie or another close teammate has looped Kent into an external commercial thread,
-       include a concise readiness note even when no immediate decision is forced. Say who or
-       which organization is involved, the live ask, and what guidance Kent should have ready.
+       Treat gmail.commercial_threads as a coverage list: include every live non-duplicative
+       external commercial thread from that list that a busy executive would want to know about,
+       especially Charlie-led prospect/customer threads such as Enterprise/Team plan, discount,
+       intro, or availability discussions. If Charlie or another close teammate has looped Kent
+       into an external commercial thread, include a concise readiness note even when no immediate
+       decision is forced. Say who or which organization is involved, the live ask, and what
+       guidance Kent should have ready.
 
        Schedule coverage contract:
        Required external meetings are a hard coverage contract, not a ranking hint. If

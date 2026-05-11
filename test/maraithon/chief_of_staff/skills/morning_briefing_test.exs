@@ -199,7 +199,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert params["max_tokens"] == 18_000
     assert params["reasoning_effort"] == "high"
-    assert params["timeout_ms"] == 240_000
+    assert params["timeout_ms"] == 300_000
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     assert prompt =~ "Brief input JSON"
@@ -207,6 +207,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Email review rule"
     assert prompt =~ "Treat meeting prep as CRM-first"
     assert prompt =~ "Fresh external commercial threads from close teammates"
+    assert prompt =~ "Treat gmail.commercial_threads as a coverage list"
     assert prompt =~ "Required external meetings are a hard coverage contract"
     assert prompt =~ "Use display_start and display_end exactly"
     assert prompt =~ "Keep the JSON executive-grade and complete"
