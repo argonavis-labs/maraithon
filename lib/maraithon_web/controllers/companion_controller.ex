@@ -10,11 +10,15 @@ defmodule MaraithonWeb.CompanionController do
   require Logger
 
   alias Maraithon.Accounts
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalFiles
   alias Maraithon.LocalMessages
   alias Maraithon.LocalNotes
+  alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
 
   @max_batch_size 500
+  @max_files_batch_size 200
 
   @doc """
   POST /api/v1/companion/messages
@@ -87,6 +91,61 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   @doc """
+  POST /api/v1/companion/calendar-events
+
+  Accepts a batch of macOS Calendar.app events (sourced from EventKit,
+  which aggregates iCloud, Exchange, Google CalDAV, and any other
+  calendar accounts the user has added locally) from a paired device.
+  """
+  def ingest_calendar_events(conn, params) do
+    ingest_collection(
+      conn,
+      params,
+      "calendar_events",
+      "calendar",
+      &LocalCalendar.ingest_batch/3
+    )
+  end
+
+  @doc """
+  POST /api/v1/companion/reminders
+
+  Accepts a batch of macOS Reminders.app items from a paired device.
+  Re-ingest overwrites mutable fields (title, due, completion) on the
+  matching row, so the assistant always sees the latest state from
+  the user's Reminders.app.
+  """
+  def ingest_reminders(conn, params) do
+    ingest_collection(
+      conn,
+      params,
+      "reminders",
+      "reminders",
+      &LocalReminders.ingest_batch/3
+    )
+  end
+
+  @doc """
+  POST /api/v1/companion/files
+
+  Accepts a batch of file metadata + extracted-text rows from a paired
+  device. Privacy filters (skip `Library/`, dotfiles, `.ssh/`, etc.)
+  are enforced client-side; the server only enforces the size caps:
+  at most 200 records per batch, and `text_content` (after base64
+  decode) capped at 200 KB per record by `LocalFiles.ingest_batch/3`.
+  """
+  def ingest_files(conn, params) do
+    ingest_collection(
+      conn,
+      params,
+      "files",
+      "files",
+      &LocalFiles.ingest_batch/3,
+      max_batch: @max_files_batch_size
+    )
+  end
+
+  @doc """
   GET /api/v1/companion/whoami
 
   Returns the email + device metadata the current bearer token is bound to.
@@ -148,11 +207,13 @@ defmodule MaraithonWeb.CompanionController do
     end
   end
 
-  defp ingest_collection(conn, params, batch_key, default_source, ingest_fun) do
+  defp ingest_collection(conn, params, batch_key, default_source, ingest_fun, opts \\ []) do
     device = conn.assigns.current_device
     user_id = conn.assigns.current_user_id
+    max_batch = Keyword.get(opts, :max_batch, @max_batch_size)
 
-    with {:ok, items, source} <- extract_collection(params, batch_key, default_source),
+    with {:ok, items, source} <-
+           extract_collection(params, batch_key, default_source, max_batch),
          :ok <- validate_device(device, params) do
       items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
@@ -180,7 +241,7 @@ defmodule MaraithonWeb.CompanionController do
       {:error, :too_many_items} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "batch exceeds maximum of #{@max_batch_size}"})
+        |> json(%{error: "batch exceeds maximum of #{max_batch}"})
 
       {:error, :device_mismatch} ->
         conn
@@ -189,7 +250,7 @@ defmodule MaraithonWeb.CompanionController do
     end
   end
 
-  defp extract_collection(params, batch_key, default_source) do
+  defp extract_collection(params, batch_key, default_source, max_batch) do
     source = params["source"] || default_source
     items = params[batch_key]
 
@@ -197,7 +258,7 @@ defmodule MaraithonWeb.CompanionController do
       not is_list(items) ->
         {:error, :missing_items}
 
-      length(items) > @max_batch_size ->
+      length(items) > max_batch ->
         {:error, :too_many_items}
 
       true ->

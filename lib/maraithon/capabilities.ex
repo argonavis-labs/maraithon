@@ -72,10 +72,21 @@ defmodule Maraithon.Capabilities do
     "voice_memos_search" => Maraithon.Tools.VoiceMemosSearch,
     "voice_memos_get" => Maraithon.Tools.VoiceMemosGet,
     "voice_memos_list_recent" => Maraithon.Tools.VoiceMemosListRecent,
+    "files_search" => Maraithon.Tools.FilesSearch,
+    "files_get" => Maraithon.Tools.FilesGet,
+    "files_list_recent" => Maraithon.Tools.FilesListRecent,
     "messages_search" => Maraithon.Tools.MessagesSearch,
     "messages_get" => Maraithon.Tools.MessagesGet,
     "messages_list_recent" => Maraithon.Tools.MessagesListRecent,
-    "messages_chats_recent" => Maraithon.Tools.MessagesChatsRecent
+    "messages_chats_recent" => Maraithon.Tools.MessagesChatsRecent,
+    "reminders_open" => Maraithon.Tools.RemindersOpen,
+    "reminders_due_soon" => Maraithon.Tools.RemindersDueSoon,
+    "reminders_search" => Maraithon.Tools.RemindersSearch,
+    "reminders_get" => Maraithon.Tools.RemindersGet,
+    "calendar_events_around" => Maraithon.Tools.CalendarEventsAround,
+    "calendar_events_for_person" => Maraithon.Tools.CalendarEventsForPerson,
+    "calendar_search" => Maraithon.Tools.CalendarSearch,
+    "calendar_event_get" => Maraithon.Tools.CalendarEventGet
   }
 
   @tool_descriptions %{
@@ -155,6 +166,12 @@ defmodule Maraithon.Capabilities do
     "voice_memos_get" => "Fetch one mirrored macOS Voice Memo by its source GUID.",
     "voice_memos_list_recent" =>
       "List the user's most recently created mirrored macOS Voice Memos.",
+    "files_search" =>
+      "Search the user's mirrored macOS files (Documents, Desktop, Downloads) for a substring across filename, path, and extracted text content. Optional extension and path_substring filters.",
+    "files_get" =>
+      "Fetch one mirrored macOS file by its source GUID, including extracted text (capped at 30 KB for the response).",
+    "files_list_recent" =>
+      "List the user's most recently modified mirrored macOS files, newest first. Optional extension filter.",
     "messages_search" =>
       "Search the user's mirrored iMessage history for a substring, optionally filtered by sender handle and date range.",
     "messages_get" =>
@@ -162,7 +179,23 @@ defmodule Maraithon.Capabilities do
     "messages_list_recent" =>
       "List the user's most recent mirrored iMessages, newest first. Optionally restrict to one chat by chat_key.",
     "messages_chats_recent" =>
-      "List the user's most recently active iMessage chats with the latest message in each and a 7-day message count."
+      "List the user's most recently active iMessage chats with the latest message in each and a 7-day message count.",
+    "reminders_open" =>
+      "List the user's open mirrored macOS Reminders, ordered by due date then priority.",
+    "reminders_due_soon" =>
+      "List the user's open mirrored macOS Reminders due within the next N days (default 7), including overdue.",
+    "reminders_search" =>
+      "Search the user's mirrored macOS Reminders for a substring in title, notes, or list name.",
+    "reminders_get" =>
+      "Fetch one mirrored macOS Reminder by its source GUID (EventKit identifier).",
+    "calendar_events_around" =>
+      "List the user's mirrored macOS Calendar events overlapping a date window (default: now to +7 days). Prefer this over google_calendar_list_events when both are available — the local mirror aggregates every calendar account (iCloud, Exchange, Google CalDAV, etc.) that the user has added on their Mac.",
+    "calendar_events_for_person" =>
+      "Find the user's mirrored macOS Calendar events that involve a specific person, matched by email or name substring against attendees, organizer, and title.",
+    "calendar_search" =>
+      "Substring-search the user's mirrored macOS Calendar events on title, notes, and location. Use for topic-based questions like 'when's the launch review?'.",
+    "calendar_event_get" =>
+      "Fetch one mirrored macOS Calendar event by its EventKit GUID."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -177,7 +210,10 @@ defmodule Maraithon.Capabilities do
     notion_search notion_get_page notion_query_database
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
+    files_search files_get files_list_recent
     messages_search messages_get messages_list_recent messages_chats_recent
+    reminders_open reminders_due_soon reminders_search reminders_get
+    calendar_events_around calendar_events_for_person calendar_search calendar_event_get
   ))
 
   @destructive_tools MapSet.new(~w(

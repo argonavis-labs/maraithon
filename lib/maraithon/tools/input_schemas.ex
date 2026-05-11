@@ -423,6 +423,23 @@ defmodule Maraithon.Tools.InputSchemas do
       "voice_memos_list_recent" ->
         user_object(%{"limit" => @integer})
 
+      "files_search" ->
+        user_object(
+          %{
+            "query" => @string,
+            "limit" => @integer,
+            "extension" => @string,
+            "path_substring" => @string
+          },
+          ["query"]
+        )
+
+      "files_get" ->
+        user_object(%{"file_id" => @string}, ["file_id"])
+
+      "files_list_recent" ->
+        user_object(%{"limit" => @integer, "extension" => @string})
+
       "messages_search" ->
         user_object(
           %{
@@ -443,6 +460,55 @@ defmodule Maraithon.Tools.InputSchemas do
 
       "messages_chats_recent" ->
         user_object(%{"limit" => @integer})
+
+      "reminders_open" ->
+        user_object(%{"limit" => @integer, "list_name" => @string})
+
+      "reminders_due_soon" ->
+        user_object(%{
+          "limit" => @integer,
+          "days_ahead" => @integer,
+          "list_name" => @string
+        })
+
+      "reminders_search" ->
+        user_object(
+          %{"query" => @string, "limit" => @integer, "list_name" => @string},
+          ["query"]
+        )
+
+      "reminders_get" ->
+        user_object(%{"reminder_id" => @string}, ["reminder_id"])
+
+      "calendar_events_around" ->
+        user_object(%{
+          "since" => @string,
+          "until" => @string,
+          "limit" => @integer
+        })
+
+      "calendar_events_for_person" ->
+        user_object(
+          %{
+            "email_or_substring" => @string,
+            "since" => @string,
+            "limit" => @integer
+          },
+          ["email_or_substring"]
+        )
+
+      "calendar_search" ->
+        user_object(
+          %{
+            "query" => @string,
+            "since" => @string,
+            "limit" => @integer
+          },
+          ["query"]
+        )
+
+      "calendar_event_get" ->
+        user_object(%{"event_id" => @string}, ["event_id"])
 
       _ ->
         object(%{})

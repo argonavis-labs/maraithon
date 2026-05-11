@@ -74,6 +74,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     explain_action_ledger
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
+    files_search files_get files_list_recent
+    reminders_open reminders_due_soon reminders_search reminders_get
+    calendar_events_around calendar_events_for_person calendar_search calendar_event_get
   ))
 
   @toolbox_write_tools MapSet.new(~w(
@@ -925,6 +928,42 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "files_search",
+        "Search the user's mirrored macOS files (Documents, Desktop, Downloads) by substring across filename, path, and extracted text content. Use when the user references a file they wrote, downloaded, or saved (PDF, doc, markdown, text). Optional extension and path_substring filters narrow the result set.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "extension" => %{"type" => "string"},
+            "path_substring" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "files_get",
+        "Fetch a single mirrored macOS file by its id, including the full extracted text content (capped at 30 KB). Use after files_search returns candidates and you need the body, not just the snippet.",
+        %{
+          "type" => "object",
+          "required" => ["file_id"],
+          "properties" => %{
+            "file_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "files_list_recent",
+        "List the user's mirrored macOS files ordered by most recently modified. Use when the user asks 'what files did I save recently?' or wants a sweep of new documents.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "extension" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
         "messages_search",
         "Search the user's iMessage history for a substring in the message text. Use when the user references a text from someone, by topic, by sender, or within a date range.",
         %{
@@ -968,6 +1007,102 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "type" => "object",
           "properties" => %{
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
+        "reminders_open",
+        "List the user's open Apple Reminders ordered by due date then priority. Use as the entry point when the user asks about reminders, things they need to do, or their to-do list (the durable Reminders.app list, not assistant-written todos).",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "list_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "reminders_due_soon",
+        "List the user's open Apple Reminders due within the next N days (default 7), including overdue. Use when the user asks 'what's due soon?', 'what's coming up?', or 'what's overdue?'.",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "days_ahead" => %{"type" => "integer", "minimum" => 1, "maximum" => 365},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "list_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "reminders_search",
+        "Search the user's Apple Reminders for a substring in title, notes, or list name. Use when the user asks if they have a reminder about a specific topic.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "list_name" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "reminders_get",
+        "Fetch a single Apple Reminder by its id. Use after reminders_search or reminders_open returns candidates and you need the full notes body, completion timestamp, or url attachment.",
+        %{
+          "type" => "object",
+          "required" => ["reminder_id"],
+          "properties" => %{
+            "reminder_id" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "calendar_events_around",
+        "List the user's macOS Calendar events overlapping a date window (default: now to +7 days). The Mac's Calendar.app aggregates iCloud, Exchange, Google CalDAV, etc. — prefer this over the Google Calendar connector when both are available. Use for schedule questions (today, tomorrow, this week, what's on my calendar).",
+        %{
+          "type" => "object",
+          "properties" => %{
+            "since" => %{"type" => "string"},
+            "until" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100}
+          }
+        }
+      ),
+      tool_definition(
+        "calendar_events_for_person",
+        "Find Calendar events that involve a specific person, matched by email or name substring against attendees, organizer, and title. Use when the user asks about meetings with a particular person.",
+        %{
+          "type" => "object",
+          "required" => ["email_or_substring"],
+          "properties" => %{
+            "email_or_substring" => %{"type" => "string"},
+            "since" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100}
+          }
+        }
+      ),
+      tool_definition(
+        "calendar_search",
+        "Substring-search the user's Calendar events on title, notes, and location. Use for topic-based queries like 'when's the launch review?'.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "since" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100}
+          }
+        }
+      ),
+      tool_definition(
+        "calendar_event_get",
+        "Fetch a single Calendar event by its EventKit id. Use after calendar_events_around or calendar_search returns candidates and you need the full notes body and attendee list.",
+        %{
+          "type" => "object",
+          "required" => ["event_id"],
+          "properties" => %{
+            "event_id" => %{"type" => "string"}
           }
         }
       )
@@ -1150,6 +1285,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "voice_memos_list_recent" ->
         inject_user_and_execute("voice_memos_list_recent", runtime_context, args)
 
+      "files_search" ->
+        inject_user_and_execute("files_search", runtime_context, args)
+
+      "files_get" ->
+        inject_user_and_execute("files_get", runtime_context, args)
+
+      "files_list_recent" ->
+        inject_user_and_execute("files_list_recent", runtime_context, args)
+
       "messages_search" ->
         inject_user_and_execute("messages_search", runtime_context, args)
 
@@ -1161,6 +1305,30 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "messages_chats_recent" ->
         inject_user_and_execute("messages_chats_recent", runtime_context, args)
+
+      "reminders_open" ->
+        inject_user_and_execute("reminders_open", runtime_context, args)
+
+      "reminders_due_soon" ->
+        inject_user_and_execute("reminders_due_soon", runtime_context, args)
+
+      "reminders_search" ->
+        inject_user_and_execute("reminders_search", runtime_context, args)
+
+      "reminders_get" ->
+        inject_user_and_execute("reminders_get", runtime_context, args)
+
+      "calendar_events_around" ->
+        inject_user_and_execute("calendar_events_around", runtime_context, args)
+
+      "calendar_events_for_person" ->
+        inject_user_and_execute("calendar_events_for_person", runtime_context, args)
+
+      "calendar_search" ->
+        inject_user_and_execute("calendar_search", runtime_context, args)
+
+      "calendar_event_get" ->
+        inject_user_and_execute("calendar_event_get", runtime_context, args)
 
       _ ->
         {:error, "unknown_telegram_tool: #{tool_name}"}

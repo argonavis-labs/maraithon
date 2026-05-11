@@ -154,6 +154,9 @@ defmodule MaraithonWeb.Router do
     post "/messages", CompanionController, :ingest
     post "/notes", CompanionController, :ingest_notes
     post "/voice-memos", CompanionController, :ingest_voice_memos
+    post "/calendar-events", CompanionController, :ingest_calendar_events
+    post "/reminders", CompanionController, :ingest_reminders
+    post "/files", CompanionController, :ingest_files
     get "/whoami", CompanionController, :whoami
     delete "/devices/:id/messages", CompanionController, :purge_messages
   end

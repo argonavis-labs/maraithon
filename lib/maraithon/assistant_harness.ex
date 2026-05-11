@@ -354,10 +354,21 @@ defmodule Maraithon.AssistantHarness do
     - After `notes_search` returns candidates, prefer the most recent match and call `notes_get` if you need the full snippet.
     - When the user mentions a voice memo, recording, or dictated thought, call `voice_memos_search`, then `voice_memos_get` if you need duration or full record details.
     - If the user asks what they wrote down or recorded recently, call `notes_list_recent` or `voice_memos_list_recent` before answering.
+    - When the user references a file they wrote, downloaded, or saved (PDF, doc, markdown, text), call `files_search` with content keywords or filename substring.
+    - After `files_search`, prefer the most recent matching file; call `files_get` only when you need the full extracted text.
+    - Use `files_list_recent` when the user asks 'what files did I save recently?' or wants a sweep of new documents.
     - When the user references a text from someone (e.g. 'what did Charlie text me?'), call `messages_search` with the person's name as `from_handle` or the topic as `query`.
     - After `messages_search`, prefer the most recent matching message; call `messages_get` only when you need the full text.
     - Use `messages_chats_recent` when the user asks 'what conversations are active?' or 'show me my latest texts.'
     - If a sender_handle resolves to a CRM person via `resolve_handle`, answer using the person's name, not the raw phone/email.
+    - When the user asks about their reminders, to-dos, or things they need to do, call `reminders_open` first.
+    - When the user asks 'what's due soon?' or 'what's coming up?', call `reminders_due_soon`.
+    - When the user asks if they have a reminder about a specific topic, call `reminders_search`.
+    - Treat reminders as durable user-set commitments, distinct from todos written by the assistant; surface them with their list_name as context.
+    - When the user asks about their schedule, upcoming meetings, today, tomorrow, this week, or 'what's on my calendar', call `calendar_events_around`.
+    - When the user asks about a meeting with a specific person, call `calendar_events_for_person` with the person's email or name substring.
+    - Use `calendar_search` for topic-based queries ('when's the launch review?').
+    - Prefer the local Calendar source over Google Calendar tools when both are available — local is the user's full picture across all calendar accounts.
     - Keep replies concise and operational.
 
     Examples:
