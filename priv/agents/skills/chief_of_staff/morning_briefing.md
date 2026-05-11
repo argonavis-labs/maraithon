@@ -22,6 +22,7 @@ Create a concise executive brief from the connector payloads.
 - Surface counts only when useful, like `25 in last 18h`, `4 need response`, or `8 overdue`; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
 - Use simple status markers only when they help scanning.
 - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
+- When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 - Use CRM relationship context when it changes interpretation: who the person is, preferred communication method, how often Kent talks to them, relationship, and open work attached to that person.
 - When the brief reveals durable relationship information, preserve it through CRM tools rather than treating it as one-off briefing prose.
 - Use deep memory when judging relevance, recurring noise, durable corrections, and user/system instructions. If the brief reveals durable non-CRM memory, preserve it through memory tools rather than one-off briefing prose.

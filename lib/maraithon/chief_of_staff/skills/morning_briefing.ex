@@ -9,9 +9,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
+  alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
   alias Maraithon.Insights
+  alias Maraithon.LocalBrowserHistory
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalFiles
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalReminders
+  alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
   alias Maraithon.Todos
@@ -26,6 +34,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "medium"
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
+  @local_imessage_chat_limit 8
+  @local_notes_limit 10
+  @local_voice_memo_limit 5
+  @local_calendar_limit 12
+  @local_reminders_days_ahead 7
+  @local_reminders_limit 25
+  @local_files_limit 6
+  @local_browser_visits_limit 60
+  @local_browser_top_hosts 6
+  @local_files_allowed_extensions ~w(pdf md txt rtf rtfd docx pages key keynote ppt pptx xls xlsx csv numbers doc)
+  @device_stale_seconds 2 * 60 * 60
 
   @impl true
   def id, do: "morning_briefing"
@@ -298,7 +317,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     email_prompt_limit = min(state.email_scan_limit, 30)
     slack_prompt_limit = min(max(state.slack_message_scan_limit, 20), 60)
 
-    calendar_events = SourceBundle.calendar_events(source_bundle)
+    # Prefer local-first calendar (macOS Calendar.app aggregates iCloud /
+    # Exchange / Google / CalDAV in one place). Fall back to the Google
+    # source bundle when no local events are present for this user. The
+    # local snapshot can come from the source bundle (`put_calendar_local`)
+    # or be queried live from `LocalCalendar` here.
+    google_calendar_events = SourceBundle.calendar_events(source_bundle)
+    bundle_local_calendar = SourceBundle.calendar_local_events(source_bundle)
+
+    local_calendar_events =
+      maybe_fetch_local(user_id, bundle_local_calendar, fn id ->
+        LocalCalendar.events_around(id,
+          since: now,
+          until: DateTime.add(now, 48 * 3_600, :second),
+          limit: @local_calendar_limit
+        )
+      end)
+      |> Enum.map(&local_event_to_prompt/1)
+
+    calendar_events =
+      cond do
+        local_calendar_events != [] -> local_calendar_events
+        true -> google_calendar_events
+      end
+
+    calendar_source =
+      cond do
+        local_calendar_events != [] -> "local"
+        google_calendar_events != [] -> "google"
+        true -> "none"
+      end
+
     gmail_messages = SourceBundle.gmail_inbox_messages(source_bundle)
     slack_messages = SourceBundle.slack_messages(source_bundle)
     news_items = SourceBundle.news_items(source_bundle)
@@ -306,11 +355,62 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     recent_slack_messages =
       Enum.filter(slack_messages, &recent_slack_message?(&1, lookback_start))
 
+    bundle_imessage_chats = SourceBundle.imessage_chats(source_bundle)
+
+    imessage_chats =
+      maybe_fetch_local(user_id, bundle_imessage_chats, fn id ->
+        LocalMessages.chats_recent(id, limit: @local_imessage_chat_limit, now: now)
+      end)
+
+    bundle_notes = SourceBundle.notes(source_bundle)
+
+    notes =
+      maybe_fetch_local(user_id, bundle_notes, fn id ->
+        LocalNotes.recent_for_user(id, limit: @local_notes_limit)
+      end)
+
+    bundle_memos = SourceBundle.voice_memos(source_bundle)
+
+    voice_memos =
+      maybe_fetch_local(user_id, bundle_memos, fn id ->
+        LocalVoiceMemos.recent_for_user(id, limit: @local_voice_memo_limit)
+      end)
+
+    bundle_reminders = SourceBundle.reminders(source_bundle)
+
+    reminders =
+      maybe_fetch_local(user_id, bundle_reminders, fn id ->
+        LocalReminders.due_soon(id,
+          days_ahead: @local_reminders_days_ahead,
+          limit: @local_reminders_limit
+        )
+      end)
+
+    bundle_files = SourceBundle.files(source_bundle)
+
+    files =
+      maybe_fetch_local(user_id, bundle_files, fn id ->
+        id
+        |> LocalFiles.recent_for_user(limit: @local_files_limit * 6)
+        |> Enum.filter(&allowed_file_extension?/1)
+        |> Enum.take(@local_files_limit)
+      end)
+
+    bundle_visits = SourceBundle.browser_visits(source_bundle)
+
+    visits =
+      maybe_fetch_local(user_id, bundle_visits, fn id ->
+        LocalBrowserHistory.recent_visits(id, limit: @local_browser_visits_limit)
+      end)
+
+    top_hosts = top_browser_hosts(visits, now, @local_browser_top_hosts)
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
       "timezone_offset_hours" => offset_hours,
       "calendar" => %{
+        "preferred_source" => calendar_source,
         "today_events" =>
           calendar_events
           |> Enum.filter(&event_on_date?(&1, local_date, offset_hours))
@@ -321,7 +421,58 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.filter(&event_on_date?(&1, tomorrow, offset_hours))
           |> Enum.sort_by(&event_sort_key/1)
           |> List.first()
-          |> calendar_event_for_prompt()
+          |> calendar_event_for_prompt(),
+        "upcoming_local" =>
+          local_calendar_events
+          |> Enum.map(&calendar_event_for_prompt/1)
+          |> Enum.take(@local_calendar_limit)
+      },
+      "imessage" => %{
+        "chats" =>
+          imessage_chats
+          |> Enum.map(&imessage_chat_for_prompt/1)
+          |> Enum.take(@local_imessage_chat_limit),
+        "counts" => %{"chats" => length(imessage_chats)}
+      },
+      "notes" => %{
+        "items" =>
+          notes
+          |> Enum.map(&note_for_prompt/1)
+          |> Enum.take(@local_notes_limit),
+        "counts" => %{"count" => length(notes)}
+      },
+      "voice_memos" => %{
+        "items" =>
+          voice_memos
+          |> Enum.map(&voice_memo_for_prompt/1)
+          |> Enum.take(@local_voice_memo_limit),
+        "counts" => %{"count" => length(voice_memos)}
+      },
+      "reminders" => %{
+        "due_soon" =>
+          reminders
+          |> Enum.map(&reminder_for_prompt/1)
+          |> Enum.take(@local_reminders_limit),
+        "counts" => %{
+          "open" => length(reminders),
+          "due_today" => Enum.count(reminders, &reminder_due_today?(&1, now))
+        }
+      },
+      "files" => %{
+        "items" =>
+          files
+          |> Enum.map(&file_for_prompt/1)
+          |> Enum.take(@local_files_limit),
+        "counts" => %{"recent_count" => length(files)}
+      },
+      "browser_history" => %{
+        "top_hosts" => top_hosts,
+        "counts" => %{
+          "visits_last_24h" =>
+            Enum.count(visits, fn visit ->
+              within_last_24h?(visit_last_visited_at(visit), now)
+            end)
+        }
       },
       "gmail" => %{
         "recent_unread" =>
@@ -381,7 +532,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "deep_memory" =>
         user_id
         |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 10),
-      "source_health" => SourceBundle.freshness(source_bundle)
+      "source_health" =>
+        source_bundle
+        |> SourceBundle.freshness()
+        |> merge_local_source_health(user_id, now,
+          imessage: imessage_chats,
+          notes: notes,
+          voice_memos: voice_memos,
+          calendar_local: local_calendar_events,
+          reminders: reminders,
+          files: files,
+          browser_history: visits
+        )
     }
   end
 
@@ -528,6 +690,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        snippet alone. If body_available is false, treat that email as unreviewable source
        degradation and do not surface it as finance, school, marketing, urgent, or actionable
        unless another full-body source supports that conclusion.
+
+       Local source rule:
+       When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 
        Brief input JSON:
        #{input_json}
@@ -712,6 +877,243 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
   end
 
+  defp local_event_to_prompt(%Maraithon.LocalCalendar.LocalEvent{} = event) do
+    %{
+      "event_id" => event.guid,
+      "summary" => event.title || "Untitled event",
+      "start" => event.start_at,
+      "end" => event.end_at,
+      "location" => event.location,
+      "attendees" => event.attendee_emails || [],
+      "organizer" => event.organizer_email,
+      "calendar_name" => event.calendar_name,
+      "is_all_day" => event.is_all_day,
+      "source" => "local_calendar"
+    }
+  end
+
+  defp local_event_to_prompt(event) when is_map(event), do: event
+  defp local_event_to_prompt(_), do: nil
+
+  defp imessage_chat_for_prompt(%{chat_key: chat_key} = chat) do
+    latest = Map.get(chat, :latest_message)
+
+    %{
+      "chat_key" => chat_key,
+      "chat_display_name" => Map.get(chat, :chat_display_name),
+      "message_count_last_7d" => Map.get(chat, :message_count_last_7d, 0),
+      "latest_snippet" => latest && truncate(latest.text || "", 160),
+      "latest_sender" => latest && latest.sender_handle,
+      "latest_is_from_me" => latest && latest.is_from_me,
+      "latest_sent_at" => latest && prompt_time(latest.sent_at)
+    }
+  end
+
+  defp imessage_chat_for_prompt(chat) when is_map(chat) do
+    %{
+      "chat_key" => Map.get(chat, "chat_key"),
+      "chat_display_name" => Map.get(chat, "chat_display_name"),
+      "message_count_last_7d" => Map.get(chat, "message_count_last_7d", 0),
+      "latest_snippet" => Map.get(chat, "latest_snippet"),
+      "latest_sender" => Map.get(chat, "latest_sender"),
+      "latest_is_from_me" => Map.get(chat, "latest_is_from_me"),
+      "latest_sent_at" => Map.get(chat, "latest_sent_at")
+    }
+  end
+
+  defp note_for_prompt(%Maraithon.LocalNotes.LocalNote{} = note) do
+    %{
+      "note_id" => note.guid,
+      "title" => note.title || "(untitled note)",
+      "snippet" => truncate(note.snippet || "", 240),
+      "folder" => note.folder,
+      "is_pinned" => note.is_pinned,
+      "modified_at" => prompt_time(note.modified_at)
+    }
+  end
+
+  defp note_for_prompt(note) when is_map(note), do: note
+
+  defp voice_memo_for_prompt(%Maraithon.LocalVoiceMemos.LocalVoiceMemo{} = memo) do
+    %{
+      "memo_id" => memo.guid,
+      "title" => memo.title || "(untitled memo)",
+      "snippet" => truncate(memo.snippet || "", 240),
+      "duration_seconds" => memo.duration_seconds,
+      "created_at" => prompt_time(memo.created_at),
+      "has_transcript" => is_binary(memo.transcript) and memo.transcript != ""
+    }
+  end
+
+  defp voice_memo_for_prompt(memo) when is_map(memo), do: memo
+
+  defp reminder_for_prompt(%Maraithon.LocalReminders.LocalReminder{} = reminder) do
+    %{
+      "reminder_id" => reminder.guid,
+      "title" => reminder.title || "(untitled reminder)",
+      "list_name" => reminder.list_name,
+      "due_at" => prompt_time(reminder.due_at),
+      "priority" => reminder.priority,
+      "is_completed" => reminder.is_completed,
+      "has_alarm" => reminder.has_alarm,
+      "url_attachment" => reminder.url_attachment
+    }
+  end
+
+  defp reminder_for_prompt(reminder) when is_map(reminder), do: reminder
+
+  defp file_for_prompt(%Maraithon.LocalFiles.LocalFile{} = file) do
+    %{
+      "file_id" => file.guid,
+      "filename" => file.filename,
+      "extension" => file.extension,
+      "path" => file.path,
+      "byte_size" => file.byte_size,
+      "modified_at" => prompt_time(file.modified_at)
+    }
+  end
+
+  defp file_for_prompt(file) when is_map(file), do: file
+
+  defp allowed_file_extension?(%Maraithon.LocalFiles.LocalFile{extension: ext})
+       when is_binary(ext) do
+    String.downcase(ext) in @local_files_allowed_extensions
+  end
+
+  defp allowed_file_extension?(_file), do: false
+
+  defp top_browser_hosts(visits, now, limit) do
+    cutoff = DateTime.add(now, -24 * 3_600, :second)
+
+    visits
+    |> Enum.filter(fn visit ->
+      host = visit_host(visit)
+      last = visit_last_visited_at(visit)
+      is_binary(host) and host != "" and (is_nil(last) or DateTime.compare(last, cutoff) != :lt)
+    end)
+    |> Enum.group_by(&visit_host/1)
+    |> Enum.map(fn {host, host_visits} ->
+      %{
+        "host" => host,
+        "visits" => length(host_visits),
+        "last_visited_at" =>
+          host_visits
+          |> Enum.map(&visit_last_visited_at/1)
+          |> Enum.filter(& &1)
+          |> Enum.max(DateTime, fn -> nil end)
+          |> prompt_time()
+      }
+    end)
+    |> Enum.sort_by(& &1["visits"], :desc)
+    |> Enum.take(limit)
+  end
+
+  defp visit_host(%Maraithon.LocalBrowserHistory.LocalVisit{host: host}), do: host
+  defp visit_host(visit) when is_map(visit), do: Map.get(visit, "host") || Map.get(visit, :host)
+  defp visit_host(_), do: nil
+
+  defp visit_last_visited_at(%Maraithon.LocalBrowserHistory.LocalVisit{
+         last_visited_at: last_visited_at
+       }),
+       do: last_visited_at
+
+  defp visit_last_visited_at(%{last_visited_at: last_visited_at}), do: last_visited_at
+
+  defp visit_last_visited_at(%{"last_visited_at" => last_visited_at})
+       when is_binary(last_visited_at) do
+    case DateTime.from_iso8601(last_visited_at) do
+      {:ok, dt, _} -> dt
+      _ -> nil
+    end
+  end
+
+  defp visit_last_visited_at(%{"last_visited_at" => %DateTime{} = dt}), do: dt
+  defp visit_last_visited_at(_visit), do: nil
+
+  defp within_last_24h?(nil, _now), do: false
+
+  defp within_last_24h?(%DateTime{} = dt, %DateTime{} = now) do
+    DateTime.diff(now, dt, :second) <= 24 * 3_600
+  end
+
+  defp within_last_24h?(_dt, _now), do: false
+
+  defp reminder_due_today?(%Maraithon.LocalReminders.LocalReminder{due_at: %DateTime{} = due}, now) do
+    DateTime.compare(due, now) != :gt or
+      DateTime.diff(due, now, :second) <= 24 * 3_600
+  end
+
+  defp reminder_due_today?(reminder, now) when is_map(reminder) do
+    due = Map.get(reminder, "due_at") || Map.get(reminder, :due_at)
+
+    case due do
+      %DateTime{} = dt -> reminder_due_today?(%Maraithon.LocalReminders.LocalReminder{due_at: dt}, now)
+      _ -> false
+    end
+  end
+
+  defp reminder_due_today?(_reminder, _now), do: false
+
+  defp maybe_fetch_local(user_id, bundle_items, fetch_fun)
+       when is_binary(user_id) and is_list(bundle_items) and is_function(fetch_fun, 1) do
+    case bundle_items do
+      [] -> fetch_fun.(user_id)
+      items -> items
+    end
+  end
+
+  defp maybe_fetch_local(_user_id, _bundle_items, _fetch_fun), do: []
+
+  defp merge_local_source_health(freshness, user_id, now, sources) when is_map(freshness) do
+    devices_last_seen = latest_device_seen_at(user_id)
+
+    Enum.reduce(sources, freshness, fn {source, items}, acc ->
+      status = local_source_status(items, devices_last_seen, now)
+
+      health =
+        Map.merge(Map.get(acc, to_string(source), %{}), %{
+          "source" => to_string(source),
+          "status" => status,
+          "device_last_seen_at" => prompt_time(devices_last_seen),
+          "item_count" => length(items)
+        })
+
+      Map.put(acc, to_string(source), health)
+    end)
+  end
+
+  defp merge_local_source_health(freshness, _user_id, _now, _sources), do: freshness
+
+  defp local_source_status(items, %DateTime{} = devices_last_seen, %DateTime{} = now)
+       when is_list(items) do
+    cond do
+      items != [] -> "connected"
+      DateTime.diff(now, devices_last_seen, :second) > @device_stale_seconds -> "stale"
+      true -> "connected"
+    end
+  end
+
+  defp local_source_status([], nil, _now), do: "error"
+  defp local_source_status([_ | _], nil, _now), do: "connected"
+  defp local_source_status(_items, _last_seen, _now), do: "error"
+
+  defp latest_device_seen_at(user_id) when is_binary(user_id) do
+    try do
+      user_id
+      |> Companion.Devices.list_for_user()
+      |> Enum.map(& &1.last_seen_at)
+      |> Enum.filter(& &1)
+      |> case do
+        [] -> nil
+        timestamps -> Enum.max(timestamps, DateTime)
+      end
+    rescue
+      _ -> nil
+    end
+  end
+
+  defp latest_device_seen_at(_user_id), do: nil
+
   defp news_item_for_prompt(item) when is_map(item) do
     %{
       "source" => read_string(item, "source", nil),
@@ -806,8 +1208,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "insights" => length(get_in(input, ["open_work", "insights"]) || []),
         "todos" => length(get_in(input, ["open_work", "todos"]) || []),
         "relationships" => length(get_in(input, ["relationships"]) || []),
-        "deep_memory" => deep_memory_count(input)
-      }
+        "deep_memory" => deep_memory_count(input),
+        "imessage_chats" => length(get_in(input, ["imessage", "chats"]) || []),
+        "notes" => length(get_in(input, ["notes", "items"]) || []),
+        "voice_memos" => length(get_in(input, ["voice_memos", "items"]) || []),
+        "reminders_due_soon" => length(get_in(input, ["reminders", "due_soon"]) || []),
+        "files_recent" => length(get_in(input, ["files", "items"]) || []),
+        "browser_top_hosts" => length(get_in(input, ["browser_history", "top_hosts"]) || []),
+        "calendar_local_upcoming" => length(get_in(input, ["calendar", "upcoming_local"]) || [])
+      },
+      "calendar_preferred_source" => get_in(input, ["calendar", "preferred_source"])
     }
   end
 

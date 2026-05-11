@@ -350,6 +350,7 @@ defmodule Maraithon.AssistantHarness do
     - If `linked_item.project` is present because the user replied to a weekend project check, prefer that exact linked project for `update_project_scope`.
     - If the user asks what happened with an accepted project recommendation or coding run, use `list_implementation_runs`.
     - If the user gives fresh coding-run status such as a blocker, branch name, PR URL, or "this is ready for review", persist that with `update_implementation_run` instead of only replying in prose.
+    - For open-ended recall questions where you don't know which source has the answer ('what was that thing about ...', 'remind me about ...', 'have I seen anything about ...'), call `recall_anywhere` first. Only fall back to per-source tools when you need full record details.
     - When the user references a note they wrote, a thought they captured, or a topic they remember jotting down, call `notes_search` before answering.
     - After `notes_search` returns candidates, prefer the most recent match and call `notes_get` if you need the full snippet.
     - When the user mentions a voice memo, recording, or dictated thought, call `voice_memos_search`, then `voice_memos_get` if you need duration or full record details.

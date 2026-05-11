@@ -90,7 +90,8 @@ defmodule Maraithon.Capabilities do
     "browser_history_recent" => Maraithon.Tools.BrowserHistoryRecent,
     "browser_history_by_host" => Maraithon.Tools.BrowserHistoryByHost,
     "browser_history_search" => Maraithon.Tools.BrowserHistorySearch,
-    "browser_history_get" => Maraithon.Tools.BrowserHistoryGet
+    "browser_history_get" => Maraithon.Tools.BrowserHistoryGet,
+    "recall_anywhere" => Maraithon.Tools.RecallAnywhere
   }
 
   @tool_descriptions %{
@@ -207,7 +208,9 @@ defmodule Maraithon.Capabilities do
     "browser_history_search" =>
       "Search the user's browser history for a substring in title, URL, or host. Use when the user references something they were reading or researching online by topic.",
     "browser_history_get" =>
-      "Fetch one browser visit by its source GUID, including the full URL and title."
+      "Fetch one browser visit by its source GUID, including the full URL and title.",
+    "recall_anywhere" =>
+      "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'."
   }
 
   @read_only_tools MapSet.new(~w(
@@ -227,6 +230,7 @@ defmodule Maraithon.Capabilities do
     reminders_open reminders_due_soon reminders_search reminders_get
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
     browser_history_recent browser_history_by_host browser_history_search browser_history_get
+    recall_anywhere
   ))
 
   @destructive_tools MapSet.new(~w(

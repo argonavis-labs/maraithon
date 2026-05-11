@@ -27,8 +27,15 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
         "events" => [],
         "events_by_provider" => %{}
       },
+      "calendar_local" => %{"events" => [], "counts" => %{}},
       "slack" => %{},
       "news" => %{"items" => [], "feeds" => []},
+      "imessage" => %{"messages" => [], "chats" => [], "counts" => %{}},
+      "notes" => %{"notes" => [], "counts" => %{}},
+      "voice_memos" => %{"memos" => [], "counts" => %{}},
+      "reminders" => %{"reminders" => [], "counts" => %{}},
+      "files" => %{"files" => [], "counts" => %{}},
+      "browser_history" => %{"visits" => [], "counts" => %{}},
       "web_context" => nil,
       "source_scope" => SourceScope.normalize(source_scope)
     }
@@ -115,6 +122,127 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
     |> put_freshness("news", freshness)
   end
 
+  @doc """
+  Stores a local-calendar (macOS Calendar.app via companion device) snapshot.
+
+  This sits alongside `put_calendar/2` (Google). Callers can populate both;
+  the brief pipeline prefers the local snapshot first because it aggregates
+  iCloud / Exchange / Google / CalDAV in one place, and falls back to Google
+  when no local events are present.
+  """
+  def put_calendar_local(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    events = normalize_items(read_list(attrs, "events"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"count" => length(events)},
+        else: counts
+
+    freshness = build_freshness("calendar_local", attrs, counts)
+
+    bundle
+    |> Map.put("calendar_local", %{"events" => events, "counts" => counts})
+    |> put_freshness("calendar_local", freshness)
+  end
+
+  def put_imessage(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    messages = normalize_items(read_list(attrs, "messages"))
+    chats = normalize_items(read_list(attrs, "chats"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"messages" => length(messages), "chats" => length(chats)},
+        else: counts
+
+    freshness = build_freshness("imessage", attrs, counts)
+
+    bundle
+    |> Map.put("imessage", %{"messages" => messages, "chats" => chats, "counts" => counts})
+    |> put_freshness("imessage", freshness)
+  end
+
+  def put_notes(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    notes = normalize_items(read_list(attrs, "notes"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"count" => length(notes)},
+        else: counts
+
+    freshness = build_freshness("notes", attrs, counts)
+
+    bundle
+    |> Map.put("notes", %{"notes" => notes, "counts" => counts})
+    |> put_freshness("notes", freshness)
+  end
+
+  def put_voice_memos(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    memos = normalize_items(read_list(attrs, "memos"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"count" => length(memos)},
+        else: counts
+
+    freshness = build_freshness("voice_memos", attrs, counts)
+
+    bundle
+    |> Map.put("voice_memos", %{"memos" => memos, "counts" => counts})
+    |> put_freshness("voice_memos", freshness)
+  end
+
+  def put_reminders(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    reminders = normalize_items(read_list(attrs, "reminders"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"open" => length(reminders)},
+        else: counts
+
+    freshness = build_freshness("reminders", attrs, counts)
+
+    bundle
+    |> Map.put("reminders", %{"reminders" => reminders, "counts" => counts})
+    |> put_freshness("reminders", freshness)
+  end
+
+  def put_files(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    files = normalize_items(read_list(attrs, "files"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"recent_count" => length(files)},
+        else: counts
+
+    freshness = build_freshness("files", attrs, counts)
+
+    bundle
+    |> Map.put("files", %{"files" => files, "counts" => counts})
+    |> put_freshness("files", freshness)
+  end
+
+  def put_browser_history(bundle, attrs) when is_map(bundle) and is_map(attrs) do
+    visits = normalize_items(read_list(attrs, "visits"))
+    counts = read_map(attrs, "counts")
+
+    counts =
+      if map_size(counts) == 0,
+        do: %{"count" => length(visits)},
+        else: counts
+
+    freshness = build_freshness("browser_history", attrs, counts)
+
+    bundle
+    |> Map.put("browser_history", %{"visits" => visits, "counts" => counts})
+    |> put_freshness("browser_history", freshness)
+  end
+
   def mark_unavailable(bundle, source, reason, metadata \\ %{})
       when is_map(bundle) and is_binary(source) do
     put_freshness(bundle, source, %{
@@ -134,6 +262,14 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def slack_mentions(bundle), do: bundle |> read_map("slack") |> read_list("mentions")
   def news_items(bundle), do: bundle |> read_map("news") |> read_list("items")
   def news_feeds(bundle), do: bundle |> read_map("news") |> read_list("feeds")
+  def calendar_local_events(bundle), do: bundle |> read_map("calendar_local") |> read_list("events")
+  def imessage_messages(bundle), do: bundle |> read_map("imessage") |> read_list("messages")
+  def imessage_chats(bundle), do: bundle |> read_map("imessage") |> read_list("chats")
+  def notes(bundle), do: bundle |> read_map("notes") |> read_list("notes")
+  def voice_memos(bundle), do: bundle |> read_map("voice_memos") |> read_list("memos")
+  def reminders(bundle), do: bundle |> read_map("reminders") |> read_list("reminders")
+  def files(bundle), do: bundle |> read_map("files") |> read_list("files")
+  def browser_visits(bundle), do: bundle |> read_map("browser_history") |> read_list("visits")
   def freshness(bundle), do: read_map(bundle, "freshness")
   def source_scope(bundle), do: bundle |> read_map("source_scope") |> SourceScope.normalize()
 

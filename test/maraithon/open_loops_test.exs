@@ -186,6 +186,141 @@ defmodule Maraithon.OpenLoopsTest do
     assert memory.source_ref_type == "todo"
   end
 
+  describe "local_observations/2" do
+    test "emits imessage_pending_reply observation for non-self message younger than 24h with a question" do
+      user_id = unique_user_email("local-obs-imsg")
+      {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
+      device_id = Ecto.UUID.generate()
+      now = ~U[2026-05-10 12:00:00Z]
+
+      {:ok, _} =
+        Maraithon.LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-q",
+            "local_id" => "p:q",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_display_name" => "Charlie",
+            "chat_style" => "im",
+            "text" => "Can you confirm the price?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 3_600, :second))
+          },
+          %{
+            "guid" => "msg-mine",
+            "local_id" => "p:mine",
+            "service" => "iMessage",
+            "is_from_me" => true,
+            "sender_handle" => "+14165550000",
+            "chat_handles" => ["+14165550000"],
+            "chat_style" => "im",
+            "text" => "Sounds good.",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          },
+          %{
+            "guid" => "msg-old",
+            "local_id" => "p:old",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_style" => "im",
+            "text" => "Are we still on?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -36 * 3_600, :second))
+          },
+          %{
+            "guid" => "msg-fyi",
+            "local_id" => "p:fyi",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_style" => "im",
+            "text" => "Thanks.",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -1_800, :second))
+          }
+        ])
+
+      observations = OpenLoops.local_observations(user_id, now: now)
+      imsg = Enum.filter(observations, &(&1["type"] == "imessage_pending_reply"))
+
+      assert length(imsg) == 1
+      [obs] = imsg
+      assert obs["source"] == "imessage"
+      assert obs["excerpt"] =~ "confirm the price"
+      assert get_in(obs, ["metadata", "open_loop_hint", "title"]) =~ "Reply to Charlie"
+    end
+
+    test "emits reminder_due_today observation for open reminders due within 24h" do
+      user_id = unique_user_email("local-obs-rem")
+      {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
+      device_id = Ecto.UUID.generate()
+      now = ~U[2026-05-10 12:00:00Z]
+
+      {:ok, _} =
+        Maraithon.LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "rem-due",
+            "title" => "Pay invoice",
+            "list_name" => "Finance",
+            "priority" => 1,
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 4 * 3_600, :second)),
+            "is_completed" => false
+          },
+          %{
+            "guid" => "rem-far",
+            "title" => "Schedule offsite",
+            "list_name" => "Work",
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 6 * 86_400, :second)),
+            "is_completed" => false
+          }
+        ])
+
+      observations = OpenLoops.local_observations(user_id, now: now)
+      due = Enum.filter(observations, &(&1["type"] == "reminder_due_today"))
+
+      assert [obs] = due
+      assert obs["source"] == "reminders"
+      assert obs["subject"] == "Pay invoice"
+      assert get_in(obs, ["metadata", "open_loop_hint", "title"]) == "Pay invoice"
+    end
+
+    test "emits voice_memo_unprocessed observation for memos under 48h old" do
+      user_id = unique_user_email("local-obs-vm")
+      {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
+      device_id = Ecto.UUID.generate()
+      now = ~U[2026-05-10 12:00:00Z]
+
+      {:ok, _} =
+        Maraithon.LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "vm-fresh",
+            "title" => "Strategy idea",
+            "snippet" => "Thought about product...",
+            "duration_seconds" => 60,
+            "created_at" => DateTime.to_iso8601(DateTime.add(now, -6 * 3_600, :second))
+          },
+          %{
+            "guid" => "vm-stale",
+            "title" => "Older recording",
+            "duration_seconds" => 30,
+            "created_at" => DateTime.to_iso8601(DateTime.add(now, -72 * 3_600, :second))
+          }
+        ])
+
+      observations = OpenLoops.local_observations(user_id, now: now)
+      memos = Enum.filter(observations, &(&1["type"] == "voice_memo_unprocessed"))
+
+      assert [obs] = memos
+      assert obs["source"] == "voice_memos"
+      assert obs["subject"] == "Strategy idea"
+
+      assert get_in(obs, ["metadata", "open_loop_hint", "title"]) ==
+               "Review yesterday's voice memos"
+    end
+  end
+
   defp unique_user_email(prefix) do
     "#{prefix}-#{System.unique_integer([:positive])}@example.com"
   end

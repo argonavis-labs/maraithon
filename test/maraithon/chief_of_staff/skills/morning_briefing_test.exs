@@ -7,8 +7,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.Commitments
+  alias Maraithon.Companion
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Crm
+  alias Maraithon.LocalBrowserHistory
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalFiles
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalReminders
+  alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
   alias Maraithon.Todos
 
@@ -437,5 +445,575 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert {:idle, _state} = MorningBriefing.handle_wakeup(state, context)
     assert [] = Briefs.list_recent_for_user(user_id, limit: 1)
+  end
+
+  describe "local source ingestion" do
+    setup %{user_id: user_id} = ctx do
+      device_id = Ecto.UUID.generate()
+
+      now = ~U[2026-05-07 14:00:00Z]
+
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      Map.merge(ctx, %{device_id: device_id, now: now, state: state})
+    end
+
+    test "includes iMessage chats and counts in build_brief_input", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-imsg-1",
+            "local_id" => "p:1",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_display_name" => "Charlie Jones",
+            "chat_style" => "im",
+            "text" => "Can you confirm pricing today?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"chats" => [chat | _], "counts" => %{"chats" => 1}} = input["imessage"]
+      assert chat["chat_display_name"] == "Charlie Jones"
+      assert chat["latest_snippet"] =~ "Can you confirm pricing"
+      assert chat["latest_is_from_me"] == false
+      refute is_nil(chat["latest_sent_at"])
+    end
+
+    test "includes local notes with snippet, folder, and pinned flag", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "note-1",
+            "local_id" => "n:1",
+            "title" => "Runner Q3 plan",
+            "snippet" => "Heartbeat GA + ambassador push",
+            "folder" => "Work",
+            "is_pinned" => true,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => [note], "counts" => %{"count" => 1}} = input["notes"]
+      assert note["title"] == "Runner Q3 plan"
+      assert note["snippet"] =~ "Heartbeat GA"
+      assert note["folder"] == "Work"
+      assert note["is_pinned"] == true
+    end
+
+    test "includes recent voice memos with duration and transcript flag", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalVoiceMemos.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "memo-1",
+            "local_id" => "v:1",
+            "title" => "Standup recap",
+            "snippet" => "Walks through Runner priorities for the week",
+            "duration_seconds" => 92,
+            "created_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 3_600, :second)),
+            "transcript" => "We need to ship heartbeat GA.",
+            "transcript_engine" => "whisper",
+            "transcript_lang" => "en"
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => [memo], "counts" => %{"count" => 1}} = input["voice_memos"]
+      assert memo["title"] == "Standup recap"
+      assert memo["duration_seconds"] == 92
+      assert memo["has_transcript"] == true
+    end
+
+    test "prefers local calendar over Google source bundle when local events exist", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalCalendar.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "evt-local-1",
+            "local_id" => "evt:1",
+            "calendar_name" => "Personal",
+            "calendar_color" => "#ffaa00",
+            "title" => "Runner GTM sync",
+            "notes" => "Pricing and rollout cadence",
+            "location" => "Zoom",
+            "start_at" => DateTime.to_iso8601(DateTime.add(now, 2 * 3_600, :second)),
+            "end_at" => DateTime.to_iso8601(DateTime.add(now, 3 * 3_600, :second)),
+            "is_all_day" => false,
+            "is_recurring" => false,
+            "organizer_email" => "charlie@example.com",
+            "attendees_count" => 2,
+            "attendee_emails" => ["kent@example.com", "charlie@example.com"]
+          }
+        ])
+
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_calendar(%{
+          "events" => [
+            %{
+              "event_id" => "google-evt-1",
+              "summary" => "Should be ignored when local is present",
+              "start" => DateTime.add(now, 2 * 3_600, :second),
+              "end" => DateTime.add(now, 3 * 3_600, :second)
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert input["calendar"]["preferred_source"] == "local"
+      assert [%{"summary" => "Runner GTM sync"} | _] = input["calendar"]["upcoming_local"]
+
+      assert Enum.any?(input["calendar"]["today_events"], fn event ->
+               event["summary"] == "Runner GTM sync"
+             end)
+
+      refute Enum.any?(input["calendar"]["today_events"] || [], fn event ->
+               event["summary"] == "Should be ignored when local is present"
+             end)
+    end
+
+    test "falls back to Google calendar when no local events", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_calendar(%{
+          "events" => [
+            %{
+              "event_id" => "google-evt-2",
+              "summary" => "Runner standup (Google)",
+              "start" => DateTime.add(now, 2 * 3_600, :second),
+              "end" => DateTime.add(now, 3 * 3_600, :second)
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert input["calendar"]["preferred_source"] == "google"
+
+      assert Enum.any?(input["calendar"]["today_events"], fn event ->
+               event["summary"] == "Runner standup (Google)"
+             end)
+    end
+
+    test "reports due-soon reminders with priority and due timestamps", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "r-due-1",
+            "local_id" => "r:1",
+            "list_name" => "Work",
+            "title" => "Ship heartbeat docs",
+            "notes" => nil,
+            "priority" => 1,
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 6 * 3_600, :second)),
+            "is_completed" => false,
+            "has_alarm" => true
+          },
+          %{
+            "guid" => "r-done-1",
+            "local_id" => "r:2",
+            "list_name" => "Work",
+            "title" => "Already done",
+            "is_completed" => true,
+            "completed_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second)),
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"due_soon" => [reminder | _], "counts" => counts} = input["reminders"]
+      assert reminder["title"] == "Ship heartbeat docs"
+      assert reminder["priority"] == 1
+      assert reminder["list_name"] == "Work"
+      assert counts["open"] == 1
+      assert counts["due_today"] == 1
+    end
+
+    test "lists recent files but only with allowlist extensions", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, _} =
+        LocalFiles.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "file-allow",
+            "local_id" => "~/Documents/Runner/spec.md",
+            "path" => "~/Documents/Runner/spec.md",
+            "filename" => "spec.md",
+            "extension" => "md",
+            "mime_type" => "text/markdown",
+            "byte_size" => 1024,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          },
+          %{
+            "guid" => "file-deny",
+            "local_id" => "~/Downloads/image.png",
+            "path" => "~/Downloads/image.png",
+            "filename" => "image.png",
+            "extension" => "png",
+            "mime_type" => "image/png",
+            "byte_size" => 32_000,
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"items" => files, "counts" => %{"recent_count" => 1}} = input["files"]
+      assert [%{"extension" => "md"}] = files
+    end
+
+    test "groups top hosts from recent browser history", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      visits =
+        for i <- 1..4 do
+          %{
+            "guid" => "visit-#{i}",
+            "local_id" => "v:#{i}",
+            "browser" => "chrome",
+            "url" => "https://news.example.com/article-#{i}",
+            "title" => "Article #{i}",
+            "host" => "news.example.com",
+            "visit_count" => 1,
+            "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -(i * 600), :second))
+          }
+        end
+
+      other =
+        %{
+          "guid" => "visit-blog",
+          "local_id" => "v:blog",
+          "browser" => "chrome",
+          "url" => "https://blog.example.org/x",
+          "title" => "Blog",
+          "host" => "blog.example.org",
+          "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -120, :second))
+        }
+
+      {:ok, _} = LocalBrowserHistory.ingest_batch(user_id, device_id, [other | visits])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert %{"top_hosts" => [%{"host" => "news.example.com", "visits" => 4} | _]} =
+               input["browser_history"]
+
+      assert input["browser_history"]["counts"]["visits_last_24h"] == 5
+    end
+
+    test "marks unsynced local sources as error when no device has checked in", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      health = input["source_health"]
+      assert health["imessage"]["status"] == "error"
+      assert health["notes"]["status"] == "error"
+      assert health["voice_memos"]["status"] == "error"
+      assert health["calendar_local"]["status"] == "error"
+      assert health["reminders"]["status"] == "error"
+      assert health["files"]["status"] == "error"
+      assert health["browser_history"]["status"] == "error"
+    end
+
+    test "marks unsynced sources as stale when device last checked in over 2h ago", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      {:ok, %{device: device}} =
+        Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "MacBook Pro")
+
+      stale_at = DateTime.add(now, -3 * 3_600, :second)
+      Maraithon.Repo.update_all(
+        Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
+        set: [last_seen_at: stale_at]
+      )
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert input["source_health"]["imessage"]["status"] == "stale"
+      assert input["source_health"]["notes"]["status"] == "stale"
+    end
+
+    test "marks local sources as connected when data is present even if device is stale", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      state: state
+    } do
+      {:ok, %{device: device}} =
+        Companion.Devices.register(user_id, Ecto.UUID.generate(), device_name: "Stale Mac")
+
+      stale_at = DateTime.add(now, -4 * 3_600, :second)
+      Maraithon.Repo.update_all(
+        Ecto.Query.from(d in Companion.Device, where: d.id == ^device.id),
+        set: [last_seen_at: stale_at]
+      )
+
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "note-stale",
+            "local_id" => "n:1",
+            "title" => "Synced before stale",
+            "snippet" => "Still useful data",
+            "modified_at" => DateTime.to_iso8601(DateTime.add(now, -3_600, :second))
+          }
+        ])
+
+      input = MorningBriefing.build_brief_input(user_id, now, state, %{})
+
+      assert input["source_health"]["notes"]["status"] == "connected"
+      # iMessage has no rows for this user, device is stale -> stale.
+      assert input["source_health"]["imessage"]["status"] == "stale"
+    end
+
+    test "compact metadata counts all local sources", %{
+      user_id: user_id,
+      device_id: device_id,
+      now: now,
+      agent: agent
+    } do
+      {:ok, _} =
+        LocalNotes.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "n-meta-1",
+            "title" => "Note for metadata",
+            "snippet" => "Body",
+            "modified_at" => DateTime.to_iso8601(now)
+          }
+        ])
+
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "r-meta-1",
+            "title" => "Reminder for metadata",
+            "due_at" => DateTime.to_iso8601(DateTime.add(now, 60 * 60, :second)),
+            "is_completed" => false
+          }
+        ])
+
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      context = %{
+        agent_id: agent.id,
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup},
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+        assistant_cycle_id: "cycle-meta"
+      }
+
+      {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+      response = %{
+        content:
+          Jason.encode!(%{
+            "title" => "Day with local sources",
+            "summary" => "Notes and reminders considered.",
+            "body" => "## Needs Your Attention\n- placeholder"
+          })
+      }
+
+      {:emit, {:briefs_recorded, _}, _state} =
+        MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+      [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+      counts = brief.metadata["brief_input"]["counts"]
+      assert counts["notes"] == 1
+      assert counts["reminders_due_soon"] == 1
+    end
+
+    test "prompt now contains the local-source citation rule", %{
+      user_id: user_id,
+      now: now,
+      agent: agent
+    } do
+      state =
+        MorningBriefing.init(%{
+          "user_id" => user_id,
+          "timezone_offset_hours" => -4,
+          "morning_brief_hour_local" => 8
+        })
+
+      context = %{
+        agent_id: agent.id,
+        user_id: user_id,
+        timestamp: now,
+        trigger: %{type: :wakeup},
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+        assistant_cycle_id: "cycle-prompt"
+      }
+
+      {:effect, {:llm_call, params}, _} = MorningBriefing.handle_wakeup(state, context)
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+      assert prompt =~
+               "Prefer first-party local sources over scraped equivalents"
+    end
+
+    test "SourceBundle.put_imessage stores chats, messages, counts and freshness", %{now: now} do
+      bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_imessage(%{
+          "chats" => [%{"chat_key" => "+15555550100", "chat_display_name" => "Sarah"}],
+          "messages" => [%{"guid" => "g1", "text" => "hi"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      assert [%{"chat_key" => "+15555550100"}] = SourceBundle.imessage_chats(bundle)
+      assert [%{"guid" => "g1"}] = SourceBundle.imessage_messages(bundle)
+      assert get_in(SourceBundle.freshness(bundle), ["imessage", "status"]) == "ready"
+    end
+
+    test "SourceBundle.put_notes / put_voice_memos / put_reminders / put_files / put_browser_history populate the bundle",
+         %{now: now} do
+      bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_notes(%{
+          "notes" => [%{"note_id" => "n1", "title" => "t"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_voice_memos(%{
+          "memos" => [%{"memo_id" => "v1", "title" => "m"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_reminders(%{
+          "reminders" => [%{"reminder_id" => "r1", "title" => "r"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_files(%{
+          "files" => [%{"file_id" => "f1", "filename" => "spec.md"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_browser_history(%{
+          "visits" => [%{"host" => "example.com"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_calendar_local(%{
+          "events" => [%{"summary" => "Local meeting"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      assert [%{"note_id" => "n1"}] = SourceBundle.notes(bundle)
+      assert [%{"memo_id" => "v1"}] = SourceBundle.voice_memos(bundle)
+      assert [%{"reminder_id" => "r1"}] = SourceBundle.reminders(bundle)
+      assert [%{"file_id" => "f1"}] = SourceBundle.files(bundle)
+      assert [%{"host" => "example.com"}] = SourceBundle.browser_visits(bundle)
+      assert [%{"summary" => "Local meeting"}] = SourceBundle.calendar_local_events(bundle)
+
+      freshness = SourceBundle.freshness(bundle)
+      assert freshness["notes"]["status"] == "ready"
+      assert freshness["voice_memos"]["status"] == "ready"
+      assert freshness["reminders"]["status"] == "ready"
+      assert freshness["files"]["status"] == "ready"
+      assert freshness["browser_history"]["status"] == "ready"
+      assert freshness["calendar_local"]["status"] == "ready"
+    end
+
+    test "build_brief_input reads SourceBundle local sections when the bundle is populated", %{
+      user_id: user_id,
+      now: now,
+      state: state
+    } do
+      source_bundle =
+        %{trigger: %{type: :wakeup}, timestamp: now}
+        |> SourceBundle.empty(%{})
+        |> SourceBundle.put_imessage(%{
+          "chats" => [
+            %{
+              "chat_key" => "k1",
+              "chat_display_name" => "Bundle Charlie",
+              "latest_snippet" => "from bundle"
+            }
+          ],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+        |> SourceBundle.put_notes(%{
+          "notes" => [%{"note_id" => "bn", "title" => "Bundle note"}],
+          "status" => "ready",
+          "fetched_at" => now
+        })
+
+      input =
+        MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
+
+      assert [%{"chat_display_name" => "Bundle Charlie"}] = input["imessage"]["chats"]
+      assert [%{"title" => "Bundle note"}] = input["notes"]["items"]
+    end
   end
 end

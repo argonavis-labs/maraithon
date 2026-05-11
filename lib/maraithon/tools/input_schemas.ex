@@ -528,6 +528,16 @@ defmodule Maraithon.Tools.InputSchemas do
       "browser_history_get" ->
         user_object(%{"visit_id" => @string}, ["visit_id"])
 
+      "recall_anywhere" ->
+        user_object(
+          %{
+            "query" => @string,
+            "limit" => @integer,
+            "sources" => @string_array
+          },
+          ["query"]
+        )
+
       _ ->
         object(%{})
     end

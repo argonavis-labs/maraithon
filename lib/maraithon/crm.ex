@@ -37,6 +37,21 @@ defmodule Maraithon.Crm do
 
   def list_people(_user_id, _opts), do: []
 
+  @doc """
+  Substring search across the user's CRM people on `display_name`,
+  `first_name`, `last_name`, `notes`, and stored contact details. Thin
+  wrapper around `list_people/2` shaped to match the other context-module
+  `search/3` signatures used by `Maraithon.Tools.RecallAnywhere`.
+  """
+  def search_people(user_id, query, opts \\ [])
+
+  def search_people(user_id, query, opts)
+      when is_binary(user_id) and is_binary(query) and is_list(opts) do
+    list_people(user_id, Keyword.put(opts, :query, query))
+  end
+
+  def search_people(_user_id, _query, _opts), do: []
+
   def get_person_for_user(user_id, person_id, opts \\ [])
 
   def get_person_for_user(user_id, person_id, opts)

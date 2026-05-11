@@ -8,6 +8,9 @@ defmodule Maraithon.OpenLoops do
 
   alias Maraithon.Crm
   alias Maraithon.Crm.{Person, PersonLink}
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalReminders
+  alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
   alias Maraithon.Memory.Item
   alias Maraithon.Todos
@@ -194,6 +197,167 @@ defmodule Maraithon.OpenLoops do
     do: {:error, :invalid_reconcile_input}
 
   def reconcile_sentinel, do: @reconcile_sentinel
+
+  @imessage_question_markers ~w(? can you could you would you will you please reply respond when can needs your)
+  @voice_memo_unprocessed_window_seconds 48 * 3_600
+  @imessage_pending_reply_window_seconds 24 * 3_600
+  @reminder_due_today_window_seconds 24 * 3_600
+
+  @doc """
+  Build a set of observation maps for the given user from the local
+  context tables. Observations are loose maps shaped like the rest of
+  the reconciliation pipeline expects and can be passed straight into
+  `reconcile_from_observations/3`.
+
+  Adds three new observation types backed by local sources:
+
+    * `imessage_pending_reply` — non-self iMessages younger than 24h that
+      look like a question or request to Kent. Produces an open loop
+      "Reply to <person>".
+    * `reminder_due_today` — local reminders due within the next 24h.
+    * `voice_memo_unprocessed` — voice memos under 48h old that have
+      not been turned into a downstream todo yet. Produces an open loop
+      "Review yesterday's voice memos".
+  """
+  def local_observations(user_id, opts \\ [])
+
+  def local_observations(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    imessage_pending_reply_observations(user_id, now) ++
+      reminder_due_today_observations(user_id, now) ++
+      voice_memo_unprocessed_observations(user_id, now)
+  end
+
+  def local_observations(_user_id, _opts), do: []
+
+  defp imessage_pending_reply_observations(user_id, now) do
+    cutoff = DateTime.add(now, -@imessage_pending_reply_window_seconds, :second)
+
+    user_id
+    |> LocalMessages.recent_for_user(limit: 200)
+    |> Enum.filter(fn msg ->
+      msg.is_from_me == false and
+        is_struct(msg.sent_at, DateTime) and
+        DateTime.compare(msg.sent_at, cutoff) != :lt and
+        imessage_question_or_ask?(msg.text)
+    end)
+    |> Enum.map(fn msg ->
+      %{
+        "type" => "imessage_pending_reply",
+        "source" => "imessage",
+        "source_account" => "local",
+        "source_item_id" => msg.guid || msg.local_id,
+        "occurred_at" => format_datetime(msg.sent_at),
+        "direction" => "incoming",
+        "participants" => imessage_participants(msg),
+        "subject" => msg.chat_display_name || "iMessage chat",
+        "excerpt" => msg.text,
+        "metadata" => %{
+          "chat_key" => msg.chat_key,
+          "chat_display_name" => msg.chat_display_name,
+          "is_from_me" => msg.is_from_me,
+          "open_loop_hint" => %{
+            "title" => "Reply to #{display_name_for_message(msg)}",
+            "rule" => "imessage_pending_reply"
+          }
+        }
+      }
+    end)
+  end
+
+  defp reminder_due_today_observations(user_id, now) do
+    horizon = DateTime.add(now, @reminder_due_today_window_seconds, :second)
+
+    user_id
+    |> LocalReminders.due_soon(days_ahead: 1, limit: 50)
+    |> Enum.filter(fn reminder ->
+      reminder.is_completed == false and
+        is_struct(reminder.due_at, DateTime) and
+        DateTime.compare(reminder.due_at, horizon) != :gt
+    end)
+    |> Enum.map(fn reminder ->
+      %{
+        "type" => "reminder_due_today",
+        "source" => "reminders",
+        "source_account" => "local",
+        "source_item_id" => reminder.guid || reminder.local_id,
+        "occurred_at" => format_datetime(reminder.modified_at || reminder.created_at || now),
+        "direction" => "self",
+        "participants" => [],
+        "subject" => reminder.title || "Reminder due",
+        "excerpt" => reminder.notes,
+        "metadata" => %{
+          "list_name" => reminder.list_name,
+          "due_at" => format_datetime(reminder.due_at),
+          "priority" => reminder.priority,
+          "has_alarm" => reminder.has_alarm,
+          "url_attachment" => reminder.url_attachment,
+          "open_loop_hint" => %{
+            "title" => reminder.title || "Finish reminder due today",
+            "due_at" => format_datetime(reminder.due_at),
+            "rule" => "reminder_due_today"
+          }
+        }
+      }
+    end)
+  end
+
+  defp voice_memo_unprocessed_observations(user_id, now) do
+    cutoff = DateTime.add(now, -@voice_memo_unprocessed_window_seconds, :second)
+
+    user_id
+    |> LocalVoiceMemos.recent_for_user(limit: 20)
+    |> Enum.filter(fn memo ->
+      is_struct(memo.created_at, DateTime) and
+        DateTime.compare(memo.created_at, cutoff) != :lt
+    end)
+    |> Enum.map(fn memo ->
+      %{
+        "type" => "voice_memo_unprocessed",
+        "source" => "voice_memos",
+        "source_account" => "local",
+        "source_item_id" => memo.guid || memo.local_id,
+        "occurred_at" => format_datetime(memo.created_at),
+        "direction" => "self",
+        "participants" => [],
+        "subject" => memo.title || "Voice memo",
+        "excerpt" => memo.snippet,
+        "metadata" => %{
+          "duration_seconds" => memo.duration_seconds,
+          "has_transcript" => is_binary(memo.transcript) and memo.transcript != "",
+          "open_loop_hint" => %{
+            "title" => "Review yesterday's voice memos",
+            "rule" => "voice_memo_unprocessed"
+          }
+        }
+      }
+    end)
+  end
+
+  defp imessage_question_or_ask?(nil), do: false
+
+  defp imessage_question_or_ask?(text) when is_binary(text) do
+    downcased = String.downcase(text)
+    Enum.any?(@imessage_question_markers, &String.contains?(downcased, &1))
+  end
+
+  defp imessage_question_or_ask?(_), do: false
+
+  defp imessage_participants(%{sender_handle: handle, chat_display_name: name})
+       when is_binary(handle) and handle != "" do
+    [%{"handle" => handle, "display_name" => name}]
+  end
+
+  defp imessage_participants(_), do: []
+
+  defp display_name_for_message(%{chat_display_name: name}) when is_binary(name) and name != "",
+    do: name
+
+  defp display_name_for_message(%{sender_handle: handle}) when is_binary(handle) and handle != "",
+    do: handle
+
+  defp display_name_for_message(_), do: "someone"
 
   defp reconcile_llm_params(user_id, observations, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())

@@ -78,6 +78,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     reminders_open reminders_due_soon reminders_search reminders_get
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
     browser_history_recent browser_history_by_host browser_history_search browser_history_get
+    recall_anywhere
   ))
 
   @toolbox_write_tools MapSet.new(~w(
@@ -1154,6 +1155,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "visit_id" => %{"type" => "string"}
           }
         }
+      ),
+      tool_definition(
+        "recall_anywhere",
+        "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
+        %{
+          "type" => "object",
+          "required" => ["query"],
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
+            "sources" => %{"type" => "array", "items" => %{"type" => "string"}}
+          }
+        }
       )
     ]
   end
@@ -1390,6 +1404,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "browser_history_get" ->
         inject_user_and_execute("browser_history_get", runtime_context, args)
+
+      "recall_anywhere" ->
+        inject_user_and_execute("recall_anywhere", runtime_context, args)
 
       _ ->
         {:error, "unknown_telegram_tool: #{tool_name}"}

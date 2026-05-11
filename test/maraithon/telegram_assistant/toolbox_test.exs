@@ -33,6 +33,20 @@ defmodule Maraithon.TelegramAssistant.ToolboxTest do
       end
     end
 
+    test "exposes recall_anywhere as a unified open-ended search tool" do
+      definitions =
+        Toolbox.tool_definitions(%{})
+        |> Map.new(fn definition -> {definition["name"], definition} end)
+
+      definition = Map.get(definitions, "recall_anywhere")
+      assert definition, "expected recall_anywhere to be registered in the toolbox"
+
+      assert "query" in definition["parameters"]["required"]
+      assert definition["parameters"]["properties"]["sources"]["type"] == "array"
+      assert definition["parameters"]["properties"]["limit"]["type"] == "integer"
+      assert definition["description"] =~ "open-ended"
+    end
+
     test "each new tool exposes a non-empty description and input schema" do
       all_new = @new_tools ++ @messages_tools
 
