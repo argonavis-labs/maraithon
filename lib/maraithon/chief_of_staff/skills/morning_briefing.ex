@@ -43,6 +43,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @prompt_slack_message_limit 18
   @prompt_context_limit 8
   @prompt_default_list_limit 24
+  @commercial_thread_limit 10
+  @commercial_thread_terms [
+    "availability",
+    "connect",
+    "customer",
+    "discount",
+    "enterprise",
+    "glossier",
+    "intro",
+    "introduction",
+    "pricing",
+    "prospect",
+    "team plan",
+    "ultra plan"
+  ]
   @local_imessage_chat_limit 8
   @local_notes_limit 10
   @local_voice_memo_limit 5
@@ -510,6 +525,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         }
       },
       "gmail" => %{
+        "commercial_threads" =>
+          gmail_messages
+          |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
+          |> Enum.filter(&commercial_thread_candidate?/1)
+          |> Enum.map(&gmail_message_for_prompt/1)
+          |> Enum.take(@commercial_thread_limit),
         "recent_inbox" =>
           gmail_messages
           |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
@@ -522,6 +543,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.take(email_prompt_limit),
         "counts" => %{
           "inbox" => length(gmail_messages),
+          "commercial_threads" =>
+            Enum.count(gmail_messages, fn message ->
+              recent_gmail_message?(message, lookback_start) and
+                commercial_thread_candidate?(message)
+            end),
           "recent_inbox" =>
             Enum.count(gmail_messages, &recent_gmail_message?(&1, lookback_start)),
           "recent_unread" =>
@@ -825,8 +851,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
        Commercial thread rule:
        Fresh external commercial threads from close teammates are not inbox noise. Use model
-       judgment to scan gmail.recent_inbox, commitments, todos, and CRM context for teammate-led
-       customer, prospect, intro, plan, pricing, discount, availability, or launch-video threads.
+       judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, todos, and
+       CRM context for teammate-led customer, prospect, intro, plan, pricing, discount,
+       availability, or launch-video threads.
        If Charlie or another close teammate has looped Kent into an external commercial thread,
        include a concise readiness note even when no immediate decision is forced. Say who or
        which organization is involved, the live ask, and what guidance Kent should have ready.
@@ -843,8 +870,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
        the prep point, decision, or risk Kent should carry into it.
-       Keep the JSON executive-grade and bounded: body 250-450 words, at most six todos,
-       and no todo should contain a long narrative or project plan.
+       Keep the JSON executive-grade and complete. Do not enforce an artificial short brief:
+       if there are ten material items, include ten material items. Avoid filler and source
+       inventory, but include every meeting, risk, decision, commercial thread, and follow-up
+       a busy executive would want before starting the day. Todos may be longer than six
+       when the source-backed action list is genuinely longer; keep each todo concise.
 
        Brief input JSON:
        #{input_json}
@@ -1343,6 +1373,32 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp recent_gmail_message?(_message, _lookback_start), do: false
 
+  defp commercial_thread_candidate?(message) when is_map(message) do
+    text =
+      [
+        read_string(message, "from", ""),
+        read_string(message, "to", ""),
+        read_string(message, "subject", ""),
+        read_string(message, "snippet", ""),
+        gmail_body_for_prompt(message)
+      ]
+      |> Enum.join("\n")
+      |> String.downcase()
+
+    teammate_or_external_commercial_sender?(text) and
+      Enum.any?(@commercial_thread_terms, &String.contains?(text, &1))
+  end
+
+  defp commercial_thread_candidate?(_message), do: false
+
+  defp teammate_or_external_commercial_sender?(text) when is_binary(text) do
+    String.contains?(text, "@runner.now") or
+      String.contains?(text, "@sandwich.co") or
+      String.contains?(text, "@represent") or
+      String.contains?(text, "@glossier") or
+      String.contains?(text, "@cogniate")
+  end
+
   defp recent_slack_message?(message, lookback_start) when is_map(message) do
     case read_slack_datetime(message, "ts") do
       nil -> true
@@ -1511,6 +1567,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_gmail_for_prompt(gmail) when is_map(gmail) do
     gmail
+    |> Map.update("commercial_threads", [], fn messages ->
+      messages
+      |> read_list()
+      |> Enum.take(@commercial_thread_limit)
+      |> Enum.map(&compact_gmail_message_for_prompt/1)
+    end)
     |> Map.update("recent_inbox", [], fn messages ->
       messages
       |> read_list()
@@ -1618,6 +1680,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" => read_string(input, "date", nil),
       "generated_at" => read_string(input, "generated_at", nil),
       "counts" => %{
+        "gmail_commercial_threads" =>
+          length(get_in(input, ["gmail", "commercial_threads"]) || []),
         "gmail_recent_inbox" => length(get_in(input, ["gmail", "recent_inbox"]) || []),
         "gmail_recent_unread" => length(get_in(input, ["gmail", "recent_unread"]) || []),
         "slack_key_threads" => length(get_in(input, ["slack", "key_threads"]) || []),
