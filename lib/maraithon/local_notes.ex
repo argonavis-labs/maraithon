@@ -39,8 +39,11 @@ defmodule Maraithon.LocalNotes do
       if rows == [] do
         {0, []}
       else
+        # Replace mutable fields on re-sync so later body decodes
+        # (NotesBodyDecoder fallback path) backfill into existing rows
+        # instead of being silently dropped by `on_conflict: :nothing`.
         Repo.insert_all(LocalNote, rows,
-          on_conflict: :nothing,
+          on_conflict: {:replace, [:title, :snippet, :body, :body_format, :folder, :is_pinned, :modified_at, :updated_at]},
           conflict_target: [:user_id, :device_id, :source, :guid],
           returning: [:id]
         )
