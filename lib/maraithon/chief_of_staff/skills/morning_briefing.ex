@@ -889,6 +889,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        to Runner or Agora, what fit or risk Kent should test, and the concrete pre/post-call
        next step. Do not collapse a source-backed external meeting into a generic "creative
        vendor" or "intro chat" label when the page context supports a richer prep note.
+       When a source page gives concrete facts such as services, pricing, operating model,
+       work history, background, customer profile, or partnership angle, include the most
+       decision-useful specifics in the meeting note. If an internal teammate owns or hosts
+       the meeting, state what Kent should ask that teammate before or after the call.
+       A busy executive should be able to read the schedule item and know the dossier,
+       fit hypothesis, and next move without asking for a second briefing.
 
        Commercial thread rule:
        Fresh external commercial threads from close teammates are not inbox noise. Use model
