@@ -717,7 +717,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       assert memo["has_transcript"] == true
     end
 
-    test "prefers local calendar over Google source bundle when local events exist", %{
+    test "merges local calendar with Google source bundle when both exist", %{
       user_id: user_id,
       device_id: device_id,
       now: now,
@@ -750,7 +750,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
           "events" => [
             %{
               "event_id" => "google-evt-1",
-              "summary" => "Should be ignored when local is present",
+              "summary" => "FreshBooks discovery",
               "start" => DateTime.add(now, 2 * 3_600, :second),
               "end" => DateTime.add(now, 3 * 3_600, :second)
             }
@@ -762,15 +762,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       input =
         MorningBriefing.build_brief_input(user_id, now, state, %{source_bundle: source_bundle})
 
-      assert input["calendar"]["preferred_source"] == "local"
+      assert input["calendar"]["preferred_source"] == "local+google"
       assert [%{"summary" => "Runner GTM sync"} | _] = input["calendar"]["upcoming_local"]
 
       assert Enum.any?(input["calendar"]["today_events"], fn event ->
                event["summary"] == "Runner GTM sync"
              end)
 
-      refute Enum.any?(input["calendar"]["today_events"] || [], fn event ->
-               event["summary"] == "Should be ignored when local is present"
+      assert Enum.any?(input["calendar"]["today_events"] || [], fn event ->
+               event["summary"] == "FreshBooks discovery"
              end)
     end
 

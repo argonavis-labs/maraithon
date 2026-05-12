@@ -8,6 +8,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ConnectedAccounts
   alias Maraithon.TestSupport.{CapturingTelegram, NewsStub, TravelCalendarStub}
+  alias Maraithon.Todos
 
   defmodule CapturingLLM do
     @behaviour Maraithon.LLM.Adapter
@@ -24,7 +25,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
              "title" => "Morning briefing",
              "summary" => "Dawn meeting included.",
              "body" => "## Today's Schedule\n- **Prep for Dawn Nguyen** and Charlie Feng.",
-             "todos" => []
+             "todos" => [
+               %{
+                 "source" => "calendar",
+                 "title" => "Prep for Dawn Nguyen",
+                 "summary" => "Bring meeting context into the Dawn Nguyen call.",
+                 "next_action" => "Review Dawn and Kiln Studio context before the meeting.",
+                 "dedupe_key" => "morning:calendar:dawn-nguyen"
+               }
+             ]
            }),
          model: "capturing-test",
          tokens_in: 100,
@@ -41,6 +50,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     original_llm_config = Application.get_env(:maraithon, CapturingLLM, [])
     original_web_search_config = Application.get_env(:maraithon, Maraithon.WebSearch, [])
     original_insights_config = Application.get_env(:maraithon, :insights, [])
+    original_todos_config = Application.get_env(:maraithon, :todos, [])
 
     Application.put_env(
       :maraithon,
@@ -64,6 +74,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     Application.put_env(:maraithon, Maraithon.WebSearch, enabled: false)
     Application.put_env(:maraithon, :insights, telegram_module: CapturingTelegram)
 
+    Application.put_env(
+      :maraithon,
+      :todos,
+      Keyword.merge(original_todos_config, llm_complete: &todo_intelligence_llm/1)
+    )
+
     on_exit(fn ->
       Application.put_env(:maraithon, Acquisition, original_acquisition_config)
       Application.put_env(:maraithon, TravelCalendarStub, original_calendar_stub)
@@ -71,9 +87,40 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
       Application.put_env(:maraithon, CapturingLLM, original_llm_config)
       Application.put_env(:maraithon, Maraithon.WebSearch, original_web_search_config)
       Application.put_env(:maraithon, :insights, original_insights_config)
+      Application.put_env(:maraithon, :todos, original_todos_config)
     end)
 
     :ok
+  end
+
+  defp todo_intelligence_llm(_prompt) do
+    {:ok,
+     %{
+       content:
+         Jason.encode!(%{
+           "summary" => "Created one briefing todo.",
+           "decisions" => [
+             %{
+               "candidate_index" => 0,
+               "action" => "create",
+               "dedupe_key" => "morning:calendar:dawn-nguyen",
+               "reasoning" => "The briefing emitted a concrete meeting-prep action.",
+               "todo" => %{
+                 "source" => "calendar",
+                 "kind" => "general",
+                 "attention_mode" => "act_now",
+                 "title" => "Prep for Dawn Nguyen",
+                 "summary" => "Bring meeting context into the Dawn Nguyen call.",
+                 "next_action" => "Review Dawn and Kiln Studio context before the meeting.",
+                 "priority" => 50,
+                 "status" => "open",
+                 "dedupe_key" => "morning:calendar:dawn-nguyen",
+                 "metadata" => %{"origin_skill_id" => "morning_briefing"}
+               }
+             }
+           ]
+         })
+     }}
   end
 
   test "smoke_test acquires calendar sources before building the prompt" do
@@ -166,7 +213,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     source_bundle =
       SourceBundle.empty(%{trigger: %{type: :manual}, timestamp: ~U[2026-05-11 14:00:00Z]})
 
-    assert {:ok, brief, _diagnostics} =
+    assert {:ok, brief, diagnostics} =
              MorningBriefing.smoke_test(agent.id,
                now: ~U[2026-05-11 14:00:00Z],
                source_bundle: source_bundle,
@@ -174,6 +221,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
              )
 
     assert brief["body"] =~ "Dawn Nguyen"
+    assert diagnostics.todo_persistence.todo_count == 1
+
+    [todo] = Todos.list_for_user(user_id, source: "calendar", limit: 5)
+    assert todo.title == "Prep for Dawn Nguyen"
+    assert todo.metadata["origin_skill_id"] == "morning_briefing"
 
     [message] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
 

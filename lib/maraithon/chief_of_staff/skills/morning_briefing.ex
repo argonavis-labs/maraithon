@@ -685,6 +685,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
               case parsed do
                 {:ok, brief} ->
+                  todo_result =
+                    if Keyword.get(opts, :persist_todos, Keyword.get(opts, :send, false)) do
+                      persist_model_todos(user_id, brief, brief_input)
+                    else
+                      {:ok, :no_todos}
+                    end
+
+                  diagnostics =
+                    Map.put(diagnostics, :todo_persistence, todo_event_payload(todo_result))
+
                   result = {:ok, brief, diagnostics}
 
                   if Keyword.get(opts, :send, false) do
