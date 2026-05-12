@@ -32,6 +32,7 @@ defmodule Maraithon.OpenLoops do
     "emails" => :emails,
     "first_name" => :first_name,
     "id" => :id,
+    "kind" => :kind,
     "last_name" => :last_name,
     "memories" => :memories,
     "memory" => :memory,
@@ -56,6 +57,9 @@ defmodule Maraithon.OpenLoops do
     "todo_relationship_note" => :todo_relationship_note
   }
   @person_identity_fields ~w(person_id id first_name last_name display_name contact_details contacts email emails phone phone_number phones slack_id slack_ids telegram_id telegram_ids preferred_communication_method preferred_method preferred_method_of_communication relationship)
+  @memory_kinds ~w(fact preference relevance_feedback instruction relationship project workflow correction system_note)
+  @relationship_memory_kind_aliases ~w(contact professional_contact person professional_relationship customer customer_contact partner partner_contact stakeholder sponsor)
+  @workflow_memory_kind_aliases ~w(task todo action process operating_model operating_preference)
 
   def snapshot(user_id, opts \\ [])
 
@@ -732,13 +736,42 @@ defmodule Maraithon.OpenLoops do
       })
       |> compact_map()
 
+    original_kind = read_string(attrs, "kind", nil)
+    normalized_kind = normalize_memory_kind(original_kind)
+
+    metadata =
+      if original_kind && original_kind != normalized_kind do
+        Map.put(metadata, "original_memory_kind", original_kind)
+      else
+        metadata
+      end
+
     attrs
+    |> Map.put("kind", normalized_kind)
     |> Map.put_new("source", source)
     |> Map.put_new("source_ref_type", "todo")
     |> Map.put_new("source_ref_id", todo.id)
     |> Map.put_new("author_type", "model")
     |> Map.put("metadata", metadata)
   end
+
+  defp normalize_memory_kind(kind) when is_binary(kind) do
+    normalized =
+      kind
+      |> String.trim()
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "_")
+      |> String.trim("_")
+
+    cond do
+      normalized in @memory_kinds -> normalized
+      normalized in @relationship_memory_kind_aliases -> "relationship"
+      normalized in @workflow_memory_kind_aliases -> "workflow"
+      true -> "fact"
+    end
+  end
+
+  defp normalize_memory_kind(_kind), do: "fact"
 
   defp structured_person_attrs?(attrs) do
     Enum.any?(@person_identity_fields, fn field ->

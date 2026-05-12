@@ -109,6 +109,63 @@ defmodule Maraithon.OpenLoopsTest do
     assert snapshot.memory.count >= 1
   end
 
+  test "ingest_todos normalizes model-suggested memory kind aliases during enrichment" do
+    user_id = unique_user_email("open-loops-memory-kind")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "chief_of_staff_morning_briefing",
+        "title" => "Send Sissi the partner answer",
+        "summary" => "Sissi asked how Runner's partner program works.",
+        "next_action" => "Send Sissi the clean partner-program answer.",
+        "dedupe_key" => "morning:sissi-partner-answer",
+        "memories" => [
+          %{
+            "kind" => "professional_contact",
+            "title" => "Sissi Wang is a workshop-driven partner lead",
+            "content" =>
+              "Sissi Wang at ideamatch.ai ran a Runner workshop and asked how the partner program works.",
+            "tags" => ["runner", "partnerships", "ideamatch"],
+            "dedupe_key" => "memory:contact:sissi_wang:ideamatch_runner_partner_interest"
+          }
+        ]
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one partner follow-up.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "morning:sissi-partner-answer",
+                 "reasoning" => "New partner-program follow-up.",
+                 "todo" => Enum.at(candidates, 0)
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             OpenLoops.ingest_todos(user_id, candidates,
+               source: "chief_of_staff_morning_briefing",
+               llm_complete: llm_complete
+             )
+
+    assert [%{title: "Sissi Wang is a workshop-driven partner lead"}] = result.enrichment.memories
+    assert result.enrichment.errors == []
+
+    assert [memory] = Memory.list_items(user_id, query: "Sissi Wang", limit: 5)
+    assert memory.kind == "relationship"
+    assert memory.metadata["original_memory_kind"] == "professional_contact"
+  end
+
   test "ingest_todos enriches from model-written todo metadata" do
     user_id = unique_user_email("open-loops-model")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
