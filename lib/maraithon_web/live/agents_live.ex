@@ -1037,12 +1037,27 @@ defmodule MaraithonWeb.AgentsLive do
                                       <.c_select
                                         id="morning-brief-hour"
                                         name="schedule[local_hour]"
-                                        class="min-w-44"
+                                        class="min-w-32"
                                       >
                                         <option
                                           :for={option <- morning_brief_hour_options()}
                                           value={option.value}
                                           selected={option.value == schedule.hour}
+                                        >
+                                          <%= option.label %>
+                                        </option>
+                                      </.c_select>
+                                    </.field>
+                                    <.field label="Minute" for="morning-brief-minute" class="min-w-28">
+                                      <.c_select
+                                        id="morning-brief-minute"
+                                        name="schedule[local_minute]"
+                                        class="min-w-28"
+                                      >
+                                        <option
+                                          :for={option <- morning_brief_minute_options()}
+                                          value={option.value}
+                                          selected={option.value == schedule.minute}
                                         >
                                           <%= option.label %>
                                         </option>
@@ -1956,22 +1971,31 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp morning_brief_schedule(%{config: config}) when is_map(config) do
     hour = config |> Map.get("morning_brief_hour_local") |> parse_integer(8) |> clamp_hour()
+    minute = config |> Map.get("morning_brief_minute_local") |> parse_integer(0) |> clamp_minute()
     timezone_offset = config |> Map.get("timezone_offset_hours") |> parse_integer(-5)
 
     %{
       hour: hour,
-      display_time_local: display_hour(hour),
+      minute: minute,
+      display_time_local: display_time(hour, minute),
       local_timezone: timezone_label(timezone_offset)
     }
   end
 
   defp morning_brief_schedule(_agent) do
-    %{hour: 8, display_time_local: "8:00 AM", local_timezone: "UTC-05:00"}
+    %{hour: 8, minute: 0, display_time_local: "8:00 AM", local_timezone: "UTC-05:00"}
   end
 
   defp morning_brief_hour_options do
     Enum.map(0..23, fn hour ->
       %{value: hour, label: display_hour(hour)}
+    end)
+  end
+
+  defp morning_brief_minute_options do
+    [0, 15, 30, 45]
+    |> Enum.map(fn minute ->
+      %{value: minute, label: minute |> Integer.to_string() |> String.pad_leading(2, "0")}
     end)
   end
 
@@ -1993,12 +2017,20 @@ defmodule MaraithonWeb.AgentsLive do
   defp clamp_hour(hour) when hour > 23, do: 23
   defp clamp_hour(hour), do: hour
 
+  defp clamp_minute(minute) when minute < 0, do: 0
+  defp clamp_minute(minute) when minute > 59, do: 59
+  defp clamp_minute(minute), do: minute
+
   defp display_hour(hour) when is_integer(hour) do
+    display_time(hour, 0)
+  end
+
+  defp display_time(hour, minute) when is_integer(hour) and is_integer(minute) do
     suffix = if hour < 12, do: "AM", else: "PM"
     display_hour = rem(hour, 12)
     display_hour = if display_hour == 0, do: 12, else: display_hour
 
-    "#{display_hour}:00 #{suffix}"
+    "#{display_hour}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")} #{suffix}"
   end
 
   defp timezone_label(offset) when is_integer(offset) do

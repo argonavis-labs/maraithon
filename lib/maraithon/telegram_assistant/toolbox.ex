@@ -146,6 +146,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "properties" => %{
             "briefing_kind" => %{"type" => "string"},
             "local_hour" => %{"type" => "integer", "minimum" => 0, "maximum" => 23},
+            "local_minute" => %{"type" => "integer", "minimum" => 0, "maximum" => 59},
             "local_day_of_week" => %{"type" => "integer", "minimum" => 1, "maximum" => 7},
             "timezone_offset_hours" => %{
               "type" => "integer",
@@ -1582,6 +1583,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       {:error, :invalid_local_hour} ->
         {:error, "invalid_local_hour"}
+
+      {:error, :invalid_local_minute} ->
+        {:error, "invalid_local_minute"}
 
       {:error, :invalid_timezone_offset_hours} ->
         {:error, "invalid_timezone_offset_hours"}

@@ -11,11 +11,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   require Logger
 
-  @default_gmail_message_limit 60
-  @default_calendar_limit 24
+  @default_gmail_message_limit 250
+  @default_calendar_limit 250
   @default_slack_channel_limit 12
-  @default_slack_message_limit 8
+  @default_slack_message_limit 100
   @default_lookback_hours 24 * 14
+  @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
   @commercial_gmail_query_limit 5
   @commercial_gmail_queries [
@@ -121,7 +122,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       {:ok, events} ->
         bundle =
           SourceBundle.put_calendar(bundle, %{
-            "events" => Enum.take(events, plan.calendar_limit),
+            "events" => events,
             "events_by_provider" => group_events_by_provider(events),
             "providers" => event_calendar_providers(events),
             "metadata" => %{"mode" => "event"},
@@ -492,7 +493,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> List.flatten()
         |> dedupe_messages()
         |> sort_messages()
-        |> Enum.take(plan.gmail_message_limit)
 
       status = if messages == [], do: "partial", else: "ready"
 
@@ -531,13 +531,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       bundle = SourceBundle.mark_unavailable(bundle, "calendar", "google_calendar_not_connected")
       {put_source_summary(telemetry, "calendar", %{"status" => "unavailable"}), bundle}
     else
+      reference_at = context[:timestamp] || DateTime.utc_now()
+
       time_min =
-        (context[:timestamp] || DateTime.utc_now())
-        |> DateTime.add(-plan.lookback_hours, :hour)
-        |> DateTime.to_iso8601()
+        plan[:calendar_time_min] ||
+          reference_at
+          |> DateTime.add(-plan.lookback_hours, :hour)
+          |> DateTime.to_iso8601()
 
       time_max =
-        (context[:timestamp] || DateTime.utc_now())
+        reference_at
         |> DateTime.add(plan.forward_days, :day)
         |> DateTime.to_iso8601()
 
@@ -596,7 +599,6 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         |> Map.values()
         |> List.flatten()
         |> sort_events()
-        |> Enum.take(plan.calendar_limit)
 
       status = if events == [], do: "partial", else: "ready"
 
@@ -658,6 +660,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       max_skill_integer(skill_ids, skill_configs, "lookback_hours", @default_lookback_hours)
 
     news_config = news_config(skill_ids, skill_configs)
+    morning_brief? = morning_brief_trigger?(skill_ids, context)
 
     %{
       gmail:
@@ -670,12 +673,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       news: morning_brief_trigger?(skill_ids, context) and news_enabled?(news_config),
       news_config: news_config,
       web_context: morning_brief_trigger?(skill_ids, context),
-      inbox_limit: max(max_email_scan_limit, 10),
-      sent_limit: max(max_email_scan_limit * 2, 12),
+      inbox_limit: max(max_email_scan_limit, 100),
+      sent_limit: max(max_email_scan_limit * 2, 100),
       gmail_message_limit: max(max_email_scan_limit * 4, @default_gmail_message_limit),
-      calendar_limit: max(max_event_scan_limit * 2, @default_calendar_limit),
+      calendar_limit:
+        if(morning_brief?,
+          do: max(max_event_scan_limit * 10, @default_calendar_limit),
+          else: max(max_event_scan_limit * 2, @default_calendar_limit)
+        ),
+      calendar_time_min: calendar_time_min(skill_ids, skill_configs, context, morning_brief?),
       slack_channel_limit: max_slack_channel_limit,
-      slack_message_limit: max_slack_message_limit,
+      slack_message_limit:
+        if(morning_brief?,
+          do: max(max_slack_message_limit, @default_slack_message_limit),
+          else: max_slack_message_limit
+        ),
       slack_key_channels: slack_key_channels(skill_ids, skill_configs),
       lookback_hours: max(max_lookback_hours, 24),
       forward_days: @default_forward_days
@@ -691,6 +703,24 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> maybe_put("news_limit", Map.get(config, "news_limit"))
       |> maybe_merge_news_feeds(Map.get(config, "news_feeds"))
     end)
+  end
+
+  defp calendar_time_min(_skill_ids, _skill_configs, _context, false), do: nil
+
+  defp calendar_time_min(skill_ids, skill_configs, context, true) do
+    reference_at = context[:timestamp] || DateTime.utc_now()
+
+    timezone_offset_hours =
+      first_skill_integer(
+        skill_ids,
+        skill_configs,
+        "timezone_offset_hours",
+        @default_timezone_offset_hours
+      )
+
+    reference_at
+    |> local_day_start_utc(timezone_offset_hours)
+    |> DateTime.to_iso8601()
   end
 
   defp news_enabled?(%{"news_enabled" => false}), do: false
@@ -869,6 +899,29 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     end
   end
 
+  defp first_skill_integer(skill_ids, skill_configs, key, default) do
+    skill_ids
+    |> Enum.find_value(fn skill_id ->
+      skill_configs
+      |> Map.get(skill_id, %{})
+      |> Map.get(key)
+      |> parse_integer()
+    end)
+    |> case do
+      nil -> default
+      value -> value
+    end
+  end
+
+  defp local_day_start_utc(%DateTime{} = reference_at, offset_hours)
+       when is_integer(offset_hours) do
+    reference_at
+    |> DateTime.add(offset_hours, :hour)
+    |> DateTime.to_date()
+    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+    |> DateTime.add(-offset_hours, :hour)
+  end
+
   defp annotate_google_items(items, source_scope, provider) when is_list(items) do
     google_source = SourceScope.google_account_for_provider(source_scope, provider)
     account_email = account_email(google_source)
@@ -1023,14 +1076,13 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     Enum.group_by(events, &Map.get(&1, "google_provider", "unknown"))
   end
 
-  defp filter_messages_by_label(messages, label, limit) when is_list(messages) do
+  defp filter_messages_by_label(messages, label, _limit) when is_list(messages) do
     messages
     |> Enum.filter(fn message ->
       message
       |> Map.get("labels", [])
       |> Enum.any?(&(to_string(&1) == label))
     end)
-    |> Enum.take(limit)
   end
 
   defp filter_messages_by_label(_messages, _label, _limit), do: []

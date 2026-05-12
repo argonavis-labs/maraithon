@@ -64,7 +64,8 @@ defmodule Maraithon.Runtime.BriefingCron do
         "dedupe_key" => due.dedupe_key,
         "local_date" => Date.to_iso8601(due.local_date),
         "timezone_offset_hours" => due.timezone_offset_hours,
-        "morning_brief_hour_local" => due.morning_brief_hour_local
+        "morning_brief_hour_local" => due.morning_brief_hour_local,
+        "morning_brief_minute_local" => due.morning_brief_minute_local
       }
 
       if Scheduler.pending_payload?(due.agent_id, "wakeup", "dedupe_key", due.dedupe_key) do

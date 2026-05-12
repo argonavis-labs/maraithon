@@ -7,13 +7,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   alias Maraithon.Tools.PersonHelpers
   alias Maraithon.WebSearch
 
-  @max_meetings 10
-  @max_candidates_per_meeting 8
-  @max_web_queries 8
-  @max_web_queries_per_meeting 3
-  @max_web_pages_per_candidate 2
-  @web_result_limit 3
-  @web_page_text_limit 1_800
+  @max_web_queries 100
+  @max_web_queries_per_meeting 10
+  @web_result_limit 10
+  @web_page_text_limit 20_000
   @web_timeout_ms 15_000
 
   @internal_terms ~w(
@@ -72,7 +69,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     {meetings, _remaining_queries} =
       events
       |> prioritize_meeting_events()
-      |> Enum.take(@max_meetings)
       |> Enum.reduce({[], max_web_queries}, fn event, {meeting_acc, remaining_queries} ->
         {meeting, next_remaining} = enrich_event(user_id, event, opts, remaining_queries)
         {[meeting | meeting_acc], next_remaining}
@@ -119,7 +115,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       if personal_logistics? do
         []
       else
-        event |> candidates_for_event() |> Enum.take(@max_candidates_per_meeting)
+        event |> candidates_for_event()
       end
 
     {crm_contexts, unmatched_candidates} =
@@ -511,7 +507,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "attendees" =>
         event
         |> read_list("attendees")
-        |> Enum.take(8)
         |> Enum.map(&compact_attendee/1)
         |> Enum.reject(&is_nil/1),
       "external_attendees" => external_attendees,
@@ -550,7 +545,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> Enum.sort_by(fn {event, index} ->
       {meeting_priority(event), event_start_sort_key(event), index}
     end)
-    |> Enum.take(@max_meetings)
     |> Enum.sort_by(fn {_event, index} -> index end)
     |> Enum.map(fn {event, _index} -> event end)
   end
@@ -778,8 +772,8 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "person" => compact_crm_person(read_any(context, "person")),
       "link_count" => read_any(context, "link_count"),
       "open_todo_count" => read_any(context, "open_todo_count"),
-      "links" => context |> read_list("links") |> Enum.take(3) |> Enum.map(&compact_crm_link/1),
-      "todos" => context |> read_list("todos") |> Enum.take(3) |> Enum.map(&compact_crm_todo/1)
+      "links" => context |> read_list("links") |> Enum.map(&compact_crm_link/1),
+      "todos" => context |> read_list("todos") |> Enum.map(&compact_crm_todo/1)
     }
     |> compact_map()
   end
@@ -799,7 +793,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       "relationship" => read_string(person, "relationship"),
       "preferred_communication_method" => read_string(person, "preferred_communication_method"),
       "communication_frequency" => read_string(person, "communication_frequency"),
-      "notes" => read_string(person, "notes") |> truncate_text(360),
+      "notes" => read_string(person, "notes"),
       "contact_details" => compact_contact_details(read_any(person, "contact_details"))
     }
     |> compact_map()
@@ -829,9 +823,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     %{
       "resource_type" => read_string(link, "resource_type"),
       "resource_source" => read_string(link, "resource_source"),
-      "title" => read_string(link, "title") |> truncate_text(180),
-      "summary" => read_string(link, "summary") |> truncate_text(280),
-      "relationship_note" => read_string(link, "relationship_note") |> truncate_text(280)
+      "title" => read_string(link, "title"),
+      "summary" => read_string(link, "summary"),
+      "relationship_note" => read_string(link, "relationship_note")
     }
     |> compact_map()
   end
@@ -840,9 +834,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp compact_crm_todo(todo) when is_map(todo) do
     %{
-      "title" => read_string(todo, "title") |> truncate_text(180),
-      "summary" => read_string(todo, "summary") |> truncate_text(280),
-      "next_action" => read_string(todo, "next_action") |> truncate_text(280),
+      "title" => read_string(todo, "title"),
+      "summary" => read_string(todo, "summary"),
+      "next_action" => read_string(todo, "next_action"),
       "due_at" => read_string(todo, "due_at"),
       "status" => read_string(todo, "status"),
       "source" => read_string(todo, "source")
@@ -854,7 +848,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp compact_web_results(results) when is_list(results) do
     results
-    |> Enum.take(@web_result_limit)
     |> Enum.map(&compact_web_result/1)
     |> Enum.reject(&(&1 == %{}))
   end
@@ -863,9 +856,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp compact_web_result(result) when is_map(result) do
     %{
-      "title" => read_string(result, "title") |> truncate_text(180),
+      "title" => read_string(result, "title"),
       "url" => read_string(result, "url"),
-      "snippet" => read_string(result, "snippet") |> truncate_text(320)
+      "snippet" => read_string(result, "snippet")
     }
     |> compact_map()
   end
@@ -875,7 +868,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp fetch_page_contexts(candidate, results, page_fetch_fun, page_opts) do
     candidate
     |> page_urls_for_candidate(results)
-    |> Enum.take(@max_web_pages_per_candidate)
     |> Enum.map(fn url ->
       case page_fetch_fun.(url, page_opts) do
         {:ok, %{} = page} ->
@@ -924,9 +916,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp compact_page_context(page) when is_map(page) do
     %{
       "url" => read_string(page, "url") || read_string(page, "source_url"),
-      "title" => read_string(page, "title") |> truncate_text(180),
-      "description" => read_string(page, "description") |> truncate_text(360),
-      "text" => read_string(page, "text") |> truncate_text(@web_page_text_limit)
+      "title" => read_string(page, "title"),
+      "description" => read_string(page, "description"),
+      "text" => read_string(page, "text")
     }
     |> compact_map()
   end
@@ -1081,21 +1073,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp normalize_string(_value), do: nil
-
-  defp truncate_text(nil, _limit), do: nil
-
-  defp truncate_text(value, limit) when is_binary(value) and is_integer(limit) do
-    if String.length(value) <= limit do
-      value
-    else
-      value
-      |> String.slice(0, limit)
-      |> String.trim()
-      |> Kernel.<>("...")
-    end
-  end
-
-  defp truncate_text(value, _limit), do: value
 
   defp clamp_integer(value, min_value, max_value) when is_integer(value) do
     value |> max(min_value) |> min(max_value)

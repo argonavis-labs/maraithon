@@ -12,9 +12,12 @@ defmodule Maraithon.BriefingSchedules do
   @briefing_behaviors ["ai_chief_of_staff", "founder_followthrough_agent"]
   @default_timezone_offset_hours -5
   @default_morning_hour 8
+  @default_morning_minute 0
   @default_end_of_day_hour 18
+  @default_end_of_day_minute 0
   @default_weekly_day 5
   @default_weekly_hour 16
+  @default_weekly_minute 0
 
   @spec summarize_for_prompt(String.t() | nil) :: map()
   def summarize_for_prompt(user_id) when is_binary(user_id) do
@@ -31,10 +34,20 @@ defmodule Maraithon.BriefingSchedules do
       |> config_value("morning_brief_hour_local")
       |> parse_integer(@default_morning_hour)
 
+    morning_minute =
+      primary_agent
+      |> config_value("morning_brief_minute_local")
+      |> parse_integer(@default_morning_minute)
+
     end_of_day_hour =
       primary_agent
       |> config_value("end_of_day_brief_hour_local")
       |> parse_integer(@default_end_of_day_hour)
+
+    end_of_day_minute =
+      primary_agent
+      |> config_value("end_of_day_brief_minute_local")
+      |> parse_integer(@default_end_of_day_minute)
 
     weekly_day =
       primary_agent
@@ -46,26 +59,34 @@ defmodule Maraithon.BriefingSchedules do
       |> config_value("weekly_review_hour_local")
       |> parse_integer(@default_weekly_hour)
 
+    weekly_minute =
+      primary_agent
+      |> config_value("weekly_review_minute_local")
+      |> parse_integer(@default_weekly_minute)
+
     %{
       configured: agents != [],
       timezone_offset_hours: timezone_offset_hours,
       local_timezone: timezone_label(timezone_offset_hours),
       morning: %{
         hour_local: morning_hour,
-        time_local: hour_label(morning_hour),
-        display_time_local: display_time_label(morning_hour)
+        minute_local: morning_minute,
+        time_local: time_label(morning_hour, morning_minute),
+        display_time_local: display_time_label(morning_hour, morning_minute)
       },
       end_of_day: %{
         hour_local: end_of_day_hour,
-        time_local: hour_label(end_of_day_hour),
-        display_time_local: display_time_label(end_of_day_hour)
+        minute_local: end_of_day_minute,
+        time_local: time_label(end_of_day_hour, end_of_day_minute),
+        display_time_local: display_time_label(end_of_day_hour, end_of_day_minute)
       },
       weekly_review: %{
         day_local: weekly_day,
         weekday_local: weekday_label(weekly_day),
         hour_local: weekly_hour,
-        time_local: hour_label(weekly_hour),
-        display_time_local: display_time_label(weekly_hour)
+        minute_local: weekly_minute,
+        time_local: time_label(weekly_hour, weekly_minute),
+        display_time_local: display_time_label(weekly_hour, weekly_minute)
       },
       agent_count: length(agents),
       agents: Enum.map(agents, &serialize_agent_schedule/1)
@@ -91,7 +112,9 @@ defmodule Maraithon.BriefingSchedules do
         Enum.reduce(agents, {[], []}, fn agent, {updated, failed} ->
           previous = serialize_agent_schedule(agent)
 
-          case Runtime.update_agent(agent.id, %{config: normalized.config_updates}) do
+          case Runtime.update_agent(agent.id, %{
+                 config: schedule_config_updates(agent, normalized.config_updates)
+               }) do
             {:ok, updated_agent} ->
               {[build_update_result(previous, updated_agent, normalized.briefing_kind) | updated],
                failed}
@@ -122,8 +145,10 @@ defmodule Maraithon.BriefingSchedules do
              status: if(failed_agents == [], do: "updated", else: "partial"),
              briefing_kind: normalized.briefing_kind,
              local_hour: normalized.local_hour,
-             local_time: hour_label(normalized.local_hour),
-             display_time_local: display_time_label(normalized.local_hour),
+             local_minute: normalized.local_minute,
+             local_time: time_label(normalized.local_hour, normalized.local_minute),
+             display_time_local:
+               display_time_label(normalized.local_hour, normalized.local_minute),
              local_timezone:
                if(is_integer(normalized.timezone_offset_hours),
                  do: timezone_label(normalized.timezone_offset_hours),
@@ -178,9 +203,15 @@ defmodule Maraithon.BriefingSchedules do
       |> config_value("morning_brief_hour_local")
       |> parse_integer(@default_morning_hour)
 
-    local_now = DateTime.add(now, timezone_offset_hours, :hour)
+    morning_minute =
+      agent
+      |> config_value("morning_brief_minute_local")
+      |> parse_integer(@default_morning_minute)
 
-    if local_now.hour >= morning_hour do
+    local_now = DateTime.add(now, timezone_offset_hours, :hour)
+    due_time = Time.new!(morning_hour, morning_minute, 0)
+
+    if Time.compare(DateTime.to_time(local_now), due_time) != :lt do
       local_date = DateTime.to_date(local_now)
       dedupe_key = "morning_briefing:#{Date.to_iso8601(local_date)}"
 
@@ -191,7 +222,8 @@ defmodule Maraithon.BriefingSchedules do
         dedupe_key: dedupe_key,
         local_date: local_date,
         timezone_offset_hours: timezone_offset_hours,
-        morning_brief_hour_local: morning_hour
+        morning_brief_hour_local: morning_hour,
+        morning_brief_minute_local: morning_minute
       }
     end
   end
@@ -209,11 +241,19 @@ defmodule Maraithon.BriefingSchedules do
              0,
              23
            ),
+         {:ok, local_minute} <-
+           parse_optional_integer_in_range(
+             Map.get(attrs, "local_minute") || Map.get(attrs, :local_minute),
+             0,
+             59,
+             :invalid_local_minute
+           ),
          {:ok, timezone_offset_hours} <-
            parse_optional_integer_in_range(
              Map.get(attrs, "timezone_offset_hours") || Map.get(attrs, :timezone_offset_hours),
              -12,
-             14
+             14,
+             :invalid_timezone_offset_hours
            ),
          {:ok, weekly_review_day_local} <-
            parse_weekly_review_day(
@@ -221,16 +261,19 @@ defmodule Maraithon.BriefingSchedules do
              Map.get(attrs, "local_day_of_week") || Map.get(attrs, :local_day_of_week),
              agents
            ) do
-      field =
+      local_minute = local_minute || existing_minute(agents, briefing_kind)
+
+      {field, minute_field} =
         case briefing_kind do
-          "morning" -> "morning_brief_hour_local"
-          "end_of_day" -> "end_of_day_brief_hour_local"
-          "weekly_review" -> "weekly_review_hour_local"
+          "morning" -> {"morning_brief_hour_local", "morning_brief_minute_local"}
+          "end_of_day" -> {"end_of_day_brief_hour_local", "end_of_day_brief_minute_local"}
+          "weekly_review" -> {"weekly_review_hour_local", "weekly_review_minute_local"}
         end
 
       config_updates =
         %{}
         |> Map.put(field, local_hour)
+        |> Map.put(minute_field, local_minute)
         |> maybe_put("timezone_offset_hours", timezone_offset_hours)
         |> maybe_put("weekly_review_day_local", weekly_review_day_local)
 
@@ -238,6 +281,8 @@ defmodule Maraithon.BriefingSchedules do
        %{
          briefing_kind: briefing_kind,
          local_hour: local_hour,
+         local_minute: local_minute,
+         minute_field: minute_field,
          timezone_offset_hours: timezone_offset_hours,
          weekly_review_day_local: weekly_review_day_local,
          config_updates: config_updates
@@ -263,6 +308,49 @@ defmodule Maraithon.BriefingSchedules do
   end
 
   defp parse_weekly_review_day(_briefing_kind, _value, _agents), do: {:ok, nil}
+
+  defp existing_minute(agents, "morning") do
+    agents
+    |> List.first()
+    |> config_value("morning_brief_minute_local")
+    |> parse_integer(@default_morning_minute)
+  end
+
+  defp existing_minute(agents, "end_of_day") do
+    agents
+    |> List.first()
+    |> config_value("end_of_day_brief_minute_local")
+    |> parse_integer(@default_end_of_day_minute)
+  end
+
+  defp existing_minute(agents, "weekly_review") do
+    agents
+    |> List.first()
+    |> config_value("weekly_review_minute_local")
+    |> parse_integer(@default_weekly_minute)
+  end
+
+  defp schedule_config_updates(%Agent{config: config}, updates) when is_map(updates) do
+    skill_configs = Map.get(config || %{}, "skill_configs")
+
+    if is_map(skill_configs) do
+      Map.put(updates, "skill_configs", merge_schedule_into_skill_configs(skill_configs, updates))
+    else
+      updates
+    end
+  end
+
+  defp schedule_config_updates(_agent, updates), do: updates
+
+  defp merge_schedule_into_skill_configs(skill_configs, updates) do
+    Map.new(skill_configs, fn
+      {skill_id, skill_config} when is_map(skill_config) ->
+        {skill_id, Map.merge(skill_config, updates)}
+
+      entry ->
+        entry
+    end)
+  end
 
   defp list_briefing_agents(user_id) do
     Agents.list_agents(user_id: user_id)
@@ -321,10 +409,20 @@ defmodule Maraithon.BriefingSchedules do
       |> config_value("morning_brief_hour_local")
       |> parse_integer(@default_morning_hour)
 
+    morning_minute =
+      agent
+      |> config_value("morning_brief_minute_local")
+      |> parse_integer(@default_morning_minute)
+
     end_of_day_hour =
       agent
       |> config_value("end_of_day_brief_hour_local")
       |> parse_integer(@default_end_of_day_hour)
+
+    end_of_day_minute =
+      agent
+      |> config_value("end_of_day_brief_minute_local")
+      |> parse_integer(@default_end_of_day_minute)
 
     weekly_day =
       agent
@@ -336,6 +434,11 @@ defmodule Maraithon.BriefingSchedules do
       |> config_value("weekly_review_hour_local")
       |> parse_integer(@default_weekly_hour)
 
+    weekly_minute =
+      agent
+      |> config_value("weekly_review_minute_local")
+      |> parse_integer(@default_weekly_minute)
+
     %{
       id: agent.id,
       name: agent_name(agent),
@@ -343,15 +446,18 @@ defmodule Maraithon.BriefingSchedules do
       timezone_offset_hours: timezone_offset_hours,
       local_timezone: timezone_label(timezone_offset_hours),
       morning_brief_hour_local: morning_hour,
-      morning_time_local: hour_label(morning_hour),
-      morning_display_time_local: display_time_label(morning_hour),
+      morning_brief_minute_local: morning_minute,
+      morning_time_local: time_label(morning_hour, morning_minute),
+      morning_display_time_local: display_time_label(morning_hour, morning_minute),
       end_of_day_brief_hour_local: end_of_day_hour,
-      end_of_day_time_local: hour_label(end_of_day_hour),
-      end_of_day_display_time_local: display_time_label(end_of_day_hour),
+      end_of_day_brief_minute_local: end_of_day_minute,
+      end_of_day_time_local: time_label(end_of_day_hour, end_of_day_minute),
+      end_of_day_display_time_local: display_time_label(end_of_day_hour, end_of_day_minute),
       weekly_review_day_local: weekly_day,
       weekly_review_hour_local: weekly_hour,
-      weekly_review_time_local: hour_label(weekly_hour),
-      weekly_review_display_time_local: display_time_label(weekly_hour)
+      weekly_review_minute_local: weekly_minute,
+      weekly_review_time_local: time_label(weekly_hour, weekly_minute),
+      weekly_review_display_time_local: display_time_label(weekly_hour, weekly_minute)
     }
   end
 
@@ -389,13 +495,13 @@ defmodule Maraithon.BriefingSchedules do
 
   defp parse_integer_in_range(_value, _min, _max), do: {:error, :invalid_local_hour}
 
-  defp parse_optional_integer_in_range(nil, _min, _max), do: {:ok, nil}
-  defp parse_optional_integer_in_range("", _min, _max), do: {:ok, nil}
+  defp parse_optional_integer_in_range(nil, _min, _max, _error), do: {:ok, nil}
+  defp parse_optional_integer_in_range("", _min, _max, _error), do: {:ok, nil}
 
-  defp parse_optional_integer_in_range(value, min, max) do
+  defp parse_optional_integer_in_range(value, min, max, error) do
     case parse_integer_in_range(value, min, max) do
       {:ok, parsed} -> {:ok, parsed}
-      {:error, _reason} -> {:error, :invalid_timezone_offset_hours}
+      {:error, _reason} -> {:error, error}
     end
   end
 
@@ -412,14 +518,14 @@ defmodule Maraithon.BriefingSchedules do
 
   defp stringify_keys(_map), do: %{}
 
-  defp hour_label(hour) when is_integer(hour) do
+  defp time_label(hour, minute) when is_integer(hour) and is_integer(minute) do
     hour
     |> Integer.to_string()
     |> String.pad_leading(2, "0")
-    |> then(&"#{&1}:00")
+    |> then(&"#{&1}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")}")
   end
 
-  defp display_time_label(hour) when is_integer(hour) do
+  defp display_time_label(hour, minute) when is_integer(hour) and is_integer(minute) do
     {display_hour, meridiem} =
       cond do
         hour == 0 -> {12, "AM"}
@@ -428,7 +534,7 @@ defmodule Maraithon.BriefingSchedules do
         true -> {hour - 12, "PM"}
       end
 
-    "#{display_hour}:00 #{meridiem}"
+    "#{display_hour}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")} #{meridiem}"
   end
 
   defp weekday_label(1), do: "Monday"
@@ -485,20 +591,24 @@ defmodule Maraithon.BriefingSchedules do
       local_timezone: timezone_label(@default_timezone_offset_hours),
       morning: %{
         hour_local: @default_morning_hour,
-        time_local: hour_label(@default_morning_hour),
-        display_time_local: display_time_label(@default_morning_hour)
+        minute_local: @default_morning_minute,
+        time_local: time_label(@default_morning_hour, @default_morning_minute),
+        display_time_local: display_time_label(@default_morning_hour, @default_morning_minute)
       },
       end_of_day: %{
         hour_local: @default_end_of_day_hour,
-        time_local: hour_label(@default_end_of_day_hour),
-        display_time_local: display_time_label(@default_end_of_day_hour)
+        minute_local: @default_end_of_day_minute,
+        time_local: time_label(@default_end_of_day_hour, @default_end_of_day_minute),
+        display_time_local:
+          display_time_label(@default_end_of_day_hour, @default_end_of_day_minute)
       },
       weekly_review: %{
         day_local: @default_weekly_day,
         weekday_local: weekday_label(@default_weekly_day),
         hour_local: @default_weekly_hour,
-        time_local: hour_label(@default_weekly_hour),
-        display_time_local: display_time_label(@default_weekly_hour)
+        minute_local: @default_weekly_minute,
+        time_local: time_label(@default_weekly_hour, @default_weekly_minute),
+        display_time_local: display_time_label(@default_weekly_hour, @default_weekly_minute)
       },
       agent_count: 0,
       agents: []

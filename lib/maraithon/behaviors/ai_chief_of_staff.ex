@@ -316,6 +316,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       read_integer(config, "morning_brief_hour_local")
     )
     |> maybe_put_integer(
+      "morning_brief_minute_local",
+      read_integer(config, "morning_brief_minute_local")
+    )
+    |> maybe_put_integer(
       "end_of_day_brief_hour_local",
       read_integer(config, "end_of_day_brief_hour_local")
     )

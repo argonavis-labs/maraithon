@@ -30,23 +30,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   @default_timezone_offset_hours -5
   @default_morning_hour 8
-  @default_email_scan_limit 30
+  @default_morning_minute 0
+  @default_email_scan_limit 100
   @default_slack_channel_scan_limit 16
-  @default_slack_message_scan_limit 8
-  @default_news_limit 6
+  @default_slack_message_scan_limit 100
+  @default_news_limit 25
   @default_lookback_hours 18
   @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "xhigh"
   @default_llm_timeout_ms 1_200_000
   @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
-  @prompt_string_limit 1_500
-  @prompt_gmail_body_limit 900
-  @prompt_gmail_message_limit 16
-  @prompt_slack_message_limit 18
-  @prompt_context_limit 8
-  @prompt_default_list_limit 24
-  @commercial_thread_limit 30
+  @prompt_string_limit 1_000_000
+  @prompt_default_list_limit 10_000
   @commercial_thread_terms [
     "availability",
     "connect",
@@ -63,16 +59,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   ]
   @commercial_counterparty_domain_markers ~w(cogniate glossier represent sandwich.co)
   @commercial_teammate_domains ~w(runner.now)
-  @local_imessage_chat_limit 8
-  @local_notes_limit 10
-  @local_voice_memo_limit 5
-  @local_calendar_limit 12
-  @today_calendar_limit 32
+  @local_imessage_chat_limit 100
+  @local_notes_limit 100
+  @local_voice_memo_limit 100
+  @local_calendar_limit 500
   @local_reminders_days_ahead 7
-  @local_reminders_limit 25
-  @local_files_limit 6
-  @local_browser_visits_limit 60
-  @local_browser_top_hosts 6
+  @local_reminders_limit 100
+  @local_files_limit 100
+  @local_browser_visits_limit 500
+  @local_browser_top_hosts 25
   @local_files_allowed_extensions ~w(pdf md txt rtf rtfd docx pages key keynote ppt pptx xls xlsx csv numbers doc)
   @device_stale_seconds 2 * 60 * 60
   @telegram_chunk_limit 3_300
@@ -92,6 +87,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "assistant_behavior" => "ai_chief_of_staff",
       "timezone_offset_hours" => @default_timezone_offset_hours,
       "morning_brief_hour_local" => @default_morning_hour,
+      "morning_brief_minute_local" => @default_morning_minute,
       "email_scan_limit" => @default_email_scan_limit,
       "slack_channel_scan_limit" => @default_slack_channel_scan_limit,
       "slack_message_scan_limit" => @default_slack_message_scan_limit,
@@ -185,14 +181,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       morning_hour:
         integer_in_range(config["morning_brief_hour_local"], @default_morning_hour, 0, 23),
+      morning_minute:
+        integer_in_range(config["morning_brief_minute_local"], @default_morning_minute, 0, 59),
       email_scan_limit:
-        integer_in_range(config["email_scan_limit"], @default_email_scan_limit, 1, 100),
+        integer_in_range(config["email_scan_limit"], @default_email_scan_limit, 1, 500),
       slack_message_scan_limit:
         integer_in_range(
           config["slack_message_scan_limit"],
           @default_slack_message_scan_limit,
           1,
-          100
+          500
         ),
       lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 168),
       llm_model: normalize_string(config["llm_model"]),
@@ -352,25 +350,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     source_bundle = context[:source_bundle] || %{}
     offset_hours = state.timezone_offset_hours
     local_date = local_date(now, state)
+    local_day_start = local_day_start_utc(local_date, state)
     tomorrow = Date.add(local_date, 1)
     lookback_start = DateTime.add(now, -state.lookback_hours, :hour)
     commercial_lookback_start = DateTime.add(now, -@commercial_thread_lookback_hours, :hour)
-    email_prompt_limit = min(state.email_scan_limit, 30)
-    slack_prompt_limit = min(max(state.slack_message_scan_limit, 20), 60)
 
-    # Prefer local-first calendar (macOS Calendar.app aggregates iCloud /
-    # Exchange / Google / CalDAV in one place). Fall back to the Google
-    # source bundle when no local events are present for this user. The
-    # local snapshot can come from the source bundle (`put_calendar_local`)
-    # or be queried live from `LocalCalendar` here.
+    # Merge the local Calendar.app mirror with Google Calendar. The local
+    # mirror can be stale or unavailable on remote runs, while Google may
+    # omit non-Google accounts; neither source should suppress the other.
     google_calendar_events = SourceBundle.calendar_events(source_bundle)
     bundle_local_calendar = SourceBundle.calendar_local_events(source_bundle)
 
     {local_calendar_events, local_calendar_error} =
       fetch_local_source(user_id, :calendar_local, bundle_local_calendar, fn id ->
         LocalCalendar.events_around(id,
-          since: now,
-          until: DateTime.add(now, 48 * 3_600, :second),
+          since: local_day_start,
+          until: DateTime.add(local_day_start, 72 * 3_600, :second),
           limit: @local_calendar_limit
         )
       end)
@@ -378,15 +373,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     local_calendar_events =
       local_calendar_events
       |> Enum.map(&local_event_to_prompt/1)
+      |> Enum.reject(&is_nil/1)
 
     calendar_events =
-      cond do
-        local_calendar_events != [] -> local_calendar_events
-        true -> google_calendar_events
-      end
+      (local_calendar_events ++ google_calendar_events)
+      |> dedupe_calendar_events()
+      |> Enum.sort_by(&event_sort_key/1)
 
     calendar_source =
       cond do
+        local_calendar_events != [] and google_calendar_events != [] -> "local+google"
         local_calendar_events != [] -> "local"
         google_calendar_events != [] -> "google"
         true -> "none"
@@ -438,7 +434,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         id
         |> LocalFiles.recent_for_user(limit: @local_files_limit * 6)
         |> Enum.filter(&allowed_file_extension?/1)
-        |> Enum.take(@local_files_limit)
       end)
 
     bundle_visits = SourceBundle.browser_visits(source_bundle)
@@ -460,7 +455,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     commercial_threads =
       commercial_thread_messages
       |> Enum.map(&gmail_message_for_prompt/1)
-      |> Enum.take(@commercial_thread_limit)
 
     local_source_errors =
       [
@@ -480,7 +474,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Enum.filter(&event_on_date?(&1, local_date, state))
       |> Enum.map(&calendar_event_for_prompt(&1, state))
       |> Enum.reject(&is_nil/1)
-      |> Enum.take(@today_calendar_limit)
 
     tomorrow_first_event =
       calendar_events
@@ -492,7 +485,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     meeting_prep =
       MeetingEnrichment.enrich(user_id, today_events,
         now: now,
-        max_web_queries: 8
+        max_web_queries: 100
       )
 
     schedule_coverage = schedule_coverage_contract(meeting_prep)
@@ -509,7 +502,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "upcoming_local" =>
           local_calendar_events
           |> Enum.map(&calendar_event_for_prompt(&1, state))
-          |> Enum.take(@local_calendar_limit)
       },
       "meeting_prep" => meeting_prep,
       "schedule_coverage" => schedule_coverage,
@@ -517,29 +509,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "imessage" => %{
         "chats" =>
           imessage_chats
-          |> Enum.map(&imessage_chat_for_prompt/1)
-          |> Enum.take(@local_imessage_chat_limit),
+          |> Enum.map(&imessage_chat_for_prompt/1),
         "counts" => %{"chats" => length(imessage_chats)}
       },
       "notes" => %{
         "items" =>
           notes
-          |> Enum.map(&note_for_prompt/1)
-          |> Enum.take(@local_notes_limit),
+          |> Enum.map(&note_for_prompt/1),
         "counts" => %{"count" => length(notes)}
       },
       "voice_memos" => %{
         "items" =>
           voice_memos
-          |> Enum.map(&voice_memo_for_prompt/1)
-          |> Enum.take(@local_voice_memo_limit),
+          |> Enum.map(&voice_memo_for_prompt/1),
         "counts" => %{"count" => length(voice_memos)}
       },
       "reminders" => %{
         "due_soon" =>
           reminders
-          |> Enum.map(&reminder_for_prompt/1)
-          |> Enum.take(@local_reminders_limit),
+          |> Enum.map(&reminder_for_prompt/1),
         "counts" => %{
           "open" => length(reminders),
           "due_today" => Enum.count(reminders, &reminder_due_today?(&1, now))
@@ -548,8 +536,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "files" => %{
         "items" =>
           files
-          |> Enum.map(&file_for_prompt/1)
-          |> Enum.take(@local_files_limit),
+          |> Enum.map(&file_for_prompt/1),
         "counts" => %{"recent_count" => length(files)}
       },
       "browser_history" => %{
@@ -566,13 +553,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "recent_inbox" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_gmail_message?(&1, lookback_start))
-          |> Enum.map(&gmail_message_for_prompt/1)
-          |> Enum.take(email_prompt_limit),
+          |> Enum.map(&gmail_message_for_prompt/1),
         "recent_unread" =>
           gmail_inbox_messages
           |> Enum.filter(&recent_unread_message?(&1, lookback_start))
-          |> Enum.map(&gmail_message_for_prompt/1)
-          |> Enum.take(email_prompt_limit),
+          |> Enum.map(&gmail_message_for_prompt/1),
         "counts" => %{
           "messages" => length(gmail_messages),
           "inbox" => length(gmail_inbox_messages),
@@ -588,9 +573,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           slack_messages
           |> Enum.filter(&recent_slack_message?(&1, lookback_start))
           |> Enum.reject(&blank?(read_string(&1, "text", nil)))
-          |> Enum.map(&slack_message_for_prompt/1)
-          |> Enum.take(slack_prompt_limit),
-        "mentions" => SourceBundle.slack_mentions(source_bundle) |> Enum.take(20),
+          |> Enum.map(&slack_message_for_prompt/1),
+        "mentions" => SourceBundle.slack_mentions(source_bundle),
         "counts" => %{
           "messages" => length(slack_messages),
           "recent_messages" => length(recent_slack_messages),
@@ -600,8 +584,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "news" => %{
         "items" =>
           news_items
-          |> Enum.map(&news_item_for_prompt/1)
-          |> Enum.take(@default_news_limit),
+          |> Enum.map(&news_item_for_prompt/1),
         "counts" => %{
           "items" => length(news_items),
           "feeds" => length(SourceBundle.news_feeds(source_bundle))
@@ -616,19 +599,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "open_work" => %{
         "insights" =>
           user_id
-          |> Insights.list_open_act_now_for_user(limit: 12)
+          |> Insights.list_open_act_now_for_user(limit: 100)
           |> Enum.map(&insight_for_prompt/1),
         "todos" =>
           user_id
-          |> Todos.list_open_for_user(limit: 12)
+          |> Todos.list_open_for_user(limit: 100)
           |> Enum.map(&todo_for_prompt/1)
       },
       "relationships" =>
         user_id
-        |> Crm.summarize_for_prompt(16),
+        |> Crm.summarize_for_prompt(100),
       "deep_memory" =>
         user_id
-        |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 10),
+        |> Memory.prompt_context(query: "morning briefing chief of staff relevance", limit: 100),
       "source_health" =>
         source_bundle
         |> SourceBundle.freshness()
@@ -751,6 +734,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "source_scope",
         "timezone_offset_hours",
         "morning_brief_hour_local",
+        "morning_brief_minute_local",
         "email_scan_limit",
         "slack_channel_scan_limit",
         "slack_message_scan_limit",
@@ -963,6 +947,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 
+       Source completeness rule:
+       The morning briefing payload is intentionally not pre-truncated for brevity. Review all
+       included Gmail, Slack, calendar, CRM, todo, memory, and local-source rows before deciding
+       what belongs in the executive brief. The output should be synthesized and judgmental,
+       but the input scan should not stop after an arbitrary first page of items.
+
        Meeting enrichment rule:
        The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
        before public web context. Use web snippets only as fallback evidence for attendees
@@ -1154,7 +1144,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "display_date" => display_date(start_value, state),
       "display_timezone" => timezone_label(state, datetime_from_value(start_value)),
       "location" => read_string(event, "location", nil),
-      "attendees" => read_list(event, "attendees") |> Enum.take(12),
+      "attendees" => read_list(event, "attendees"),
       "organizer" => read_string(event, "organizer", nil),
       "html_link" => read_string(event, "html_link", nil),
       "calendar_name" => read_string(event, "calendar_name", nil),
@@ -1178,11 +1168,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" =>
         prompt_time(read_any(message, "internal_date")) || read_string(message, "date", nil),
       "labels" => read_list(message, "labels"),
-      "snippet" => truncate(read_string(message, "snippet", ""), 240),
+      "snippet" => read_string(message, "snippet", ""),
       "body_available" => body_available,
       "body_status" =>
         read_string(message, "body_status", if(body_available, do: "available", else: "missing")),
-      "body" => truncate(body, 6_000)
+      "body" => body
     }
   end
 
@@ -1208,7 +1198,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "user" => read_string(message, "user", nil),
       "ts" => read_string(message, "ts", nil),
       "thread_ts" => read_string(message, "thread_ts", nil),
-      "text" => truncate(read_string(message, "text", ""), 260),
+      "text" => read_string(message, "text", ""),
       "reply_count" => read_integer(message, "reply_count", 0)
     }
   end
@@ -1238,7 +1228,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "chat_key" => chat_key,
       "chat_display_name" => Map.get(chat, :chat_display_name),
       "message_count_last_7d" => Map.get(chat, :message_count_last_7d, 0),
-      "latest_snippet" => latest && truncate(latest.text || "", 160),
+      "latest_snippet" => latest && (latest.text || ""),
       "latest_sender" => latest && latest.sender_handle,
       "latest_is_from_me" => latest && latest.is_from_me,
       "latest_sent_at" => latest && prompt_time(latest.sent_at)
@@ -1261,7 +1251,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "note_id" => note.guid,
       "title" => note.title || "(untitled note)",
-      "snippet" => truncate(note.snippet || "", 240),
+      "snippet" => note.snippet || "",
       "folder" => note.folder,
       "is_pinned" => note.is_pinned,
       "modified_at" => prompt_time(note.modified_at)
@@ -1274,7 +1264,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "memo_id" => memo.guid,
       "title" => memo.title || "(untitled memo)",
-      "snippet" => truncate(memo.snippet || "", 240),
+      "snippet" => memo.snippet || "",
       "duration_seconds" => memo.duration_seconds,
       "created_at" => prompt_time(memo.created_at),
       "has_transcript" => is_binary(memo.transcript) and memo.transcript != ""
@@ -1492,7 +1482,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "source" => read_string(item, "source", nil),
       "title" => read_string(item, "title", nil),
-      "summary" => truncate(read_string(item, "summary", ""), 220),
+      "summary" => read_string(item, "summary", ""),
       "url" => read_string(item, "url", nil),
       "published_at" => read_string(item, "published_at", nil)
     }
@@ -1762,6 +1752,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> compact_map()
   end
 
+  defp dedupe_calendar_events(events) when is_list(events) do
+    events
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq_by(&calendar_event_dedupe_key/1)
+  end
+
+  defp calendar_event_dedupe_key(event) when is_map(event) do
+    summary = normalize_calendar_dedupe_text(read_string(event, "summary", ""))
+    start = prompt_time(read_any(event, "start"))
+    end_time = prompt_time(read_any(event, "end"))
+    organizer = normalize_calendar_dedupe_text(read_string(event, "organizer", ""))
+
+    cond do
+      summary != "" and is_binary(start) ->
+        {:time, summary, start, end_time, organizer}
+
+      event_id = read_string(event, "event_id", nil) ->
+        {:id, event_id}
+
+      true ->
+        {:raw, inspect(event)}
+    end
+  end
+
+  defp calendar_event_dedupe_key(event), do: {:raw, inspect(event)}
+
+  defp normalize_calendar_dedupe_text(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp normalize_calendar_dedupe_text(_value), do: ""
+
   defp event_sort_key(event) when is_map(event) do
     case read_any(event, "start") do
       %DateTime{} = value -> DateTime.to_unix(value, :microsecond)
@@ -1801,13 +1826,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("today_events", [], fn events ->
       events
       |> read_list()
-      |> Enum.take(@today_calendar_limit)
       |> Enum.map(&compact_calendar_event_for_prompt/1)
     end)
     |> Map.update("upcoming_local", [], fn events ->
       events
       |> read_list()
-      |> Enum.take(@local_calendar_limit)
       |> Enum.map(&compact_calendar_event_for_prompt/1)
     end)
     |> Map.update("tomorrow_first_event", nil, &compact_calendar_event_for_prompt/1)
@@ -1818,7 +1841,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_calendar_event_for_prompt(event) when is_map(event) do
     event
-    |> Map.update("attendees", [], &(read_list(&1) |> Enum.take(8)))
+    |> Map.update("attendees", [], &read_list/1)
     |> compact_prompt_value()
   end
 
@@ -1830,7 +1853,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       meetings
       |> read_list()
       |> prioritize_required_prompt_items()
-      |> Enum.take(@prompt_context_limit)
       |> Enum.map(&compact_meeting_for_prompt/1)
     end)
     |> compact_prompt_value()
@@ -1867,12 +1889,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_meeting_for_prompt(meeting) when is_map(meeting) do
     meeting
-    |> Map.update("attendees", [], &(read_list(&1) |> Enum.take(8)))
-    |> Map.update("external_attendees", [], &(read_list(&1) |> Enum.take(8)))
-    |> Map.update("candidate_people_and_orgs", [], &(read_list(&1) |> Enum.take(8)))
-    |> Map.update("crm_context", [], &(read_list(&1) |> Enum.take(6) |> compact_prompt_value()))
-    |> Map.update("web_context", [], &(read_list(&1) |> Enum.take(6) |> compact_prompt_value()))
-    |> Map.update("data_gaps", [], &(read_list(&1) |> Enum.take(6)))
+    |> Map.update("attendees", [], &read_list/1)
+    |> Map.update("external_attendees", [], &read_list/1)
+    |> Map.update("candidate_people_and_orgs", [], &read_list/1)
+    |> Map.update("crm_context", [], &(read_list(&1) |> compact_prompt_value()))
+    |> Map.update("web_context", [], &(read_list(&1) |> compact_prompt_value()))
+    |> Map.update("data_gaps", [], &read_list/1)
     |> compact_prompt_value()
   end
 
@@ -1883,19 +1905,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("commercial_threads", [], fn messages ->
       messages
       |> read_list()
-      |> Enum.take(@commercial_thread_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> Map.update("recent_inbox", [], fn messages ->
       messages
       |> read_list()
-      |> Enum.take(@prompt_gmail_message_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> Map.update("recent_unread", [], fn messages ->
       messages
       |> read_list()
-      |> Enum.take(@prompt_gmail_message_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> compact_prompt_value()
@@ -1905,8 +1924,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_gmail_message_for_prompt(message) when is_map(message) do
     message
-    |> Map.update("body", "", &truncate(to_string(&1), @prompt_gmail_body_limit))
-    |> Map.update("snippet", "", &truncate(to_string(&1), 360))
+    |> Map.update("body", "", &to_string/1)
+    |> Map.update("snippet", "", &to_string/1)
     |> compact_prompt_value()
   end
 
@@ -1917,10 +1936,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("key_threads", [], fn messages ->
       messages
       |> read_list()
-      |> Enum.take(@prompt_slack_message_limit)
       |> Enum.map(&compact_prompt_value/1)
     end)
-    |> Map.update("mentions", [], &(read_list(&1) |> Enum.take(@prompt_context_limit)))
+    |> Map.update("mentions", [], &read_list/1)
     |> compact_prompt_value()
   end
 
@@ -1928,7 +1946,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_news_for_prompt(news) when is_map(news) do
     news
-    |> Map.update("items", [], &(read_list(&1) |> Enum.take(@default_news_limit)))
+    |> Map.update("items", [], &read_list/1)
     |> compact_prompt_value()
   end
 
@@ -1937,7 +1955,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_relationships_for_prompt(relationships) do
     relationships
     |> read_list()
-    |> Enum.take(16)
     |> compact_prompt_value()
   end
 
@@ -1957,8 +1974,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_prompt_value(%Time{} = value, _list_limit, _string_limit),
     do: Time.to_iso8601(value)
 
-  defp compact_prompt_value(%{__struct__: _struct} = value, _list_limit, string_limit),
-    do: value |> inspect() |> truncate(string_limit)
+  defp compact_prompt_value(%{__struct__: _struct} = value, _list_limit, _string_limit),
+    do: inspect(value)
 
   defp compact_prompt_value(value, list_limit, string_limit) when is_map(value) do
     Map.new(value, fn {key, item} ->
@@ -1968,12 +1985,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_prompt_value(value, list_limit, string_limit) when is_list(value) do
     value
-    |> Enum.take(list_limit)
     |> Enum.map(&compact_prompt_value(&1, list_limit, string_limit))
   end
 
-  defp compact_prompt_value(value, _list_limit, string_limit) when is_binary(value),
-    do: truncate(value, string_limit)
+  defp compact_prompt_value(value, _list_limit, _string_limit) when is_binary(value),
+    do: value
 
   defp compact_prompt_value(value, _list_limit, _string_limit), do: value
 
@@ -2041,7 +2057,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp due_now?(now, state) do
     local_now = local_datetime(now, state)
-    local_now.hour >= state.morning_hour
+
+    local_now.hour > state.morning_hour or
+      (local_now.hour == state.morning_hour and local_now.minute >= state.morning_minute)
   end
 
   defp next_morning_occurrence(now, state) do
@@ -2050,14 +2068,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     scheduled_today =
       local_date
-      |> DateTime.new!(Time.new!(state.morning_hour, 0, 0), "Etc/UTC")
+      |> DateTime.new!(Time.new!(state.morning_hour, state.morning_minute, 0), "Etc/UTC")
 
     target_local =
       if DateTime.compare(local_now, scheduled_today) == :lt do
         scheduled_today
       else
         Date.add(local_date, 1)
-        |> DateTime.new!(Time.new!(state.morning_hour, 0, 0), "Etc/UTC")
+        |> DateTime.new!(Time.new!(state.morning_hour, state.morning_minute, 0), "Etc/UTC")
       end
 
     DateTime.add(target_local, -local_timezone_offset_hours(target_local, state), :hour)
@@ -2073,6 +2091,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     now
     |> local_datetime(state)
     |> DateTime.to_date()
+  end
+
+  defp local_day_start_utc(%Date{} = date, state) do
+    local_midnight = DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+    DateTime.add(local_midnight, -local_timezone_offset_hours(local_midnight, state), :hour)
   end
 
   defp local_date_from_value(%DateTime{} = value, state),
@@ -2403,16 +2426,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
   defp blank?(_value), do: false
-
-  defp truncate(nil, _limit), do: ""
-
-  defp truncate(value, limit) when is_binary(value) do
-    if String.length(value) > limit do
-      String.slice(value, 0, limit) <> "..."
-    else
-      value
-    end
-  end
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do
