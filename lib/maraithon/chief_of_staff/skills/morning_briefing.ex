@@ -23,6 +23,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Memory
+  alias Maraithon.Spend
   alias Maraithon.OpenLoops
   alias Maraithon.Todos
 
@@ -260,6 +261,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     brief_input = state.pending_brief_input || %{}
     parsed_brief = parse_llm_brief(response)
     {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
+    cost_summary = briefing_cost_summary(response, brief_input)
 
     attrs = %{
       "cadence" => "morning",
@@ -281,6 +283,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "error_message" => error_message,
         "generation_mode" => generation_mode,
         "llm_finish_reason" => llm_finish_reason(response),
+        "llm_usage" => json_metadata(response_usage(response)),
+        "estimated_cost" => json_metadata(cost_summary),
         "origin_skill_id" => id(),
         "source_backed" => true,
         "brief_input" => compact_brief_input_for_metadata(brief_input),
@@ -291,12 +295,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
       {:ok, brief_record} ->
         period_key = read_string(brief_input, "date", nil)
-        todo_result = persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
+
+        {todo_result, todo_elapsed_ms} =
+          timed(fn ->
+            persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
+          end)
 
         event_type =
           if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
 
-        todo_payload = todo_event_payload(todo_result)
+        todo_payload =
+          todo_result
+          |> todo_event_payload()
+          |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
 
         {:emit,
          {event_type,
@@ -651,8 +662,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       skill_config = smoke_test_skill_config(agent, user_id)
       state = init(skill_config)
       now = Keyword.get(opts, :now, DateTime.utc_now())
-      context = smoke_test_context(agent, user_id, skill_config, now, opts)
-      brief_input = build_brief_input(user_id, now, state, context)
+      total_started_ms = System.monotonic_time(:millisecond)
+
+      {context, source_context_elapsed_ms} =
+        timed(fn -> smoke_test_context(agent, user_id, skill_config, now, opts) end)
+
+      {brief_input, input_build_elapsed_ms} =
+        timed(fn -> build_brief_input(user_id, now, state, context) end)
 
       case llm_params(brief_input, state) do
         {:ok, params} ->
@@ -669,8 +685,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                 tokens_out: response.tokens_out,
                 finish_reason: response.finish_reason,
                 elapsed_ms: elapsed_ms,
+                briefing_llm_elapsed_ms: elapsed_ms,
+                source_context_elapsed_ms: source_context_elapsed_ms,
+                input_build_elapsed_ms: input_build_elapsed_ms,
                 max_tokens_used: effective_llm_max_tokens(state),
                 reasoning_effort_used: state.llm_reasoning_effort,
+                llm_usage: response_usage(response),
+                estimated_cost: briefing_cost_summary(response, brief_input),
                 calendar_today_events:
                   length(get_in(brief_input, ["calendar", "today_events"]) || []),
                 commercial_coverage_required_threads:
@@ -685,25 +706,39 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
               case parsed do
                 {:ok, brief} ->
-                  todo_result =
+                  {todo_result, todo_elapsed_ms} =
                     if Keyword.get(opts, :persist_todos, Keyword.get(opts, :send, false)) do
-                      persist_model_todos(user_id, brief, brief_input)
+                      timed(fn -> persist_model_todos(user_id, brief, brief_input) end)
                     else
-                      {:ok, :no_todos}
+                      {{:ok, :no_todos}, 0}
                     end
 
                   diagnostics =
-                    Map.put(diagnostics, :todo_persistence, todo_event_payload(todo_result))
+                    diagnostics
+                    |> Map.put(:todo_persistence, todo_event_payload(todo_result))
+                    |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
+
+                  {delivery_result, delivery_elapsed_ms} =
+                    if Keyword.get(opts, :send, false) do
+                      timed(fn -> deliver_smoke_brief(user_id, brief, diagnostics) end)
+                    else
+                      {{:ok, :not_sent}, 0}
+                    end
+
+                  diagnostics =
+                    diagnostics
+                    |> Map.put(:telegram_delivery, delivery_event_payload(delivery_result))
+                    |> Map.put(:telegram_delivery_elapsed_ms, delivery_elapsed_ms)
+                    |> Map.put(:total_elapsed_ms, elapsed_since_ms(total_started_ms))
 
                   result = {:ok, brief, diagnostics}
-
-                  if Keyword.get(opts, :send, false) do
-                    deliver_smoke_brief(user_id, brief, diagnostics)
-                  end
 
                   result
 
                 {:error, reason} ->
+                  diagnostics =
+                    Map.put(diagnostics, :total_elapsed_ms, elapsed_since_ms(total_started_ms))
+
                   {:error, {:invalid_brief, reason}, diagnostics}
               end
 
@@ -713,6 +748,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               {:error, {:llm_call_failed, reason},
                %{
                  elapsed_ms: elapsed_ms,
+                 total_elapsed_ms: elapsed_since_ms(total_started_ms),
+                 source_context_elapsed_ms: source_context_elapsed_ms,
+                 input_build_elapsed_ms: input_build_elapsed_ms,
                  max_tokens_used: effective_llm_max_tokens(state),
                  reasoning_effort_used: state.llm_reasoning_effort
                }}
@@ -1095,7 +1133,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:ok, :no_todos}
 
       candidates ->
-        OpenLoops.ingest_todos(user_id, candidates, source: "chief_of_staff_morning_briefing")
+        OpenLoops.ingest_todos(user_id, candidates,
+          source: "chief_of_staff_morning_briefing",
+          max_tokens: 32_000,
+          timeout_ms: 1_200_000,
+          reasoning_effort: "xhigh"
+        )
     end
   end
 
@@ -1126,7 +1169,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp todo_event_payload({:ok, result}) when is_map(result) do
     %{
       todo_count: length(result.todos),
-      todo_skipped_count: result.skipped_count
+      todo_skipped_count: result.skipped_count,
+      todo_usage: Map.get(result, :usage, %{})
     }
   end
 
@@ -1136,6 +1180,59 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       todo_skipped_count: 0,
       todo_error: inspect(reason)
     }
+  end
+
+  defp delivery_event_payload({:ok, result}) when is_map(result) do
+    %{
+      status: "sent",
+      chunks: Map.get(result, "chunks", 0),
+      message_ids: Map.get(result, "message_ids", [])
+    }
+  end
+
+  defp delivery_event_payload({:ok, :not_sent}), do: %{status: "not_sent"}
+
+  defp delivery_event_payload({:error, reason}) do
+    %{status: "error", error: inspect(reason)}
+  end
+
+  defp briefing_cost_summary(response, brief_input) do
+    llm_usage = response_usage(response)
+    web_searches = get_in(brief_input, ["meeting_prep", "counts", "web_searches"]) || 0
+    web_search_cost = Spend.web_search_cost(web_searches)
+    llm_cost = read_number(llm_usage, "total_cost", 0.0)
+    total_cost = llm_cost + web_search_cost.total_cost
+
+    %{
+      pricing_source: "openai_api_pricing_2026_05_12",
+      llm: llm_usage,
+      web_search: web_search_cost,
+      estimated_total_cost: Float.round(total_cost, 6)
+    }
+  end
+
+  defp response_usage(response) do
+    case read_map(response, "usage") do
+      usage when map_size(usage) > 0 ->
+        usage
+
+      _empty ->
+        model = read_string(response, "model", "unknown")
+        tokens_in = read_integer(response, "tokens_in", 0)
+        tokens_out = read_integer(response, "tokens_out", 0)
+        Spend.calculate_cost(model, tokens_in, tokens_out)
+    end
+  end
+
+  defp json_metadata(value), do: Maraithon.Normalization.normalize_json_value(value)
+
+  defp timed(fun) when is_function(fun, 0) do
+    started_ms = System.monotonic_time(:millisecond)
+    {fun.(), elapsed_since_ms(started_ms)}
+  end
+
+  defp elapsed_since_ms(started_ms) do
+    System.monotonic_time(:millisecond) - started_ms
   end
 
   defp calendar_event_for_prompt(nil, _state), do: nil
@@ -2381,6 +2478,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp read_integer(_map, _key, default), do: default
+
+  defp read_number(map, key, default) when is_map(map) do
+    case read_any(map, key) do
+      value when is_number(value) -> value
+      value when is_binary(value) -> parse_float(value, default)
+      _ -> default
+    end
+  end
+
+  defp read_number(_map, _key, default), do: default
+
+  defp parse_float(value, default) when is_binary(value) do
+    case Float.parse(String.trim(value)) do
+      {number, _rest} -> number
+      :error -> default
+    end
+  end
 
   defp truthy?(true), do: true
   defp truthy?("true"), do: true

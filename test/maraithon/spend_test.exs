@@ -53,6 +53,24 @@ defmodule Maraithon.SpendTest do
       assert result.output_cost == 1.25
       assert result.total_cost == 1.5
     end
+
+    test "applies GPT-5.4 long-context pricing above 272K input tokens" do
+      result = Spend.calculate_cost("gpt-5.4-2026-03-05", 529_554, 32_616)
+
+      assert result.input_multiplier == 2.0
+      assert result.output_multiplier == 1.5
+      assert result.input_cost == 2.64777
+      assert result.output_cost == 0.73386
+      assert result.total_cost == 3.38163
+    end
+
+    test "calculates web search cost" do
+      result = Spend.web_search_cost(15)
+
+      assert result.call_count == 15
+      assert result.rate_per_1k_calls == 10.0
+      assert result.total_cost == 0.15
+    end
   end
 
   describe "get_agent_spend/1" do

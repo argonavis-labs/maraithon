@@ -15,6 +15,8 @@ defmodule Maraithon.Todos.Intelligence do
   @persist_actions ~w(create update)
   @valid_actions ["create", "update", "skip"]
   @required_todo_fields ~w(source title summary next_action dedupe_key)
+  @default_max_tokens 32_000
+  @default_timeout_ms 1_200_000
 
   def sentinel, do: @sentinel
 
@@ -39,7 +41,7 @@ defmodule Maraithon.Todos.Intelligence do
            {:ok, decoded} <- decode_response(response),
            {:ok, decisions, summary} <- normalize_response(decoded, candidates, existing, opts),
            {:ok, result} <- apply_decisions(user_id, decisions, summary) do
-        {:ok, result}
+        {:ok, Map.put(result, :usage, response_usage(response))}
       else
         {:error, reason} -> {:error, reason}
         _other -> {:error, :todo_intelligence_failed}
@@ -196,24 +198,34 @@ defmodule Maraithon.Todos.Intelligence do
   end
 
   defp llm_complete(opts) do
-    Keyword.get(opts, :llm_complete) || configured_llm_complete()
+    Keyword.get(opts, :llm_complete) || configured_llm_complete(opts)
   end
 
-  defp configured_llm_complete do
+  defp configured_llm_complete(opts) do
     config = Application.get_env(:maraithon, :todos, [])
 
     case Keyword.get(config, :llm_complete) do
       fun when is_function(fun, 1) -> fun
-      _other -> &default_llm_complete/1
+      _other -> &default_llm_complete(&1, opts)
     end
   end
 
-  defp default_llm_complete(prompt) when is_binary(prompt) do
+  defp default_llm_complete(prompt, opts) when is_binary(prompt) do
+    config = Application.get_env(:maraithon, :todos, [])
+
     params = %{
       "messages" => [%{"role" => "user", "content" => prompt}],
-      "max_tokens" => 4_000,
+      "max_tokens" =>
+        Keyword.get(opts, :max_tokens, Keyword.get(config, :max_tokens, @default_max_tokens)),
       "temperature" => 0.1,
-      "reasoning_effort" => LLM.intelligence()
+      "reasoning_effort" =>
+        Keyword.get(
+          opts,
+          :reasoning_effort,
+          Keyword.get(config, :reasoning_effort, LLM.intelligence())
+        ),
+      "timeout_ms" =>
+        Keyword.get(opts, :timeout_ms, Keyword.get(config, :timeout_ms, @default_timeout_ms))
     }
 
     case LLM.complete(params) do
@@ -251,6 +263,10 @@ defmodule Maraithon.Todos.Intelligence do
       _other -> {:error, :todo_intelligence_invalid_json}
     end
   end
+
+  defp response_usage(%{usage: usage}) when is_map(usage), do: normalize_json_value(usage)
+  defp response_usage(%{"usage" => usage}) when is_map(usage), do: normalize_json_value(usage)
+  defp response_usage(_response), do: %{}
 
   defp normalize_response(decoded, candidates, existing, opts) when is_map(decoded) do
     summary = read_string(decoded, "summary", nil)
