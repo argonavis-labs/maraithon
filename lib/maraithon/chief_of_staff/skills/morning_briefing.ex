@@ -1135,7 +1135,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       candidates ->
         OpenLoops.ingest_todos(user_id, candidates,
           source: "chief_of_staff_morning_briefing",
-          max_tokens: 32_000,
+          max_tokens: 64_000,
           timeout_ms: 1_200_000,
           reasoning_effort: "xhigh"
         )

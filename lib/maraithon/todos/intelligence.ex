@@ -15,7 +15,7 @@ defmodule Maraithon.Todos.Intelligence do
   @persist_actions ~w(create update)
   @valid_actions ["create", "update", "skip"]
   @required_todo_fields ~w(source title summary next_action dedupe_key)
-  @default_max_tokens 32_000
+  @default_max_tokens 64_000
   @default_timeout_ms 1_200_000
 
   def sentinel, do: @sentinel
