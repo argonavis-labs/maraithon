@@ -86,8 +86,8 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     refute Enum.any?(meeting["web_context"], &String.contains?(&1["query"], "Charlie Feng"))
 
     assert Enum.any?(meeting["data_gaps"], &String.contains?(&1, "Dawn Nguyen"))
-    assert_received {:web_search, "Dawn Nguyen cogniate.com", [limit: 3]}
-    assert_received {:web_search, "Cogniate cogniate.com", [limit: 3]}
+    assert_received {:web_search, "Dawn Nguyen cogniate.com", [limit: 10]}
+    assert_received {:web_search, "Cogniate cogniate.com", [limit: 10]}
   end
 
   test "keeps external attendee meetings when reminder-like calendar blocks fill the day", %{
@@ -121,7 +121,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     summaries = Enum.map(result["meetings"], & &1["summary"])
 
     assert "Dawn Nguyen and Charlie Feng" in summaries
-    assert get_in(result, ["counts", "meetings"]) == 10
+    assert get_in(result, ["counts", "meetings"]) == 11
     assert get_in(result, ["counts", "required_schedule_meetings"]) == 1
 
     assert Enum.any?(result["meetings"], fn meeting ->
@@ -234,9 +234,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
              end)
            end)
 
-    assert_received {:web_search, "Dawn Nguyen kilnstudio.io", [limit: 3]}
-    assert_received {:web_search, "Kiln Studio kilnstudio.io", [limit: 3]}
-    assert_received {:page_fetch, "https://kilnstudio.io/", [text_limit: 1800]}
+    assert_received {:web_search, "Dawn Nguyen kilnstudio.io", [limit: 10]}
+    assert_received {:web_search, "Kiln Studio kilnstudio.io", [limit: 10]}
+    assert_received {:page_fetch, "https://kilnstudio.io/", [text_limit: 20000]}
     refute_received {:web_search, "Coach School", _opts}
     refute_received {:web_search, "School company", _opts}
     refute_received {:web_search, "Coach Club Soccer", _opts}
