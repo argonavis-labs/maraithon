@@ -9,6 +9,7 @@ defmodule Maraithon.TelegramResponder do
   @action_prefix "tgact"
 
   def send(chat_id, text, opts \\ []) when is_binary(chat_id) and is_binary(text) do
+    {text, opts} = prepare_text(text, opts)
     telegram_module().send_message(chat_id, text, opts)
   end
 
@@ -27,6 +28,7 @@ defmodule Maraithon.TelegramResponder do
 
   def edit(chat_id, message_id, text, opts \\ [])
       when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
+    {text, opts} = prepare_text(text, opts)
     telegram_module().edit_message_text(chat_id, message_id, text, opts)
   end
 
@@ -102,6 +104,19 @@ defmodule Maraithon.TelegramResponder do
 
   defp action_callback_data(prepared_action_id, decision),
     do: "#{@action_prefix}:#{prepared_action_id}:#{decision}"
+
+  defp prepare_text(text, opts) do
+    case Keyword.get(opts, :parse_mode) do
+      nil ->
+        {Maraithon.TelegramMarkdown.to_html(text), Keyword.put(opts, :parse_mode, "HTML")}
+
+      "HTML" ->
+        {text, opts}
+
+      _other ->
+        {text, opts}
+    end
+  end
 
   defp telegram_module do
     Application.get_env(:maraithon, :insights, [])

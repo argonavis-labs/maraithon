@@ -37,7 +37,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_lookback_hours 18
   @default_llm_max_tokens 64_000
   @default_llm_reasoning_effort "xhigh"
-  @default_llm_timeout_ms 600_000
+  @default_llm_timeout_ms 1_200_000
   @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
   @prompt_string_limit 1_500
@@ -75,6 +75,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @local_browser_top_hosts 6
   @local_files_allowed_extensions ~w(pdf md txt rtf rtfd docx pages key keynote ppt pptx xls xlsx csv numbers doc)
   @device_stale_seconds 2 * 60 * 60
+  @telegram_chunk_limit 3_300
 
   @impl true
   def id, do: "morning_briefing"
@@ -205,7 +206,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       llm_reasoning_effort:
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       llm_timeout_ms:
-        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 600_000),
+        integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 1_200_000),
       pending_brief_input: nil,
       pending_dedupe_key: nil,
       last_generated_keys: %{}
@@ -802,7 +803,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp deliver_smoke_brief(user_id, brief, diagnostics) do
+  defp deliver_smoke_brief(user_id, brief, _diagnostics) do
     case ConnectedAccounts.telegram_destination(user_id) do
       nil ->
         {:error, :no_telegram_destination}
@@ -816,24 +817,107 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             other -> to_string(other)
           end
 
-        title = read_string(brief, "title", "Morning briefing")
-        summary = read_string(brief, "summary", "")
-        body = read_string(brief, "body", "")
-
-        text =
-          [
-            title,
-            summary,
-            body,
-            "",
-            "[smoke-test • #{diagnostics.tokens_out} out tokens • #{diagnostics.elapsed_ms}ms]"
-          ]
-          |> Enum.reject(&(&1 == ""))
-          |> Enum.join("\n\n")
-
-        Maraithon.TelegramResponder.send(chat_id, text)
+        brief
+        |> smoke_brief_telegram_chunks()
+        |> send_telegram_html_chunks(chat_id)
     end
   end
+
+  defp smoke_brief_telegram_chunks(brief) do
+    title = read_string(brief, "title", "Morning briefing")
+    summary = read_string(brief, "summary", "")
+    body = read_string(brief, "body", "")
+
+    [title, summary, body]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+    |> markdown_chunks(@telegram_chunk_limit)
+    |> maybe_prefix_parts()
+    |> Enum.map(&Maraithon.TelegramMarkdown.to_html/1)
+  end
+
+  defp send_telegram_html_chunks(chunks, chat_id) do
+    chunks
+    |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, message_ids} ->
+      case Maraithon.TelegramResponder.send(chat_id, chunk, parse_mode: "HTML") do
+        {:ok, result} ->
+          {:cont, {:ok, [read_message_id(result) | message_ids]}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, message_ids} ->
+        {:ok, %{"message_ids" => Enum.reverse(message_ids), "chunks" => length(message_ids)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp markdown_chunks(text, limit) when is_binary(text) do
+    text
+    |> markdown_chunk_units(limit)
+    |> Enum.reduce([], fn unit, chunks ->
+      append_markdown_chunk(chunks, unit, limit)
+    end)
+    |> Enum.reverse()
+  end
+
+  defp markdown_chunk_units(text, limit) do
+    text
+    |> String.split(~r/\n{2,}/, trim: true)
+    |> Enum.flat_map(fn block ->
+      cond do
+        String.length(block) <= limit ->
+          [block]
+
+        String.contains?(block, "\n") ->
+          block
+          |> String.split("\n", trim: true)
+          |> Enum.flat_map(&hard_split_markdown_unit(&1, limit))
+
+        true ->
+          hard_split_markdown_unit(block, limit)
+      end
+    end)
+  end
+
+  defp hard_split_markdown_unit(text, limit) do
+    if String.length(text) <= limit do
+      [text]
+    else
+      {chunk, rest} = String.split_at(text, limit)
+      [chunk | hard_split_markdown_unit(rest, limit)]
+    end
+  end
+
+  defp append_markdown_chunk([], unit, _limit), do: [unit]
+
+  defp append_markdown_chunk([current | rest], unit, limit) do
+    candidate = current <> "\n\n" <> unit
+
+    if String.length(candidate) <= limit do
+      [candidate | rest]
+    else
+      [unit, current | rest]
+    end
+  end
+
+  defp maybe_prefix_parts([_single] = chunks), do: chunks
+
+  defp maybe_prefix_parts(chunks) do
+    total = length(chunks)
+
+    chunks
+    |> Enum.with_index(1)
+    |> Enum.map(fn {chunk, index} -> "Part #{index}/#{total}\n\n#{chunk}" end)
+  end
+
+  defp read_message_id(%{"message_id" => message_id}), do: message_id
+  defp read_message_id(%{message_id: message_id}), do: message_id
+  defp read_message_id(_result), do: nil
 
   defp llm_params(brief_input, state) do
     with {:ok, prompt} <- morning_prompt(brief_input) do

@@ -323,7 +323,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert conversation.metadata["pending_rule_ids"] != []
 
     prompt_reply = last_telegram_message(:send)
-    assert prompt_reply.text =~ "Reply `yes`"
+    assert prompt_reply.opts[:parse_mode] == "HTML"
+    assert prompt_reply.text =~ "Reply <code>yes</code>"
 
     :ok =
       InsightNotifications.handle_telegram_event(%{

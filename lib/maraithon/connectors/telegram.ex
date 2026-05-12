@@ -339,6 +339,8 @@ defmodule Maraithon.Connectors.Telegram do
   Sends a text message.
   """
   def send_message(chat_id, text, opts \\ []) do
+    {text, opts} = prepare_text(text, opts)
+
     params =
       %{chat_id: chat_id, text: text}
       |> maybe_put(:parse_mode, opts[:parse_mode])
@@ -360,6 +362,8 @@ defmodule Maraithon.Connectors.Telegram do
   Sends a photo.
   """
   def send_photo(chat_id, photo, opts \\ []) do
+    opts = prepare_caption(opts)
+
     params =
       %{chat_id: chat_id, photo: photo}
       |> maybe_put(:caption, opts[:caption])
@@ -373,6 +377,8 @@ defmodule Maraithon.Connectors.Telegram do
   Sends a document.
   """
   def send_document(chat_id, document, opts \\ []) do
+    opts = prepare_caption(opts)
+
     params =
       %{chat_id: chat_id, document: document}
       |> maybe_put(:caption, opts[:caption])
@@ -399,6 +405,8 @@ defmodule Maraithon.Connectors.Telegram do
   Edits a message's text.
   """
   def edit_message_text(chat_id, message_id, text, opts \\ []) do
+    {text, opts} = prepare_text(text, opts)
+
     params =
       %{chat_id: chat_id, message_id: message_id, text: text}
       |> maybe_put(:parse_mode, opts[:parse_mode])
@@ -622,6 +630,31 @@ defmodule Maraithon.Connectors.Telegram do
   defp allow_unsigned? do
     Application.get_env(:maraithon, :telegram, [])
     |> Keyword.get(:allow_unsigned, false)
+  end
+
+  defp prepare_text(text, opts) do
+    case Keyword.get(opts, :parse_mode) do
+      nil ->
+        {Maraithon.TelegramMarkdown.to_html(text), Keyword.put(opts, :parse_mode, "HTML")}
+
+      "HTML" ->
+        {text, opts}
+
+      _other ->
+        {text, opts}
+    end
+  end
+
+  defp prepare_caption(opts) do
+    case {Keyword.get(opts, :caption), Keyword.get(opts, :parse_mode)} do
+      {caption, nil} when is_binary(caption) ->
+        opts
+        |> Keyword.put(:caption, Maraithon.TelegramMarkdown.to_html(caption))
+        |> Keyword.put(:parse_mode, "HTML")
+
+      _other ->
+        opts
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map

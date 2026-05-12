@@ -13,6 +13,71 @@ defmodule Maraithon.Connectors.TelegramTest do
     :ok
   end
 
+  describe "send_message/3" do
+    test "converts markdown text to Telegram HTML by default" do
+      bypass = Bypass.open()
+      parent = self()
+
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345ABC",
+        allow_unsigned: true,
+        api_base_url: "http://localhost:#{bypass.port}/bot"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/bot12345ABC/sendMessage", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:telegram_payload, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 42}})
+        )
+      end)
+
+      assert {:ok, %{"message_id" => 42}} =
+               Telegram.send_message("chat-1", "## Needs\n- **Dawn** and `getdelegates`")
+
+      assert_received {:telegram_payload, payload}
+      assert payload["parse_mode"] == "HTML"
+      assert payload["text"] =~ "<b>Needs</b>"
+      assert payload["text"] =~ "• <b>Dawn</b> and <code>getdelegates</code>"
+      refute payload["text"] =~ "##"
+      refute payload["text"] =~ "**Dawn**"
+    end
+
+    test "preserves explicit HTML payloads" do
+      bypass = Bypass.open()
+      parent = self()
+
+      Application.put_env(:maraithon, :telegram,
+        bot_token: "12345ABC",
+        allow_unsigned: true,
+        api_base_url: "http://localhost:#{bypass.port}/bot"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/bot12345ABC/sendMessage", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:telegram_payload, Jason.decode!(body)})
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{"ok" => true, "result" => %{"message_id" => 43}})
+        )
+      end)
+
+      assert {:ok, %{"message_id" => 43}} =
+               Telegram.send_message("chat-1", "<b>Already HTML</b>", parse_mode: "HTML")
+
+      assert_received {:telegram_payload, payload}
+      assert payload["parse_mode"] == "HTML"
+      assert payload["text"] == "<b>Already HTML</b>"
+    end
+  end
+
   describe "handle_webhook/2" do
     test "parses text message" do
       params = %{
