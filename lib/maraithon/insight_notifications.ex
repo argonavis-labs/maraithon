@@ -89,8 +89,13 @@ defmodule Maraithon.InsightNotifications do
 
       true ->
         case maybe_handle_preference_command(chat_id, text) do
-          :handled -> :ok
-          _ -> TelegramRouter.handle_message(data)
+          :handled ->
+            :ok
+
+          _ ->
+            # Hand off to the per-chat worker so the webhook acks immediately
+            # and concurrent messages in this chat are serialized.
+            Maraithon.TelegramAssistant.ChatWorker.enqueue(chat_id, data)
         end
     end
   end
