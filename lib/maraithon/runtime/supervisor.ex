@@ -38,7 +38,8 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.BriefingCron,
           Maraithon.Runtime.BriefNotifier,
           Maraithon.Runtime.ProactiveCheckIn,
-          Maraithon.Runtime.TokenRefresher
+          Maraithon.Runtime.TokenRefresher,
+          Maraithon.TelegramAssistant.RunReaper
         ]
       else
         []
