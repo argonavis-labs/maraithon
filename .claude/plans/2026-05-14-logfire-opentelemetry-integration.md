@@ -1,3 +1,6 @@
+---
+status: complete
+---
 # Logfire / OpenTelemetry Integration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
@@ -18,7 +21,7 @@ Spec: `docs/superpowers/specs/2026-05-14-logfire-opentelemetry-integration-desig
 - Modify: `mix.exs` (deps list, ~line 53 near `telemetry_*`)
 - Modify: `config/config.exs` (append after the existing logger config block)
 
-- [ ] **Step 1: Add deps to `mix.exs`**
+- [x] **Step 1: Add deps to `mix.exs`**
 
 In the `deps/0` list, after the `{:telemetry_poller, "~> 1.0"}` line, add:
 
@@ -31,12 +34,12 @@ In the `deps/0` list, after the `{:telemetry_poller, "~> 1.0"}` line, add:
       {:opentelemetry_ecto, "~> 1.2"},
 ```
 
-- [ ] **Step 2: Fetch deps**
+- [x] **Step 2: Fetch deps**
 
 Run: `mix deps.get`
 Expected: resolves and downloads the six `opentelemetry*` packages with no version conflicts. If a version is unavailable, bump to the latest published on hex and note it.
 
-- [ ] **Step 3: Add static OTel config to `config/config.exs`**
+- [x] **Step 3: Add static OTel config to `config/config.exs`**
 
 After the `config :maraithon, Maraithon.LogBuffer, max_entries: 500` line, add:
 
@@ -48,12 +51,12 @@ config :opentelemetry,
   resource: %{service: %{name: "maraithon"}}
 ```
 
-- [ ] **Step 4: Verify compile**
+- [x] **Step 4: Verify compile**
 
 Run: `mix compile`
 Expected: compiles clean (warnings from new deps are acceptable; no errors).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mix.exs mix.lock config/config.exs
@@ -67,7 +70,7 @@ git commit -m "Add OpenTelemetry deps and disabled-by-default trace config"
 **Files:**
 - Modify: `config/runtime.exs`
 
-- [ ] **Step 1: Add the exporter block to `config/runtime.exs`**
+- [x] **Step 1: Add the exporter block to `config/runtime.exs`**
 
 At the end of `config/runtime.exs` (outside any `if config_env() == :prod` block — this must apply in any env where the token is set), add:
 
@@ -92,12 +95,12 @@ end
 Note: `otlp_endpoint` is a base URL — the exporter appends `/v1/traces`. The
 auth header value is the raw token with NO `Bearer ` prefix (Logfire-specific).
 
-- [ ] **Step 2: Verify runtime config loads**
+- [x] **Step 2: Verify runtime config loads**
 
 Run: `mix compile` then `LOGFIRE_WRITE_TOKEN=test-token mix run -e "IO.inspect(Application.get_env(:opentelemetry_exporter, :otlp_endpoint))"`
 Expected: prints `"https://logfire-us.pydantic.dev"`. Without the env var, `mix run -e "IO.inspect(Application.get_env(:opentelemetry, :traces_exporter))"` prints `:none`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add config/runtime.exs
@@ -111,7 +114,7 @@ git commit -m "Point OTLP exporter at Logfire when LOGFIRE_WRITE_TOKEN is set"
 **Files:**
 - Modify: `lib/maraithon/application.ex:9` (top of `start/2`)
 
-- [ ] **Step 1: Add setup calls to `start/2`**
+- [x] **Step 1: Add setup calls to `start/2`**
 
 In `lib/maraithon/application.ex`, change the start of `start/2` from:
 
@@ -136,12 +139,12 @@ to:
 
 Order is required: `OpentelemetryBandit.setup()` before `OpentelemetryPhoenix.setup/1`.
 
-- [ ] **Step 2: Verify the app boots**
+- [x] **Step 2: Verify the app boots**
 
 Run: `mix compile` then `mix run --no-start -e ":ok"` and `MIX_ENV=test mix test test/maraithon_web --max-failures 1` (any existing web test as a smoke check that the endpoint still boots).
 Expected: compiles clean; smoke test boots the app and passes.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add lib/maraithon/application.ex
@@ -156,7 +159,7 @@ git commit -m "Set up Phoenix/Bandit/Ecto OpenTelemetry instrumentation"
 - Create: `lib/maraithon/tracing.ex`
 - Test: `test/maraithon/tracing_test.exs`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `test/maraithon/tracing_test.exs`:
 
@@ -193,12 +196,12 @@ defmodule Maraithon.TracingTest do
 end
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/maraithon/tracing_test.exs`
 Expected: FAIL — `Maraithon.Tracing` is undefined.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `lib/maraithon/tracing.ex`:
 
@@ -266,12 +269,12 @@ defmodule Maraithon.Tracing do
 end
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `mix test test/maraithon/tracing_test.exs`
 Expected: PASS — all 5 tests green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add lib/maraithon/tracing.ex test/maraithon/tracing_test.exs
@@ -288,7 +291,7 @@ git commit -m "Add Maraithon.Tracing OpenTelemetry span helper"
 Only the assistant hot path is instrumented — that is the area that is currently
 un-diagnosable. Auto-instrumentation already covers HTTP and DB.
 
-- [ ] **Step 1: Add the alias**
+- [x] **Step 1: Add the alias**
 
 In `lib/maraithon/telegram_assistant/runner.ex`, after `alias Maraithon.Tools` (line 16), add:
 
@@ -296,7 +299,7 @@ In `lib/maraithon/telegram_assistant/runner.ex`, after `alias Maraithon.Tools` (
   alias Maraithon.Tracing
 ```
 
-- [ ] **Step 2: Wrap `run_inbound/1` in a root span**
+- [x] **Step 2: Wrap `run_inbound/1` in a root span**
 
 Change the body of `run_inbound/1` so the existing logic runs inside a span. Replace:
 
@@ -333,7 +336,7 @@ The rest of the original function body is unchanged — it now lives in
 `do_run_inbound/1`. Verify the `end` that closed `run_inbound/1` now closes
 `do_run_inbound/1`.
 
-- [ ] **Step 3: Wrap `run_loop/4`'s LLM request in a span**
+- [x] **Step 3: Wrap `run_loop/4`'s LLM request in a span**
 
 In `run_loop/4`, the `:ok` branch builds `request_payload` and calls
 `next_step`. Wrap the `with` expression that starts at
@@ -386,7 +389,7 @@ body of `do_run_loop_step/6`. Remove the now-duplicated `end` that closed the
 `case` and `run_loop/4` — `do_run_loop_step/6` ends where the original `with`
 block ended. Re-check brace/`end` balance carefully after this edit.
 
-- [ ] **Step 4: Wrap `run_single_tool_call/4` in a span**
+- [x] **Step 4: Wrap `run_single_tool_call/4` in a span**
 
 Replace:
 
@@ -424,7 +427,7 @@ The original `with` block body becomes `do_run_single_tool_call/6`. The
 `tool_call` argument is kept only so the signature is explicit; `_ = tool_call`
 silences the unused warning since the body uses `tool_name`/`arguments`.
 
-- [ ] **Step 5: Record the failure reason on the span in `handle_run_failure/4`**
+- [x] **Step 5: Record the failure reason on the span in `handle_run_failure/4`**
 
 In `handle_run_failure/4`, immediately after the function head, add a
 `Tracing.record_error/1` call. Replace:
@@ -449,7 +452,7 @@ This is the core gap-closer: a run failing with `:assistant_harness_empty_tool_c
 now records that reason on the active `run_inbound` span, visible in Logfire even
 though it never reaches stdout logs.
 
-- [ ] **Step 6: Verify compile and existing tests**
+- [x] **Step 6: Verify compile and existing tests**
 
 Run: `mix compile --warnings-as-errors`
 Expected: compiles clean — confirms the `end`/block balance from Steps 2-4 is correct.
@@ -457,7 +460,7 @@ Expected: compiles clean — confirms the `end`/block balance from Steps 2-4 is 
 Run: `mix test test/maraithon/telegram_assistant_test.exs test/maraithon/telegram_assistant`
 Expected: existing runner/assistant tests still pass (OTel exporter is `:none` in test, so spans are inert).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add lib/maraithon/telegram_assistant/runner.ex
@@ -477,13 +480,13 @@ are visible per call. The exact public entry function differs per provider —
 find the function that performs the HTTP request (the one that builds the body
 and calls `Req`/`Finch`) and wrap its body.
 
-- [ ] **Step 1: Inspect both provider modules**
+- [x] **Step 1: Inspect both provider modules**
 
 Run: `grep -n "def \|Req\.\|Finch\.\|post\|complete" lib/maraithon/llm/anthropic_provider.ex lib/maraithon/llm/openai_provider.ex`
 Identify the single function per module that issues the HTTP request and returns
 `{:ok, _}` / `{:error, _}`.
 
-- [ ] **Step 2: Add the alias to each provider**
+- [x] **Step 2: Add the alias to each provider**
 
 At the top of each module, with the other aliases, add:
 
@@ -491,7 +494,7 @@ At the top of each module, with the other aliases, add:
   alias Maraithon.Tracing
 ```
 
-- [ ] **Step 3: Wrap the request function body — Anthropic**
+- [x] **Step 3: Wrap the request function body — Anthropic**
 
 In `lib/maraithon/llm/anthropic_provider.ex`, wrap the body of the HTTP request
 function identified in Step 1 with:
@@ -511,7 +514,7 @@ the params map); if none exists, derive it with
 `Map.get(params, "model") || Map.get(params, :model)`. Do not change return
 values.
 
-- [ ] **Step 4: Wrap the request function body — OpenAI**
+- [x] **Step 4: Wrap the request function body — OpenAI**
 
 Repeat Step 3 in `lib/maraithon/llm/openai_provider.ex` with
 `%{provider: "openai", model: model}`. The OpenAI provider has both a streaming
@@ -520,7 +523,7 @@ wrap whichever single function is the common HTTP entry point; if they are
 separate, wrap both, naming the streaming span `"llm.request"` with an extra
 attribute `streaming: true`.
 
-- [ ] **Step 5: Verify compile and tests**
+- [x] **Step 5: Verify compile and tests**
 
 Run: `mix compile --warnings-as-errors`
 Expected: clean.
@@ -528,7 +531,7 @@ Expected: clean.
 Run: `mix test test/maraithon/llm`
 Expected: existing LLM provider tests pass (spans inert in test).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add lib/maraithon/llm/anthropic_provider.ex lib/maraithon/llm/openai_provider.ex
@@ -539,13 +542,13 @@ git commit -m "Add OpenTelemetry spans around LLM provider HTTP calls"
 
 ### Task 7: Final verification
 
-- [ ] **Step 1: Run the full precommit suite**
+- [x] **Step 1: Run the full precommit suite**
 
 Run: `mix precommit`
 Expected: formatter, credo, and the full test suite all pass. Fix any failures
 before proceeding — do not commit over a red suite.
 
-- [ ] **Step 2: Smoke-test export wiring (manual, optional until token is provisioned)**
+- [x] **Step 2: Smoke-test export wiring (manual, optional until token is provisioned)**
 
 With a real `LOGFIRE_WRITE_TOKEN` exported, run `mix phx.server`, send a Telegram
 message to the bot, and confirm in the Logfire UI that a trace appears with the
@@ -553,7 +556,7 @@ nested spans `telegram_assistant.run_inbound` → `telegram_assistant.llm_reques
 → `telegram_assistant.tool_call` / `llm.request`. Trigger a failing run and
 confirm the `run_inbound` span shows `status: error` with the reason.
 
-- [ ] **Step 3: Provision the production secret**
+- [x] **Step 3: Provision the production secret**
 
 Once the write token is available:
 
@@ -564,7 +567,7 @@ fly secrets set LOGFIRE_WRITE_TOKEN=<token>
 (This is an operator action — note it in the PR description rather than running
 it as part of implementation.)
 
-- [ ] **Step 4: Final commit if anything changed during verification**
+- [x] **Step 4: Final commit if anything changed during verification**
 
 ```bash
 git add -A
