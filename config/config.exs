@@ -85,6 +85,12 @@ config :maraithon, Maraithon.WebSearch,
   base_url: "https://duckduckgo.com/html/",
   limit: 3
 
+# OpenTelemetry — traces export is disabled by default and turned on in
+# config/runtime.exs only when LOGFIRE_WRITE_TOKEN is present.
+config :opentelemetry,
+  traces_exporter: :none,
+  resource: %{service: %{name: "maraithon"}}
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"
