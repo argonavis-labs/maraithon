@@ -424,6 +424,65 @@ defmodule Maraithon.Runtime.SchedulerTest do
 
       GenServer.stop(pid, :normal)
     end
+
+    @doc """
+    Verifies that on :poll, stale dispatched jobs are reclaimed to "pending"
+    when they still have retries left, but dead-lettered to "failed" once they
+    have been dispatched @max_dispatch_attempts times without an ack. This
+    stops the reclaim/re-dispatch churn for jobs bound for dead agents.
+    """
+    test "poll dead-letters stale jobs past the dispatch-attempt cap", %{agent: agent} do
+      case Process.whereis(Scheduler) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      stale = DateTime.add(DateTime.utc_now(), -120, :second)
+      future = DateTime.add(DateTime.utc_now(), 3600, :second)
+
+      # Stale + exhausted attempts -> should be dead-lettered to "failed".
+      {:ok, dead} =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "wakeup",
+          fire_at: stale,
+          status: "dispatched",
+          claimed_by: "old-node",
+          claimed_at: stale,
+          dispatched_at: stale,
+          attempts: 5
+        })
+        |> Repo.insert()
+
+      # Stale but retries remaining -> should be reclaimed to "pending".
+      # fire_at is in the future so the same poll does not immediately
+      # re-dispatch it.
+      {:ok, retry} =
+        %ScheduledJob{}
+        |> ScheduledJob.changeset(%{
+          agent_id: agent.id,
+          job_type: "wakeup",
+          fire_at: future,
+          status: "dispatched",
+          claimed_by: "old-node",
+          claimed_at: stale,
+          dispatched_at: stale,
+          attempts: 1
+        })
+        |> Repo.insert()
+
+      {:ok, pid} = Scheduler.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      Process.sleep(200)
+
+      assert Repo.get(ScheduledJob, dead.id).status == "failed"
+      assert Repo.get(ScheduledJob, retry.id).status == "pending"
+
+      GenServer.stop(pid, :normal)
+    end
   end
 
   # ============================================================================

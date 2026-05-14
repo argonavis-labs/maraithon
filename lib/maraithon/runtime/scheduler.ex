@@ -16,6 +16,11 @@ defmodule Maraithon.Runtime.Scheduler do
 
   @default_poll_interval_ms 5_000
   @default_dispatch_timeout_ms 60_000
+  # After this many dispatch attempts that were never acknowledged, a job is
+  # dead-lettered instead of being reclaimed and re-dispatched forever. With
+  # agents acking wakeups on receipt, a job that keeps going stale is almost
+  # always bound for an agent process that no longer exists.
+  @max_dispatch_attempts 5
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -299,6 +304,19 @@ defmodule Maraithon.Runtime.Scheduler do
   defp reclaim_stale_dispatched_jobs(timeout_ms) do
     cutoff = DateTime.add(DateTime.utc_now(), -timeout_ms, :millisecond)
 
+    # Dead-letter jobs that have gone stale too many times — almost always
+    # wakeups for an agent process that is gone. Run this first so the reclaim
+    # below only re-queues jobs that still have retries left.
+    {failed_count, _} =
+      Repo.update_all(
+        from(j in ScheduledJob,
+          where: j.status == "dispatched",
+          where: j.claimed_at < ^cutoff,
+          where: j.attempts >= @max_dispatch_attempts
+        ),
+        set: [status: "failed", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
+      )
+
     {count, _} =
       Repo.update_all(
         from(j in ScheduledJob,
@@ -307,6 +325,12 @@ defmodule Maraithon.Runtime.Scheduler do
         ),
         set: [status: "pending", claimed_by: nil, claimed_at: nil, dispatched_at: nil]
       )
+
+    if failed_count > 0 do
+      Logger.warning(
+        "Dead-lettered #{failed_count} scheduled jobs after #{@max_dispatch_attempts} unacknowledged dispatch attempts"
+      )
+    end
 
     if count > 0 do
       Logger.info("Reclaimed #{count} stale scheduled jobs")

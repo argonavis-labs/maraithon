@@ -64,7 +64,9 @@ defmodule Maraithon.Runtime.Agent do
     %{
       id: agent.id,
       start: {__MODULE__, :start_link, [agent]},
-      restart: :temporary,
+      # :transient — the supervisor restarts an agent that crashes (abnormal
+      # exit) but not one that stops intentionally (:normal / :shutdown).
+      restart: :transient,
       type: :worker
     }
   end
@@ -93,8 +95,11 @@ defmodule Maraithon.Runtime.Agent do
         # Start in recovering state to load any existing state
         {:ok, :recovering, data, [{:next_event, :internal, {:init, agent}}]}
 
-      {:error, reason} ->
-        {:stop, reason}
+      {:error, _reason} ->
+        # Another process already owns this agent globally. Return :ignore so a
+        # :transient supervisor treats this as "not started" rather than a crash
+        # to restart — otherwise a re-register race would loop.
+        :ignore
     end
   end
 
@@ -171,21 +176,17 @@ defmodule Maraithon.Runtime.Agent do
     # Schedule first wakeup based on behavior
     schedule_next_wakeup(data)
 
-    # Drain any messages that arrived during recovery.
-    Enum.each(Enum.reverse(data.deferred_messages), &send(self(), &1))
-
-    data = %{data | deferred_messages: []}
-
+    # Messages that arrived during recovery are drained in idle(:enter).
     Logger.info("Agent recovered, transitioning to idle")
     {:next_state, :idle, data}
   end
 
   def recovering(:info, {:agent_dispatch, msg}, data) do
-    {:keep_state, %{data | deferred_messages: [msg | data.deferred_messages]}}
+    {:keep_state, defer_message(data, msg)}
   end
 
   def recovering(:info, msg, data) do
-    {:keep_state, %{data | deferred_messages: [msg | data.deferred_messages]}}
+    {:keep_state, defer_message(data, msg)}
   end
 
   # ==========================================================================
@@ -194,7 +195,7 @@ defmodule Maraithon.Runtime.Agent do
 
   def idle(:enter, _old_state, data) do
     Logger.debug("Entering idle state")
-    {:keep_state, data}
+    {:keep_state, drain_deferred_messages(data)}
   end
 
   def idle(:info, {:agent_dispatch, msg}, data) do
@@ -331,9 +332,15 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def working(:info, {:wakeup, _, _, _} = msg, data) do
-    # Queue wakeup for later
-    send(self(), msg)
-    {:keep_state, data}
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:pubsub_event, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def working(:info, {:message, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
   end
 
   def working(:info, {:control, :stop, reason}, data) do
@@ -466,8 +473,15 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   def waiting_effect(:info, {:wakeup, _, _, _} = msg, data) do
-    send(self(), msg)
-    {:keep_state, data}
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:pubsub_event, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
+  end
+
+  def waiting_effect(:info, {:message, _, _, _} = msg, data) do
+    {:keep_state, defer_message(data, msg)}
   end
 
   def waiting_effect(:info, {:control, :stop, reason}, data) do
@@ -1033,6 +1047,34 @@ defmodule Maraithon.Runtime.Agent do
       {:error, :not_found} -> :ok
       {:error, :invalid_state} -> :ok
     end
+  end
+
+  # Buffer a message that arrived while the agent was busy (recovering, working,
+  # or waiting on an effect) and replay it once the agent is idle again. Without
+  # this, connector pubsub events and direct messages were silently dropped in
+  # the busy states' catch-all clauses.
+  defp defer_message(data, msg) do
+    maybe_ack_wakeup(msg)
+    %{data | deferred_messages: [msg | data.deferred_messages]}
+  end
+
+  # A wakeup is "delivered" the moment it lands in the agent's mailbox, in any
+  # state. Acking on receipt — not only in :idle — stops the Scheduler from
+  # reclaiming and re-dispatching the same job every poll while the agent is
+  # busy, which was the scheduler-churn leak.
+  defp maybe_ack_wakeup({:wakeup, _type, job_id, _payload}) when is_binary(job_id) do
+    acknowledge_wakeup(job_id)
+  end
+
+  defp maybe_ack_wakeup({:agent_dispatch, inner}), do: maybe_ack_wakeup(inner)
+  defp maybe_ack_wakeup(_msg), do: :ok
+
+  defp drain_deferred_messages(%{deferred_messages: []} = data), do: data
+
+  defp drain_deferred_messages(%{deferred_messages: messages} = data) do
+    # Replay in arrival order (the buffer is prepended, so reverse first).
+    Enum.each(Enum.reverse(messages), &send(self(), &1))
+    %{data | deferred_messages: []}
   end
 
   defp stop_agent(reason, data) do

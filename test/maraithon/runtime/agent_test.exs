@@ -220,7 +220,8 @@ defmodule Maraithon.Runtime.AgentTest do
     Key properties:
     - id: Must match agent.id for proper supervision
     - start: Must be {RuntimeAgent, :start_link, [agent]}
-    - restart: :temporary because agents should not auto-restart
+    - restart: :transient so the supervisor restarts an agent that crashes
+      (abnormal exit) but not one that stops intentionally (:normal)
     - type: :worker (not a supervisor)
     """
     test "returns valid child spec", %{agent: agent} do
@@ -228,7 +229,7 @@ defmodule Maraithon.Runtime.AgentTest do
 
       assert spec.id == agent.id
       assert spec.start == {RuntimeAgent, :start_link, [agent]}
-      assert spec.restart == :temporary
+      assert spec.restart == :transient
       assert spec.type == :worker
     end
   end

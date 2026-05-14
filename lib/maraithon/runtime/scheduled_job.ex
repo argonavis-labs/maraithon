@@ -39,6 +39,6 @@ defmodule Maraithon.Runtime.ScheduledJob do
     job
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ["pending", "dispatched", "delivered", "cancelled"])
+    |> validate_inclusion(:status, ["pending", "dispatched", "delivered", "cancelled", "failed"])
   end
 end
