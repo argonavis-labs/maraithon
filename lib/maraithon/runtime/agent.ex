@@ -1080,6 +1080,11 @@ defmodule Maraithon.Runtime.Agent do
   defp stop_agent(reason, data) do
     data = fail_current_run(data, reason)
     data = emit_event(data, "agent_stopped", %{reason: reason})
+    # Cancel this agent's scheduled jobs so they don't churn in the scheduler
+    # once the process is gone. Only intentional stops reach here — a crash
+    # bypasses stop_agent and is restarted by the :transient supervisor, which
+    # re-schedules its own heartbeat/checkpoint jobs on recovery.
+    _ = Scheduler.cancel_all(data.agent_id)
     {:stop, :normal, data}
   end
 
