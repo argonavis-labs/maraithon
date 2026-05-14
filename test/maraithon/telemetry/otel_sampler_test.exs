@@ -7,6 +7,8 @@ defmodule Maraithon.Telemetry.OtelSamplerTest do
     test "matches opentelemetry_ecto query span names" do
       assert OtelSampler.ecto_query_span?("maraithon.repo.query:scheduled_jobs")
       assert OtelSampler.ecto_query_span?("maraithon.repo.query:effects")
+      # bare form, emitted when no single source is resolved
+      assert OtelSampler.ecto_query_span?("maraithon.repo.query")
     end
 
     test "does not match application or HTTP span names" do

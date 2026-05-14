@@ -35,7 +35,9 @@ defmodule Maraithon.Telemetry.OtelSampler do
   end
 
   @doc false
-  def ecto_query_span?(name) when is_binary(name), do: String.contains?(name, ".repo.query:")
+  # opentelemetry_ecto names spans either `maraithon.repo.query:<table>` or, when
+  # no single source is resolved, bare `maraithon.repo.query` — match both.
+  def ecto_query_span?(name) when is_binary(name), do: String.contains?(name, ".repo.query")
 
   def ecto_query_span?(name) when is_atom(name) and name not in [nil],
     do: ecto_query_span?(Atom.to_string(name))
