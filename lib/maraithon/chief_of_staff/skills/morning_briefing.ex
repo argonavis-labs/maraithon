@@ -26,6 +26,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
   alias Maraithon.Todos
+  alias Maraithon.Tracing
 
   require Logger
 
@@ -258,79 +259,101 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   @impl true
   def handle_effect_result({:llm_call, response}, state, context) do
-    brief_input = state.pending_brief_input || %{}
-    parsed_brief = parse_llm_brief(response)
-    {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
-    cost_summary = briefing_cost_summary(response, brief_input)
+    Tracing.with_span(
+      "chief_of_staff.morning_briefing",
+      %{
+        skill: "morning_briefing",
+        user_id: context[:user_id] || state.user_id,
+        finish_reason: llm_finish_reason(response) || "ok"
+      },
+      fn ->
+        brief_input = state.pending_brief_input || %{}
+        parsed_brief = parse_llm_brief(response)
+        {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
 
-    attrs = %{
-      "cadence" => "morning",
-      "scheduled_for" =>
-        read_string(brief_input, "generated_at", DateTime.utc_now() |> DateTime.to_iso8601()),
-      "dedupe_key" =>
-        state.pending_dedupe_key ||
-          "morning_briefing:#{read_string(brief_input, "date", "unknown")}",
-      "status" => "pending",
-      "title" => read_string(brief, "title", "Morning briefing"),
-      "summary" =>
-        read_string(brief, "summary", "Review today's schedule, inbox, Slack, and commitments."),
-      "body" => read_string(brief, "body", "No briefing body was generated."),
-      "error_message" => error_message,
-      "metadata" => %{
-        "agent_behavior" => state.assistant_behavior,
-        "assistant_behavior" => state.assistant_behavior,
-        "assistant_cycle_id" => context[:assistant_cycle_id],
-        "error_message" => error_message,
-        "generation_mode" => generation_mode,
-        "llm_finish_reason" => llm_finish_reason(response),
-        "llm_usage" => json_metadata(response_usage(response)),
-        "estimated_cost" => json_metadata(cost_summary),
-        "origin_skill_id" => id(),
-        "source_backed" => true,
-        "brief_input" => compact_brief_input_for_metadata(brief_input),
-        "source_health" => read_map(brief_input, "source_health")
-      }
-    }
+        if generation_mode == "error" do
+          Tracing.record_error(
+            "morning_briefing generation failed: " <>
+              String.slice(error_message || "unknown", 0, 300)
+          )
+        end
 
-    case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
-      {:ok, brief_record} ->
-        period_key = read_string(brief_input, "date", nil)
+        cost_summary = briefing_cost_summary(response, brief_input)
 
-        {todo_result, todo_elapsed_ms} =
-          timed(fn ->
-            persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
-          end)
-
-        event_type =
-          if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
-
-        todo_payload =
-          todo_result
-          |> todo_event_payload()
-          |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
-
-        {:emit,
-         {event_type,
-          %{
-            count: 1,
-            error_message: error_message,
-            generation_mode: generation_mode,
-            user_id: context[:user_id] || state.user_id,
-            cadences: ["morning"],
-            source_backed: true,
-            brief_id: brief_record.id
+        attrs = %{
+          "cadence" => "morning",
+          "scheduled_for" =>
+            read_string(brief_input, "generated_at", DateTime.utc_now() |> DateTime.to_iso8601()),
+          "dedupe_key" =>
+            state.pending_dedupe_key ||
+              "morning_briefing:#{read_string(brief_input, "date", "unknown")}",
+          "status" => "pending",
+          "title" => read_string(brief, "title", "Morning briefing"),
+          "summary" =>
+            read_string(
+              brief,
+              "summary",
+              "Review today's schedule, inbox, Slack, and commitments."
+            ),
+          "body" => read_string(brief, "body", "No briefing body was generated."),
+          "error_message" => error_message,
+          "metadata" => %{
+            "agent_behavior" => state.assistant_behavior,
+            "assistant_behavior" => state.assistant_behavior,
+            "assistant_cycle_id" => context[:assistant_cycle_id],
+            "error_message" => error_message,
+            "generation_mode" => generation_mode,
+            "llm_finish_reason" => llm_finish_reason(response),
+            "llm_usage" => json_metadata(response_usage(response)),
+            "estimated_cost" => json_metadata(cost_summary),
+            "origin_skill_id" => id(),
+            "source_backed" => true,
+            "brief_input" => compact_brief_input_for_metadata(brief_input),
+            "source_health" => read_map(brief_input, "source_health")
           }
-          |> Map.merge(todo_payload)},
-         %{
-           state
-           | pending_brief_input: nil,
-             pending_dedupe_key: nil,
-             last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
-         }}
+        }
 
-      {:error, _reason} ->
-        {:idle, %{state | pending_brief_input: nil, pending_dedupe_key: nil}}
-    end
+        case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
+          {:ok, brief_record} ->
+            period_key = read_string(brief_input, "date", nil)
+
+            {todo_result, todo_elapsed_ms} =
+              timed(fn ->
+                persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
+              end)
+
+            event_type =
+              if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+
+            todo_payload =
+              todo_result
+              |> todo_event_payload()
+              |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
+
+            {:emit,
+             {event_type,
+              %{
+                count: 1,
+                error_message: error_message,
+                generation_mode: generation_mode,
+                user_id: context[:user_id] || state.user_id,
+                cadences: ["morning"],
+                source_backed: true,
+                brief_id: brief_record.id
+              }
+              |> Map.merge(todo_payload)},
+             %{
+               state
+               | pending_brief_input: nil,
+                 pending_dedupe_key: nil,
+                 last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
+             }}
+
+          {:error, _reason} ->
+            {:idle, %{state | pending_brief_input: nil, pending_dedupe_key: nil}}
+        end
+      end
+    )
   end
 
   def handle_effect_result(_effect_result, state, _context), do: {:idle, state}

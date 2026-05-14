@@ -13,6 +13,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   alias Maraithon.OpenLoops
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
+  alias Maraithon.Tracing
 
   @default_timezone_offset_hours -5
   @default_review_hour 7
@@ -173,89 +174,110 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   @impl true
   def handle_effect_result({:llm_call, response}, state, context) do
-    tracker_input = state.pending_tracker_input || %{}
-    parsed_report = parse_llm_report(response)
-    {report, generation_mode, error_message} = report_or_error_notice(parsed_report, response)
+    Tracing.with_span(
+      "chief_of_staff.commitment_tracker",
+      %{
+        skill: "commitment_tracker",
+        user_id: context[:user_id] || state.user_id,
+        finish_reason: llm_finish_reason(response) || "ok"
+      },
+      fn ->
+        tracker_input = state.pending_tracker_input || %{}
+        parsed_report = parse_llm_report(response)
+        {report, generation_mode, error_message} = report_or_error_notice(parsed_report, response)
 
-    todo_result =
-      if generation_mode == "llm" do
-        persist_model_todos(context[:user_id] || state.user_id, report, tracker_input)
-      else
-        {:ok, :no_todos}
-      end
+        if generation_mode == "error" do
+          Tracing.record_error(
+            "commitment_tracker generation failed: " <>
+              String.slice(error_message || "unknown", 0, 300)
+          )
+        end
 
-    report = append_todo_write_summary(report, todo_result)
+        todo_result =
+          if generation_mode == "llm" do
+            persist_model_todos(context[:user_id] || state.user_id, report, tracker_input)
+          else
+            {:ok, :no_todos}
+          end
 
-    attrs = %{
-      "cadence" => "commitment_tracker",
-      "scheduled_for" =>
-        read_string(tracker_input, "generated_at", DateTime.utc_now() |> DateTime.to_iso8601()),
-      "dedupe_key" =>
-        state.pending_dedupe_key ||
-          "commitment_tracker:#{read_string(tracker_input, "date", "unknown")}",
-      "status" => "pending",
-      "title" =>
-        report
-        |> read_string(
-          "title",
-          "Commitment tracker - #{read_string(tracker_input, "date", "today")}"
-        )
-        |> truncate(180),
-      "summary" =>
-        report
-        |> read_string("summary", "Review new commitments captured from connected sources.")
-        |> truncate(500),
-      "body" =>
-        report
-        |> read_string("body", "Commitment tracker did not produce a body.")
-        |> truncate(3_900),
-      "error_message" => error_message,
-      "metadata" => %{
-        "agent_behavior" => state.assistant_behavior,
-        "assistant_behavior" => state.assistant_behavior,
-        "assistant_cycle_id" => context[:assistant_cycle_id],
-        "brief_type" => id(),
-        "error_message" => error_message,
-        "generation_mode" => generation_mode,
-        "llm_finish_reason" => llm_finish_reason(response),
-        "origin_skill_id" => id(),
-        "source_backed" => true,
-        "tracker_input" => compact_tracker_input_for_metadata(tracker_input),
-        "source_health" => read_map(tracker_input, "source_health"),
-        "source_access" => read_map(tracker_input, "source_access"),
-        "todo_write" => summarize_todo_result(todo_result)
-      }
-    }
+        report = append_todo_write_summary(report, todo_result)
 
-    case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
-      {:ok, brief_record} ->
-        period_key = read_string(tracker_input, "date", nil)
-
-        event_type =
-          if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
-
-        {:emit,
-         {event_type,
-          %{
-            count: 1,
-            error_message: error_message,
-            generation_mode: generation_mode,
-            user_id: context[:user_id] || state.user_id,
-            cadences: ["commitment_tracker"],
-            source_backed: true,
-            brief_id: brief_record.id
+        attrs = %{
+          "cadence" => "commitment_tracker",
+          "scheduled_for" =>
+            read_string(
+              tracker_input,
+              "generated_at",
+              DateTime.utc_now() |> DateTime.to_iso8601()
+            ),
+          "dedupe_key" =>
+            state.pending_dedupe_key ||
+              "commitment_tracker:#{read_string(tracker_input, "date", "unknown")}",
+          "status" => "pending",
+          "title" =>
+            report
+            |> read_string(
+              "title",
+              "Commitment tracker - #{read_string(tracker_input, "date", "today")}"
+            )
+            |> truncate(180),
+          "summary" =>
+            report
+            |> read_string("summary", "Review new commitments captured from connected sources.")
+            |> truncate(500),
+          "body" =>
+            report
+            |> read_string("body", "Commitment tracker did not produce a body.")
+            |> truncate(3_900),
+          "error_message" => error_message,
+          "metadata" => %{
+            "agent_behavior" => state.assistant_behavior,
+            "assistant_behavior" => state.assistant_behavior,
+            "assistant_cycle_id" => context[:assistant_cycle_id],
+            "brief_type" => id(),
+            "error_message" => error_message,
+            "generation_mode" => generation_mode,
+            "llm_finish_reason" => llm_finish_reason(response),
+            "origin_skill_id" => id(),
+            "source_backed" => true,
+            "tracker_input" => compact_tracker_input_for_metadata(tracker_input),
+            "source_health" => read_map(tracker_input, "source_health"),
+            "source_access" => read_map(tracker_input, "source_access"),
+            "todo_write" => summarize_todo_result(todo_result)
           }
-          |> Map.merge(todo_event_payload(todo_result))},
-         %{
-           state
-           | pending_tracker_input: nil,
-             pending_dedupe_key: nil,
-             last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
-         }}
+        }
 
-      {:error, _reason} ->
-        {:idle, %{state | pending_tracker_input: nil, pending_dedupe_key: nil}}
-    end
+        case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
+          {:ok, brief_record} ->
+            period_key = read_string(tracker_input, "date", nil)
+
+            event_type =
+              if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+
+            {:emit,
+             {event_type,
+              %{
+                count: 1,
+                error_message: error_message,
+                generation_mode: generation_mode,
+                user_id: context[:user_id] || state.user_id,
+                cadences: ["commitment_tracker"],
+                source_backed: true,
+                brief_id: brief_record.id
+              }
+              |> Map.merge(todo_event_payload(todo_result))},
+             %{
+               state
+               | pending_tracker_input: nil,
+                 pending_dedupe_key: nil,
+                 last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
+             }}
+
+          {:error, _reason} ->
+            {:idle, %{state | pending_tracker_input: nil, pending_dedupe_key: nil}}
+        end
+      end
+    )
   end
 
   def handle_effect_result(_effect_result, state, _context), do: {:idle, state}

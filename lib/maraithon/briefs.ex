@@ -324,7 +324,7 @@ defmodule Maraithon.Briefs do
   end
 
   defp brief_reply_markup(%Brief{} = brief) do
-    if travel_brief?(brief) do
+    if travel_brief?(brief) or failed_brief?(brief) do
       nil
     else
       buttons = [
@@ -365,6 +365,12 @@ defmodule Maraithon.Briefs do
   defp cadence_label("travel_prep"), do: "Travel prep"
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other
+
+  # A failed-generation brief is a plain error notice — no dashboard/tune-agent
+  # action buttons, which are noise on a failure message.
+  defp failed_brief?(%Brief{error_message: msg}) when is_binary(msg) and msg != "", do: true
+  defp failed_brief?(%Brief{metadata: %{"generation_mode" => "error"}}), do: true
+  defp failed_brief?(%Brief{}), do: false
 
   defp travel_brief?(%Brief{metadata: %{"brief_type" => type}})
        when type in ["travel_prep", "travel_update"],
