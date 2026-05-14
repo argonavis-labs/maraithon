@@ -476,3 +476,22 @@ if config_env() == :prod do
 
   config :maraithon, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 end
+
+# =============================================================================
+# Observability — Pydantic Logfire (OpenTelemetry / OTLP)
+# =============================================================================
+# Opt-in: when LOGFIRE_WRITE_TOKEN is set, traces export to Logfire. When it is
+# absent (default dev/test), the exporter stays :none and nothing is sent.
+#
+# otlp_endpoint is a base URL — the exporter appends /v1/traces. The auth header
+# value is the raw write token with NO "Bearer " prefix (Logfire-specific).
+if logfire_token = System.get_env("LOGFIRE_WRITE_TOKEN") do
+  config :opentelemetry,
+    traces_exporter: :otlp,
+    span_processor: :batch
+
+  config :opentelemetry_exporter,
+    otlp_protocol: :http_protobuf,
+    otlp_endpoint: System.get_env("LOGFIRE_ENDPOINT", "https://logfire-us.pydantic.dev"),
+    otlp_headers: [{"authorization", logfire_token}]
+end
