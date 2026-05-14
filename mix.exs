@@ -31,7 +31,9 @@ defmodule Maraithon.MixProject do
   def application do
     [
       mod: {Maraithon.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      # :inets is needed by opentelemetry_exporter's HTTP (httpc) transport;
+      # listing it here avoids the :inets_not_started boot race on the OTLP exporter.
+      extra_applications: [:logger, :runtime_tools, :inets]
     ]
   end
 
