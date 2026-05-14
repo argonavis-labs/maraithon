@@ -14,11 +14,23 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
   alias Maraithon.Tools
+  alias Maraithon.Tracing
   alias Maraithon.UserMemory
 
   require Logger
 
   def run_inbound(attrs) when is_map(attrs) do
+    Tracing.with_span(
+      "telegram_assistant.run_inbound",
+      %{
+        chat_id: Map.get(attrs, :chat_id),
+        trigger_type: trigger_type(attrs)
+      },
+      fn -> do_run_inbound(attrs) end
+    )
+  end
+
+  defp do_run_inbound(attrs) do
     context = ContextEngine.build_context(attrs)
     conversation = Map.get(attrs, :conversation)
 
@@ -150,22 +162,44 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
         now = DateTime.utc_now()
 
-        with {:ok, llm_request_step} <-
-               build_step(run, "llm_request", state.sequence + 1, request_payload, now),
-             {:ok, response} <- TelegramAssistant.client_module().next_step(request_payload),
-             {:ok, _completed_request_step} <-
-               TelegramAssistant.complete_step(llm_request_step, %{
-                 response_payload: %{ok: true},
-                 finished_at: DateTime.utc_now()
-               }),
-             {:ok, _llm_response_step} <-
-               record_llm_response(run, state.sequence + 2, response) do
-          next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
-          handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
-        else
-          {:error, reason} ->
-            {:error, run, reason, state}
-        end
+        Tracing.with_span(
+          "telegram_assistant.llm_request",
+          %{
+            run_id: run.id,
+            iteration: state.iteration,
+            llm_turns: state.llm_turns,
+            model: TelegramAssistant.model_name()
+          },
+          fn ->
+            do_run_loop_step(
+              run,
+              runtime_context,
+              state,
+              started_monotonic_ms,
+              request_payload,
+              now
+            )
+          end
+        )
+    end
+  end
+
+  defp do_run_loop_step(run, runtime_context, state, started_monotonic_ms, request_payload, now) do
+    with {:ok, llm_request_step} <-
+           build_step(run, "llm_request", state.sequence + 1, request_payload, now),
+         {:ok, response} <- TelegramAssistant.client_module().next_step(request_payload),
+         {:ok, _completed_request_step} <-
+           TelegramAssistant.complete_step(llm_request_step, %{
+             response_payload: %{ok: true},
+             finished_at: DateTime.utc_now()
+           }),
+         {:ok, _llm_response_step} <-
+           record_llm_response(run, state.sequence + 2, response) do
+      next_state = %{state | llm_turns: state.llm_turns + 1, sequence: state.sequence + 2}
+      handle_llm_response(run, runtime_context, response, next_state, started_monotonic_ms)
+    else
+      {:error, reason} ->
+        {:error, run, reason, state}
     end
   end
 
@@ -260,6 +294,16 @@ defmodule Maraithon.TelegramAssistant.Runner do
     arguments = Map.get(tool_call, "arguments", %{})
     now = DateTime.utc_now()
 
+    Tracing.with_span(
+      "telegram_assistant.tool_call",
+      %{run_id: run.id, tool: tool_name, sequence: sequence},
+      fn ->
+        do_run_single_tool_call(run, runtime_context, tool_name, arguments, sequence, now)
+      end
+    )
+  end
+
+  defp do_run_single_tool_call(run, runtime_context, tool_name, arguments, sequence, now) do
     with {:ok, tool_step} <-
            build_step(
              run,
@@ -355,6 +399,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp handle_run_failure(run, reason, state, attrs) do
+    _ = Tracing.record_error(reason)
+
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
       TelegramAssistant.prepare_final_delivery(run.id)
 
