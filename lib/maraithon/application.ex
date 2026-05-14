@@ -7,6 +7,13 @@ defmodule Maraithon.Application do
 
   @impl true
   def start(_type, _args) do
+    # OpenTelemetry auto-instrumentation. Must run before the supervisor starts
+    # so :telemetry handlers are attached before the first request. No-op for
+    # export when traces_exporter is :none (default dev/test).
+    OpentelemetryBandit.setup()
+    OpentelemetryPhoenix.setup(adapter: :bandit)
+    OpentelemetryEcto.setup([:maraithon, :repo])
+
     children = [
       MaraithonWeb.Telemetry,
       # Encryption vault (must start before Repo for encrypted fields)
