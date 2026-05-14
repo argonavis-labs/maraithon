@@ -16,6 +16,7 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.OpenLoops
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
+  alias Maraithon.Runtime.Snapshot
   alias Maraithon.UserMemory
 
   require Logger
@@ -118,14 +119,20 @@ defmodule Maraithon.Runtime.Agent do
     # Load behavior module
     behavior_module = Behaviors.get!(agent.behavior)
 
-    # Initialize budget from config
-    budget = init_budget(agent_config["budget"])
+    # Restore behavior state and budget from the latest checkpoint snapshot so a
+    # restarted agent resumes with context instead of a blank behavior state.
+    # The snapshot is the recovery boundary — events between the last checkpoint
+    # and a crash are not replayed (replaying behavior handlers would re-run
+    # their side effects).
+    {behavior_state, budget} =
+      case safe_load_snapshot(agent.id) do
+        %{behavior_state: snapshot_state, budget: snapshot_budget, sequence_num: seq} ->
+          Logger.info("Agent restoring behavior state from snapshot", sequence_num: seq)
+          {snapshot_state, snapshot_budget}
 
-    # TODO: Load snapshot and replay events for crash recovery
-    # For now, just initialize fresh
-
-    # Initialize behavior state
-    behavior_state = behavior_module.init(agent_config)
+        nil ->
+          {behavior_module.init(agent_config), init_budget(agent_config["budget"])}
+      end
 
     # Subscribe to internal runtime dispatch topic (cluster-safe routing)
     :ok = Dispatch.subscribe(agent.id)
@@ -511,10 +518,55 @@ defmodule Maraithon.Runtime.Agent do
   end
 
   defp emit_checkpoint(data) do
-    # TODO: Write actual snapshot to snapshots table
     now = DateTime.utc_now()
     data = emit_event(data, "checkpoint_created", %{timestamp: DateTime.to_iso8601(now)})
+    _ = persist_snapshot(data)
     %{data | last_checkpoint_at: now}
+  end
+
+  # Best-effort: a snapshot write must never crash the agent loop. Checkpoints
+  # are only handled in the :idle state, so that is the captured state name.
+  defp persist_snapshot(data) do
+    case Snapshot.persist(
+           data.agent_id,
+           data.sequence_num,
+           :idle,
+           data.behavior_state,
+           data.budget
+         ) do
+      {:ok, _snapshot} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Agent checkpoint snapshot failed",
+          agent_id: data.agent_id,
+          reason: inspect(reason)
+        )
+
+        :ok
+    end
+  rescue
+    error ->
+      Logger.warning("Agent checkpoint snapshot crashed",
+        agent_id: data.agent_id,
+        reason: Exception.message(error)
+      )
+
+      :ok
+  end
+
+  # A corrupt or schema-incompatible snapshot must not wedge agent startup —
+  # fall back to a fresh behavior state if loading or decoding fails.
+  defp safe_load_snapshot(agent_id) do
+    Snapshot.latest(agent_id)
+  rescue
+    error ->
+      Logger.warning("Agent snapshot load failed, starting fresh",
+        agent_id: agent_id,
+        reason: Exception.message(error)
+      )
+
+      nil
   end
 
   defp schedule_heartbeat(data) do

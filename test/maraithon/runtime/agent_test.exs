@@ -313,6 +313,28 @@ defmodule Maraithon.Runtime.AgentTest do
     end
 
     @doc """
+    Verifies a checkpoint wakeup persists a recoverable snapshot of the agent's
+    behavior state, so a restarted agent resumes with context instead of blank.
+    """
+    test "checkpoint wakeup persists a snapshot", %{agent: agent, scheduler_pid: _scheduler_pid} do
+      {:ok, pid} = RuntimeAgent.start_link(agent)
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      Process.sleep(150)
+      assert Maraithon.Runtime.Snapshot.latest(agent.id) == nil
+
+      send(pid, {:wakeup, "checkpoint", Ecto.UUID.generate(), %{}})
+      Process.sleep(150)
+
+      snapshot = Maraithon.Runtime.Snapshot.latest(agent.id)
+      assert snapshot != nil
+      assert snapshot.state_name == "idle"
+      assert is_map(snapshot.behavior_state)
+
+      GenServer.stop(pid, :normal)
+    end
+
+    @doc """
     Verifies agents handle user messages in idle state.
     Messages are the primary way users interact with agents.
     Format: {:message, content, metadata, message_id}
