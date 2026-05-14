@@ -87,8 +87,14 @@ config :maraithon, Maraithon.WebSearch,
 
 # OpenTelemetry — traces export is disabled by default and turned on in
 # config/runtime.exs only when LOGFIRE_WRITE_TOKEN is present.
+#
+# The sampler drops root-level Ecto query spans (background-poller noise)
+# while keeping Ecto queries that are children of a real trace — see
+# Maraithon.Telemetry.OtelSampler. Wrapped in :parent_based so children
+# follow their parent's decision.
 config :opentelemetry,
   traces_exporter: :none,
+  sampler: {:parent_based, %{root: {Maraithon.Telemetry.OtelSampler, %{}}}},
   resource: %{service: %{name: "maraithon"}}
 
 # Import environment specific config. This must remain at the bottom
