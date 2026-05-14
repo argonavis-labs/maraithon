@@ -6,6 +6,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
   @behaviour Maraithon.LLM.Adapter
 
   alias Maraithon.Spend
+  alias Maraithon.Tracing
 
   require Logger
 
@@ -37,6 +38,13 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   defp do_complete(params, api_key) do
     model = params["model"] || Maraithon.LLM.openai_model()
+
+    Tracing.with_span("llm.request", %{provider: "openai", model: model}, fn ->
+      do_complete_request(params, api_key, model)
+    end)
+  end
+
+  defp do_complete_request(params, api_key, model) do
     timeout = params["timeout_ms"] || 120_000
 
     base_body = %{
@@ -89,6 +97,15 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   defp do_stream_complete(params, api_key, on_chunk) do
     model = params["model"] || Maraithon.LLM.openai_model()
+
+    Tracing.with_span(
+      "llm.request",
+      %{provider: "openai", model: model, streaming: true},
+      fn -> do_stream_request(params, api_key, on_chunk, model) end
+    )
+  end
+
+  defp do_stream_request(params, api_key, on_chunk, model) do
     timeout = params["timeout_ms"] || 120_000
 
     base_body = %{

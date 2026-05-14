@@ -7,6 +7,8 @@ defmodule Maraithon.LLM.AnthropicProvider do
 
   require Logger
 
+  alias Maraithon.Tracing
+
   @default_base_url "https://api.anthropic.com/v1/messages"
   @anthropic_version "2023-06-01"
   @cache_min_chars 1024
@@ -48,6 +50,12 @@ defmodule Maraithon.LLM.AnthropicProvider do
     body = build_body(params)
     model = body.model
 
+    Tracing.with_span("llm.request", %{provider: "anthropic", model: model}, fn ->
+      do_request(body, model, params, api_key)
+    end)
+  end
+
+  defp do_request(body, model, params, api_key) do
     headers = [
       {"x-api-key", api_key},
       {"anthropic-version", @anthropic_version},
