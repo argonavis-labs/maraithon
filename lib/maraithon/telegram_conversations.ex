@@ -29,10 +29,16 @@ defmodule Maraithon.TelegramConversations do
            is_nil(linked_insight_id) do
         nil
       else
+        # Each top-level ask gets its own conversation row. We only continue
+        # an existing thread when there is an explicit signal: the user
+        # replied to a specific bot message, there's a pending confirmation,
+        # or the message is linked to a delivery/insight push. Without one of
+        # those, two unrelated asks ("what emails do I have?" then "who is
+        # Charlie?") would pile into one conversation and bleed context.
         find_by_reply(chat_id, reply_to_message_id) ||
           open_pending_confirmation(chat_id) ||
-          find_open_linked(chat_id, linked_delivery_id, linked_insight_id) ||
-          find_recent_general(chat_id, now)
+          open_pending_clarification(chat_id) ||
+          find_open_linked(chat_id, linked_delivery_id, linked_insight_id)
       end
 
     case conversation do
@@ -164,6 +170,18 @@ defmodule Maraithon.TelegramConversations do
   def open_pending_confirmation(chat_id) when is_binary(chat_id) do
     Conversation
     |> where([c], c.chat_id == ^chat_id and c.status == "awaiting_confirmation")
+    |> order_by([c], desc: c.updated_at)
+    |> preload([:linked_delivery, :linked_insight, :turns])
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  # The user is answering a clarifying question the bot asked — continue that
+  # thread instead of opening a new one.
+  defp open_pending_clarification(chat_id) when is_binary(chat_id) do
+    Conversation
+    |> where([c], c.chat_id == ^chat_id and c.status == "open")
+    |> where([c], fragment("? @> ?", c.metadata, ^%{"pending_clarification" => true}))
     |> order_by([c], desc: c.updated_at)
     |> preload([:linked_delivery, :linked_insight, :turns])
     |> limit(1)
@@ -413,19 +431,6 @@ defmodule Maraithon.TelegramConversations do
       |> limit(1)
       |> Repo.one()
     end
-  end
-
-  defp find_recent_general(chat_id, now) do
-    threshold = DateTime.add(now, -@general_idle_seconds, :second)
-
-    Conversation
-    |> where([c], c.chat_id == ^chat_id and c.status == "open")
-    |> where([c], is_nil(c.linked_delivery_id) and is_nil(c.linked_insight_id))
-    |> where([c], c.updated_at >= ^threshold)
-    |> order_by([c], desc: c.updated_at)
-    |> preload([:linked_delivery, :linked_insight, :turns])
-    |> limit(1)
-    |> Repo.one()
   end
 
   defp summarize_recent_turns(conversation_id) do

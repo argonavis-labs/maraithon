@@ -5,6 +5,61 @@ defmodule Maraithon.TelegramConversationsTest do
   alias Maraithon.OperatorEvents
   alias Maraithon.TelegramConversations
 
+  describe "start_or_continue/3 threading" do
+    test "two unrelated non-reply messages create two separate conversations" do
+      user_id = "thread-test-#{System.unique_integer([:positive])}@example.com"
+      chat_id = "chat-#{System.unique_integer([:positive])}"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, first} =
+        TelegramConversations.start_or_continue(user_id, chat_id, %{
+          "root_message_id" => "msg-1"
+        })
+
+      {:ok, _} =
+        TelegramConversations.append_turn(first, %{
+          "role" => "user",
+          "telegram_message_id" => "msg-1",
+          "text" => "What emails do I need to look at"
+        })
+
+      {:ok, second} =
+        TelegramConversations.start_or_continue(user_id, chat_id, %{
+          "root_message_id" => "msg-2"
+        })
+
+      # Each top-level ask gets its own conversation — no piling into one
+      # shared thread for 24h.
+      refute first.id == second.id
+    end
+
+    test "a reply_to message continues the matching conversation" do
+      user_id = "reply-test-#{System.unique_integer([:positive])}@example.com"
+      chat_id = "chat-#{System.unique_integer([:positive])}"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, conversation} =
+        TelegramConversations.start_or_continue(user_id, chat_id, %{
+          "root_message_id" => "msg-100"
+        })
+
+      {:ok, _} =
+        TelegramConversations.append_turn(conversation, %{
+          "role" => "assistant",
+          "telegram_message_id" => "assistant-101",
+          "text" => "Here's an answer."
+        })
+
+      {:ok, follow_up} =
+        TelegramConversations.start_or_continue(user_id, chat_id, %{
+          "reply_to_message_id" => "assistant-101",
+          "root_message_id" => "msg-102"
+        })
+
+      assert follow_up.id == conversation.id
+    end
+  end
+
   test "append_turn emits a canonical operator event for the persisted turn" do
     user_id = "telegram-conversations@example.com"
     chat_id = "chat-123"
