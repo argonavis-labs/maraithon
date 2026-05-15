@@ -38,8 +38,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_slack_message_scan_limit 100
   @default_news_limit 25
   @default_lookback_hours 18
-  @default_llm_max_tokens 64_000
-  @default_llm_reasoning_effort "xhigh"
+  # Tuned for the per-minute token bucket on the reasoning-tier primary
+  # model. "xhigh" reasoning + a 64k budget reliably exhausts the TPM cap on
+  # a single call and the next attempt gets a 429 — the brief was failing
+  # because it asked for more headroom than the account had. "high" + 16k is
+  # still plenty for a thorough executive brief and leaves room for retries.
+  @default_llm_max_tokens 16_000
+  @default_llm_reasoning_effort "high"
   @default_llm_timeout_ms 1_200_000
   @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
