@@ -65,10 +65,14 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
       {:ok, _data} = ok ->
         ok
 
-      {:error, reason} = error ->
+      {:error, reason} ->
         case retry_backoff_ms(reason, attempt) do
           nil ->
-            error
+            # Same-model retries are spent. For transient errors that look
+            # like a model-scoped capacity issue (rate_limit, 5xx, network),
+            # try once more with the cheaper chat-tier model so the brief
+            # still delivers something useful instead of failing entirely.
+            maybe_try_chat_fallback(params, effect, reason)
 
           sleep_ms ->
             Logger.info(
@@ -82,6 +86,45 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         end
     end
   end
+
+  defp maybe_try_chat_fallback(params, effect, original_reason) do
+    chat_model = LLM.chat_model()
+    current_model = Map.get(params, "model")
+
+    cond do
+      not transient_capacity_error?(original_reason) ->
+        {:error, original_reason}
+
+      is_nil(chat_model) ->
+        {:error, original_reason}
+
+      current_model == chat_model ->
+        # Already running on the fallback tier — nowhere else to go.
+        {:error, original_reason}
+
+      true ->
+        Logger.info(
+          "LLM primary exhausted; falling back to chat-tier model",
+          effect_id: effect.id,
+          original_reason: inspect(original_reason),
+          fallback_model: chat_model
+        )
+
+        case LLM.complete(Map.put(params, "model", chat_model)) do
+          {:ok, _data} = ok -> ok
+          {:error, _fallback_reason} -> {:error, original_reason}
+        end
+    end
+  end
+
+  defp transient_capacity_error?({:rate_limited, _}), do: true
+  defp transient_capacity_error?(:timeout), do: true
+  defp transient_capacity_error?({:network_error, _}), do: true
+
+  defp transient_capacity_error?({:api_error, status, _}) when status in [500, 502, 503, 504],
+    do: true
+
+  defp transient_capacity_error?(_), do: false
 
   defp retry_backoff_ms(_reason, attempt) when attempt >= @max_retry_attempts, do: nil
 

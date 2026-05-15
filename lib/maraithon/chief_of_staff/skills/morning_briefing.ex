@@ -702,7 +702,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:ok, params} ->
           started_ms = System.monotonic_time(:millisecond)
 
-          case Maraithon.LLM.complete(params) do
+          # Go through LLMCallCommand so smoke_test gets the same retry +
+          # chat-tier fallback that scheduled briefs do — otherwise it can't
+          # reproduce a successful prod-path call when the primary model is
+          # rate-limited.
+          effect = %Maraithon.Effects.Effect{
+            id: Ecto.UUID.generate(),
+            agent_id: agent.id,
+            params: params
+          }
+
+          case Maraithon.Runtime.Effects.LLMCallCommand.execute(effect) do
             {:ok, response} ->
               elapsed_ms = System.monotonic_time(:millisecond) - started_ms
               parsed = parse_llm_brief(response)
