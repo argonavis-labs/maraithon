@@ -206,8 +206,7 @@ defmodule Maraithon.Capabilities do
       "Find the user's mirrored macOS Calendar events that involve a specific person, matched by email or name substring against attendees, organizer, and title.",
     "calendar_search" =>
       "Substring-search the user's mirrored macOS Calendar events on title, notes, and location. Use for topic-based questions like 'when's the launch review?'.",
-    "calendar_event_get" =>
-      "Fetch one mirrored macOS Calendar event by its EventKit GUID.",
+    "calendar_event_get" => "Fetch one mirrored macOS Calendar event by its EventKit GUID.",
     "browser_history_recent" =>
       "List the user's most recently visited URLs across Chrome / Safari / Arc / Brave, newest first. Optional browser filter.",
     "browser_history_by_host" =>

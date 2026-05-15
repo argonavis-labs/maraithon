@@ -150,10 +150,18 @@ defmodule Maraithon.Proactive.LocalPatterns do
   # ---------------------------------------------------------------------
 
   defp build_insights(:cold_thread, user_id, now), do: cold_thread_insights(user_id, now)
-  defp build_insights(:dropped_commitment, user_id, now), do: dropped_commitment_insights(user_id, now)
-  defp build_insights(:untranscribed_memo, user_id, now), do: untranscribed_memo_insights(user_id, now)
+
+  defp build_insights(:dropped_commitment, user_id, now),
+    do: dropped_commitment_insights(user_id, now)
+
+  defp build_insights(:untranscribed_memo, user_id, now),
+    do: untranscribed_memo_insights(user_id, now)
+
   defp build_insights(:note_follow_up, user_id, now), do: note_follow_up_insights(user_id, now)
-  defp build_insights(:calendar_conflict, user_id, now), do: calendar_conflict_insights(user_id, now)
+
+  defp build_insights(:calendar_conflict, user_id, now),
+    do: calendar_conflict_insights(user_id, now)
+
   defp build_insights(:file_mention, user_id, now), do: file_mention_insights(user_id, now)
 
   # ---------------------------------------------------------------------
@@ -170,8 +178,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
     |> select([m], %{
       chat_key: m.chat_key,
       latest_sent_at: max(m.sent_at),
-      count_30d:
-        sum(fragment("CASE WHEN ? >= ? THEN 1 ELSE 0 END", m.sent_at, ^window_cutoff))
+      count_30d: sum(fragment("CASE WHEN ? >= ? THEN 1 ELSE 0 END", m.sent_at, ^window_cutoff))
     })
     |> Repo.all()
     |> Enum.filter(fn row ->
@@ -183,7 +190,11 @@ defmodule Maraithon.Proactive.LocalPatterns do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp cold_thread_insight(user_id, now, %{chat_key: chat_key, latest_sent_at: latest, count_30d: count}) do
+  defp cold_thread_insight(user_id, now, %{
+         chat_key: chat_key,
+         latest_sent_at: latest,
+         count_30d: count
+       }) do
     days = days_since(now, latest)
     display = chat_display_for(user_id, chat_key)
 
@@ -339,8 +350,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
       "source" => "local_patterns",
       "category" => "general",
       "title" => "Voice memo didn't transcribe",
-      "summary" =>
-        "You recorded \"#{title}\" #{age} but it doesn't have a transcript yet.",
+      "summary" => "You recorded \"#{title}\" #{age} but it doesn't have a transcript yet.",
       "recommended_action" => "Open Maraithon and tap retry on the memo to re-transcribe it.",
       "priority" => 55,
       "confidence" => 0.85,
@@ -574,7 +584,8 @@ defmodule Maraithon.Proactive.LocalPatterns do
       "attention_mode" => "act_now",
       "source_id" => file.guid || file.id,
       "source_occurred_at" => file.created_at,
-      "tracking_key" => tracking_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}"),
+      "tracking_key" =>
+        tracking_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}"),
       "dedupe_key" =>
         dedupe_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}", now),
       "metadata" => %{

@@ -869,7 +869,8 @@ defmodule MaraithonWeb.CompanionControllerTest do
     end
 
     test "404 when the device does not belong to the user", %{conn: conn} do
-      %{token: token} = pair_device("companion-revoke-a-#{System.unique_integer([:positive])}@x.io")
+      %{token: token} =
+        pair_device("companion-revoke-a-#{System.unique_integer([:positive])}@x.io")
 
       %{user: stranger} =
         pair_device("companion-revoke-b-#{System.unique_integer([:positive])}@x.io")

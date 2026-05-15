@@ -2,10 +2,10 @@ defmodule Maraithon.LocalVoiceMemos.LocalVoiceMemo do
   @moduledoc """
   Append-only mirror of a macOS Voice Memos recording synced from a
   companion device. `title`, `snippet`, and `transcript` are stored
-  encrypted at rest via the existing Cloak vault
-  (`Maraithon.Encrypted.Binary`). `audio_bytes` carries the raw `.m4a`
-  bytes for memos that fit under the per-record cap; oversize files are
-  passed through with `audio_truncated = true` and a nil `audio_bytes`.
+  plaintext so downstream AI / inference / `LIKE` search can read them
+  directly. `audio_bytes` carries the raw `.m4a` bytes for memos that
+  fit under the per-record cap; oversize files are passed through with
+  `audio_truncated = true` and a nil `audio_bytes`.
   """
 
   use Ecto.Schema
@@ -20,8 +20,8 @@ defmodule Maraithon.LocalVoiceMemos.LocalVoiceMemo do
     field :source, :string, default: "voice_memos"
     field :guid, :string
     field :local_id, :string
-    field :title, Maraithon.Encrypted.Binary
-    field :snippet, Maraithon.Encrypted.Binary
+    field :title, :string
+    field :snippet, :string
     field :duration_seconds, :integer
     field :file_size_bytes, :integer
     field :created_at, :utc_datetime_usec
@@ -30,7 +30,7 @@ defmodule Maraithon.LocalVoiceMemos.LocalVoiceMemo do
     field :audio_bytes, :binary
     field :audio_truncated, :boolean, default: false
     field :audio_mime, :string, default: "audio/m4a"
-    field :transcript, Maraithon.Encrypted.Binary
+    field :transcript, :string
     field :transcript_engine, :string
     field :transcript_lang, :string
     field :encrypted_with_device_key, :boolean, default: false

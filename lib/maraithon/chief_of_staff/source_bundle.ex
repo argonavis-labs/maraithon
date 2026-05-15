@@ -262,7 +262,10 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   def slack_mentions(bundle), do: bundle |> read_map("slack") |> read_list("mentions")
   def news_items(bundle), do: bundle |> read_map("news") |> read_list("items")
   def news_feeds(bundle), do: bundle |> read_map("news") |> read_list("feeds")
-  def calendar_local_events(bundle), do: bundle |> read_map("calendar_local") |> read_list("events")
+
+  def calendar_local_events(bundle),
+    do: bundle |> read_map("calendar_local") |> read_list("events")
+
   def imessage_messages(bundle), do: bundle |> read_map("imessage") |> read_list("messages")
   def imessage_chats(bundle), do: bundle |> read_map("imessage") |> read_list("chats")
   def notes(bundle), do: bundle |> read_map("notes") |> read_list("notes")

@@ -41,7 +41,9 @@ defmodule Maraithon.Companion.ReleasesMigrationTest do
     assert table_exists?("companion_releases")
 
     columns = table_columns("companion_releases")
-    expected = ~w(id version build_number url signature min_system_version notes_markdown released_at inserted_at updated_at)
+
+    expected =
+      ~w(id version build_number url signature min_system_version notes_markdown released_at inserted_at updated_at)
 
     for column <- expected do
       assert column in columns, "expected column #{column} on companion_releases"

@@ -35,16 +35,42 @@ defmodule Maraithon.LocalMessages do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, inserted_rows} =
+    # On-conflict :replace backfills mutable text fields on re-sync (e.g. a
+    # later client with an improved typedstream decoder fills in text that was
+    # first stored NULL). Identity columns and the original `sent_at` stay
+    # untouched. Because :replace upserts conflicting rows, `insert_all`'s count
+    # would include re-sends — so we look up which keys already existed to keep
+    # the accepted/duplicate accounting (and the embed enqueue) correct.
+    existing_keys = existing_message_keys(user_id, device_id, rows)
+
+    {_upsert_count, upserted_rows} =
       if rows == [] do
         {0, []}
       else
         Repo.insert_all(LocalMessage, rows,
-          on_conflict: :nothing,
+          on_conflict:
+            {:replace,
+             [
+               :sender_handle,
+               :chat_display_name,
+               :chat_style,
+               :chat_key,
+               :text,
+               :has_attachments,
+               :attachments,
+               :updated_at
+             ]},
           conflict_target: [:user_id, :device_id, :source, :guid],
-          returning: [:id]
+          returning: [:id, :source, :guid]
         )
       end
+
+    inserted_rows =
+      Enum.reject(upserted_rows, fn row ->
+        MapSet.member?(existing_keys, {row.source, row.guid})
+      end)
+
+    inserted_count = length(inserted_rows)
 
     enqueue_embed_jobs(user_id, inserted_rows)
 
@@ -74,6 +100,21 @@ defmodule Maraithon.LocalMessages do
   end
 
   def ingest_batch(_user_id, _device_id, _messages), do: {:error, :invalid_batch}
+
+  # Which (source, guid) keys from this batch already exist for the device —
+  # used to tell genuine inserts apart from :replace upserts (re-sends).
+  defp existing_message_keys(_user_id, _device_id, []), do: MapSet.new()
+
+  defp existing_message_keys(user_id, device_id, rows) do
+    guids = Enum.map(rows, & &1.guid)
+
+    from(m in LocalMessage,
+      where: m.user_id == ^user_id and m.device_id == ^device_id and m.guid in ^guids,
+      select: {m.source, m.guid}
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
 
   @doc """
   Returns the most recent messages for a chat for a user.
@@ -328,11 +369,11 @@ defmodule Maraithon.LocalMessages do
       guid: fetch(message, :guid),
       local_id: fetch(message, :local_id),
       is_from_me: truthy?(fetch(message, :is_from_me)),
-      sender_handle: fetch(message, :sender_handle),
+      sender_handle: Maraithon.TextSanitize.scrub(fetch(message, :sender_handle)),
       chat_key: derive_chat_key(message),
-      chat_display_name: fetch(message, :chat_display_name),
+      chat_display_name: Maraithon.TextSanitize.scrub(fetch(message, :chat_display_name)),
       chat_style: fetch(message, :chat_style),
-      text: fetch(message, :text),
+      text: Maraithon.TextSanitize.scrub(fetch(message, :text)),
       sent_at: parse_datetime(fetch(message, :sent_at)),
       has_attachments: truthy?(fetch(message, :has_attachments)),
       attachments: normalize_attachments(fetch(message, :attachments)),

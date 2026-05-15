@@ -131,7 +131,8 @@ defmodule Maraithon.LocalReminders do
         # (default / no priority) goes to the back inside each bucket.
         order_by: [
           asc_nulls_last: reminder.due_at,
-          asc: fragment("CASE WHEN ? = 0 THEN 10 ELSE ? END", reminder.priority, reminder.priority),
+          asc:
+            fragment("CASE WHEN ? = 0 THEN 10 ELSE ? END", reminder.priority, reminder.priority),
           desc: reminder.modified_at
         ],
         limit: ^limit
@@ -161,7 +162,8 @@ defmodule Maraithon.LocalReminders do
             not is_nil(reminder.due_at) and reminder.due_at <= ^horizon,
         order_by: [
           asc: reminder.due_at,
-          asc: fragment("CASE WHEN ? = 0 THEN 10 ELSE ? END", reminder.priority, reminder.priority)
+          asc:
+            fragment("CASE WHEN ? = 0 THEN 10 ELSE ? END", reminder.priority, reminder.priority)
         ],
         limit: ^limit
 
@@ -338,8 +340,8 @@ defmodule Maraithon.LocalReminders do
       local_id: fetch(reminder, :local_id),
       list_name: fetch(reminder, :list_name),
       list_color: fetch(reminder, :list_color),
-      title: fetch(reminder, :title),
-      notes: fetch(reminder, :notes),
+      title: Maraithon.TextSanitize.scrub(fetch(reminder, :title)),
+      notes: Maraithon.TextSanitize.scrub(fetch(reminder, :notes)),
       priority: clamp_priority(fetch(reminder, :priority)),
       due_at: parse_datetime(fetch(reminder, :due_at)),
       completed_at: parse_datetime(fetch(reminder, :completed_at)),

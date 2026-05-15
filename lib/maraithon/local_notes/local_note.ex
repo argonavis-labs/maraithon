@@ -1,8 +1,8 @@
 defmodule Maraithon.LocalNotes.LocalNote do
   @moduledoc """
   Append-only mirror of a macOS Notes.app note synced from a companion
-  device. `title`, `snippet`, and `body` are stored encrypted at rest
-  via the existing Cloak vault (`Maraithon.Encrypted.Binary`).
+  device. `title`, `snippet`, and `body` are stored plaintext so
+  downstream AI / inference / `LIKE` search can read them directly.
   `body_format` records the encoding the companion shipped — today
   always `"plain"`, but the column exists so a future RTF / Markdown
   payload doesn't need another migration.
@@ -20,9 +20,9 @@ defmodule Maraithon.LocalNotes.LocalNote do
     field :source, :string, default: "notes"
     field :guid, :string
     field :local_id, :string
-    field :title, Maraithon.Encrypted.Binary
-    field :snippet, Maraithon.Encrypted.Binary
-    field :body, Maraithon.Encrypted.Binary
+    field :title, :string
+    field :snippet, :string
+    field :body, :string
     field :body_format, :string, default: "plain"
     field :folder, :string
     field :is_pinned, :boolean, default: false

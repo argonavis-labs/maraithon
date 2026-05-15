@@ -39,7 +39,21 @@ defmodule MaraithonWeb.CompanionController do
          :ok <- validate_device(device, params) do
       messages = Enum.map(messages, &Map.put_new(stringify(&1), "source", source))
 
-      case LocalMessages.ingest_batch(user_id, device.device_id, messages) do
+      result =
+        try do
+          LocalMessages.ingest_batch(user_id, device.device_id, messages)
+        rescue
+          exception ->
+            Logger.error(
+              "companion messages ingest crashed",
+              error: Exception.format(:error, exception, __STACKTRACE__),
+              batch_size: length(messages)
+            )
+
+            {:error, :ingest_exception}
+        end
+
+      case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
           json(conn, %{
             accepted: accepted,
@@ -168,8 +182,7 @@ defmodule MaraithonWeb.CompanionController do
       items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
       case LocalBrowserHistory.ingest_batch(user_id, device.device_id, items) do
-        {:ok,
-         %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
+        {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
           json(conn, %{
             accepted: accepted,
             duplicate: duplicate,
@@ -488,7 +501,26 @@ defmodule MaraithonWeb.CompanionController do
          :ok <- validate_device(device, params) do
       items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
-      case ingest_fun.(user_id, device.device_id, items) do
+      # Match the channel handler: a Postgrex `22001` (or any other
+      # exception) from `ingest_fun` must not 500 the request. Convert
+      # to a `bad_request` with `invalid_batch` so the client just
+      # retries the offending batch instead of treating the whole
+      # source as broken.
+      result =
+        try do
+          ingest_fun.(user_id, device.device_id, items)
+        rescue
+          exception ->
+            Logger.error(
+              "companion #{batch_key} ingest crashed",
+              error: Exception.format(:error, exception, __STACKTRACE__),
+              batch_size: length(items)
+            )
+
+            {:error, :ingest_exception}
+        end
+
+      case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid}} ->
           json(conn, %{
             accepted: accepted,

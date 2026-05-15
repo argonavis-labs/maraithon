@@ -161,9 +161,31 @@ defmodule MaraithonWeb.CompanionChannel do
       {:ok, items, source} ->
         items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
-        case ingest_fun.(user_id, device.device_id, items) do
-          {:ok, %{accepted: a, duplicate: d, invalid: i} = result} ->
-            emit_ingested(device, batch_key, result)
+        # Wrap the ingest in `try/rescue` so a single bad row can never
+        # crash the channel GenServer. Before this guard a Postgrex
+        # `22001` (value too long) raised through `ingest_batch/3`
+        # killed the channel for the whole device, and *every* other
+        # source (iMessage, Reminders, Voice Memos) sharing that
+        # channel started getting 400 until Phoenix re-supervised it.
+        # Now the offending batch returns `invalid_batch`; the channel
+        # stays alive and the other sources keep flowing.
+        result =
+          try do
+            ingest_fun.(user_id, device.device_id, items)
+          rescue
+            exception ->
+              Logger.error(
+                "companion channel #{batch_key} ingest crashed",
+                error: Exception.format(:error, exception, __STACKTRACE__),
+                batch_size: length(items)
+              )
+
+              {:error, :ingest_exception}
+          end
+
+        case result do
+          {:ok, %{accepted: a, duplicate: d, invalid: i} = ok} ->
+            emit_ingested(device, batch_key, ok)
             {:reply, {:ok, %{accepted: a, duplicate: d, invalid: i}}, socket}
 
           {:error, reason} ->

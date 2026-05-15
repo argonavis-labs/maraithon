@@ -116,7 +116,10 @@ defmodule Maraithon.LocalCalendar do
   def events_for_attendee(user_id, email_or_substring, opts \\ [])
       when is_binary(user_id) and is_binary(email_or_substring) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    since = parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -30 * 86_400, :second))
+
+    since =
+      parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -30 * 86_400, :second))
+
     limit = Keyword.get(opts, :limit, 50)
     needle = email_or_substring |> String.trim() |> String.downcase()
 
@@ -140,7 +143,10 @@ defmodule Maraithon.LocalCalendar do
   def search(user_id, term, opts \\ [])
       when is_binary(user_id) and is_binary(term) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    since = parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -90 * 86_400, :second))
+
+    since =
+      parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -90 * 86_400, :second))
+
     limit = Keyword.get(opts, :limit, 50)
     needle = term |> String.trim() |> String.downcase()
 
@@ -167,7 +173,10 @@ defmodule Maraithon.LocalCalendar do
   def semantic_search(user_id, query, opts)
       when is_binary(user_id) and is_binary(query) and is_list(opts) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    since = parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -90 * 86_400, :second))
+
+    since =
+      parse_datetime_arg(Keyword.get(opts, :since), DateTime.add(now, -90 * 86_400, :second))
+
     limit = Keyword.get(opts, :limit, 12)
     pool_size = Keyword.get(opts, :pool_size, 300)
 

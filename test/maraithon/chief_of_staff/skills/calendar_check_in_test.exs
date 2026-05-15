@@ -90,7 +90,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     }
 
     assert {:emit, {:briefs_recorded, payload}, final_state} =
-             CalendarCheckIn.handle_effect_result({:llm_call, response}, pending, context(ctx, events))
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
 
     assert payload.cadences == ["check_in"]
     assert final_state.last_check_in_at != nil
@@ -119,7 +123,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     }
 
     assert {:idle, final_state} =
-             CalendarCheckIn.handle_effect_result({:llm_call, response}, pending, context(ctx, events))
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
 
     assert final_state.last_check_in_at == nil
     assert final_state.pending_check_in_input == nil

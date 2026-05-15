@@ -287,9 +287,15 @@ defmodule Maraithon.LocalBrowserHistoryTest do
 
       {:ok, _} =
         LocalBrowserHistory.ingest_batch(user_id, device_id, [
-          sample_visit("t1", %{"host" => "www.techmeme.com", "url" => "https://www.techmeme.com/a"}),
+          sample_visit("t1", %{
+            "host" => "www.techmeme.com",
+            "url" => "https://www.techmeme.com/a"
+          }),
           sample_visit("t2", %{"host" => "techmeme.com", "url" => "https://techmeme.com/b"}),
-          sample_visit("n1", %{"host" => "news.ycombinator.com", "url" => "https://news.ycombinator.com/c"})
+          sample_visit("n1", %{
+            "host" => "news.ycombinator.com",
+            "url" => "https://news.ycombinator.com/c"
+          })
         ])
 
       hits = LocalBrowserHistory.visits_by_host(user_id, "TECHMEME")

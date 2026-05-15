@@ -2,8 +2,8 @@ defmodule Maraithon.LocalReminders.LocalReminder do
   @moduledoc """
   Append-only mirror of a macOS Reminders.app item synced from a
   companion device via EventKit. `title` and `notes` are stored
-  encrypted at rest via the existing Cloak vault
-  (`Maraithon.Encrypted.Binary`).
+  plaintext so downstream AI / inference / `LIKE` search can read
+  them directly.
 
   `priority` follows the EventKit convention: `0` is the default "no
   priority", `1` is the highest priority, and `9` is the lowest. The
@@ -34,8 +34,8 @@ defmodule Maraithon.LocalReminders.LocalReminder do
     field :local_id, :string
     field :list_name, :string
     field :list_color, :string
-    field :title, Maraithon.Encrypted.Binary
-    field :notes, Maraithon.Encrypted.Binary
+    field :title, :string
+    field :notes, :string
     field :priority, :integer, default: 0
     field :due_at, :utc_datetime_usec
     field :completed_at, :utc_datetime_usec

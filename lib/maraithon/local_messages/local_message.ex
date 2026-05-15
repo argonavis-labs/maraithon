@@ -1,8 +1,8 @@
 defmodule Maraithon.LocalMessages.LocalMessage do
   @moduledoc """
   Append-only mirror of a local-context message synced from a companion
-  device. `text` and `sender_handle` are stored encrypted at rest via the
-  existing Cloak vault (`Maraithon.Encrypted.Binary`).
+  device. `text` and `sender_handle` are stored plaintext so downstream
+  AI / inference / `LIKE` search can read them directly.
   """
 
   use Ecto.Schema
@@ -18,11 +18,11 @@ defmodule Maraithon.LocalMessages.LocalMessage do
     field :guid, :string
     field :local_id, :string
     field :is_from_me, :boolean, default: false
-    field :sender_handle, Maraithon.Encrypted.Binary
+    field :sender_handle, :string
     field :chat_key, :string
     field :chat_display_name, :string
     field :chat_style, :string
-    field :text, Maraithon.Encrypted.Binary
+    field :text, :string
     field :sent_at, :utc_datetime_usec
     field :has_attachments, :boolean, default: false
     field :attachments, :map, default: %{}

@@ -569,6 +569,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
                "travel_logistics",
                "morning_briefing",
                "commitment_tracker",
+               "calendar_check_in",
                "project_scope_alignment",
                "holiday_radar"
              ]

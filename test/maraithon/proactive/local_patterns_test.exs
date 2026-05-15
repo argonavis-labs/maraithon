@@ -508,6 +508,7 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
       now = DateTime.utc_now()
 
       {:ok, summary_1} = LocalPatterns.run_for_user(user_id, now: now)
+
       assert Map.keys(summary_1) |> Enum.sort() ==
                [
                  :calendar_conflict,

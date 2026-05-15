@@ -120,7 +120,8 @@ defmodule Maraithon.LocalRemindersTest do
     end
 
     test "rejects non-list input" do
-      assert {:error, :invalid_batch} = LocalReminders.ingest_batch("u", Ecto.UUID.generate(), "x")
+      assert {:error, :invalid_batch} =
+               LocalReminders.ingest_batch("u", Ecto.UUID.generate(), "x")
     end
   end
 
