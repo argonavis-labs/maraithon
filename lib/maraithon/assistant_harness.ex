@@ -243,20 +243,12 @@ defmodule Maraithon.AssistantHarness do
 
   def next_step(payload, opts \\ []) when is_map(payload) do
     params = build_step_request(payload, opts)
-
-    with {:ok, decoded} <- complete_json(params, opts),
-         {:ok, normalized} <- normalize(decoded, payload) do
-      {:ok, normalized}
-    end
+    complete_json(params, opts, fn decoded -> normalize(decoded, payload) end)
   end
 
   def proactive_plan(payload, opts \\ []) when is_map(payload) do
     params = build_proactive_request(payload, opts)
-
-    with {:ok, decoded} <- complete_json(params, opts),
-         {:ok, normalized} <- normalize_proactive(decoded) do
-      {:ok, normalized}
-    end
+    complete_json(params, opts, &normalize_proactive/1)
   end
 
   def build_prompt(payload) do
@@ -526,7 +518,7 @@ defmodule Maraithon.AssistantHarness do
 
   defp non_empty_string(_value, default), do: default
 
-  defp complete_json(params, opts) do
+  defp complete_json(params, opts, normalize_fn) do
     attempts = model_attempts(params, opts)
     llm_complete = llm_complete(opts)
     final_attempt_index = length(attempts) - 1
@@ -538,19 +530,15 @@ defmodule Maraithon.AssistantHarness do
                                                                                 _last_error ->
       last_attempt? = index >= final_attempt_index
 
-      case llm_complete.(attempt_params) do
-        {:ok, response} ->
-          case decode_json(response_content(response)) do
-            {:ok, decoded} ->
-              {:halt, {:ok, decoded}}
+      result =
+        case llm_complete.(attempt_params) do
+          {:ok, response} -> decode_and_normalize(response, normalize_fn)
+          {:error, _reason} = error -> error
+        end
 
-            {:error, reason} = error ->
-              if retryable_model_error?(reason) and not last_attempt? do
-                {:cont, error}
-              else
-                {:halt, error}
-              end
-          end
+      case result do
+        {:ok, _value} = ok ->
+          {:halt, ok}
 
         {:error, reason} = error ->
           if retryable_model_error?(reason) and not last_attempt? do
@@ -560,6 +548,12 @@ defmodule Maraithon.AssistantHarness do
           end
       end
     end)
+  end
+
+  defp decode_and_normalize(response, normalize_fn) do
+    with {:ok, decoded} <- decode_json(response_content(response)) do
+      normalize_fn.(decoded)
+    end
   end
 
   defp llm_complete(opts) do
@@ -585,16 +579,24 @@ defmodule Maraithon.AssistantHarness do
 
     max_attempts = model_failover_max_attempts(opts, fallbacks)
 
-    [params | Enum.map(fallbacks, &Map.put(params, "model", &1))]
-    |> Enum.take(max_attempts)
+    base_attempts = [params | Enum.map(fallbacks, &Map.put(params, "model", &1))]
+
+    # Fill the remaining attempt budget with same-model retries, so transient
+    # model errors (malformed JSON, an empty tool_calls array, a network blip)
+    # get retried even when no fallback model is configured.
+    filled =
+      if length(base_attempts) < max_attempts do
+        base_attempts ++ List.duplicate(params, max_attempts - length(base_attempts))
+      else
+        base_attempts
+      end
+
+    Enum.take(filled, max_attempts)
   end
 
-  defp model_failover_max_attempts(opts, fallbacks) do
-    max_attempts =
-      policy_value(opts, :model_failover_max_attempts, @default_model_failover_max_attempts)
-      |> positive_integer(@default_model_failover_max_attempts)
-
-    min(max_attempts, 1 + length(fallbacks))
+  defp model_failover_max_attempts(opts, _fallbacks) do
+    policy_value(opts, :model_failover_max_attempts, @default_model_failover_max_attempts)
+    |> positive_integer(@default_model_failover_max_attempts)
   end
 
   defp model_fallbacks(opts) do
@@ -624,6 +626,17 @@ defmodule Maraithon.AssistantHarness do
   defp retryable_model_error?(:timeout), do: true
   defp retryable_model_error?(:assistant_harness_invalid_json), do: true
   defp retryable_model_error?(:assistant_harness_missing_content), do: true
+  # Malformed decisions — the model returned a transient JSON-shape slip
+  # (e.g. status:"tool_calls" with an empty tool_calls array, an unknown
+  # status, or a malformed tool call). A retry / fallback-model attempt
+  # commonly recovers; treating these as fatal hands the user a generic
+  # "I hit an internal issue" message instead.
+  defp retryable_model_error?(:assistant_harness_invalid_status), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_tool_calls), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_tool_call), do: true
+  defp retryable_model_error?(:assistant_harness_empty_tool_calls), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_decision), do: true
+  defp retryable_model_error?(:assistant_harness_empty_message), do: true
   defp retryable_model_error?({:rate_limited, _retry_after}), do: true
   defp retryable_model_error?({:network_error, _reason}), do: true
 

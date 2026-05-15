@@ -85,7 +85,9 @@ defmodule Maraithon.AssistantHarnessTest do
 
     failover_policy = AssistantHarness.runtime_policy(model_fallbacks: ["fallback-model"])
     assert failover_policy.model_failover.enabled == true
-    assert failover_policy.model_failover.max_attempts == 2
+    # max_attempts is the configured ceiling (default 3) — used as a retry
+    # budget for same-model retries on transient errors as well as for fallbacks.
+    assert failover_policy.model_failover.max_attempts == 3
   end
 
   test "builds model requests with runtime policy instead of prompt text alone" do
@@ -442,6 +444,51 @@ defmodule Maraithon.AssistantHarnessTest do
 
     assert {:error, :assistant_harness_empty_message} =
              AssistantHarness.proactive_plan(%{context: %{}}, llm_complete: llm_complete)
+  end
+
+  test "next_step retries same-model on a transient malformed-decision error" do
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+    llm_complete = fn _params ->
+      n = Agent.get_and_update(calls, fn count -> {count + 1, count + 1} end)
+
+      # First call simulates the production bug: status:"tool_calls" with an
+      # empty array. Used to fail fatally as :assistant_harness_empty_tool_calls.
+      # Subsequent calls return a clean final response.
+      if n == 1 do
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "status" => "tool_calls",
+               "tool_calls" => [],
+               "assistant_message" => "",
+               "message_class" => "assistant_reply",
+               "summary" => ""
+             })
+         }}
+      else
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "status" => "final",
+               "assistant_message" => "Recovered on retry.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "retry"
+             })
+         }}
+      end
+    end
+
+    assert {:ok, response} =
+             AssistantHarness.next_step(payload("retry me"), llm_complete: llm_complete)
+
+    assert response["status"] == "final"
+    assert response["assistant_message"] == "Recovered on retry."
+    # Verifies the retry budget was actually exercised on a normalize-stage error.
+    assert Agent.get(calls, & &1) == 2
   end
 
   defp payload(message) do
