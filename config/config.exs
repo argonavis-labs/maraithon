@@ -47,6 +47,7 @@ config :maraithon, Maraithon.Runtime,
   openai_reasoning_effort: "high"
 
 config :maraithon, :telegram_assistant,
+  chat_reasoning_effort: "medium",
   telegram_proactive_checkins_enabled: false,
   proactive_delivery_planner_enabled: false,
   proactive_candidate_ttl_minutes: 120

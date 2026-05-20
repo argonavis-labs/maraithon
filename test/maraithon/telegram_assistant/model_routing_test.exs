@@ -45,6 +45,19 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert Keyword.fetch!(profile.llm_opts, :chat_model) == "chat-tier"
   end
 
+  test "defaults ordinary chat to medium reasoning when not configured" do
+    :maraithon
+    |> Application.get_env(:telegram_assistant, [])
+    |> Keyword.delete(:chat_reasoning_effort)
+    |> then(&Application.put_env(:maraithon, :telegram_assistant, &1))
+
+    profile = ModelRouting.profile_for(%{text: "Which connections are active?"})
+
+    assert profile.tier == :chat
+    assert profile.model == "chat-tier"
+    assert profile.reasoning_effort == "medium"
+  end
+
   test "routes broad planning and todo-review asks to the reasoning tier" do
     for text <- [
           "What should I do next?",

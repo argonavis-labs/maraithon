@@ -271,6 +271,7 @@ config :maraithon, Maraithon.Runtime,
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
 
 config :maraithon, :telegram_assistant,
+  chat_reasoning_effort: System.get_env("TELEGRAM_CHAT_REASONING_EFFORT", "medium"),
   telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),
   telegram_unified_push_enabled: optional_boolean_env.("TELEGRAM_UNIFIED_PUSH_ENABLED"),
   telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false),

@@ -8,7 +8,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   alias Maraithon.LLM
 
-  @default_chat_reasoning_effort "low"
+  @default_chat_reasoning_effort "medium"
   @default_reasoning_max_tokens 6_000
 
   @planning_patterns [
