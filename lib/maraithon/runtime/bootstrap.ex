@@ -9,6 +9,7 @@ defmodule Maraithon.Runtime.Bootstrap do
 
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Runtime.DbResilience
+  alias Maraithon.Runtime.IncidentLog
 
   require Logger
 
@@ -41,6 +42,14 @@ defmodule Maraithon.Runtime.Bootstrap do
     Logger.info("Bootstrapping runtime")
 
     case DbResilience.with_database("runtime bootstrap", fn ->
+           IncidentLog.record(%{
+             kind: :node_boot,
+             metadata: %{
+               "source" => "runtime_bootstrap",
+               "baseline" => IncidentLog.backlog_snapshot()
+             }
+           })
+
            with {:ok, _installations} <- Maraithon.AgentMarketplace.ensure_default_installations() do
              Maraithon.Runtime.resume_all_agents()
            end

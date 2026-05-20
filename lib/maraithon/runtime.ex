@@ -11,6 +11,7 @@ defmodule Maraithon.Runtime do
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Events
   alias Maraithon.Runtime.BackgroundJobs
+  alias Maraithon.Runtime.IncidentLog
   alias Maraithon.Runtime.Scheduler
 
   require Logger
@@ -372,7 +373,7 @@ defmodule Maraithon.Runtime do
     Logger.info("Resuming #{length(agents)} agents")
 
     Enum.each(agents, fn agent ->
-      case start_agent_process(agent) do
+      case start_agent_process(agent, resume_trigger: "node_boot") do
         {:ok, _pid} ->
           Logger.info("Resumed agent #{agent.id}", agent_id: agent.id)
 
@@ -384,6 +385,19 @@ defmodule Maraithon.Runtime do
     end)
   end
 
+  @doc """
+  Resume a persisted agent after AgentWatcher detects an abnormal process exit.
+  """
+  def resume_agent_after_crash(id, metadata \\ %{}) when is_binary(id) and is_map(metadata) do
+    case Agents.get_agent(id) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        start_agent_process(agent, resume_trigger: "targeted_reresume", metadata: metadata)
+    end
+  end
+
   # Private functions
 
   defp maybe_start_installed_agent(%{install_status: "enabled", status: "running"} = agent) do
@@ -392,8 +406,15 @@ defmodule Maraithon.Runtime do
 
   defp maybe_start_installed_agent(_agent), do: {:ok, :not_started}
 
-  defp start_agent_process(agent) do
-    AgentSupervisor.start_agent(agent)
+  defp start_agent_process(agent, opts \\ []) do
+    case AgentSupervisor.start_agent(agent) do
+      {:ok, pid} = result ->
+        maybe_record_agent_resumed(agent, pid, opts)
+        result
+
+      other ->
+        other
+    end
   end
 
   defp stop_agent_process(id, reason) do
@@ -481,6 +502,31 @@ defmodule Maraithon.Runtime do
       "llm_calls" => 500,
       "tool_calls" => 1000
     }
+  end
+
+  defp maybe_record_agent_resumed(agent, pid, opts) do
+    case Keyword.get(opts, :resume_trigger) do
+      nil ->
+        :ok
+
+      trigger ->
+        metadata =
+          %{
+            "resume_trigger" => trigger,
+            "behavior" => agent.behavior,
+            "user_id" => agent.user_id,
+            "pid" => inspect(pid)
+          }
+          |> Map.merge(Keyword.get(opts, :metadata, %{}))
+
+        IncidentLog.record(%{
+          kind: :agent_resumed,
+          agent_id: agent.id,
+          metadata: metadata
+        })
+
+        :ok
+    end
   end
 
   defp stop_for_update(agent, false), do: {:ok, agent}

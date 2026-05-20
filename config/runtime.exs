@@ -228,6 +228,23 @@ config :maraithon, Maraithon.Runtime,
     String.to_integer(System.get_env("BOOTSTRAP_RETRY_INTERVAL_MS", "5000")),
   health_report_interval_ms:
     String.to_integer(System.get_env("HEALTH_REPORT_INTERVAL_MS", "60000")),
+  agent_watcher_poll_interval_ms:
+    String.to_integer(System.get_env("AGENT_WATCHER_POLL_INTERVAL_MS", "2000")),
+  agent_crash_loop_max: String.to_integer(System.get_env("AGENT_CRASH_LOOP_MAX", "3")),
+  agent_crash_loop_window_ms:
+    String.to_integer(System.get_env("AGENT_CRASH_LOOP_WINDOW_MS", "600000")),
+  agent_reresume_backoffs:
+    System.get_env("AGENT_RERESUME_BACKOFFS", "5000,15000,30000")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.map(&String.to_integer/1),
+  dogfood_user_id: System.get_env("DOGFOOD_USER_ID") || System.get_env("PRIMARY_ADMIN_EMAIL"),
+  dogfood_digest_hour: String.to_integer(System.get_env("DOGFOOD_DIGEST_HOUR", "7")),
+  dogfood_digest_minute: String.to_integer(System.get_env("DOGFOOD_DIGEST_MINUTE", "30")),
+  dogfood_digest_timezone: System.get_env("DOGFOOD_DIGEST_TIMEZONE", "America/Toronto"),
+  dogfood_digest_timezone_offset_hours:
+    String.to_integer(System.get_env("DOGFOOD_DIGEST_TIMEZONE_OFFSET_HOURS", "-4")),
   proactive_check_in_interval_ms:
     String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000")),
   proactive_check_in_batch_size:

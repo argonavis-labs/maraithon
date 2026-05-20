@@ -5,6 +5,7 @@ defmodule Maraithon.Health do
 
   alias Maraithon.Repo
   alias Maraithon.Agents
+  alias Maraithon.Runtime.IncidentLog
 
   require Logger
 
@@ -12,6 +13,7 @@ defmodule Maraithon.Health do
   @database_wall_timeout_ms 750
   @database_failure_cooldown_ms 10_000
   @database_failure_cache_key {__MODULE__, :database_failure_at_ms}
+  @database_outage_active_key {__MODULE__, :database_outage_active?}
   @empty_agent_counts %{running: 0, degraded: 0, stopped: 0}
 
   @doc """
@@ -135,10 +137,29 @@ defmodule Maraithon.Health do
   defp recent_database_failure?(_cooldown_ms), do: false
 
   defp mark_database_failure do
+    unless :persistent_term.get(@database_outage_active_key, false) do
+      :persistent_term.put(@database_outage_active_key, true)
+
+      IncidentLog.record(%{
+        kind: :db_outage,
+        reason: "database health check failed",
+        metadata: %{"source" => "health_check"}
+      })
+    end
+
     :persistent_term.put(@database_failure_cache_key, System.monotonic_time(:millisecond))
   end
 
   defp clear_database_failure do
+    if :persistent_term.get(@database_outage_active_key, false) do
+      IncidentLog.record(%{
+        kind: :db_recovered,
+        reason: "database health check recovered",
+        metadata: %{"source" => "health_check"}
+      })
+    end
+
+    :persistent_term.erase(@database_outage_active_key)
     :persistent_term.erase(@database_failure_cache_key)
   rescue
     ArgumentError -> :ok

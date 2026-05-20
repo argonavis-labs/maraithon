@@ -21,6 +21,7 @@ maraithon-*.tar
 
 # VM crash dump
 erl_crash.dump
+*.dump
 
 # Temporary files
 /tmp/
