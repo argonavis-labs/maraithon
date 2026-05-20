@@ -2,6 +2,10 @@
 
 Follow `AGENTS.md` for engineering rules and `DESIGN.md` for product UI direction.
 
+## Testing Principle
+
+- Tests are there for a reason and must not be ignored, worked around, or gamed to look green. A failing test means either the production code has a real issue, or the test no longer represents valid product behavior and should be deliberately removed or rewritten with that rationale. Use the test suite as the highest-leverage harness for moving fast safely: understand what each failing test is trying to protect, then fix the underlying code or retire obsolete coverage intentionally.
+
 ## Design Defaults
 
 - Use the Catalyst/Tailwind UI look and feel from `DESIGN.md` on every app surface.
