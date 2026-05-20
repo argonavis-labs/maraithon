@@ -50,9 +50,20 @@ defmodule Maraithon.LLM.AnthropicProvider do
     body = build_body(params)
     model = body.model
 
-    Tracing.with_span("llm.request", %{provider: "anthropic", model: model}, fn ->
+    Tracing.with_span("llm.request", request_span_attributes(body, model), fn ->
       do_request(body, model, params, api_key)
     end)
+  end
+
+  defp request_span_attributes(body, model) do
+    %{
+      provider: "anthropic",
+      model: model,
+      message_count: length(body.messages),
+      max_tokens: body.max_tokens,
+      temperature: body.temperature,
+      cache_blocks: count_cache_blocks(body)
+    }
   end
 
   defp do_request(body, model, params, api_key) do

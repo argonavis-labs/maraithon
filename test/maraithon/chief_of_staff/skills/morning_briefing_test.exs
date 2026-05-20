@@ -453,10 +453,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief.title == "Morning briefing generation failed"
     assert brief.error_message =~ "max_output_tokens"
     assert brief.metadata["llm_finish_reason"] == "error"
+    assert brief.metadata["max_tokens_used"] == 16_000
+    assert brief.metadata["reasoning_effort_used"] == "high"
+    assert brief.metadata["llm_request"]["max_tokens"] == 16_000
+    assert brief.metadata["llm_request"]["reasoning_effort"] == "high"
     assert brief.body =~ "No heuristic or keyword-based fallback was used."
   end
 
-  test "lets skill config override the LLM budget and intelligence", %{user_id: user_id} do
+  test "lets skill config override the LLM budget while capping risky intelligence", %{
+    user_id: user_id
+  } do
     state =
       MorningBriefing.init(%{
         "user_id" => user_id,
@@ -479,7 +485,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert params["model"] == "gpt-5.4"
     assert params["max_tokens"] == 4096
-    assert params["reasoning_effort"] == "xhigh"
+    assert params["reasoning_effort"] == "high"
   end
 
   test "caps oversized morning briefing output budgets", %{user_id: user_id} do

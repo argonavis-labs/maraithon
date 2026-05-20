@@ -39,10 +39,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_news_limit 25
   @default_lookback_hours 18
   # Tuned for the per-minute token bucket on the reasoning-tier primary
-  # model. "xhigh" reasoning + a 64k budget reliably exhausts the TPM cap on
-  # a single call and the next attempt gets a 429 — the brief was failing
-  # because it asked for more headroom than the account had. "high" + 16k is
-  # still plenty for a thorough executive brief and leaves room for retries.
+  # model. "xhigh" reasoning + a large output budget reliably exhausts the
+  # TPM cap on a single call and the next attempt gets a 429 — the brief was
+  # failing because it asked for more headroom than the account had. "high" +
+  # 16k is still plenty for a thorough executive brief and leaves room for
+  # retries/fallbacks.
   @default_llm_max_tokens 16_000
   @default_llm_reasoning_effort "high"
   @default_llm_timeout_ms 1_200_000
@@ -274,6 +275,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       %{
         skill: "morning_briefing",
         user_id: context[:user_id] || state.user_id,
+        llm_model: state.llm_model || Maraithon.LLM.model() || "unknown",
+        llm_max_tokens: effective_llm_max_tokens(state),
+        llm_reasoning_effort: state.llm_reasoning_effort,
         finish_reason: llm_finish_reason(response) || "ok"
       },
       fn ->
@@ -314,6 +318,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             "error_message" => error_message,
             "generation_mode" => generation_mode,
             "llm_finish_reason" => llm_finish_reason(response),
+            "llm_request" => llm_request_metadata(state),
+            "max_tokens_used" => effective_llm_max_tokens(state),
+            "reasoning_effort_used" => state.llm_reasoning_effort,
             "llm_usage" => json_metadata(response_usage(response)),
             "estimated_cost" => json_metadata(cost_summary),
             "origin_skill_id" => id(),
@@ -1178,9 +1185,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       candidates ->
         OpenLoops.ingest_todos(user_id, candidates,
           source: "chief_of_staff_morning_briefing",
-          max_tokens: 64_000,
+          max_tokens: @default_llm_max_tokens,
           timeout_ms: 1_200_000,
-          reasoning_effort: "xhigh"
+          reasoning_effort: @default_llm_reasoning_effort
         )
     end
   end
@@ -2645,7 +2652,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         normalized = String.downcase(effort)
 
         case normalized do
-          effort when effort in ["high", "xhigh"] -> effort
+          "high" -> "high"
+          "xhigh" -> default
           effort when effort in ["low", "medium"] -> default
           _other -> default
         end
@@ -2659,6 +2667,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     state
     |> Map.get(:llm_max_tokens)
     |> integer_in_range(@default_llm_max_tokens, 256, @default_llm_max_tokens)
+  end
+
+  defp llm_request_metadata(state) do
+    %{
+      "model" => state.llm_model || Maraithon.LLM.model() || "unknown",
+      "max_tokens" => effective_llm_max_tokens(state),
+      "reasoning_effort" => state.llm_reasoning_effort,
+      "timeout_ms" => state.llm_timeout_ms
+    }
   end
 
   defp maybe_put(map, _key, nil), do: map

@@ -3,10 +3,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   Command implementation for `llm_call` effects.
 
   Retries transient provider errors (`{:rate_limited, retry_after}`, network
-  blips, 5xx API errors, timeouts) up to `@max_retry_attempts` times. Without
-  this, a single 60-second rate-limit would turn an entire scheduled morning
-  briefing into a user-facing failure message — the LLM provider already told
-  us when to come back.
+  blips, 5xx API errors, timeouts) up to `@max_retry_attempts` times. If the
+  primary model stays capacity-limited, the command then tries configured
+  fallback models with a lighter request shape before surfacing a failure.
   """
 
   @behaviour Maraithon.Runtime.Effects.Command
@@ -14,6 +13,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   alias Maraithon.LLM
   alias Maraithon.Effects.Effect
   alias Maraithon.Spend
+  alias Maraithon.Tracing
 
   require Logger
 
@@ -24,6 +24,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @max_retry_after_ms 120_000
   # Fallback when the provider gives a non-integer retry-after.
   @default_rate_limited_backoff_ms 30_000
+  @fallback_max_tokens 8_000
+  @fallback_reasoning_effort "medium"
 
   @impl true
   def execute(%Effect{} = effect) do
@@ -69,10 +71,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         case retry_backoff_ms(reason, attempt) do
           nil ->
             # Same-model retries are spent. For transient errors that look
-            # like a model-scoped capacity issue (rate_limit, 5xx, network),
-            # try once more with the cheaper chat-tier model so the brief
-            # still delivers something useful instead of failing entirely.
-            maybe_try_chat_fallback(params, effect, reason)
+            # like model-scoped capacity issues, try configured fallback
+            # models with a lighter request before failing the effect.
+            maybe_try_model_fallbacks(params, effect, reason)
 
           sleep_ms ->
             Logger.info(
@@ -87,35 +88,124 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     end
   end
 
-  defp maybe_try_chat_fallback(params, effect, original_reason) do
-    chat_model = LLM.chat_model()
-    current_model = Map.get(params, "model")
+  defp maybe_try_model_fallbacks(params, effect, original_reason) do
+    fallback_models = fallback_models(params)
 
     cond do
       not transient_capacity_error?(original_reason) ->
         {:error, original_reason}
 
-      is_nil(chat_model) ->
-        {:error, original_reason}
-
-      current_model == chat_model ->
-        # Already running on the fallback tier — nowhere else to go.
+      fallback_models == [] ->
         {:error, original_reason}
 
       true ->
-        Logger.info(
-          "LLM primary exhausted; falling back to chat-tier model",
-          effect_id: effect.id,
-          original_reason: inspect(original_reason),
-          fallback_model: chat_model
-        )
-
-        case LLM.complete(Map.put(params, "model", chat_model)) do
-          {:ok, _data} = ok -> ok
-          {:error, _fallback_reason} -> {:error, original_reason}
-        end
+        try_fallback_models(params, effect, original_reason, fallback_models, [])
     end
   end
+
+  defp try_fallback_models(_params, _effect, original_reason, [], fallback_errors) do
+    Tracing.record_error({:llm_fallbacks_failed, original_reason, Enum.reverse(fallback_errors)})
+
+    {:error, {:llm_fallbacks_failed, original_reason, Enum.reverse(fallback_errors)}}
+  end
+
+  defp try_fallback_models(params, effect, original_reason, [fallback_model | rest], errors) do
+    Logger.info(
+      "LLM primary exhausted; falling back to alternate model",
+      effect_id: effect.id,
+      original_reason: inspect(original_reason),
+      fallback_model: fallback_model
+    )
+
+    case LLM.complete(fallback_params(params, fallback_model)) do
+      {:ok, _data} = ok ->
+        ok
+
+      {:error, fallback_reason} ->
+        Logger.warning(
+          "LLM fallback model failed",
+          effect_id: effect.id,
+          fallback_model: fallback_model,
+          fallback_reason: inspect(fallback_reason)
+        )
+
+        try_fallback_models(params, effect, original_reason, rest, [
+          %{model: fallback_model, reason: inspect(fallback_reason)} | errors
+        ])
+    end
+  end
+
+  defp fallback_models(params) do
+    current_model = normalize_model(Map.get(params, "model") || LLM.model())
+
+    [LLM.chat_model(), LLM.routing_model() | configured_model_fallbacks()]
+    |> Enum.map(&normalize_model/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reject(&(&1 == current_model))
+    |> Enum.uniq()
+  end
+
+  defp fallback_params(params, fallback_model) do
+    params
+    |> Map.put("model", fallback_model)
+    |> cap_fallback_tokens()
+    |> Map.put("reasoning_effort", @fallback_reasoning_effort)
+  end
+
+  defp cap_fallback_tokens(params) do
+    params
+    |> cap_token_key("max_tokens")
+    |> cap_token_key("max_output_tokens")
+  end
+
+  defp cap_token_key(params, key) do
+    case Map.get(params, key) do
+      value when is_integer(value) and value > @fallback_max_tokens ->
+        Map.put(params, key, @fallback_max_tokens)
+
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > @fallback_max_tokens ->
+            Map.put(params, key, @fallback_max_tokens)
+
+          _other ->
+            params
+        end
+
+      _other ->
+        params
+    end
+  end
+
+  defp configured_model_fallbacks do
+    :maraithon
+    |> Application.get_env(Maraithon.Runtime, [])
+    |> Keyword.get(:llm_model_fallbacks, [])
+    |> normalize_string_list()
+  end
+
+  defp normalize_string_list(values) when is_list(values) do
+    values
+    |> Enum.map(&normalize_model/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_string_list(value) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> normalize_string_list()
+  end
+
+  defp normalize_string_list(_value), do: []
+
+  defp normalize_model(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      model -> model
+    end
+  end
+
+  defp normalize_model(_value), do: nil
 
   defp transient_capacity_error?({:rate_limited, _}), do: true
   defp transient_capacity_error?(:timeout), do: true

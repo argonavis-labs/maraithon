@@ -72,10 +72,19 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     # Provider that emits the responses set up via `setup/1` in order, one
     # per `complete/1` call. Used to verify the retry policy.
 
-    def complete(_params) do
+    def complete(params) do
       Agent.get_and_update(__MODULE__, fn
-        [] -> {{:error, :exhausted_stub}, []}
-        [resp | rest] -> {resp, rest}
+        [] ->
+          {{:error, :exhausted_stub}, []}
+
+        [resp | rest] ->
+          {resp, rest}
+
+        %{responses: [], calls: calls} = state ->
+          {{:error, :exhausted_stub}, %{state | calls: [params | calls]}}
+
+        %{responses: [resp | rest], calls: calls} = state ->
+          {resp, %{state | responses: rest, calls: [params | calls]}}
       end)
     end
   end
@@ -97,6 +106,20 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
       id: RetryStub,
       start: {Agent, :start_link, [fn -> responses end, [name: RetryStub]]}
     })
+  end
+
+  defp start_retry_stub_with_calls(responses) do
+    start_supervised!(%{
+      id: RetryStub,
+      start:
+        {Agent, :start_link, [fn -> %{responses: responses, calls: []} end, [name: RetryStub]]}
+    })
+  end
+
+  defp retry_stub_calls do
+    RetryStub
+    |> Agent.get(& &1.calls)
+    |> Enum.reverse()
   end
 
   defp effect_for do
@@ -145,6 +168,61 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
       ])
 
       assert {:error, {:rate_limited, 5}} = LLMCallCommand.execute(effect_for())
+    end
+
+    test "falls back through distinct chat and routing models after retry exhaustion" do
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.merge(original_runtime_config,
+          llm_provider: RetryStub,
+          llm_model: "primary-reasoning",
+          llm_chat_model: "primary-reasoning",
+          llm_routing_model: "fast-routing",
+          llm_model_fallbacks: ["backup-model"]
+        )
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+      end)
+
+      start_retry_stub_with_calls([
+        {:error, {:rate_limited, 5}},
+        {:error, {:rate_limited, 5}},
+        {:error, {:rate_limited, 5}},
+        {:ok,
+         %{
+           content: "fallback ok",
+           model: "fast-routing",
+           tokens_in: 1,
+           tokens_out: 1,
+           finish_reason: "stop"
+         }}
+      ])
+
+      effect = %Effect{
+        id: Ecto.UUID.generate(),
+        agent_id: Ecto.UUID.generate(),
+        params: %{
+          "model" => "primary-reasoning",
+          "messages" => [%{"role" => "user", "content" => "go"}],
+          "max_tokens" => 16_000,
+          "reasoning_effort" => "xhigh"
+        }
+      }
+
+      assert {:ok, %{content: "fallback ok"}} = LLMCallCommand.execute(effect)
+
+      calls = retry_stub_calls()
+      fallback_call = List.last(calls)
+
+      assert length(calls) == 4
+      assert fallback_call["model"] == "fast-routing"
+      assert fallback_call["max_tokens"] == 8_000
+      assert fallback_call["reasoning_effort"] == "medium"
     end
   end
 end

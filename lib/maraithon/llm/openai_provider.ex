@@ -39,7 +39,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
   defp do_complete(params, api_key) do
     model = params["model"] || Maraithon.LLM.openai_model()
 
-    Tracing.with_span("llm.request", %{provider: "openai", model: model}, fn ->
+    Tracing.with_span("llm.request", request_span_attributes(params, model), fn ->
       do_complete_request(params, api_key, model)
     end)
   end
@@ -100,9 +100,20 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
     Tracing.with_span(
       "llm.request",
-      %{provider: "openai", model: model, streaming: true},
+      request_span_attributes(params, model, true),
       fn -> do_stream_request(params, api_key, on_chunk, model) end
     )
+  end
+
+  defp request_span_attributes(params, model, streaming \\ false) do
+    %{
+      provider: "openai",
+      model: model,
+      streaming: streaming,
+      message_count: length(params["messages"] || []),
+      max_output_tokens: params["max_tokens"] || params["max_output_tokens"] || 2048,
+      reasoning_effort: effective_reasoning_effort(params, model) || "none"
+    }
   end
 
   defp do_stream_request(params, api_key, on_chunk, model) do
