@@ -73,6 +73,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
 
       assert is_map(params)
       assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["max_tokens"] == 6_000
       assert params["reasoning_effort"] == "none"
       assert params["temperature"] == 0.15
       assert length(new_state.pending_candidates) >= 1
@@ -87,6 +88,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert prompt =~ "evidence_for_reply_owed"
       assert prompt =~ "evidence_against_reply_owed"
       assert prompt =~ "unsolicited sales outreach"
+      assert prompt =~ "Return at most 5 items"
+      assert prompt =~ "Keep every string field to one short sentence"
     end
 
     test "bounds advisor triage prompts before the llm call", %{context: context} do
@@ -116,6 +119,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       prompt = get_in(params, ["messages", Access.at(0), "content"])
 
       assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["max_tokens"] == 6_000
       assert length(new_state.pending_candidates) in 1..20
       assert String.length(prompt) < 80_000
       refute prompt =~ String.duplicate("Can you send the promised deck today? ", 100)

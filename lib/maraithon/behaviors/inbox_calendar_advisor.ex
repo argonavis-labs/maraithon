@@ -41,6 +41,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @max_watch_rules 4
   @max_email_body_excerpt_chars 2_400
   @llm_candidate_limit 20
+  @llm_output_item_limit 5
+  @llm_max_output_tokens 6_000
   @llm_candidate_body_excerpt_chars 1_500
   @llm_candidate_string_chars 1_000
 
@@ -331,7 +333,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             llm_candidates = Enum.take(candidates, @llm_candidate_limit)
 
             params =
-              insight_triage_llm_params(llm_candidates, context.timestamp, feedback_context)
+              insight_triage_llm_params(
+                llm_candidates,
+                context.timestamp,
+                feedback_context,
+                state.max_insights_per_cycle
+              )
 
             {:effect, {:llm_call, params},
              %{
@@ -2479,22 +2486,30 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     String.downcase(status || "unresolved") == "unresolved"
   end
 
-  defp insight_triage_llm_params(candidates, timestamp, feedback_context) do
+  defp insight_triage_llm_params(candidates, timestamp, feedback_context, max_insights) do
+    output_item_limit = output_item_limit(max_insights)
+
     %{
       "messages" => [
         %{
           "role" => "user",
-          "content" => build_llm_prompt(candidates, timestamp, feedback_context)
+          "content" =>
+            build_llm_prompt(candidates, timestamp, feedback_context, output_item_limit)
         }
       ],
-      "max_tokens" => 1_800,
+      "max_tokens" => @llm_max_output_tokens,
       "temperature" => 0.15,
       "reasoning_effort" => "none"
     }
     |> maybe_put_model(LLM.chat_model())
   end
 
-  defp build_llm_prompt(candidates, timestamp, feedback_context) do
+  defp output_item_limit(max_insights) when is_integer(max_insights) and max_insights > 0,
+    do: min(max_insights, @llm_output_item_limit)
+
+  defp output_item_limit(_max_insights), do: @llm_output_item_limit
+
+  defp build_llm_prompt(candidates, timestamp, feedback_context, output_item_limit) do
     candidates_json =
       candidates
       |> compact_llm_candidates()
@@ -2564,6 +2579,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       4. "Saw your post, worth a quick call? Here's my Calendly."
       5. "Following up on my outbound prospecting tool" when the user never replied
     - Every returned item must be high-signal and worth keeping open.
+    - Return at most #{output_item_limit} items. If more than #{output_item_limit} qualify, return only the highest-priority,
+      highest-confidence items.
+    - Keep every string field to one short sentence. Keep list fields to at most 3 concise entries.
+    - Return [] instead of verbose borderline output.
     - Each candidate may include conversation_context.notification_posture.
     - If notification_posture is "heads_up" or "insufficient_context", prefer attention_mode = "monitor".
     - If notification_posture is "heads_up", keep the softer "conversation is moving" framing.
