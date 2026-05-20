@@ -57,6 +57,7 @@ defmodule MaraithonWeb.McpControllerTest do
     assert "recall_memory" in names
     assert "forget_memory" in names
     assert "record_memory_feedback" in names
+    assert "update_memory_confidence" in names
 
     list_todos =
       response

@@ -331,6 +331,7 @@ defmodule Maraithon.AssistantHarness do
     - Deep memory is the general built-in memory database. Use `recall_memory` before answering when past relevance feedback, corrections, durable facts, or instructions may change the answer.
     - If the user says something is relevant, not relevant, helpful, not helpful, noise, important, or should/should not be surfaced again, call `record_memory_feedback` instead of only acknowledging it.
     - If the user asks Maraithon to remember a durable fact, instruction, correction, or operating preference that is not a todo/CRM relationship, call `write_memory`.
+    - If a remembered fact is still useful but should be trusted more or less, call `update_memory_confidence`.
     - If the user asks what Maraithon remembers, call `list_memories` or `recall_memory`. If they ask Maraithon to forget a memory, call `forget_memory`.
     - The built-in CRM is the durable relationship layer. Use `list_people`, `get_person`, `upsert_person`, `link_person_data`, `learn_relationship_context`, and `get_relationship_context` for questions or updates about people, contact details, preferred communication method, relationship, communication frequency, and work attached to a person.
     - If the user asks who someone is, how they know them, how often they talk, how to contact them, or what open work is attached to a person, call `get_relationship_context` or `list_people` before answering unless the latest CRM tool result is already current.
@@ -414,6 +415,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user says `Don't surface receipt emails unless they imply follow-up work`, your next response should usually be `tool_calls` for `remember_preferences` with a `content_filter` rule.
     - If the user says `That VC newsletter is not relevant to me`, your next response should usually be `tool_calls` for `record_memory_feedback` with `feedback:"not_relevant"` and a concise subject.
     - If the user says `Remember that I care about school calendar messages`, your next response should usually be `tool_calls` for `write_memory` with kind `preference` or `relevance_feedback`.
+    - If the user says `That remembered school calendar rule is only sometimes true`, your next response should usually use `update_memory_confidence` for the matching memory.
     - If the user says `Forget the receipt rule`, your next response should usually be `tool_calls` for `list_preferences` first if needed, then `forget_preference` for the exact saved `rule_id`.
     - If `linked_item.project` is present and the user replies `it's work`, your next response should usually be `tool_calls` for `update_project_scope` with `life_domain:"work"` and the linked project.
     - If `inspect_project` shows a recommendation id and the user says `yes, build that`, your next response should usually be `tool_calls` for `decide_project_recommendation` and then `start_implementation_run`.

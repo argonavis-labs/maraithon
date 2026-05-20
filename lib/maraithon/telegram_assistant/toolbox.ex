@@ -83,7 +83,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   @toolbox_write_tools MapSet.new(~w(
     update_briefing_schedule remember_preferences forget_preference write_memory
-    record_memory_feedback forget_memory upsert_todos resolve_todo upsert_person
+    record_memory_feedback update_memory_confidence forget_memory upsert_todos resolve_todo upsert_person
     link_person_data learn_relationship_context delete_person update_project_scope
     decide_project_recommendation grant_project_repo_access start_implementation_run
     update_implementation_run prepare_project_action prepare_agent_action
@@ -272,6 +272,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "kind" => %{"type" => "string"},
             "scope" => %{"type" => "string"},
             "tag" => %{"type" => "string"},
+            "source_ref_type" => %{"type" => "string"},
+            "source_ref_id" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
           }
         }
@@ -286,6 +288,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "kind" => %{"type" => "string"},
             "scope" => %{"type" => "string"},
             "tag" => %{"type" => "string"},
+            "max_tokens" => %{"type" => "integer", "minimum" => 100, "maximum" => 8000},
+            "subject_type" => %{"type" => "string"},
+            "subject_id" => %{"type" => "string"},
+            "project_id" => %{"type" => "string"},
+            "person_id" => %{"type" => "string"},
+            "source_ref_type" => %{"type" => "string"},
+            "source_ref_id" => %{"type" => "string"},
             "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 40}
           }
         }
@@ -308,13 +317,18 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
                 "content" => %{"type" => "string"},
                 "summary" => %{"type" => "string"},
                 "source" => %{"type" => "string"},
+                "source_ref_type" => %{"type" => "string"},
+                "source_ref_id" => %{"type" => "string"},
                 "author_type" => %{"type" => "string"},
                 "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
                 "importance" => %{"type" => "integer", "minimum" => 0, "maximum" => 100},
                 "confidence" => %{"type" => "number"},
                 "polarity" => %{"type" => "string"},
                 "dedupe_key" => %{"type" => "string"},
-                "metadata" => %{"type" => "object"}
+                "metadata" => %{"type" => "object"},
+                "decay_at" => %{"type" => "string"},
+                "expires_at" => %{"type" => "string"},
+                "supersedes_id" => %{"type" => "string"}
               }
             }
           }
@@ -335,6 +349,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "source" => %{"type" => "string"},
             "tags" => %{"type" => "array", "items" => %{"type" => "string"}},
             "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "update_memory_confidence",
+        "Update how strongly Maraithon should trust one durable deep memory item.",
+        %{
+          "type" => "object",
+          "required" => ["memory_id", "confidence"],
+          "properties" => %{
+            "memory_id" => %{"type" => "string"},
+            "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+            "reason" => %{"type" => "string"}
           }
         }
       ),
@@ -1232,6 +1259,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "record_memory_feedback" ->
         inject_user_and_execute("record_memory_feedback", runtime_context, args)
 
+      "update_memory_confidence" ->
+        inject_user_and_execute("update_memory_confidence", runtime_context, args)
+
       "forget_memory" ->
         inject_user_and_execute("forget_memory", runtime_context, args)
 
@@ -1464,7 +1494,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp toolbox_idempotent?(tool_name) do
     tool_name in ~w(
-      update_briefing_schedule remember_preferences write_memory record_memory_feedback
+      update_briefing_schedule remember_preferences write_memory record_memory_feedback update_memory_confidence
       upsert_todos resolve_todo upsert_person link_person_data learn_relationship_context
       update_project_scope decide_project_recommendation update_implementation_run
       create_scheduled_task pause_scheduled_task cancel_scheduled_task

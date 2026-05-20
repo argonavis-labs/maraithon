@@ -293,6 +293,7 @@ defmodule Maraithon.AgentMarketplace do
       "recall_memory",
       "write_memory",
       "record_memory_feedback",
+      "update_memory_confidence",
       "llm.complete"
     ]
   end

@@ -65,6 +65,30 @@ defmodule Maraithon.Tools.MemoryToolsTest do
     assert feedback.memory.kind == "relevance_feedback"
     assert feedback.memory.polarity == "negative"
 
+    assert {:ok, confidence} =
+             Tools.execute("update_memory_confidence", %{
+               "user_id" => user_id,
+               "memory_id" => memory.id,
+               "confidence" => 0.42,
+               "reason" => "Applies only sometimes."
+             })
+
+    assert confidence.memory.confidence == 0.42
+
+    assert {:ok, replacement} =
+             Tools.execute("write_memory", %{
+               "user_id" => user_id,
+               "memory" => %{
+                 "kind" => "instruction",
+                 "title" => "Prefer actionable school notices",
+                 "content" => "Surface only school notices that require action today.",
+                 "dedupe_key" => "memory-tools:school",
+                 "supersedes_id" => memory.id
+               }
+             })
+
+    assert replacement.memory.supersedes_id == memory.id
+
     assert {:ok, listed} =
              Tools.execute("list_memories", %{
                "user_id" => user_id,
@@ -76,7 +100,7 @@ defmodule Maraithon.Tools.MemoryToolsTest do
     assert {:ok, forgotten} =
              Tools.execute("forget_memory", %{
                "user_id" => user_id,
-               "memory_id" => memory.id
+               "memory_id" => replacement.memory.id
              })
 
     assert forgotten.forgotten == true

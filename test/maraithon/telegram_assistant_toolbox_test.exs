@@ -508,6 +508,19 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert feedback.memory.kind == "relevance_feedback"
     assert feedback.memory.polarity == "negative"
 
+    assert {:ok, confidence} =
+             Toolbox.execute(
+               "update_memory_confidence",
+               %{
+                 "memory_id" => written.memory.id,
+                 "confidence" => 0.51,
+                 "reason" => "Only applies to school notices with logistics."
+               },
+               runtime_context
+             )
+
+    assert confidence.memory.confidence == 0.51
+
     assert {:ok, listed} = Toolbox.execute("list_memories", %{}, runtime_context)
     assert listed.count == 2
 

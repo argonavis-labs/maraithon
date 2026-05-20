@@ -12,7 +12,7 @@ defmodule Maraithon.Memory.Event do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :string
 
-  @event_types ~w(written updated recalled archived superseded rejected feedback_recorded)
+  @event_types ~w(written updated recalled archived superseded rejected feedback_recorded confidence_updated)
 
   schema "memory_events" do
     field :event_type, :string

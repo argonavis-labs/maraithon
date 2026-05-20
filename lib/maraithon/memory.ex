@@ -10,17 +10,18 @@ defmodule Maraithon.Memory do
 
   import Ecto.Query
 
-  alias Maraithon.Memory.{Event, Intelligence, Item}
+  alias Maraithon.Memory.{Event, Intelligence, Item, Recall}
   alias Maraithon.Repo
 
   @default_limit 12
   @candidate_limit 80
   @prompt_limit 8
-  @memory_tool_names ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback)
+  @memory_tool_names ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback update_memory_confidence)
   @read_key_atoms %{
     "author_type" => :author_type,
     "confidence" => :confidence,
     "content" => :content,
+    "decay_at" => :decay_at,
     "dedupe_key" => :dedupe_key,
     "feedback" => :feedback,
     "id" => :id,
@@ -35,6 +36,8 @@ defmodule Maraithon.Memory do
     "source_ref_id" => :source_ref_id,
     "source_ref_type" => :source_ref_type,
     "subject" => :subject,
+    "superseded_by_id" => :superseded_by_id,
+    "supersedes_id" => :supersedes_id,
     "title" => :title,
     "type" => :type
   }
@@ -42,17 +45,26 @@ defmodule Maraithon.Memory do
   def list_items(user_id, opts \\ [])
 
   def list_items(user_id, opts) when is_binary(user_id) do
+    query_text = Keyword.get(opts, :query)
+    limit = result_limit(opts, @default_limit)
+    fetch_limit = overfetch_limit(query_text, limit)
+
     Item
     |> where([item], item.user_id == ^user_id)
     |> maybe_filter_status(Keyword.get(opts, :status, "active"))
     |> maybe_filter_kind(Keyword.get(opts, :kind))
     |> maybe_filter_scope(Keyword.get(opts, :scope))
-    |> maybe_filter_query(Keyword.get(opts, :query))
     |> maybe_filter_tag(Keyword.get(opts, :tag))
+    |> maybe_filter_source_ref(
+      Keyword.get(opts, :source_ref_type),
+      Keyword.get(opts, :source_ref_id)
+    )
     |> where_not_expired()
     |> order_by([item], desc: item.importance, desc: item.updated_at, desc: item.inserted_at)
-    |> limit(^result_limit(opts, @default_limit))
+    |> limit(^fetch_limit)
     |> Repo.all()
+    |> filter_items_by_text(query_text)
+    |> Enum.take(limit)
   end
 
   def list_items(_user_id, _opts), do: []
@@ -72,37 +84,121 @@ defmodule Maraithon.Memory do
       |> Map.put("user_id", user_id)
 
     source = read_string(attrs, "source", Keyword.get(opts, :source, "tool"))
+    supersedes_id = read_string(attrs, "supersedes_id", nil)
 
-    Repo.transaction(fn ->
-      {item, event_type} =
-        case resolve_write_target(user_id, attrs) do
-          %Item{} = existing ->
-            {:ok, item} =
-              existing
-              |> Item.changeset(Map.put(attrs, "source", source))
-              |> Repo.update()
+    if supersedes_id do
+      supersede(user_id, attrs, supersedes_id, source: source)
+    else
+      Repo.transaction(fn ->
+        {item, event_type} =
+          case resolve_write_target(user_id, attrs) do
+            %Item{} = existing ->
+              item =
+                existing
+                |> Item.changeset(Map.put(attrs, "source", source))
+                |> repo_write_or_rollback()
 
-            {item, "updated"}
+              {item, "updated"}
 
-          nil ->
-            {:ok, item} =
-              %Item{}
-              |> Item.changeset(Map.put(attrs, "source", source))
-              |> Repo.insert()
+            nil ->
+              item =
+                %Item{user_id: user_id}
+                |> Item.changeset(Map.put(attrs, "source", source))
+                |> repo_insert_or_rollback()
 
-            {item, "written"}
-        end
+              {item, "written"}
+          end
 
-      log_event!(user_id, item.id, event_type, source, %{
-        "memory" => serialize_item(item),
-        "source" => source
-      })
+        log_event!(user_id, item.id, event_type, source, %{
+          "memory" => serialize_item(item),
+          "source" => source
+        })
 
-      item
-    end)
+        item
+      end)
+    end
   end
 
   def write(_user_id, _attrs, _opts), do: {:error, :invalid_memory_attrs}
+
+  def supersede(user_id, attrs, supersedes_id, opts \\ [])
+
+  def supersede(user_id, attrs, supersedes_id, opts)
+      when is_binary(user_id) and is_map(attrs) and is_binary(supersedes_id) do
+    attrs =
+      attrs
+      |> memory_attrs()
+      |> Map.put("supersedes_id", supersedes_id)
+
+    source = read_string(attrs, "source", Keyword.get(opts, :source, "tool"))
+    new_id = Ecto.UUID.generate()
+
+    Repo.transaction(fn ->
+      case Repo.get_by(Item, id: supersedes_id, user_id: user_id) do
+        %Item{status: "active"} = previous ->
+          superseded =
+            previous
+            |> Item.changeset(%{"status" => "superseded"})
+            |> repo_write_or_rollback()
+
+          item =
+            %Item{id: new_id, user_id: user_id}
+            |> Item.changeset(Map.put(attrs, "source", source))
+            |> repo_insert_or_rollback()
+
+          _previous =
+            superseded
+            |> Item.changeset(%{"superseded_by_id" => item.id})
+            |> repo_write_or_rollback()
+
+          log_event!(user_id, previous.id, "superseded", source, %{
+            "superseded_by_id" => item.id,
+            "memory" => serialize_item(previous)
+          })
+
+          log_event!(user_id, item.id, "written", source, %{
+            "supersedes_id" => previous.id,
+            "memory" => serialize_item(item),
+            "source" => source
+          })
+
+          item
+
+        %Item{} = previous ->
+          Repo.rollback({:memory_not_active, previous.status})
+
+        nil ->
+          Repo.rollback(:memory_not_found)
+      end
+    end)
+  end
+
+  def supersede(_user_id, _attrs, _supersedes_id, _opts), do: {:error, :invalid_memory_attrs}
+
+  def update_confidence(user_id, memory_id, confidence, opts \\ [])
+
+  def update_confidence(user_id, memory_id, confidence, opts)
+      when is_binary(user_id) and is_binary(memory_id) do
+    source = Keyword.get(opts, :source, "tool")
+    reason = Keyword.get(opts, :reason)
+
+    with %Item{} = item <- get_item_for_user(user_id, memory_id),
+         {:ok, updated} <- item |> Item.changeset(%{"confidence" => confidence}) |> Repo.update() do
+      log_event(user_id, updated.id, "confidence_updated", source, %{
+        "previous_confidence" => item.confidence,
+        "confidence" => updated.confidence,
+        "reason" => reason
+      })
+
+      {:ok, updated}
+    else
+      nil -> {:error, :memory_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def update_confidence(_user_id, _memory_id, _confidence, _opts),
+    do: {:error, :invalid_memory_id}
 
   def record_relevance_feedback(user_id, attrs, opts \\ [])
 
@@ -182,12 +278,18 @@ defmodule Maraithon.Memory do
 
   def recall(user_id, query, opts) when is_binary(user_id) do
     query = normalize_optional_text(query) || ""
-    candidates = recall_candidates(user_id, query, opts)
+
+    recall_opts =
+      opts
+      |> Keyword.put(:query, query)
+      |> Keyword.put_new(:candidate_limit, @candidate_limit)
+
+    {:ok, candidates, recall_metadata} = Recall.recall(user_id, recall_opts)
     serialized_candidates = Enum.map(candidates, &serialize_item/1)
 
     case Intelligence.select_relevant(user_id, query, serialized_candidates, opts) do
       {:ok, %{items: recalled} = model_result} ->
-        touch_recalled(user_id, recalled)
+        touch(user_id, recalled)
 
         {:ok,
          %{
@@ -195,6 +297,7 @@ defmodule Maraithon.Memory do
            count: length(recalled),
            summary: Map.get(model_result, :summary) || recall_summary(query, recalled),
            memories: recalled,
+           recall: recall_metadata,
            selection_source: "memory_intelligence"
          }}
 
@@ -239,18 +342,13 @@ defmodule Maraithon.Memory do
     limit = result_limit(opts, @prompt_limit)
 
     {memories, recall_error} =
-      if query do
-        case recall(user_id, query, Keyword.put(opts, :limit, limit)) do
-          {:ok, %{memories: memories}} -> {memories, nil}
-          {:error, reason} -> {[], inspect(reason)}
-        end
-      else
-        memories =
-          user_id
-          |> list_items(limit: limit, status: "active")
-          |> Enum.map(&serialize_item/1)
+      case Recall.recall(user_id, Keyword.merge(opts, query: query || "", limit: limit)) do
+        {:ok, items, _metadata} ->
+          touch(user_id, items)
+          {Enum.map(items, &serialize_item/1), nil}
 
-        {memories, nil}
+        {:error, reason} ->
+          {[], inspect(reason)}
       end
 
     %{
@@ -296,7 +394,7 @@ defmodule Maraithon.Memory do
         end)
 
       """
-      ## Deep Memory
+      ## Relevant memories
       These are durable user/system memories. Treat them as steering context, not as one-off chat history.
       Use memory tools when you need more recall, when the user corrects relevance, or when a durable fact should be written.
 
@@ -349,6 +447,9 @@ defmodule Maraithon.Memory do
       last_used_at: item.last_used_at,
       use_count: item.use_count || 0,
       expires_at: item.expires_at,
+      decay_at: item.decay_at,
+      superseded_by_id: item.superseded_by_id,
+      supersedes_id: item.supersedes_id,
       inserted_at: item.inserted_at,
       updated_at: item.updated_at
     }
@@ -378,6 +479,9 @@ defmodule Maraithon.Memory do
       last_used_at: Map.get(item, :last_used_at) || Map.get(item, "last_used_at"),
       use_count: Map.get(item, :use_count) || Map.get(item, "use_count") || 0,
       expires_at: Map.get(item, :expires_at) || Map.get(item, "expires_at"),
+      decay_at: Map.get(item, :decay_at) || Map.get(item, "decay_at"),
+      superseded_by_id: Map.get(item, :superseded_by_id) || Map.get(item, "superseded_by_id"),
+      supersedes_id: Map.get(item, :supersedes_id) || Map.get(item, "supersedes_id"),
       inserted_at: Map.get(item, :inserted_at) || Map.get(item, "inserted_at"),
       updated_at: Map.get(item, :updated_at) || Map.get(item, "updated_at")
     }
@@ -428,20 +532,7 @@ defmodule Maraithon.Memory do
     |> Map.put_new("confidence", 0.75)
   end
 
-  defp recall_candidates(user_id, _query, opts) do
-    Item
-    |> where([item], item.user_id == ^user_id and item.status == "active")
-    |> where_not_expired()
-    |> maybe_filter_kind(Keyword.get(opts, :kind))
-    |> maybe_filter_scope(Keyword.get(opts, :scope))
-    |> maybe_filter_tag(Keyword.get(opts, :tag))
-    |> order_by([item], desc: item.importance, desc: item.updated_at, desc: item.inserted_at)
-    |> limit(^Keyword.get(opts, :candidate_limit, @candidate_limit))
-    |> Repo.all()
-    |> Enum.take(Keyword.get(opts, :candidate_limit, @candidate_limit))
-  end
-
-  defp touch_recalled(user_id, memories) do
+  def touch(user_id, memories) when is_binary(user_id) and is_list(memories) do
     now = DateTime.utc_now()
 
     memory_ids =
@@ -473,17 +564,24 @@ defmodule Maraithon.Memory do
         end)
 
       Repo.insert_all(Event, events)
+      :ok
+    else
+      :ok
     end
   end
+
+  def touch(_user_id, _memories), do: :ok
 
   defp resolve_item(user_id, memory_id_or_query) do
     get_item_for_user(user_id, memory_id_or_query) ||
       Item
       |> where([item], item.user_id == ^user_id and item.status == "active")
-      |> maybe_filter_query(memory_id_or_query)
+      |> where_not_expired()
       |> order_by([item], desc: item.importance, desc: item.updated_at)
-      |> limit(1)
-      |> Repo.one()
+      |> limit(200)
+      |> Repo.all()
+      |> filter_items_by_text(memory_id_or_query)
+      |> List.first()
   end
 
   defp log_event(user_id, memory_id, event_type, source, payload) do
@@ -514,6 +612,20 @@ defmodule Maraithon.Memory do
     |> Repo.insert!()
   end
 
+  defp repo_insert_or_rollback(changeset) do
+    case Repo.insert(changeset) do
+      {:ok, item} -> item
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp repo_write_or_rollback(changeset) do
+    case Repo.update(changeset) do
+      {:ok, item} -> item
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
   defp maybe_filter_status(query, nil), do: query
   defp maybe_filter_status(query, "all"), do: query
   defp maybe_filter_status(query, status), do: where(query, [item], item.status == ^status)
@@ -530,18 +642,57 @@ defmodule Maraithon.Memory do
   defp maybe_filter_tag(query, ""), do: query
   defp maybe_filter_tag(query, tag), do: where(query, [item], ^tag in item.tags)
 
-  defp maybe_filter_query(query, nil), do: query
-  defp maybe_filter_query(query, ""), do: query
+  defp maybe_filter_source_ref(query, nil, _source_ref_id), do: query
+  defp maybe_filter_source_ref(query, "", _source_ref_id), do: query
+  defp maybe_filter_source_ref(query, _source_ref_type, nil), do: query
+  defp maybe_filter_source_ref(query, _source_ref_type, ""), do: query
 
-  defp maybe_filter_query(query, text) when is_binary(text) do
-    pattern = "%#{text}%"
-
+  defp maybe_filter_source_ref(query, source_ref_type, source_ref_id) do
     where(
       query,
       [item],
-      ilike(item.title, ^pattern) or ilike(item.content, ^pattern) or
-        ilike(item.summary, ^pattern) or fragment("?::text ILIKE ?", item.metadata, ^pattern)
+      item.source_ref_type == ^source_ref_type and item.source_ref_id == ^source_ref_id
     )
+  end
+
+  defp filter_items_by_text(items, nil), do: items
+  defp filter_items_by_text(items, ""), do: items
+
+  defp filter_items_by_text(items, text) when is_binary(text) do
+    needle = String.downcase(text)
+
+    Enum.filter(items, fn item ->
+      item
+      |> searchable_text()
+      |> String.downcase()
+      |> String.contains?(needle)
+    end)
+  end
+
+  defp searchable_text(%Item{} = item) do
+    [
+      item.title,
+      item.content,
+      item.summary,
+      item.source,
+      item.source_ref_type,
+      item.source_ref_id,
+      Jason.encode!(item.metadata || %{}),
+      Enum.join(item.tags || [], " ")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+  end
+
+  defp overfetch_limit(query_text, limit) do
+    if normalize_optional_text(query_text) do
+      limit
+      |> Kernel.*(10)
+      |> max(100)
+      |> min(500)
+    else
+      limit
+    end
   end
 
   defp where_not_expired(query) do

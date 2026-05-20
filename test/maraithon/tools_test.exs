@@ -48,6 +48,7 @@ defmodule Maraithon.ToolsTest do
       assert "recall_memory" in tools
       assert "forget_memory" in tools
       assert "record_memory_feedback" in tools
+      assert "update_memory_confidence" in tools
       assert "github_create_issue_comment" in tools
       assert "slack_post_message" in tools
       assert "slack_list_conversations" in tools
@@ -118,6 +119,7 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("recall_memory")
       assert Tools.exists?("forget_memory")
       assert Tools.exists?("record_memory_feedback")
+      assert Tools.exists?("update_memory_confidence")
       assert Tools.exists?("github_create_issue_comment")
       assert Tools.exists?("slack_list_messages")
       assert Tools.exists?("notaui_list_tasks")

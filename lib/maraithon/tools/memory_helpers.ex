@@ -21,6 +21,8 @@ defmodule Maraithon.Tools.MemoryHelpers do
     |> maybe_put(:kind, optional_string(args, "kind"))
     |> maybe_put(:scope, optional_string(args, "scope"))
     |> maybe_put(:tag, optional_string(args, "tag"))
+    |> maybe_put(:source_ref_type, optional_string(args, "source_ref_type"))
+    |> maybe_put(:source_ref_id, optional_string(args, "source_ref_id"))
   end
 
   def recall_opts(args, default_limit \\ 12) when is_map(args) do
@@ -37,6 +39,13 @@ defmodule Maraithon.Tools.MemoryHelpers do
     |> maybe_put(:kind, optional_string(args, "kind"))
     |> maybe_put(:scope, optional_string(args, "scope"))
     |> maybe_put(:tag, optional_string(args, "tag"))
+    |> maybe_put(:max_tokens, optional_integer(args, "max_tokens"))
+    |> maybe_put(:subject_type, optional_string(args, "subject_type"))
+    |> maybe_put(:subject_id, optional_string(args, "subject_id"))
+    |> maybe_put(:project_id, optional_string(args, "project_id"))
+    |> maybe_put(:person_id, optional_string(args, "person_id"))
+    |> maybe_put(:source_ref_type, optional_string(args, "source_ref_type"))
+    |> maybe_put(:source_ref_id, optional_string(args, "source_ref_id"))
     |> maybe_put(:llm_complete, optional_function(args, "llm_complete"))
   end
 

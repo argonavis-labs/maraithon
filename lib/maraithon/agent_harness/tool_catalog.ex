@@ -137,6 +137,13 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "record_relevance_feedback",
       side_effect: "write"
     },
+    "update_memory_confidence" => %{
+      name: "update_memory_confidence",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "update_memory_confidence",
+      side_effect: "write"
+    },
     "slack.read" => %{
       name: "slack.read",
       connector: "slack",

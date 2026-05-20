@@ -22,8 +22,8 @@ defmodule Maraithon.Memory.Item do
     field :kind, :string, default: "fact"
     field :scope, :string, default: "user"
     field :title, :string
-    field :content, :string
-    field :summary, :string
+    field :content, Maraithon.Encrypted.Binary
+    field :summary, Maraithon.Encrypted.Binary
     field :source, :string, default: "manual"
     field :source_ref_type, :string
     field :source_ref_id, :string
@@ -34,17 +34,22 @@ defmodule Maraithon.Memory.Item do
     field :confidence, :float, default: 0.75
     field :polarity, :string, default: "neutral"
     field :dedupe_key, :string
-    field :metadata, :map, default: %{}
+    field :metadata, Maraithon.Encrypted.Map
     field :last_used_at, :utc_datetime_usec
     field :use_count, :integer, default: 0
     field :expires_at, :utc_datetime_usec
+    field :decay_at, :utc_datetime_usec
 
     belongs_to :user, User, type: :string
+    belongs_to :superseded_by, __MODULE__, foreign_key: :superseded_by_id, type: :binary_id
+    belongs_to :supersedes, __MODULE__, foreign_key: :supersedes_id, type: :binary_id
+    has_one :superseding_memory, __MODULE__, foreign_key: :supersedes_id
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @required_fields [:user_id, :status, :kind, :scope, :title, :content, :source, :author_type]
+  @cast_required_fields @required_fields -- [:user_id]
   @optional_fields [
     :summary,
     :source_ref_type,
@@ -58,7 +63,10 @@ defmodule Maraithon.Memory.Item do
     :metadata,
     :last_used_at,
     :use_count,
-    :expires_at
+    :expires_at,
+    :decay_at,
+    :superseded_by_id,
+    :supersedes_id
   ]
   @all_fields @required_fields ++ @optional_fields
   @known_string_keys Map.new(@all_fields, &{Atom.to_string(&1), &1})
@@ -67,7 +75,7 @@ defmodule Maraithon.Memory.Item do
     attrs = normalize_attrs(attrs, item)
 
     item
-    |> cast(attrs, @required_fields ++ @optional_fields)
+    |> cast(attrs, @cast_required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:kind, @kinds)
@@ -84,7 +92,11 @@ defmodule Maraithon.Memory.Item do
     |> validate_change(:metadata, fn :metadata, value ->
       if is_map(value), do: [], else: [metadata: "must be a map"]
     end)
+    |> validate_evidence()
+    |> validate_decay_after_inserted_at()
     |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:superseded_by_id)
+    |> foreign_key_constraint(:supersedes_id)
     |> unique_constraint(:dedupe_key, name: :memory_items_user_active_dedupe_index)
   end
 
@@ -198,6 +210,55 @@ defmodule Maraithon.Memory.Item do
   defp normalize_metadata(%{metadata: metadata} = attrs) when is_map(metadata), do: attrs
   defp normalize_metadata(%{metadata: _metadata} = attrs), do: Map.put(attrs, :metadata, %{})
   defp normalize_metadata(attrs), do: attrs
+
+  defp validate_evidence(changeset) do
+    evidence =
+      changeset
+      |> get_field(:metadata)
+      |> case do
+        metadata when is_map(metadata) ->
+          Map.get(metadata, "evidence") || Map.get(metadata, :evidence)
+
+        _metadata ->
+          nil
+      end
+
+    if valid_evidence?(evidence) do
+      changeset
+    else
+      add_error(
+        changeset,
+        :metadata,
+        "evidence must be a map or list of maps with quote and source"
+      )
+    end
+  end
+
+  defp valid_evidence?(nil), do: true
+
+  defp valid_evidence?(evidence) when is_map(evidence) do
+    present?(Map.get(evidence, "quote") || Map.get(evidence, :quote)) and
+      present?(Map.get(evidence, "source") || Map.get(evidence, :source))
+  end
+
+  defp valid_evidence?(evidence) when is_list(evidence),
+    do: Enum.all?(evidence, &valid_evidence?/1)
+
+  defp valid_evidence?(_evidence), do: false
+
+  defp validate_decay_after_inserted_at(changeset) do
+    case {get_field(changeset, :inserted_at), get_field(changeset, :decay_at)} do
+      {%DateTime{} = inserted_at, %DateTime{} = decay_at} ->
+        if DateTime.compare(decay_at, inserted_at) == :gt do
+          changeset
+        else
+          add_error(changeset, :decay_at, "must be after inserted_at")
+        end
+
+      _other ->
+        changeset
+    end
+  end
 
   defp normalize_title(attrs, item) do
     current_title = item && Map.get(item, :title)

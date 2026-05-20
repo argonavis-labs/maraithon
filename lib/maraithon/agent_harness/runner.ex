@@ -70,7 +70,7 @@ defmodule Maraithon.AgentHarness.Runner do
 
   defp memory_guidance(tool_allowlist) do
     memory_tools =
-      ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback)
+      ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback update_memory_confidence)
 
     if Enum.any?(memory_tools, &Enum.member?(tool_allowlist, &1)) do
       """
@@ -79,6 +79,7 @@ defmodule Maraithon.AgentHarness.Runner do
       - Call recall_memory when a relationship, preference, relevance decision, or past correction may change the answer.
       - Call write_memory when the user or system provides durable facts or instructions.
       - Call record_memory_feedback when the user says something is or is not relevant.
+      - Call update_memory_confidence when a remembered fact is still useful but should be trusted more or less.
       - Call forget_memory when the user asks to remove or stop using a memory.
       """
       |> String.trim()

@@ -207,9 +207,16 @@ defmodule Maraithon.Tools.InputSchemas do
           "query" => @string,
           "text" => @string,
           "limit" => @integer,
+          "max_tokens" => @integer,
           "kind" => @string,
           "scope" => @string,
-          "tag" => @string
+          "tag" => @string,
+          "subject_type" => @string,
+          "subject_id" => @string,
+          "project_id" => @string,
+          "person_id" => @string,
+          "source_ref_type" => @string,
+          "source_ref_id" => @string
         })
 
       "forget_memory" ->
@@ -221,6 +228,13 @@ defmodule Maraithon.Tools.InputSchemas do
 
       "record_memory_feedback" ->
         user_object(%{"feedback" => feedback_schema()} |> Map.merge(feedback_fields()))
+
+      "update_memory_confidence" ->
+        user_object(%{
+          "memory_id" => @string,
+          "confidence" => %{"type" => "number"},
+          "reason" => @string
+        })
 
       "github_create_issue_comment" ->
         object(
@@ -730,7 +744,9 @@ defmodule Maraithon.Tools.InputSchemas do
       "status" => @string,
       "kind" => @string,
       "scope" => @string,
-      "tag" => @string
+      "tag" => @string,
+      "source_ref_type" => @string,
+      "source_ref_id" => @string
     }
   end
 
@@ -752,7 +768,10 @@ defmodule Maraithon.Tools.InputSchemas do
       "confidence" => %{"type" => "number"},
       "polarity" => enum(~w(neutral positive negative)),
       "metadata" => @object,
-      "expires_at" => @string
+      "expires_at" => @string,
+      "decay_at" => @string,
+      "supersedes_id" => @string,
+      "superseded_by_id" => @string
     }
   end
 

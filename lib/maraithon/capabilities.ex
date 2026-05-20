@@ -43,6 +43,7 @@ defmodule Maraithon.Capabilities do
     "recall_memory" => Maraithon.Tools.RecallMemory,
     "forget_memory" => Maraithon.Tools.ForgetMemory,
     "record_memory_feedback" => Maraithon.Tools.RecordMemoryFeedback,
+    "update_memory_confidence" => Maraithon.Tools.UpdateMemoryConfidence,
     "github_create_issue_comment" => Maraithon.Tools.GitHubCreateIssueComment,
     "slack_post_message" => Maraithon.Tools.SlackPostMessage,
     "slack_list_conversations" => Maraithon.Tools.SlackListConversations,
@@ -144,6 +145,7 @@ defmodule Maraithon.Capabilities do
     "forget_memory" => "Archive, supersede, or reject one durable deep memory item.",
     "record_memory_feedback" =>
       "Record user feedback that something is relevant or not relevant as durable memory.",
+    "update_memory_confidence" => "Update the confidence score for one durable memory item.",
     "github_create_issue_comment" => "Create a GitHub issue comment.",
     "slack_post_message" => "Post a Slack message or thread reply.",
     "slack_list_conversations" => "List Slack channels, private channels, DMs, and MPIMs.",
@@ -269,7 +271,7 @@ defmodule Maraithon.Capabilities do
 
   @write_tools MapSet.new(~w(
     upsert_todos upsert_person link_person_data learn_relationship_context
-    write_memory record_memory_feedback
+    write_memory record_memory_feedback update_memory_confidence
   ))
 
   @user_optional_tools MapSet.new(~w(
@@ -278,7 +280,7 @@ defmodule Maraithon.Capabilities do
 
   @idempotent_tools MapSet.new(~w(
     upsert_todos upsert_person learn_relationship_context write_memory
-    record_memory_feedback link_person_data
+    record_memory_feedback update_memory_confidence link_person_data
     gmail_batch_modify notaui_update_task notion_update_page
   ))
 

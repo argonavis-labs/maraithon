@@ -849,7 +849,7 @@ defmodule Maraithon.Runtime.Agent do
           limit: 8
         ),
       memory_tools:
-        ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback),
+        ~w(write_memory recall_memory list_memories forget_memory record_memory_feedback update_memory_confidence),
       open_loops:
         OpenLoops.snapshot(data.user_id,
           query: data.current_message,
@@ -857,7 +857,7 @@ defmodule Maraithon.Runtime.Agent do
           include_memory?: false
         ),
       open_loop_tools:
-        ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback),
+        ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence),
       last_message: data.current_message,
       last_message_metadata: data.current_message_metadata || %{},
       last_message_id: data.current_message_id,

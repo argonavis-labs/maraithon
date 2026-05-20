@@ -20,7 +20,7 @@ defmodule Maraithon.OpenLoops do
   @max_limit 50
   @prompt_limit 8
   @open_statuses ~w(open snoozed)
-  @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback)
+  @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence)
   @read_key_atoms %{
     "contact_details" => :contact_details,
     "contacts" => :contacts,
