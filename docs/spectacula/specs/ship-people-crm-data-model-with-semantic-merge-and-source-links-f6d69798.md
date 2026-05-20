@@ -3,11 +3,11 @@ created_at: 2026-05-15T04:06:35Z
 created_by: cybrus
 cybrus_task_id: F6D69798-494B-48BC-AB89-A19941A826E6
 project: Maraithon App
-status: specs
+status: inprogress
 ---
 # Ship People/CRM data model with semantic merge and source links
 
-Status: Needs spec update
+Status: In progress - upgraded as a delta against the existing `Maraithon.Crm` implementation
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context
@@ -53,6 +53,35 @@ Ship a durable People/CRM data layer in Maraithon (Phoenix 1.8 + Ecto + Postgres
 - A Telegram-friendly person card serializer.
 
 This is Phase A — pure data layer, tools, backfill, serializer. Drift detection, waiting-on, and action drafting are explicitly out of scope.
+
+## 2026-05-20 Delta Decision
+
+The current codebase already ships the Phase A CRM foundation under `Maraithon.Crm`:
+
+- `crm_people` and `crm_person_links` migrations and schemas exist.
+- `Maraithon.Crm` supports list/search/get/create/update/upsert, contact-detail identity matching, fuzzy name matching, pgvector semantic lookup, resource links, relationship context, and ingestion paths.
+- Model-callable CRM tools already exist: `list_people`, `get_person`, `upsert_person`, `delete_person`, `link_person_data`, `get_relationship_context`, and `learn_relationship_context`.
+
+Do **not** create a new `Maraithon.People` context or duplicate `people` tables. The implementation target is a focused delta on top of the existing CRM surface:
+
+1. Add auditable model-callable merge to `Maraithon.Crm`.
+2. Add source-evidence fields to `crm_person_links` without breaking existing `resource_source` / `relationship_note` callers.
+3. Add a Telegram-friendly person card serializer for compact relationship answers.
+4. Keep merged people hidden from normal list/search/upsert resolution while preserving the row and audit trail.
+5. Register the merge tool in the same first-party tool registry and Chief of Staff allowlists as the existing CRM tools.
+
+Separate identifier tables, a full People LiveView, and one-shot historical backfill are deferred unless this delta exposes a real blocker. The existing `contact_details` map, CRM ingestion loop, and local source ingestion already cover the immediate product need with less schema churn.
+
+## Delta Acceptance Checks
+
+- [ ] `crm_people` has `status`, `merged_into_id`, and `merged_at`; default list/search/upsert resolution ignores merged rows.
+- [ ] `crm_person_links` can store `role`, `source_system`, `source_account`, `source_ref`, `evidence_quote`, `model_rationale`, and `confidence`.
+- [ ] `crm_person_merges` records every merge with user id, surviving person, merged person, evidence, rationale, performer, metadata, and timestamp.
+- [ ] `Maraithon.Crm.merge_people/4` runs transactionally, verifies same-user ownership, rejects self/double merges, repoints non-duplicate links, collapses duplicate links deterministically, merges contact details/relationship metrics, marks the merged row, and writes an audit row.
+- [ ] A model-callable `merge_people` tool exists with JSON schema and tool-catalog/capability registration.
+- [ ] `Maraithon.Crm.Serializer.telegram_card/2` renders a compact Markdown person card with name, relationship, preferred channel, last touch, open-loop count, recent sources, and no tables.
+- [ ] Tests cover successful merge, invalid ownership/self merges, duplicate link collapse, source-evidence serialization, tool execution, and Telegram card output.
+- [ ] `mix precommit` passes before this spec can move to `done`.
 
 ---
 
