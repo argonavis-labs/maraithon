@@ -14,7 +14,6 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Agents
-  alias Maraithon.Runtime.Agent, as: RuntimeAgent
   alias Maraithon.Runtime.AgentRegistry
   alias Maraithon.Runtime.AgentSupervisor
   alias Maraithon.Runtime.Scheduler
@@ -31,7 +30,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
       pid -> GenServer.stop(pid, :normal)
     end
 
-    {:ok, _scheduler} = Scheduler.start_link([])
+    start_supervised!({Scheduler, []})
 
     {:ok, agent} =
       Agents.create_agent(%{

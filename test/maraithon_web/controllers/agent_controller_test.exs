@@ -121,15 +121,8 @@ defmodule MaraithonWeb.AgentControllerTest do
       pid -> GenServer.stop(pid, :normal)
     end
 
-    {:ok, scheduler_pid} = Maraithon.Runtime.Scheduler.start_link([])
+    scheduler_pid = start_supervised!({Maraithon.Runtime.Scheduler, []})
     Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), scheduler_pid)
-
-    on_exit(fn ->
-      case Process.whereis(Maraithon.Runtime.Scheduler) do
-        nil -> :ok
-        pid -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
-      end
-    end)
 
     :ok
   end
