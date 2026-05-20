@@ -3,11 +3,11 @@ created_at: 2026-05-14T18:42:56Z
 created_by: cybrus
 cybrus_task_id: DDB2542B-A1F6-4125-A931-4C93D6A836B1
 project: Maraithon App
-status: ready
+status: inprogress
 ---
 # Spec: Run 30-day Chief of Staff dogfood with crash-recovery telemetry
 
-Status: Ready for human approval
+Status: In progress - runtime telemetry code checkpoint implemented; 30-day production run and report pending
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context
@@ -154,13 +154,13 @@ Wire `IncidentLog.record/1` into existing code — do **not** duplicate data alr
 
 ## Acceptance Checks
 
-- [ ] `runtime_incidents` migration + `RuntimeIncident` schema + `IncidentLog` context, with unit tests including the best-effort/rescue path.
-- [ ] Incidents recorded for `node_boot`, `node_shutdown`, `agent_crash`, `agent_resumed`, `db_outage`, `db_recovered` at the instrumented hook points.
-- [ ] Integration test: crashing an agent abnormally produces an `agent_crash` + `agent_resumed` (`:targeted_reresume`) pair.
-- [ ] `AgentWatcher` re-resumes an abnormally-crashed agent with staged backoff and trips its circuit breaker after the configured threshold, recording `agent_stopped_unexpectedly`.
-- [ ] `DogfoodDigest` sends a correct trailing-24h Telegram summary; covered by a test with a fake Telegram client.
-- [ ] All new config keys defaulted and documented; `mix precommit` clean.
-- [ ] `erl_crash.dump` gitignored and removed from tracking; its origin noted in the report.
+- [x] `runtime_incidents` migration + `RuntimeIncident` schema + `IncidentLog` context, with unit tests including the best-effort/rescue path.
+- [x] Incidents recorded for `node_boot`, `node_shutdown`, `agent_crash`, `agent_resumed`, `db_outage`, `db_recovered` at the instrumented hook points.
+- [x] Integration test: crashing an agent abnormally produces an `agent_crash` + `agent_resumed` (`:targeted_reresume`) pair.
+- [x] `AgentWatcher` re-resumes an abnormally-crashed agent with staged backoff and trips its circuit breaker after the configured threshold, recording `agent_stopped_unexpectedly`.
+- [x] `DogfoodDigest` sends a correct trailing-24h Telegram summary; covered by a test with a fake Telegram client.
+- [x] All new config keys defaulted and documented; `mix precommit` clean.
+- [x] `erl_crash.dump` gitignored and confirmed untracked; its origin is captured in the manifest for the final report.
 - [ ] 30-day run completed with daily digests archived.
 - [ ] At least one real crash-and-recover captured as clip/transcript.
 - [ ] Wrap-up report committed under `docs/dogfood/`.

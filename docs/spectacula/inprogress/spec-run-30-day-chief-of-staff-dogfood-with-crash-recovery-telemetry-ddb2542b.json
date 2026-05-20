@@ -1,5 +1,7 @@
 {
-  "blockers": [],
+  "blockers": [
+    "Elapsed-time acceptance remains: deploy/run for 30 calendar days, archive daily digests, capture at least one crash-and-recover artifact, and commit docs/dogfood/2026-chief-of-staff-30-day.md."
+  ],
   "created_at": "2026-05-14T18:42:56Z",
   "history": [
     {
@@ -21,19 +23,36 @@
       "from_stage": "ready",
       "note": "Starting the buildable runtime telemetry and recovery-monitor portion. The 30-day production run/report acceptance remains an elapsed-time follow-up before this spec can move to done.",
       "to_stage": "inprogress"
+    },
+    {
+      "at": "2026-05-20T10:54:50Z",
+      "event": "code_checkpoint_verified",
+      "from_stage": "inprogress",
+      "note": "Implemented runtime_incidents, IncidentLog, boot/shutdown/db instrumentation, AgentWatcher, DogfoodDigest, dogfood baseline task, config, hygiene, and focused tests. mix precommit passed with 1851 tests and 0 failures.",
+      "to_stage": "inprogress"
     }
   ],
-  "next_action": "Implement runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, hygiene, and tests.",
+  "next_action": "Deploy the verified code, run mix maraithon.dogfood_baseline at day 0, archive daily Telegram digests for 30 days, capture a crash-and-recover artifact, then commit docs/dogfood/2026-chief-of-staff-30-day.md.",
   "resume_context": {
     "artifacts": [
-      "/Users/kent/bliss/maraithon/docs/spectacula/specs/spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b.md"
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b.md",
+      "/Users/kent/bliss/maraithon/priv/repo/migrations/20260520104440_create_runtime_incidents.exs",
+      "/Users/kent/bliss/maraithon/lib/maraithon/runtime/runtime_incident.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/runtime/incident_log.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/runtime/agent_watcher.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/runtime/shutdown_reporter.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/runtime/dogfood_digest.ex",
+      "/Users/kent/bliss/maraithon/lib/mix/tasks/maraithon.dogfood_baseline.ex",
+      "/Users/kent/bliss/maraithon/test/maraithon/runtime/incident_log_test.exs",
+      "/Users/kent/bliss/maraithon/test/maraithon/runtime/agent_watcher_test.exs",
+      "/Users/kent/bliss/maraithon/test/maraithon/runtime/dogfood_digest_test.exs"
     ],
-    "last_completed_step": "Moved the dogfood telemetry spec to inprogress and confirmed no runtime incident infrastructure exists yet.",
-    "notes": "Build the runtime observability/recovery foundation now. Do not mark this spec done until the production 30-day run, daily digest archive, crash/recover artifact, and final docs/dogfood report exist. Local erl_crash.dump is ignored, not tracked; its header says Runtime terminating during boot on 2026-05-10 22:53:30 with a standard_error device badarg.",
+    "last_completed_step": "Implemented and verified the runtime observability/recovery foundation; mix precommit passed with 1851 tests and 0 failures.",
+    "notes": "The buildable code portion is complete and verified. Do not mark this spec done until the production 30-day run, daily digest archive, crash/recover artifact, and final docs/dogfood report exist. Local erl_crash.dump is ignored, not tracked; its header says Runtime terminating during boot on 2026-05-10 22:53:30 with a standard_error device badarg.",
     "pending_steps": [
-      "Build runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, and tests.",
-      "Run and pass project verification.",
       "Deploy and run the 30-day production dogfood.",
+      "Archive the daily Telegram uptime digests during the run.",
+      "Capture at least one real or staged crash-and-recover artifact.",
       "Commit docs/dogfood/2026-chief-of-staff-30-day.md with the run report."
     ],
     "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
@@ -45,18 +64,18 @@
   "spec_path": "../specs/spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b.md",
   "stage": "inprogress",
   "started_at": "2026-05-20T10:43:32Z",
-  "summary": "Implementation started for the runtime observability/recovery foundation. The final 30-day run and report are not complete and remain required before done.",
+  "summary": "Runtime telemetry and recovery-monitor code is implemented and verified. The final 30-day production run, digest archive, crash/recover artifact, and report remain required before done.",
   "title": "Spec: Run 30-day Chief of Staff dogfood with crash-recovery telemetry",
-  "updated_at": "2026-05-20T10:43:32Z",
+  "updated_at": "2026-05-20T10:54:50Z",
   "verification": {
-    "build": "not_run",
-    "codebase_review": "not_implemented",
-    "format": "generated",
-    "lint": "not_run",
-    "notes": "No runtime_incidents migration/schema, IncidentLog, AgentWatcher, DogfoodDigest, or dogfood report exists. .gitignore already ignores erl_crash.dump, but an ignored local erl_crash.dump file is still present.",
-    "reviewed_at": "2026-05-20T09:07:06Z",
-    "spec_review": "passed",
-    "tests": "not_run",
-    "typecheck": "not_run"
+    "build": "passed",
+    "codebase_review": "code_checkpoint_passed",
+    "format": "passed",
+    "lint": "skipped",
+    "notes": "mix precommit passed on 2026-05-20T10:54:50Z with 1851 tests and 0 failures. There is no separate lint alias beyond mix precommit's compile/deps/format/test sequence. The full spec remains inprogress because elapsed-time production acceptance is not complete.",
+    "reviewed_at": "2026-05-20T10:54:50Z",
+    "spec_review": "partial",
+    "tests": "passed",
+    "typecheck": "passed"
   }
 }
