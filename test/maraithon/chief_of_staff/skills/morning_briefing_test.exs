@@ -510,6 +510,69 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["max_tokens"] == 16_000
   end
 
+  test "bounds oversized connector payloads before building the LLM prompt", %{user_id: user_id} do
+    now = ~U[2026-05-07 14:00:00Z]
+    huge_body = String.duplicate("Important commercial detail. ", 12_000)
+
+    inbox_messages =
+      Enum.map(1..100, fn index ->
+        %{
+          "message_id" => "big-msg-#{index}",
+          "thread_id" => "big-thread-#{index}",
+          "labels" => ["INBOX", "UNREAD"],
+          "from" => "Customer #{index} <customer#{index}@example.com>",
+          "subject" => "Large source payload #{index}",
+          "snippet" => huge_body,
+          "text_body" => huge_body,
+          "body_available" => true,
+          "body_status" => "available",
+          "internal_date" => DateTime.add(now, -index, :minute)
+        }
+      end)
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "messages" => inbox_messages,
+        "inbox_messages" => inbox_messages,
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: "agent-large-prompt",
+      user_id: user_id,
+      timestamp: now,
+      source_bundle: source_bundle
+    }
+
+    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+    [_instructions, input_json] = String.split(prompt, "Brief input JSON:\n", parts: 2)
+    input = Jason.decode!(String.trim(input_json))
+
+    assert String.length(prompt) < 500_000
+    assert length(get_in(input, ["gmail", "recent_inbox"])) == 50
+    assert length(get_in(input, ["gmail", "recent_unread"])) == 50
+
+    first_body = get_in(input, ["gmail", "recent_inbox", Access.at(0), "body"])
+    first_snippet = get_in(input, ["gmail", "recent_inbox", Access.at(0), "snippet"])
+
+    assert String.length(first_body) < 1_600
+    assert String.length(first_snippet) < 500
+    assert first_body =~ "[truncated"
+    assert first_snippet =~ "[truncated"
+  end
+
   test "adds explicit local display times for a configured named timezone", %{user_id: user_id} do
     now = ~U[2026-05-11 15:00:00Z]
 

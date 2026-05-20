@@ -49,8 +49,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @default_llm_timeout_ms 1_200_000
   @commercial_thread_lookback_hours 24 * 7
   @skill_path "priv/agents/skills/chief_of_staff/morning_briefing.md"
-  @prompt_string_limit 1_000_000
-  @prompt_default_list_limit 10_000
+  @prompt_string_limit 12_000
+  @prompt_default_list_limit 500
+  @prompt_gmail_list_limit 50
+  @prompt_gmail_body_limit 1_500
+  @prompt_meeting_list_limit 60
+  @prompt_meeting_string_limit 6_000
+  @prompt_web_context_limit 5
+  @prompt_web_page_context_limit 3
+  @prompt_relationship_limit 80
+  @prompt_section_build_timeout_ms 30_000
   @commercial_thread_terms [
     "availability",
     "connect",
@@ -1045,11 +1053,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
 
-       Source completeness rule:
-       The morning briefing payload is intentionally not pre-truncated for brevity. Review all
-       included Gmail, Slack, calendar, CRM, todo, memory, and local-source rows before deciding
-       what belongs in the executive brief. The output should be synthesized and judgmental,
-       but the input scan should not stop after an arbitrary first page of items.
+       Source digest rule:
+       The morning briefing payload is assembled from independently bounded source digests for
+       Gmail, Slack, calendar, CRM, todos, memory, and local sources. Treat included rows as the
+       selected high-signal evidence set, not a full raw export. Review all included rows before
+       deciding what belongs in the executive brief, and use source_health/counts to call out
+       connector gaps or truncation risk when it affects confidence.
 
        Meeting enrichment rule:
        The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
@@ -1973,28 +1982,90 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_brief_input_for_prompt(input) when is_map(input) do
     input
-    |> Map.update("calendar", %{}, &compact_calendar_for_prompt/1)
-    |> Map.update("meeting_prep", %{}, &compact_meeting_prep_for_prompt/1)
-    |> Map.update("schedule_coverage", %{}, &compact_schedule_coverage_for_prompt/1)
-    |> Map.update("commercial_coverage", %{}, &compact_commercial_coverage_for_prompt/1)
-    |> Map.update("gmail", %{}, &compact_gmail_for_prompt/1)
-    |> Map.update("slack", %{}, &compact_slack_for_prompt/1)
-    |> Map.update("news", %{}, &compact_news_for_prompt/1)
-    |> Map.update("commitments", %{}, &compact_prompt_value/1)
-    |> Map.update("open_work", %{}, &compact_prompt_value/1)
-    |> Map.update("relationships", [], &compact_relationships_for_prompt/1)
-    |> Map.update("deep_memory", %{}, &compact_prompt_value/1)
-    |> Map.update("imessage", %{}, &compact_prompt_value/1)
-    |> Map.update("notes", %{}, &compact_prompt_value/1)
-    |> Map.update("voice_memos", %{}, &compact_prompt_value/1)
-    |> Map.update("reminders", %{}, &compact_prompt_value/1)
-    |> Map.update("files", %{}, &compact_prompt_value/1)
-    |> Map.update("browser_history", %{}, &compact_prompt_value/1)
-    |> Map.update("source_health", %{}, &compact_prompt_value/1)
+    |> compact_prompt_sections()
     |> compact_prompt_value()
   end
 
   defp compact_brief_input_for_prompt(input), do: input
+
+  defp compact_prompt_sections(input) do
+    base =
+      input
+      |> Map.take(["date", "generated_at", "timezone_offset_hours", "timezone"])
+      |> compact_prompt_value()
+
+    prompt_section_compactors()
+    |> Task.async_stream(&compact_prompt_section(&1, input),
+      max_concurrency: prompt_section_concurrency(),
+      timeout: @prompt_section_build_timeout_ms
+    )
+    |> Enum.reduce(base, fn
+      {:ok, {key, value}}, acc ->
+        Map.put(acc, key, value)
+
+      {:exit, reason}, acc ->
+        Logger.warning("morning_briefing prompt section compaction task failed",
+          reason: inspect(reason)
+        )
+
+        acc
+    end)
+  end
+
+  defp prompt_section_compactors do
+    [
+      {"calendar", %{}, &compact_calendar_for_prompt/1},
+      {"meeting_prep", %{}, &compact_meeting_prep_for_prompt/1},
+      {"schedule_coverage", %{}, &compact_schedule_coverage_for_prompt/1},
+      {"commercial_coverage", %{}, &compact_commercial_coverage_for_prompt/1},
+      {"gmail", %{}, &compact_gmail_for_prompt/1},
+      {"slack", %{}, &compact_slack_for_prompt/1},
+      {"news", %{}, &compact_news_for_prompt/1},
+      {"commitments", %{}, &compact_prompt_value/1},
+      {"open_work", %{}, &compact_prompt_value/1},
+      {"relationships", [], &compact_relationships_for_prompt/1},
+      {"deep_memory", %{}, &compact_prompt_value/1},
+      {"imessage", %{}, &compact_prompt_value/1},
+      {"notes", %{}, &compact_prompt_value/1},
+      {"voice_memos", %{}, &compact_prompt_value/1},
+      {"reminders", %{}, &compact_prompt_value/1},
+      {"files", %{}, &compact_prompt_value/1},
+      {"browser_history", %{}, &compact_prompt_value/1},
+      {"source_health", %{}, &compact_prompt_value/1}
+    ]
+  end
+
+  defp compact_prompt_section({key, default, compact_fun}, input) do
+    value =
+      input
+      |> Map.get(key, default)
+      |> compact_fun.()
+
+    {key, value}
+  rescue
+    exception ->
+      Logger.warning("morning_briefing prompt section compaction failed",
+        section: key,
+        error: Exception.message(exception),
+        exception: inspect(exception.__struct__)
+      )
+
+      {key, compact_prompt_value(Map.get(input, key, default), 25, 2_000)}
+  catch
+    kind, reason ->
+      Logger.warning("morning_briefing prompt section compaction failed",
+        section: key,
+        error: "#{kind}: #{inspect(reason)}"
+      )
+
+      {key, compact_prompt_value(Map.get(input, key, default), 25, 2_000)}
+  end
+
+  defp prompt_section_concurrency do
+    System.schedulers_online()
+    |> min(length(prompt_section_compactors()))
+    |> max(1)
+  end
 
   defp compact_calendar_for_prompt(calendar) when is_map(calendar) do
     calendar
@@ -2028,9 +2099,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       meetings
       |> read_list()
       |> prioritize_required_prompt_items()
+      |> Enum.take(@prompt_meeting_list_limit)
       |> Enum.map(&compact_meeting_for_prompt/1)
     end)
-    |> compact_prompt_value()
+    |> compact_prompt_value(@prompt_meeting_list_limit, @prompt_meeting_string_limit)
   end
 
   defp compact_meeting_prep_for_prompt(meeting_prep), do: compact_prompt_value(meeting_prep)
@@ -2040,9 +2112,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("required_meetings", [], fn meetings ->
       meetings
       |> read_list()
+      |> Enum.take(@prompt_meeting_list_limit)
       |> Enum.map(&compact_meeting_for_prompt/1)
     end)
-    |> compact_prompt_value()
+    |> compact_prompt_value(@prompt_meeting_list_limit, @prompt_meeting_string_limit)
   end
 
   defp compact_schedule_coverage_for_prompt(schedule_coverage),
@@ -2067,10 +2140,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("attendees", [], &read_list/1)
     |> Map.update("external_attendees", [], &read_list/1)
     |> Map.update("candidate_people_and_orgs", [], &read_list/1)
-    |> Map.update("crm_context", [], &(read_list(&1) |> compact_prompt_value()))
-    |> Map.update("web_context", [], &(read_list(&1) |> compact_prompt_value()))
+    |> Map.update("crm_context", [], &(read_list(&1) |> compact_prompt_value(10, 3_000)))
+    |> Map.update("web_context", [], &compact_web_context_for_prompt/1)
     |> Map.update("data_gaps", [], &read_list/1)
-    |> compact_prompt_value()
+    |> compact_prompt_value(@prompt_meeting_list_limit, @prompt_meeting_string_limit)
   end
 
   defp compact_meeting_for_prompt(meeting), do: compact_prompt_value(meeting)
@@ -2080,16 +2153,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Map.update("commercial_threads", [], fn messages ->
       messages
       |> read_list()
+      |> Enum.take(@prompt_gmail_list_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> Map.update("recent_inbox", [], fn messages ->
       messages
       |> read_list()
+      |> Enum.take(@prompt_gmail_list_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> Map.update("recent_unread", [], fn messages ->
       messages
       |> read_list()
+      |> Enum.take(@prompt_gmail_list_limit)
       |> Enum.map(&compact_gmail_message_for_prompt/1)
     end)
     |> compact_prompt_value()
@@ -2099,12 +2175,38 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_gmail_message_for_prompt(message) when is_map(message) do
     message
-    |> Map.update("body", "", &to_string/1)
-    |> Map.update("snippet", "", &to_string/1)
+    |> Map.update(
+      "body",
+      "",
+      &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_body_limit))
+    )
+    |> Map.update("snippet", "", &(to_string(&1) |> truncate_prompt_string(400)))
     |> compact_prompt_value()
   end
 
   defp compact_gmail_message_for_prompt(message), do: compact_prompt_value(message)
+
+  defp compact_web_context_for_prompt(web_context) do
+    web_context
+    |> read_list()
+    |> Enum.take(@prompt_web_context_limit)
+    |> Enum.map(fn context ->
+      context
+      |> compact_prompt_value(@prompt_web_page_context_limit, @prompt_meeting_string_limit)
+      |> maybe_compact_page_contexts()
+    end)
+  end
+
+  defp maybe_compact_page_contexts(%{} = context) do
+    Map.update(context, "page_contexts", [], fn page_contexts ->
+      page_contexts
+      |> read_list()
+      |> Enum.take(@prompt_web_page_context_limit)
+      |> compact_prompt_value(@prompt_web_page_context_limit, @prompt_meeting_string_limit)
+    end)
+  end
+
+  defp maybe_compact_page_contexts(context), do: context
 
   defp compact_slack_for_prompt(slack) when is_map(slack) do
     slack
@@ -2130,6 +2232,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp compact_relationships_for_prompt(relationships) do
     relationships
     |> read_list()
+    |> Enum.take(@prompt_relationship_limit)
     |> compact_prompt_value()
   end
 
@@ -2160,13 +2263,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_prompt_value(value, list_limit, string_limit) when is_list(value) do
     value
+    |> Enum.take(list_limit)
     |> Enum.map(&compact_prompt_value(&1, list_limit, string_limit))
   end
 
-  defp compact_prompt_value(value, _list_limit, _string_limit) when is_binary(value),
-    do: value
+  defp compact_prompt_value(value, _list_limit, string_limit) when is_binary(value),
+    do: truncate_prompt_string(value, string_limit)
 
   defp compact_prompt_value(value, _list_limit, _string_limit), do: value
+
+  defp truncate_prompt_string(value, limit) when is_binary(value) and is_integer(limit) do
+    if String.length(value) > limit do
+      String.slice(value, 0, limit) <> "\n[truncated #{String.length(value) - limit} chars]"
+    else
+      value
+    end
+  end
+
+  defp truncate_prompt_string(value, _limit), do: value
 
   defp prioritize_required_prompt_items(items) do
     {required, rest} =
