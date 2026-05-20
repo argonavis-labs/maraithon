@@ -3,11 +3,11 @@ created_at: 2026-05-09T17:22:16Z
 created_by: cybrus
 cybrus_task_id: 2D542828-8045-4751-B6FE-8442B7B5A4FD
 project: Maraithon App
-status: specs
+status: done
 ---
 # Decide Maraithon's 6-month path: double down, fold into Runner, or pause
 
-Status: Needs decision
+Status: Done - decided constrained double-down on 2026-05-20
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context
@@ -44,6 +44,20 @@ No repository workflow instructions were found. Use the existing codebase conven
 ## Objective
 
 Produce a written, defensible decision on which of the three paths Maraithon follows for the next 6 months — **double down**, **fold into Runner**, or **pause** — and update project documentation so all downstream Maraithon planning has a clear target. This ticket is strategic; no application code changes.
+
+## 2026-05-20 Decision Result
+
+Decision: **double down, but only inside a narrow proof window**.
+
+Artifacts:
+
+- `docs/decisions/2026-05-09-maraithon-path.md` records the decision, diagnosis, usage-data gap, Runner comparison, options, chosen path, and dated 7/30/90-day plan.
+- `GOALS.md` now has a status banner linking to the decision and naming the proof window.
+- `docs/decisions/README.md` indexes the decision.
+
+Verification: `mix precommit` passed with `1855` tests and `0` failures.
+
+The decision explicitly keeps Maraithon active through 2026-06-19 to complete the 30-day Chief of Staff dogfood run, onboard 3 alpha candidates, and prove the Telegram-first open-loop product loop. If the proof is weak, the default next decision is to freeze standalone Maraithon feature work and fold the useful primitives into Runner.
 
 ---
 
@@ -165,13 +179,13 @@ Single commit with message: `decide: maraithon 6-month path — [chosen path]`. 
 
 ## Acceptance Checks
 
-- [ ] `docs/decisions/2026-05-09-maraithon-path.md` exists and names exactly one chosen path in its **Decision** section.
-- [ ] The doc contains a non-empty "Why April Stopped" section that doesn't read as sanitized PR copy.
-- [ ] The doc contains either real usage numbers or an explicit "Zero external users" / "data unavailable because X" statement — no hand-waving.
-- [ ] The conditional plan is filled in for the chosen path *only*, not all three, and includes at least one concrete dated action.
-- [ ] `goals.md` has a status banner at the top that links to the decision doc.
-- [ ] If the chosen path is **pause**, a calendar event or cron exists for the checkpoint date.
-- [ ] Single commit on `main` (or a short-lived branch) with both files; commit message names the chosen path.
+- [x] `docs/decisions/2026-05-09-maraithon-path.md` exists and names exactly one chosen path in its **Decision** section.
+- [x] The doc contains a non-empty "Why April Stopped" section that doesn't read as sanitized PR copy.
+- [x] The doc contains either real usage numbers or an explicit "Zero external users" / "data unavailable because X" statement — no hand-waving.
+- [x] The conditional plan is filled in for the chosen path *only*, not all three, and includes at least one concrete dated action.
+- [x] `GOALS.md` has a status banner at the top that links to the decision doc.
+- [x] If the chosen path is **pause**, a calendar event or cron exists for the checkpoint date. Not applicable: chosen path is double down.
+- [x] Single commit on `main` (or a short-lived branch) with both files; commit message names the chosen path.
 
 ---
 

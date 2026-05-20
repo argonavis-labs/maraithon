@@ -1,5 +1,7 @@
 # Maraithon Goals
 
+> **Status (2026-05-20): Active through a narrow double-down proof window.** Complete the 30-day Chief of Staff dogfood run, onboard 3 alpha candidates, and keep building only what proves Telegram-first open-loop capture. See [Maraithon 6-month Path Decision](docs/decisions/2026-05-09-maraithon-path.md).
+
 Updated: May 9, 2026
 
 ## North Star

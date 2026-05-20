@@ -6,7 +6,7 @@ Purpose: clean the active Spectacula queue so `docs/spectacula/ready` contains o
 
 - Before review: `50` ready manifests, `0` in progress, `17` done.
 - Initial verification result: `4` ready manifests, `0` in progress, `23` done, `3` specs needing update/decision, `37` orphan ready manifests archived.
-- Current active state after implementation work on 2026-05-20: `0` ready manifests, `1` in progress, `26` done, `3` specs needing update/decision.
+- Current active state after implementation work on 2026-05-20: `0` ready manifests, `1` in progress, `28` done, `1` spec needing update/decision.
 - Archive path: `docs/spectacula/archive/orphaned-ready-manifests-2026-05-20/`.
 
 ## Ready To Build
@@ -36,14 +36,14 @@ No specs are currently ready to build.
 | `proactive-delivery-planner-implementation-plan-a6547aa9` | Implemented after the initial verification pass: durable queue, flag-gated source enqueueing, one model planning pass per user, interrupt/digest/hold dispatch, runtime drain, stale expiry, config, and tests. |
 | `spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13` | Implemented after the initial verification pass: connector readiness gating, `setup_required`, enabled/running install path, dashboard setup links, signed Telegram linking with email fallback, docs, and smoke tests. |
 | `ship-memory-primitive-with-model-callable-read-write-tools-26355ff4` | Implemented after the initial verification pass: encrypted memory storage, recall ranking, supersession, update-confidence tooling, prompt injection, operator UI, and tests. |
+| `ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798` | Implemented after the initial verification pass as a CRM delta: auditable `merge_people`, source-evidence link fields, `crm_person_merges`, Telegram card serializer, model-callable merge tool, Chief of Staff registration, and tests. `mix precommit` passed with `1855` tests and `0` failures. |
+| `decide-maraithon-s-6-month-path-double-down-fold-into-runner-or-pause-2d542828` | Completed as a strategic decision deliverable after the initial verification pass. Decision: constrained double-down through the 30-day dogfood and 3-person alpha proof window, with fold-to-Runner as the default if proof is weak. Evidence: `docs/decisions/2026-05-09-maraithon-path.md`, `docs/decisions/README.md`, and the `GOALS.md` status banner. `mix precommit` passed with `1855` tests and `0` failures. |
 
 ## Moved Back To Specs
 
 | Spec | Reason |
 | --- | --- |
 | `audit-maraithon-app-for-blocked-or-stale-work-0e7e7735` | Operational board audit, not an application build spec. No `docs/audits/backlog-audit-2026-05-14.md` exists and Orchestrator task MCP artifacts are not in the repo. |
-| `decide-maraithon-s-6-month-path-double-down-fold-into-runner-or-pause-2d542828` | Strategic decision artifact, not buildable code. The expected `docs/decisions/2026-05-09-maraithon-path.md` and `goals.md` status banner are absent. |
-| `ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798` | Current code already has `Maraithon.Crm`, `crm_people`, `crm_person_links`, CRM tools, ingestion, fuzzy/semantic lookup, and relationship context. This spec should be upgraded into a CRM delta before implementation to avoid building a conflicting `Maraithon.People` model. |
 
 ## Archived Orphans
 
@@ -54,4 +54,6 @@ Archived `37` `fast-context-aware-telegram-answers-implementation-plan-*` ready 
 - This pass used file/module evidence from `lib`, `priv/repo/migrations`, `test`, `.claude/plans`, and docs.
 - Stage manifests were updated with `codebase_verified_*` history entries and review notes.
 - The implementation follow-up ran `mix precommit` successfully after the dogfood telemetry code checkpoint: `1851` tests, `0` failures.
+- The CRM merge/source-evidence follow-up ran `mix precommit` successfully: `1855` tests, `0` failures.
+- The strategic path decision is now committed as a markdown deliverable; `mix precommit` passed after the documentation update: `1855` tests, `0` failures.
 - No stale ready manifests remain in the active lifecycle tree.
