@@ -3,11 +3,11 @@ created_at: 2026-05-09T17:22:16Z
 created_by: cybrus
 cybrus_task_id: 2D542828-8045-4751-B6FE-8442B7B5A4FD
 project: Maraithon App
-status: ready
+status: specs
 ---
 # Decide Maraithon's 6-month path: double down, fold into Runner, or pause
 
-Status: Ready for human approval
+Status: Needs decision
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context

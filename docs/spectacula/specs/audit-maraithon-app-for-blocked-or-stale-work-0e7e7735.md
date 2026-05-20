@@ -3,11 +3,11 @@ created_at: 2026-05-14T18:40:11Z
 created_by: cybrus
 cybrus_task_id: 0E7E7735-4107-4A15-BB07-036C6F5767C8
 project: Maraithon App
-status: ready
+status: specs
 ---
 # Audit Maraithon App for blocked or stale work
 
-Status: Ready for human approval
+Status: Needs spec update
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context

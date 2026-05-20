@@ -1,5 +1,5 @@
 ---
-status: planning
+status: done
 ---
 # Logfire / OpenTelemetry Integration Implementation Plan
 

@@ -3,11 +3,11 @@ created_at: 2026-05-15T04:06:35Z
 created_by: cybrus
 cybrus_task_id: F6D69798-494B-48BC-AB89-A19941A826E6
 project: Maraithon App
-status: ready
+status: specs
 ---
 # Ship People/CRM data model with semantic merge and source links
 
-Status: Ready for human approval
+Status: Needs spec update
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context

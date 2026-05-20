@@ -1,5 +1,5 @@
 ---
-status: planning
+status: done
 ---
 # Fast & Context-Aware Telegram Answers — Implementation Plan
 
