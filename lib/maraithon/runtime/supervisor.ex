@@ -21,6 +21,9 @@ defmodule Maraithon.Runtime.Supervisor do
       # Task supervisor for effect worker tasks
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
 
+      # Shared provider backpressure for effect-driven LLM calls
+      Maraithon.Runtime.Effects.LLMRateLimiter,
+
       # Task supervisor for app-level background jobs
       {Task.Supervisor, name: Maraithon.Runtime.BackgroundJobTaskSupervisor}
     ]

@@ -54,7 +54,14 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
   # ---------------------------------------------------------------------------
 
   alias Maraithon.Runtime.EffectRunner
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
   alias Maraithon.Agents
+
+  defmodule RateLimitedProvider do
+    @moduledoc false
+
+    def complete(_params), do: {:error, {:rate_limited, 60_000}}
+  end
 
   # ===========================================================================
   # Test Setup
@@ -65,6 +72,10 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
   # ===========================================================================
 
   setup do
+    LLMRateLimiter.reset()
+
+    on_exit(fn -> LLMRateLimiter.reset() end)
+
     # Create a test agent that effects will be associated with.
     # The agent doesn't need to be actually running - we just need a valid
     # agent_id for the foreign key constraint on the effects table.
@@ -680,6 +691,46 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
 
       # Should have incremented attempts and be pending retry
       assert updated_effect.attempts >= 1 or updated_effect.status in ["pending", "claimed"]
+
+      GenServer.stop(pid, :normal)
+    end
+
+    test "defers rate-limited llm effects without consuming attempts", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(original_runtime_config, :llm_provider, RateLimitedProvider)
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+      end)
+
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 100
+        })
+
+      {:ok, pid} = EffectRunner.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      Process.sleep(300)
+
+      updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
+
+      assert updated_effect.status == "pending"
+      assert updated_effect.attempts == 0
+      assert updated_effect.retry_after != nil
+      assert DateTime.diff(updated_effect.retry_after, DateTime.utc_now(), :second) >= 50
 
       GenServer.stop(pid, :normal)
     end

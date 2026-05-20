@@ -13,10 +13,14 @@ defmodule Maraithon.ChiefOfStaff.MorningBriefingVerifier do
   alias Maraithon.Agents.Agent
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
+  alias Maraithon.Effects.Effect
   alias Maraithon.LLM
   alias Maraithon.Repo
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   @default_recent_limit 5
+  @effect_recent_limit 10
+  @effect_recent_window_hours 2
   @safe_max_tokens 16_000
   @chief_behaviors ["ai_chief_of_staff", "manifest_agent"]
   @shared_config_keys [
@@ -34,17 +38,24 @@ defmodule Maraithon.ChiefOfStaff.MorningBriefingVerifier do
     recent_limit = positive_integer(Keyword.get(opts, :recent_limit), @default_recent_limit)
     runtime = runtime_report()
 
+    agent_records = list_agents(opts)
+
     agents =
-      opts
-      |> list_agents()
+      agent_records
       |> Enum.map(&agent_report(&1, recent_limit))
 
-    issues = runtime_issues(runtime) ++ Enum.flat_map(agents, & &1["issues"])
+    effect_queue = effect_queue_report(agent_records)
+
+    issues =
+      runtime_issues(runtime) ++
+        effect_queue["issues"] ++
+        Enum.flat_map(agents, & &1["issues"])
 
     %{
       "status" => if(issues == [], do: "ok", else: "attention_required"),
       "checked_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
       "runtime" => runtime,
+      "effect_queue" => effect_queue,
       "agents" => agents,
       "issues" => issues
     }
@@ -58,6 +69,90 @@ defmodule Maraithon.ChiefOfStaff.MorningBriefingVerifier do
     |> maybe_filter(:user_id, Keyword.get(opts, :user_id))
     |> order_by([a], asc: a.inserted_at)
     |> Repo.all()
+  end
+
+  defp effect_queue_report([]) do
+    %{
+      "llm_rate_limiter" => LLMRateLimiter.status(),
+      "active_status_counts" => %{},
+      "recent_noncompleted_llm_effects" => [],
+      "issues" => []
+    }
+  end
+
+  defp effect_queue_report(agents) do
+    agent_ids = Enum.map(agents, & &1.id)
+    cutoff = DateTime.add(DateTime.utc_now(), -@effect_recent_window_hours, :hour)
+    active_counts = active_llm_effect_counts(agent_ids)
+
+    recent_noncompleted =
+      Effect
+      |> where([e], e.agent_id in ^agent_ids)
+      |> where([e], e.effect_type == "llm_call")
+      |> where([e], e.inserted_at >= ^cutoff)
+      |> where([e], e.status not in ["completed", "cancelled"])
+      |> order_by([e], desc: e.updated_at)
+      |> limit(^@effect_recent_limit)
+      |> Repo.all()
+
+    issues = effect_queue_issues(active_counts, recent_noncompleted)
+
+    %{
+      "llm_rate_limiter" => LLMRateLimiter.status(),
+      "active_status_counts" => active_counts,
+      "recent_noncompleted_llm_effects" => Enum.map(recent_noncompleted, &effect_summary/1),
+      "issues" => issues
+    }
+  end
+
+  defp active_llm_effect_counts(agent_ids) do
+    Effect
+    |> where([e], e.agent_id in ^agent_ids)
+    |> where([e], e.effect_type == "llm_call")
+    |> where([e], e.status in ["pending", "claimed", "failed"])
+    |> group_by([e], e.status)
+    |> select([e], {e.status, count(e.id)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  defp effect_queue_issues(active_counts, recent_noncompleted) do
+    active_total =
+      active_counts
+      |> Map.take(["pending", "claimed"])
+      |> Map.values()
+      |> Enum.sum()
+
+    recent_rate_limits? =
+      Enum.any?(recent_noncompleted, fn effect ->
+        effect.error && String.contains?(effect.error, "rate_limited")
+      end)
+
+    []
+    |> maybe_add_issue(active_total > 10, %{
+      "code" => "llm_effect_queue_backlog",
+      "severity" => "high",
+      "message" => "#{active_total} active LLM effect(s) are pending or claimed."
+    })
+    |> maybe_add_issue(recent_rate_limits?, %{
+      "code" => "recent_llm_rate_limits",
+      "severity" => "high",
+      "message" => "Recent non-completed Chief of Staff LLM effects include provider rate limits."
+    })
+  end
+
+  defp effect_summary(%Effect{} = effect) do
+    %{
+      "id" => effect.id,
+      "agent_id" => effect.agent_id,
+      "status" => effect.status,
+      "attempts" => effect.attempts,
+      "max_attempts" => effect.max_attempts,
+      "inserted_at" => effect.inserted_at && DateTime.to_iso8601(effect.inserted_at),
+      "updated_at" => effect.updated_at && DateTime.to_iso8601(effect.updated_at),
+      "retry_after" => effect.retry_after && DateTime.to_iso8601(effect.retry_after),
+      "error" => effect.error
+    }
   end
 
   defp maybe_filter(query, _field, nil), do: query

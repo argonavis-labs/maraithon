@@ -22,6 +22,7 @@ defmodule Maraithon.Runtime.Agent do
   require Logger
 
   @default_effect_timeout_ms 120_000
+  @default_llm_effect_timeout_ms 900_000
   @effect_timeout_buffer_ms 10_000
 
   defstruct [
@@ -632,6 +633,17 @@ defmodule Maraithon.Runtime.Agent do
     |> Map.values()
     |> Enum.map(&effect_timeout_ms/1)
     |> Enum.max(fn -> @default_effect_timeout_ms end)
+  end
+
+  defp effect_timeout_ms(%{type: type, params: params})
+       when type in [:llm_call, "llm_call"] and is_map(params) do
+    case read_timeout_ms(params) do
+      timeout_ms when is_integer(timeout_ms) and timeout_ms > 0 ->
+        timeout_ms + @effect_timeout_buffer_ms
+
+      _other ->
+        @default_llm_effect_timeout_ms
+    end
   end
 
   defp effect_timeout_ms(%{params: params}) when is_map(params) do

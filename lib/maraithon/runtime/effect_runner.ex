@@ -19,6 +19,8 @@ defmodule Maraithon.Runtime.EffectRunner do
   # 5 minutes
   @default_claim_timeout_ms 300_000
   @default_batch_size 10
+  @default_rate_limit_retry_ms 60_000
+  @max_rate_limit_retry_ms 300_000
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -154,12 +156,12 @@ defmodule Maraithon.Runtime.EffectRunner do
         end
 
       {:error, reason} ->
-        attempts = effect.attempts + 1
+        attempts = next_attempt_count(effect, reason)
 
-        if attempts < effect.max_attempts do
+        if should_retry?(effect, reason, attempts) do
           mark_pending_retry(effect, reason, attempts)
         else
-          case mark_failed(effect, reason) do
+          case mark_failed(effect, reason, attempts) do
             :ok -> notify_agent(effect.agent_id, effect.id, {:error, reason})
             {:error, _reason} -> :ok
           end
@@ -197,7 +199,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp mark_pending_retry(effect, reason, attempts) do
-    backoff_ms = calculate_backoff(attempts)
+    backoff_ms = calculate_backoff(attempts, reason)
     retry_after = DateTime.add(DateTime.utc_now(), backoff_ms, :millisecond)
 
     case DbResilience.with_database("effect runner mark retry", fn ->
@@ -219,13 +221,14 @@ defmodule Maraithon.Runtime.EffectRunner do
     end
   end
 
-  defp mark_failed(effect, reason) do
+  defp mark_failed(effect, reason, attempts) do
     case DbResilience.with_database("effect runner mark failed", fn ->
            Repo.update_all(
              from(e in Effect, where: e.id == ^effect.id),
              set: [
                status: "failed",
                error: inspect(reason),
+               attempts: attempts,
                claimed_by: nil,
                claimed_at: nil,
                updated_at: DateTime.utc_now()
@@ -236,6 +239,24 @@ defmodule Maraithon.Runtime.EffectRunner do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp next_attempt_count(%Effect{} = effect, reason) do
+    if deferrable_effect_error?(effect, reason) do
+      effect.attempts
+    else
+      effect.attempts + 1
+    end
+  end
+
+  defp should_retry?(%Effect{} = effect, reason, attempts) do
+    deferrable_effect_error?(effect, reason) or attempts < effect.max_attempts
+  end
+
+  defp deferrable_effect_error?(%Effect{effect_type: "llm_call"}, reason) do
+    retry_after_ms(reason) != nil
+  end
+
+  defp deferrable_effect_error?(_effect, _reason), do: false
 
   defp notify_agent(agent_id, effect_id, result) do
     :ok = Dispatch.dispatch(agent_id, {:effect_result, effect_id, result})
@@ -258,12 +279,66 @@ defmodule Maraithon.Runtime.EffectRunner do
     end
   end
 
-  defp calculate_backoff(attempt) do
+  defp calculate_backoff(attempt, reason) do
+    case retry_after_ms(reason) do
+      nil -> calculate_exponential_backoff(attempt)
+      retry_after_ms -> add_jitter(retry_after_ms)
+    end
+  end
+
+  defp calculate_exponential_backoff(attempt) do
     base = 1_000
     max = 60_000
     delay = base * :math.pow(2, attempt)
     jitter = :rand.uniform() * delay * 0.3
     round(min(delay + jitter, max))
+  end
+
+  defp retry_after_ms({:rate_limited, value}), do: normalize_retry_after_ms(value)
+  defp retry_after_ms({:llm_busy, value}), do: normalize_retry_after_ms(value)
+
+  defp retry_after_ms({:llm_fallbacks_failed, original_reason, fallback_errors}) do
+    retry_after_values =
+      ([retry_after_ms(original_reason)] ++ Enum.map(fallback_errors, &fallback_retry_after_ms/1))
+      |> Enum.reject(&is_nil/1)
+
+    case retry_after_values do
+      [] -> nil
+      values -> Enum.max(values)
+    end
+  end
+
+  defp retry_after_ms(_reason), do: nil
+
+  defp fallback_retry_after_ms(%{reason: reason}), do: retry_after_text_ms(reason)
+  defp fallback_retry_after_ms(%{"reason" => reason}), do: retry_after_text_ms(reason)
+  defp fallback_retry_after_ms(_reason), do: nil
+
+  defp retry_after_text_ms(reason) when is_binary(reason) do
+    case Regex.run(~r/rate_limited,\s*(\d+)/, reason) do
+      [_, retry_after] -> normalize_retry_after_ms(retry_after)
+      _other -> nil
+    end
+  end
+
+  defp retry_after_text_ms(_reason), do: nil
+
+  defp normalize_retry_after_ms(value) when is_integer(value) and value > 0 do
+    min(value, @max_rate_limit_retry_ms)
+  end
+
+  defp normalize_retry_after_ms(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {parsed, ""} when parsed > 0 -> normalize_retry_after_ms(parsed)
+      _other -> @default_rate_limit_retry_ms
+    end
+  end
+
+  defp normalize_retry_after_ms(_value), do: @default_rate_limit_retry_ms
+
+  defp add_jitter(retry_after_ms) do
+    jitter = :rand.uniform(max(1, div(retry_after_ms, 5)))
+    retry_after_ms + jitter
   end
 
   defp schedule_poll(interval_ms) do

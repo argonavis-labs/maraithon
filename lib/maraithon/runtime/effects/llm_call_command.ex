@@ -2,10 +2,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @moduledoc """
   Command implementation for `llm_call` effects.
 
-  Retries transient provider errors (`{:rate_limited, retry_after}`, network
-  blips, 5xx API errors, timeouts) up to `@max_retry_attempts` times. If the
-  primary model stays capacity-limited, the command then tries configured
-  fallback models with a lighter request shape before surfacing a failure.
+  Retries short transient provider errors (network blips, 5xx API errors,
+  timeouts, and very short rate limits) up to `@max_retry_attempts` times. Long
+  provider rate limits are surfaced to the effect runner so the durable queue can
+  retry later without blocking worker tasks or stampeding fallback models in the
+  same provider bucket.
   """
 
   @behaviour Maraithon.Runtime.Effects.Command
@@ -14,6 +15,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   alias Maraithon.Effects.Effect
   alias Maraithon.Spend
   alias Maraithon.Tracing
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   require Logger
 
@@ -22,6 +24,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   # Hard ceiling on a single retry-after to keep the effect process from
   # blocking on the provider for an unreasonable stretch.
   @max_retry_after_ms 120_000
+  @max_inline_rate_limit_retry_ms 5_000
   # Fallback when the provider gives a non-integer retry-after.
   @default_rate_limited_backoff_ms 30_000
   @fallback_max_tokens 8_000
@@ -32,6 +35,25 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     params = effect.params
     _timeout = params["timeout_ms"] || 120_000
 
+    case LLMRateLimiter.checkout() do
+      :ok ->
+        try do
+          do_execute(effect, params)
+        after
+          LLMRateLimiter.checkin()
+        end
+
+      {:error, reason} = error ->
+        Logger.info("LLM call deferred by local rate limiter",
+          effect_id: effect.id,
+          reason: inspect(reason)
+        )
+
+        error
+    end
+  end
+
+  defp do_execute(effect, params) do
     Logger.info("Starting LLM call for effect #{effect.id}",
       agent_id: effect.agent_id,
       effect_id: effect.id
@@ -68,6 +90,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         ok
 
       {:error, reason} ->
+        record_provider_limit(reason)
+
         case retry_backoff_ms(reason, attempt) do
           nil ->
             # Same-model retries are spent. For transient errors that look
@@ -92,6 +116,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     fallback_models = fallback_models(params)
 
     cond do
+      rate_limit_error?(original_reason) ->
+        {:error, original_reason}
+
       not transient_capacity_error?(original_reason) ->
         {:error, original_reason}
 
@@ -122,6 +149,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         ok
 
       {:error, fallback_reason} ->
+        record_provider_limit(fallback_reason)
+
         Logger.warning(
           "LLM fallback model failed",
           effect_id: effect.id,
@@ -216,13 +245,23 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   defp transient_capacity_error?(_), do: false
 
+  defp rate_limit_error?({:rate_limited, _retry_after}), do: true
+  defp rate_limit_error?(_reason), do: false
+
+  defp record_provider_limit({:rate_limited, retry_after_ms}) do
+    LLMRateLimiter.record_rate_limit(retry_after_ms)
+  end
+
+  defp record_provider_limit(_reason), do: :ok
+
   defp retry_backoff_ms(_reason, attempt) when attempt >= @max_retry_attempts, do: nil
 
   defp retry_backoff_ms({:rate_limited, retry_after}, _attempt)
        when is_integer(retry_after) and retry_after > 0,
-       do: min(retry_after, @max_retry_after_ms)
+       do: inline_rate_limit_backoff_ms(retry_after)
 
-  defp retry_backoff_ms({:rate_limited, _}, _attempt), do: @default_rate_limited_backoff_ms
+  defp retry_backoff_ms({:rate_limited, _}, _attempt),
+    do: inline_rate_limit_backoff_ms(@default_rate_limited_backoff_ms)
 
   defp retry_backoff_ms(:timeout, _attempt), do: 5_000
 
@@ -233,6 +272,13 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
        do: 2_000 * attempt
 
   defp retry_backoff_ms(_reason, _attempt), do: nil
+
+  defp inline_rate_limit_backoff_ms(retry_after_ms)
+       when retry_after_ms <= @max_inline_rate_limit_retry_ms do
+    min(retry_after_ms, @max_retry_after_ms)
+  end
+
+  defp inline_rate_limit_backoff_ms(_retry_after_ms), do: nil
 
   defp ensure_usage(%{usage: %{} = usage} = data) do
     model = Map.get(data, :model, "unknown")

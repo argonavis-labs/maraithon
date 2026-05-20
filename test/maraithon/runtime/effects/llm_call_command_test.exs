@@ -4,6 +4,15 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
   alias Maraithon.Effects.Effect
   alias Maraithon.LLM.MockProvider
   alias Maraithon.Runtime.Effects.LLMCallCommand
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
+
+  setup do
+    LLMRateLimiter.reset()
+
+    on_exit(fn -> LLMRateLimiter.reset() end)
+
+    :ok
+  end
 
   test "normalizes usage metadata for mock provider responses" do
     original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
@@ -170,7 +179,27 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
       assert {:error, {:rate_limited, 5}} = LLMCallCommand.execute(effect_for())
     end
 
-    test "falls back through distinct chat and routing models after retry exhaustion" do
+    test "long provider rate limits return to the queue without inline fallback" do
+      swap_provider(RetryStub)
+
+      start_retry_stub_with_calls([
+        {:error, {:rate_limited, 60_000}},
+        {:ok,
+         %{
+           content: "would be wrong",
+           model: "fallback",
+           tokens_in: 1,
+           tokens_out: 1,
+           finish_reason: "stop"
+         }}
+      ])
+
+      assert {:error, {:rate_limited, 60_000}} = LLMCallCommand.execute(effect_for())
+      assert [_single_call] = retry_stub_calls()
+      assert LLMRateLimiter.status().blocked_for_ms > 0
+    end
+
+    test "does not fallback through same-provider models after rate limit exhaustion" do
       original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
       Application.put_env(
@@ -214,15 +243,8 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
         }
       }
 
-      assert {:ok, %{content: "fallback ok"}} = LLMCallCommand.execute(effect)
-
-      calls = retry_stub_calls()
-      fallback_call = List.last(calls)
-
-      assert length(calls) == 4
-      assert fallback_call["model"] == "fast-routing"
-      assert fallback_call["max_tokens"] == 8_000
-      assert fallback_call["reasoning_effort"] == "medium"
+      assert {:error, {:rate_limited, 5}} = LLMCallCommand.execute(effect)
+      assert length(retry_stub_calls()) == 3
     end
   end
 end
