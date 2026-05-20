@@ -10,14 +10,29 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
   alias Maraithon.LLM.JsonFieldStreamer
   alias Maraithon.TelegramAssistant.LivenessSession
 
+  @allowed_llm_opt_keys [
+    :chat_model,
+    :reasoning_effort,
+    :max_tokens,
+    :temperature,
+    :model_fallbacks,
+    :model_failover_max_attempts,
+    :llm_complete
+  ]
+
   @impl true
   def next_step(payload) when is_map(payload) do
     {stream_target, payload} = Map.pop(payload, :_stream_target)
+    {llm_opts, payload} = Map.pop(payload, :_llm_opts, [])
+    llm_opts = normalize_llm_opts(llm_opts)
 
     if is_binary(stream_target) and stream_target != "" do
-      AssistantHarness.next_step(payload, llm_complete: streaming_llm_complete(stream_target))
+      AssistantHarness.next_step(
+        payload,
+        Keyword.put(llm_opts, :llm_complete, streaming_llm_complete(stream_target))
+      )
     else
-      AssistantHarness.next_step(payload)
+      AssistantHarness.next_step(payload, llm_opts)
     end
   end
 
@@ -52,4 +67,16 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
       end
     end
   end
+
+  defp normalize_llm_opts(opts) when is_list(opts) do
+    Enum.reduce(opts, [], fn
+      {key, value}, acc when key in @allowed_llm_opt_keys ->
+        Keyword.put(acc, key, value)
+
+      _other, acc ->
+        acc
+    end)
+  end
+
+  defp normalize_llm_opts(_opts), do: []
 end

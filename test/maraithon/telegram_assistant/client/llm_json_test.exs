@@ -118,6 +118,42 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "current local timezone"
   end
 
+  test "next_step applies explicit model routing options from the runner payload" do
+    parent = self()
+
+    payload =
+      payload("What should I do next?")
+      |> Map.put(
+        :_llm_opts,
+        chat_model: "reasoning-tier",
+        reasoning_effort: "high",
+        max_tokens: 6_000,
+        llm_complete: fn params ->
+          send(parent, {:llm_params, params})
+
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "status" => "final",
+                 "assistant_message" => "Start with the most time-sensitive open loop.",
+                 "message_class" => "assistant_reply",
+                 "tool_calls" => [],
+                 "summary" => "Answered from the routed request."
+               })
+           }}
+        end
+      )
+
+    assert {:ok, response} = LLMJson.next_step(payload)
+    assert response["status"] == "final"
+
+    assert_receive {:llm_params, params}
+    assert params["model"] == "reasoning-tier"
+    assert params["reasoning_effort"] == "high"
+    assert params["max_tokens"] == 6_000
+  end
+
   test "build_prompt instructs the model to persist and remove durable preferences" do
     prompt =
       LLMJson.build_prompt(

@@ -9,7 +9,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Run, TodoActions, Toolbox}
+  alias Maraithon.TelegramAssistant.{ModelRouting, Run, TodoActions, Toolbox}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
@@ -33,10 +33,11 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp do_run_inbound(attrs) do
     context = ContextEngine.build_context(attrs)
     conversation = Map.get(attrs, :conversation)
+    model_profile = ModelRouting.profile_for(attrs)
 
-    case start_run(attrs, context) do
+    case start_run(attrs, context, model_profile) do
       {:ok, run} ->
-        runtime_context = build_runtime_context(run, attrs, context)
+        runtime_context = build_runtime_context(run, attrs, context, model_profile)
         _ = maybe_start_liveness_session(run, attrs)
 
         with {:ok, _step_state} <- record_context_fetch(run, context),
@@ -50,6 +51,12 @@ defmodule Maraithon.TelegramAssistant.Runner do
                ),
              {:ok, status, summary} <-
                deliver_final_response(conversation, run, response, state, attrs) do
+          summary =
+            summary
+            |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
+            |> Map.put(:model_name, Map.get(runtime_context, :model_name))
+            |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
+
           {:ok, _run} =
             TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
 
@@ -120,7 +127,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
-  defp start_run(attrs, context) do
+  defp start_run(attrs, context, model_profile) do
     TelegramAssistant.start_run(%{
       user_id: Map.fetch!(attrs, :user_id),
       chat_id: Map.fetch!(attrs, :chat_id),
@@ -128,9 +135,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
       trigger_type: trigger_type(attrs),
       status: "running",
       model_provider: TelegramAssistant.model_provider_name(),
-      model_name: TelegramAssistant.model_name(),
+      model_name: Map.get(model_profile, :model) || TelegramAssistant.model_name(),
       prompt_snapshot: ContextEngine.prompt_snapshot(context),
-      result_summary: %{},
+      result_summary: %{model_tier: Map.get(model_profile, :tier)},
       started_at: DateTime.utc_now()
     })
   end
@@ -149,7 +156,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp run_loop(run, runtime_context, state, started_monotonic_ms) do
-    case AssistantHarness.guard_loop(state, started_monotonic_ms, runner_policy_opts()) do
+    policy_opts = runner_policy_opts(runtime_context)
+
+    case AssistantHarness.guard_loop(state, started_monotonic_ms, policy_opts) do
       {:error, reason} ->
         {:error, run, reason, state}
 
@@ -157,8 +166,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
         request_payload =
           runtime_context
           |> Map.put(:tools, ContextEngine.tool_catalog(runtime_context.context))
-          |> AssistantHarness.build_loop_request_payload(state, runner_policy_opts())
+          |> AssistantHarness.build_loop_request_payload(state, policy_opts)
           |> Map.put(:_stream_target, runtime_context.run_id)
+          |> Map.put(:_llm_opts, Map.get(runtime_context, :llm_opts, []))
 
         now = DateTime.utc_now()
 
@@ -168,7 +178,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
             run_id: run.id,
             iteration: state.iteration,
             llm_turns: state.llm_turns,
-            model: TelegramAssistant.model_name()
+            model: Map.get(runtime_context, :model_name),
+            model_tier: Map.get(runtime_context, :model_tier)
           },
           fn ->
             do_run_loop_step(
@@ -271,7 +282,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
           |> Map.update!(:sequence, &(&1 + length(history_entries)))
           |> Map.update!(:tool_history, fn history -> history ++ history_entries end)
 
-        case AssistantHarness.guard_tool_history(next_state.tool_history, runner_policy_opts()) do
+        case AssistantHarness.guard_tool_history(
+               next_state.tool_history,
+               runner_policy_opts(runtime_context)
+             ) do
           :ok ->
             run_loop(
               run,
@@ -496,7 +510,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     })
   end
 
-  defp build_runtime_context(run, attrs, context) do
+  defp build_runtime_context(run, attrs, context, model_profile) do
     defaults = Map.get(context, :defaults) || Map.get(context, "defaults") || %{}
 
     %{
@@ -505,6 +519,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
       chat_id: Map.fetch!(attrs, :chat_id),
       conversation_id: conversation_id(Map.get(attrs, :conversation)),
       context: context,
+      model_tier: Map.get(model_profile, :tier),
+      model_name: Map.get(model_profile, :model),
+      model_reasoning_effort: Map.get(model_profile, :reasoning_effort),
+      llm_opts: Map.get(model_profile, :llm_opts, []),
       default_project_id:
         Map.get(defaults, :default_project_id) || defaults["default_project_id"],
       default_project_slug:
@@ -955,8 +973,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
     AssistantHarness.max_tool_steps(runner_policy_opts())
   end
 
-  defp runner_policy_opts do
+  defp runner_policy_opts(runtime_context \\ %{}) do
     [max_wall_clock_ms: TelegramAssistant.hard_timeout_ms()]
+    |> Keyword.merge(Map.get(runtime_context, :llm_opts, []))
   end
 
   defp conversation_id(%Conversation{id: id}), do: id
