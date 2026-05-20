@@ -14,6 +14,13 @@
       "from_stage": "ready",
       "note": "Current code has memory_items, Memory.write/recall/forget, write_memory/recall_memory/list_memories/forget_memory/record_memory_feedback, and prompt memory context. Missing: decay_at, supersession links, encrypted content/metadata, Memory.Recall module, update_memory_confidence, /operator/memories LiveView.",
       "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T10:16:19Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "note": "Starting Memory primitive completion after finishing and pushing the self-serve Chief of Staff install spec.",
+      "to_stage": "inprogress"
     }
   ],
   "next_action": "Build the remaining Memory delta against Maraithon.Memory and existing memory tools, avoiding duplicate primitives.",
@@ -21,7 +28,7 @@
     "artifacts": [
       "/Users/kent/bliss/maraithon/docs/spectacula/specs/ship-memory-primitive-with-model-callable-read-write-tools-26355ff4.md"
     ],
-    "last_completed_step": "Spectacula codebase verification completed on 2026-05-20; spec remains ready for implementation.",
+    "last_completed_step": "Moved spec to inprogress and started codebase inspection for the remaining Memory delta.",
     "notes": "Current code has memory_items, Memory.write/recall/forget, write_memory/recall_memory/list_memories/forget_memory/record_memory_feedback, and prompt memory context. Missing: decay_at, supersession links, encrypted content/metadata, Memory.Recall module, update_memory_confidence, /operator/memories LiveView.",
     "pending_steps": [
       "Build the remaining Memory delta against Maraithon.Memory and existing memory tools, avoiding duplicate primitives."
@@ -33,10 +40,11 @@
   "slug": "ship-memory-primitive-with-model-callable-read-write-tools-26355ff4",
   "spec_id": "ship-memory-primitive-with-model-callable-read-write-tools-26355ff4",
   "spec_path": "../specs/ship-memory-primitive-with-model-callable-read-write-tools-26355ff4.md",
-  "stage": "ready",
+  "stage": "inprogress",
+  "started_at": "2026-05-20T10:16:19Z",
   "summary": "Reviewed against current codebase; partially implemented but still a real build spec. Existing Memory schema/tools should be reused; supersession, decay, encryption, recall helper, update-confidence tool, and operator UI remain open.",
   "title": "Ship Memory primitive with model-callable read/write tools",
-  "updated_at": "2026-05-20T09:07:06Z",
+  "updated_at": "2026-05-20T10:16:19Z",
   "verification": {
     "build": "not_run",
     "codebase_review": "partial",
