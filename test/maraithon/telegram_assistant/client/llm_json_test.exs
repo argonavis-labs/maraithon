@@ -48,6 +48,16 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "what do I owe Justin?"
   end
 
+  test "build_prompt distinguishes connected accounts from CRM people" do
+    prompt = LLMJson.build_prompt(payload("Which connections are currently connected?"))
+
+    assert prompt =~ "`connected_accounts` and `source_freshness`"
+    assert prompt =~ "connector, integration, account, and source-health questions"
+    assert prompt =~ "answer directly from those context fields"
+    assert prompt =~ "Do not call `list_people` for connector/account status"
+    assert prompt =~ "`list_people` is only for human CRM relationships"
+  end
+
   test "build_prompt instructs the model to use deep memory tools" do
     prompt = LLMJson.build_prompt(payload("That VC newsletter is not relevant to me."))
 
