@@ -16,6 +16,7 @@ defmodule Maraithon.ActionLedger.Action do
     tool.executed
     proactive.sent
     proactive.held
+    proactive.delivery_planned
     todo.changed
     crm.changed
     memory.changed

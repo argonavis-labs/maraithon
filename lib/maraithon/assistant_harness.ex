@@ -32,6 +32,7 @@ defmodule Maraithon.AssistantHarness do
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
   @valid_proactive_decisions ~w(send_now hold)
   @valid_proactive_message_classes ~w(assistant_push todo_digest system_notice)
+  @valid_delivery_dispositions ~w(interrupt_now digest hold)
 
   def runtime_policy(opts \\ []) when is_list(opts) do
     model_fallbacks = model_fallbacks(opts)
@@ -85,6 +86,9 @@ defmodule Maraithon.AssistantHarness do
       proactive_decision_contract: %{
         decisions: @valid_proactive_decisions,
         message_classes: @valid_proactive_message_classes
+      },
+      delivery_planning_contract: %{
+        dispositions: @valid_delivery_dispositions
       },
       chat_request: %{
         max_tokens:
@@ -241,6 +245,21 @@ defmodule Maraithon.AssistantHarness do
     }
   end
 
+  def build_delivery_plan_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
+    policy = runtime_policy(opts)
+    prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_delivery_plan_prompt()
+
+    %{
+      "messages" => [
+        %{"role" => "system", "content" => system_prompt()},
+        %{"role" => "user", "content" => prompt}
+      ],
+      "max_tokens" => policy.proactive_request.max_tokens,
+      "temperature" => policy.proactive_request.temperature,
+      "reasoning_effort" => policy.proactive_request.reasoning_effort
+    }
+  end
+
   def next_step(payload, opts \\ []) when is_map(payload) do
     params = build_step_request(payload, opts)
     complete_json(params, opts, fn decoded -> normalize(decoded, payload) end)
@@ -249,6 +268,11 @@ defmodule Maraithon.AssistantHarness do
   def proactive_plan(payload, opts \\ []) when is_map(payload) do
     params = build_proactive_request(payload, opts)
     complete_json(params, opts, &normalize_proactive/1)
+  end
+
+  def plan_delivery(payload, opts \\ []) when is_map(payload) do
+    params = build_delivery_plan_request(payload, opts)
+    complete_json(params, opts, &normalize_delivery_plan/1)
   end
 
   def build_prompt(payload) do
@@ -464,6 +488,42 @@ defmodule Maraithon.AssistantHarness do
     """
   end
 
+  def build_delivery_plan_prompt(payload) do
+    """
+    Return ONLY valid JSON with this exact shape:
+    {
+      "dispositions":[
+        {"candidate_id":"uuid","disposition":"interrupt_now|digest|hold","reason":"short reason"}
+      ],
+      "digest_intro":"Telegram-ready digest intro, or empty string when nothing should be digested",
+      "summary":"short reasoning summary"
+    }
+
+    Delivery planning contract:
+    - The model is responsible for assigning each pending proactive candidate one disposition: interrupt_now, digest, or hold.
+    - Runtime code only validates this JSON contract, persists the plan, sends Telegram, records receipts, and preserves dedupe guarantees.
+    - Use interrupt_now only when the item is timely enough to stand alone.
+    - Use digest when the item is useful but should be batched with other proactive material.
+    - Use hold when the item should not be delivered in this cycle.
+    - If any candidate is assigned digest, write one compact digest_intro that can introduce the grouped candidate cards.
+    - Keep reasons short, source-grounded, and safe for audit logs.
+    - Do not invent facts outside the candidate snapshots, context, recent pushes, and user preferences.
+    - The runtime policy below is authoritative for valid dispositions and request budgets.
+
+    Pending candidates JSON:
+    #{PromptStability.encode!(Map.get(payload, :candidates) || Map.get(payload, "candidates") || [])}
+
+    Context snapshot JSON:
+    #{PromptStability.encode!(Map.get(payload, :context) || Map.get(payload, "context") || %{})}
+
+    Recent push receipts JSON:
+    #{PromptStability.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
+
+    Runtime policy JSON:
+    #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
+    """
+  end
+
   defp policy_value(opts, key, default) do
     case Keyword.fetch(opts, key) do
       {:ok, value} ->
@@ -636,6 +696,9 @@ defmodule Maraithon.AssistantHarness do
   defp retryable_model_error?(:assistant_harness_invalid_tool_call), do: true
   defp retryable_model_error?(:assistant_harness_empty_tool_calls), do: true
   defp retryable_model_error?(:assistant_harness_invalid_decision), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_disposition), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_dispositions), do: true
+  defp retryable_model_error?(:assistant_harness_invalid_candidate_id), do: true
   defp retryable_model_error?(:assistant_harness_empty_message), do: true
   defp retryable_model_error?({:rate_limited, _retry_after}), do: true
   defp retryable_model_error?({:network_error, _reason}), do: true
@@ -916,6 +979,64 @@ defmodule Maraithon.AssistantHarness do
 
   defp validate_proactive_message("send_now", ""), do: {:error, :assistant_harness_empty_message}
   defp validate_proactive_message(_decision, _assistant_message), do: :ok
+
+  defp normalize_delivery_plan(%{} = parsed) do
+    digest_intro = normalize_message(Map.get(parsed, "digest_intro"))
+    summary = normalize_message(Map.get(parsed, "summary"))
+
+    with {:ok, dispositions} <- normalize_delivery_dispositions(Map.get(parsed, "dispositions")) do
+      {:ok,
+       %{
+         "dispositions" => dispositions,
+         "digest_intro" => digest_intro,
+         "summary" => summary
+       }}
+    end
+  end
+
+  defp normalize_delivery_dispositions(dispositions) when is_list(dispositions) do
+    dispositions
+    |> Enum.reduce_while({:ok, []}, fn disposition, {:ok, acc} ->
+      case normalize_delivery_disposition(disposition) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp normalize_delivery_dispositions(_dispositions),
+    do: {:error, :assistant_harness_invalid_dispositions}
+
+  defp normalize_delivery_disposition(%{} = disposition) do
+    candidate_id =
+      normalize_message(Map.get(disposition, "candidate_id") || Map.get(disposition, "id"))
+
+    disposition_value = normalize_message(Map.get(disposition, "disposition"))
+    reason = normalize_message(Map.get(disposition, "reason"))
+
+    cond do
+      candidate_id == "" ->
+        {:error, :assistant_harness_invalid_candidate_id}
+
+      disposition_value not in @valid_delivery_dispositions ->
+        {:error, :assistant_harness_invalid_disposition}
+
+      true ->
+        {:ok,
+         %{
+           "candidate_id" => candidate_id,
+           "disposition" => disposition_value,
+           "reason" => reason
+         }}
+    end
+  end
+
+  defp normalize_delivery_disposition(_disposition),
+    do: {:error, :assistant_harness_invalid_dispositions}
 
   defp compact_tool_history(tool_history, policy) when is_list(tool_history) do
     tool_history

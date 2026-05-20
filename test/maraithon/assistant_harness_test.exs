@@ -446,6 +446,90 @@ defmodule Maraithon.AssistantHarnessTest do
              AssistantHarness.proactive_plan(%{context: %{}}, llm_complete: llm_complete)
   end
 
+  test "plan_delivery normalizes model dispositions" do
+    llm_complete = fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+      assert prompt =~ "Delivery planning contract:"
+      assert prompt =~ "candidate-1"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" => [
+               %{
+                 "candidate_id" => "candidate-1",
+                 "disposition" => "interrupt_now",
+                 "reason" => "The escalation is time-sensitive."
+               },
+               %{
+                 "candidate_id" => "candidate-2",
+                 "disposition" => "digest",
+                 "reason" => "Useful, but it can be batched."
+               },
+               %{
+                 "candidate_id" => "candidate-3",
+                 "disposition" => "hold",
+                 "reason" => "Not worth interrupting right now."
+               }
+             ],
+             "digest_intro" => "A couple of useful things can wait for one digest.",
+             "summary" => "One interrupt, one digest item, one hold."
+           })
+       }}
+    end
+
+    assert {:ok, plan} =
+             AssistantHarness.plan_delivery(
+               %{
+                 candidates: [
+                   %{"id" => "candidate-1", "title" => "Customer escalation"},
+                   %{"id" => "candidate-2", "title" => "Follow-up digest"},
+                   %{"id" => "candidate-3", "title" => "Low-signal FYI"}
+                 ],
+                 context: %{},
+                 recent_pushes: []
+               },
+               llm_complete: llm_complete
+             )
+
+    assert Enum.map(plan["dispositions"], & &1["disposition"]) == [
+             "interrupt_now",
+             "digest",
+             "hold"
+           ]
+
+    assert plan["digest_intro"] =~ "digest"
+    assert plan["summary"] == "One interrupt, one digest item, one hold."
+  end
+
+  test "plan_delivery rejects unknown dispositions" do
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" => [
+               %{
+                 "candidate_id" => "candidate-1",
+                 "disposition" => "send_later",
+                 "reason" => "Invalid disposition."
+               }
+             ],
+             "digest_intro" => "",
+             "summary" => "Invalid plan."
+           })
+       }}
+    end
+
+    assert {:error, :assistant_harness_invalid_disposition} =
+             AssistantHarness.plan_delivery(
+               %{candidates: [%{"id" => "candidate-1"}], context: %{}, recent_pushes: []},
+               llm_complete: llm_complete
+             )
+  end
+
   test "next_step retries same-model on a transient malformed-decision error" do
     {:ok, calls} = Agent.start_link(fn -> 0 end)
 
