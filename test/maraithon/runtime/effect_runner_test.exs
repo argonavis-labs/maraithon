@@ -63,6 +63,30 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     def complete(_params), do: {:error, {:rate_limited, 60_000}}
   end
 
+  defmodule BlockingProvider do
+    @moduledoc false
+
+    def complete(params) do
+      test_pid = Application.fetch_env!(:maraithon, :effect_runner_test_pid)
+      send(test_pid, {:blocking_provider_called, self(), params})
+
+      receive do
+        :release_blocking_provider ->
+          {:ok,
+           %{
+             content: "ok",
+             model: "blocking-v1",
+             tokens_in: 1,
+             tokens_out: 1,
+             finish_reason: "stop",
+             usage: %{}
+           }}
+      after
+        5_000 -> {:error, :timeout}
+      end
+    end
+  end
+
   # ===========================================================================
   # Test Setup
   # ===========================================================================
@@ -731,6 +755,97 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert updated_effect.attempts == 0
       assert updated_effect.retry_after != nil
       assert DateTime.diff(updated_effect.retry_after, DateTime.utc_now(), :second) >= 50
+
+      GenServer.stop(pid, :normal)
+    end
+
+    test "does not claim llm effects while provider cooldown is active", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 100
+        })
+
+      LLMRateLimiter.record_rate_limit(60_000)
+
+      {:ok, pid} = EffectRunner.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      _ = :sys.get_state(pid)
+
+      updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
+
+      assert updated_effect.status == "pending"
+      assert updated_effect.attempts == 0
+      assert updated_effect.claimed_by == nil
+      assert updated_effect.claimed_at == nil
+      assert updated_effect.retry_after == nil
+
+      GenServer.stop(pid, :normal)
+    end
+
+    test "does not claim a second llm effect while one is running", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(original_runtime_config, :llm_provider, BlockingProvider)
+      )
+
+      Application.put_env(:maraithon, :effect_runner_test_pid, self())
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+        Application.delete_env(:maraithon, :effect_runner_test_pid)
+      end)
+
+      {:ok, first_effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "First"}],
+          "max_tokens" => 100
+        })
+
+      {:ok, pid} = EffectRunner.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      assert_receive {:blocking_provider_called, provider_pid, _params}, 1_000
+
+      {:ok, second_effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Second"}],
+          "max_tokens" => 100
+        })
+
+      send(pid, :poll)
+      _ = :sys.get_state(pid)
+
+      second_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, second_effect_id)
+
+      assert second_effect.status == "pending"
+      assert second_effect.attempts == 0
+      assert second_effect.claimed_by == nil
+      assert second_effect.claimed_at == nil
+      assert second_effect.retry_after == nil
+
+      ref = Process.monitor(provider_pid)
+      send(provider_pid, :release_blocking_provider)
+      assert_receive {:DOWN, ^ref, :process, ^provider_pid, :normal}, 1_000
+
+      first_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, first_effect_id)
+      assert first_effect.status == "completed"
 
       GenServer.stop(pid, :normal)
     end

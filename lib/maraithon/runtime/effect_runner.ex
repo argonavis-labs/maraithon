@@ -12,6 +12,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   alias Maraithon.Runtime.DbResilience
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Effects.CommandFactory
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   require Logger
 
@@ -52,7 +53,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   def handle_info(:poll, state) do
     case DbResilience.with_database("effect runner poll", fn ->
            reclaim_stale_effects(state.claim_timeout_ms)
-           fetch_pending_effects(state.batch_size)
+           fetch_pending_effects(state.batch_size, state.running)
          end) do
       {:ok, effects} ->
         running =
@@ -93,17 +94,55 @@ defmodule Maraithon.Runtime.EffectRunner do
 
   # Private functions
 
-  defp fetch_pending_effects(limit) do
+  defp fetch_pending_effects(limit, running) do
     now = DateTime.utc_now()
+    llm_available? = llm_effect_available?(running)
+    llm_limit = if llm_available?, do: 1, else: 0
+    non_llm_limit = max(limit - llm_limit, 0)
 
+    non_llm_effects =
+      now
+      |> pending_effects_query()
+      |> where([e], e.effect_type != "llm_call")
+      |> limit(^non_llm_limit)
+      |> Repo.all()
+
+    llm_effects =
+      if llm_limit > 0 do
+        now
+        |> pending_effects_query()
+        |> where([e], e.effect_type == "llm_call")
+        |> limit(^llm_limit)
+        |> Repo.all()
+      else
+        []
+      end
+
+    (non_llm_effects ++ llm_effects)
+    |> Enum.sort_by(&DateTime.to_unix(&1.inserted_at, :microsecond))
+  end
+
+  defp pending_effects_query(now) do
     from(e in Effect,
       where: e.status == "pending",
       where: is_nil(e.retry_after) or e.retry_after <= ^now,
-      order_by: [asc: e.inserted_at],
-      limit: ^limit
+      order_by: [asc: e.inserted_at]
     )
-    |> Repo.all()
   end
+
+  defp llm_effect_available?(running) do
+    status = LLMRateLimiter.status()
+
+    not running_llm_effect?(running) and
+      Map.get(status, :blocked_for_ms, 0) <= 0 and
+      Map.get(status, :in_flight, 0) < Map.get(status, :max_concurrency, 1)
+  end
+
+  defp running_llm_effect?(running) when is_map(running) do
+    Enum.any?(running, fn {_id, effect} -> match?(%Effect{effect_type: "llm_call"}, effect) end)
+  end
+
+  defp running_llm_effect?(_running), do: false
 
   defp claim_effect(effect) do
     node_id = node() |> to_string()
