@@ -42,6 +42,7 @@ defmodule Maraithon.ToolsTest do
       assert "upsert_person" in tools
       assert "delete_person" in tools
       assert "link_person_data" in tools
+      assert "merge_people" in tools
       assert "get_relationship_context" in tools
       assert "list_memories" in tools
       assert "write_memory" in tools
@@ -113,6 +114,7 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("upsert_person")
       assert Tools.exists?("delete_person")
       assert Tools.exists?("link_person_data")
+      assert Tools.exists?("merge_people")
       assert Tools.exists?("get_relationship_context")
       assert Tools.exists?("list_memories")
       assert Tools.exists?("write_memory")

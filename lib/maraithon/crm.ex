@@ -5,7 +5,7 @@ defmodule Maraithon.Crm do
 
   import Ecto.Query
 
-  alias Maraithon.Crm.{Person, PersonLink}
+  alias Maraithon.Crm.{Person, PersonLink, PersonMerge}
   alias Maraithon.Repo
   alias Maraithon.Todos
 
@@ -22,9 +22,11 @@ defmodule Maraithon.Crm do
     frequency = normalize_string(Keyword.get(opts, :communication_frequency))
     contact_kind = normalize_string(Keyword.get(opts, :contact_kind))
     contact_value = normalize_string(Keyword.get(opts, :contact_value))
+    status = normalize_string(Keyword.get(opts, :status, "active"))
 
     Person
     |> where([person], person.user_id == ^user_id)
+    |> maybe_filter_status(status)
     |> maybe_filter_people_query(query_text)
     |> maybe_filter_text(:relationship, relationship)
     |> maybe_filter_text(:preferred_communication_method, method)
@@ -123,7 +125,7 @@ defmodule Maraithon.Crm do
           """
           SELECT id, 1 - (embedding <=> $1::vector) AS similarity
           FROM crm_people
-          WHERE user_id = $2 AND embedding IS NOT NULL
+          WHERE user_id = $2 AND status = 'active' AND embedding IS NOT NULL
           ORDER BY embedding <=> $1::vector
           LIMIT 1
           """,
@@ -255,6 +257,52 @@ defmodule Maraithon.Crm do
   end
 
   def delete_person(_user_id, _person_id), do: {:error, :person_not_found}
+
+  def merge_people(user_id, surviving_id, merged_id, attrs \\ %{})
+
+  def merge_people(user_id, surviving_id, merged_id, attrs)
+      when is_binary(user_id) and is_binary(surviving_id) and is_binary(merged_id) and
+             is_map(attrs) do
+    attrs = stringify_keys(attrs)
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    result =
+      Repo.transaction(fn ->
+        with :ok <- reject_self_merge(surviving_id, merged_id),
+             %Person{} = surviving <- get_person_for_user(user_id, surviving_id),
+             %Person{} = merged <- get_person_for_user(user_id, merged_id),
+             :ok <- ensure_mergeable(surviving, merged),
+             {:ok, surviving} <- update_surviving_person(surviving, merged, now),
+             %{repointed: repointed, collapsed: collapsed} <-
+               move_person_links(user_id, surviving.id, merged.id),
+             {:ok, merged} <- mark_person_merged(merged, surviving, attrs, now),
+             {:ok, audit} <- insert_person_merge_audit(user_id, surviving, merged, attrs, now) do
+          %{
+            surviving_person: surviving,
+            merged_person: merged,
+            audit: audit,
+            repointed_link_count: repointed,
+            collapsed_link_count: collapsed
+          }
+        else
+          nil -> Repo.rollback(:person_not_found)
+          {:error, reason} -> Repo.rollback(reason)
+          reason when is_atom(reason) -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, %{surviving_person: %Person{} = person} = merge_result} ->
+        Maraithon.Crm.PersonEmbeddings.refresh_async(person)
+        {:ok, merge_result}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  def merge_people(_user_id, _surviving_id, _merged_id, _attrs),
+    do: {:error, :invalid_merge_attrs}
 
   def list_links_for_person(user_id, person_id, opts \\ [])
 
@@ -415,6 +463,152 @@ defmodule Maraithon.Crm do
       affinity_score: person.affinity_score,
       last_interaction_at: person.last_interaction_at
     }
+  end
+
+  defp reject_self_merge(id, id), do: {:error, :cannot_merge_person_into_self}
+  defp reject_self_merge(_surviving_id, _merged_id), do: :ok
+
+  defp ensure_mergeable(%Person{status: "active"}, %Person{status: "active"}), do: :ok
+
+  defp ensure_mergeable(%Person{status: "merged"}, _merged),
+    do: {:error, :survivor_already_merged}
+
+  defp ensure_mergeable(_surviving, %Person{status: "merged"}),
+    do: {:error, :person_already_merged}
+
+  defp ensure_mergeable(_surviving, _merged), do: {:error, :person_not_active}
+
+  defp update_surviving_person(%Person{} = surviving, %Person{} = merged, %DateTime{} = now) do
+    attrs =
+      %{
+        contact_details: merged.contact_details || %{},
+        metadata: merged_survivor_metadata(surviving.metadata, merged.id, now),
+        interaction_count: (surviving.interaction_count || 0) + (merged.interaction_count || 0),
+        relationship_strength:
+          max(surviving.relationship_strength || 0, merged.relationship_strength || 0),
+        affinity_score: max(surviving.affinity_score || 0, merged.affinity_score || 0),
+        last_interaction_at:
+          latest_datetime(surviving.last_interaction_at, %{
+            "last_interaction_at" => merged.last_interaction_at
+          })
+      }
+      |> maybe_fill_blank(:preferred_communication_method, surviving, merged)
+      |> maybe_fill_blank(:relationship, surviving, merged)
+      |> maybe_fill_blank(:communication_frequency, surviving, merged)
+      |> maybe_fill_blank(:notes, surviving, merged)
+
+    surviving
+    |> Person.changeset(attrs)
+    |> Repo.update()
+  end
+
+  defp maybe_fill_blank(attrs, field, surviving, merged) do
+    if blank?(Map.get(surviving, field)) and not blank?(Map.get(merged, field)) do
+      Map.put(attrs, field, Map.get(merged, field))
+    else
+      attrs
+    end
+  end
+
+  defp merged_survivor_metadata(metadata, merged_id, %DateTime{} = now) do
+    metadata = metadata || %{}
+
+    merged_ids =
+      metadata
+      |> Map.get("merged_person_ids", [])
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> then(&[merged_id | &1])
+      |> Enum.uniq()
+
+    metadata
+    |> Map.put("merged_person_ids", merged_ids)
+    |> Map.put("last_person_merge_at", DateTime.to_iso8601(now))
+  end
+
+  defp move_person_links(user_id, surviving_id, merged_id) do
+    PersonLink
+    |> where([link], link.user_id == ^user_id and link.person_id == ^merged_id)
+    |> Repo.all()
+    |> Enum.reduce(%{repointed: 0, collapsed: 0}, fn link, counts ->
+      case get_existing_link(user_id, surviving_id, %{
+             "resource_type" => link.resource_type,
+             "resource_id" => link.resource_id
+           }) do
+        %PersonLink{} = existing ->
+          {:ok, _existing} = merge_duplicate_link(existing, link)
+          {:ok, _deleted} = Repo.delete(link)
+          %{counts | collapsed: counts.collapsed + 1}
+
+        nil ->
+          {:ok, _link} =
+            link
+            |> Ecto.Changeset.change(person_id: surviving_id)
+            |> Repo.update()
+
+          %{counts | repointed: counts.repointed + 1}
+      end
+    end)
+  end
+
+  defp merge_duplicate_link(%PersonLink{} = existing, %PersonLink{} = duplicate) do
+    attrs = %{
+      "resource_source" => first_present(existing.resource_source, duplicate.resource_source),
+      "role" => first_present(existing.role, duplicate.role),
+      "source_system" => first_present(existing.source_system, duplicate.source_system),
+      "source_account" => first_present(existing.source_account, duplicate.source_account),
+      "source_ref" => first_present(existing.source_ref, duplicate.source_ref),
+      "title" => first_present(existing.title, duplicate.title),
+      "summary" => first_present(existing.summary, duplicate.summary),
+      "relationship_note" =>
+        combine_text(existing.relationship_note, duplicate.relationship_note),
+      "evidence_quote" => first_present(existing.evidence_quote, duplicate.evidence_quote),
+      "model_rationale" => first_present(existing.model_rationale, duplicate.model_rationale),
+      "confidence" => max(existing.confidence || 0.0, duplicate.confidence || 0.0),
+      "metadata" =>
+        existing.metadata
+        |> merge_maps(duplicate.metadata)
+        |> Map.put("collapsed_person_link_ids", [duplicate.id])
+    }
+
+    existing
+    |> PersonLink.changeset(attrs)
+    |> Repo.update()
+  end
+
+  defp mark_person_merged(%Person{} = merged, %Person{} = surviving, attrs, %DateTime{} = now) do
+    metadata =
+      merged.metadata
+      |> merge_maps(%{
+        "merged_into_id" => surviving.id,
+        "merge_evidence" => normalize_string(Map.get(attrs, "evidence")),
+        "merge_model_rationale" => normalize_string(Map.get(attrs, "model_rationale"))
+      })
+
+    merged
+    |> Person.changeset(%{
+      status: "merged",
+      merged_into_id: surviving.id,
+      merged_at: now,
+      metadata: metadata
+    })
+    |> Repo.update()
+  end
+
+  defp insert_person_merge_audit(user_id, surviving, merged, attrs, %DateTime{} = now) do
+    %PersonMerge{}
+    |> PersonMerge.changeset(%{
+      user_id: user_id,
+      surviving_person_id: surviving.id,
+      merged_person_id: merged.id,
+      evidence: normalize_string(Map.get(attrs, "evidence")),
+      model_rationale:
+        normalize_string(Map.get(attrs, "model_rationale") || Map.get(attrs, "rationale")),
+      performed_by: normalize_string(Map.get(attrs, "performed_by", "model")),
+      metadata: read_map(Map.get(attrs, "metadata")),
+      performed_at: now
+    })
+    |> Repo.insert()
   end
 
   defp apply_relationship_metric_growth(attrs, person) when is_map(attrs) do
@@ -613,6 +807,7 @@ defmodule Maraithon.Crm do
 
         Person
         |> where([person], person.user_id == ^user_id)
+        |> where([person], person.status == "active")
         |> where(^contact_match)
         |> order_by([person], desc: person.updated_at)
         |> limit(1)
@@ -622,6 +817,7 @@ defmodule Maraithon.Crm do
         exact =
           Person
           |> where([person], person.user_id == ^user_id)
+          |> where([person], person.status == "active")
           |> where(
             [person],
             fragment("lower(?)", person.display_name) == ^String.downcase(display_name)
@@ -641,6 +837,7 @@ defmodule Maraithon.Crm do
   defp fuzzy_find_person(user_id, query_text) when is_binary(query_text) do
     Person
     |> where([person], person.user_id == ^user_id)
+    |> where([person], person.status == "active")
     |> where(
       [person],
       fragment(
@@ -770,6 +967,10 @@ defmodule Maraithon.Crm do
     normalize_string(Map.get(attrs, "person_id") || Map.get(attrs, "id"))
   end
 
+  defp maybe_filter_status(query, nil), do: query
+  defp maybe_filter_status(query, "all"), do: query
+  defp maybe_filter_status(query, status), do: where(query, [person], person.status == ^status)
+
   defp maybe_filter_people_query(query, nil), do: query
 
   defp maybe_filter_people_query(query, query_text) do
@@ -886,6 +1087,34 @@ defmodule Maraithon.Crm do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp blank?(value), do: normalize_string(value) == nil
+
+  defp first_present(left, right) do
+    normalize_string(left) || normalize_string(right)
+  end
+
+  defp combine_text(left, right) do
+    [normalize_string(left), normalize_string(right)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.join("\n\n")
+    |> normalize_string()
+  end
+
+  defp merge_maps(left, right) do
+    Map.merge(read_map(left), read_map(right), fn _key, left_value, right_value ->
+      cond do
+        is_map(left_value) and is_map(right_value) -> merge_maps(left_value, right_value)
+        is_list(left_value) and is_list(right_value) -> Enum.uniq(left_value ++ right_value)
+        is_nil(right_value) -> left_value
+        true -> right_value
+      end
+    end)
+  end
+
+  defp read_map(value) when is_map(value), do: value
+  defp read_map(_value), do: %{}
 
   defp clamp_limit(value, min_value, max_value) when is_integer(value) do
     value |> max(min_value) |> min(max_value)

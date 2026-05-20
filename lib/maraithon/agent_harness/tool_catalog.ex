@@ -88,6 +88,13 @@ defmodule Maraithon.AgentHarness.ToolCatalog do
       action: "link_person_data",
       side_effect: "write"
     },
+    "merge_people" => %{
+      name: "merge_people",
+      connector: nil,
+      mcp_server: "maraithon",
+      action: "merge_people",
+      side_effect: "write"
+    },
     "get_relationship_context" => %{
       name: "get_relationship_context",
       connector: nil,

@@ -288,6 +288,7 @@ defmodule Maraithon.AgentMarketplace do
       "get_person",
       "upsert_person",
       "link_person_data",
+      "merge_people",
       "get_relationship_context",
       "learn_relationship_context",
       "recall_memory",

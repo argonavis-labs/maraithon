@@ -25,6 +25,7 @@ defmodule Maraithon.Tools.PersonHelpers do
     |> maybe_put(:communication_frequency, optional_string(args, "communication_frequency"))
     |> maybe_put(:contact_kind, optional_string(args, "contact_kind"))
     |> maybe_put(:contact_value, optional_string(args, "contact_value"))
+    |> maybe_put(:status, optional_string(args, "status"))
   end
 
   def link_list_opts(args, default_limit \\ 25) when is_map(args) do
@@ -71,6 +72,9 @@ defmodule Maraithon.Tools.PersonHelpers do
       relationship_strength: person.relationship_strength,
       affinity_score: person.affinity_score,
       last_interaction_at: person.last_interaction_at,
+      status: person.status,
+      merged_into_id: person.merged_into_id,
+      merged_at: person.merged_at,
       notes: person.notes,
       metadata: person.metadata || %{},
       inserted_at: person.inserted_at,
@@ -85,9 +89,16 @@ defmodule Maraithon.Tools.PersonHelpers do
       resource_type: link.resource_type,
       resource_id: link.resource_id,
       resource_source: link.resource_source,
+      role: link.role,
+      source_system: link.source_system,
+      source_account: link.source_account,
+      source_ref: link.source_ref,
       title: link.title,
       summary: link.summary,
       relationship_note: link.relationship_note,
+      evidence_quote: link.evidence_quote,
+      model_rationale: link.model_rationale,
+      confidence: link.confidence,
       metadata: link.metadata || %{},
       inserted_at: link.inserted_at,
       updated_at: link.updated_at
@@ -111,6 +122,22 @@ defmodule Maraithon.Tools.PersonHelpers do
   end
 
   defp serialize_todo(%Todo{} = todo), do: TodoHelpers.serialize_todo(todo)
+
+  def serialize_merge_result(%{
+        surviving_person: %Person{} = surviving,
+        merged_person: %Person{} = merged,
+        audit: audit,
+        repointed_link_count: repointed,
+        collapsed_link_count: collapsed
+      }) do
+    %{
+      surviving_person: serialize_person(surviving),
+      merged_person: serialize_person(merged),
+      merge_audit_id: audit.id,
+      repointed_link_count: repointed,
+      collapsed_link_count: collapsed
+    }
+  end
 
   defp preferred_method(args) do
     optional_string(args, "preferred_communication_method") ||

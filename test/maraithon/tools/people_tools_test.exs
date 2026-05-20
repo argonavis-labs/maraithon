@@ -127,4 +127,50 @@ defmodule Maraithon.Tools.PeopleToolsTest do
     assert person.affinity_score == 58
     assert person.interaction_count == 3
   end
+
+  test "merge_people tool collapses duplicate CRM people" do
+    user_id = "people-merge-tool-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, first} =
+      Tools.execute("upsert_person", %{
+        "user_id" => user_id,
+        "person" => %{
+          "display_name" => "Charlie Smith",
+          "email" => "charlie@example.com"
+        }
+      })
+
+    {:ok, second} =
+      Tools.execute("upsert_person", %{
+        "user_id" => user_id,
+        "person" => %{
+          "display_name" => "Charles Smith",
+          "slack_id" => "UCHARLIE"
+        }
+      })
+
+    assert {:ok, result} =
+             Tools.execute("merge_people", %{
+               "user_id" => user_id,
+               "surviving_person_id" => first.person.id,
+               "merged_person_id" => second.person.id,
+               "evidence" => "Same person across email and Slack.",
+               "model_rationale" => "Same collaborator."
+             })
+
+    assert result.source == "maraithon_crm"
+    assert result.merge.surviving_person.id == first.person.id
+    assert result.merge.merged_person.status == "merged"
+
+    assert {:ok, listed} =
+             Tools.execute("list_people", %{
+               "user_id" => user_id,
+               "query" => "Charlie"
+             })
+
+    assert listed.count == 1
+    assert [person] = listed.people
+    assert person.id == first.person.id
+  end
 end

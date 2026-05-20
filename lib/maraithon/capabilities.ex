@@ -36,6 +36,7 @@ defmodule Maraithon.Capabilities do
     "upsert_person" => Maraithon.Tools.UpsertPerson,
     "delete_person" => Maraithon.Tools.DeletePerson,
     "link_person_data" => Maraithon.Tools.LinkPersonData,
+    "merge_people" => Maraithon.Tools.MergePeople,
     "get_relationship_context" => Maraithon.Tools.GetRelationshipContext,
     "learn_relationship_context" => Maraithon.Tools.LearnRelationshipContext,
     "list_memories" => Maraithon.Tools.ListMemories,
@@ -134,6 +135,7 @@ defmodule Maraithon.Capabilities do
     "delete_person" => "Delete one CRM person and its CRM links.",
     "link_person_data" =>
       "Attach or detach a CRM person from a todo or another user-owned data object.",
+    "merge_people" => "Merge two CRM people into one surviving record with an audit trail.",
     "get_relationship_context" =>
       "Fetch CRM relationship context for a person, including linked todos.",
     "learn_relationship_context" =>
@@ -270,7 +272,7 @@ defmodule Maraithon.Capabilities do
   ))
 
   @write_tools MapSet.new(~w(
-    upsert_todos upsert_person link_person_data learn_relationship_context
+    upsert_todos upsert_person link_person_data merge_people learn_relationship_context
     write_memory record_memory_feedback update_memory_confidence
   ))
 

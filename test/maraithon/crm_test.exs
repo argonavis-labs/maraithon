@@ -3,6 +3,8 @@ defmodule Maraithon.CrmTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Crm
+  alias Maraithon.Crm.{PersonMerge, Serializer}
+  alias Maraithon.Repo
   alias Maraithon.Todos
 
   test "upserts people by contact details and normalizes relationship fields" do
@@ -107,11 +109,21 @@ defmodule Maraithon.CrmTest do
                "resource_type" => "todo",
                "resource_id" => todo.id,
                "resource_source" => "gmail",
+               "role" => "owed_to",
+               "source_account" => "justin@example.com",
+               "source_ref" => "gmail-message-1",
+               "evidence_quote" => "Justin is waiting for a financing update.",
+               "model_rationale" => "The todo is owed to Justin.",
+               "confidence" => 0.91,
                "title" => todo.title,
                "relationship_note" => "This is follow-up work owed to Justin."
              })
 
     assert link.person_id == person.id
+    assert link.source_system == "gmail"
+    assert link.role == "owed_to"
+    assert link.source_ref == "gmail-message-1"
+    assert link.evidence_quote =~ "financing update"
 
     assert {:ok, context} = Crm.relationship_context(user_id, %{"query" => "Justin"})
     assert context.person.id == person.id
@@ -123,6 +135,176 @@ defmodule Maraithon.CrmTest do
     assert batched_context.person.id == person.id
     assert batched_context.open_todo_count == 1
     assert [%{id: ^todo_id}] = batched_context.todos
+  end
+
+  test "merge_people audits, hides the merged row, repoints links, and collapses duplicates" do
+    user_id = "crm-merge-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, survivor} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Charlie Smith",
+        "email" => "charlie@example.com",
+        "relationship_strength" => 50,
+        "affinity_score" => 20
+      })
+
+    {:ok, duplicate} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Charles Smith",
+        "slack_id" => "UCHARLIE",
+        "relationship" => "Runner teammate",
+        "interaction_count_delta" => 3,
+        "relationship_strength" => 40,
+        "affinity_score" => 60
+      })
+
+    {:ok, [shared_todo, unique_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Reply to Charlie",
+          "summary" => "Shared follow-up.",
+          "next_action" => "Reply.",
+          "dedupe_key" => "crm-merge:shared"
+        },
+        %{
+          "source" => "slack",
+          "title" => "Send Charlie deck",
+          "summary" => "Unique follow-up.",
+          "next_action" => "Send deck.",
+          "dedupe_key" => "crm-merge:unique"
+        }
+      ])
+
+    {:ok, _survivor_link} =
+      Crm.attach_resource(user_id, survivor.id, %{
+        "todo_id" => shared_todo.id,
+        "resource_source" => "gmail",
+        "relationship_note" => "Existing survivor note"
+      })
+
+    {:ok, _duplicate_shared_link} =
+      Crm.attach_resource(user_id, duplicate.id, %{
+        "todo_id" => shared_todo.id,
+        "resource_source" => "slack",
+        "relationship_note" => "Duplicate evidence note",
+        "evidence_quote" => "Charlie asked for a reply.",
+        "confidence" => 0.8
+      })
+
+    {:ok, _duplicate_unique_link} =
+      Crm.attach_resource(user_id, duplicate.id, %{
+        "todo_id" => unique_todo.id,
+        "resource_source" => "slack",
+        "role" => "participant"
+      })
+
+    assert {:ok, result} =
+             Crm.merge_people(user_id, survivor.id, duplicate.id, %{
+               "evidence" => "Same person across Gmail and Slack.",
+               "model_rationale" => "Names and context match.",
+               "performed_by" => "test"
+             })
+
+    assert result.repointed_link_count == 1
+    assert result.collapsed_link_count == 1
+    assert result.audit.evidence =~ "Same person"
+
+    reloaded_survivor = Crm.get_person_for_user(user_id, survivor.id)
+    assert reloaded_survivor.status == "active"
+    assert reloaded_survivor.contact_details["emails"] == ["charlie@example.com"]
+    assert reloaded_survivor.contact_details["slack_ids"] == ["UCHARLIE"]
+    assert reloaded_survivor.interaction_count == 3
+    assert reloaded_survivor.relationship_strength == 50
+    assert reloaded_survivor.affinity_score == 60
+
+    reloaded_duplicate = Crm.get_person_for_user(user_id, duplicate.id)
+    assert reloaded_duplicate.status == "merged"
+    assert reloaded_duplicate.merged_into_id == survivor.id
+    assert reloaded_duplicate.merged_at
+
+    assert [listed] = Crm.list_people(user_id, query: "Charlie", limit: 5)
+    assert listed.id == survivor.id
+    assert [merged] = Crm.list_people(user_id, status: "merged")
+    assert merged.id == duplicate.id
+
+    links = Crm.list_links_for_person(user_id, survivor.id, limit: 10)
+    assert length(links) == 2
+    assert Enum.any?(links, &(&1.resource_id == unique_todo.id and &1.role == "participant"))
+
+    shared_link = Enum.find(links, &(&1.resource_id == shared_todo.id))
+    assert shared_link.relationship_note =~ "Existing survivor note"
+    assert shared_link.relationship_note =~ "Duplicate evidence note"
+    assert shared_link.evidence_quote =~ "asked for a reply"
+    assert shared_link.confidence == 0.8
+
+    assert %PersonMerge{} =
+             Repo.get_by(PersonMerge,
+               user_id: user_id,
+               surviving_person_id: survivor.id,
+               merged_person_id: duplicate.id
+             )
+
+    assert {:error, :person_already_merged} =
+             Crm.merge_people(user_id, survivor.id, duplicate.id, %{})
+  end
+
+  test "merge_people rejects self merges and cross-user ownership" do
+    user_id = "crm-merge-invalid-#{System.unique_integer([:positive])}@example.com"
+    other_user_id = "crm-merge-other-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    {:ok, _other_user} = Accounts.get_or_create_user_by_email(other_user_id)
+
+    {:ok, person} = Crm.upsert_person(user_id, %{"display_name" => "A"})
+    {:ok, other_person} = Crm.upsert_person(other_user_id, %{"display_name" => "B"})
+
+    assert {:error, :cannot_merge_person_into_self} =
+             Crm.merge_people(user_id, person.id, person.id, %{})
+
+    assert {:error, :person_not_found} =
+             Crm.merge_people(user_id, person.id, other_person.id, %{})
+  end
+
+  test "telegram card serializer renders compact relationship context" do
+    user_id = "crm-card-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Dana Lee",
+        "relationship" => "Customer sponsor",
+        "preferred_communication_method" => "slack",
+        "last_interaction_at" => "2026-05-19T12:00:00Z"
+      })
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "slack",
+          "title" => "Send Dana notes",
+          "summary" => "Dana asked for notes.",
+          "next_action" => "Send notes.",
+          "dedupe_key" => "crm-card:dana"
+        }
+      ])
+
+    {:ok, _link} =
+      Crm.attach_resource(user_id, person.id, %{
+        "todo_id" => todo.id,
+        "resource_source" => "slack"
+      })
+
+    assert {:ok, context} = Crm.relationship_context(user_id, %{"person_id" => person.id})
+    card = Serializer.telegram_card(context)
+
+    assert card =~ "*Dana Lee*"
+    assert card =~ "Relationship: Customer sponsor"
+    assert card =~ "Preferred: slack"
+    assert card =~ "Open loops: 1"
+    assert card =~ "Sources: slack (1)"
+    refute card =~ "|"
+    assert String.length(card) < 600
   end
 
   describe "resolve_contact/3" do

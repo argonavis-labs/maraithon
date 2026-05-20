@@ -184,6 +184,19 @@ defmodule Maraithon.Tools.InputSchemas do
           ["person_id"]
         )
 
+      "merge_people" ->
+        user_object(
+          %{
+            "surviving_person_id" => @string,
+            "merged_person_id" => @string,
+            "evidence" => @string,
+            "model_rationale" => @string,
+            "performed_by" => @string,
+            "metadata" => @object
+          },
+          ["surviving_person_id", "merged_person_id"]
+        )
+
       "get_relationship_context" ->
         user_object(person_lookup_fields(%{"link_limit" => @integer, "resource_type" => @string}))
 
@@ -671,7 +684,8 @@ defmodule Maraithon.Tools.InputSchemas do
       "preferred_communication_method" => @string,
       "communication_frequency" => @string,
       "contact_kind" => @string,
-      "contact_value" => @string
+      "contact_value" => @string,
+      "status" => @string
     }
   end
 
@@ -715,6 +729,13 @@ defmodule Maraithon.Tools.InputSchemas do
       "title" => @string,
       "summary" => @string,
       "relationship_note" => @string,
+      "role" => @string,
+      "source_system" => @string,
+      "source_account" => @string,
+      "source_ref" => @string,
+      "evidence_quote" => @string,
+      "model_rationale" => @string,
+      "confidence" => %{"type" => "number"},
       "metadata" => @object
     }
   end

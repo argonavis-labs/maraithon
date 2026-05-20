@@ -26,10 +26,13 @@ defmodule Maraithon.Crm.Person do
     field :relationship_strength, :integer, default: 0
     field :affinity_score, :integer, default: 0
     field :last_interaction_at, :utc_datetime_usec
+    field :status, :string, default: "active"
+    field :merged_at, :utc_datetime_usec
     field :notes, :string
     field :metadata, :map, default: %{}
 
     belongs_to :user, User, type: :string
+    belongs_to :merged_into, __MODULE__, type: :binary_id
     has_many :links, PersonLink, foreign_key: :person_id
 
     timestamps(type: :utc_datetime_usec)
@@ -47,6 +50,9 @@ defmodule Maraithon.Crm.Person do
     :relationship_strength,
     :affinity_score,
     :last_interaction_at,
+    :status,
+    :merged_into_id,
+    :merged_at,
     :notes,
     :metadata
   ]
@@ -69,10 +75,12 @@ defmodule Maraithon.Crm.Person do
       less_than_or_equal_to: 100
     )
     |> validate_number(:affinity_score, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
+    |> validate_inclusion(:status, ~w(active merged archived))
     |> validate_length(:notes, max: 8_000)
     |> validate_map(:contact_details)
     |> validate_map(:metadata)
     |> foreign_key_constraint(:user_id)
+    |> foreign_key_constraint(:merged_into_id)
   end
 
   defp normalize_attrs(attrs) when is_map(attrs) do
