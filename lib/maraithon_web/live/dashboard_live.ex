@@ -3,8 +3,10 @@ defmodule MaraithonWeb.DashboardLive do
 
   alias Maraithon.AgentBuilder
   alias Maraithon.Admin
+  alias Maraithon.AgentMarketplace
   alias Maraithon.Agents
   alias Maraithon.Behaviors
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Connections
   alias Maraithon.Insights.Detail
   alias Maraithon.Insights
@@ -67,6 +69,10 @@ defmodule MaraithonWeb.DashboardLive do
         connections: [],
         raw_connections: [],
         connection_errors: [],
+        chief_of_staff_package: nil,
+        chief_of_staff_readiness: [],
+        chief_of_staff_agent: nil,
+        chief_of_staff_schedule: BriefingSchedules.summarize_for_prompt(nil),
         dashboard_errors: [],
         inspection_errors: [],
         global_memory_summaries: [],
@@ -313,6 +319,49 @@ defmodule MaraithonWeb.DashboardLive do
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, "Failed to save project memory: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("install_chief_of_staff", params, socket) do
+    user_id = current_user_id(socket)
+    project_id = Map.get(params, "project_id") || first_project_id(socket.assigns.projects)
+
+    cond do
+      is_nil(project_id) ->
+        {:noreply, put_flash(socket, :error, "Create a project before installing Chief of Staff")}
+
+      true ->
+        case Runtime.install_chief_of_staff(user_id,
+               project_id: project_id,
+               delivery_policy: %{"telegram" => "enabled"}
+             ) do
+          {:ok, %{install_status: "setup_required"} = agent} ->
+            {:noreply,
+             socket
+             |> refresh_dashboard()
+             |> put_flash(
+               :info,
+               "Chief of Staff installed. Connect the missing services to enable briefs."
+             )
+             |> push_navigate(to: "/agents?id=#{agent.id}&panel=apps")}
+
+          {:ok, agent} ->
+            {:noreply,
+             socket
+             |> refresh_dashboard()
+             |> put_flash(:info, "Chief of Staff installed")
+             |> push_navigate(to: "/agents?id=#{agent.id}&panel=inspect")}
+
+          {:error, :project_not_found} ->
+            {:noreply, put_flash(socket, :error, "Choose a valid project before installing")}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply,
+             put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+        end
     end
   end
 
@@ -838,6 +887,92 @@ defmodule MaraithonWeb.DashboardLive do
             cta="View projects"
           />
         </dl>
+      </section>
+
+      <section id="chief-of-staff-install">
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Install agent</h2>
+          <span class="text-xs/5 text-zinc-500">
+            <%= chief_of_staff_install_state(@chief_of_staff_agent, @chief_of_staff_readiness, @projects) %>
+          </span>
+        </div>
+
+        <div class="mt-4 divide-y divide-zinc-950/5 rounded-lg border border-zinc-950/10 bg-white">
+          <div class="grid grid-cols-1 gap-4 px-4 py-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <h3 class="text-sm/6 font-semibold text-zinc-950">Chief of Staff</h3>
+                <.badge color={chief_of_staff_badge_color(@chief_of_staff_agent)}>
+                  <%= chief_of_staff_badge_label(@chief_of_staff_agent) %>
+                </.badge>
+              </div>
+              <p class="mt-1 max-w-3xl text-sm/6 text-zinc-600">
+                <%= chief_of_staff_summary(@chief_of_staff_package) %>
+              </p>
+
+              <div class="mt-3 flex flex-wrap gap-2">
+                <span
+                  :for={item <- @chief_of_staff_readiness}
+                  class={connector_chip_class(item)}
+                >
+                  <%= item.label %>
+                </span>
+              </div>
+
+              <div :if={chief_of_staff_missing_readiness(@chief_of_staff_readiness) != []} class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs/5">
+                <%= for item <- chief_of_staff_missing_readiness(@chief_of_staff_readiness) do %>
+                  <a
+                    href={item.connect_path}
+                    class="font-medium text-zinc-950 hover:text-zinc-700"
+                  >
+                    Connect <%= item.label %> →
+                  </a>
+                <% end %>
+              </div>
+
+              <p :if={@chief_of_staff_agent} class="mt-3 text-sm/6 text-zinc-500">
+                Morning brief: <%= chief_of_staff_schedule_label(@chief_of_staff_schedule) %>
+                <.link
+                  navigate={"/agents?id=#{@chief_of_staff_agent.id}&panel=skills"}
+                  class="ml-2 font-medium text-zinc-950 hover:text-zinc-700"
+                >
+                  Edit
+                </.link>
+              </p>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
+              <%= cond do %>
+                <% @chief_of_staff_agent -> %>
+                  <.button navigate={"/agents?id=#{@chief_of_staff_agent.id}&panel=inspect"} variant="outline">
+                    Open
+                  </.button>
+                <% @projects == [] -> %>
+                  <.button type="button" disabled>
+                    Create project first
+                  </.button>
+                <% chief_of_staff_missing_readiness(@chief_of_staff_readiness) != [] -> %>
+                  <.button
+                    type="button"
+                    phx-click="install_chief_of_staff"
+                    phx-value-project_id={first_project_id(@projects)}
+                    variant="outline"
+                  >
+                    Setup required
+                  </.button>
+                <% true -> %>
+                  <.button
+                    type="button"
+                    phx-click="install_chief_of_staff"
+                    phx-value-project_id={first_project_id(@projects)}
+                    phx-disable-with="Installing..."
+                  >
+                    Install Chief of Staff
+                  </.button>
+              <% end %>
+            </div>
+          </div>
+        </div>
       </section>
 
       <details class="group rounded-lg border border-zinc-950/10 bg-white">
@@ -1946,6 +2081,7 @@ defmodule MaraithonWeb.DashboardLive do
     socket = refresh_projects(socket)
     socket = refresh_global_memory(socket)
     socket = refresh_todos(socket)
+    socket = refresh_chief_of_staff_install(socket)
 
     user_id = current_user_id(socket)
 
@@ -2265,6 +2401,34 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp refresh_chief_of_staff_install(socket) do
+    user_id = current_user_id(socket)
+    package = chief_of_staff_package()
+    required_connectors = AgentMarketplace.required_connectors_for("ai_chief_of_staff")
+
+    readiness =
+      Connections.connector_readiness(user_id, required_connectors, return_to: "/dashboard")
+
+    assign(socket,
+      chief_of_staff_package: package,
+      chief_of_staff_readiness: readiness,
+      chief_of_staff_agent:
+        Agents.get_package_installation(user_id, "ai_chief_of_staff", preload: [:project]),
+      chief_of_staff_schedule: BriefingSchedules.summarize_for_prompt(user_id)
+    )
+  end
+
+  defp chief_of_staff_package do
+    case Agents.get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version]) do
+      nil ->
+        _ = AgentMarketplace.sync_builtin_packages()
+        Agents.get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version])
+
+      package ->
+        package
+    end
+  end
+
   defp refresh_projects(socket) do
     user_id = current_user_id(socket)
 
@@ -2468,6 +2632,69 @@ defmodule MaraithonWeb.DashboardLive do
   defp legacy_agents_path(_params), do: nil
 
   defp current_user_id(socket), do: socket.assigns.current_user.id
+
+  defp first_project_id([%{project: %{id: id}} | _]) when is_binary(id), do: id
+  defp first_project_id(_projects), do: nil
+
+  defp chief_of_staff_summary(%{summary: summary}) when is_binary(summary) and summary != "",
+    do: summary
+
+  defp chief_of_staff_summary(_package) do
+    "Daily briefing, follow-through, commitment tracking, and Telegram delivery for one project."
+  end
+
+  defp chief_of_staff_install_state(%{install_status: install_status}, _readiness, _projects),
+    do: install_status_label(install_status)
+
+  defp chief_of_staff_install_state(_agent, _readiness, []), do: "project required"
+
+  defp chief_of_staff_install_state(_agent, readiness, _projects) do
+    if chief_of_staff_missing_readiness(readiness) == [] do
+      "ready"
+    else
+      "setup required"
+    end
+  end
+
+  defp chief_of_staff_badge_label(nil), do: "Not installed"
+  defp chief_of_staff_badge_label(%{install_status: status}), do: install_status_label(status)
+
+  defp chief_of_staff_badge_color(nil), do: "zinc"
+  defp chief_of_staff_badge_color(%{install_status: "enabled"}), do: "emerald"
+  defp chief_of_staff_badge_color(%{install_status: "setup_required"}), do: "amber"
+  defp chief_of_staff_badge_color(_agent), do: "zinc"
+
+  defp chief_of_staff_missing_readiness(readiness) when is_list(readiness) do
+    Enum.reject(readiness, & &1.connected?)
+  end
+
+  defp chief_of_staff_missing_readiness(_readiness), do: []
+
+  defp connector_chip_class(%{connected?: true}) do
+    "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
+  end
+
+  defp connector_chip_class(_item) do
+    "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-700"
+  end
+
+  defp chief_of_staff_schedule_label(%{
+         morning: %{display_time_local: time},
+         local_timezone: timezone
+       })
+       when is_binary(time) and is_binary(timezone) do
+    "#{time} #{timezone}"
+  end
+
+  defp chief_of_staff_schedule_label(_schedule), do: "8:00 AM UTC-05:00"
+
+  defp install_status_label("enabled"), do: "enabled"
+  defp install_status_label("setup_required"), do: "setup required"
+  defp install_status_label("paused"), do: "paused"
+  defp install_status_label("error"), do: "error"
+  defp install_status_label("removed"), do: "removed"
+  defp install_status_label(status) when is_binary(status), do: status
+  defp install_status_label(_status), do: "unknown"
 
   defp show_onboarding_preview?(eligible?, agents), do: eligible? and agents == []
 

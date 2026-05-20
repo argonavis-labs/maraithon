@@ -198,7 +198,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       MorningBriefing.init(%{
         "user_id" => user_id,
         "timezone_offset_hours" => -4,
-        "morning_brief_hour_local" => 8
+        "morning_brief_hour_local" => 8,
+        "commercial_counterparty_domain_markers" => ["cogniate"],
+        "commercial_teammate_domains" => ["runner.now"],
+        "slack_key_channels" => ["runner-general"]
       })
 
     context = %{
@@ -252,7 +255,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute prompt =~ "Vanta enterprise security discount"
     assert prompt =~ "runner-general"
     assert prompt =~ "OpenAI ships briefing-relevant updates"
-    assert prompt =~ "Include news only when it affects Runner"
+    assert prompt =~ "Include news only when it affects the operator's company"
     assert prompt =~ "relationships"
     assert prompt =~ "Charlie Jones"
     assert prompt =~ "Runner teammate"

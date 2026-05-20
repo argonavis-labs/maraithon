@@ -64,8 +64,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     "team plan",
     "ultra plan"
   ]
-  @commercial_counterparty_domain_markers ~w(cogniate glossier represent sandwich.co)
-  @commercial_teammate_domains ~w(runner.now)
+  @commercial_counterparty_domain_markers []
+  @commercial_teammate_domains []
   @local_imessage_chat_limit 100
   @local_notes_limit 100
   @local_voice_memo_limit 100
@@ -114,19 +114,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "llm_max_tokens" => @default_llm_max_tokens,
       "llm_reasoning_effort" => @default_llm_reasoning_effort,
       "llm_timeout_ms" => @default_llm_timeout_ms,
-      "slack_key_channels" => [
-        "runner-general",
-        "runner-leads",
-        "runner-gtm",
-        "runner-user-feedback",
-        "gtm-leads",
-        "general",
-        "eng-general",
-        "exec-agora-gov-mgmt-w-dash",
-        "jeff",
-        "charlie",
-        "yitong"
-      ]
+      "slack_key_channels" => [],
+      "commercial_counterparty_domain_markers" => [],
+      "commercial_teammate_domains" => [],
+      "commercial_gmail_queries" => []
     }
   end
 
@@ -212,6 +203,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         normalize_reasoning_effort(config["llm_reasoning_effort"], @default_llm_reasoning_effort),
       llm_timeout_ms:
         integer_in_range(config["llm_timeout_ms"], @default_llm_timeout_ms, 30_000, 1_200_000),
+      commercial_thread_terms:
+        configured_string_list(config, "commercial_thread_terms", @commercial_thread_terms),
+      commercial_counterparty_domain_markers:
+        configured_string_list(
+          config,
+          "commercial_counterparty_domain_markers",
+          @commercial_counterparty_domain_markers
+        ),
+      commercial_teammate_domains:
+        configured_string_list(
+          config,
+          "commercial_teammate_domains",
+          @commercial_teammate_domains
+        ),
       pending_brief_input: nil,
       pending_dedupe_key: nil,
       last_generated_keys: %{}
@@ -487,7 +492,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     commercial_thread_messages =
       gmail_messages
       |> Enum.filter(&recent_gmail_message?(&1, commercial_lookback_start))
-      |> Enum.filter(&commercial_thread_candidate?/1)
+      |> Enum.filter(&commercial_thread_candidate?(&1, state))
       |> Enum.uniq_by(&commercial_thread_key/1)
       |> Enum.sort_by(&commercial_thread_sort_key/1, :desc)
 
@@ -1046,13 +1051,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        When meeting_prep.web_context includes page_contexts, treat those source pages as the
        meeting dossier. For each required external meeting, synthesize the executive read:
        who the person is, what the company or practice does, why the meeting likely matters
-       to Runner or Agora, what fit or risk Kent should test, and the concrete pre/post-call
+       to the operator's work, what fit or risk they should test, and the concrete pre/post-call
        next step. Do not collapse a source-backed external meeting into a generic "creative
        vendor" or "intro chat" label when the page context supports a richer prep note.
        When a source page gives concrete facts such as services, pricing, operating model,
        work history, background, customer profile, or partnership angle, include the most
        decision-useful specifics in the meeting note. If an internal teammate owns or hosts
-       the meeting, state what Kent should ask that teammate before or after the call.
+       the meeting, state what the operator should ask that teammate before or after the call.
        A busy executive should be able to read the schedule item and know the dossier,
        fit hypothesis, and next move without asking for a second briefing.
 
@@ -1063,11 +1068,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        availability, or launch-video threads.
        Treat gmail.commercial_threads as a coverage list: include every live non-duplicative
        external commercial thread from that list that a busy executive would want to know about,
-       especially Charlie-led prospect/customer threads such as Enterprise/Team plan, discount,
-       intro, or availability discussions. If Charlie or another close teammate has looped Kent
+       especially teammate-led prospect/customer threads such as Enterprise/Team plan, discount,
+       intro, or availability discussions. If a close teammate has looped the operator
        into an external commercial thread, include a concise readiness note even when no immediate
        decision is forced. Say who or which organization is involved, the live ask, and what
-       guidance Kent should have ready.
+       guidance the operator should have ready.
 
        Commercial coverage contract:
        commercial_coverage.required_threads is a hard coverage contract, not a ranking hint.
@@ -1076,12 +1081,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        judgment for the executive read, but do not drop a teammate-led customer, prospect, intro,
        Enterprise/Team plan, pricing, discount, or availability thread just because there are
        other risk items. Before returning JSON, verify that each required commercial thread appears
-       by organization or counterparty name with the live ask and the guidance Kent should have ready.
+       by organization or counterparty name with the live ask and the guidance the operator should have ready.
 
        Schedule coverage contract:
        Required external meetings are a hard coverage contract, not a ranking hint. If
        schedule_coverage.required_meetings is non-empty, Today's Schedule must include
-       every item in that list. Use model judgment for what the meeting means and how Kent
+       every item in that list. Use model judgment for what the meeting means and how the operator
        should prepare; do not write a heuristic digest. Do not say the calendar is open
        when calendar.today_events or schedule_coverage.required_meetings is non-empty.
        Use display_start and display_end exactly when present for schedule times; do not
@@ -1089,7 +1094,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        rather than guessing a local time.
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
-       the prep point, decision, or risk Kent should carry into it.
+       the prep point, decision, or risk the operator should carry into it.
        Keep the JSON executive-grade and complete. Do not enforce an artificial short brief:
        if there are ten material items, include ten material items. Avoid filler and source
        inventory, but include every meeting, risk, decision, commercial thread, and follow-up
@@ -1684,7 +1689,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp recent_gmail_message?(_message, _lookback_start), do: false
 
-  defp commercial_thread_candidate?(message) when is_map(message) do
+  defp commercial_thread_candidate?(message, state) when is_map(message) do
     from = read_string(message, "from", "") |> String.downcase()
     recipients = commercial_thread_recipients(message)
 
@@ -1699,24 +1704,42 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Enum.join("\n")
       |> String.downcase()
 
-    commercial_thread_counterparty?(from, recipients) and
-      Enum.any?(@commercial_thread_terms, &String.contains?(text, &1))
+    terms = Map.get(state, :commercial_thread_terms, @commercial_thread_terms)
+
+    commercial_thread_counterparty?(from, recipients, state) and
+      Enum.any?(terms, &String.contains?(text, &1))
   end
 
-  defp commercial_thread_candidate?(_message), do: false
+  defp commercial_thread_candidate?(_message, _state), do: false
 
-  defp commercial_thread_counterparty?(from, recipients)
+  defp commercial_thread_counterparty?(from, recipients, state)
        when is_binary(from) and is_binary(recipients) do
     from_domains = email_domains(from)
     recipient_domains = email_domains(recipients)
-    from_teammate? = Enum.any?(from_domains, &commercial_teammate_domain?/1)
-    from_counterparty? = Enum.any?(from_domains, &commercial_counterparty_domain?/1)
-    external_recipient? = Enum.any?(recipient_domains, &(not commercial_teammate_domain?(&1)))
+    teammate_domains = Map.get(state, :commercial_teammate_domains, @commercial_teammate_domains)
+
+    counterparty_domain_markers =
+      Map.get(
+        state,
+        :commercial_counterparty_domain_markers,
+        @commercial_counterparty_domain_markers
+      )
+
+    from_teammate? = Enum.any?(from_domains, &commercial_teammate_domain?(&1, teammate_domains))
+
+    from_counterparty? =
+      Enum.any?(
+        from_domains,
+        &commercial_counterparty_domain?(&1, counterparty_domain_markers)
+      )
+
+    external_recipient? =
+      Enum.any?(recipient_domains, &(not commercial_teammate_domain?(&1, teammate_domains)))
 
     from_counterparty? or (from_teammate? and external_recipient?)
   end
 
-  defp commercial_thread_counterparty?(_from, _recipients), do: false
+  defp commercial_thread_counterparty?(_from, _recipients, _state), do: false
 
   defp email_domains(text) when is_binary(text) do
     ~r/@([a-z0-9][a-z0-9.-]*\.[a-z]{2,})/i
@@ -1727,19 +1750,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp email_domains(_text), do: []
 
-  defp commercial_teammate_domain?(domain) when is_binary(domain) do
-    Enum.any?(@commercial_teammate_domains, fn teammate_domain ->
+  defp commercial_teammate_domain?(domain, teammate_domains) when is_binary(domain) do
+    Enum.any?(teammate_domains, fn teammate_domain ->
       domain == teammate_domain or String.ends_with?(domain, "." <> teammate_domain)
     end)
   end
 
-  defp commercial_teammate_domain?(_domain), do: false
+  defp commercial_teammate_domain?(_domain, _teammate_domains), do: false
 
-  defp commercial_counterparty_domain?(domain) when is_binary(domain) do
-    Enum.any?(@commercial_counterparty_domain_markers, &String.contains?(domain, &1))
+  defp commercial_counterparty_domain?(domain, markers) when is_binary(domain) do
+    Enum.any?(markers, &String.contains?(domain, &1))
   end
 
-  defp commercial_counterparty_domain?(_domain), do: false
+  defp commercial_counterparty_domain?(_domain, _markers), do: false
 
   defp commercial_thread_recipients(message) when is_map(message) do
     [
@@ -2597,6 +2620,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp configured_string_list(config, key, defaults) when is_map(config) do
+    configured =
+      [
+        Map.get(config, key),
+        get_in(config, ["org", key])
+      ]
+      |> Enum.flat_map(&List.wrap/1)
+      |> Enum.map(&normalize_string/1)
+      |> Enum.reject(&is_nil/1)
+
+    (defaults ++ configured)
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp configured_string_list(_config, _key, defaults), do: defaults
 
   defp normalize_reasoning_effort(value, default) do
     case normalize_string(value) do

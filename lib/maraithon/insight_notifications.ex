@@ -17,6 +17,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramRouter
+  alias MaraithonWeb.TelegramLink
 
   require Logger
 
@@ -390,13 +391,19 @@ defmodule Maraithon.InsightNotifications do
 
   defp link_telegram_chat(chat_id, command_text, from_user) do
     case parse_link_user_id(command_text) do
+      {:error, :invalid_token} ->
+        telegram_module().send_message(
+          chat_id,
+          "That Telegram link expired or is invalid. Generate a new Connect Telegram link and try again."
+        )
+
       nil ->
         telegram_module().send_message(
           chat_id,
           "Use /start your-email@example.com to link this Telegram chat to Maraithon."
         )
 
-      user_id ->
+      {:ok, user_id} ->
         case Accounts.get_user(user_id) do
           nil ->
             telegram_module().send_message(chat_id, "No Maraithon user found for #{user_id}.")
@@ -451,13 +458,31 @@ defmodule Maraithon.InsightNotifications do
           nil
       end
 
-    case Accounts.normalize_email(candidate || "") do
-      "" -> nil
-      normalized -> normalized
+    cond do
+      is_nil(candidate) ->
+        nil
+
+      telegram_link_token?(candidate) ->
+        case TelegramLink.verify_token(candidate) do
+          {:ok, user_id} when is_binary(user_id) -> {:ok, user_id}
+          _error -> {:error, :invalid_token}
+        end
+
+      true ->
+        case Accounts.normalize_email(candidate) do
+          "" -> nil
+          normalized -> {:ok, normalized}
+        end
     end
   end
 
   defp parse_link_user_id(_), do: nil
+
+  defp telegram_link_token?(candidate) when is_binary(candidate) do
+    String.contains?(candidate, ".") and not String.contains?(candidate, "@")
+  end
+
+  defp telegram_link_token?(_candidate), do: false
 
   defp command_matches?(command, base) when is_binary(command) and is_binary(base) do
     normalized =

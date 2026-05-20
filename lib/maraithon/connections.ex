@@ -8,6 +8,7 @@ defmodule Maraithon.Connections do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
   alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack, Token}
+  alias MaraithonWeb.TelegramLink
 
   @google_services [
     %{
@@ -117,6 +118,25 @@ defmodule Maraithon.Connections do
       errors: []
     }
   end
+
+  @doc """
+  Projects package connector requirements into user-facing readiness rows.
+  """
+  def connector_readiness(user_id, required_connectors, opts \\ [])
+
+  def connector_readiness(user_id, required_connectors, opts)
+      when is_binary(user_id) and is_map(required_connectors) do
+    return_to = Keyword.get(opts, :return_to, "/connectors")
+    snapshot = dashboard_snapshot(user_id, return_to: return_to)
+    provider_by_id = Map.new(snapshot.providers, &{&1.provider, &1})
+
+    required_connectors
+    |> normalize_required_connectors()
+    |> Enum.map(&readiness_item(&1, provider_by_id))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  def connector_readiness(_user_id, _required_connectors, _opts), do: []
 
   @doc """
   Disconnects a provider grant for the given control-center user.
@@ -477,7 +497,8 @@ defmodule Maraithon.Connections do
       configured?: configured?,
       updated_at: account && account.updated_at,
       disconnectable?: account && account.status == "connected",
-      connect_url: auth_url("/connectors/telegram", user_id, return_to),
+      connect_url:
+        TelegramLink.deep_link(user_id) || auth_url("/connectors/telegram", user_id, return_to),
       disconnect_label: "Disconnect Telegram",
       refresh_token_status: :not_applicable,
       details:
@@ -489,11 +510,160 @@ defmodule Maraithon.Connections do
           ]
           |> Enum.reject(&is_nil/1)
         else
-          ["Not linked yet. Send /start #{user_id} to your bot chat."]
+          telegram_unlinked_details(user_id)
         end,
       services: []
     }
     |> enrich_provider_setup()
+  end
+
+  defp readiness_item(
+         %{"provider" => provider, "service" => service, "label" => label},
+         providers
+       )
+       when is_binary(provider) do
+    provider_card = Map.get(providers, provider)
+    service_card = find_provider_service(provider_card, service)
+    status = readiness_status(provider_card, service_card, service)
+    connected? = status in [:connected, :partial]
+
+    %{
+      provider: provider,
+      service: service,
+      label: readiness_display_label(provider, service, label, service_card),
+      status: status,
+      connected?: connected?,
+      connect_path: readiness_connect_path(provider_card, service_card),
+      details: readiness_details(provider_card, service_card, service)
+    }
+  end
+
+  defp readiness_item(_requirement, _providers), do: nil
+
+  defp readiness_status(nil, _service_card, _service), do: :disconnected
+  defp readiness_status(provider_card, nil, nil), do: provider_card.status
+  defp readiness_status(_provider_card, nil, _service), do: :disconnected
+  defp readiness_status(_provider_card, service_card, _service), do: service_card.status
+
+  defp readiness_connect_path(_provider_card, %{connect_url: connect_url})
+       when is_binary(connect_url),
+       do: connect_url
+
+  defp readiness_connect_path(%{connect_url: connect_url}, _service_card)
+       when is_binary(connect_url),
+       do: connect_url
+
+  defp readiness_connect_path(%{provider: provider}, _service_card) when is_binary(provider),
+    do: "/connectors/#{provider}"
+
+  defp readiness_connect_path(_provider_card, _service_card), do: "/connectors"
+
+  defp readiness_details(_provider_card, _service_card, nil), do: nil
+
+  defp readiness_details(_provider_card, nil, _service), do: "Connect this Google service."
+
+  defp readiness_details(_provider_card, service_card, _service) do
+    service_card[:description]
+  end
+
+  defp find_provider_service(_provider_card, nil), do: nil
+  defp find_provider_service(nil, _service), do: nil
+
+  defp find_provider_service(provider_card, service) when is_binary(service) do
+    provider_card
+    |> Map.get(:services, [])
+    |> Enum.find(&(&1.id == service))
+  end
+
+  defp readiness_label("google", "gmail"), do: "Gmail"
+  defp readiness_label("google", "calendar"), do: "Google Calendar"
+  defp readiness_label("telegram", _service), do: "Telegram"
+  defp readiness_label(provider, nil), do: humanize_provider(provider)
+
+  defp readiness_label(provider, service),
+    do: "#{humanize_provider(provider)} #{humanize_provider(service)}"
+
+  defp readiness_display_label("google", "gmail", _label, _service_card), do: "Gmail"
+
+  defp readiness_display_label("google", "calendar", _label, _service_card),
+    do: "Google Calendar"
+
+  defp readiness_display_label("google", service, _label, %{label: label})
+       when is_binary(service) and is_binary(label) and label != "",
+       do: label
+
+  defp readiness_display_label("google", service, _label, _service_card),
+    do: readiness_label("google", service)
+
+  defp readiness_display_label(_provider, _service, label, _service_card)
+       when is_binary(label) and label != "",
+       do: label
+
+  defp readiness_display_label(provider, service, _label, _service_card),
+    do: readiness_label(provider, service)
+
+  defp humanize_provider(value) when is_binary(value) do
+    value
+    |> String.replace(["_", "-"], " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  defp humanize_provider(value), do: to_string(value)
+
+  defp normalize_required_connectors(required_connectors) when is_map(required_connectors) do
+    required_connectors
+    |> Enum.flat_map(fn {provider, requirements} ->
+      normalize_provider_requirements(to_string(provider), requirements)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp normalize_required_connectors(_required_connectors), do: []
+
+  defp normalize_provider_requirements(provider, requirements) when is_list(requirements) do
+    Enum.map(requirements, fn
+      %{"service" => service, "label" => label} ->
+        %{"provider" => provider, "service" => normalize_service(service), "label" => label}
+
+      %{service: service, label: label} ->
+        %{"provider" => provider, "service" => normalize_service(service), "label" => label}
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp normalize_provider_requirements(provider, requirements) when is_map(requirements) do
+    Enum.flat_map(requirements, fn
+      {"provider", true} ->
+        [%{"provider" => provider, "service" => nil, "label" => nil}]
+
+      {service, true} ->
+        [%{"provider" => provider, "service" => normalize_service(service), "label" => nil}]
+
+      {service, %{"label" => label}} ->
+        [%{"provider" => provider, "service" => normalize_service(service), "label" => label}]
+
+      _other ->
+        []
+    end)
+  end
+
+  defp normalize_provider_requirements(provider, true),
+    do: [%{"provider" => provider, "service" => nil, "label" => nil}]
+
+  defp normalize_provider_requirements(_provider, _requirements), do: []
+
+  defp normalize_service(nil), do: nil
+  defp normalize_service(""), do: nil
+  defp normalize_service(service), do: to_string(service)
+
+  defp telegram_unlinked_details(user_id) do
+    case TelegramLink.bot_username() do
+      nil -> ["Not linked yet. Send /start #{user_id} to your bot chat."]
+      username -> ["Not linked yet. Open @#{username} or send /start #{user_id} to the bot."]
+    end
   end
 
   defp notion_card(user_id, token, account, return_to) do
@@ -1694,6 +1864,13 @@ defmodule Maraithon.Connections do
           true
         ),
         env_requirement(
+          "TELEGRAM_BOT_USERNAME",
+          config_value(:telegram, :bot_username),
+          "Telegram bot username used for self-serve deep links",
+          true,
+          "maraithon_bot"
+        ),
+        env_requirement(
           "TELEGRAM_WEBHOOK_SECRET",
           config_value(:telegram, :webhook_secret_path),
           "Secret path segment used by the webhook endpoint",
@@ -1702,7 +1879,7 @@ defmodule Maraithon.Connections do
       ],
       setup_notes: [
         "Set your webhook to the callback URL shown above.",
-        "Users link their chat with: /start their-email@example.com",
+        "Users link their chat from the Connect Telegram button or with: /start their-email@example.com",
         "Only insights above each user's threshold are pushed."
       ]
     }

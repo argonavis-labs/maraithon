@@ -111,7 +111,7 @@ defmodule Maraithon.AgentBuilder do
           service: "channels",
           label: "Slack Channels",
           description: "Needed to detect channel commitments and open loops.",
-          required?: true
+          required?: false
         },
         %{
           kind: :provider_service,
@@ -119,7 +119,7 @@ defmodule Maraithon.AgentBuilder do
           service: "dms",
           label: "Slack Personal DMs",
           description: "Needed to detect private reply debt and direct follow-through loops.",
-          required?: true
+          required?: false
         },
         %{
           kind: :provider,

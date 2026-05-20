@@ -126,7 +126,7 @@ defmodule MaraithonWeb.AgentsLive do
 
     case package do
       %{slug: slug} ->
-        case Runtime.install_agent_package(user_id, slug) do
+        case install_library_package(user_id, slug) do
           {:ok, agent} ->
             {:noreply,
              socket
@@ -1812,6 +1812,14 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp ensure_marketplace_package(_behavior_id), do: nil
+
+  defp install_library_package(user_id, "ai_chief_of_staff") do
+    Runtime.install_chief_of_staff(user_id)
+  end
+
+  defp install_library_package(user_id, slug) do
+    Runtime.install_agent_package(user_id, slug)
+  end
 
   defp remove_or_delete_agent(%{agent_package_id: package_id}, id)
        when is_binary(package_id) do

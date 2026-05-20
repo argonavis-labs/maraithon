@@ -63,6 +63,16 @@ defmodule Maraithon.AgentMarketplaceTest do
   describe "ensure_default_installations/1" do
     test "installs the default Chief of Staff package for the target user" do
       user_id = "marketplace-default-#{System.unique_integer([:positive])}@example.com"
+      previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
+      System.put_env("PRIMARY_ADMIN_EMAIL", user_id)
+
+      on_exit(fn ->
+        case previous_primary_admin do
+          nil -> System.delete_env("PRIMARY_ADMIN_EMAIL")
+          value -> System.put_env("PRIMARY_ADMIN_EMAIL", value)
+        end
+      end)
+
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
       assert {:ok, [agent]} = AgentMarketplace.ensure_default_installations(user_id: user_id)
@@ -86,6 +96,27 @@ defmodule Maraithon.AgentMarketplaceTest do
                |> Enum.filter(&(&1.package.slug == "ai_chief_of_staff"))
 
       assert listed.id == agent.id
+    end
+
+    test "does not install for an explicit non-admin target" do
+      previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
+      primary_admin = "marketplace-primary-#{Ecto.UUID.generate()}@example.com"
+      user_id = "marketplace-non-admin-#{Ecto.UUID.generate()}@example.com"
+
+      System.put_env("PRIMARY_ADMIN_EMAIL", primary_admin)
+
+      on_exit(fn ->
+        case previous_primary_admin do
+          nil -> System.delete_env("PRIMARY_ADMIN_EMAIL")
+          value -> System.put_env("PRIMARY_ADMIN_EMAIL", value)
+        end
+      end)
+
+      {:ok, _primary} = Accounts.get_or_create_user_by_email(primary_admin)
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      assert {:ok, []} = AgentMarketplace.ensure_default_installations(user_id: user_id)
+      refute Agents.get_package_installation(user_id, "ai_chief_of_staff")
     end
 
     test "syncs marketplace packages without installing when no target user is configured" do

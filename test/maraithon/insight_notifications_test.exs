@@ -8,6 +8,7 @@ defmodule Maraithon.InsightNotificationsTest do
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
   alias Maraithon.Repo
+  alias MaraithonWeb.TelegramLink
 
   setup do
     Application.put_env(:maraithon, :insights,
@@ -106,6 +107,28 @@ defmodule Maraithon.InsightNotificationsTest do
       account = ConnectedAccounts.get(user_id, "telegram")
       assert account.status == "connected"
       assert account.external_account_id == "445566"
+    end
+
+    test "links telegram chat from signed start token" do
+      user_id = "link-token@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      token = TelegramLink.sign_token(user_id)
+
+      event = %{
+        type: "message",
+        data: %{
+          chat_id: 223_344,
+          text: "/start #{token}",
+          from: %{id: 1003, username: "linker3"}
+        }
+      }
+
+      :ok = InsightNotifications.handle_telegram_event(event)
+
+      account = ConnectedAccounts.get(user_id, "telegram")
+      assert account.status == "connected"
+      assert account.external_account_id == "223344"
     end
 
     test "records callback feedback and tunes threshold", %{user_id: user_id, insight: insight} do

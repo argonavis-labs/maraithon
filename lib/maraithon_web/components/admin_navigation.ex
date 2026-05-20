@@ -22,11 +22,6 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Settings", path: "/settings", icon: :settings}
   ]
 
-  @secondary_nav [
-    %{label: "Support", path: "mailto:kent.fenwick@gmail.com", icon: :lifebuoy},
-    %{label: "Changelog", path: "/changelog", icon: :bolt}
-  ]
-
   attr :current_path, :string, default: "/dashboard"
   attr :current_user, :map, default: nil
   slot :inner_block, required: true
@@ -37,7 +32,7 @@ defmodule MaraithonWeb.AdminNavigation do
       assigns
       |> assign(:normalized_path, normalize_path(assigns.current_path))
       |> assign(:primary_nav, @primary_nav)
-      |> assign(:secondary_nav, @secondary_nav)
+      |> assign(:secondary_nav, secondary_nav())
       |> assign(:admin_nav, if(admin_user?(assigns.current_user), do: @admin_nav, else: []))
 
     ~H"""
@@ -111,6 +106,19 @@ defmodule MaraithonWeb.AdminNavigation do
       </main>
     </div>
     """
+  end
+
+  defp secondary_nav do
+    [
+      %{label: "Support", path: "mailto:#{support_email()}", icon: :lifebuoy},
+      %{label: "Changelog", path: "/changelog", icon: :bolt}
+    ]
+  end
+
+  defp support_email do
+    :maraithon
+    |> Application.get_env(:support, [])
+    |> Keyword.get(:email, "support@maraithon.app")
   end
 
   attr :primary_nav, :list, required: true

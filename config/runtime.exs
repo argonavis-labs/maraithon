@@ -34,6 +34,8 @@ config :maraithon, :admin_auth,
 
 config :maraithon, :api_auth, bearer_token: api_bearer_token
 
+config :maraithon, :support, email: System.get_env("SUPPORT_EMAIL", "support@maraithon.app")
+
 admin_default_user_id =
   case System.get_env("ADMIN_DEFAULT_USER_ID", admin_username) do
     "" -> "operator"
@@ -348,6 +350,7 @@ config :maraithon, :notaui,
 # Telegram Connector
 config :maraithon, :telegram,
   bot_token: System.get_env("TELEGRAM_BOT_TOKEN", ""),
+  bot_username: System.get_env("TELEGRAM_BOT_USERNAME", ""),
   webhook_secret_path: System.get_env("TELEGRAM_WEBHOOK_SECRET", ""),
   allow_unsigned: allow_unsigned
 

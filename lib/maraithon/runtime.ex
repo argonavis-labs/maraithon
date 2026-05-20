@@ -90,7 +90,7 @@ defmodule Maraithon.Runtime do
       |> Keyword.put_new(:install_status, "enabled")
 
     with {:ok, agent} <- Agents.install_agent_package(user_id, package_slug, opts),
-         {:ok, _pid} <- start_agent_process(agent) do
+         {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
       Logger.info("Installed package agent #{agent.id}",
         agent_id: agent.id,
         package_slug: package_slug,
@@ -102,6 +102,16 @@ defmodule Maraithon.Runtime do
       {:error, reason} = error ->
         Logger.error("Failed to install package #{package_slug}: #{inspect(reason)}")
         error
+    end
+  end
+
+  @doc """
+  Installs the Chief of Staff package and starts it only when setup is complete.
+  """
+  def install_chief_of_staff(user_id, opts \\ []) when is_binary(user_id) do
+    with {:ok, agent} <- Agents.install_chief_of_staff(user_id, opts),
+         {:ok, _pid_or_status} <- maybe_start_installed_agent(agent) do
+      {:ok, agent}
     end
   end
 
@@ -375,6 +385,12 @@ defmodule Maraithon.Runtime do
   end
 
   # Private functions
+
+  defp maybe_start_installed_agent(%{install_status: "enabled", status: "running"} = agent) do
+    start_agent_process(agent)
+  end
+
+  defp maybe_start_installed_agent(_agent), do: {:ok, :not_started}
 
   defp start_agent_process(agent) do
     AgentSupervisor.start_agent(agent)

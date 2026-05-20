@@ -9,6 +9,44 @@ defmodule Maraithon.AgentMarketplace do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.LLM
 
+  @chief_of_staff_slug "ai_chief_of_staff"
+  @primary_admin_chief_of_staff_config %{
+    "skill_configs" => %{
+      "morning_briefing" => %{
+        "commercial_gmail_queries" => [
+          "newer_than:7d Cogniate",
+          "newer_than:7d Glossier",
+          "newer_than:7d \"team plan\"",
+          "newer_than:7d \"Ultra plan\"",
+          "newer_than:7d Enterprise",
+          "newer_than:7d discount",
+          "newer_than:7d intro",
+          "newer_than:7d availability"
+        ],
+        "commercial_counterparty_domain_markers" => [
+          "cogniate",
+          "glossier",
+          "represent",
+          "sandwich.co"
+        ],
+        "commercial_teammate_domains" => ["runner.now"],
+        "slack_key_channels" => [
+          "runner-general",
+          "runner-leads",
+          "runner-gtm",
+          "runner-user-feedback",
+          "gtm-leads",
+          "general",
+          "eng-general",
+          "exec-agora-gov-mgmt-w-dash",
+          "jeff",
+          "charlie",
+          "yitong"
+        ]
+      }
+    }
+  }
+
   @doc """
   Ensure built-in agent packages exist in the marketplace tables.
   """
@@ -41,7 +79,7 @@ defmodule Maraithon.AgentMarketplace do
         user_id ->
           if default_install_allowed?(user_id, install_source) do
             slugs
-            |> Enum.map(&ensure_user_installation(user_id, &1))
+            |> Enum.map(&ensure_user_installation(user_id, &1, install_source))
             |> split_results()
           else
             {:ok, []}
@@ -77,6 +115,28 @@ defmodule Maraithon.AgentMarketplace do
     }
   end
 
+  @doc """
+  Returns normalized connector requirements for a package slug or package struct.
+  """
+  def required_connectors_for(slug) when is_binary(slug) do
+    case Agents.get_agent_package_by_slug(slug, preload: [:latest_version]) do
+      %{latest_version: %{required_connectors: required_connectors}}
+      when is_map(required_connectors) ->
+        required_connectors
+
+      _missing ->
+        slug
+        |> builtin_manifest_for_slug()
+        |> Map.get("required_connectors", %{})
+    end
+  end
+
+  def required_connectors_for(%{latest_version: %{required_connectors: required_connectors}})
+      when is_map(required_connectors),
+      do: required_connectors
+
+  def required_connectors_for(_package), do: %{}
+
   defp sync_builtin_package(spec) do
     spec
     |> builtin_manifest()
@@ -109,29 +169,53 @@ defmodule Maraithon.AgentMarketplace do
   defp default_install_slugs do
     :maraithon
     |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:default_install_slugs, ["ai_chief_of_staff"])
+    |> Keyword.get(:default_install_slugs, [@chief_of_staff_slug])
   end
 
-  defp default_install_allowed?(_user_id, :explicit), do: true
+  defp default_install_allowed?(user_id, :explicit), do: primary_admin_user?(user_id)
 
   defp default_install_allowed?(user_id, :primary_admin),
     do: ConnectedAccounts.telegram_destination(user_id) != nil
 
   defp default_install_allowed?(_user_id, _source), do: false
 
-  defp ensure_user_installation(nil, _slug), do: {:ok, nil}
+  defp primary_admin_user?(user_id) when is_binary(user_id) do
+    case Accounts.primary_admin_email() do
+      nil -> false
+      primary -> Accounts.normalize_email(user_id) == primary
+    end
+  end
 
-  defp ensure_user_installation(user_id, slug) do
+  defp primary_admin_user?(_user_id), do: false
+
+  defp ensure_user_installation(nil, _slug, _install_source), do: {:ok, nil}
+
+  defp ensure_user_installation(user_id, slug, install_source) do
     case installed_package_agent(user_id, slug) do
       nil ->
         Agents.install_agent_package(user_id, slug,
           runtime_status: "running",
           install_status: "enabled",
+          config: default_install_config(slug, install_source),
           delivery_policy: %{"telegram" => "enabled"}
         )
 
       agent ->
         {:ok, agent}
+    end
+  end
+
+  defp default_install_config(@chief_of_staff_slug, :primary_admin),
+    do: @primary_admin_chief_of_staff_config
+
+  defp default_install_config(_slug, _install_source), do: %{}
+
+  defp builtin_manifest_for_slug(slug) when is_binary(slug) do
+    AgentBuilder.library_specs()
+    |> Enum.find(&(&1.id == slug))
+    |> case do
+      nil -> %{}
+      spec -> builtin_manifest(spec)
     end
   end
 

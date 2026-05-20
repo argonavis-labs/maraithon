@@ -9,6 +9,8 @@ defmodule Maraithon.Agents do
   alias Maraithon.AgentHarness.Manifest, as: HarnessManifest
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.AgentSubscriptions
+  alias Maraithon.Connections
+  alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.Agents.Agent
   alias Maraithon.Agents.AgentPackage
@@ -329,6 +331,27 @@ defmodule Maraithon.Agents do
   end
 
   @doc """
+  Returns the active installation for a package slug and user.
+  """
+  def get_package_installation(user_id, package_slug, opts \\ [])
+
+  def get_package_installation(user_id, package_slug, opts)
+      when is_binary(user_id) and is_binary(package_slug) do
+    preload = Keyword.get(opts, :preload, [])
+
+    Agent
+    |> join(:inner, [agent], package in AgentPackage, on: package.id == agent.agent_package_id)
+    |> where([agent, package], agent.user_id == ^user_id and package.slug == ^package_slug)
+    |> where([agent, _package], agent.install_status != "removed")
+    |> order_by([agent, _package], desc: agent.updated_at, desc: agent.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+    |> Repo.preload(preload)
+  end
+
+  def get_package_installation(_user_id, _package_slug, _opts), do: nil
+
+  @doc """
   Get a package by slug.
   """
   def get_agent_package_by_slug(slug, opts \\ []) when is_binary(slug) do
@@ -470,6 +493,69 @@ defmodule Maraithon.Agents do
   end
 
   @doc """
+  Installs or updates the Chief of Staff package for a user.
+
+  Connector readiness controls the persisted install/runtime status:
+  connected requirements produce an enabled, resumable agent; missing
+  requirements produce a setup-required, stopped agent.
+  """
+  def install_chief_of_staff(user_id, opts \\ [])
+
+  def install_chief_of_staff(user_id, opts) when is_binary(user_id) do
+    project_id = Keyword.get(opts, :project_id)
+
+    with :ok <- validate_install_project(user_id, project_id),
+         {:ok, _packages} <- Maraithon.AgentMarketplace.sync_builtin_packages(),
+         %AgentPackage{} = package <-
+           get_agent_package_by_slug("ai_chief_of_staff", preload: [:latest_version]),
+         %AgentPackageVersion{} = version <- package.latest_version do
+      required_connectors = Maraithon.AgentMarketplace.required_connectors_for(package)
+      readiness = Connections.connector_readiness(user_id, required_connectors)
+      ready? = Enum.all?(readiness, & &1.connected?)
+
+      install_status = if ready?, do: "enabled", else: "setup_required"
+      runtime_status = if ready?, do: "running", else: "stopped"
+
+      opts =
+        opts
+        |> Keyword.put(:project_id, project_id)
+        |> Keyword.put(:install_status, install_status)
+        |> Keyword.put(:runtime_status, runtime_status)
+        |> Keyword.put_new(:delivery_policy, %{"telegram" => "enabled"})
+
+      case get_package_installation(user_id, package.slug) do
+        nil ->
+          attrs = installation_attrs(user_id, package, version, opts)
+          create_agent(attrs)
+
+        %Agent{} = existing ->
+          attrs =
+            installation_attrs(user_id, package, version, opts)
+            |> Map.take([
+              :project_id,
+              :config,
+              :status,
+              :install_status,
+              :connector_grants,
+              :schedule_policy,
+              :delivery_policy,
+              :memory_scope,
+              :agent_package_id,
+              :agent_package_version_id
+            ])
+            |> Map.put(:installed_at, existing.installed_at || DateTime.utc_now())
+
+          update_agent(existing, attrs)
+      end
+    else
+      nil -> {:error, :package_not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def install_chief_of_staff(_user_id, _opts), do: {:error, :invalid_user}
+
+  @doc """
   Seed or update a database package from an in-memory manifest.
   """
   def sync_agent_package_manifest(manifest) when is_map(manifest) do
@@ -564,6 +650,19 @@ defmodule Maraithon.Agents do
   defp maybe_filter_package_status(query, status),
     do: where(query, [package], package.status == ^status)
 
+  defp validate_install_project(_user_id, nil), do: :ok
+  defp validate_install_project(_user_id, ""), do: :ok
+
+  defp validate_install_project(user_id, project_id)
+       when is_binary(user_id) and is_binary(project_id) do
+    case Projects.get_project_for_user(project_id, user_id) do
+      nil -> {:error, :project_not_found}
+      _project -> :ok
+    end
+  end
+
+  defp validate_install_project(_user_id, _project_id), do: {:error, :project_not_found}
+
   defp next_run_step_sequence(run_id) do
     AgentRunStep
     |> where([step], step.agent_run_id == ^run_id)
@@ -581,7 +680,7 @@ defmodule Maraithon.Agents do
     config =
       version
       |> package_default_config(user_id)
-      |> Map.merge(stringify_keys(config_overrides))
+      |> deep_merge(stringify_keys(config_overrides))
       |> Map.put_new("name", package.name)
       |> Map.put("agent_package_version_id", version.id)
 
@@ -656,6 +755,14 @@ defmodule Maraithon.Agents do
         %{}
     end
   end
+
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      deep_merge(left_value, right_value)
+    end)
+  end
+
+  defp deep_merge(_left, right), do: right
 
   defp source_behavior(%{"source_behavior" => behavior})
        when is_binary(behavior) and behavior != "",

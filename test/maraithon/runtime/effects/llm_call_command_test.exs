@@ -72,8 +72,6 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     # Provider that emits the responses set up via `setup/1` in order, one
     # per `complete/1` call. Used to verify the retry policy.
 
-    def setup(responses), do: Agent.start_link(fn -> responses end, name: __MODULE__)
-
     def complete(_params) do
       Agent.get_and_update(__MODULE__, fn
         [] -> {{:error, :exhausted_stub}, []}
@@ -94,13 +92,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     on_exit(fn -> Application.put_env(:maraithon, Maraithon.Runtime, original) end)
   end
 
-  defp stop_stub_on_exit do
-    on_exit(fn ->
-      case Process.whereis(RetryStub) do
-        nil -> :ok
-        pid -> Agent.stop(pid)
-      end
-    end)
+  defp start_retry_stub(responses) do
+    start_supervised!(%{
+      id: RetryStub,
+      start: {Agent, :start_link, [fn -> responses end, [name: RetryStub]]}
+    })
   end
 
   defp effect_for do
@@ -115,7 +111,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     test "retries on :rate_limited with the provider-supplied backoff and recovers" do
       swap_provider(RetryStub)
 
-      RetryStub.setup([
+      start_retry_stub([
         {:error, {:rate_limited, 10}},
         {:ok,
          %{
@@ -127,15 +123,12 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
          }}
       ])
 
-      stop_stub_on_exit()
-
       assert {:ok, %{content: "ok"}} = LLMCallCommand.execute(effect_for())
     end
 
     test "non-retryable errors are returned without retrying" do
       swap_provider(RetryStub)
-      RetryStub.setup([{:error, :model_not_found}])
-      stop_stub_on_exit()
+      start_retry_stub([{:error, :model_not_found}])
 
       assert {:error, :model_not_found} = LLMCallCommand.execute(effect_for())
       # Stub queue empty -> exactly one provider call -> no retry happened.
@@ -145,13 +138,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommandTest do
     test "after the max retry attempts the final error is surfaced" do
       swap_provider(RetryStub)
 
-      RetryStub.setup([
+      start_retry_stub([
         {:error, {:rate_limited, 5}},
         {:error, {:rate_limited, 5}},
         {:error, {:rate_limited, 5}}
       ])
-
-      stop_stub_on_exit()
 
       assert {:error, {:rate_limited, 5}} = LLMCallCommand.execute(effect_for())
     end

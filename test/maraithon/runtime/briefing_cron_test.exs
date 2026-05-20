@@ -112,6 +112,16 @@ defmodule Maraithon.Runtime.BriefingCronTest do
 
   test "schedules manifest-installed Chief of Staff packages" do
     user_id = "manifest-briefing-cron-#{System.unique_integer([:positive])}@example.com"
+    previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
+    System.put_env("PRIMARY_ADMIN_EMAIL", user_id)
+
+    on_exit(fn ->
+      case previous_primary_admin do
+        nil -> System.delete_env("PRIMARY_ADMIN_EMAIL")
+        value -> System.put_env("PRIMARY_ADMIN_EMAIL", value)
+      end
+    end)
+
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, _telegram} =

@@ -19,30 +19,9 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
   @commercial_gmail_query_limit 5
-  @commercial_gmail_queries [
-    "newer_than:7d Cogniate",
-    "newer_than:7d Glossier",
-    "newer_than:7d \"team plan\"",
-    "newer_than:7d \"Ultra plan\"",
-    "newer_than:7d Enterprise",
-    "newer_than:7d discount",
-    "newer_than:7d intro",
-    "newer_than:7d availability"
-  ]
   @default_forward_days 14
-  @default_slack_key_channels [
-    "runner-general",
-    "runner-leads",
-    "runner-gtm",
-    "runner-user-feedback",
-    "gtm-leads",
-    "general",
-    "eng-general",
-    "exec-agora-gov-mgmt-w-dash",
-    "jeff",
-    "charlie",
-    "yitong"
-  ]
+  @default_commercial_gmail_queries []
+  @default_slack_key_channels []
 
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
@@ -437,7 +416,8 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  provider: provider
                ) do
             {:ok, messages} ->
-              commercial_messages = fetch_commercial_gmail_messages(user_id, provider)
+              commercial_messages =
+                fetch_commercial_gmail_messages(user_id, provider, plan.commercial_gmail_queries)
 
               annotated =
                 (messages ++ commercial_messages)
@@ -689,6 +669,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           else: max_slack_message_limit
         ),
       slack_key_channels: slack_key_channels(skill_ids, skill_configs),
+      commercial_gmail_queries: commercial_gmail_queries(skill_ids, skill_configs),
       lookback_hours: max(max_lookback_hours, 24),
       forward_days: @default_forward_days
     }
@@ -859,8 +840,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> Enum.flat_map(fn skill_id ->
         skill_configs
         |> Map.get(skill_id, %{})
-        |> Map.get("slack_key_channels", [])
-        |> List.wrap()
+        |> configured_list("slack_key_channels")
       end)
       |> Enum.map(&normalize_channel_name/1)
       |> Enum.reject(&is_nil/1)
@@ -868,6 +848,21 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     (@default_slack_key_channels ++ configured)
     |> Enum.map(&normalize_channel_name/1)
     |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp commercial_gmail_queries(skill_ids, skill_configs) do
+    configured =
+      skill_ids
+      |> Enum.flat_map(fn skill_id ->
+        skill_configs
+        |> Map.get(skill_id, %{})
+        |> configured_list("commercial_gmail_queries")
+      end)
+      |> Enum.map(&normalize_string/1)
+      |> Enum.reject(&is_nil/1)
+
+    (@default_commercial_gmail_queries ++ configured)
     |> Enum.uniq()
   end
 
@@ -955,8 +950,10 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp enrich_gmail_messages(_messages, _user_id, _default_provider), do: []
 
-  defp fetch_commercial_gmail_messages(user_id, provider) do
-    @commercial_gmail_queries
+  defp fetch_commercial_gmail_messages(_user_id, _provider, []), do: []
+
+  defp fetch_commercial_gmail_messages(user_id, provider, queries) when is_list(queries) do
+    queries
     |> Enum.flat_map(fn query ->
       case gmail_module().fetch_messages(user_id,
              max_results: @commercial_gmail_query_limit,
@@ -1273,6 +1270,28 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp normalize_channel_name(_value), do: nil
+
+  defp configured_list(config, key) when is_map(config) and is_binary(key) do
+    top_level = Map.get(config, key)
+    org_level = get_in(config, ["org", key])
+
+    [top_level, org_level]
+    |> Enum.flat_map(&List.wrap/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp configured_list(_config, _key), do: []
+
+  defp normalize_string(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_string(_value), do: nil
 
   defp message_sort_key(%{"internal_date" => %DateTime{} = value}),
     do: DateTime.to_unix(value, :microsecond)
