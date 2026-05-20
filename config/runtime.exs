@@ -99,6 +99,9 @@ llm_model_fallbacks =
 
 configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |> String.downcase()
 
+proactive_check_in_interval_ms =
+  String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000"))
+
 optional_boolean_env = fn name ->
   case System.get_env(name) do
     nil -> nil
@@ -245,8 +248,14 @@ config :maraithon, Maraithon.Runtime,
   dogfood_digest_timezone: System.get_env("DOGFOOD_DIGEST_TIMEZONE", "America/Toronto"),
   dogfood_digest_timezone_offset_hours:
     String.to_integer(System.get_env("DOGFOOD_DIGEST_TIMEZONE_OFFSET_HOURS", "-4")),
-  proactive_check_in_interval_ms:
-    String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000")),
+  proactive_check_in_interval_ms: proactive_check_in_interval_ms,
+  proactive_check_in_initial_delay_ms:
+    String.to_integer(
+      System.get_env(
+        "PROACTIVE_CHECK_IN_INITIAL_DELAY_MS",
+        Integer.to_string(proactive_check_in_interval_ms)
+      )
+    ),
   proactive_check_in_batch_size:
     String.to_integer(System.get_env("PROACTIVE_CHECK_IN_BATCH_SIZE", "25")),
   oauth_refresh_interval_ms:

@@ -43,12 +43,16 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
 
   @impl true
   def init(_opts) do
+    interval_ms = Config.positive_integer(:proactive_check_in_interval_ms, @default_interval_ms)
+
     state = %{
-      interval_ms: Config.positive_integer(:proactive_check_in_interval_ms, @default_interval_ms),
+      interval_ms: interval_ms,
+      initial_delay_ms:
+        Config.positive_integer(:proactive_check_in_initial_delay_ms, interval_ms),
       batch_size: Config.positive_integer(:proactive_check_in_batch_size, @default_batch_size)
     }
 
-    schedule_tick(10_000)
+    schedule_tick(state.initial_delay_ms)
     {:ok, state}
   end
 

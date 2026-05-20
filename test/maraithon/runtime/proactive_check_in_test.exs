@@ -10,12 +10,48 @@ defmodule Maraithon.Runtime.ProactiveCheckInTest do
 
   setup do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
 
     on_exit(fn ->
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
     end)
 
-    %{original_assistant: original_assistant}
+    %{original_assistant: original_assistant, original_runtime: original_runtime}
+  end
+
+  test "initial tick delay defaults to the configured interval", %{
+    original_runtime: original_runtime
+  } do
+    runtime_config =
+      original_runtime
+      |> Keyword.put(:proactive_check_in_interval_ms, 123_456)
+      |> Keyword.delete(:proactive_check_in_initial_delay_ms)
+
+    Application.put_env(:maraithon, Maraithon.Runtime, runtime_config)
+
+    pid = start_supervised!(ProactiveCheckIn)
+    state = :sys.get_state(pid)
+
+    assert state.interval_ms == 123_456
+    assert state.initial_delay_ms == 123_456
+  end
+
+  test "initial tick delay can be configured separately", %{
+    original_runtime: original_runtime
+  } do
+    runtime_config =
+      original_runtime
+      |> Keyword.put(:proactive_check_in_interval_ms, 123_456)
+      |> Keyword.put(:proactive_check_in_initial_delay_ms, 5_000)
+
+    Application.put_env(:maraithon, Maraithon.Runtime, runtime_config)
+
+    pid = start_supervised!(ProactiveCheckIn)
+    state = :sys.get_state(pid)
+
+    assert state.interval_ms == 123_456
+    assert state.initial_delay_ms == 5_000
   end
 
   test "run_delivery_planner is disabled until the planner flag is enabled", %{
