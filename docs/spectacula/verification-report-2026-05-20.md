@@ -5,17 +5,23 @@ Purpose: clean the active Spectacula queue so `docs/spectacula/ready` contains o
 ## Summary
 
 - Before review: `50` ready manifests, `0` in progress, `17` done.
-- After review: `4` ready manifests, `0` in progress, `23` done, `3` specs needing update/decision, `37` orphan ready manifests archived.
+- Initial verification result: `4` ready manifests, `0` in progress, `23` done, `3` specs needing update/decision, `37` orphan ready manifests archived.
+- Current active state after implementation work on 2026-05-20: `0` ready manifests, `1` in progress, `26` done, `3` specs needing update/decision.
 - Archive path: `docs/spectacula/archive/orphaned-ready-manifests-2026-05-20/`.
 
 ## Ready To Build
 
+No specs are currently ready to build.
+
 | Spec | Current verdict | Evidence |
 | --- | --- | --- |
-| `proactive-delivery-planner-implementation-plan-a6547aa9` | Not implemented; ready to build. | No `proactive_candidates` migration, `ProactiveQueue`, `DeliveryPlanner`, or `AssistantHarness.plan_delivery/2` exists. Existing `PushReceipt` supports `queued_digest`/`merged`, but code does not produce the planned cross-source planner path. |
-| `ship-memory-primitive-with-model-callable-read-write-tools-26355ff4` | Partially implemented; ready to build as a delta. | `Maraithon.Memory`, `memory_items`, and memory tools exist. Missing planned delta: `decay_at`, supersession links, encrypted content/metadata, `Memory.Recall`, `update_memory_confidence`, and `/operator/memories`. |
-| `spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13` | Not implemented; ready to build. | Marketplace install primitives and `setup_required` exist. Missing self-serve flow: shared `install_chief_of_staff`, connector readiness, Telegram signed deep link, dashboard install row, de-Kent first brief work, docs, and smoke tests. |
-| `spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b` | Not implemented; ready to build. | No `runtime_incidents`, `IncidentLog`, `AgentWatcher`, `DogfoodDigest`, `ShutdownReporter`, or dogfood report exists. `.gitignore` already ignores `erl_crash.dump`; an ignored local dump remains present. |
+| `ready/` | Empty. | `docs/spectacula/ready` has no active JSON manifests. |
+
+## In Progress
+
+| Spec | Current verdict | Evidence |
+| --- | --- | --- |
+| `spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b` | Runtime telemetry code checkpoint implemented and verified; not eligible for `done` yet. | `runtime_incidents`, `IncidentLog`, boot/shutdown/db instrumentation, `AgentWatcher`, `DogfoodDigest`, dogfood baseline task, config, and focused tests exist. `mix precommit` passed with `1851` tests and `0` failures. Remaining acceptance requires the elapsed 30-day production run, daily digest archive, crash/recover artifact, and `docs/dogfood/2026-chief-of-staff-30-day.md`. |
 
 ## Moved To Done
 
@@ -27,6 +33,9 @@ Purpose: clean the active Spectacula queue so `docs/spectacula/ready` contains o
 | `logfire-opentelemetry-integration-implementation-plan-25736676` | Implemented. Evidence includes OpenTelemetry deps, opt-in Logfire runtime config, application setup calls, `Maraithon.Tracing`, assistant/LLM spans, and `tracing_test`. |
 | `logfire-opentelemetry-integration-implementation-plan-3382bc3b` | Duplicate Logfire implementation plan, satisfied by current implementation. |
 | `logfire-opentelemetry-integration-implementation-plan-cf6f000d` | Latest Logfire implementation plan, satisfied by current implementation. Live Logfire smoke still needs a real `LOGFIRE_WRITE_TOKEN`, but app implementation is present. |
+| `proactive-delivery-planner-implementation-plan-a6547aa9` | Implemented after the initial verification pass: durable queue, flag-gated source enqueueing, one model planning pass per user, interrupt/digest/hold dispatch, runtime drain, stale expiry, config, and tests. |
+| `spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13` | Implemented after the initial verification pass: connector readiness gating, `setup_required`, enabled/running install path, dashboard setup links, signed Telegram linking with email fallback, docs, and smoke tests. |
+| `ship-memory-primitive-with-model-callable-read-write-tools-26355ff4` | Implemented after the initial verification pass: encrypted memory storage, recall ranking, supersession, update-confidence tooling, prompt injection, operator UI, and tests. |
 
 ## Moved Back To Specs
 
@@ -44,4 +53,5 @@ Archived `37` `fast-context-aware-telegram-answers-implementation-plan-*` ready 
 
 - This pass used file/module evidence from `lib`, `priv/repo/migrations`, `test`, `.claude/plans`, and docs.
 - Stage manifests were updated with `codebase_verified_*` history entries and review notes.
-- No application code was changed by this verification pass.
+- The implementation follow-up ran `mix precommit` successfully after the dogfood telemetry code checkpoint: `1851` tests, `0` failures.
+- No stale ready manifests remain in the active lifecycle tree.
