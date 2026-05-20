@@ -3,6 +3,8 @@ defmodule Maraithon.LLM do
   LLM provider interface and configuration.
   """
 
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
+
   defp runtime_config do
     Application.get_env(:maraithon, Maraithon.Runtime, [])
   end
@@ -113,7 +115,7 @@ defmodule Maraithon.LLM do
           "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
-        module.complete(params)
+        run_provider_request(module, fn -> module.complete(params) end)
     end
   end
 
@@ -164,7 +166,7 @@ defmodule Maraithon.LLM do
         complete(params)
 
       function_exported?(provider(), :stream_complete, 2) ->
-        provider().stream_complete(params, on_chunk)
+        run_provider_request(provider(), fn -> provider().stream_complete(params, on_chunk) end)
 
       true ->
         complete(params)
@@ -187,4 +189,40 @@ defmodule Maraithon.LLM do
     runtime_config()
     |> Keyword.get(:openai_stream_replies, true)
   end
+
+  defp run_provider_request(module, fun) when is_function(fun, 0) do
+    if provider_backpressure_enabled?(module) do
+      with_provider_slot(fun)
+    else
+      fun.()
+    end
+  end
+
+  defp provider_backpressure_enabled?(Maraithon.LLM.OpenAIProvider), do: true
+  defp provider_backpressure_enabled?(Maraithon.LLM.AnthropicProvider), do: true
+
+  defp provider_backpressure_enabled?(_module) do
+    provider_name() in ["openai", "anthropic"]
+  end
+
+  defp with_provider_slot(fun) when is_function(fun, 0) do
+    case LLMRateLimiter.checkout() do
+      :ok ->
+        try do
+          fun.()
+          |> tap(&record_provider_rate_limit/1)
+        after
+          LLMRateLimiter.checkin()
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}) do
+    LLMRateLimiter.record_rate_limit(retry_after_ms)
+  end
+
+  defp record_provider_rate_limit(_result), do: :ok
 end

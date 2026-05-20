@@ -35,25 +35,6 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     params = effect.params
     _timeout = params["timeout_ms"] || 120_000
 
-    case LLMRateLimiter.checkout() do
-      :ok ->
-        try do
-          do_execute(effect, params)
-        after
-          LLMRateLimiter.checkin()
-        end
-
-      {:error, reason} = error ->
-        Logger.info("LLM call deferred by local rate limiter",
-          effect_id: effect.id,
-          reason: inspect(reason)
-        )
-
-        error
-    end
-  end
-
-  defp do_execute(effect, params) do
     Logger.info("Starting LLM call for effect #{effect.id}",
       agent_id: effect.agent_id,
       effect_id: effect.id
@@ -116,7 +97,7 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     fallback_models = fallback_models(params)
 
     cond do
-      rate_limit_error?(original_reason) ->
+      provider_deferral_error?(original_reason) ->
         {:error, original_reason}
 
       not transient_capacity_error?(original_reason) ->
@@ -245,8 +226,9 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
 
   defp transient_capacity_error?(_), do: false
 
-  defp rate_limit_error?({:rate_limited, _retry_after}), do: true
-  defp rate_limit_error?(_reason), do: false
+  defp provider_deferral_error?({:rate_limited, _retry_after}), do: true
+  defp provider_deferral_error?({:llm_busy, _retry_after}), do: true
+  defp provider_deferral_error?(_reason), do: false
 
   defp record_provider_limit({:rate_limited, retry_after_ms}) do
     LLMRateLimiter.record_rate_limit(retry_after_ms)

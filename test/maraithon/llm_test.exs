@@ -8,13 +8,26 @@ defmodule Maraithon.LLMTest.CapturingProvider do
   end
 end
 
+defmodule Maraithon.LLMTest.RateLimitedProvider do
+  @moduledoc false
+  @target :llm_routing_test_target
+
+  def complete(params) do
+    send(@target, {:rate_limited_provider_called, params})
+    {:error, {:rate_limited, 60_000}}
+  end
+end
+
 defmodule Maraithon.LLMTest do
   use ExUnit.Case, async: false
 
   alias Maraithon.LLM
+  alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   setup do
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime)
+    ensure_rate_limiter_started()
+    LLMRateLimiter.reset()
 
     Application.put_env(:maraithon, Maraithon.Runtime,
       llm_provider: Maraithon.LLM.MockProvider,
@@ -26,6 +39,8 @@ defmodule Maraithon.LLMTest do
     )
 
     on_exit(fn ->
+      LLMRateLimiter.reset()
+
       if original_runtime do
         Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
       else
@@ -36,9 +51,50 @@ defmodule Maraithon.LLMTest do
     :ok
   end
 
+  defp ensure_rate_limiter_started do
+    case Process.whereis(LLMRateLimiter) do
+      nil -> start_supervised!(LLMRateLimiter)
+      _pid -> :ok
+    end
+  end
+
   describe "provider/0" do
     test "returns the configured test MockProvider" do
       assert LLM.provider() == Maraithon.LLM.MockProvider
+    end
+  end
+
+  describe "provider rate limiting" do
+    setup do
+      Process.register(self(), :llm_routing_test_target)
+
+      on_exit(fn ->
+        try do
+          Process.unregister(:llm_routing_test_target)
+        rescue
+          ArgumentError -> :ok
+        end
+      end)
+
+      :ok
+    end
+
+    test "records provider cooldowns and blocks the next direct LLM call" do
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        llm_provider: Maraithon.LLMTest.RateLimitedProvider,
+        llm_provider_name: "openai",
+        llm_model: "gpt-5.4"
+      )
+
+      params = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
+
+      assert {:error, {:rate_limited, 60_000}} = LLM.complete(params)
+      assert_received {:rate_limited_provider_called, ^params}
+      assert LLMRateLimiter.status().blocked_for_ms > 0
+
+      assert {:error, {:rate_limited, retry_after_ms}} = LLM.complete(params)
+      assert retry_after_ms > 0
+      refute_received {:rate_limited_provider_called, ^params}
     end
   end
 

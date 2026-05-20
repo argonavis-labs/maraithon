@@ -84,6 +84,9 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
       blocked_for_ms(state, now_ms) > 0 ->
         {:reply, {:error, {:rate_limited, blocked_for_ms(state, now_ms)}}, state}
 
+      Map.has_key?(state.holders, pid) ->
+        {:reply, :ok, add_holder(state, pid)}
+
       state.in_flight >= state.max_concurrency ->
         {:reply, {:error, {:llm_busy, state.busy_retry_ms}}, state}
 
