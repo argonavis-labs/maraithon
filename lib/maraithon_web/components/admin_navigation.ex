@@ -15,6 +15,7 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Dashboard", path: "/dashboard", icon: :home},
     %{label: "Agents", path: "/agents", icon: :agents},
     %{label: "Connectors", path: "/connectors", icon: :connectors},
+    %{label: "People", path: "/operator/people", icon: :people},
     %{label: "Memory", path: "/operator/memories", icon: :memory},
     %{label: "How it works", path: "/how-it-works", icon: :book}
   ]
