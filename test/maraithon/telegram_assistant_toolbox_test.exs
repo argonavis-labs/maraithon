@@ -117,6 +117,43 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Use gmail_search_messages"
   end
 
+  test "list_connected_accounts returns connector status without CRM or todo writes" do
+    user_id = "toolbox-connections-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _telegram} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "12345",
+        metadata: %{"username" => "kentfenwick", "token" => "redacted"}
+      })
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google", %{
+        external_account_id: "kent@example.com",
+        scopes: ["gmail.readonly"]
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "list_connected_accounts",
+               %{},
+               %{user_id: user_id, context: %{}}
+             )
+
+    assert result.connected_count == 2
+    assert result.status_counts == %{"connected" => 2}
+
+    providers = Enum.map(result.connected_accounts, & &1.provider)
+    assert "google" in providers
+    assert "telegram" in providers
+
+    telegram = Enum.find(result.connected_accounts, &(&1.provider == "telegram"))
+    assert telegram.metadata["username"] == "kentfenwick"
+    refute Map.has_key?(telegram.metadata, "token")
+
+    assert Enum.any?(result.source_freshness, &(&1.provider == "telegram"))
+  end
+
   test "explain_action_ledger returns redacted why path and source freshness" do
     user_id = "toolbox-explain-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

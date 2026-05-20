@@ -53,8 +53,9 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
 
     assert prompt =~ "`connected_accounts` and `source_freshness`"
     assert prompt =~ "connector, integration, account, and source-health questions"
-    assert prompt =~ "answer directly from those context fields"
-    assert prompt =~ "Do not call `list_people` for connector/account status"
+    assert prompt =~ "answer directly from those context fields or call `list_connected_accounts`"
+    assert prompt =~ "Do not call `list_people`, `upsert_todos`, or any write tool"
+    assert prompt =~ "`upsert_todos`"
     assert prompt =~ "`list_people` is only for human CRM relationships"
   end
 
