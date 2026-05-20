@@ -10,7 +10,10 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
 
   alias Maraithon.Proactive.LocalPatterns
   alias Maraithon.Runtime.Config
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.DeliveryPlanner
   alias Maraithon.TelegramAssistant.Proactive
+  alias Maraithon.TelegramAssistant.ProactiveQueue
 
   require Logger
 
@@ -24,6 +27,18 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
 
   def run_once(opts \\ []) do
     Proactive.deliver_due_check_ins(opts)
+  end
+
+  def run_delivery_planner(opts \\ []) do
+    if TelegramAssistant.proactive_delivery_planner_enabled?() do
+      DeliveryPlanner.run_for_due_users(opts)
+    else
+      :disabled
+    end
+  end
+
+  def expire_stale_candidates(now \\ DateTime.utc_now()) do
+    ProactiveQueue.expire_stale(now)
   end
 
   @impl true
@@ -51,6 +66,9 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
     end
 
     run_local_pattern_detectors()
+    expired = maybe_expire_stale_candidates()
+    planner_result = run_delivery_planner(batch_size: state.batch_size)
+    log_delivery_planner_cycle(planner_result, expired)
 
     schedule_tick(state.interval_ms)
     {:noreply, state}
@@ -98,6 +116,36 @@ defmodule Maraithon.Runtime.ProactiveCheckIn do
       :file_mention
     ]
   end
+
+  defp maybe_expire_stale_candidates do
+    if TelegramAssistant.proactive_delivery_planner_enabled?() do
+      expire_stale_candidates()
+    else
+      0
+    end
+  end
+
+  defp log_delivery_planner_cycle(:disabled, _expired), do: :ok
+
+  defp log_delivery_planner_cycle(%{} = result, expired) do
+    if result.planned > 0 or result.delivered > 0 or result.held > 0 or result.failed > 0 or
+         expired > 0 do
+      Logger.info("Proactive delivery planner cycle",
+        users: result.users,
+        planned: result.planned,
+        interrupt_now: result.interrupt_now,
+        digest: result.digest,
+        held: result.held,
+        delivered: result.delivered,
+        failed: result.failed,
+        expired: expired
+      )
+    end
+
+    :ok
+  end
+
+  defp log_delivery_planner_cycle(_result, _expired), do: :ok
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
     Process.send_after(self(), :tick, delay_ms)

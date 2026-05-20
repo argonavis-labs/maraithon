@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramAssistant do
     LivenessSupervisor,
     PreparedAction,
     Proactive,
+    ProactiveQueue,
     PushBroker,
     PushReceipt,
     Run,
@@ -51,6 +52,16 @@ defmodule Maraithon.TelegramAssistant do
       true -> true
       false -> false
       nil -> enabled?()
+    end
+  end
+
+  def proactive_delivery_planner_enabled? do
+    case Keyword.get(config(), :proactive_delivery_planner_enabled) do
+      true -> true
+      false -> false
+      nil -> false
+      value when is_binary(value) -> String.downcase(String.trim(value)) in ~w(true 1 yes)
+      _value -> false
     end
   end
 
@@ -304,6 +315,7 @@ defmodule Maraithon.TelegramAssistant do
   def deliver_insight(delivery), do: PushBroker.deliver_insight(delivery)
   def deliver_brief(brief), do: PushBroker.deliver_brief(brief)
   def deliver_push_candidate(candidate), do: PushBroker.deliver(candidate)
+  def enqueue_proactive_candidate(attrs), do: ProactiveQueue.enqueue(attrs)
   def plan_proactive_check_in(user_id, opts \\ []), do: Proactive.plan_check_in(user_id, opts)
 
   def deliver_proactive_check_in(user_id, opts \\ []),

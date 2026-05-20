@@ -245,7 +245,10 @@ config :maraithon, Maraithon.Runtime,
 config :maraithon, :telegram_assistant,
   telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),
   telegram_unified_push_enabled: optional_boolean_env.("TELEGRAM_UNIFIED_PUSH_ENABLED"),
-  telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false)
+  telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false),
+  proactive_delivery_planner_enabled: boolean_env.("PROACTIVE_DELIVERY_PLANNER_ENABLED", false),
+  proactive_candidate_ttl_minutes:
+    String.to_integer(System.get_env("PROACTIVE_CANDIDATE_TTL_MINUTES", "120"))
 
 # =============================================================================
 # Connector Configuration

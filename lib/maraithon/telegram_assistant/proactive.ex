@@ -77,9 +77,14 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       |> Enum.reduce(%{sent: 0, held: 0, suppressed: 0, failed: 0, disabled: 0}, fn account,
                                                                                     acc ->
         case deliver_check_in(account.user_id, opts) do
+          {:ok, %{"decision" => "sent_now"}} -> %{acc | sent: acc.sent + 1}
           {:ok, %{decision: "sent_now"}} -> %{acc | sent: acc.sent + 1}
+          {:ok, %{"decision" => "queued"}} -> %{acc | sent: acc.sent + 1}
+          {:ok, %{"decision" => "hold"}} -> %{acc | held: acc.held + 1}
           {:ok, %{decision: "hold"}} -> %{acc | held: acc.held + 1}
+          {:ok, %{"decision" => "suppressed"}} -> %{acc | suppressed: acc.suppressed + 1}
           {:ok, %{decision: "suppressed"}} -> %{acc | suppressed: acc.suppressed + 1}
+          {:ok, %{"decision" => "disabled"}} -> %{acc | disabled: acc.disabled + 1}
           {:ok, %{decision: "disabled"}} -> %{acc | disabled: acc.disabled + 1}
           {:ok, _other} -> acc
           {:error, _reason} -> %{acc | failed: acc.failed + 1}
@@ -120,6 +125,14 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     trigger = proactive_trigger(user_id, chat_id, opts)
     dedupe_key = plan_dedupe_key(user_id, plan, trigger)
 
+    if TelegramAssistant.proactive_delivery_planner_enabled?() do
+      enqueue_plan_candidate(user_id, chat_id, plan, trigger, dedupe_key)
+    else
+      deliver_plan_now(user_id, chat_id, plan, trigger, dedupe_key)
+    end
+  end
+
+  defp deliver_plan_now(user_id, chat_id, plan, trigger, dedupe_key) do
     candidate = %{
       user_id: user_id,
       chat_id: chat_id,
@@ -171,6 +184,37 @@ defmodule Maraithon.TelegramAssistant.Proactive do
          plan
          |> Map.put("decision", "disabled")
          |> Map.put("reason", to_string(reason))}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp enqueue_plan_candidate(user_id, _chat_id, plan, trigger, dedupe_key) do
+    TelegramAssistant.enqueue_proactive_candidate(%{
+      user_id: user_id,
+      source: "proactive_check_in",
+      source_id: Map.fetch!(trigger, "id"),
+      dedupe_key: dedupe_key,
+      title: "Maraithon check-in",
+      body: Map.fetch!(plan, "assistant_message"),
+      urgency: Map.get(plan, "urgency", 0.0),
+      why_now: Map.get(plan, "summary"),
+      structured_data: %{
+        "message_class" => Map.get(plan, "message_class"),
+        "summary" => Map.get(plan, "summary"),
+        "todo_ids" => Map.get(plan, "todo_ids", []),
+        "interrupt_now" => Map.get(plan, "interrupt_now"),
+        "trigger" => trigger
+      },
+      telegram_opts: %{"parse_mode" => "HTML"}
+    })
+    |> case do
+      {:ok, candidate} ->
+        {:ok,
+         plan
+         |> Map.put("decision", "queued")
+         |> Map.put("candidate_id", candidate.id)}
 
       {:error, reason} ->
         {:error, reason}

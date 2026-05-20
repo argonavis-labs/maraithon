@@ -45,7 +45,10 @@ config :maraithon, Maraithon.Runtime,
   openai_model: "gpt-5.4",
   openai_reasoning_effort: "high"
 
-config :maraithon, :telegram_assistant, telegram_proactive_checkins_enabled: false
+config :maraithon, :telegram_assistant,
+  telegram_proactive_checkins_enabled: false,
+  proactive_delivery_planner_enabled: false,
+  proactive_candidate_ttl_minutes: 120
 
 # Configure the endpoint
 config :maraithon, MaraithonWeb.Endpoint,

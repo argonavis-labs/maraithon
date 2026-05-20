@@ -21,63 +21,81 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   @default_push_limit_per_hour 3
 
   def deliver_insight(%Delivery{} = delivery) do
-    if TelegramAssistant.unified_push_enabled?() do
-      delivery = Repo.preload(delivery, :insight)
-      payload = Actions.telegram_payload(delivery)
+    cond do
+      not TelegramAssistant.unified_push_enabled?() ->
+        {:fallback, :disabled}
 
-      case deliver(%{
-             user_id: delivery.user_id,
-             chat_id: delivery.destination,
-             origin_type: "insight",
-             origin_id: delivery.id,
-             linked_delivery_id: delivery.id,
-             linked_insight_id: delivery.insight_id,
-             dedupe_key: "insight_delivery:#{delivery.id}",
-             title: delivery.insight && delivery.insight.title,
-             body: payload.text,
-             urgency: delivery.score || 0.0,
-             interrupt_now: true,
-             why_now: delivery.insight && delivery.insight.summary,
-             telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
-           }) do
-        {:ok, %{decision: "sent_now", message_id: message_id}} ->
-          delivery
-          |> Ecto.Changeset.change(%{
-            status: "sent",
-            sent_at: DateTime.utc_now(),
-            provider_message_id: message_id,
-            metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
-          })
-          |> Repo.update()
+      TelegramAssistant.proactive_delivery_planner_enabled?() ->
+        enqueue_insight_candidate(delivery)
 
-          :ok
+      true ->
+        deliver_insight_now(delivery)
+    end
+  end
 
-        {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
-          :ok
+  defp deliver_insight_now(%Delivery{} = delivery) do
+    delivery = Repo.preload(delivery, :insight)
+    payload = Actions.telegram_payload(delivery)
 
-        {:error, reason} ->
-          delivery
-          |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
-          |> Repo.update()
+    case deliver(%{
+           user_id: delivery.user_id,
+           chat_id: delivery.destination,
+           origin_type: "insight",
+           origin_id: delivery.id,
+           linked_delivery_id: delivery.id,
+           linked_insight_id: delivery.insight_id,
+           dedupe_key: "insight_delivery:#{delivery.id}",
+           title: delivery.insight && delivery.insight.title,
+           body: payload.text,
+           urgency: delivery.score || 0.0,
+           interrupt_now: true,
+           why_now: delivery.insight && delivery.insight.summary,
+           telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
+         }) do
+      {:ok, %{decision: "sent_now", message_id: message_id}} ->
+        delivery
+        |> Ecto.Changeset.change(%{
+          status: "sent",
+          sent_at: DateTime.utc_now(),
+          provider_message_id: message_id,
+          metadata: Map.merge(delivery.metadata || %{}, %{"telegram_message_id" => message_id})
+        })
+        |> Repo.update()
 
-          {:error, reason}
-      end
-    else
-      {:fallback, :disabled}
+        :ok
+
+      {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
+        :ok
+
+      {:error, reason} ->
+        delivery
+        |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
+        |> Repo.update()
+
+        {:error, reason}
     end
   end
 
   def deliver_brief(%Brief{} = brief) do
-    if TelegramAssistant.unified_push_enabled?() do
-      todos = Briefs.todo_digest_todos(brief)
+    cond do
+      not TelegramAssistant.unified_push_enabled?() ->
+        {:fallback, :disabled}
 
-      if todos != [] do
-        deliver_todo_digest_brief(brief, todos)
-      else
-        deliver_standard_brief(brief)
-      end
+      TelegramAssistant.proactive_delivery_planner_enabled?() ->
+        enqueue_brief_candidate(brief)
+
+      true ->
+        deliver_brief_now(brief)
+    end
+  end
+
+  defp deliver_brief_now(%Brief{} = brief) do
+    todos = Briefs.todo_digest_todos(brief)
+
+    if todos != [] do
+      deliver_todo_digest_brief(brief, todos)
     else
-      {:fallback, :disabled}
+      deliver_standard_brief(brief)
     end
   end
 
@@ -277,6 +295,92 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp enqueue_insight_candidate(%Delivery{} = delivery) do
+    delivery = Repo.preload(delivery, :insight)
+    payload = Actions.telegram_payload(delivery)
+
+    TelegramAssistant.enqueue_proactive_candidate(%{
+      user_id: delivery.user_id,
+      source: "insight",
+      source_id: delivery.id,
+      dedupe_key: "insight_delivery:#{delivery.id}",
+      title: delivery.insight && delivery.insight.title,
+      body: payload.text,
+      urgency: delivery.score || 0.0,
+      why_now: delivery.insight && delivery.insight.summary,
+      structured_data: %{
+        "linked_delivery_id" => delivery.id,
+        "linked_insight_id" => delivery.insight_id,
+        "message_class" => "insight"
+      },
+      telegram_opts:
+        compact_map(%{"parse_mode" => "HTML", "reply_markup" => payload.reply_markup})
+    })
+    |> case do
+      {:ok, _candidate} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp enqueue_brief_candidate(%Brief{} = brief) do
+    todos = Briefs.todo_digest_todos(brief)
+
+    attrs =
+      if todos == [],
+        do: standard_brief_candidate(brief),
+        else: todo_digest_candidate(brief, todos)
+
+    TelegramAssistant.enqueue_proactive_candidate(attrs)
+    |> case do
+      {:ok, _candidate} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp standard_brief_candidate(%Brief{} = brief) do
+    payload = Briefs.telegram_payload(brief)
+
+    %{
+      user_id: brief.user_id,
+      source: "brief",
+      source_id: brief.id,
+      dedupe_key: "brief:#{brief.id}",
+      title: brief.title,
+      body: payload.text,
+      urgency: 0.7,
+      why_now: brief.summary,
+      structured_data: brief_structured_data(brief),
+      telegram_opts:
+        compact_map(%{"parse_mode" => "HTML", "reply_markup" => payload.reply_markup})
+    }
+  end
+
+  defp todo_digest_candidate(%Brief{} = brief, todos) when is_list(todos) do
+    %{
+      user_id: brief.user_id,
+      source: "brief",
+      source_id: brief.id,
+      dedupe_key: "brief:#{brief.id}",
+      title: brief.title,
+      body: Briefs.todo_digest_intro_text(brief, todos),
+      urgency: 0.7,
+      why_now: brief.summary,
+      structured_data:
+        brief_structured_data(brief)
+        |> Map.put("message_class", "todo_digest")
+        |> Map.put("todo_ids", Enum.map(todos, & &1.id))
+        |> Map.put("todo_count", length(todos))
+        |> Map.put("brief_cadence", brief.cadence),
+      telegram_opts: %{"parse_mode" => "HTML"}
+    }
+  end
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
 
   defp deliver_standard_brief(%Brief{} = brief) do
     payload = Briefs.telegram_payload(brief)
