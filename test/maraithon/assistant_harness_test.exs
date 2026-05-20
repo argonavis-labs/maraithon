@@ -104,6 +104,26 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "\"contract_version\":2"
   end
 
+  test "uses chat-tier models for proactive planning requests" do
+    proactive_request =
+      AssistantHarness.build_proactive_request(%{context: %{}}, chat_model: "chat-tier")
+
+    delivery_request =
+      AssistantHarness.build_delivery_plan_request(%{context: %{}, candidates: []},
+        chat_model: "chat-tier"
+      )
+
+    override_request =
+      AssistantHarness.build_proactive_request(%{context: %{}},
+        chat_model: "chat-tier",
+        proactive_model: "proactive-tier"
+      )
+
+    assert proactive_request["model"] == "chat-tier"
+    assert delivery_request["model"] == "chat-tier"
+    assert override_request["model"] == "proactive-tier"
+  end
+
   test "builds loop request payloads with compact tool evidence" do
     state = %{
       iteration: 2,

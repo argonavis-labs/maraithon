@@ -53,6 +53,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @prompt_default_list_limit 500
   @prompt_gmail_list_limit 50
   @prompt_gmail_body_limit 1_500
+  @prompt_gmail_snippet_limit 400
   @prompt_meeting_list_limit 60
   @prompt_meeting_string_limit 6_000
   @prompt_web_context_limit 5
@@ -1044,11 +1045,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        #{skill.instructions}
 
        Email review rule:
-       Every Gmail item includes body_available, body_status, and body. Use the full body for
-       relevance and obligation judgments. Do not classify an email from sender, subject, or
-       snippet alone. If body_available is false, treat that email as unreviewable source
-       degradation and do not surface it as finance, school, marketing, urgent, or actionable
-       unless another full-body source supports that conclusion.
+       Every Gmail item includes body_available, body_status, and body. Use body for relevance
+       and obligation judgments. Do not classify an email from sender, subject, or snippet alone.
+       If body_status is available_truncated, treat body as the selected bounded source excerpt
+       for that message and keep uncertainty visible when the excerpt is insufficient. If
+       body_available is false, treat that email as unreviewable source degradation and do not
+       surface it as finance, school, marketing, urgent, or actionable unless another body-backed
+       source supports that conclusion.
 
        Local source rule:
        When the connector context includes iMessage chats, calendar events, reminders, notes, voice memos, files, or browser history, cite the most relevant items by short name. Prefer first-party local sources over scraped equivalents.
@@ -1320,7 +1323,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp gmail_message_for_prompt(message) when is_map(message) do
-    body = gmail_body_for_prompt(message)
+    body =
+      message
+      |> gmail_body_for_prompt()
+      |> truncate_prompt_string(@prompt_gmail_body_limit)
+
     body_available = body != ""
 
     %{
@@ -1334,13 +1341,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "date" =>
         prompt_time(read_any(message, "internal_date")) || read_string(message, "date", nil),
       "labels" => read_list(message, "labels"),
-      "snippet" => read_string(message, "snippet", ""),
+      "snippet" =>
+        message
+        |> read_string("snippet", "")
+        |> truncate_prompt_string(@prompt_gmail_snippet_limit),
       "body_available" => body_available,
-      "body_status" =>
-        read_string(message, "body_status", if(body_available, do: "available", else: "missing")),
+      "body_status" => gmail_body_status_for_prompt(message, body, body_available),
       "body" => body
     }
   end
+
+  defp gmail_body_status_for_prompt(message, body, true) do
+    source_status = read_string(message, "body_status", "available")
+
+    if String.contains?(body, "[truncated") do
+      "available_truncated"
+    else
+      source_status
+    end
+  end
+
+  defp gmail_body_status_for_prompt(message, _body, false),
+    do: read_string(message, "body_status", "missing")
 
   defp gmail_body_for_prompt(message) when is_map(message) do
     [
@@ -2180,7 +2202,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "",
       &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_body_limit))
     )
-    |> Map.update("snippet", "", &(to_string(&1) |> truncate_prompt_string(400)))
+    |> Map.update(
+      "snippet",
+      "",
+      &(to_string(&1) |> truncate_prompt_string(@prompt_gmail_snippet_limit))
+    )
     |> compact_prompt_value()
   end
 

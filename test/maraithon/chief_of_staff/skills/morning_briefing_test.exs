@@ -554,19 +554,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       source_bundle: source_bundle
     }
 
-    {:effect, {:llm_call, params}, _state} = MorningBriefing.handle_wakeup(state, context)
+    {:effect, {:llm_call, params}, state} = MorningBriefing.handle_wakeup(state, context)
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
     [_instructions, input_json] = String.split(prompt, "Brief input JSON:\n", parts: 2)
     input = Jason.decode!(String.trim(input_json))
 
+    {:ok, pending_json} = Jason.encode(state.pending_brief_input)
+
+    assert String.length(pending_json) < 500_000
     assert String.length(prompt) < 500_000
     assert length(get_in(input, ["gmail", "recent_inbox"])) == 50
     assert length(get_in(input, ["gmail", "recent_unread"])) == 50
 
+    pending_body =
+      get_in(state.pending_brief_input, ["gmail", "recent_inbox", Access.at(0), "body"])
+
+    pending_status =
+      get_in(state.pending_brief_input, ["gmail", "recent_inbox", Access.at(0), "body_status"])
+
     first_body = get_in(input, ["gmail", "recent_inbox", Access.at(0), "body"])
     first_snippet = get_in(input, ["gmail", "recent_inbox", Access.at(0), "snippet"])
 
+    assert String.length(pending_body) < 1_600
+    assert pending_body =~ "[truncated"
+    assert pending_status == "available_truncated"
     assert String.length(first_body) < 1_600
     assert String.length(first_snippet) < 500
     assert first_body =~ "[truncated"

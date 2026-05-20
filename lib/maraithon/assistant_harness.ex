@@ -213,7 +213,7 @@ defmodule Maraithon.AssistantHarness do
     policy = runtime_policy(opts)
     prompt = payload |> Map.put_new(:runtime_policy, policy) |> build_prompt()
 
-    base = %{
+    %{
       "messages" => [
         %{"role" => "system", "content" => system_prompt()},
         %{"role" => "user", "content" => prompt}
@@ -222,12 +222,7 @@ defmodule Maraithon.AssistantHarness do
       "temperature" => policy.chat_request.temperature,
       "reasoning_effort" => policy.chat_request.reasoning_effort
     }
-
-    case Keyword.get(opts, :chat_model, LLM.chat_model()) do
-      nil -> base
-      "" -> base
-      model -> Map.put(base, "model", model)
-    end
+    |> maybe_put_request_model(Keyword.get(opts, :chat_model, LLM.chat_model()))
   end
 
   def build_proactive_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -243,6 +238,7 @@ defmodule Maraithon.AssistantHarness do
       "temperature" => policy.proactive_request.temperature,
       "reasoning_effort" => policy.proactive_request.reasoning_effort
     }
+    |> maybe_put_request_model(proactive_model(opts))
   end
 
   def build_delivery_plan_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -258,7 +254,16 @@ defmodule Maraithon.AssistantHarness do
       "temperature" => policy.proactive_request.temperature,
       "reasoning_effort" => policy.proactive_request.reasoning_effort
     }
+    |> maybe_put_request_model(proactive_model(opts))
   end
+
+  defp proactive_model(opts) do
+    Keyword.get(opts, :proactive_model, Keyword.get(opts, :chat_model, LLM.chat_model()))
+  end
+
+  defp maybe_put_request_model(params, nil), do: params
+  defp maybe_put_request_model(params, ""), do: params
+  defp maybe_put_request_model(params, model), do: Map.put(params, "model", model)
 
   def next_step(payload, opts \\ []) when is_map(payload) do
     params = build_step_request(payload, opts)
