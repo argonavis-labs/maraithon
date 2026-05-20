@@ -719,7 +719,9 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       GenServer.stop(pid, :normal)
     end
 
-    test "defers rate-limited llm effects without consuming attempts", %{agent: agent} do
+    test "retries rate-limited llm effects with provider backoff and consumes attempts", %{
+      agent: agent
+    } do
       case Process.whereis(EffectRunner) do
         nil -> :ok
         pid -> GenServer.stop(pid, :normal)
@@ -752,7 +754,7 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
 
       assert updated_effect.status == "pending"
-      assert updated_effect.attempts == 0
+      assert updated_effect.attempts == 1
       assert updated_effect.retry_after != nil
       assert DateTime.diff(updated_effect.retry_after, DateTime.utc_now(), :second) >= 50
 

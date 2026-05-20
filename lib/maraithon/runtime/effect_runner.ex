@@ -280,7 +280,7 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp next_attempt_count(%Effect{} = effect, reason) do
-    if deferrable_effect_error?(effect, reason) do
+    if no_attempt_deferrable_effect_error?(effect, reason) do
       effect.attempts
     else
       effect.attempts + 1
@@ -288,14 +288,16 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp should_retry?(%Effect{} = effect, reason, attempts) do
-    deferrable_effect_error?(effect, reason) or attempts < effect.max_attempts
+    no_attempt_deferrable_effect_error?(effect, reason) or attempts < effect.max_attempts
   end
 
-  defp deferrable_effect_error?(%Effect{effect_type: "llm_call"}, reason) do
-    retry_after_ms(reason) != nil
-  end
+  defp no_attempt_deferrable_effect_error?(
+         %Effect{effect_type: "llm_call"},
+         {:llm_busy, _retry_after}
+       ),
+       do: true
 
-  defp deferrable_effect_error?(_effect, _reason), do: false
+  defp no_attempt_deferrable_effect_error?(_effect, _reason), do: false
 
   defp notify_agent(agent_id, effect_id, result) do
     :ok = Dispatch.dispatch(agent_id, {:effect_result, effect_id, result})
