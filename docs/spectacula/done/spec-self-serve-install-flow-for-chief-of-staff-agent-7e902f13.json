@@ -1,0 +1,67 @@
+{
+  "blockers": [],
+  "created_at": "2026-05-14T18:38:42Z",
+  "history": [
+    {
+      "at": "2026-05-14T18:38:42Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task 7E902F13-AAEA-4A8E-A430-8F3E013C4D1D.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_verified_ready",
+      "from_stage": "ready",
+      "note": "Current code has package manifests, required connector metadata, setup_required statuses, and /start email linking fallback. Missing: install_chief_of_staff shared path, connector_readiness/2, TelegramLink.deep_link/1, dashboard install handler/section, docs/install-chief-of-staff.md, self-serve smoke test.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:41:20Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "note": "Starting implementation after completing the proactive delivery planner spec. Work will stay in progress until the self-serve install flow is implemented, verified, and moved to done.",
+      "to_stage": "inprogress"
+    },
+    {
+      "at": "2026-05-20T10:14:20Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "note": "Implemented connector readiness, shared Chief of Staff install path, dashboard install row, Telegram signed token linking with email fallback, de-Kent morning briefing defaults, docs, and smoke coverage. mix precommit passed with 1835 tests and 0 failures.",
+      "to_stage": "done"
+    }
+  ],
+  "completed_at": "2026-05-20T10:14:20Z",
+  "next_action": "None for this spec. Pick the next ready Spectacula spec.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13.md",
+      "/Users/kent/bliss/maraithon/docs/install-chief-of-staff.md",
+      "/Users/kent/bliss/maraithon/test/maraithon_web/self_serve_install_smoke_test.exs"
+    ],
+    "last_completed_step": "Implemented and verified the self-serve Chief of Staff install flow; final spec review passed on 2026-05-20.",
+    "notes": "Dashboard install supports enabled and setup_required paths. Telegram signed start tokens are accepted; Telegram deep links fall back to the documented /start email path when the signed token exceeds Telegram start-param limits. Fresh tenant briefing defaults no longer bake in Kent/Runner commercial constants; primary admin config preserves those values only for the primary admin install.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "7E902F13-AAEA-4A8E-A430-8F3E013C4D1D"
+  },
+  "slug": "spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13",
+  "spec_id": "spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13",
+  "spec_path": "../specs/spec-self-serve-install-flow-for-chief-of-staff-agent-7e902f13.md",
+  "stage": "done",
+  "started_at": "2026-05-20T09:41:20Z",
+  "summary": "Done: self-serve Chief of Staff install now gates on Telegram/Gmail/Calendar readiness, records setup_required when incomplete, installs enabled/running when ready, links to connector setup from the dashboard, supports signed Telegram linking with email fallback, and includes docs and smoke tests.",
+  "title": "Spec: Self-serve install flow for Chief of Staff agent",
+  "updated_at": "2026-05-20T10:14:20Z",
+  "verification": {
+    "build": "passed",
+    "codebase_review": "passed",
+    "format": "passed",
+    "lint": "skipped",
+    "notes": "Ran mix precommit after targeted verification. The first full run exposed two real test issues: a morning briefing test still assuming global Runner commercial defaults, and an LLM retry test cleanup race. Updated the tests to match the new config-backed behavior and ExUnit-supervised process lifecycle, then reran mix precommit successfully.",
+    "reviewed_at": "2026-05-20T10:14:20Z",
+    "spec_review": "passed",
+    "tests": "passed",
+    "typecheck": "passed"
+  }
+}

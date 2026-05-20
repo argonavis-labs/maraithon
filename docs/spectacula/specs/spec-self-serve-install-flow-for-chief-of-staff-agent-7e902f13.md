@@ -3,11 +3,11 @@ created_at: 2026-05-14T18:38:42Z
 created_by: cybrus
 cybrus_task_id: 7E902F13-AAEA-4A8E-A430-8F3E013C4D1D
 project: Maraithon App
-status: ready
+status: done
 ---
 # Spec: Self-serve install flow for Chief of Staff agent
 
-Status: Ready for human approval
+Status: Done
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context
