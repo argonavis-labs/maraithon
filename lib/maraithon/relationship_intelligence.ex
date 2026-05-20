@@ -15,10 +15,15 @@ defmodule Maraithon.RelationshipIntelligence do
   alias Maraithon.Memory.Item
 
   @sentinel "RELATIONSHIP_INTELLIGENCE_JSON_V1"
-  @max_observations 40
-  @max_people 12
-  @max_memories 12
-  @max_links 20
+  @max_observations 16
+  @max_people 8
+  @max_memories 6
+  @max_links 12
+  @default_max_tokens 6_000
+  @default_reasoning_effort "none"
+  @default_people_limit 16
+  @prompt_long_string_chars 1_200
+  @prompt_string_chars 700
   @valid_resource_types ~w(todo gmail_thread gmail_message calendar_event slack_thread slack_message telegram_message whatsapp_message source_observation)
 
   def sentinel, do: @sentinel
@@ -37,10 +42,11 @@ defmodule Maraithon.RelationshipIntelligence do
       {:ok,
        %{
          "messages" => [%{"role" => "user", "content" => prompt}],
-         "max_tokens" => Keyword.get(opts, :max_tokens, 8_000),
+         "max_tokens" => Keyword.get(opts, :max_tokens, @default_max_tokens),
          "temperature" => Keyword.get(opts, :temperature, 0.1),
-         "reasoning_effort" => Keyword.get(opts, :reasoning_effort, LLM.intelligence())
+         "reasoning_effort" => Keyword.get(opts, :reasoning_effort, @default_reasoning_effort)
        }}
+      |> maybe_put_model(Keyword.get(opts, :model, LLM.chat_model()))
     end
   end
 
@@ -76,7 +82,12 @@ defmodule Maraithon.RelationshipIntelligence do
   defp build_prompt(user_id, observations, opts) do
     source = Keyword.get(opts, :source, "relationship_intelligence")
     now = Keyword.get(opts, :now, DateTime.utc_now())
-    existing_people = Crm.summarize_for_prompt(user_id, Keyword.get(opts, :people_limit, 24))
+
+    existing_people =
+      user_id
+      |> Crm.summarize_for_prompt(Keyword.get(opts, :people_limit, @default_people_limit))
+      |> Enum.map(&compact_prompt_value/1)
+
     memory_context = safe_memory_context(user_id, observations, opts)
 
     payload = %{
@@ -84,8 +95,8 @@ defmodule Maraithon.RelationshipIntelligence do
       "source" => source,
       "generated_at" => normalize_json_value(now),
       "existing_people" => existing_people,
-      "memory_context" => memory_context,
-      "observations" => observations
+      "memory_context" => compact_prompt_value(memory_context),
+      "observations" => Enum.map(observations, &compact_prompt_value/1)
     }
 
     """
@@ -136,6 +147,14 @@ defmodule Maraithon.RelationshipIntelligence do
     - Link learned people to relevant source observations or todos when a
       resource id is available.
     - Return ONLY valid JSON. No markdown.
+
+    Output budget:
+    - Return at most #{@max_people} people, #{@max_memories} memories, and #{@max_links} links.
+    - If more observations qualify, choose the highest-confidence durable facts
+      and skip borderline or duplicate items.
+    - Keep every string field to one short sentence. Keep notes, memory content,
+      link summaries, and metadata reasoning concise.
+    - Prefer empty arrays over verbose low-confidence output.
 
     Return JSON shaped like:
     {
@@ -466,7 +485,64 @@ defmodule Maraithon.RelationshipIntelligence do
     observation
     |> normalize_json_value()
     |> normalize_map()
+    |> compact_prompt_value()
     |> compact_map()
+  end
+
+  defp maybe_put_model({:ok, params}, nil), do: {:ok, params}
+  defp maybe_put_model({:ok, params}, ""), do: {:ok, params}
+  defp maybe_put_model({:ok, params}, model), do: {:ok, Map.put(params, "model", model)}
+
+  defp compact_prompt_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp compact_prompt_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp compact_prompt_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp compact_prompt_value(%Time{} = value), do: Time.to_iso8601(value)
+  defp compact_prompt_value(%{__struct__: _struct} = value), do: inspect(value)
+
+  defp compact_prompt_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, nested} ->
+      key = to_string(key)
+      {key, compact_prompt_value(key, nested)}
+    end)
+    |> Map.new()
+    |> compact_map()
+  end
+
+  defp compact_prompt_value(value) when is_list(value),
+    do: Enum.map(value, &compact_prompt_value/1)
+
+  defp compact_prompt_value(value), do: normalize_json_value(value)
+
+  defp compact_prompt_value(key, value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> truncate_string(prompt_string_limit(key))
+  end
+
+  defp compact_prompt_value(_key, value), do: compact_prompt_value(value)
+
+  defp prompt_string_limit(key)
+       when key in [
+              "body",
+              "body_excerpt",
+              "content",
+              "description",
+              "excerpt",
+              "notes",
+              "summary",
+              "text_body"
+            ],
+       do: @prompt_long_string_chars
+
+  defp prompt_string_limit(_key), do: @prompt_string_chars
+
+  defp truncate_string(value, limit) when is_binary(value) and is_integer(limit) do
+    if String.length(value) > limit do
+      String.slice(value, 0, limit) <> " [truncated]"
+    else
+      value
+    end
   end
 
   defp serialize_person(%Person{} = person) do

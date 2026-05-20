@@ -6,6 +6,41 @@ defmodule Maraithon.RelationshipIntelligenceTest do
   alias Maraithon.Memory
   alias Maraithon.RelationshipIntelligence
 
+  test "builds bounded chat-tier params for relationship learning" do
+    user_id = "relationship-intel-params-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    long_body = String.duplicate("Detailed relationship context that should be compacted. ", 80)
+
+    observations =
+      for index <- 1..25 do
+        %{
+          "source" => "gmail",
+          "resource_type" => "gmail_thread",
+          "resource_id" => "thread-#{index}",
+          "title" => "Relationship thread #{index}",
+          "summary" => "Summary #{index}",
+          "body_excerpt" => long_body,
+          "from" => "Person #{index} <person#{index}@example.com>",
+          "to" => user_id
+        }
+      end
+
+    assert {:ok, params} = RelationshipIntelligence.llm_params(user_id, observations)
+
+    assert params["model"] == Maraithon.LLM.chat_model()
+    assert params["max_tokens"] == 6_000
+    assert params["reasoning_effort"] == "none"
+
+    prompt = get_in(params, ["messages", Access.at(0), "content"])
+    assert prompt =~ "Return at most 8 people, 6 memories, and 12 links"
+    assert prompt =~ "Keep every string field to one short sentence"
+    assert prompt =~ "thread-16"
+    refute prompt =~ "thread-17"
+    assert prompt =~ "[truncated]"
+    assert byte_size(prompt) < 45_000
+  end
+
   test "learns CRM people, relationship memories, and source links from model output" do
     user_id = "relationship-intel-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
