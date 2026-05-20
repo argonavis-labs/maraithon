@@ -63,6 +63,17 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
     def complete(_params), do: {:error, {:rate_limited, 60_000}}
   end
 
+  defmodule InsufficientQuotaProvider do
+    @moduledoc false
+
+    def complete(params) do
+      test_pid = Application.fetch_env!(:maraithon, :effect_runner_test_pid)
+      send(test_pid, {:insufficient_quota_provider_called, self(), params})
+
+      {:error, {:insufficient_quota, "OpenAI quota exceeded"}}
+    end
+  end
+
   defmodule BlockingProvider do
     @moduledoc false
 
@@ -757,6 +768,52 @@ defmodule Maraithon.Runtime.EffectRunnerTest do
       assert updated_effect.attempts == 1
       assert updated_effect.retry_after != nil
       assert DateTime.diff(updated_effect.retry_after, DateTime.utc_now(), :second) >= 50
+
+      GenServer.stop(pid, :normal)
+    end
+
+    test "fails insufficient quota llm effects without scheduling retries", %{agent: agent} do
+      case Process.whereis(EffectRunner) do
+        nil -> :ok
+        pid -> GenServer.stop(pid, :normal)
+      end
+
+      original_runtime_config = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+      Application.put_env(
+        :maraithon,
+        Maraithon.Runtime,
+        Keyword.put(original_runtime_config, :llm_provider, InsufficientQuotaProvider)
+      )
+
+      Application.put_env(:maraithon, :effect_runner_test_pid, self())
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.Runtime, original_runtime_config)
+        Application.delete_env(:maraithon, :effect_runner_test_pid)
+      end)
+
+      {:ok, effect_id} =
+        Maraithon.Effects.request(agent.id, "llm_call", nil, %{
+          "messages" => [%{"role" => "user", "content" => "Hello"}],
+          "max_tokens" => 100
+        })
+
+      {:ok, pid} = EffectRunner.start_link([])
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      send(pid, :poll)
+      assert_receive {:insufficient_quota_provider_called, provider_pid, _params}, 1_000
+
+      ref = Process.monitor(provider_pid)
+      assert_receive {:DOWN, ^ref, :process, ^provider_pid, :normal}, 1_000
+
+      updated_effect = Maraithon.Repo.get!(Maraithon.Effects.Effect, effect_id)
+
+      assert updated_effect.status == "failed"
+      assert updated_effect.attempts == 1
+      assert updated_effect.retry_after == nil
+      assert updated_effect.error =~ "insufficient_quota"
 
       GenServer.stop(pid, :normal)
     end

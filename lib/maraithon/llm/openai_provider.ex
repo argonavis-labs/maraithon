@@ -77,9 +77,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
         parse_response(response)
 
       {:ok, %{status: 429, headers: headers, body: body}} ->
-        retry_after = extract_retry_after(headers, body)
-        Logger.warning("Rate limited, retry after #{retry_after}ms")
-        {:error, {:rate_limited, retry_after}}
+        handle_429(headers, body, "OpenAI API")
 
       {:ok, %{status: status, body: body}} ->
         Logger.error("OpenAI API error", status: status, body: inspect(body))
@@ -155,9 +153,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
         finalize_stream(acc, model)
 
       {:ok, %{status: 429, headers: headers, body: body}} ->
-        retry_after = extract_retry_after(headers, body)
-        Logger.warning("Rate limited (stream), retry after #{retry_after}ms")
-        {:error, {:rate_limited, retry_after}}
+        handle_429(headers, body, "OpenAI API stream")
 
       {:ok, %{status: status, body: body}} ->
         Logger.error("OpenAI API stream error", status: status, body: inspect(body))
@@ -482,6 +478,54 @@ defmodule Maraithon.LLM.OpenAIProvider do
   end
 
   defp extract_retry_after_from_body(_body), do: @default_retry_after_ms
+
+  defp handle_429(headers, body, log_context) do
+    case quota_error(body) do
+      {:insufficient_quota, message} ->
+        Logger.error("#{log_context} quota exceeded",
+          error_code: error_field(body, "code"),
+          error_type: error_field(body, "type"),
+          message: message
+        )
+
+        {:error, {:insufficient_quota, message}}
+
+      nil ->
+        retry_after = extract_retry_after(headers, body)
+        Logger.warning("Rate limited, retry after #{retry_after}ms")
+        {:error, {:rate_limited, retry_after}}
+    end
+  end
+
+  defp quota_error(%{"error" => %{} = error}) do
+    code = normalize_error_field(Map.get(error, "code"))
+    type = normalize_error_field(Map.get(error, "type"))
+
+    if "insufficient_quota" in [code, type] do
+      {:insufficient_quota, error_message(error)}
+    end
+  end
+
+  defp quota_error(_body), do: nil
+
+  defp error_field(%{"error" => %{} = error}, field), do: Map.get(error, field)
+  defp error_field(_body, _field), do: nil
+
+  defp normalize_error_field(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+  end
+
+  defp normalize_error_field(_value), do: nil
+
+  defp error_message(%{"message" => message}) when is_binary(message) do
+    message
+    |> String.trim()
+    |> String.slice(0, 500)
+  end
+
+  defp error_message(_error), do: "OpenAI quota exceeded"
 
   defp base_url do
     Application.get_env(:maraithon, :openai, [])

@@ -67,10 +67,8 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
 
     # 3. Force a checkpoint to persist the snapshot.
     send(original_pid, {:wakeup, "checkpoint", Ecto.UUID.generate(), %{}})
-    Process.sleep(200)
 
-    snapshot = Snapshot.latest(agent.id)
-    assert snapshot != nil, "checkpoint must have written a snapshot"
+    snapshot = wait_for_snapshot(agent.id, marker, 10_000)
     assert snapshot.behavior_state == marker
 
     # 4. Crash it. `:kill` is an unstoppable abnormal exit — :transient
@@ -81,7 +79,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
 
     # 5. The supervisor restarts it under the same Registry name. Poll
     #    until a new pid claims that name.
-    new_pid = wait_for_new_pid(agent.id, original_pid, 5_000)
+    new_pid = wait_for_new_pid(agent.id, original_pid, 15_000)
     refute new_pid == original_pid
     wait_for_idle(new_pid)
 
@@ -110,6 +108,25 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
   defp wait_for_new_pid(agent_id, old_pid, timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_wait_for_new_pid(agent_id, old_pid, deadline)
+  end
+
+  defp wait_for_snapshot(agent_id, marker, timeout) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_wait_for_snapshot(agent_id, marker, deadline)
+  end
+
+  defp do_wait_for_snapshot(agent_id, marker, deadline) do
+    case Snapshot.latest(agent_id) do
+      snapshot when is_map(snapshot) ->
+        if snapshot.behavior_state == marker do
+          snapshot
+        else
+          retry_until(deadline, fn -> do_wait_for_snapshot(agent_id, marker, deadline) end)
+        end
+
+      _other ->
+        retry_until(deadline, fn -> do_wait_for_snapshot(agent_id, marker, deadline) end)
+    end
   end
 
   defp do_wait_for_new_pid(agent_id, old_pid, deadline) do

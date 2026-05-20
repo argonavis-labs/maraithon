@@ -288,8 +288,13 @@ defmodule Maraithon.Runtime.EffectRunner do
   end
 
   defp should_retry?(%Effect{} = effect, reason, attempts) do
-    no_attempt_deferrable_effect_error?(effect, reason) or attempts < effect.max_attempts
+    not terminal_effect_error?(reason) and
+      (no_attempt_deferrable_effect_error?(effect, reason) or attempts < effect.max_attempts)
   end
+
+  defp terminal_effect_error?({:insufficient_quota, _message}), do: true
+  defp terminal_effect_error?(:insufficient_quota), do: true
+  defp terminal_effect_error?(_reason), do: false
 
   defp no_attempt_deferrable_effect_error?(
          %Effect{effect_type: "llm_call"},

@@ -255,6 +255,38 @@ defmodule Maraithon.LLM.OpenAIProviderTest do
                })
     end
 
+    test "classifies insufficient quota as terminal quota exhaustion" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime, openai_api_key: "test_api_key")
+
+      Application.put_env(:maraithon, :openai,
+        base_url: "http://localhost:#{bypass.port}/v1/responses"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/responses", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          429,
+          Jason.encode!(%{
+            "error" => %{
+              "code" => "insufficient_quota",
+              "message" => "You exceeded your current quota.",
+              "type" => "insufficient_quota"
+            }
+          })
+        )
+      end)
+
+      assert {:error, {:insufficient_quota, message}} =
+               OpenAIProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Hello"}]
+               })
+
+      assert message =~ "current quota"
+    end
+
     test "returns incomplete response error when no answer is produced" do
       bypass = Bypass.open()
 
