@@ -1,5 +1,5 @@
 defmodule Maraithon.OAuthTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
