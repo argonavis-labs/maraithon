@@ -1,0 +1,65 @@
+{
+  "blockers": [],
+  "created_at": "2026-05-14T19:23:06Z",
+  "history": [
+    {
+      "at": "2026-05-14T19:23:06Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task A6547AA9-52E7-42A3-ADB9-27E6B036BB32.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_verified_ready",
+      "from_stage": "ready",
+      "note": "No proactive_candidates migration, ProactiveQueue, DeliveryPlanner, or plan_delivery/2 implementation exists in lib/test/priv as of review.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:21:15Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "note": "Starting implementation with the canonical spec as the reference contract. Work will stay in progress until code, tests, verification, and final spec review pass.",
+      "to_stage": "inprogress"
+    },
+    {
+      "at": "2026-05-20T09:40:10Z",
+      "event": "implementation_verified",
+      "from_stage": "inprogress",
+      "note": "Implemented the durable proactive_candidates queue, source enqueueing, delivery planner, AssistantHarness plan_delivery contract, runtime drain/expiry, config, and tests. Migration round-trip, targeted tests, full mix test, prod compile, and mix precommit passed.",
+      "to_stage": "done"
+    }
+  ],
+  "completed_at": "2026-05-20T09:40:10Z",
+  "next_action": "Spec complete. Keep PROACTIVE_DELIVERY_PLANNER_ENABLED disabled until rollout, then monitor delivery_planner spans, proactive.delivery_planned ledger entries, and stale pending candidates.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/proactive-delivery-planner-implementation-plan-a6547aa9.md"
+    ],
+    "last_completed_step": "Implemented and verified the Proactive Delivery Planner end to end.",
+    "notes": "Added proactive_candidates, ProactiveCandidate, ProactiveQueue, DeliveryPlanner, AssistantHarness.plan_delivery/2, flag-gated insight/brief/check-in enqueueing, ProactiveCheckIn planner drain and expiry, ActionLedger planning event, config/runtime flags, and test coverage for queue/source/planner/runtime/legacy paths.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "A6547AA9-52E7-42A3-ADB9-27E6B036BB32"
+  },
+  "slug": "proactive-delivery-planner-implementation-plan-a6547aa9",
+  "spec_id": "proactive-delivery-planner-implementation-plan-a6547aa9",
+  "spec_path": "../specs/proactive-delivery-planner-implementation-plan-a6547aa9.md",
+  "stage": "done",
+  "started_at": "2026-05-20T09:21:15Z",
+  "summary": "Implemented the Proactive Delivery Planner: durable queue, flag-gated source enqueueing, one model planning pass per user, interrupt/digest/hold dispatch, runtime drain, stale expiry, config, and tests.",
+  "title": "Proactive Delivery Planner Implementation Plan",
+  "updated_at": "2026-05-20T09:40:10Z",
+  "verification": {
+    "build": "passed",
+    "codebase_review": "implemented",
+    "format": "passed",
+    "lint": "passed",
+    "notes": "Acceptance checks passed: mix ecto.migrate, mix ecto.rollback, mix ecto.migrate; targeted proactive queue/source/planner/runtime/harness tests; regression tests for proactive, insight notifications, and briefs; mix format --check-formatted; mix compile --warnings-as-errors; MIX_ENV=prod mix compile --warnings-as-errors; mix test with 1830 tests, 0 failures; mix precommit with 1830 tests, 0 failures.",
+    "reviewed_at": "2026-05-20T09:40:10Z",
+    "spec_review": "passed",
+    "tests": "passed",
+    "typecheck": "passed"
+  }
+}
