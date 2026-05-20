@@ -26,6 +26,8 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   @default_memory_limit 50
 
+  alias Maraithon.LLM
+
   require Logger
 
   @impl true
@@ -141,13 +143,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     # Build prompt and ask LLM what to do
     prompt = build_thinking_prompt(state, event, context)
 
-    params = %{
-      "messages" => [
-        %{"role" => "user", "content" => prompt}
-      ],
-      "max_tokens" => 2000,
-      "temperature" => 0.7
-    }
+    params = llm_params(prompt, 2_000)
 
     {:effect, {:llm_call, params}, state}
   end
@@ -157,13 +153,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     if length(state.memory) > 0 do
       prompt = build_proactive_prompt(state, context)
 
-      params = %{
-        "messages" => [
-          %{"role" => "user", "content" => prompt}
-        ],
-        "max_tokens" => 1000,
-        "temperature" => 0.7
-      }
+      params = llm_params(prompt, 1_000)
 
       {:effect, {:llm_call, params}, state}
     else
@@ -224,13 +214,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
         # Tool succeeded - ask LLM what to do with the result
         prompt = build_tool_result_prompt(state, tool_call, tool_result, context)
 
-        params = %{
-          "messages" => [
-            %{"role" => "user", "content" => prompt}
-          ],
-          "max_tokens" => 1500,
-          "temperature" => 0.7
-        }
+        params = llm_params(prompt, 1_500)
 
         state = %{state | pending_tool_call: nil}
         {:effect, {:llm_call, params}, state}
@@ -258,6 +242,22 @@ defmodule Maraithon.Behaviors.PromptAgent do
   # ===========================================================================
   # Prompt Building
   # ===========================================================================
+
+  defp llm_params(prompt, max_tokens) do
+    %{
+      "messages" => [
+        %{"role" => "user", "content" => prompt}
+      ],
+      "max_tokens" => max_tokens,
+      "temperature" => 0.7,
+      "reasoning_effort" => "none"
+    }
+    |> maybe_put_model(LLM.chat_model())
+  end
+
+  defp maybe_put_model(params, nil), do: params
+  defp maybe_put_model(params, ""), do: params
+  defp maybe_put_model(params, model), do: Map.put(params, "model", model)
 
   defp build_thinking_prompt(state, event, context) do
     memory_context = format_memory(state.memory)

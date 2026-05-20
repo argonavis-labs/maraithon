@@ -56,6 +56,8 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert new_state.last_processed_message == "Hello agent"
       assert length(new_state.memory) == 1
       assert is_map(params)
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["reasoning_effort"] == "none"
       assert params["max_tokens"] == 2000
     end
 
@@ -79,6 +81,8 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert new_state.events_seen == 1
       assert length(new_state.memory) == 1
       assert is_map(params)
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["reasoning_effort"] == "none"
     end
 
     test "returns idle when no events and empty memory" do
@@ -101,6 +105,8 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
 
       {:effect, {:llm_call, params}, _state} = PromptAgent.handle_wakeup(state, @context)
 
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["reasoning_effort"] == "none"
       assert params["max_tokens"] == 1000
     end
   end
@@ -206,6 +212,8 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
         PromptAgent.handle_effect_result({:tool_call, result}, state, @context)
 
       assert new_state.pending_tool_call == nil
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["reasoning_effort"] == "none"
       assert params["max_tokens"] == 1500
     end
 
