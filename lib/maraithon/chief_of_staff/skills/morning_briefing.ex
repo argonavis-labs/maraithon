@@ -250,6 +250,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       Map.get(state.last_generated_keys, "morning") == period_key ->
         {:idle, %{state | user_id: user_id}}
 
+      Briefs.exists?(user_id, dedupe_key) ->
+        {:idle,
+         %{
+           state
+           | user_id: user_id,
+             pending_brief_input: nil,
+             pending_dedupe_key: nil,
+             last_generated_keys: Map.put(state.last_generated_keys, "morning", period_key)
+         }}
+
       not due_now?(now, state) ->
         {:idle, %{state | user_id: user_id}}
 

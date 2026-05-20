@@ -673,6 +673,42 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["reasoning_effort"] == "high"
   end
 
+  test "does not regenerate when a persisted morning brief already exists", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    {:ok, _brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Thursday morning briefing",
+        "summary" => "Existing source-backed briefing for the local day.",
+        "body" => "The briefing already exists for this local date.",
+        "status" => "sent",
+        "scheduled_for" => now,
+        "dedupe_key" => "morning_briefing:2026-05-07"
+      })
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+    }
+
+    assert {:idle, state} = MorningBriefing.handle_wakeup(state, context)
+    assert state.last_generated_keys["morning"] == "2026-05-07"
+  end
+
   test "does not generate a morning brief when Telegram is not connected", %{agent: agent} do
     user_id = "morning-briefing-no-telegram-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
