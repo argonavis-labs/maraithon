@@ -1,0 +1,73 @@
+{
+  "blockers": [],
+  "created_at": "2026-05-15T04:06:35Z",
+  "history": [
+    {
+      "at": "2026-05-15T04:06:35Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task F6D69798-494B-48BC-AB89-A19941A826E6.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_review_needs_spec_update",
+      "from_stage": "ready",
+      "note": "Current code has Maraithon.Crm, crm_people, crm_person_links, CRM tools, ingestion, fuzzy/semantic lookup, and relationship context. Missing from this spec: separate person_identifiers/person_merges/person_notes, model-callable merge, Telegram card serializer, and /people LiveViews.",
+      "to_stage": "specs"
+    },
+    {
+      "at": "2026-05-20T10:59:44Z",
+      "event": "spec_upgraded_and_started",
+      "from_stage": "specs",
+      "note": "Upgraded the stale People/CRM spec into a focused delta against the existing Maraithon.Crm implementation: auditable merge, richer source-evidence links, Telegram card serializer, and model-callable merge tooling.",
+      "to_stage": "inprogress"
+    },
+    {
+      "at": "2026-05-20T11:08:57Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "note": "Implemented the CRM delta on Maraithon.Crm, added tests, and verified with mix precommit.",
+      "to_stage": "done"
+    }
+  ],
+  "next_action": "Pick the next highest-priority ready Spectacula spec and start implementation.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798.md",
+      "/Users/kent/bliss/maraithon/priv/repo/migrations/20260520105938_add_crm_merge_and_source_evidence.exs",
+      "/Users/kent/bliss/maraithon/lib/maraithon/crm.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/crm/person_merge.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/crm/serializer.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/tools/merge_people.ex",
+      "/Users/kent/bliss/maraithon/test/maraithon/crm_test.exs",
+      "/Users/kent/bliss/maraithon/test/maraithon/tools/people_tools_test.exs"
+    ],
+    "last_completed_step": "Implemented and verified the CRM merge/source-evidence delta.",
+    "notes": "Done as a focused delta on Maraithon.Crm. Deferred original stale-plan items remain intentionally out of scope: parallel Maraithon.People context, separate identifier tables, People LiveViews, and one-shot historical backfill.",
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "F6D69798-494B-48BC-AB89-A19941A826E6"
+  },
+  "slug": "ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798",
+  "spec_id": "ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798",
+  "spec_path": "../specs/ship-people-crm-data-model-with-semantic-merge-and-source-links-f6d69798.md",
+  "stage": "done",
+  "started_at": "2026-05-20T10:59:44Z",
+  "completed_at": "2026-05-20T11:08:57Z",
+  "summary": "Done as a focused CRM delta: auditable people merges, source-evidence links, Telegram card serializer, and model-callable merge tooling are implemented and verified on top of Maraithon.Crm.",
+  "title": "Ship People/CRM data model with semantic merge and source links",
+  "updated_at": "2026-05-20T11:08:57Z",
+  "verification": {
+    "build": "passed",
+    "codebase_review": "passed",
+    "format": "passed",
+    "lint": "passed",
+    "notes": "mix format passed; mix compile --warnings-as-errors passed; focused CRM/tool tests passed with 30 tests and 0 failures; mix precommit passed with 1855 tests and 0 failures.",
+    "precommit": "passed",
+    "reviewed_at": "2026-05-20T11:08:57Z",
+    "spec_review": "passed",
+    "tests": "passed",
+    "typecheck": "passed"
+  }
+}

@@ -3,11 +3,11 @@ created_at: 2026-05-15T04:06:35Z
 created_by: cybrus
 cybrus_task_id: F6D69798-494B-48BC-AB89-A19941A826E6
 project: Maraithon App
-status: inprogress
+status: done
 ---
 # Ship People/CRM data model with semantic merge and source links
 
-Status: In progress - upgraded as a delta against the existing `Maraithon.Crm` implementation
+Status: Done - implemented as a focused delta against the existing `Maraithon.Crm` implementation
 Purpose: Provide a durable Spectacula planning artifact for local Cybrus execution.
 
 ## Task Context
@@ -74,18 +74,39 @@ Separate identifier tables, a full People LiveView, and one-shot historical back
 
 ## Delta Acceptance Checks
 
-- [ ] `crm_people` has `status`, `merged_into_id`, and `merged_at`; default list/search/upsert resolution ignores merged rows.
-- [ ] `crm_person_links` can store `role`, `source_system`, `source_account`, `source_ref`, `evidence_quote`, `model_rationale`, and `confidence`.
-- [ ] `crm_person_merges` records every merge with user id, surviving person, merged person, evidence, rationale, performer, metadata, and timestamp.
-- [ ] `Maraithon.Crm.merge_people/4` runs transactionally, verifies same-user ownership, rejects self/double merges, repoints non-duplicate links, collapses duplicate links deterministically, merges contact details/relationship metrics, marks the merged row, and writes an audit row.
-- [ ] A model-callable `merge_people` tool exists with JSON schema and tool-catalog/capability registration.
-- [ ] `Maraithon.Crm.Serializer.telegram_card/2` renders a compact Markdown person card with name, relationship, preferred channel, last touch, open-loop count, recent sources, and no tables.
-- [ ] Tests cover successful merge, invalid ownership/self merges, duplicate link collapse, source-evidence serialization, tool execution, and Telegram card output.
-- [ ] `mix precommit` passes before this spec can move to `done`.
+- [x] `crm_people` has `status`, `merged_into_id`, and `merged_at`; default list/search/upsert resolution ignores merged rows.
+- [x] `crm_person_links` can store `role`, `source_system`, `source_account`, `source_ref`, `evidence_quote`, `model_rationale`, and `confidence`.
+- [x] `crm_person_merges` records every merge with user id, surviving person, merged person, evidence, rationale, performer, metadata, and timestamp.
+- [x] `Maraithon.Crm.merge_people/4` runs transactionally, verifies same-user ownership, rejects self/double merges, repoints non-duplicate links, collapses duplicate links deterministically, merges contact details/relationship metrics, marks the merged row, and writes an audit row.
+- [x] A model-callable `merge_people` tool exists with JSON schema and tool-catalog/capability registration.
+- [x] `Maraithon.Crm.Serializer.telegram_card/2` renders a compact Markdown person card with name, relationship, preferred channel, last touch, open-loop count, recent sources, and no tables.
+- [x] Tests cover successful merge, invalid ownership/self merges, duplicate link collapse, source-evidence serialization, tool execution, and Telegram card output.
+- [x] `mix precommit` passes before this spec can move to `done`.
+
+## 2026-05-20 Implementation Result
+
+Implemented on top of the existing `Maraithon.Crm` context rather than creating a parallel `Maraithon.People` context. The shipped delta includes:
+
+- CRM merge/source-evidence migration: `priv/repo/migrations/20260520105938_add_crm_merge_and_source_evidence.exs`.
+- Merge audit schema: `Maraithon.Crm.PersonMerge`.
+- Merge behavior: `Maraithon.Crm.merge_people/4`.
+- Source-evidence link fields in `Maraithon.Crm.PersonLink`.
+- Compact Telegram card serializer: `Maraithon.Crm.Serializer.telegram_card/2`.
+- Model-callable `merge_people` tool, JSON schema, tool catalog, capability registration, Chief of Staff marketplace allowlist, and skill headers.
+- Focused tests in `test/maraithon/crm_test.exs`, `test/maraithon/tools/people_tools_test.exs`, and `test/maraithon/tools_test.exs`.
+
+Verification:
+
+- `mix format` passed.
+- `mix compile --warnings-as-errors` passed.
+- Focused CRM/tool tests passed: `30 tests, 0 failures`.
+- `mix precommit` passed: `1855 tests, 0 failures`.
+
+The legacy plan below is retained as historical context from the original Cybrus task. It is superseded by the 2026-05-20 delta decision and implementation result above.
 
 ---
 
-## Assumptions and Decisions
+## Legacy Assumptions and Decisions (superseded)
 
 **Stack and conventions**
 - Phoenix 1.8 + Ecto + Postgres (matches current Maraithon deployment).
@@ -135,7 +156,7 @@ Separate identifier tables, a full People LiveView, and one-shot historical back
 
 ---
 
-## Implementation Plan
+## Legacy Implementation Plan (superseded)
 
 **Step 1 — Schema and migrations**
 1. Create migration `add_people_tables`:
