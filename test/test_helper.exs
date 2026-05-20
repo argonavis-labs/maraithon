@@ -50,6 +50,7 @@ Application.put_env(:maraithon, Maraithon.TelegramAssistant.Runner,
 
 Application.put_env(:maraithon, Maraithon.ContextCache.Builder, async_enabled: false)
 Application.put_env(:maraithon, Maraithon.Crm.PersonEmbeddings, async_enabled: false)
+Application.put_env(:maraithon, Maraithon.TelegramAssistant.ChatWorker, async_enabled: false)
 
 Application.put_env(
   :maraithon,

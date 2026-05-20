@@ -380,10 +380,10 @@ defmodule Maraithon.Runtime do
     AgentSupervisor.start_agent(agent)
   end
 
-  defp stop_agent_process(id) do
+  defp stop_agent_process(id, reason) do
     case lookup_agent_process(id) do
       {:ok, pid} ->
-        AgentSupervisor.stop_agent(pid)
+        AgentSupervisor.stop_agent(pid, reason)
 
       :not_running ->
         :ok
@@ -399,8 +399,7 @@ defmodule Maraithon.Runtime do
 
   defp stop_running_agent(agent, reason) do
     if running_agent?(agent) do
-      Dispatch.dispatch(agent.id, {:control, :stop, reason})
-      stop_agent_process(agent.id)
+      stop_agent_process(agent.id, reason)
     end
 
     :ok

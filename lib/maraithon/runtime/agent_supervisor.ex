@@ -16,7 +16,23 @@ defmodule Maraithon.Runtime.AgentSupervisor do
   @doc """
   Stop an agent process.
   """
-  def stop_agent(pid) do
-    DynamicSupervisor.terminate_child(__MODULE__, pid)
+  def stop_agent(pid, reason \\ "manual_stop")
+
+  def stop_agent(pid, reason) when is_pid(pid) do
+    if Process.alive?(pid) do
+      ref = Process.monitor(pid)
+      send(pid, {:agent_dispatch, {:control, :stop, reason}})
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} ->
+          :ok
+      after
+        5_000 ->
+          Process.demonitor(ref, [:flush])
+          DynamicSupervisor.terminate_child(__MODULE__, pid)
+      end
+    else
+      DynamicSupervisor.terminate_child(__MODULE__, pid)
+    end
   end
 end
