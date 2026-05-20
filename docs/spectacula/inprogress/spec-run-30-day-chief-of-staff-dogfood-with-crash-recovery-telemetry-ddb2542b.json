@@ -14,17 +14,27 @@
       "from_stage": "ready",
       "note": "No runtime_incidents migration/schema, IncidentLog, AgentWatcher, DogfoodDigest, or dogfood report exists. .gitignore already ignores erl_crash.dump, but an ignored local erl_crash.dump file is still present.",
       "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T10:43:32Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "note": "Starting the buildable runtime telemetry and recovery-monitor portion. The 30-day production run/report acceptance remains an elapsed-time follow-up before this spec can move to done.",
+      "to_stage": "inprogress"
     }
   ],
-  "next_action": "Build runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, tests, and then run/report the 30-day dogfood.",
+  "next_action": "Implement runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, hygiene, and tests.",
   "resume_context": {
     "artifacts": [
       "/Users/kent/bliss/maraithon/docs/spectacula/specs/spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b.md"
     ],
-    "last_completed_step": "Spectacula codebase verification completed on 2026-05-20; spec remains ready for implementation.",
-    "notes": "No runtime_incidents migration/schema, IncidentLog, AgentWatcher, DogfoodDigest, or dogfood report exists. .gitignore already ignores erl_crash.dump, but an ignored local erl_crash.dump file is still present.",
+    "last_completed_step": "Moved the dogfood telemetry spec to inprogress and confirmed no runtime incident infrastructure exists yet.",
+    "notes": "Build the runtime observability/recovery foundation now. Do not mark this spec done until the production 30-day run, daily digest archive, crash/recover artifact, and final docs/dogfood report exist. Local erl_crash.dump is ignored, not tracked; its header says Runtime terminating during boot on 2026-05-10 22:53:30 with a standard_error device badarg.",
     "pending_steps": [
-      "Build runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, tests, and then run/report the 30-day dogfood."
+      "Build runtime_incidents, IncidentLog, AgentWatcher recovery monitor, ShutdownReporter, DogfoodDigest, config, and tests.",
+      "Run and pass project verification.",
+      "Deploy and run the 30-day production dogfood.",
+      "Commit docs/dogfood/2026-chief-of-staff-30-day.md with the run report."
     ],
     "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
     "repository_path": "/Users/kent/bliss/maraithon",
@@ -33,10 +43,11 @@
   "slug": "spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b",
   "spec_id": "spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b",
   "spec_path": "../specs/spec-run-30-day-chief-of-staff-dogfood-with-crash-recovery-telemetry-ddb2542b.md",
-  "stage": "ready",
-  "summary": "Reviewed against current codebase; not implemented. The spec remains ready for build as a runtime observability/recovery milestone plus later 30-day run artifact.",
+  "stage": "inprogress",
+  "started_at": "2026-05-20T10:43:32Z",
+  "summary": "Implementation started for the runtime observability/recovery foundation. The final 30-day run and report are not complete and remain required before done.",
   "title": "Spec: Run 30-day Chief of Staff dogfood with crash-recovery telemetry",
-  "updated_at": "2026-05-20T09:07:06Z",
+  "updated_at": "2026-05-20T10:43:32Z",
   "verification": {
     "build": "not_run",
     "codebase_review": "not_implemented",
