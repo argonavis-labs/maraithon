@@ -1,0 +1,71 @@
+{
+  "blockers": [],
+  "created_at": "2026-05-15T04:12:29Z",
+  "history": [
+    {
+      "at": "2026-05-15T04:12:29Z",
+      "event": "spec_created",
+      "note": "Created by local Cybrus automated planning for task 26355FF4-5746-4CE8-8C93-F6B260C4DF33.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T09:07:06Z",
+      "event": "codebase_verified_ready",
+      "from_stage": "ready",
+      "note": "Current code has memory_items, Memory.write/recall/forget, write_memory/recall_memory/list_memories/forget_memory/record_memory_feedback, and prompt memory context. Missing: decay_at, supersession links, encrypted content/metadata, Memory.Recall module, update_memory_confidence, /operator/memories LiveView.",
+      "to_stage": "ready"
+    },
+    {
+      "at": "2026-05-20T10:16:19Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "note": "Starting Memory primitive completion after finishing and pushing the self-serve Chief of Staff install spec.",
+      "to_stage": "inprogress"
+    },
+    {
+      "at": "2026-05-20T10:41:25Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "note": "Shipped encrypted memory fields, centralized recall, supersession, update_memory_confidence, operator memory UI, and verification coverage. mix precommit passed with 1842 tests, 0 failures.",
+      "to_stage": "done"
+    }
+  ],
+  "next_action": "Pick the next ready Spectacula spec and repeat the build/verify/done loop.",
+  "resume_context": {
+    "artifacts": [
+      "/Users/kent/bliss/maraithon/docs/spectacula/specs/ship-memory-primitive-with-model-callable-read-write-tools-26355ff4.md",
+      "/Users/kent/bliss/maraithon/lib/maraithon/memory.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon/memory/recall.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/live/memories_live.ex",
+      "/Users/kent/bliss/maraithon/priv/repo/migrations/20260520102036_add_memory_recall_supersession_and_encryption.exs"
+    ],
+    "last_completed_step": "Implemented the remaining Memory primitive delta, reviewed the result against the spec, ran migration rollback/forward, and reran mix precommit successfully.",
+    "notes": "Done in commits e22aada and efaf61d. Memory now has encrypted content/summary/metadata, decay_at, supersession links, Memory.Recall ranking and token budgeting, model-callable update_memory_confidence, expanded tool schemas/catalogs, prompt injection under ## Relevant memories, and /operator/memories.",
+    "open_questions": [],
+    "pending_steps": [],
+    "project_id": "9D33DE32-DCAC-4EAB-AA18-27F507CC4DE2",
+    "repository_path": "/Users/kent/bliss/maraithon",
+    "task_id": "26355FF4-5746-4CE8-8C93-F6B260C4DF33"
+  },
+  "slug": "ship-memory-primitive-with-model-callable-read-write-tools-26355ff4",
+  "spec_id": "ship-memory-primitive-with-model-callable-read-write-tools-26355ff4",
+  "spec_path": "../specs/ship-memory-primitive-with-model-callable-read-write-tools-26355ff4.md",
+  "stage": "done",
+  "started_at": "2026-05-20T10:16:19Z",
+  "completed_at": "2026-05-20T10:41:25Z",
+  "summary": "Done. The Memory primitive delta has shipped against the existing Maraithon.Memory surface with encrypted storage, recall ranking, supersession, update-confidence tooling, prompt injection, operator UI, and passing verification.",
+  "title": "Ship Memory primitive with model-callable read/write tools",
+  "updated_at": "2026-05-20T10:41:25Z",
+  "verification": {
+    "build": "passed",
+    "codebase_review": "passed",
+    "format": "passed",
+    "lint": "skipped",
+    "migration": "passed",
+    "notes": "Verification run: MIX_ENV=test mix ecto.rollback -n 1 && MIX_ENV=test mix ecto.migrate; mix compile --warnings-as-errors; focused memory/tool/live/controller/runtime tests; final mix precommit. Full precommit finished with 1842 tests, 0 failures.",
+    "reviewed_at": "2026-05-20T10:41:25Z",
+    "spec_review": "passed",
+    "tests": "passed",
+    "typecheck": "passed"
+  }
+}
