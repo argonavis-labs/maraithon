@@ -78,7 +78,7 @@ defmodule Maraithon.Runtime.DogfoodDigest do
   def compose(now \\ DateTime.utc_now(), opts \\ []) do
     opts = Map.new(opts)
     since = DateTime.add(now, -@day_seconds, :second)
-    incidents = IncidentLog.since(since)
+    incidents = IncidentLog.between(since, now)
     counts = IncidentLog.count_by_kind(incidents)
     segments = IncidentLog.uptime_segments(since, now: now)
     health = Health.check()

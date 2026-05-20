@@ -58,6 +58,16 @@ defmodule Maraithon.Runtime.IncidentLog do
     |> repo.all()
   end
 
+  def between(%DateTime{} = since, %DateTime{} = until, opts \\ []) do
+    repo = Keyword.get(opts, :repo, Repo)
+
+    RuntimeIncident
+    |> where([incident], incident.occurred_at >= ^since)
+    |> where([incident], incident.occurred_at <= ^until)
+    |> order_by([incident], asc: incident.occurred_at)
+    |> repo.all()
+  end
+
   def by_kind(kind, since_or_opts \\ [])
 
   def by_kind(kind, %DateTime{} = since) do
@@ -95,6 +105,7 @@ defmodule Maraithon.Runtime.IncidentLog do
     incidents =
       RuntimeIncident
       |> where([incident], incident.occurred_at >= ^since)
+      |> where([incident], incident.occurred_at <= ^now)
       |> where([incident], incident.kind in ["node_boot", "node_shutdown"])
       |> order_by([incident], asc: incident.occurred_at)
       |> repo.all()

@@ -35,9 +35,21 @@ defmodule Maraithon.Runtime.IncidentLogTest do
     assert incident.node == Atom.to_string(node())
 
     assert Enum.any?(IncidentLog.since(since), &(&1.id == incident.id))
+    assert Enum.any?(IncidentLog.between(since, occurred_at), &(&1.id == incident.id))
 
     assert [kind_incident] = IncidentLog.by_kind(:agent_crash, since: since)
     assert kind_incident.id == incident.id
+
+    {:ok, future_incident} =
+      IncidentLog.record(%{
+        kind: :agent_crash,
+        agent_id: agent.id,
+        reason: "after requested window",
+        occurred_at: DateTime.add(occurred_at, 60, :second)
+      })
+
+    assert Enum.any?(IncidentLog.since(since), &(&1.id == future_incident.id))
+    refute Enum.any?(IncidentLog.between(since, occurred_at), &(&1.id == future_incident.id))
 
     assert %{"agent_crash" => 1} = IncidentLog.count_by_kind([incident])
   end
