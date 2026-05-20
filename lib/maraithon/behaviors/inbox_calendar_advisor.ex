@@ -18,6 +18,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   alias Maraithon.InsightFeedback
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
+  alias Maraithon.LLM
   alias Maraithon.OpenLoops
   alias Maraithon.PreferenceMemory
   alias Maraithon.RelationshipIntelligence
@@ -39,6 +40,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @max_attendee_preview 4
   @max_watch_rules 4
   @max_email_body_excerpt_chars 2_400
+  @llm_candidate_limit 20
+  @llm_candidate_body_excerpt_chars 1_500
+  @llm_candidate_string_chars 1_000
 
   @promise_terms [
     "i will",
@@ -324,21 +328,15 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             )
 
           true ->
-            params = %{
-              "messages" => [
-                %{
-                  "role" => "user",
-                  "content" => build_llm_prompt(candidates, context.timestamp, feedback_context)
-                }
-              ],
-              "max_tokens" => 1_800,
-              "temperature" => 0.15
-            }
+            llm_candidates = Enum.take(candidates, @llm_candidate_limit)
+
+            params =
+              insight_triage_llm_params(llm_candidates, context.timestamp, feedback_context)
 
             {:effect, {:llm_call, params},
              %{
                state
-               | pending_candidates: candidates,
+               | pending_candidates: llm_candidates,
                  pending_direct_insights: direct_insights,
                  pending_relationship_observations: relationship_observations,
                  pending_llm_kind: :insights,
@@ -2481,8 +2479,27 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     String.downcase(status || "unresolved") == "unresolved"
   end
 
+  defp insight_triage_llm_params(candidates, timestamp, feedback_context) do
+    %{
+      "messages" => [
+        %{
+          "role" => "user",
+          "content" => build_llm_prompt(candidates, timestamp, feedback_context)
+        }
+      ],
+      "max_tokens" => 1_800,
+      "temperature" => 0.15,
+      "reasoning_effort" => "none"
+    }
+    |> maybe_put_model(LLM.chat_model())
+  end
+
   defp build_llm_prompt(candidates, timestamp, feedback_context) do
-    candidates_json = Jason.encode!(candidates)
+    candidates_json =
+      candidates
+      |> compact_llm_candidates()
+      |> Jason.encode!()
+
     feedback_json = Jason.encode!(feedback_context[:recent_feedback] || [])
     threshold_json = Jason.encode!(feedback_context[:threshold_profile] || %{})
     preference_json = Jason.encode!(feedback_context[:preference_profile] || %{})
@@ -2588,6 +2605,49 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Keep false_positive_risk <= 0.35 for every returned item.
     """
   end
+
+  defp compact_llm_candidates(candidates) when is_list(candidates) do
+    candidates
+    |> Enum.take(@llm_candidate_limit)
+    |> Enum.map(&compact_llm_value/1)
+  end
+
+  defp compact_llm_candidates(_candidates), do: []
+
+  defp compact_llm_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp compact_llm_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp compact_llm_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp compact_llm_value(%Time{} = value), do: Time.to_iso8601(value)
+  defp compact_llm_value(%{__struct__: _struct} = value), do: inspect(value)
+
+  defp compact_llm_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, value} -> {key, compact_llm_value(key, value)} end)
+    |> Map.new()
+    |> compact_map()
+  end
+
+  defp compact_llm_value(value) when is_list(value) do
+    Enum.map(value, &compact_llm_value/1)
+  end
+
+  defp compact_llm_value(value), do: value
+
+  defp compact_llm_value(key, value) when is_binary(value) do
+    value
+    |> truncate(llm_candidate_string_limit(key))
+  end
+
+  defp compact_llm_value(_key, value), do: compact_llm_value(value)
+
+  defp llm_candidate_string_limit(key) when key in ["body_excerpt", :body_excerpt],
+    do: @llm_candidate_body_excerpt_chars
+
+  defp llm_candidate_string_limit(_key), do: @llm_candidate_string_chars
+
+  defp maybe_put_model(params, nil), do: params
+  defp maybe_put_model(params, ""), do: params
+  defp maybe_put_model(params, model), do: Map.put(params, "model", model)
 
   defp gmail_reply_triage(
          body,

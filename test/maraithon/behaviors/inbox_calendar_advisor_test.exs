@@ -72,6 +72,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
         InboxCalendarAdvisor.handle_wakeup(state, context)
 
       assert is_map(params)
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert params["reasoning_effort"] == "none"
       assert params["temperature"] == 0.15
       assert length(new_state.pending_candidates) >= 1
       prompt = get_in(params, ["messages", Access.at(0), "content"])
@@ -85,6 +87,38 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert prompt =~ "evidence_for_reply_owed"
       assert prompt =~ "evidence_against_reply_owed"
       assert prompt =~ "unsolicited sales outreach"
+    end
+
+    test "bounds advisor triage prompts before the llm call", %{context: context} do
+      state = InboxCalendarAdvisor.init(%{"user_id" => context.user_id})
+      large_body = String.duplicate("Can you send the promised deck today? ", 2_000)
+
+      messages =
+        for index <- 1..30 do
+          %{
+            "message_id" => "msg-bounded-#{index}",
+            "thread_id" => "thread-bounded-#{index}",
+            "subject" => "Urgent: customer escalation #{index}",
+            "snippet" => String.duplicate("Need response ASAP ", 200),
+            "text_body" => large_body,
+            "from" => "customer-#{index}@example.com",
+            "to" => context.user_id,
+            "labels" => ["INBOX", "IMPORTANT", "UNREAD"],
+            "internal_date" => DateTime.utc_now()
+          }
+        end
+
+      payload = %{"source" => "gmail", "data" => %{"messages" => messages}}
+
+      {:effect, {:llm_call, params}, new_state} =
+        InboxCalendarAdvisor.handle_wakeup(state, %{context | event: %{payload: payload}})
+
+      prompt = get_in(params, ["messages", Access.at(0), "content"])
+
+      assert params["model"] == Maraithon.LLM.chat_model()
+      assert length(new_state.pending_candidates) in 1..20
+      assert String.length(prompt) < 80_000
+      refute prompt =~ String.duplicate("Can you send the promised deck today? ", 100)
     end
 
     test "includes Telegram feedback context in the llm prompt", %{
