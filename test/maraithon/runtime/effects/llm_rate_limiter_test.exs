@@ -29,6 +29,36 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
     LLMRateLimiter.checkin()
   end
 
+  test "keeps chat and reasoning lanes independent" do
+    assert :ok = LLMRateLimiter.checkout(:reasoning)
+
+    test_pid = self()
+
+    start_supervised!(
+      {Task,
+       fn ->
+         result = LLMRateLimiter.checkout(:chat)
+         send(test_pid, {:chat_checkout_result, result})
+
+         if result == :ok do
+           LLMRateLimiter.checkin(:chat)
+         end
+       end}
+    )
+
+    assert_receive {:chat_checkout_result, :ok}
+
+    start_supervised!(
+      {Task,
+       fn -> send(test_pid, {:reasoning_checkout_result, LLMRateLimiter.checkout(:reasoning)}) end}
+    )
+
+    assert_receive {:reasoning_checkout_result, {:error, {:llm_busy, retry_after_ms}}}
+    assert retry_after_ms > 0
+
+    LLMRateLimiter.checkin(:reasoning)
+  end
+
   test "shares provider rate-limit cooldowns" do
     LLMRateLimiter.record_rate_limit(60_000)
 

@@ -115,7 +115,7 @@ defmodule Maraithon.LLM do
           "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
-        run_provider_request(module, fn -> module.complete(params) end)
+        run_provider_request(module, params, fn -> module.complete(params) end)
     end
   end
 
@@ -166,7 +166,9 @@ defmodule Maraithon.LLM do
         complete(params)
 
       function_exported?(provider(), :stream_complete, 2) ->
-        run_provider_request(provider(), fn -> provider().stream_complete(params, on_chunk) end)
+        run_provider_request(provider(), params, fn ->
+          provider().stream_complete(params, on_chunk)
+        end)
 
       true ->
         complete(params)
@@ -190,9 +192,11 @@ defmodule Maraithon.LLM do
     |> Keyword.get(:openai_stream_replies, true)
   end
 
-  defp run_provider_request(module, fun) when is_function(fun, 0) do
+  defp run_provider_request(module, params, fun) when is_function(fun, 0) do
     if provider_backpressure_enabled?(module) do
-      with_provider_slot(fun)
+      params
+      |> rate_limit_bucket()
+      |> with_provider_slot(fun)
     else
       fun.()
     end
@@ -205,20 +209,51 @@ defmodule Maraithon.LLM do
     provider_name() in ["openai", "anthropic"]
   end
 
-  defp with_provider_slot(fun) when is_function(fun, 0) do
-    case LLMRateLimiter.checkout() do
+  defp with_provider_slot(bucket, fun) when is_function(fun, 0) do
+    case LLMRateLimiter.checkout(bucket) do
       :ok ->
         try do
           fun.()
           |> tap(&record_provider_rate_limit/1)
         after
-          LLMRateLimiter.checkin()
+          LLMRateLimiter.checkin(bucket)
         end
 
       {:error, _reason} = error ->
         error
     end
   end
+
+  defp rate_limit_bucket(params) do
+    params_model = params["model"] || params[:model] || model()
+    chat_model = chat_model()
+    routing_model = routing_model()
+    primary_model = model()
+
+    cond do
+      non_empty(params_model) == nil ->
+        :default
+
+      non_empty(params_model) == non_empty(chat_model) and
+          non_empty(params_model) != non_empty(primary_model) ->
+        :chat
+
+      non_empty(params_model) == non_empty(routing_model) ->
+        :chat
+
+      true ->
+        :reasoning
+    end
+  end
+
+  defp non_empty(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp non_empty(_value), do: nil
 
   defp record_provider_rate_limit({:error, {:rate_limited, retry_after_ms}}) do
     LLMRateLimiter.record_rate_limit(retry_after_ms)
