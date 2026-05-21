@@ -1,5 +1,5 @@
 defmodule MaraithonWeb.CompanionChannelTest do
-  use MaraithonWeb.ChannelCase, async: true
+  use MaraithonWeb.ChannelCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.Companion.Devices

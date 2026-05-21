@@ -382,7 +382,11 @@ defmodule Maraithon.TelegramAssistant.Runner do
          state,
          attrs
        ) do
-    message_class = Map.get(response, "message_class", "assistant_reply")
+    message_class =
+      response
+      |> map_value("message_class", "assistant_reply")
+      |> verified_message_class(response, state)
+
     prepared_action_id = latest_prepared_action_id(state.tool_history)
 
     {:ok, %{delivery: delivery, summary: liveness_summary}} =
@@ -592,9 +596,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
     tool_history
     |> Enum.reverse()
     |> Enum.find_value(fn entry ->
-      case Map.get(entry, "result") do
-        %{"prepared_action_id" => id} when is_binary(id) -> id
-        _ -> nil
+      case map_value(entry, "result") do
+        result when is_map(result) ->
+          case map_value(result, "prepared_action_id") do
+            id when is_binary(id) -> id
+            _ -> nil
+          end
+
+        _ ->
+          nil
       end
     end)
   end
@@ -641,7 +651,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
                  "assistant_reply",
                  prepared_action_id,
                  delivery,
-                 Map.get(response, "summary")
+                 map_value(response, "summary")
                )
              ),
            {:ok, final_conversation} <-
@@ -649,7 +659,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         summary =
           build_result_summary("todo_digest", prepared_action_id, state, liveness_summary)
           |> Map.put(:todo_items_sent, length(todos))
-          |> Map.put(:todo_ids, Enum.map(todos, &Map.get(&1, "id")))
+          |> Map.put(:todo_ids, Enum.map(todos, &map_value(&1, "id")))
 
         _ = maybe_refresh_user_memory(attrs)
         _ = maybe_compact_conversation_async(final_conversation)
@@ -673,17 +683,31 @@ defmodule Maraithon.TelegramAssistant.Runner do
          delivery,
          liveness_summary
        ) do
-    deliver_standard_response(
-      conversation,
-      run,
-      response,
-      state,
-      attrs,
-      message_class,
-      prepared_action_id,
-      delivery,
-      liveness_summary
-    )
+    if should_force_todo_digest?(message_class, response, state) do
+      deliver_response_by_class(
+        conversation,
+        run,
+        response,
+        state,
+        attrs,
+        "todo_digest",
+        prepared_action_id,
+        delivery,
+        liveness_summary
+      )
+    else
+      deliver_standard_response(
+        conversation,
+        run,
+        response,
+        state,
+        attrs,
+        message_class,
+        prepared_action_id,
+        delivery,
+        liveness_summary
+      )
+    end
   end
 
   defp deliver_standard_response(
@@ -710,7 +734,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
              message_class,
              prepared_action_id,
              delivery,
-             Map.get(response, "summary")
+             map_value(response, "summary")
            )
          ) do
       {:ok, updated_conversation, _turn, _telegram_result} ->
@@ -725,6 +749,61 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:error, run, reason, state}
     end
   end
+
+  defp verified_message_class(message_class, response, state) do
+    if should_force_todo_digest?(message_class, response, state) do
+      "todo_digest"
+    else
+      message_class
+    end
+  end
+
+  defp should_force_todo_digest?("todo_digest", _response, _state), do: false
+  defp should_force_todo_digest?("approval_prompt", _response, _state), do: false
+
+  defp should_force_todo_digest?(_message_class, response, state) do
+    todos = latest_todo_items(state.tool_history)
+    latest_todo_tool? = latest_todo_list_tool?(state.tool_history)
+    bullet_list? = todo_bullet_list?(map_value(response, "assistant_message", ""))
+
+    case {todos, latest_todo_tool?, bullet_list?} do
+      {[], _latest_todo_tool?, _bullet_list?} -> false
+      {_todos, true, _bullet_list?} -> true
+      {_todos, _latest_todo_tool?, true} -> true
+      _ -> false
+    end
+  end
+
+  defp latest_todo_list_tool?(tool_history) when is_list(tool_history) do
+    Enum.reverse(tool_history)
+    |> Enum.any?(fn entry ->
+      tool = map_value(entry, "tool")
+      result = map_value(entry, "result")
+
+      tool in ["list_todos", "resolve_todo"] and is_map(result) and has_todo_result?(result)
+    end)
+  end
+
+  defp latest_todo_list_tool?(_tool_history), do: false
+
+  defp has_todo_result?(result) when is_map(result) do
+    case {map_value(result, "todos"), map_value(result, "remaining_todos")} do
+      {todos, _remaining_todos} when is_list(todos) and todos != [] -> true
+      {_todos, remaining_todos} when is_list(remaining_todos) and remaining_todos != [] -> true
+      _ -> false
+    end
+  end
+
+  defp has_todo_result?(_result), do: false
+
+  defp todo_bullet_list?(text) when is_binary(text) do
+    text
+    |> String.split("\n")
+    |> Enum.count(&Regex.match?(~r/^\s*(?:[-*•]|\d+[.)])\s+\S+/, &1))
+    |> Kernel.>=(2)
+  end
+
+  defp todo_bullet_list?(_text), do: false
 
   defp standard_turn_opts(
          attrs,
@@ -789,18 +868,23 @@ defmodule Maraithon.TelegramAssistant.Runner do
     tool_history
     |> Enum.reverse()
     |> Enum.find_value([], fn entry ->
-      case {Map.get(entry, "tool"), Map.get(entry, "result")} do
-        {"resolve_todo", %{"remaining_todos" => todos}} when is_list(todos) and todos != [] ->
-          todos
+      tool = map_value(entry, "tool")
+      result = map_value(entry, "result")
 
-        {"resolve_todo", %{"remaining_todos" => []}} ->
-          []
+      cond do
+        tool == "resolve_todo" and is_map(result) ->
+          case map_value(result, "remaining_todos") do
+            todos when is_list(todos) -> todos
+            _ -> nil
+          end
 
-        {tool, %{"todos" => todos}}
-        when tool in ["upsert_todos", "list_todos"] and is_list(todos) and todos != [] ->
-          todos
+        tool in ["upsert_todos", "list_todos"] and is_map(result) ->
+          case map_value(result, "todos") do
+            todos when is_list(todos) and todos != [] -> todos
+            _ -> nil
+          end
 
-        _ ->
+        true ->
           nil
       end
     end)
@@ -815,23 +899,34 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
+  defp hydrate_todo_for_delivery(attrs, %{id: todo_id} = todo) when is_binary(todo_id) do
+    case Todos.get_for_user(Map.fetch!(attrs, :user_id), todo_id) do
+      nil -> todo
+      record -> record
+    end
+  end
+
   defp hydrate_todo_for_delivery(_attrs, todo), do: todo
 
   defp serialize_linked_todo(%{"id" => _id} = todo), do: todo
 
   defp serialize_linked_todo(todo) when is_map(todo) do
-    case Map.fetch(todo, :id) do
-      {:ok, _id} -> Todos.serialize_for_prompt(todo)
-      :error -> %{}
+    case map_value(todo, "id") do
+      id when is_binary(id) -> Todos.serialize_for_prompt(todo)
+      _ -> %{}
     end
   end
 
   defp serialize_linked_todo(_todo), do: %{}
 
   defp todo_digest_intro_text(response, prepared_action_id) do
-    case Map.get(response, "assistant_message", "") do
+    case map_value(response, "assistant_message", "") do
       value when is_binary(value) and value != "" ->
-        value
+        if todo_bullet_list?(value) do
+          "I found the current open items. I'm sending each with context."
+        else
+          value
+        end
 
       _ ->
         case final_text(response, prepared_action_id) do
@@ -865,7 +960,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp final_text(response, prepared_action_id) do
-    assistant_message = Map.get(response, "assistant_message", "")
+    assistant_message = map_value(response, "assistant_message", "")
 
     cond do
       assistant_message != "" ->
@@ -1071,6 +1166,31 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp ensure_map(value) when is_map(value), do: value
   defp ensure_map(value), do: %{"value" => value}
+
+  defp map_value(map, key, default \\ nil)
+
+  defp map_value(map, key, default) when is_map(map) do
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        case Map.fetch(map, existing_atom_key(key)) do
+          {:ok, value} -> value
+          :error -> default
+        end
+    end
+  end
+
+  defp map_value(_map, _key, default), do: default
+
+  defp existing_atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp existing_atom_key(key), do: key
 
   defp normalize_error(error) when is_binary(error), do: error
   defp normalize_error(error), do: inspect(error)

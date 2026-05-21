@@ -167,13 +167,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     source = source_label(todo_source)
     feedback = feedback_label(feedback_value(todo))
     next_action = display_text(todo_next_action(todo))
-    summary = display_text(todo_summary(todo))
+    context = display_text(todo_context(todo, metadata))
     assistant_source? = assistant_source?(todo_source)
 
     [
       display_text(prefix_text),
       action_line(next_action, assistant_source?),
-      todo_context_line(summary, next_action),
+      todo_context_line(context, next_action),
       source_sentence(source, account, assistant_source?),
       feedback && "Feedback noted: #{safe(feedback)}"
     ]
@@ -344,8 +344,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     cond do
       blank?(summary) -> nil
       String.trim(summary) == String.trim(next_action) -> nil
-      true -> safe(summary)
+      true -> summary |> one_sentence() |> truncate(240) |> safe()
     end
+  end
+
+  defp todo_context(todo, metadata) do
+    todo_summary(todo) ||
+      metadata_context(metadata) ||
+      todo_notes(todo)
   end
 
   defp todo_summary(%Todo{summary: summary}), do: summary
@@ -354,6 +360,29 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     do: map_string(todo, "summary")
 
   defp todo_summary(_todo), do: nil
+
+  defp todo_notes(%Todo{notes: notes}), do: notes
+  defp todo_notes(todo) when is_map(todo), do: map_string(todo, "notes")
+  defp todo_notes(_todo), do: nil
+
+  defp metadata_context(metadata) when is_map(metadata) do
+    record = read_map(metadata, "record")
+
+    [
+      read_string(metadata, "context"),
+      read_string(metadata, "context_brief"),
+      read_string(metadata, "why_now"),
+      read_string(metadata, "source_summary"),
+      read_string(record, "context"),
+      read_string(record, "summary"),
+      read_string(record, "ask"),
+      read_string(record, "commitment"),
+      record |> read_string_list("evidence") |> List.first()
+    ]
+    |> Enum.find(&present?/1)
+  end
+
+  defp metadata_context(_metadata), do: nil
 
   defp todo_next_action(%Todo{next_action: next_action, title: title}),
     do: next_action || title || "Review and decide the next step."
@@ -385,6 +414,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp replace_internal_language(text) do
     text
+    |> String.replace(~r/\bthe user wants\b/i, "You want")
+    |> String.replace(~r/\bthe user needs\b/i, "You need")
+    |> String.replace(~r/\bthe user has\b/i, "You have")
+    |> String.replace(~r/\bthe user is\b/i, "You are")
+    |> String.replace(~r/\bthe user should\b/i, "You should")
     |> String.replace(~r/\bKent needs\b/i, "you need")
     |> String.replace(~r/\bKent has\b/i, "you have")
     |> String.replace(~r/\bKent should\b/i, "you should")
@@ -406,6 +440,28 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     |> String.replace(~r/\n{3,}/, "\n\n")
     |> String.trim()
   end
+
+  defp one_sentence(text) when is_binary(text) do
+    case Regex.run(~r/^(.+?[.!?])(?:\s|$)/, text) do
+      [_, sentence] -> sentence
+      _ -> text
+    end
+  end
+
+  defp one_sentence(text), do: text
+
+  defp truncate(text, max_length) when is_binary(text) do
+    if String.length(text) > max_length do
+      text
+      |> String.slice(0, max_length)
+      |> String.trim()
+      |> Kernel.<>("...")
+    else
+      text
+    end
+  end
+
+  defp truncate(text, _max_length), do: text
 
   defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
 
@@ -480,6 +536,42 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         end)
     end
   end
+
+  defp read_map(map, key) when is_map(map) and is_binary(key) do
+    case Map.get(map, key) do
+      value when is_map(value) ->
+        value
+
+      _ ->
+        Enum.find_value(map, %{}, fn
+          {map_key, value} when is_atom(map_key) and is_map(value) ->
+            if Atom.to_string(map_key) == key, do: value, else: nil
+
+          _ ->
+            nil
+        end)
+    end
+  end
+
+  defp read_map(_map, _key), do: %{}
+
+  defp read_string_list(map, key) when is_map(map) and is_binary(key) do
+    case Map.get(map, key) || Map.get(map, safe_existing_atom(key)) do
+      values when is_list(values) ->
+        values
+        |> Enum.filter(&is_binary/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+
+      value when is_binary(value) ->
+        if String.trim(value) == "", do: [], else: [String.trim(value)]
+
+      _ ->
+        []
+    end
+  end
+
+  defp read_string_list(_map, _key), do: []
 
   defp read_id_string(map, key) when is_map(map) and is_binary(key) do
     case Map.get(map, key) do

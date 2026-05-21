@@ -966,8 +966,10 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.count(sends) == 3
     assert Enum.at(sends, 1).text =~ "Here is the full open todo list"
     assert List.last(sends).text =~ "Renew the domain and confirm it is done."
+    assert List.last(sends).text =~ "You want this tracked as an ongoing todo."
     refute List.last(sends).text =~ "Renew the domain this week"
     refute List.last(sends).text =~ "Maraithon Todo"
+    refute List.last(sends).text =~ "you wants"
     refute List.last(sends).text =~ "You need to:"
     refute List.last(sends).text =~ "About:"
     assert get_in(Keyword.get(List.last(sends).opts, :reply_markup), ["inline_keyboard"]) != nil
@@ -1075,6 +1077,109 @@ defmodule Maraithon.TelegramAssistantTest do
     refute Enum.at(sends, 2).text =~ "Resolve Google Ads billing issue"
     refute Enum.at(sends, 2).text =~ "Maraithon Todo"
     refute Enum.at(sends, 2).text =~ "About:"
+  end
+
+  test "todo list replies with dense bullets are converted to contextual todo cards", %{
+    user_id: user_id
+  } do
+    assert {:ok, [_first, _second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Reply to Dan Bourke about Claude Cowork",
+                 "summary" =>
+                   "Dan is waiting on the Claude Cowork killer project status before he can plan the next project step.",
+                 "next_action" =>
+                   "Confirm current status and provide a concrete ETA for the Claude Cowork killer project.",
+                 "priority" => 96,
+                 "dedupe_key" => "telegram-assistant:contextual-bullets:1"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Follow up with Matthew Diakonov",
+                 "summary" =>
+                   "Matthew is waiting on the promised follow-up before the meeting can be scheduled.",
+                 "next_action" => "Send promised follow-up and book the meeting.",
+                 "priority" => 94,
+                 "dedupe_key" => "telegram-assistant:contextual-bullets:2"
+               }
+             ])
+
+    start_supervised!(%{
+      id: :telegram_assistant_sequence_dense_todo_bullets,
+      start:
+        {Agent, :start_link,
+         [fn -> 0 end, [name: :telegram_assistant_sequence_dense_todo_bullets]]}
+    })
+
+    set_assistant(fn payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_sequence_dense_todo_bullets, fn current ->
+          {current, current + 1}
+        end)
+
+      case sequence do
+        0 ->
+          {:ok,
+           %{
+             "status" => "tool_calls",
+             "assistant_message" => "",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [
+               %{
+                 "tool" => "list_todos",
+                 "arguments" => %{"statuses" => ["open"], "limit" => 20}
+               }
+             ],
+             "summary" => "Loaded open todos."
+           }}
+
+        1 ->
+          [history_entry] = payload.tool_history
+          assert history_entry["tool"] == "list_todos"
+          assert Enum.count(history_entry["result"]["todos"]) == 2
+
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" =>
+               "- Dan Bourke: Confirm current status and provide a concrete ETA for the Claude Cowork killer project.\n- Matthew Diakonov: Send promised follow-up and book the meeting.",
+             "message_class" => "assistant_reply",
+             "tool_calls" => [],
+             "summary" => "Returned open todos as a dense list."
+           }}
+      end
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9113, text: "What should I do next?"}
+      })
+
+    sends =
+      telegram_events()
+      |> Enum.filter(&(&1.type == :send))
+
+    assert Enum.count(sends) == 3
+    assert Enum.at(sends, 0).text =~ "sending each with context"
+    refute Enum.at(sends, 0).text =~ "Dan Bourke:"
+    refute Enum.at(sends, 0).text =~ "Matthew Diakonov:"
+
+    assert Enum.at(sends, 1).text =~
+             "Confirm current status and provide a concrete ETA"
+
+    assert Enum.at(sends, 1).text =~
+             "Dan is waiting on the Claude Cowork killer project status"
+
+    assert Enum.at(sends, 2).text =~ "Send promised follow-up and book the meeting."
+
+    assert Enum.at(sends, 2).text =~
+             "Matthew is waiting on the promised follow-up"
   end
 
   test "todo item callbacks can close an item directly from Telegram", %{user_id: user_id} do

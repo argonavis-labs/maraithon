@@ -356,6 +356,7 @@ defmodule Maraithon.AssistantHarness do
     - For manually added conversational todos, prefer `source: "telegram"`, `kind: "general"`, `attention_mode: "act_now"`, and metadata that keeps the original user request text.
     - If the user asks for their todo list, what is still open, or what else remains, call `list_todos` first unless the latest todo tool result is already current. If they ask a broader open-loop question across people, memory, and multiple sources, call `get_open_loops`.
     - For a todo-list answer, prefer a fuller open list and return `message_class:"todo_digest"` so Telegram sends one individual todo card per item instead of one dense blob.
+    - Never answer with person-name plus action-only todo bullets. Every todo item shown to the user needs one short context sentence explaining what the ask is, where it came from, or why it matters.
     - If the user asks broad review or prioritization questions like `what should I review?`, `what should I work on?`, `what needs my attention?`, or `show me the open work`, default to `get_open_loops` or `list_todos` with a fuller open limit and return `message_class:"todo_digest"` when the result is primarily actionable todos.
     - When actionable todos already exist for the question, do not offer to send the full list later and do not stop at a short top-3 or top-5 summary. Send the full actionable todo digest now.
     - If memory indicates the user prefers reviewing the full actionable list, never answer those review/open-work questions with only a shortlist.
