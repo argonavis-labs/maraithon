@@ -349,7 +349,10 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp todo_context(todo, metadata) do
-    todo_summary(todo) ||
+    summary = todo_summary(todo)
+
+    commitment_context(metadata, summary) ||
+      summary ||
       metadata_context(metadata) ||
       todo_notes(todo)
   end
@@ -364,6 +367,36 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp todo_notes(%Todo{notes: notes}), do: notes
   defp todo_notes(todo) when is_map(todo), do: map_string(todo, "notes")
   defp todo_notes(_todo), do: nil
+
+  defp commitment_context(metadata, summary) when is_map(metadata) do
+    record = read_map(metadata, "record")
+    commitment = read_string(record, "commitment")
+
+    if generic_commitment_summary?(summary) and present?(commitment) do
+      person = read_string(record, "person")
+      commitment = commitment |> single_line() |> soften_sentence_breaks()
+
+      if present?(person) do
+        "#{person} is waiting on this commitment: #{commitment}"
+      else
+        "This commitment is still open: #{commitment}"
+      end
+    end
+  end
+
+  defp commitment_context(_metadata, _summary), do: nil
+
+  defp generic_commitment_summary?(summary) when is_binary(summary) do
+    summary = String.downcase(summary)
+
+    String.contains?(summary, "commitment") and
+      (String.contains?(summary, "open") or
+         String.contains?(summary, "overdue") or
+         String.contains?(summary, "no evidence") or
+         String.contains?(summary, "no completion evidence"))
+  end
+
+  defp generic_commitment_summary?(_summary), do: false
 
   defp metadata_context(metadata) when is_map(metadata) do
     record = read_map(metadata, "record")
@@ -462,6 +495,20 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp truncate(text, _max_length), do: text
+
+  defp single_line(text) when is_binary(text) do
+    text
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp single_line(text), do: text
+
+  defp soften_sentence_breaks(text) when is_binary(text) do
+    String.replace(text, ~r/[.!?]\s+/, "; ")
+  end
+
+  defp soften_sentence_breaks(text), do: text
 
   defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
 

@@ -1282,6 +1282,35 @@ defmodule Maraithon.TelegramAssistantTest do
     refute payload.text =~ "Priority:"
   end
 
+  test "commitment todo cards prefer specific source context over generic summaries" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "gmail",
+      "status" => "open",
+      "title" => "You committed to Dan Bourke and no follow-up has gone out yet.",
+      "summary" =>
+        "Commitment to Dan Bourke to follow up remains open and overdue with no evidence of completion.",
+      "next_action" =>
+        "Send the promised follow-through now and explicitly confirm delivery in the same thread.",
+      "metadata" => %{
+        "record" => %{
+          "person" => "Dan Bourke",
+          "commitment" =>
+            "Thanks for the auto-follow ups. Love A-Team but we are building out our new Claude Cowork killer: https://runner.now/"
+        },
+        "why_now" =>
+          "No later reply or follow-through was found in the conversation and the deadline is passed."
+      }
+    }
+
+    payload = Maraithon.TelegramAssistant.TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "Dan Bourke is waiting on this commitment"
+    assert payload.text =~ "Claude Cowork killer"
+    refute payload.text =~ "Commitment to Dan Bourke to follow up remains open"
+    refute payload.text =~ "You need to:"
+  end
+
   test "todo item callbacks are handled when full Telegram chat is disabled", %{
     user_id: user_id
   } do
