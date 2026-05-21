@@ -21,6 +21,16 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   @callback_prefix "insact"
   @max_preview_length 900
+  @chief_message_max_length 700
+  @section_text_max_length 180
+  @legacy_notification_fragments [
+    "I think this needs your attention.",
+    "What I'd send",
+    "Fast actions",
+    "I would do this next:",
+    "Since the last check:",
+    "Tap Draft"
+  ]
 
   def telegram_payload(%Delivery{} = delivery) do
     delivery = ensure_insight_preloaded(delivery)
@@ -89,28 +99,10 @@ defmodule Maraithon.InsightNotifications.Actions do
     insight = delivery.insight
     metadata = insight.metadata || %{}
     action_state = action_state(delivery)
-    change_summary = metadata |> read_map("attention") |> read_string("change_summary")
-
     action_state_text = action_state |> render_action_state() |> String.trim()
 
-    header =
-      if monitor_insight?(insight),
-        do: "I'm watching this.",
-        else: "I think this needs your attention."
-
-    action_label = if monitor_insight?(insight), do: "What I'm watching", else: "What I'd send"
-    reply_text = suggested_reply(insight, metadata)
-    details_text = details_text(insight, metadata)
-    action_text = action_list_text(insight, metadata)
-
     [
-      "<b>#{header}</b>",
-      "<b>#{safe(insight.title)}</b>",
-      safe(insight.summary),
-      details_text,
-      change_summary_text(change_summary),
-      reply_block(action_label, reply_text),
-      actions_block(action_text),
+      verified_chief_message(insight, metadata),
       action_state_text
     ]
     |> Enum.reject(&blank?/1)
@@ -585,149 +577,239 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp details_text(%Insight{} = insight, metadata) do
-    [
-      needed_detail(insight),
-      due_detail(insight),
-      source_detail(insight, metadata)
+  defp verified_chief_message(%Insight{} = insight, metadata) do
+    candidates = [
+      fn -> chief_message(insight, metadata) end,
+      fn -> fallback_chief_message(insight, metadata) end
     ]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> ""
-      details -> Enum.map_join(details, "\n", &safe/1)
-    end
-  end
 
-  defp due_detail(%Insight{due_at: %DateTime{} = due_at}) do
-    "This is due #{Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")}."
-  end
+    Enum.reduce_while(candidates, nil, fn candidate_fun, _last_error ->
+      message = candidate_fun.()
 
-  defp due_detail(%Insight{}), do: nil
+      case verify_chief_message(message) do
+        :ok ->
+          {:halt, message}
 
-  defp needed_detail(%Insight{recommended_action: action}) when is_binary(action) do
-    "I would do this next: #{action}"
-  end
-
-  defp needed_detail(%Insight{}), do: nil
-
-  defp source_detail(%Insight{} = insight, metadata) do
-    "I found it in #{source_label(insight, metadata)}."
-  end
-
-  defp change_summary_text(nil), do: nil
-  defp change_summary_text(value), do: "Since the last check: #{safe(value)}"
-
-  defp reply_block(_label, text) when not is_binary(text), do: nil
-
-  defp reply_block(label, text) do
-    if blank?(text) do
-      nil
-    else
-      "<b>#{safe(label)}</b>\n#{safe(text)}"
-    end
-  end
-
-  defp actions_block(text) when not is_binary(text), do: nil
-
-  defp actions_block(text) do
-    if blank?(text) do
-      nil
-    else
-      "<b>Fast actions</b>\n#{text}"
-    end
-  end
-
-  defp suggested_reply(%Insight{} = insight, metadata) do
-    explicit =
-      read_string(metadata, "suggested_reply") ||
-        read_string(metadata, "draft_reply")
-
-    explicit ||
-      if monitor_insight?(insight) do
-        insight.recommended_action
-      else
-        suggested_action_reply(insight, metadata)
+        {:error, issues} ->
+          {:cont, {:error, issues}}
       end
+    end)
+    |> case do
+      message when is_binary(message) ->
+        message
+
+      {:error, issues} ->
+        Logger.warning("Telegram insight notification failed chief-of-staff verification",
+          insight_id: insight.id,
+          issues: issues
+        )
+
+        fallback_chief_message(insight, metadata)
+        |> truncate(@chief_message_max_length)
+    end
   end
 
-  defp suggested_action_reply(%Insight{} = insight, metadata) do
-    person =
-      record_value(metadata, "person") || first_email_name(read_string(metadata, "to")) || "there"
+  defp chief_message(%Insight{} = insight, metadata) do
+    sections =
+      if monitor_insight?(insight) do
+        [
+          {"Watching", todo_text(insight, metadata)},
+          {"Context", context_text(insight, metadata)},
+          {"Person", person_text(insight, metadata)},
+          {"Why important", why_important_text(insight, metadata)},
+          {"Next", next_text(insight, metadata)}
+        ]
+      else
+        [
+          {"Todo", todo_text(insight, metadata)},
+          {"Context", context_text(insight, metadata)},
+          {"Person", person_text(insight, metadata)},
+          {"Why important", why_important_text(insight, metadata)},
+          {"Next", next_text(insight, metadata)}
+        ]
+      end
 
-    points = read_string_list(metadata, "suggested_reply_points")
+    sections
+    |> Enum.map(fn {label, text} -> message_section(label, text) end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp fallback_chief_message(%Insight{} = insight, metadata) do
+    [
+      {"Todo", todo_text(insight, metadata)},
+      {"Context", first_present([insight.summary, due_sentence(insight)])},
+      {"Person", person_text(insight, metadata)},
+      {"Why important", "This still looks open and worth a direct follow-up."},
+      {"Next", first_present([insight.recommended_action, "Reply with the concrete next step."])}
+    ]
+    |> Enum.map(fn {label, text} -> message_section(label, text, 120) end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp verify_chief_message(message) when is_binary(message) do
+    required_sections = ["Context", "Person", "Why important", "Next"]
+
+    issues =
+      []
+      |> maybe_append("too_long", String.length(message) > @chief_message_max_length)
+      |> maybe_append(
+        "missing_todo_or_watching",
+        not (String.contains?(message, "<b>Todo</b>") or
+               String.contains?(message, "<b>Watching</b>"))
+      )
+      |> then(fn issues ->
+        Enum.reduce(required_sections, issues, fn section, acc ->
+          maybe_append(
+            acc,
+            "missing_#{section}",
+            not String.contains?(message, "<b>#{section}</b>")
+          )
+        end)
+      end)
+      |> maybe_append(
+        "legacy_copy",
+        Enum.any?(@legacy_notification_fragments, &String.contains?(message, &1))
+      )
+
+    if issues == [], do: :ok, else: {:error, issues}
+  end
+
+  defp message_section(label, text, max_length \\ @section_text_max_length)
+  defp message_section(_label, text, _max_length) when not is_binary(text), do: nil
+
+  defp message_section(label, text, max_length) do
+    text =
+      text
+      |> compact_sentence()
+      |> truncate(max_length)
+      |> ensure_sentence()
+
+    if blank?(text), do: nil, else: "<b>#{safe(label)}</b>\n#{safe(text)}"
+  end
+
+  defp todo_text(%Insight{} = insight, metadata) do
+    person = person_name(metadata)
+    subject = read_string(metadata, "subject")
+    commitment = record_value(metadata, "commitment")
 
     cond do
-      points != [] ->
-        "#{email_greeting(person, nil)} #{Enum.join(points, " ")}"
+      present?(commitment) ->
+        commitment
 
-      insight.source == "gmail" ->
-        "#{email_greeting(person, nil)} I owe you the follow-up here. I’m confirming the current status now and will send either the promised update or a concrete ETA in this thread."
+      String.match?(to_string(insight.title), ~r/^reply owed:/i) ->
+        reply_todo_text(person, subject || insight.title)
 
-      insight.source == "slack" ->
-        "I owe you the follow-up here. I’m checking the current status and will reply with either the update or a concrete ETA."
+      present?(insight.title) ->
+        insight.title
 
       true ->
         insight.recommended_action
     end
   end
 
-  defp action_list_text(%Insight{} = insight, metadata) do
-    insight
-    |> action_items(metadata)
-    |> Enum.map_join("\n", fn item -> "- #{safe(item)}" end)
-  end
+  defp reply_todo_text(person, subject) do
+    subject = clean_subject(subject)
 
-  defp action_items(%Insight{} = insight, metadata) do
-    base =
-      if monitor_insight?(insight) do
-        [
-          "Keep watching for a blocker, direct ask, or stall.",
-          "Mark done if the loop is already closed.",
-          "Dismiss if this is no longer relevant."
-        ]
-      else
-        [
-          draft_action_item(insight),
-          ready_action_item(insight),
-          eta_action_item(insight, metadata)
-        ]
-      end
-
-    base
-    |> Enum.reject(&blank?/1)
-    |> Enum.uniq()
-    |> Enum.take(3)
-  end
-
-  defp draft_action_item(%Insight{source: "gmail"}),
-    do: "Tap Draft Email to generate the in-thread reply."
-
-  defp draft_action_item(%Insight{source: "slack"}),
-    do: "Tap Draft Slack to generate the thread reply."
-
-  defp draft_action_item(%Insight{}), do: "Take the recommended action."
-
-  defp ready_action_item(%Insight{source: "gmail"}),
-    do: "If the artifact or update is ready, send it in the same email thread."
-
-  defp ready_action_item(%Insight{source: "slack"}),
-    do: "If the answer is ready, send it in the same Slack thread."
-
-  defp ready_action_item(%Insight{}), do: nil
-
-  defp eta_action_item(%Insight{} = insight, metadata) do
-    due =
-      case insight.due_at do
-        %DateTime{} = due_at -> Calendar.strftime(due_at, "%Y-%m-%d %H:%M UTC")
-        _ -> nil
-      end
-
-    if due do
-      "If it is not ready, reply with the next concrete ETA before #{due}."
-    else
-      person = record_value(metadata, "person") || "the other person"
-      "If it is not ready, give #{person} a specific ETA and next step."
+    cond do
+      present?(person) and present?(subject) -> "Reply to #{person} about #{subject}"
+      present?(person) -> "Reply to #{person}"
+      present?(subject) -> "Reply on #{subject}"
+      true -> "Reply to the thread"
     end
+  end
+
+  defp context_text(%Insight{} = insight, metadata) do
+    context =
+      read_string(metadata, "context_brief") ||
+        metadata |> read_map("attention") |> read_string("change_summary") ||
+        insight.summary
+
+    [context, due_sentence(insight)]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp person_text(%Insight{} = insight, metadata) do
+    person = person_name(metadata) || "Person not clearly named"
+    source = source_label(insight, metadata)
+
+    if present?(source), do: "#{person} — #{source}", else: person
+  end
+
+  defp why_important_text(%Insight{} = insight, metadata) do
+    why_now = read_string(metadata, "why_now")
+    context = conversation_context(metadata)
+
+    cond do
+      present?(why_now) ->
+        why_now
+
+      monitor_insight?(insight) ->
+        "The thread matters, but the next move may not be yours unless it stalls or asks back."
+
+      present?(read_string(context, "open_loop_reason")) ->
+        read_string(context, "open_loop_reason")
+
+      match?(%DateTime{}, insight.due_at) ->
+        "There is a deadline and the loop still looks unclosed."
+
+      insight.category in ["reply_urgent", "reply_owed", "commitment_unresolved"] ->
+        "A real person is waiting, and the thread still looks open."
+
+      true ->
+        "This is a high-signal open loop worth closing."
+    end
+  end
+
+  defp next_text(%Insight{} = insight, metadata) do
+    record_value(metadata, "next_action") ||
+      read_string(metadata, "next_action") ||
+      insight.recommended_action ||
+      if(monitor_insight?(insight),
+        do: "Watch for a blocker, direct ask, or stall.",
+        else: "Reply with the concrete next step, owner, and ETA."
+      )
+  end
+
+  defp person_name(metadata) do
+    record_value(metadata, "person") ||
+      read_string(metadata, "person") ||
+      first_email_name(read_string(metadata, "from")) ||
+      first_email_name(read_string(metadata, "to"))
+  end
+
+  defp due_sentence(%Insight{due_at: %DateTime{} = due_at}) do
+    "Due #{Calendar.strftime(due_at, "%b %d, %H:%M UTC")}."
+  end
+
+  defp due_sentence(%Insight{}), do: nil
+
+  defp clean_subject(subject) when is_binary(subject) do
+    subject
+    |> String.trim()
+    |> String.replace(~r/^reply owed:\s*/i, "")
+    |> String.replace(~r/^(re|fw|fwd):\s*/i, "")
+    |> String.trim()
+  end
+
+  defp clean_subject(_subject), do: nil
+
+  defp first_present(values) do
+    Enum.find(values, &present?/1)
+  end
+
+  defp compact_sentence(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp compact_sentence(_value), do: ""
+
+  defp ensure_sentence(value) when is_binary(value) do
+    if value == "" or String.match?(value, ~r/[.!?]$/), do: value, else: value <> "."
   end
 
   defp primary_action(%Insight{} = insight) do

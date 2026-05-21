@@ -120,15 +120,25 @@ defmodule Maraithon.InsightNotificationActionsTest do
       Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
     sent = last_telegram_message(:send)
-    assert sent.text =~ "I think this needs your attention."
+
+    assert sent.text =~ "<b>Todo</b>"
+    assert sent.text =~ "Send the deck to Sarah"
+    assert sent.text =~ "<b>Context</b>"
+    assert sent.text =~ "Explicit promise made to Sarah."
+    assert sent.text =~ "<b>Person</b>"
+    assert sent.text =~ "Sarah"
+    assert sent.text =~ "Gmail"
+    assert sent.text =~ "<b>Why important</b>"
+    assert sent.text =~ "<b>Next</b>"
 
     assert sent.text =~
-             "The commitment still appears open for Sarah and no completion evidence was found"
+             "Send the promised follow-through now and explicitly confirm delivery"
 
-    assert sent.text =~ "<b>What I'd send</b>"
-    assert sent.text =~ "Hi Sarah,"
-    assert sent.text =~ "<b>Fast actions</b>"
-    assert sent.text =~ "Tap Draft Email"
+    assert String.length(sent.text) <= 700
+    refute sent.text =~ "I think this needs your attention."
+    refute sent.text =~ "<b>What I'd send</b>"
+    refute sent.text =~ "<b>Fast actions</b>"
+    refute sent.text =~ "Tap Draft Email"
     refute sent.text =~ "<b>What it is:</b>"
     refute sent.text =~ "<b>Suggested reply:</b>"
     refute sent.text =~ "Needed:"
@@ -216,6 +226,71 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert get_in(updated_delivery.metadata, ["telegram_action", "status"]) == "executed"
     assert completed.text =~ "Completed"
     assert completed.text =~ "Sent via Gmail"
+  end
+
+  test "verifies proactive Telegram copy stays concise and chief-of-staff shaped", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    noisy_text = String.duplicate("generic reply plan with too much detail ", 30)
+
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "reply_urgent",
+          "title" => "Reply owed: Re: Intro launch video",
+          "summary" =>
+            "Renat is waiting on the intro launch video update and no sent follow-up was found.",
+          "recommended_action" =>
+            "Reply with the owner, current status, exact artifact, or a concrete ETA.",
+          "priority" => 94,
+          "confidence" => 0.91,
+          "due_at" => ~U[2026-05-20 23:00:00Z],
+          "source_id" => "msg-renat-1",
+          "dedupe_key" => "telegram-actions:gmail:chief-copy",
+          "metadata" => %{
+            "account" => "kent@runner.now",
+            "thread_id" => "thread-renat-1",
+            "from" => "Renat Gabitov <renat@example.com>",
+            "subject" => "Re: Intro launch video",
+            "context_brief" => "Renat asked for the intro launch video update.",
+            "suggested_reply" => noisy_text,
+            "draft_plan" => noisy_text,
+            "attention" => %{"change_summary" => noisy_text},
+            "record" => %{
+              "person" => "Renat Gabitov",
+              "commitment" => "Reply to Renat about the intro launch video",
+              "next_action" =>
+                "Reply with the owner, current status, exact artifact, or a concrete ETA."
+            }
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert in_order?(sent.text, [
+             "<b>Todo</b>",
+             "<b>Context</b>",
+             "<b>Person</b>",
+             "<b>Why important</b>",
+             "<b>Next</b>"
+           ])
+
+    assert sent.text =~ "Reply to Renat about the intro launch video"
+    assert sent.text =~ "Renat asked for the intro launch video update."
+    assert sent.text =~ "Renat Gabitov"
+    assert sent.text =~ "Reply with the owner"
+    assert String.length(sent.text) <= 700
+    refute sent.text =~ "I think this needs your attention."
+    refute sent.text =~ "What I'd send"
+    refute sent.text =~ "Fast actions"
+    refute sent.text =~ "Tap Draft"
+    refute sent.text =~ "generic reply plan with too much detail"
   end
 
   test "drafts and sends a Slack reply directly from Telegram", %{agent: agent, user_id: user_id} do
@@ -504,9 +579,17 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "I'm watching this."
-    assert sent.text =~ "<b>What I'm watching</b>"
-    assert sent.text =~ "Since the last check: Ownership moved to Breck after acknowledgment."
+    assert sent.text =~ "<b>Watching</b>"
+    assert sent.text =~ "Monitor investor handoff"
+    assert sent.text =~ "<b>Context</b>"
+    assert sent.text =~ "Ownership moved to Breck after acknowledgment."
+    assert sent.text =~ "<b>Person</b>"
+    assert sent.text =~ "Breck"
+    assert sent.text =~ "<b>Why important</b>"
+    assert sent.text =~ "<b>Next</b>"
+    refute sent.text =~ "I'm watching this."
+    refute sent.text =~ "<b>What I'm watching</b>"
+    refute sent.text =~ "Since the last check:"
     refute sent.text =~ "<b>Watch for:</b>"
     refute sent.text =~ "<b>What changed:</b>"
     refute sent.text =~ "score="
@@ -530,5 +613,16 @@ defmodule Maraithon.InsightNotificationActionsTest do
     |> Map.get("inline_keyboard", [])
     |> List.flatten()
     |> Enum.map(& &1["text"])
+  end
+
+  defp in_order?(text, fragments) do
+    fragments
+    |> Enum.reduce_while(-1, fn fragment, previous_index ->
+      case :binary.match(text, fragment) do
+        {index, _length} when index > previous_index -> {:cont, index}
+        _ -> {:halt, false}
+      end
+    end)
+    |> is_integer()
   end
 end
