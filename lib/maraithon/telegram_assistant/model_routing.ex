@@ -24,17 +24,28 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\b(full|detailed|complete|all)\b.*\b(todos?|to-dos?|tasks?|open\s+loops?)\b/u
   ]
 
+  @connector_status_patterns [
+    ~r/\b(which|what|show|list)\b.*\b(connections?|connectors?|integrations?|accounts?|sources?)\b.*\b(connected|active|enabled|working|status)\b/u,
+    ~r/\b(connected|active|enabled|working)\b.*\b(connections?|connectors?|integrations?|accounts?|sources?)\b/u,
+    ~r/\bwhat\s+(is|do\s+i\s+have)\s+connected\b/u,
+    ~r/\bconnection\s+status\b/u,
+    ~r/\bconnector\s+status\b/u
+  ]
+
   def profile_for(attrs) when is_map(attrs) do
-    tier = tier_for_text(Map.get(attrs, :text) || Map.get(attrs, "text"))
+    text = Map.get(attrs, :text) || Map.get(attrs, "text")
+    tier = tier_for_text(text)
+    request_focus = request_focus_for_text(text)
     model = model_for_tier(tier)
     reasoning_effort = reasoning_effort_for_tier(tier)
 
     %{
       tier: tier,
+      request_focus: request_focus,
       model: model,
       reasoning_effort: reasoning_effort,
       max_tokens: max_tokens_for_tier(tier),
-      llm_opts: llm_opts(tier, model, reasoning_effort)
+      llm_opts: llm_opts(tier, model, reasoning_effort, request_focus)
     }
   end
 
@@ -50,12 +61,36 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   def tier_for_text(_text), do: :chat
 
-  defp llm_opts(tier, model, reasoning_effort) do
+  defp request_focus_for_text(text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    cond do
+      Enum.any?(@connector_status_patterns, &Regex.match?(&1, normalized)) ->
+        :connector_status
+
+      true ->
+        nil
+    end
+  end
+
+  defp request_focus_for_text(_text), do: nil
+
+  defp llm_opts(tier, model, reasoning_effort, request_focus) do
     []
     |> maybe_put(:chat_model, model)
     |> maybe_put(:reasoning_effort, reasoning_effort)
     |> maybe_put(:max_tokens, max_tokens_for_tier(tier))
+    |> maybe_put_focus(request_focus)
   end
+
+  defp maybe_put_focus(keyword, :connector_status) do
+    keyword
+    |> Keyword.put(:request_focus, :connector_status)
+    |> Keyword.put(:context_scope, :connector_status)
+    |> Keyword.put(:tool_scope, :connector_status)
+  end
+
+  defp maybe_put_focus(keyword, _focus), do: keyword
 
   defp model_for_tier(:reasoning), do: non_empty(LLM.model()) || non_empty(LLM.chat_model())
   defp model_for_tier(:chat), do: non_empty(LLM.chat_model()) || non_empty(LLM.model())

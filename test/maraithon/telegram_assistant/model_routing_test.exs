@@ -45,7 +45,7 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert Keyword.fetch!(profile.llm_opts, :chat_model) == "chat-tier"
   end
 
-  test "defaults ordinary chat to medium reasoning when not configured" do
+  test "keeps connector status on the chat tier with focused context and tools" do
     :maraithon
     |> Application.get_env(:telegram_assistant, [])
     |> Keyword.delete(:chat_reasoning_effort)
@@ -54,8 +54,12 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     profile = ModelRouting.profile_for(%{text: "Which connections are active?"})
 
     assert profile.tier == :chat
+    assert profile.request_focus == :connector_status
     assert profile.model == "chat-tier"
     assert profile.reasoning_effort == "medium"
+    assert Keyword.fetch!(profile.llm_opts, :request_focus) == :connector_status
+    assert Keyword.fetch!(profile.llm_opts, :context_scope) == :connector_status
+    assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :connector_status
   end
 
   test "routes broad planning and todo-review asks to the reasoning tier" do

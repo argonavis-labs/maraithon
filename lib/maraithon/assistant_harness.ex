@@ -129,10 +129,13 @@ defmodule Maraithon.AssistantHarness do
   def build_loop_request_payload(runtime_context, state, opts \\ [])
       when is_map(runtime_context) and is_map(state) and is_list(opts) do
     policy = runtime_policy(opts)
+    context = map_value(runtime_context, "context", %{})
 
     %{
-      context: map_value(runtime_context, "context", %{}),
-      tools: map_value(runtime_context, "tools", []),
+      current_user_request: current_user_request(context),
+      request_focus: normalize_focus(Keyword.get(opts, :request_focus)),
+      context: focus_context(context, Keyword.get(opts, :context_scope)),
+      tools: focus_tools(map_value(runtime_context, "tools", []), Keyword.get(opts, :tool_scope)),
       tool_history: compact_tool_history(map_value(state, "tool_history", []), policy),
       runtime_policy: policy,
       iteration: map_value(state, "iteration", 1),
@@ -301,6 +304,7 @@ defmodule Maraithon.AssistantHarness do
     - Tool/result history is compact execution evidence from prior loop steps. Treat it as source-grounded context, and call another read tool only when the evidence is insufficient or stale.
     - Do not rely on keyword heuristics. Use the full context, durable memory, CRM relationships, open loops, and tool results.
     - If you cannot decide safely from the available context, ask a concise clarifying question or call the relevant read tool.
+    - The current user request below is the primary instruction. Use context only to answer that request, and do not turn unrelated context into todos or other actions.
 
     Voice contract:
     - Sound like the operator is talking to a smart, capable chief of staff in Telegram, not reading a ticket, database row, or system notification.
@@ -402,6 +406,12 @@ defmodule Maraithon.AssistantHarness do
     - Use `browser_history_recent` for sweeping "what have I been looking at?" questions.
     - Never quote a visited URL back to the user verbatim if the host is in a private category (banks, medical, etc.) — the ingest layer should have filtered these, but double-check before surfacing.
     - Keep replies concise and operational.
+
+    Current user request JSON:
+    #{PromptStability.encode!(Map.get(payload, :current_user_request) || Map.get(payload, "current_user_request") || %{})}
+
+    Request focus JSON:
+    #{PromptStability.encode!(Map.get(payload, :request_focus) || Map.get(payload, "request_focus"))}
 
     Examples:
     - If live Gmail results include a billing thread and an OAuth thread that both need action, your next response should usually be `tool_calls` for `upsert_todos`, not a final prose answer.
@@ -1124,6 +1134,79 @@ defmodule Maraithon.AssistantHarness do
   defp compact_tool_value(value, _policy) when is_reference(value), do: inspect(value)
   defp compact_tool_value(value, _policy) when is_function(value), do: inspect(value)
   defp compact_tool_value(value, _policy), do: value
+
+  defp current_user_request(context) when is_map(context) do
+    context
+    |> map_value("recent_turns", [])
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %{} = turn ->
+        role = Map.get(turn, :role) || Map.get(turn, "role")
+        text = Map.get(turn, :text) || Map.get(turn, "text")
+
+        if role == "user" and is_binary(text) and String.trim(text) != "" do
+          %{
+            role: role,
+            text: String.trim(text),
+            turn_kind: Map.get(turn, :turn_kind) || Map.get(turn, "turn_kind"),
+            origin_type: Map.get(turn, :origin_type) || Map.get(turn, "origin_type"),
+            inserted_at: Map.get(turn, :inserted_at) || Map.get(turn, "inserted_at")
+          }
+        end
+
+      _other ->
+        nil
+    end) || %{}
+  end
+
+  defp current_user_request(_context), do: %{}
+
+  defp focus_context(context, :connector_status) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :recent_turns,
+      :connected_accounts,
+      :source_freshness,
+      :defaults,
+      :context_diagnostics
+    ])
+  end
+
+  defp focus_context(context, _scope), do: context
+
+  defp focus_tools(tools, :connector_status) when is_list(tools) do
+    Enum.filter(tools, &(tool_definition_name(&1) == "list_connected_accounts"))
+  end
+
+  defp focus_tools(tools, _scope), do: tools
+
+  defp normalize_focus(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
+  defp normalize_focus(value) when is_binary(value), do: value
+  defp normalize_focus(_value), do: nil
+
+  defp tool_definition_name(%{"name" => name}) when is_binary(name), do: name
+  defp tool_definition_name(%{name: name}) when is_binary(name), do: name
+  defp tool_definition_name(%{"tool" => name}) when is_binary(name), do: name
+  defp tool_definition_name(name) when is_binary(name), do: name
+  defp tool_definition_name(_tool), do: nil
+
+  defp take_existing(map, keys) when is_map(map) and is_list(keys) do
+    Enum.reduce(keys, %{}, fn key, acc ->
+      string_key = Atom.to_string(key)
+
+      cond do
+        Map.has_key?(map, key) ->
+          Map.put(acc, key, Map.get(map, key))
+
+        Map.has_key?(map, string_key) ->
+          Map.put(acc, key, Map.get(map, string_key))
+
+        true ->
+          acc
+      end
+    end)
+  end
 
   defp emit_tool_loop_telemetry(loop) do
     :telemetry.execute(

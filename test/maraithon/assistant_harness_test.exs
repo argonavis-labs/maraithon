@@ -151,6 +151,53 @@ defmodule Maraithon.AssistantHarnessTest do
     assert String.length(compacted) < 50
   end
 
+  test "focuses connector-status turns on the current request and connection tools" do
+    payload =
+      AssistantHarness.build_loop_request_payload(
+        %{
+          context: %{
+            user: %{id: "kent@example.com"},
+            chat: %{id: "123"},
+            recent_turns: [
+              %{role: "assistant", text: "Earlier todo answer"},
+              %{
+                role: "user",
+                text: "Which connections are currently connected?",
+                turn_kind: "assistant_request",
+                origin_type: "telegram"
+              }
+            ],
+            connected_accounts: [%{provider: "telegram", status: "connected"}],
+            source_freshness: [%{provider: "telegram", status: "fresh"}],
+            todos: [%{title: "Unrelated todo"}],
+            relationships: [%{name: "Unrelated person"}]
+          },
+          tools: [
+            %{"name" => "list_connected_accounts"},
+            %{"name" => "upsert_todos"},
+            %{"name" => "list_people"}
+          ]
+        },
+        AssistantHarness.initial_loop_state(),
+        request_focus: :connector_status,
+        context_scope: :connector_status,
+        tool_scope: :connector_status
+      )
+
+    assert payload.current_user_request.text == "Which connections are currently connected?"
+    assert payload.request_focus == "connector_status"
+    assert Map.has_key?(payload.context, :connected_accounts)
+    assert Map.has_key?(payload.context, :source_freshness)
+    refute Map.has_key?(payload.context, :todos)
+    refute Map.has_key?(payload.context, :relationships)
+    assert [%{"name" => "list_connected_accounts"}] = payload.tools
+
+    prompt = AssistantHarness.build_prompt(payload)
+    assert prompt =~ "Current user request JSON"
+    assert prompt =~ "Which connections are currently connected?"
+    assert prompt =~ "Request focus JSON"
+  end
+
   test "guard_loop owns timeout and loop budget decisions" do
     assert :ok =
              AssistantHarness.guard_loop(
