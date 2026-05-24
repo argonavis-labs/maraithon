@@ -305,7 +305,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       fn ->
         brief_input = state.pending_brief_input || %{}
         parsed_brief = parse_llm_brief(response)
-        {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
+
+        {brief, generation_mode, error_message} =
+          brief_or_error_notice(parsed_brief, response, brief_input)
 
         {brief, quality_verification} =
           verify_and_revise_morning_brief(brief, brief_input, generation_mode)
@@ -369,7 +371,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               attach_model_todos_to_brief(brief_record, todo_result)
 
             event_type =
-              if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+              if generation_mode in ["llm", "source_fallback"],
+                do: :briefs_recorded,
+                else: :brief_generation_failed
 
             todo_payload =
               todo_result
@@ -787,66 +791,118 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
               case parsed do
                 {:ok, brief} ->
-                  {brief, quality_verification} =
-                    verify_and_revise_morning_brief(brief, brief_input, "llm")
-
-                  {todo_result, todo_elapsed_ms} =
-                    if Keyword.get(opts, :persist_todos, Keyword.get(opts, :send, false)) do
-                      timed(fn -> persist_model_todos(user_id, brief, brief_input) end)
-                    else
-                      {{:ok, :no_todos}, 0}
-                    end
-
-                  diagnostics =
-                    diagnostics
-                    |> Map.put(:quality_verification, quality_verification)
-                    |> Map.put(:todo_persistence, todo_event_payload(todo_result))
-                    |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
-
-                  {delivery_result, delivery_elapsed_ms} =
-                    if Keyword.get(opts, :send, false) do
-                      timed(fn ->
-                        deliver_smoke_brief(user_id, brief, diagnostics, todo_result)
-                      end)
-                    else
-                      {{:ok, :not_sent}, 0}
-                    end
-
-                  diagnostics =
-                    diagnostics
-                    |> Map.put(:telegram_delivery, delivery_event_payload(delivery_result))
-                    |> Map.put(:telegram_delivery_elapsed_ms, delivery_elapsed_ms)
-                    |> Map.put(:total_elapsed_ms, elapsed_since_ms(total_started_ms))
-
-                  result = {:ok, brief, diagnostics}
-
-                  result
+                  finalize_smoke_brief(
+                    user_id,
+                    brief,
+                    brief_input,
+                    "llm",
+                    diagnostics,
+                    opts,
+                    total_started_ms
+                  )
 
                 {:error, reason} ->
                   diagnostics =
-                    Map.put(diagnostics, :total_elapsed_ms, elapsed_since_ms(total_started_ms))
+                    diagnostics
+                    |> Map.put(:error_message, reason)
+                    |> Map.put(:generation_mode, "source_fallback")
 
-                  {:error, {:invalid_brief, reason}, diagnostics}
+                  {brief, generation_mode, error_message} =
+                    brief_or_error_notice({:error, reason}, response, brief_input)
+
+                  finalize_smoke_brief(
+                    user_id,
+                    brief,
+                    brief_input,
+                    generation_mode,
+                    Map.put(diagnostics, :error_message, error_message),
+                    opts,
+                    total_started_ms
+                  )
               end
 
             {:error, reason} ->
               elapsed_ms = System.monotonic_time(:millisecond) - started_ms
 
-              {:error, {:llm_call_failed, reason},
-               %{
-                 elapsed_ms: elapsed_ms,
-                 total_elapsed_ms: elapsed_since_ms(total_started_ms),
-                 source_context_elapsed_ms: source_context_elapsed_ms,
-                 input_build_elapsed_ms: input_build_elapsed_ms,
-                 max_tokens_used: effective_llm_max_tokens(state),
-                 reasoning_effort_used: state.llm_reasoning_effort
-               }}
+              response = %{
+                content: "",
+                error: "llm_call_failed: #{inspect(reason)}",
+                finish_reason: "error"
+              }
+
+              {brief, generation_mode, error_message} =
+                brief_or_error_notice(
+                  {:error, "llm_call_failed: #{inspect(reason)}"},
+                  response,
+                  brief_input
+                )
+
+              finalize_smoke_brief(
+                user_id,
+                brief,
+                brief_input,
+                generation_mode,
+                %{
+                  elapsed_ms: elapsed_ms,
+                  briefing_llm_elapsed_ms: elapsed_ms,
+                  source_context_elapsed_ms: source_context_elapsed_ms,
+                  input_build_elapsed_ms: input_build_elapsed_ms,
+                  max_tokens_used: effective_llm_max_tokens(state),
+                  reasoning_effort_used: state.llm_reasoning_effort,
+                  error_message: error_message,
+                  generation_mode: generation_mode
+                },
+                opts,
+                total_started_ms
+              )
           end
 
         {:error, reason} ->
           {:error, {:llm_params_failed, reason}, %{}}
       end
     end
+  end
+
+  defp finalize_smoke_brief(
+         user_id,
+         brief,
+         brief_input,
+         generation_mode,
+         diagnostics,
+         opts,
+         total_started_ms
+       ) do
+    {brief, quality_verification} =
+      verify_and_revise_morning_brief(brief, brief_input, generation_mode)
+
+    {todo_result, todo_elapsed_ms} =
+      if Keyword.get(opts, :persist_todos, Keyword.get(opts, :send, false)) do
+        timed(fn -> persist_model_todos(user_id, brief, brief_input) end)
+      else
+        {{:ok, :no_todos}, 0}
+      end
+
+    diagnostics =
+      diagnostics
+      |> Map.put(:generation_mode, generation_mode)
+      |> Map.put(:quality_verification, quality_verification)
+      |> Map.put(:todo_persistence, todo_event_payload(todo_result))
+      |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
+
+    {delivery_result, delivery_elapsed_ms} =
+      if Keyword.get(opts, :send, false) do
+        timed(fn -> deliver_smoke_brief(user_id, brief, diagnostics, todo_result) end)
+      else
+        {{:ok, :not_sent}, 0}
+      end
+
+    diagnostics =
+      diagnostics
+      |> Map.put(:telegram_delivery, delivery_event_payload(delivery_result))
+      |> Map.put(:telegram_delivery_elapsed_ms, delivery_elapsed_ms)
+      |> Map.put(:total_elapsed_ms, elapsed_since_ms(total_started_ms))
+
+    {:ok, brief, diagnostics}
   end
 
   defp smoke_test_user_id(agent) do
@@ -1167,11 +1223,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
        the prep point, decision, or risk the operator should carry into it.
-       Keep the JSON executive-grade and complete. Do not enforce an artificial short brief:
-       if there are ten material items, include ten material items. Avoid filler and source
-       inventory, but include every meeting, risk, decision, commercial thread, and follow-up
-       a busy executive would want before starting the day. Todos may be longer than six
-       when the source-backed action list is genuinely longer; keep each todo concise.
+       Response budget rule:
+       Return compact executive JSON that can finish well under the token budget. The body should
+       be concise, scannable, and usually under 1,800 words. Use at most eight body sections and
+       at most twelve todos. Include every required meeting and required commercial thread, but
+       compress lower-priority context instead of expanding it. Each todo must be one concrete
+       action with source/person/company/why-now context in metadata.
 
        Brief input JSON:
        #{input_json}
@@ -1212,9 +1269,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp brief_or_error_notice({:ok, brief}, _response), do: {brief, "llm", nil}
+  defp brief_or_error_notice({:ok, brief}, _response, _brief_input), do: {brief, "llm", nil}
 
-  defp brief_or_error_notice({:error, reason}, response) do
+  defp brief_or_error_notice({:error, reason}, response, brief_input) do
     error_message =
       [
         "Morning briefing model synthesis failed",
@@ -1224,14 +1281,304 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Enum.reject(&is_nil/1)
       |> Enum.join(": ")
 
-    {%{
-       "title" => "Morning briefing generation failed",
-       "summary" =>
-         "Maraithon could not generate the morning briefing with the configured model.",
-       "body" =>
-         "Morning briefing generation failed because the configured model did not return a valid synthesized brief. No heuristic or keyword-based fallback was used.\n\nError: #{error_message}"
-     }, "error", error_message}
+    {build_compact_fallback_brief(brief_input, error_message), "source_fallback", error_message}
   end
+
+  @doc """
+  Builds a compact source-backed brief when model synthesis cannot produce a
+  valid JSON briefing.
+  """
+  def build_compact_fallback_brief(brief_input, error_message \\ "model synthesis unavailable")
+
+  def build_compact_fallback_brief(brief_input, error_message) when is_map(brief_input) do
+    source_backed_fallback_brief(brief_input, error_message)
+  end
+
+  def build_compact_fallback_brief(_brief_input, error_message) do
+    source_backed_fallback_brief(%{}, error_message)
+  end
+
+  defp source_backed_fallback_brief(brief_input, error_message) when is_map(brief_input) do
+    date = read_string(brief_input, "date", "today")
+    calendar = read_map(brief_input, "calendar")
+    today_events = read_list(calendar, "today_events")
+    personal_events = personal_calendar_events(brief_input)
+    tomorrow = read_map(calendar, "tomorrow_first_event")
+    required_meetings = read_list(read_map(brief_input, "schedule_coverage"), "required_meetings")
+    required_threads = read_list(read_map(brief_input, "commercial_coverage"), "required_threads")
+    open_todos = fallback_ranked_todos(brief_input)
+
+    body =
+      [
+        fallback_section(
+          "Personal / Family First",
+          personal_events
+          |> Enum.take(6)
+          |> Enum.map(&calendar_event_brief_line/1)
+        ),
+        fallback_section(
+          "Today's Schedule",
+          fallback_schedule_lines(required_meetings, today_events)
+        ),
+        fallback_section(
+          "Active Follow-Ups",
+          open_todos
+          |> Enum.take(8)
+          |> Enum.map(&fallback_todo_line/1)
+        ),
+        fallback_section(
+          "Commercial Threads",
+          required_threads
+          |> Enum.take(8)
+          |> Enum.map(&fallback_commercial_thread_line/1)
+        ),
+        fallback_lookahead_section(tomorrow, brief_input),
+        fallback_source_note(error_message)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join("\n\n")
+
+    %{
+      "title" => "Morning briefing - #{date}",
+      "summary" =>
+        "Compact source-backed briefing from calendar, todos, CRM, Gmail, Slack, and local context.",
+      "body" => body,
+      "todos" =>
+        open_todos
+        |> Enum.take(10)
+        |> Enum.map(&fallback_todo_card(&1, brief_input))
+        |> Enum.reject(&is_nil/1)
+    }
+  end
+
+  defp source_backed_fallback_brief(_brief_input, error_message) do
+    %{
+      "title" => "Morning briefing",
+      "summary" => "Compact source-backed briefing could not be assembled.",
+      "body" =>
+        "## Source Status\nThe model briefing path could not finish and no source bundle was available for compact fallback.\n\n#{error_message}",
+      "todos" => []
+    }
+  end
+
+  defp fallback_section(_title, []), do: nil
+
+  defp fallback_section(title, lines) when is_binary(title) and is_list(lines) do
+    lines =
+      lines
+      |> Enum.reject(&blank?/1)
+      |> Enum.uniq()
+
+    if lines == [] do
+      nil
+    else
+      "## #{title}\n" <> Enum.join(lines, "\n")
+    end
+  end
+
+  defp fallback_schedule_lines(required_meetings, today_events) do
+    required_ids =
+      required_meetings
+      |> Enum.map(&calendar_event_identity/1)
+      |> MapSet.new()
+
+    required_lines =
+      required_meetings
+      |> Enum.map(&fallback_meeting_line/1)
+
+    other_lines =
+      today_events
+      |> Enum.reject(&(calendar_event_identity(&1) in required_ids))
+      |> Enum.take(10)
+      |> Enum.map(&calendar_event_brief_line/1)
+
+    required_lines ++ other_lines
+  end
+
+  defp fallback_meeting_line(meeting) when is_map(meeting) do
+    summary = read_string(meeting, "summary", "Meeting")
+    start = read_string(meeting, "display_start", nil)
+    context = fallback_meeting_context(meeting)
+
+    [
+      "- **#{summary}**",
+      start && "at #{start}",
+      context && ": #{context}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp fallback_meeting_line(_meeting), do: nil
+
+  defp fallback_meeting_context(meeting) do
+    crm_context =
+      meeting
+      |> read_list("crm_context")
+      |> List.first()
+
+    person = read_map(crm_context || %{}, "person")
+    person_name = read_string(person, "display_name", nil)
+
+    relationship =
+      read_string(person, "relationship", nil) ||
+        read_string(person, "notes", nil) ||
+        read_string(meeting, "briefing_reason", nil)
+
+    cond do
+      not blank?(person_name) and not blank?(relationship) ->
+        "#{person_name}: #{truncate_prompt_string(relationship, 180)}"
+
+      not blank?(relationship) ->
+        truncate_prompt_string(relationship, 180)
+
+      true ->
+        meeting
+        |> read_list("external_attendees")
+        |> Enum.map(&fallback_attendee_label/1)
+        |> Enum.reject(&blank?/1)
+        |> Enum.take(3)
+        |> case do
+          [] -> "Prep context is thin; check CRM/web notes before the call."
+          attendees -> "External attendees: #{Enum.join(attendees, ", ")}."
+        end
+    end
+  end
+
+  defp fallback_attendee_label(attendee) when is_map(attendee) do
+    read_string(attendee, "display_name", nil) ||
+      read_string(attendee, "name", nil) ||
+      read_string(attendee, "email", nil)
+  end
+
+  defp fallback_attendee_label(value) when is_binary(value), do: value
+  defp fallback_attendee_label(_value), do: nil
+
+  defp fallback_ranked_todos(brief_input) do
+    open_work = read_map(brief_input, "open_work")
+
+    open_work
+    |> read_list("todos")
+    |> Enum.filter(&is_map/1)
+    |> Enum.sort_by(&fallback_todo_sort_key/1)
+  end
+
+  defp fallback_todo_sort_key(todo) when is_map(todo) do
+    personal_rank = if fallback_personal_todo?(todo), do: 0, else: 1
+    priority = read_integer(todo, "priority", 0)
+    {personal_rank, -priority, read_string(todo, "title", "")}
+  end
+
+  defp fallback_personal_todo?(todo) when is_map(todo) do
+    text =
+      [
+        read_string(todo, "kind", nil),
+        read_string(todo, "title", nil),
+        read_string(todo, "summary", nil),
+        read_string(todo, "next_action", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    Enum.any?(@personal_calendar_terms, &String.contains?(text, &1))
+  end
+
+  defp fallback_todo_line(todo) when is_map(todo) do
+    title = read_string(todo, "title", "Open todo")
+    summary = read_string(todo, "summary", nil) || read_string(todo, "next_action", nil)
+
+    if blank?(summary) do
+      "- **#{title}**"
+    else
+      "- **#{title}**: #{truncate_prompt_string(summary, 220)}"
+    end
+  end
+
+  defp fallback_todo_line(_todo), do: nil
+
+  defp fallback_commercial_thread_line(thread) when is_map(thread) do
+    subject = read_string(thread, "subject", "Commercial thread")
+    from = read_string(thread, "from", nil)
+    snippet = read_string(thread, "body", nil) || read_string(thread, "snippet", nil)
+
+    [
+      "- **#{subject}**",
+      from && "from #{from}",
+      snippet && ": #{truncate_prompt_string(snippet, 220)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp fallback_commercial_thread_line(_thread), do: nil
+
+  defp fallback_lookahead_section(tomorrow, brief_input) do
+    line =
+      cond do
+        is_map(tomorrow) and map_size(tomorrow) > 0 ->
+          "Tomorrow's first calendar item: " <>
+            (tomorrow
+             |> calendar_event_brief_line()
+             |> String.replace_prefix("- ", ""))
+
+        weekend_brief?(brief_input) ->
+          "Use today to prep next week's meetings, family logistics, and open decisions before Monday starts."
+
+        true ->
+          nil
+      end
+
+    fallback_section("Look Ahead", [line])
+  end
+
+  defp fallback_source_note(error_message) do
+    fallback_section("Source Status", [
+      "Compact mode used because full model synthesis did not finish: #{truncate_prompt_string(error_message, 260)}"
+    ])
+  end
+
+  defp fallback_todo_card(todo, brief_input) when is_map(todo) do
+    title = read_string(todo, "title", nil)
+
+    if blank?(title) do
+      nil
+    else
+      source_id = read_string(todo, "id", nil)
+      summary = read_string(todo, "summary", nil) || read_string(todo, "next_action", title)
+      next_action = read_string(todo, "next_action", nil) || title
+
+      %{
+        "source" => "chief_of_staff_morning_briefing",
+        "kind" => read_string(todo, "kind", "follow_up"),
+        "title" => title,
+        "summary" => summary,
+        "next_action" => next_action,
+        "priority" => read_integer(todo, "priority", 50),
+        "source_item_id" => source_id,
+        "source_occurred_at" => read_string(brief_input, "generated_at", nil),
+        "dedupe_key" =>
+          [
+            "morning-fallback",
+            read_string(brief_input, "date", "unknown"),
+            source_id || normalize_match_text(title)
+          ]
+          |> Enum.reject(&blank?/1)
+          |> Enum.join(":"),
+        "metadata" => %{
+          "origin_skill_id" => id(),
+          "origin_cadence" => "morning",
+          "brief_date" => read_string(brief_input, "date", nil),
+          "relationship_context" => read_string(todo, "notes", nil),
+          "why_it_matters" => summary,
+          "source_mode" => "compact_fallback"
+        }
+      }
+      |> compact_map()
+    end
+  end
+
+  defp fallback_todo_card(_todo, _brief_input), do: nil
 
   @doc """
   Scores and revises a model-produced morning brief against the Chief of Staff

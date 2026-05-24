@@ -166,6 +166,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         kind: :static
       },
       %{
+        id: :morning_brief_fallback_contract,
+        kind: :static
+      },
+      %{
         id: :linked_routing,
         kind: :static
       },
@@ -769,6 +773,62 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           []
         ),
         "morning brief score must include separate actionable todo cards in the rubric"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :morning_brief_fallback_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    personal_event = verification_personal_event(now)
+    todo = verification_surface_todo()
+
+    brief_input = %{
+      "date" => "2026-05-24",
+      "generated_at" => DateTime.to_iso8601(now),
+      "calendar" => %{
+        "today_events" => [personal_event],
+        "upcoming_local" => [personal_event],
+        "tomorrow_first_event" => %{
+          "summary" => "Boardy Pro Kickoff",
+          "display_start" => "9:00 AM",
+          "calendar_name" => "Work"
+        }
+      },
+      "open_work" => %{"todos" => [todo]},
+      "schedule_coverage" => %{"required_meetings" => []},
+      "commercial_coverage" => %{"required_threads" => []}
+    }
+
+    brief = MorningBriefing.build_compact_fallback_brief(brief_input, "max_output_tokens")
+
+    {verified, verification} =
+      MorningBriefing.verify_quality(brief, brief_input, "source_fallback")
+
+    body = Map.get(verified, "body", "")
+    todos = Map.get(verified, "todos", [])
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(verification, "score") == 10,
+        "compact fallback brief must satisfy the morning briefing verifier"
+      )
+      |> require_finding(
+        contains_all?(body, ["emma", "soccer"]) and contains_any?(body, ["family", "personal"]),
+        "compact fallback must retain personal/family calendar context"
+      )
+      |> require_finding(
+        contains_any?(body, ["look ahead", "tomorrow", "next week"]),
+        "compact fallback must retain weekend/week-ahead prep"
+      )
+      |> require_finding(
+        Enum.any?(todos, &(Map.get(&1, "source_item_id") || Map.get(&1, "dedupe_key"))),
+        "compact fallback todos must remain source-backed for action cards"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
