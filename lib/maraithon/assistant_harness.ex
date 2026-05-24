@@ -330,6 +330,9 @@ defmodule Maraithon.AssistantHarness do
     - If a tool returns an awaiting-confirmation action, the next final response should be an `approval_prompt`.
     - If a non-destructive agent control tool already executed, return `action_result`.
     - If the user is asking why a linked insight or push was sent, use the linked detail already present in context before calling more tools.
+    - If request_focus is `linked_item_context`, treat the quoted Telegram card as the object being discussed. Start from `linked_item.todo`, `linked_item.detail`, `linked_item.insight`, or `linked_item.project`; answer the user's short follow-up in that frame before doing broad source review.
+    - For linked-item questions like `Who is this?`, `What is this?`, `Why did you send this?`, or `What do I owe them?`, give the person/company/source context, why it matters, the concrete ask, and confidence. Use the linked todo or insight text directly when it is enough; call one focused CRM/open-loop/source review tool only when the linked item lacks identity or relationship context.
+    - A good chief of staff should not surface a person-name-plus-task answer when the user needs orientation. Unless the person is clearly a frequent close contact in context, include who they are, the company/project/source they are attached to, and why the item exists.
     - The assistant is a single operator assistant for one linked user. No cross-user access.
     - For inbox or Gmail questions about "today", "latest", "new", "what should I triage", or "what changed", do not answer from stored open insights alone.
     - For those recency-sensitive inbox questions, call `get_open_work_summary` first. If `source_health.gmail.insights_stale` is true or the user wants live inbox items, call `gmail_search_messages` before answering.
@@ -361,6 +364,7 @@ defmodule Maraithon.AssistantHarness do
     - When a todo, email, Slack thread, calendar item, or other object is clearly about a known person, attach it to the CRM person with `link_person_data` so future relationship questions include the work context.
     - If the user asks to add, remember, capture, or keep track of something for later, store it as a durable todo with `upsert_todos`.
     - For manually added conversational todos, prefer `source: "telegram"`, `kind: "general"`, `attention_mode: "act_now"`, and metadata that keeps the original user request text.
+    - For todo CRUD from chat: create/update with `upsert_todos`, read with `list_todos`, mark complete with `resolve_todo` status `done`, and treat remove/delete/not-important/dismiss as `resolve_todo` status `dismissed` unless the user explicitly asks for a hard database delete.
     - If the user asks for their todo list, what is still open, or what else remains, call `list_todos` first unless the latest todo tool result is already current. If they ask a broader open-loop question across people, memory, and multiple sources, call `get_open_loops`.
     - For a todo-list answer, prefer a fuller open list and return `message_class:"todo_digest"` so Telegram sends one individual todo card per item instead of one dense blob.
     - Never answer with person-name plus action-only todo bullets. Every todo item shown to the user needs one short context sentence explaining what the ask is, where it came from, or why it matters.
@@ -430,6 +434,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user says `What am I missing across people and work?`, your next response should usually be `tool_calls` for `get_open_loops`.
     - If the user says `What should I review?`, your next response should usually be `tool_calls` for `get_open_loops` or `list_todos` with a fuller open limit, followed by a `final` response with `message_class:"todo_digest"` when actionable todos should be sent separately.
     - If context or `list_todos` shows a todo like `{id:"todo_123", title:"Billing account past due"}` and the user says `Handled the billing, what else?`, your next response should usually be `tool_calls` for `resolve_todo` with `todo_id:"todo_123"` and `include_remaining:true`.
+    - If request_focus is `linked_item_context` and `linked_item.todo` is present, questions like `Who is this?` should usually answer from the linked todo plus `get_relationship_context` or `review_connected_context` for the named person, not `get_open_loops` across everything.
     - If the user says `Charlie prefers Slack and I talk to him weekly`, your next response should usually be `tool_calls` for `upsert_person` with `preferred_communication_method:"slack"` and `communication_frequency:"weekly"`.
     - If the user says `what do I owe Justin?`, your next response should usually be `tool_calls` for `get_relationship_context` with `query:"Justin"` before answering from the linked todos and relationship fields.
     - If `get_relationship_context` returns `person_not_found` for `Charlie` and connected-source tools are available, your next response should usually call `review_connected_context` for `Charlie`, then `learn_relationship_context` with source observations from the result, then answer. Do not stop with `I don't have Charlie in your CRM`.
@@ -1261,10 +1266,75 @@ defmodule Maraithon.AssistantHarness do
     ])
   end
 
+  defp focus_context(context, :linked_item_context) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :linked_item,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :open_insights,
+      :todos,
+      :briefing_schedule,
+      :calendar,
+      :connected_accounts,
+      :source_freshness,
+      :projects,
+      :active_agents,
+      :defaults,
+      :context_diagnostics
+    ])
+  end
+
   defp focus_context(context, _scope), do: context
 
   defp focus_tools(tools, :connector_status) when is_list(tools) do
     Enum.filter(tools, &(tool_definition_name(&1) == "list_connected_accounts"))
+  end
+
+  defp focus_tools(tools, :linked_item_context) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        inspect_open_insight
+        list_todos
+        resolve_todo
+        upsert_todos
+        get_open_loops
+        list_people
+        get_person
+        get_relationship_context
+        review_connected_context
+        learn_relationship_context
+        link_person_data
+        upsert_person
+        delete_person
+        recall_memory
+        recall_anywhere
+        list_memories
+        write_memory
+        record_memory_feedback
+        update_memory_confidence
+        forget_memory
+        list_connected_accounts
+        calendar_events_around
+        calendar_events_for_person
+        calendar_search
+        calendar_event_get
+        update_project_scope
+        inspect_project
+        list_projects
+        list_implementation_runs
+      ))
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
   end
 
   defp focus_tools(tools, _scope), do: tools

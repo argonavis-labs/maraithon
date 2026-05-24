@@ -35,10 +35,23 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bconnector\s+status\b/u
   ]
 
+  @linked_item_context_patterns [
+    ~r/\bwho\s+(is|are)\s+(this|that|they|them|he|she|it|person)\b/u,
+    ~r/\bwho\s+am\s+i\s+(talking|replying|responding)\s+to\b/u,
+    ~r/\bwhat\s+(is|was)\s+(this|that|it)\b/u,
+    ~r/\bwhy\s+(am\s+i\s+seeing|did\s+you\s+send|is\s+this\s+here)\b/u,
+    ~r/\bwhy\s+(does|do)\s+(this|that|it|they)\s+matter\b/u,
+    ~r/\bwhat\s+do\s+i\s+(owe|need\s+to\s+do)\b/u,
+    ~r/\bwhat\s+should\s+i\s+(do|say|reply)\b/u,
+    ~r/\bcontext\b/u,
+    ~r/\bmore\s+context\b/u,
+    ~r/\bremind\s+me\b/u
+  ]
+
   def profile_for(attrs) when is_map(attrs) do
     text = Map.get(attrs, :text) || Map.get(attrs, "text")
     tier = tier_for_text(text)
-    request_focus = request_focus_for_text(text)
+    request_focus = request_focus_for_attrs(attrs, text)
     model = model_for_tier(tier)
     reasoning_effort = reasoning_effort_for_tier(tier)
 
@@ -86,6 +99,16 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   def tier_for_text(_text), do: :chat
 
+  defp request_focus_for_attrs(attrs, text) do
+    cond do
+      linked_reply?(attrs) && linked_item_context_request?(text) ->
+        :linked_item_context
+
+      true ->
+        request_focus_for_text(text)
+    end
+  end
+
   defp request_focus_for_text(text) when is_binary(text) do
     normalized = normalize_text(text)
 
@@ -115,7 +138,38 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:tool_scope, :connector_status)
   end
 
+  defp maybe_put_focus(keyword, :linked_item_context) do
+    keyword
+    |> Keyword.put(:request_focus, :linked_item_context)
+    |> Keyword.put(:context_scope, :linked_item_context)
+    |> Keyword.put(:tool_scope, :linked_item_context)
+    |> Keyword.put(:max_wall_clock_ms, 75_000)
+    |> Keyword.put(:max_llm_turns, 5)
+    |> Keyword.put(:max_tool_steps, 8)
+    |> Keyword.put(:model_busy_max_retries, 20)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
   defp maybe_put_focus(keyword, _focus), do: keyword
+
+  defp linked_reply?(attrs) when is_map(attrs) do
+    attrs
+    |> Map.get(:reply_to_message_id, Map.get(attrs, "reply_to_message_id"))
+    |> present?()
+  end
+
+  defp linked_reply?(_attrs), do: false
+
+  defp linked_item_context_request?(text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    normalized != "" &&
+      (String.length(normalized) <= 120 ||
+         Regex.match?(~r/\b(this|that|it|person|context|remind|owe|reply)\b/u, normalized)) &&
+      Enum.any?(@linked_item_context_patterns, &Regex.match?(&1, normalized))
+  end
+
+  defp linked_item_context_request?(_text), do: false
 
   defp model_for_tier(:reasoning), do: non_empty(LLM.model()) || non_empty(LLM.chat_model())
   defp model_for_tier(:chat), do: non_empty(LLM.chat_model()) || non_empty(LLM.model())
@@ -189,6 +243,10 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   defp non_empty(_value), do: nil
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value) when is_integer(value), do: true
+  defp present?(_value), do: false
 
   defp maybe_put(keyword, _key, nil), do: keyword
   defp maybe_put(keyword, key, value), do: Keyword.put(keyword, key, value)

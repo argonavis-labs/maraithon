@@ -20,6 +20,7 @@ defmodule Maraithon.OpenLoops do
   @default_limit 12
   @max_limit 50
   @prompt_limit 8
+  @todo_ingest_busy_retry_delays_ms [1_000, 2_000, 5_000, 10_000, 15_000]
   @open_statuses ~w(open snoozed)
   @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence)
   @read_key_atoms %{
@@ -109,7 +110,7 @@ defmodule Maraithon.OpenLoops do
       |> Enum.filter(&is_map/1)
       |> Enum.map(&stringify_top_level_keys/1)
 
-    case Todos.ingest_many(user_id, normalized_candidates, opts) do
+    case ingest_todos_with_busy_retry(user_id, normalized_candidates, opts) do
       {:ok, result} ->
         enrichment = enrich_persisted_todos(user_id, normalized_candidates, result, opts)
         {:ok, Map.put(result, :enrichment, enrichment)}
@@ -120,6 +121,37 @@ defmodule Maraithon.OpenLoops do
   end
 
   def ingest_todos(_user_id, _candidates, _opts), do: {:error, :invalid_todo_candidates}
+
+  defp ingest_todos_with_busy_retry(user_id, candidates, opts) do
+    retry_delays = Keyword.get(opts, :llm_busy_retry_delays_ms, @todo_ingest_busy_retry_delays_ms)
+    do_ingest_todos_with_busy_retry(user_id, candidates, opts, retry_delays)
+  end
+
+  defp do_ingest_todos_with_busy_retry(user_id, candidates, opts, retry_delays) do
+    case Todos.ingest_many(user_id, candidates, opts) do
+      {:error, reason} = error when is_list(retry_delays) ->
+        case retry_delays do
+          [delay_ms | remaining] when is_integer(delay_ms) and delay_ms >= 0 ->
+            if llm_busy_reason?(reason) do
+              Process.sleep(delay_ms)
+              do_ingest_todos_with_busy_retry(user_id, candidates, opts, remaining)
+            else
+              error
+            end
+
+          _ ->
+            error
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp llm_busy_reason?(:llm_busy), do: true
+  defp llm_busy_reason?({:llm_busy, _retry_after_ms}), do: true
+  defp llm_busy_reason?("llm_busy"), do: true
+  defp llm_busy_reason?(_reason), do: false
 
   def enrich_existing_todos(user_id, todos, candidates, opts \\ [])
 
