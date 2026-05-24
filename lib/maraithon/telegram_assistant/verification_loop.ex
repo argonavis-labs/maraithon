@@ -18,6 +18,8 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.ContextEngine
   alias Maraithon.Crm
   alias Maraithon.Crm.{Person, PersonLink}
+  alias Maraithon.InsightNotifications.{Actions, Delivery}
+  alias Maraithon.Insights.Insight
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalBrowserHistory.LocalVisit
   alias Maraithon.LocalCalendar
@@ -180,6 +182,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :todo_surface_quality_contract,
+        kind: :static
+      },
+      %{
+        id: :todo_card_context_contract,
         kind: :static
       },
       %{
@@ -943,6 +949,54 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   end
 
   defp run_scenario(
+         %{kind: :static, id: :todo_card_context_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    payload =
+      verification_todo_card_delivery()
+      |> Actions.telegram_payload()
+
+    text = Map.get(payload, :text, "")
+
+    findings =
+      []
+      |> require_finding(
+        String.contains?(text, "Michael Berlingo"),
+        "todo card must name the person who needs action"
+      )
+      |> require_finding(
+        String.contains?(text, "contact on Starteryou UGC Campaigns thread"),
+        "todo card must explain who the person is when relationship context is not otherwise known"
+      )
+      |> require_finding(
+        String.contains?(text, "Thread: Starteryou UGC Campaigns"),
+        "todo card context must name the underlying source thread"
+      )
+      |> require_finding(
+        String.contains?(text, "Suggested:"),
+        "todo card next step must be framed as suggested next actions"
+      )
+      |> require_finding(
+        String.contains?(text, "confirm what Michael Berlingo is waiting on"),
+        "todo card must tell Kent how to inspect the ask before replying"
+      )
+      |> require_finding(
+        not contains_any?(text, ["exact artifact or update", "Reply now with owner, ETA"]),
+        "todo card must not surface generic owner/ETA/action boilerplate"
+      )
+      |> require_finding(
+        String.length(text) <= 700,
+        "todo card must stay concise enough for Telegram"
+      )
+
+    scenario_result(scenario, findings, %{
+      response: %{"assistant_message" => text},
+      tool_history: []
+    })
+  end
+
+  defp run_scenario(
          %{kind: :static, id: :todo_id_casting_contract} = scenario,
          env,
          _opts
@@ -1075,6 +1129,51 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       AssistantHarness.initial_loop_state(),
       Map.get(profile, :llm_opts, [])
     )
+  end
+
+  defp verification_todo_card_delivery do
+    insight_id = Ecto.UUID.generate()
+
+    insight = %Insight{
+      id: insight_id,
+      user_id: "verify@example.com",
+      agent_id: Ecto.UUID.generate(),
+      source: "gmail",
+      category: "commitment_unresolved",
+      title: "Reply to Michael Berlingo on \"Starteryou UGC Campaigns\".",
+      summary: "No later reply or follow-through was found in the conversation.",
+      recommended_action:
+        "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+      priority: 94,
+      confidence: 0.91,
+      status: "new",
+      attention_mode: "act_now",
+      due_at: ~U[2026-05-24 20:00:00Z],
+      source_id: "gmail-michael-starteryou",
+      dedupe_key: "verify:michael-starteryou",
+      tracking_key: "verify:michael-starteryou",
+      metadata: %{
+        "account" => "kent@runner.now",
+        "from" => "Michael Berlingo <michael@example.com>",
+        "subject" => "Starteryou UGC Campaigns",
+        "context_brief" => "No later reply or follow-through was found in the conversation.",
+        "why_now" => "Deadline is today and no sent follow-up found.",
+        "record" => %{"person" => "Michael Berlingo"}
+      }
+    }
+
+    %Delivery{
+      id: Ecto.UUID.generate(),
+      insight_id: insight_id,
+      user_id: insight.user_id,
+      channel: "telegram",
+      destination: "verify-chat",
+      score: 0.94,
+      threshold: 0.78,
+      status: "pending",
+      metadata: %{},
+      insight: insight
+    }
   end
 
   defp payload_tool_names(%{tools: tools}) when is_list(tools) do

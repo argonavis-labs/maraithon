@@ -638,10 +638,10 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp fallback_chief_message(%Insight{} = insight, metadata) do
     [
       {"Todo", todo_text(insight, metadata)},
-      {"Context", first_present([insight.summary, due_sentence(insight)])},
+      {"Context", context_text(insight, metadata)},
       {"Person", person_text(insight, metadata)},
-      {"Why important", "This still looks open and worth a direct follow-up."},
-      {"Next", first_present([insight.recommended_action, "Reply with the concrete next step."])}
+      {"Why important", why_important_text(insight, metadata)},
+      {"Next", next_text(insight, metadata)}
     ]
     |> Enum.map(fn {label, text} -> message_section(label, text, 120) end)
     |> Enum.reject(&blank?/1)
@@ -721,10 +721,25 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp context_text(%Insight{} = insight, metadata) do
+    subject = subject_text(metadata)
+
     context =
       read_string(metadata, "context_brief") ||
         metadata |> read_map("attention") |> read_string("change_summary") ||
         insight.summary
+
+    context =
+      cond do
+        present?(subject) and blank?(context) ->
+          subject_thread_sentence(subject)
+
+        present?(subject) and generic_followup_context?(context) and
+            not contains_ci?(context, subject) ->
+          "#{subject_thread_sentence(subject)} #{context}"
+
+        true ->
+          context
+      end
 
     [context, due_sentence(insight)]
     |> Enum.reject(&blank?/1)
@@ -733,9 +748,16 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp person_text(%Insight{} = insight, metadata) do
     person = person_name(metadata) || "Person not clearly named"
+    identity = person_identity_text(metadata)
     source = source_label(insight, metadata)
 
-    if present?(source), do: "#{person} — #{source}", else: person
+    [person, identity, source]
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> nil
+      [person] -> person
+      [person | details] -> "#{person} — #{Enum.join(details, " · ")}"
+    end
   end
 
   defp why_important_text(%Insight{} = insight, metadata) do
@@ -764,13 +786,32 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp next_text(%Insight{} = insight, metadata) do
-    record_value(metadata, "next_action") ||
-      read_string(metadata, "next_action") ||
-      insight.recommended_action ||
-      if(monitor_insight?(insight),
-        do: "Watch for a blocker, direct ask, or stall.",
-        else: "Reply with the concrete next step, owner, and ETA."
-      )
+    explicit =
+      record_value(metadata, "next_action") ||
+        read_string(metadata, "next_action") ||
+        insight.recommended_action
+
+    suggestions = suggested_next_actions_text(metadata)
+
+    cond do
+      present?(explicit) and generic_next_action?(explicit) and present?(suggestions) ->
+        suggestions
+
+      present?(explicit) and generic_next_action?(explicit) ->
+        inferred_next_action(insight, metadata)
+
+      present?(explicit) ->
+        explicit
+
+      present?(suggestions) ->
+        suggestions
+
+      monitor_insight?(insight) ->
+        "Watch for a blocker, direct ask, or stall."
+
+      true ->
+        inferred_next_action(insight, metadata)
+    end
   end
 
   defp person_name(metadata) do
@@ -795,6 +836,215 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp clean_subject(_subject), do: nil
+
+  defp subject_text(metadata) when is_map(metadata) do
+    clean_subject(
+      read_string(metadata, "subject") ||
+        record_value(metadata, "subject") ||
+        read_string(metadata, "thread_subject")
+    )
+  end
+
+  defp subject_text(_metadata), do: nil
+
+  defp subject_thread_sentence(subject) when is_binary(subject) do
+    "Thread: #{subject}."
+  end
+
+  defp generic_followup_context?(context) when is_binary(context) do
+    context = String.downcase(context)
+
+    String.contains?(context, [
+      "no later reply",
+      "no sent follow-up",
+      "no follow-up",
+      "no later follow-through",
+      "no follow-through"
+    ])
+  end
+
+  defp generic_followup_context?(_context), do: false
+
+  defp person_identity_text(metadata) when is_map(metadata) do
+    record = read_map(metadata, "record")
+    person = person_name(metadata)
+
+    identity =
+      [
+        first_present([
+          read_string(record, "company"),
+          read_string(record, "organization"),
+          read_string(record, "org"),
+          read_string(metadata, "company"),
+          read_string(metadata, "organization"),
+          read_string(metadata, "org")
+        ]),
+        first_present([
+          read_string(record, "relationship_context"),
+          read_string(metadata, "relationship_context"),
+          read_string(record, "relationship"),
+          read_string(metadata, "relationship")
+        ]),
+        first_present([
+          read_string(record, "project"),
+          read_string(record, "project_name"),
+          read_string(metadata, "project"),
+          read_string(metadata, "project_name")
+        ]),
+        person_map_identity(metadata)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(person && String.downcase(&1) == String.downcase(person)))
+      |> Enum.uniq()
+      |> Enum.take(2)
+      |> Enum.join("; ")
+
+    cond do
+      present?(identity) ->
+        identity
+
+      subject = subject_text(metadata) ->
+        "contact on #{subject} thread"
+
+      email_domain = person_email_domain(metadata) ->
+        "contact from #{email_domain}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp person_identity_text(_metadata), do: nil
+
+  defp person_map_identity(metadata) do
+    metadata
+    |> first_person_map()
+    |> case do
+      %{} = person ->
+        first_present([
+          read_string(person, "relationship_context"),
+          read_string(person, "relationship"),
+          read_string(person, "company"),
+          read_string(person, "organization"),
+          read_string(person, "project")
+        ])
+
+      _ ->
+        nil
+    end
+  end
+
+  defp first_person_map(metadata) do
+    case fetch(metadata, "people") do
+      people when is_list(people) ->
+        Enum.find(people, &is_map/1)
+
+      %{} = person ->
+        person
+
+      _ ->
+        case fetch(metadata, "crm_people") do
+          people when is_list(people) -> Enum.find(people, &is_map/1)
+          %{} = person -> person
+          _ -> nil
+        end
+    end
+  end
+
+  defp person_email_domain(metadata) do
+    [read_string(metadata, "from"), read_string(metadata, "to")]
+    |> Enum.find_value(fn value ->
+      case Regex.run(~r/@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/, to_string(value)) do
+        [_, domain] -> domain
+        _ -> nil
+      end
+    end)
+  end
+
+  defp suggested_next_actions_text(metadata) when is_map(metadata) do
+    points =
+      read_string_list(metadata, "suggested_next_actions") ++
+        read_string_list(metadata, "suggested_reply_points") ++
+        record_value_list(metadata, "suggested_next_actions") ++
+        record_value_list(metadata, "suggested_reply_points")
+
+    points =
+      points
+      |> Enum.map(&compact_sentence/1)
+      |> Enum.reject(&blank?/1)
+      |> Enum.reject(&generic_suggestion_point?/1)
+      |> Enum.uniq()
+      |> Enum.take(3)
+
+    case points do
+      [] -> nil
+      points -> "Suggested: #{Enum.join(points, "; ")}"
+    end
+  end
+
+  defp suggested_next_actions_text(_metadata), do: nil
+
+  defp generic_suggestion_point?(point) when is_binary(point) do
+    point = String.downcase(point)
+
+    String.match?(point, ~r/^acknowledge\s+[a-z]/) or
+      String.contains?(point, [
+        "answer the ask",
+        "name the owner",
+        "concrete timing commitment",
+        "owner, next step",
+        "owner / next step",
+        "owner, eta",
+        "exact artifact",
+        "current status"
+      ])
+  end
+
+  defp generic_suggestion_point?(_point), do: false
+
+  defp generic_next_action?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    String.contains?(text, [
+      "owner, eta",
+      "owner / next step / eta",
+      "owner, next step, and eta",
+      "owner, current status",
+      "exact artifact",
+      "artifact or update",
+      "concrete next step, owner",
+      "reply now with owner"
+    ])
+  end
+
+  defp generic_next_action?(_text), do: false
+
+  defp inferred_next_action(%Insight{} = insight, metadata) do
+    person = person_name(metadata) || "them"
+    subject = subject_text(metadata)
+    commitment = record_value(metadata, "commitment")
+
+    cond do
+      present?(subject) ->
+        "Suggested: open the #{subject} thread, confirm what #{person} is waiting on, then send the concrete update or mark it not important if it no longer matters."
+
+      present?(commitment) ->
+        "Suggested: verify whether the promised item is ready; if it is, send it, otherwise reply with the current status and realistic timing."
+
+      insight.source == "slack" ->
+        "Suggested: open the thread, answer the direct ask, and name the next step or owner only if the conversation needs one."
+
+      true ->
+        "Suggested: open the source, confirm the real ask, then reply with the concrete next step or dismiss it if it is no longer important."
+    end
+  end
+
+  defp contains_ci?(text, fragment) when is_binary(text) and is_binary(fragment) do
+    String.contains?(String.downcase(text), String.downcase(fragment))
+  end
+
+  defp contains_ci?(_text, _fragment), do: false
 
   defp first_present(values) do
     Enum.find(values, &present?/1)

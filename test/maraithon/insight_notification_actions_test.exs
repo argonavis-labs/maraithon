@@ -284,13 +284,64 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Reply to Renat about the intro launch video"
     assert sent.text =~ "Renat asked for the intro launch video update."
     assert sent.text =~ "Renat Gabitov"
-    assert sent.text =~ "Reply with the owner"
+    assert sent.text =~ "Suggested:"
+    assert sent.text =~ "open the Intro launch video thread"
+    assert sent.text =~ "confirm what Renat Gabitov is waiting on"
     assert String.length(sent.text) <= 700
     refute sent.text =~ "I think this needs your attention."
     refute sent.text =~ "What I'd send"
     refute sent.text =~ "Fast actions"
     refute sent.text =~ "Tap Draft"
     refute sent.text =~ "generic reply plan with too much detail"
+    refute sent.text =~ "Reply with the owner"
+  end
+
+  test "renders todo cards with person context and suggested next actions", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Reply to Michael Berlingo on \"Starteryou UGC Campaigns\".",
+          "summary" => "No later reply or follow-through was found in the conversation.",
+          "recommended_action" =>
+            "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+          "priority" => 94,
+          "confidence" => 0.91,
+          "due_at" => ~U[2026-05-24 20:00:00Z],
+          "source_id" => "msg-michael-1",
+          "dedupe_key" => "telegram-actions:gmail:michael-context",
+          "metadata" => %{
+            "account" => "kent@runner.now",
+            "thread_id" => "thread-michael-1",
+            "from" => "Michael Berlingo <michael@example.com>",
+            "subject" => "Starteryou UGC Campaigns",
+            "context_brief" => "No later reply or follow-through was found in the conversation.",
+            "why_now" => "Deadline is today and no sent follow-up found.",
+            "record" => %{"person" => "Michael Berlingo"}
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert sent.text =~ "<b>Todo</b>"
+    assert sent.text =~ "Michael Berlingo"
+    assert sent.text =~ "Thread: Starteryou UGC Campaigns"
+    assert sent.text =~ "contact on Starteryou UGC Campaigns thread"
+    assert sent.text =~ "Gmail · kent@runner.now"
+    assert sent.text =~ "Suggested:"
+    assert sent.text =~ "confirm what Michael Berlingo is waiting on"
+    assert sent.text =~ "mark it not important if it no longer matters"
+    assert String.length(sent.text) <= 700
+    refute sent.text =~ "exact artifact or update"
+    refute sent.text =~ "Reply now with owner, ETA"
   end
 
   test "drafts and sends a Slack reply directly from Telegram", %{agent: agent, user_id: user_id} do
