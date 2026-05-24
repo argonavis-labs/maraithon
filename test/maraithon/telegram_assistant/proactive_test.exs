@@ -151,6 +151,75 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     assert ledger_entry.source_evidence["dedupe_key"] == "proactive:hold"
   end
 
+  test "feedback verification rewrites stale backlog dumps before Telegram delivery", %{
+    user_id: user_id
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Dan Bourke artifact status",
+          "summary" =>
+            "Commitment to Dan Bourke remains open and overdue with no evidence of completion.",
+          "next_action" => "Confirm whether this is still important to handle.",
+          "priority" => 40,
+          "source_occurred_at" => "2026-05-01T14:00:00Z",
+          "dedupe_key" => "gmail:dan-bourke-stale",
+          "metadata" => %{
+            "record" => %{
+              "person" => "Dan Bourke",
+              "company" => "A-Team",
+              "relationship_context" => "video project contact",
+              "commitment" => "Dan asked about the Claude Cowork killer artifact."
+            }
+          }
+        }
+      ])
+
+    llm_complete = fn _params ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "send_now",
+             "assistant_message" => """
+             You have several overdue follow-ups that need your attention:
+             • Dan Bourke: confirm the artifact status and give a concrete ETA.
+             • Matthew Diakonov: confirm the artifact status and give a concrete ETA.
+             • Faye Pang: update on shared materials and next steps.
+             • Halah AlQahtani: confirm introduction and follow-up status.
+             Also, several recent meetings need a follow-up recap with owners and next steps, including Emma's Soccer Practice.
+             Prioritize sending these follow-ups now to keep commitments on track and maintain relationships.
+             """,
+             "message_class" => "assistant_push",
+             "urgency" => 0.92,
+             "interrupt_now" => true,
+             "dedupe_key" => "proactive:bad-backlog",
+             "todo_ids" => [todo.id],
+             "summary" => "Several overdue follow-ups need attention."
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             TelegramAssistant.deliver_proactive_check_in(user_id,
+               force: true,
+               context: %{todos: [Todos.serialize_for_prompt(todo)]},
+               llm_complete: llm_complete
+             )
+
+    assert result["decision"] == "sent_now"
+    assert result["todo_items_sent"] == 1
+
+    [intro, todo_card] = telegram_messages()
+    assert intro.text =~ "older follow-up"
+    assert intro.text =~ "Dan Bourke"
+    assert intro.text =~ "Mark it important"
+    refute intro.text =~ "several overdue follow-ups"
+    refute intro.text =~ "Emma's Soccer Practice"
+    assert todo_card.text =~ "Dan Bourke (A-Team; video project contact)"
+  end
+
   defp telegram_messages do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)

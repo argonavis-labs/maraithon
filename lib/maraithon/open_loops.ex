@@ -14,6 +14,7 @@ defmodule Maraithon.OpenLoops do
   alias Maraithon.Memory
   alias Maraithon.Memory.Item
   alias Maraithon.Todos
+  alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Todos.Todo
 
   @default_limit 12
@@ -853,7 +854,9 @@ defmodule Maraithon.OpenLoops do
   defp todo_bucket(_todo, _now), do: :no_due_date
 
   defp trim_buckets(bucketed, limit) do
-    Map.new(bucketed, fn {bucket, todos} -> {bucket, Enum.take(todos, limit)} end)
+    Map.new(bucketed, fn {bucket, todos} ->
+      {bucket, todos |> AttentionRanker.sort() |> Enum.take(limit)}
+    end)
   end
 
   defp totals(bucketed, people, memory) do
@@ -930,7 +933,9 @@ defmodule Maraithon.OpenLoops do
       priority: todo.priority,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
+      inserted_at: todo.inserted_at,
       metadata: todo.metadata || %{},
+      attention_profile: AttentionRanker.profile(todo),
       updated_at: todo.updated_at
     }
   end

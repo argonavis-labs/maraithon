@@ -12,6 +12,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
+  alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Travel
   alias MaraithonWeb.Endpoint
 
@@ -88,6 +89,28 @@ defmodule Maraithon.Briefs do
     Brief
     |> where([b], b.user_id == ^user_id and b.dedupe_key == ^dedupe_key)
     |> Repo.exists?()
+  end
+
+  def attach_linked_todos(%Brief{} = brief, todos_or_ids) do
+    linked_todo_ids =
+      todos_or_ids
+      |> List.wrap()
+      |> Enum.map(&todo_id/1)
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    metadata =
+      brief.metadata
+      |> Kernel.||(%{})
+      |> Map.merge(%{
+        "linked_todo_ids" => linked_todo_ids,
+        "todo_digest" => linked_todo_ids != [],
+        "todo_digest_count" => length(linked_todo_ids)
+      })
+
+    brief
+    |> Ecto.Changeset.change(%{metadata: metadata})
+    |> Repo.update()
   end
 
   def dispatch_telegram_batch(opts \\ []) do
@@ -210,7 +233,7 @@ defmodule Maraithon.Briefs do
     #{greeting}
 
     #{detail_line}
-    I'm sending them one by one so you can mark them done or say not interested.
+    I'm sending them one by one so you can mark each done, important, not important, or dismiss it.
     """
     |> String.trim()
   end
@@ -283,10 +306,13 @@ defmodule Maraithon.Briefs do
           {:error, reason}
       end
     else
-      intro_text = todo_digest_intro_text(brief, todos)
+      payload = telegram_payload(brief)
 
       with {:ok, result} <-
-             telegram_module().send_message(destination, intro_text, parse_mode: "HTML"),
+             telegram_module().send_message(destination, payload.text,
+               parse_mode: "HTML",
+               reply_markup: payload.reply_markup
+             ),
            :ok <- send_fallback_todo_messages(destination, brief, todos) do
         mark_fallback_sent(brief, read_message_id(result))
       else
@@ -399,9 +425,11 @@ defmodule Maraithon.Briefs do
 
   defp order_todo_digest_items(todos, brief) do
     todos
+    |> AttentionRanker.sort()
     |> Enum.with_index()
     |> Enum.sort_by(fn {todo, index} ->
-      {todo_digest_bucket_rank(brief, todo), index}
+      profile = AttentionRanker.profile(todo)
+      {todo_digest_bucket_rank(brief, todo), profile["bucket_rank"], -profile["score"], index}
     end)
     |> Enum.map(&elem(&1, 0))
   end
@@ -544,6 +572,11 @@ defmodule Maraithon.Briefs do
   defp normalize_cadence(value) when is_binary(value), do: value
   defp normalize_cadence(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_cadence(_value), do: nil
+
+  defp todo_id(%{id: id}) when is_binary(id), do: id
+  defp todo_id(%{"id" => id}) when is_binary(id), do: id
+  defp todo_id(id) when is_binary(id), do: id
+  defp todo_id(_value), do: nil
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false

@@ -435,6 +435,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
                "source_ref": "...",
                "source_tags": ["runner","gmail"],
                "quote": "...",
+               "company": "company or organization when known",
+               "relationship_context": "why this person matters or why they are in the thread",
+               "relationship_strength": 0,
+               "why_it_matters": "business, project, or relationship reason this deserves attention",
+               "life_domain": "personal | family | home | work when known",
                "omni_project": "best-fit OmniFocus project name when known"
              }
            }

@@ -14,12 +14,21 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Context, PushBroker, PushReceipt, TodoActions}
+
+  alias Maraithon.TelegramAssistant.{
+    Context,
+    ProactiveQualityGate,
+    PushBroker,
+    PushReceipt,
+    TodoActions
+  }
+
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
 
   @recent_push_limit 8
   @default_due_batch_size 25
+  @default_timezone_offset_hours -5
 
   def enabled? do
     config = Application.get_env(:maraithon, :telegram_assistant, [])
@@ -45,7 +54,9 @@ defmodule Maraithon.TelegramAssistant.Proactive do
         recent_pushes(user_id, Keyword.get(opts, :recent_push_limit, @recent_push_limit))
     }
 
-    AssistantHarness.proactive_plan(payload, opts)
+    with {:ok, plan} <- AssistantHarness.proactive_plan(payload, opts) do
+      {:ok, ProactiveQualityGate.verify_proactive_plan(plan, payload, opts)}
+    end
   end
 
   def plan_check_in(_user_id, _opts), do: {:error, :invalid_user}
@@ -273,6 +284,10 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     trigger_type = Keyword.get(opts, :trigger_type, "scheduled_check_in")
 
+    timezone_offset_hours =
+      Keyword.get(opts, :timezone_offset_hours, @default_timezone_offset_hours)
+      |> normalize_timezone_offset()
+
     %{
       "id" =>
         Keyword.get(opts, :trigger_id) ||
@@ -280,9 +295,53 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       "type" => trigger_type,
       "user_id" => user_id,
       "chat_id" => chat_id,
-      "now" => DateTime.to_iso8601(DateTime.truncate(now, :second))
+      "now" => DateTime.to_iso8601(DateTime.truncate(now, :second)),
+      "local_time" => local_time_context(now, timezone_offset_hours)
     }
   end
+
+  defp local_time_context(%DateTime{} = now, offset_hours) do
+    local_now = DateTime.add(now, offset_hours * 3600, :second)
+    local_date = DateTime.to_date(local_now)
+    weekday = Date.day_of_week(local_date)
+
+    %{
+      "date" => Date.to_iso8601(local_date),
+      "weekday" => weekday_name(weekday),
+      "weekday_number" => weekday,
+      "hour" => local_now.hour,
+      "day_phase" => day_phase(local_now.hour),
+      "weekend" => weekday in [6, 7],
+      "weekly_prep_window" => weekday in [6, 7],
+      "timezone_offset_hours" => offset_hours
+    }
+  end
+
+  defp day_phase(hour) when hour >= 5 and hour < 11, do: "morning"
+  defp day_phase(hour) when hour >= 11 and hour < 17, do: "daytime"
+  defp day_phase(hour) when hour >= 17 and hour < 22, do: "evening"
+  defp day_phase(_hour), do: "night"
+
+  defp weekday_name(1), do: "Monday"
+  defp weekday_name(2), do: "Tuesday"
+  defp weekday_name(3), do: "Wednesday"
+  defp weekday_name(4), do: "Thursday"
+  defp weekday_name(5), do: "Friday"
+  defp weekday_name(6), do: "Saturday"
+  defp weekday_name(7), do: "Sunday"
+  defp weekday_name(_), do: nil
+
+  defp normalize_timezone_offset(value) when is_integer(value) and value >= -12 and value <= 14,
+    do: value
+
+  defp normalize_timezone_offset(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed >= -12 and parsed <= 14 -> parsed
+      _ -> @default_timezone_offset_hours
+    end
+  end
+
+  defp normalize_timezone_offset(_value), do: @default_timezone_offset_hours
 
   defp plan_dedupe_key(_user_id, %{"dedupe_key" => key}, _trigger)
        when is_binary(key) and key != "" do

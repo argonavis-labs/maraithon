@@ -27,10 +27,14 @@ Use relationship context and memory:
 - If the source reveals a durable person, include a structured `people` entry on the todo candidate with first name, last name, contact details, relationship, preferred communication method, and communication frequency when known.
 - If the source reveals durable relevance feedback or operating preference, include a structured `memories` entry on the todo candidate.
 - Use existing todos to avoid proposing the same open loop again. The final dedupe decision still belongs to todo intelligence.
+- Re-rank commitments before returning todos. Highest attention order is personal/family commitments when this tracker receives them, strongest relationships who need something, people actively waiting on a business objective/project/deliverable, intro requests, then meeting requests.
+- If an old item has been ignored for several days and is not a close relationship, personal/family, or active project obligation, do not inflate urgency. Mark it as a stale confirmation candidate in metadata or skip it if it no longer appears important.
 
 Routing metadata:
 - Always set `metadata.commitment_direction` to `i_owe`, `asked_of_me`, or `pending_reply`.
 - Always include useful source metadata: thread ID, message ID, event ID, account, quote, source ref, and source tags.
+- For human follow-ups, include memory-jogging relationship context in metadata: `company`, `organization`, `relationship_context`, `relationship_strength` when known, `why_it_matters`, and enough `source_tags` to identify the project/company.
+- For personal/family items that are legitimately in scope, set `metadata.life_domain` to `personal`, `family`, or `home`.
 - Preserve OmniFocus intent in metadata when obvious: `metadata.omni_project`, `metadata.source_tags`, and `runner` plus the source tag when relevant. Do not say OmniFocus was written in the body unless it actually was.
 - Prefer a project guess over leaving project metadata blank when the source clearly points to Runner, Agora, health, finances, home improvements, personal, or a named family/person project.
 

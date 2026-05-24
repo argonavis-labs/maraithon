@@ -73,7 +73,17 @@ defmodule Maraithon.TelegramAssistant.Runner do
             {:fallback, reason}
 
           {:error, %Run{} = run, reason, state} ->
-            handle_run_failure(run, reason, state, attrs)
+            case maybe_escalate_and_retry(
+                   run,
+                   reason,
+                   attrs,
+                   context,
+                   conversation,
+                   model_profile
+                 ) do
+              :ok -> :ok
+              :pass -> handle_run_failure(run, reason, state, attrs)
+            end
 
           {:error, reason} ->
             _ = TelegramAssistant.cancel_liveness_session(run.id)
@@ -85,6 +95,137 @@ defmodule Maraithon.TelegramAssistant.Runner do
         {:fallback, reason}
     end
   end
+
+  defp maybe_escalate_and_retry(
+         %Run{} = original_run,
+         reason,
+         attrs,
+         context,
+         %Conversation{} = conversation,
+         model_profile
+       ) do
+    if escalatable_reason?(reason) and Map.get(model_profile, :tier) == :chat do
+      _ = TelegramAssistant.cancel_liveness_session(original_run.id)
+
+      escalated_profile = ModelRouting.escalated_profile_for(model_profile)
+
+      Logger.info("Escalating Telegram assistant turn to reasoning model",
+        run_id: original_run.id,
+        reason: inspect(reason),
+        model: Map.get(escalated_profile, :model)
+      )
+
+      case run_escalated_turn(
+             attrs,
+             context,
+             conversation,
+             escalated_profile,
+             original_run,
+             reason
+           ) do
+        {:ok, escalated_run_id} ->
+          {:ok, _run} =
+            TelegramAssistant.complete_run(original_run, %{
+              status: "completed",
+              result_summary: %{
+                escalated_to_reasoning: true,
+                escalated_run_id: escalated_run_id,
+                escalated_from_reason: normalize_error(reason)
+              }
+            })
+
+          :ok
+
+        :ok ->
+          {:ok, _run} =
+            TelegramAssistant.fail_run(
+              original_run,
+              {:escalated_to_reasoning, reason},
+              "degraded"
+            )
+
+          :ok
+
+        :pass ->
+          :pass
+      end
+    else
+      :pass
+    end
+  end
+
+  defp maybe_escalate_and_retry(_run, _reason, _attrs, _context, _conversation, _profile),
+    do: :pass
+
+  defp run_escalated_turn(attrs, context, conversation, model_profile, original_run, reason) do
+    case start_run(attrs, context, model_profile) do
+      {:ok, run} ->
+        runtime_context = build_runtime_context(run, attrs, context, model_profile)
+        _ = maybe_start_liveness_session(run, attrs)
+
+        with {:ok, _step_state} <- record_context_fetch(run, context),
+             :ok <- note_context_loaded(run),
+             {:ok, response, state} <-
+               run_loop(
+                 run,
+                 runtime_context,
+                 AssistantHarness.initial_loop_state(),
+                 System.monotonic_time(:millisecond)
+               ),
+             {:ok, status, summary} <-
+               deliver_final_response(conversation, run, response, state, attrs) do
+          summary =
+            summary
+            |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
+            |> Map.put(:model_name, Map.get(runtime_context, :model_name))
+            |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
+            |> Map.put(:escalated_from_run_id, original_run.id)
+            |> Map.put(:escalated_from_reason, normalize_error(reason))
+
+          {:ok, _run} =
+            TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
+
+          {:ok, run.id}
+        else
+          {:fallback, retry_reason} ->
+            _ = TelegramAssistant.cancel_liveness_session(run.id)
+            {:ok, _run} = TelegramAssistant.fail_run(run, retry_reason, "degraded")
+            :pass
+
+          {:error, %Run{} = retry_run, retry_reason, retry_state} ->
+            handle_run_failure(retry_run, retry_reason, retry_state, attrs)
+            :ok
+
+          {:error, retry_reason} ->
+            _ = TelegramAssistant.cancel_liveness_session(run.id)
+            {:ok, _run} = TelegramAssistant.fail_run(run, retry_reason, "degraded")
+            :pass
+        end
+
+      {:error, _reason} ->
+        :pass
+    end
+  end
+
+  defp escalatable_reason?(:timeout), do: true
+  defp escalatable_reason?(:llm_turn_limit), do: true
+  defp escalatable_reason?(:tool_step_limit), do: true
+  defp escalatable_reason?(:assistant_harness_empty_tool_calls), do: true
+  defp escalatable_reason?(:assistant_harness_invalid_status), do: true
+  defp escalatable_reason?(:assistant_harness_invalid_tool_calls), do: true
+  defp escalatable_reason?(:assistant_harness_invalid_tool_call), do: true
+  defp escalatable_reason?(:assistant_harness_invalid_json), do: true
+  defp escalatable_reason?(:assistant_harness_missing_content), do: true
+  defp escalatable_reason?(:assistant_harness_empty_message), do: true
+  defp escalatable_reason?({:llm_busy, _retry_after}), do: true
+  defp escalatable_reason?({:rate_limited, _retry_after}), do: true
+  defp escalatable_reason?({:network_error, _reason}), do: true
+
+  defp escalatable_reason?({:api_error, status, _body})
+       when status in [408, 425, 429, 500, 502, 503, 504],
+       do: true
+
+  defp escalatable_reason?(_reason), do: false
 
   def execute_prepared_action(prepared_action) do
     action_type = prepared_action.action_type

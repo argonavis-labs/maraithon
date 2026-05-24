@@ -10,6 +10,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   @default_chat_reasoning_effort "medium"
   @default_reasoning_max_tokens 6_000
+  @default_reasoning_wall_clock_ms 120_000
+  @default_reasoning_llm_turns 8
+  @default_reasoning_tool_steps 18
 
   @planning_patterns [
     ~r/\bmorning\s+brief(?:ing)?\b/u,
@@ -46,6 +49,28 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
       reasoning_effort: reasoning_effort,
       max_tokens: max_tokens_for_tier(tier),
       llm_opts: llm_opts(tier, model, reasoning_effort, request_focus)
+    }
+  end
+
+  def escalated_profile_for(profile) when is_map(profile) do
+    request_focus = Map.get(profile, :request_focus) || Map.get(profile, "request_focus")
+    model = model_for_tier(:reasoning)
+    reasoning_effort = reasoning_effort_for_tier(:reasoning)
+
+    %{
+      tier: :reasoning,
+      request_focus: request_focus,
+      model: model,
+      reasoning_effort: reasoning_effort,
+      max_tokens: max_tokens_for_tier(:reasoning),
+      llm_opts:
+        :reasoning
+        |> llm_opts(model, reasoning_effort, request_focus)
+        |> Keyword.put(:max_wall_clock_ms, reasoning_wall_clock_ms())
+        |> Keyword.put(:max_llm_turns, reasoning_llm_turns())
+        |> Keyword.put(:max_tool_steps, reasoning_tool_steps())
+        |> Keyword.put(:model_busy_max_retries, 35)
+        |> Keyword.put(:model_retry_max_delay_ms, 2_000)
     }
   end
 
@@ -114,6 +139,24 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   defp max_tokens_for_tier(:chat), do: nil
+
+  defp reasoning_wall_clock_ms do
+    config()
+    |> Keyword.get(:reasoning_wall_clock_ms, @default_reasoning_wall_clock_ms)
+    |> positive_integer(@default_reasoning_wall_clock_ms)
+  end
+
+  defp reasoning_llm_turns do
+    config()
+    |> Keyword.get(:reasoning_llm_turns, @default_reasoning_llm_turns)
+    |> positive_integer(@default_reasoning_llm_turns)
+  end
+
+  defp reasoning_tool_steps do
+    config()
+    |> Keyword.get(:reasoning_tool_steps, @default_reasoning_tool_steps)
+    |> positive_integer(@default_reasoning_tool_steps)
+  end
 
   defp normalize_text(text) do
     text

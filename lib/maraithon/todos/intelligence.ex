@@ -115,6 +115,18 @@ defmodule Maraithon.Todos.Intelligence do
          Use `you` or `Kent`, never `the user`. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
+       - Every person-linked todo needs enough context for Kent to remember why it
+         matters: company/organization when known, relationship, why the person is
+         in the thread, what they want, and what they are waiting on. Put structured
+         values in metadata (`company`, `organization`, `relationship_context`,
+         `relationship_strength`, `why_it_matters`, `life_domain`, `source_tags`).
+       - Rank candidate importance using this attention stack: personal/family
+         commitments first; strongest relationships who need something; people
+         actively waiting on a business objective, project, or deliverable; intro
+         requests; meeting requests; routine backlog last.
+       - If an old open item appears repeatedly and Kent has not acted, do not
+         inflate it as urgent unless the evidence shows personal/family impact,
+         a close relationship, or an active project/customer wait.
        - Write next_action as the sentence Kent should act on directly. Avoid
          ticket/report language such as "covering current state" when a human
          version like "ask if it is fixed, who owns it, and whether customers

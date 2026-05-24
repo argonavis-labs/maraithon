@@ -25,6 +25,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Memory
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
+  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
   alias Maraithon.Tracing
 
@@ -88,6 +89,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @local_files_allowed_extensions ~w(pdf md txt rtf rtfd docx pages key keynote ppt pptx xls xlsx csv numbers doc)
   @device_stale_seconds 2 * 60 * 60
   @telegram_chunk_limit 3_300
+  @personal_calendar_terms ~w(appointment birthday camp child children dad dentist doctor daughter emma family home jack kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband)
+  @todo_ingest_retry_delays_ms [1_500, 5_000, 12_000]
 
   @impl true
   def id, do: "morning_briefing"
@@ -304,6 +307,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         parsed_brief = parse_llm_brief(response)
         {brief, generation_mode, error_message} = brief_or_error_notice(parsed_brief, response)
 
+        {brief, quality_verification} =
+          verify_and_revise_morning_brief(brief, brief_input, generation_mode)
+
         if generation_mode == "error" do
           Tracing.record_error(
             "morning_briefing generation failed: " <>
@@ -342,6 +348,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             "reasoning_effort_used" => state.llm_reasoning_effort,
             "llm_usage" => json_metadata(response_usage(response)),
             "estimated_cost" => json_metadata(cost_summary),
+            "quality_verification" => quality_verification,
             "origin_skill_id" => id(),
             "source_backed" => true,
             "brief_input" => compact_brief_input_for_metadata(brief_input),
@@ -358,6 +365,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                 persist_model_todos(context[:user_id] || state.user_id, brief, brief_input)
               end)
 
+            {brief_record, linked_todo_ids, todo_link_error} =
+              attach_model_todos_to_brief(brief_record, todo_result)
+
             event_type =
               if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
 
@@ -365,6 +375,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               todo_result
               |> todo_event_payload()
               |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
+              |> Map.put(:linked_todo_ids, linked_todo_ids)
+              |> maybe_put(:todo_link_error, todo_link_error)
 
             {:emit,
              {event_type,
@@ -775,6 +787,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
               case parsed do
                 {:ok, brief} ->
+                  {brief, quality_verification} =
+                    verify_and_revise_morning_brief(brief, brief_input, "llm")
+
                   {todo_result, todo_elapsed_ms} =
                     if Keyword.get(opts, :persist_todos, Keyword.get(opts, :send, false)) do
                       timed(fn -> persist_model_todos(user_id, brief, brief_input) end)
@@ -784,12 +799,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
                   diagnostics =
                     diagnostics
+                    |> Map.put(:quality_verification, quality_verification)
                     |> Map.put(:todo_persistence, todo_event_payload(todo_result))
                     |> Map.put(:todo_persistence_elapsed_ms, todo_elapsed_ms)
 
                   {delivery_result, delivery_elapsed_ms} =
                     if Keyword.get(opts, :send, false) do
-                      timed(fn -> deliver_smoke_brief(user_id, brief, diagnostics) end)
+                      timed(fn ->
+                        deliver_smoke_brief(user_id, brief, diagnostics, todo_result)
+                      end)
                     else
                       {{:ok, :not_sent}, 0}
                     end
@@ -904,7 +922,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp deliver_smoke_brief(user_id, brief, _diagnostics) do
+  defp deliver_smoke_brief(user_id, brief, _diagnostics, todo_result) do
     case ConnectedAccounts.telegram_destination(user_id) do
       nil ->
         {:error, :no_telegram_destination}
@@ -918,9 +936,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             other -> to_string(other)
           end
 
-        brief
-        |> smoke_brief_telegram_chunks()
-        |> send_telegram_html_chunks(chat_id)
+        with {:ok, result} <-
+               brief
+               |> smoke_brief_telegram_chunks()
+               |> send_telegram_html_chunks(chat_id),
+             {:ok, todo_messages} <- send_smoke_todo_messages(chat_id, todo_result) do
+          {:ok, Map.put(result, "todo_messages", todo_messages)}
+        else
+          {:error, reason} -> {:error, reason}
+        end
     end
   end
 
@@ -956,6 +980,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:error, reason}
     end
   end
+
+  defp send_smoke_todo_messages(chat_id, {:ok, result}) when is_map(result) do
+    todos = Map.get(result, :todos, [])
+
+    todos
+    |> Enum.reduce_while({:ok, 0}, fn todo, {:ok, count} ->
+      payload = TodoActions.telegram_payload(todo)
+
+      case Maraithon.TelegramResponder.send(chat_id, payload.text,
+             parse_mode: "HTML",
+             reply_markup: payload.reply_markup
+           ) do
+        {:ok, _result} -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp send_smoke_todo_messages(_chat_id, _todo_result), do: {:ok, 0}
 
   defp markdown_chunks(text, limit) when is_binary(text) do
     text
@@ -1190,6 +1233,287 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
      }, "error", error_message}
   end
 
+  defp verify_and_revise_morning_brief(brief, brief_input, generation_mode) do
+    initial_findings = morning_brief_findings(brief, brief_input, generation_mode)
+    revised_brief = revise_morning_brief(brief, brief_input, initial_findings)
+    final_findings = morning_brief_findings(revised_brief, brief_input, generation_mode)
+    score = morning_brief_score(final_findings)
+
+    verification = %{
+      "status" => if(score == 10, do: "10/10", else: "needs_review"),
+      "score" => score,
+      "initial_findings" => Enum.map(initial_findings, &Atom.to_string/1),
+      "final_findings" => Enum.map(final_findings, &Atom.to_string/1),
+      "criteria" => [
+        "personal_and_family_first",
+        "newest_and_highest_priority_first",
+        "active_waiting_business_objectives_before_intros_and_meetings",
+        "stale_work_framed_as_decision_not_urgent_dump",
+        "person_company_relationship_context_for_non-obvious_people",
+        "structured_todos_delivered_as_individual_telegram_cards"
+      ]
+    }
+
+    {revised_brief, verification}
+  end
+
+  defp morning_brief_findings(brief, brief_input, generation_mode) do
+    body = read_string(brief, "body", "")
+    todos = read_list(brief, "todos")
+    personal_events = personal_calendar_events(brief_input)
+
+    []
+    |> maybe_finding(blank?(body), :missing_body)
+    |> maybe_finding(
+      generation_mode == "llm" and personal_events != [] and
+        not body_mentions_any_event?(body, personal_events),
+      :missing_personal_calendar_context
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and weekend_brief?(brief_input) and
+        not week_prep_present?(body),
+      :missing_week_prep
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and Enum.any?(todos, &sparse_person_todo?/1),
+      :sparse_person_todo_context
+    )
+    |> Enum.reverse()
+  end
+
+  defp revise_morning_brief(brief, brief_input, findings) do
+    brief
+    |> maybe_append_personal_calendar_context(brief_input, findings)
+    |> maybe_append_week_prep(brief_input, findings)
+  end
+
+  defp maybe_append_personal_calendar_context(brief, brief_input, findings) do
+    if :missing_personal_calendar_context in findings do
+      events =
+        brief_input
+        |> personal_calendar_events()
+        |> Enum.take(3)
+        |> Enum.map(&calendar_event_brief_line/1)
+        |> Enum.reject(&blank?/1)
+
+      append_body_section(brief, "## Personal / Family\n" <> Enum.join(events, "\n"))
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_week_prep(brief, brief_input, findings) do
+    if :missing_week_prep in findings do
+      tomorrow =
+        brief_input
+        |> get_in(["calendar", "tomorrow_first_event"])
+        |> calendar_event_brief_line()
+
+      line =
+        if blank?(tomorrow) do
+          "## Look Ahead\nUse the next prep block to review next week's meetings, family logistics, and open decisions before Monday starts."
+        else
+          "## Look Ahead\nTomorrow's first calendar item: #{tomorrow} Prep any family logistics and meeting notes before the week starts."
+        end
+
+      append_body_section(brief, line)
+    else
+      brief
+    end
+  end
+
+  defp append_body_section(brief, section) when is_map(brief) and is_binary(section) do
+    body = read_string(brief, "body", "")
+
+    if blank?(section) or String.contains?(body, section) do
+      brief
+    else
+      Map.put(brief, "body", [body, section] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
+    end
+  end
+
+  defp morning_brief_score([]), do: 10
+
+  defp morning_brief_score(findings) do
+    max(1, 10 - length(findings) * 2)
+  end
+
+  defp maybe_finding(findings, true, finding), do: [finding | findings]
+  defp maybe_finding(findings, _condition, _finding), do: findings
+
+  defp personal_calendar_events(brief_input) when is_map(brief_input) do
+    calendar = read_map(brief_input, "calendar")
+
+    [
+      read_list(calendar, "today_events"),
+      read_list(calendar, "upcoming_local"),
+      case read_map(calendar, "tomorrow_first_event") do
+        event when event == %{} -> []
+        event -> [event]
+      end
+    ]
+    |> List.flatten()
+    |> Enum.filter(&is_map/1)
+    |> Enum.uniq_by(&calendar_event_identity/1)
+    |> Enum.filter(&personal_calendar_event?/1)
+  end
+
+  defp personal_calendar_events(_brief_input), do: []
+
+  defp personal_calendar_event?(event) when is_map(event) do
+    text =
+      [
+        read_string(event, "summary", nil),
+        read_string(event, "calendar_name", nil),
+        read_string(event, "location", nil),
+        event
+        |> read_list("attendees")
+        |> Enum.map(&attendee_match_text/1)
+        |> Enum.reject(&blank?/1)
+        |> Enum.join(" ")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+      |> String.downcase()
+
+    Enum.any?(@personal_calendar_terms, &String.contains?(text, &1))
+  end
+
+  defp personal_calendar_event?(_event), do: false
+
+  defp attendee_match_text(%{} = attendee) do
+    [
+      read_string(attendee, "display_name", nil),
+      read_string(attendee, "email", nil)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp attendee_match_text(value) when is_binary(value), do: value
+  defp attendee_match_text(_value), do: nil
+
+  defp body_mentions_any_event?(body, events) when is_binary(body) and is_list(events) do
+    normalized_body = normalize_match_text(body)
+
+    Enum.any?(events, fn event ->
+      event
+      |> read_string("summary", "")
+      |> normalize_match_text()
+      |> important_words()
+      |> Enum.any?(&String.contains?(normalized_body, &1))
+    end)
+  end
+
+  defp week_prep_present?(body) when is_binary(body) do
+    normalized = String.downcase(body)
+
+    String.contains?(normalized, "look ahead") or
+      String.contains?(normalized, "next week") or
+      String.contains?(normalized, "week prep") or
+      String.contains?(normalized, "monday") or
+      String.contains?(normalized, "tomorrow")
+  end
+
+  defp week_prep_present?(_body), do: false
+
+  defp weekend_brief?(brief_input) do
+    with date when is_binary(date) <- read_string(brief_input, "date", nil),
+         {:ok, parsed} <- Date.from_iso8601(date) do
+      Date.day_of_week(parsed) in [6, 7]
+    else
+      _ -> false
+    end
+  end
+
+  defp sparse_person_todo?(todo) when is_map(todo) do
+    title = read_string(todo, "title", "")
+    summary = read_string(todo, "summary", "")
+    next_action = read_string(todo, "next_action", "")
+    metadata = read_map(todo, "metadata")
+
+    person_like? =
+      Regex.match?(
+        ~r/\b[A-Z][a-z]+ [A-Z][A-Za-z'-]+\b/u,
+        [title, summary, next_action] |> Enum.join(" ")
+      )
+
+    context_text =
+      [
+        title,
+        summary,
+        next_action,
+        read_string(metadata, "company", nil),
+        read_string(metadata, "organization", nil),
+        read_string(metadata, "relationship_context", nil),
+        read_string(metadata, "why_it_matters", nil),
+        read_string(metadata, "context", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(" ")
+
+    person_like? and length(important_words(context_text)) < 8
+  end
+
+  defp sparse_person_todo?(_todo), do: false
+
+  defp calendar_event_brief_line(event) when is_map(event) and map_size(event) > 0 do
+    summary = read_string(event, "summary", "Calendar event")
+    start = read_string(event, "display_start", nil) || read_string(event, "start", nil)
+    date = read_string(event, "display_date", nil)
+    calendar_name = read_string(event, "calendar_name", nil)
+
+    [
+      "- **#{summary}**",
+      start && "at #{start}",
+      date && "on #{date}",
+      calendar_name && "(#{calendar_name})"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp calendar_event_brief_line(_event), do: nil
+
+  defp calendar_event_identity(event) when is_map(event) do
+    {
+      normalize_match_text(read_string(event, "summary", "")),
+      read_string(event, "start", nil) || read_string(event, "display_start", nil)
+    }
+  end
+
+  defp normalize_match_text(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/u, " ")
+    |> String.trim()
+  end
+
+  defp normalize_match_text(_value), do: ""
+
+  defp important_words(value) when is_binary(value) do
+    value
+    |> normalize_match_text()
+    |> String.split(" ", trim: true)
+    |> Enum.reject(&(String.length(&1) < 4))
+  end
+
+  defp important_words(_value), do: []
+
+  defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
+    todos = Map.get(result, :todos, [])
+
+    case Briefs.attach_linked_todos(brief_record, todos) do
+      {:ok, updated_brief} ->
+        {updated_brief, Enum.map(todos, & &1.id), nil}
+
+      {:error, reason} ->
+        {brief_record, [], inspect(reason)}
+    end
+  end
+
+  defp attach_model_todos_to_brief(brief_record, _todo_result), do: {brief_record, [], nil}
+
   defp persist_model_todos(_user_id, %{"todos" => []}, _brief_input), do: {:ok, :no_todos}
   defp persist_model_todos(nil, _brief, _brief_input), do: {:ok, :no_todos}
 
@@ -1205,7 +1529,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         {:ok, :no_todos}
 
       candidates ->
-        OpenLoops.ingest_todos(user_id, candidates,
+        ingest_todos_with_retry(user_id, candidates,
           source: "chief_of_staff_morning_briefing",
           max_tokens: @default_llm_max_tokens,
           timeout_ms: 1_200_000,
@@ -1215,6 +1539,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp persist_model_todos(_user_id, _brief, _brief_input), do: {:ok, :no_todos}
+
+  defp ingest_todos_with_retry(user_id, candidates, opts) do
+    do_ingest_todos_with_retry(user_id, candidates, opts, [0 | @todo_ingest_retry_delays_ms], 1)
+  end
+
+  defp do_ingest_todos_with_retry(user_id, candidates, opts, [delay | remaining], attempt) do
+    if delay > 0, do: Process.sleep(delay)
+
+    case OpenLoops.ingest_todos(user_id, candidates, opts) do
+      {:error, {:llm_busy, _retry_after_ms} = reason} when remaining != [] ->
+        Logger.warning("morning_briefing todo persistence busy; retrying",
+          attempt: attempt,
+          reason: inspect(reason),
+          next_delay_ms: hd(remaining)
+        )
+
+        do_ingest_todos_with_retry(user_id, candidates, opts, remaining, attempt + 1)
+
+      other ->
+        other
+    end
+  end
 
   defp morning_todo_candidate(todo, brief_input) when is_map(todo) do
     metadata =

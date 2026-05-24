@@ -67,6 +67,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
 
       assert prompt =~ "Delivery planning contract:"
       assert prompt =~ "Customer escalation"
+      assert prompt =~ "planning_rank"
+      assert prompt =~ "attention_profile"
 
       {:ok,
        %{
@@ -181,6 +183,46 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert held.status == "held"
     assert held.disposition == "hold"
     assert held.plan_reason == "Not useful enough to interrupt."
+  end
+
+  test "feedback verification holds stale backlog dumps even when model asks to interrupt", %{
+    user_id: user_id
+  } do
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "proactive_check_in",
+          title: "Overdue follow-up digest",
+          body: """
+          You have several overdue follow-ups that need your attention:
+          • Dan Bourke: confirm the artifact status and give a concrete ETA.
+          • Matthew Diakonov: confirm the artifact status and give a concrete ETA.
+          • Faye Pang: update on shared materials and next steps.
+          • Halah AlQahtani: confirm introduction and follow-up status.
+          Also, several recent meetings need a follow-up recap with owners and next steps, including Emma's Soccer Practice.
+          Prioritize sending these follow-ups now to maintain relationships.
+          """,
+          urgency: 0.94,
+          dedupe_key: "proactive:bad-backlog-dump"
+        })
+      )
+
+    llm_complete =
+      plan_llm(%{
+        candidate.id => {"interrupt_now", "The model thought this was urgent."}
+      })
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.held == 1
+    assert result.delivered == 0
+    assert telegram_messages() == []
+
+    held = Repo.get!(ProactiveCandidate, candidate.id)
+    assert held.status == "held"
+    assert held.disposition == "hold"
+    assert held.plan_reason =~ "Feedback verification"
   end
 
   test "run_for_due_users drains pending users", %{user_id: first_user_id} do

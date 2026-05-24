@@ -124,6 +124,49 @@ defmodule Maraithon.AssistantHarnessTest do
     assert override_request["model"] == "proactive-tier"
   end
 
+  test "proactive prompts encode backlog, weekend, and attention-stack policy" do
+    proactive_request =
+      AssistantHarness.build_proactive_request(%{
+        trigger: %{"local_time" => %{"weekday" => "Saturday", "day_phase" => "evening"}},
+        context: %{
+          todos: [
+            %{
+              id: "todo-1",
+              title: "Old Dan follow-up",
+              attention_profile: %{stale_confirmation_candidate: true}
+            }
+          ]
+        },
+        recent_pushes: []
+      })
+
+    delivery_request =
+      AssistantHarness.build_delivery_plan_request(%{
+        candidates: [
+          %{
+            id: "candidate-1",
+            planning_rank: 1,
+            attention_profile: %{bucket: "personal_family"}
+          }
+        ],
+        context: %{},
+        recent_pushes: []
+      })
+
+    proactive_prompt = get_in(proactive_request, ["messages", Access.at(1), "content"])
+    delivery_prompt = get_in(delivery_request, ["messages", Access.at(1), "content"])
+
+    assert proactive_prompt =~ "Morning check-ins may include older backlog"
+    assert proactive_prompt =~ "Highest attention order"
+    assert proactive_prompt =~ "On weekends, personal and family items outrank routine work"
+    assert proactive_prompt =~ "Is this still important to handle?"
+    assert proactive_prompt =~ "private 10/10 verification loop"
+
+    assert delivery_prompt =~ "pre-ranked with attention_profile hints"
+    assert delivery_prompt =~ "old backlog during daytime/evening cycles"
+    assert delivery_prompt =~ "allow at most one confirmation-style digest card"
+  end
+
   test "builds loop request payloads with compact tool evidence" do
     state = %{
       iteration: 2,

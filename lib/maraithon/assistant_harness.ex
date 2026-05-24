@@ -27,7 +27,10 @@ defmodule Maraithon.AssistantHarness do
   @default_tool_result_list_items 20
   @default_tool_result_map_entries 40
   @default_model_failover_max_attempts 3
-  @retryable_model_errors ~w(timeout rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content)
+  @default_model_busy_max_retries 25
+  @default_model_retry_base_delay_ms 250
+  @default_model_retry_max_delay_ms 5_000
+  @retryable_model_errors ~w(timeout llm_busy rate_limited network_error api_408 api_425 api_429 api_500 api_502 api_503 api_504 invalid_json missing_content)
   @valid_statuses ~w(tool_calls final)
   @valid_message_classes ~w(assistant_reply approval_prompt action_result system_notice todo_digest)
   @valid_proactive_decisions ~w(send_now hold)
@@ -198,6 +201,10 @@ defmodule Maraithon.AssistantHarness do
 
   def failure_message(:tool_step_limit) do
     "I hit the tool limit while checking that. Ask me to narrow the source or the person."
+  end
+
+  def failure_message({:llm_busy, _retry_after}) do
+    "The model is still busy with another request. I tried the fast path and the deeper path, but neither got a slot yet. Try again in a moment."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
@@ -480,14 +487,27 @@ defmodule Maraithon.AssistantHarness do
     - The model is responsible for whether to interrupt, what to say, which open loops matter, and whether a check-in is useful.
     - Runtime code only supplies context, validates this JSON contract, dedupes sends, sends Telegram, and records delivery.
     - The runtime policy below is authoritative for proactive response classes and request budgets.
-    - Do not use keyword heuristics. Reason over open loops, todos, CRM, memory, recent pushes, connected-account health, and user preferences.
+    - Do not use keyword heuristics. Reason over open loops, todos, upcoming calendar events, CRM, memory, recent pushes, connected-account health, and user preferences.
     - Send only when the message would help the user avoid missing an open loop, handle a timely obligation, or maintain useful accountability.
     - Hold when nothing is urgent enough, when the same point was pushed recently, when the user has no Telegram destination, or when context is insufficient.
+    - Re-stack the whole field before sending. Do not send a grab bag of overdue items just because they are overdue.
+    - Morning check-ins may include older backlog. Daytime/evening scheduled check-ins should usually focus on new or newly changed items since the last brief/push.
+    - If an item has been sitting for several days and the operator has not acted, assume there may be a reason. Unless it is family/personal, a close relationship, or objectively urgent, either hold it or ask one short confirmation question such as "Is this still important to handle?" instead of calling it urgent.
+    - Highest attention order: personal/family commitments; strongest relationships who need something; people actively waiting on a business objective, project, or deliverable; intro requests; meeting requests.
+    - Treat `calendar.personal_events` as first-class attention input, not as background context. Same-day or next-day family/personal calendar events, school events, practices, RSVP/reply reminders, travel/logistics, and conflicts should outrank routine work even when they are not represented as todos.
+    - If the calendar source/account is useful context, include it briefly, e.g. "from kent.fenwick@gmail.com" or the calendar name. Do not over-explain familiar family events.
+    - On weekends, personal and family items outrank routine work. Hold non-urgent work unless it protects a close relationship, a real external commitment, or the coming week.
+    - Saturday/Sunday are weekly-prep windows. If sending a week-prep nudge, focus on upcoming meetings, unresolved commitments, and prep needed for the next workweek.
+    - Use each todo's attention_profile and timestamps as hints, not as a substitute for judgment.
     - Keep Telegram copy compact and operational. Use plain Telegram-friendly text, not markdown tables.
     - Write like a human chief of staff checking in, not a system notification or database report.
     - Avoid report labels like "Open:", "Title:", "Priority:", "Status:", "Source:", and "From:" unless they are truly needed for clarity.
     - Never show numeric or internal priority scores. If urgency matters, explain the real-world reason.
     - If sending, include the specific next action and why now. Do not invent facts outside the context.
+    - Include the right amount of human context for named people. If the person is not clearly someone the operator speaks with often, add a quick memory jog: company/organization, relationship, project/objective, why they are reaching out, or what they are waiting on. Do not make the operator remember who "Dan Bourke" is from a bare name.
+    - Run a private 10/10 verification loop against the operator's feedback before returning JSON: reject stale backlog dumps, false urgency, missing person context, wrong ordering, and business framing for personal/family items.
+    - If the draft looks like "several overdue follow-ups" with a list of names, it is not good enough. Re-rank first; for stale low-priority work, surface at most one confirmation-style item with "mark important or dismiss" intent.
+    - Never frame personal/family calendar items as meeting recaps needing owners and next steps. Treat them as personal logistics or hold them.
     - If sending a todo digest, make the parent message and todo fields sound like a chief of staff speaking directly to the operator, not like a copied ticket. Use `you`, never `the user`, and never expose internal source names.
     - If holding, assistant_message must be empty.
     - Use `todo_digest` only when the proactive message should be followed by todo cards from the listed todo_ids.
@@ -524,6 +544,13 @@ defmodule Maraithon.AssistantHarness do
     - Use interrupt_now only when the item is timely enough to stand alone.
     - Use digest when the item is useful but should be batched with other proactive material.
     - Use hold when the item should not be delivered in this cycle.
+    - The pending candidates are already pre-ranked with attention_profile hints. Re-rank again from all evidence before assigning dispositions.
+    - Prefer interrupt_now for genuinely new, newly changed, personal/family, close-relationship, or active external-waiting items.
+    - Prefer hold for old backlog during daytime/evening cycles unless the attention_profile shows personal/family, strong relationship waiting, or a real deadline.
+    - If a stale candidate should be checked but not pushed as urgent, use digest with a concise confirmation-style body already present on the candidate; otherwise hold it.
+    - When digesting multiple candidates, keep the digest order aligned with highest current importance: personal/family, strong relationships, active project/customer waits, intros, then meetings.
+    - Run a private 10/10 verification loop against the operator's feedback before returning JSON. A plan fails if it sends stale backlog as urgent, batches many old follow-ups, lacks the right person/company/relationship/project context for names the operator may not instantly recognize, or treats personal/family logistics like business meetings.
+    - For stale low-priority backlog, allow at most one confirmation-style digest card in a cycle; otherwise hold it for the morning/backlog review.
     - If any candidate is assigned digest, write one compact digest_intro that can introduce the grouped candidate cards.
     - Keep reasons short, source-grounded, and safe for audit logs.
     - Do not invent facts outside the candidate snapshots, context, recent pushes, and user preferences.
@@ -609,11 +636,7 @@ defmodule Maraithon.AssistantHarness do
                                                                                 _last_error ->
       last_attempt? = index >= final_attempt_index
 
-      result =
-        case llm_complete.(attempt_params) do
-          {:ok, response} -> decode_and_normalize(response, normalize_fn)
-          {:error, _reason} = error -> error
-        end
+      result = run_model_attempt(attempt_params, llm_complete, normalize_fn, opts)
 
       case result do
         {:ok, _value} = ok ->
@@ -621,6 +644,7 @@ defmodule Maraithon.AssistantHarness do
 
         {:error, reason} = error ->
           if retryable_model_error?(reason) and not last_attempt? do
+            maybe_sleep_before_retry(reason, index, opts)
             {:cont, error}
           else
             {:halt, error}
@@ -632,6 +656,30 @@ defmodule Maraithon.AssistantHarness do
   defp decode_and_normalize(response, normalize_fn) do
     with {:ok, decoded} <- decode_json(response_content(response)) do
       normalize_fn.(decoded)
+    end
+  end
+
+  defp run_model_attempt(params, llm_complete, normalize_fn, opts) do
+    do_run_model_attempt(
+      params,
+      llm_complete,
+      normalize_fn,
+      opts,
+      model_busy_max_retries(opts)
+    )
+  end
+
+  defp do_run_model_attempt(params, llm_complete, normalize_fn, opts, busy_retries_left) do
+    case llm_complete.(params) do
+      {:ok, response} ->
+        decode_and_normalize(response, normalize_fn)
+
+      {:error, {:llm_busy, _retry_after} = reason} when busy_retries_left > 0 ->
+        maybe_sleep_before_retry(reason, model_busy_max_retries(opts) - busy_retries_left, opts)
+        do_run_model_attempt(params, llm_complete, normalize_fn, opts, busy_retries_left - 1)
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -678,6 +726,11 @@ defmodule Maraithon.AssistantHarness do
     |> positive_integer(@default_model_failover_max_attempts)
   end
 
+  defp model_busy_max_retries(opts) do
+    policy_value(opts, :model_busy_max_retries, @default_model_busy_max_retries)
+    |> positive_integer(@default_model_busy_max_retries)
+  end
+
   defp model_fallbacks(opts) do
     opts
     |> policy_value(:model_fallbacks, configured_model_fallbacks())
@@ -703,6 +756,7 @@ defmodule Maraithon.AssistantHarness do
   defp normalize_model_fallbacks(value), do: normalize_string_list(value) |> Enum.uniq()
 
   defp retryable_model_error?(:timeout), do: true
+  defp retryable_model_error?({:llm_busy, _retry_after}), do: true
   defp retryable_model_error?(:assistant_harness_invalid_json), do: true
   defp retryable_model_error?(:assistant_harness_missing_content), do: true
   # Malformed decisions — the model returned a transient JSON-shape slip
@@ -727,6 +781,39 @@ defmodule Maraithon.AssistantHarness do
        do: true
 
   defp retryable_model_error?(_reason), do: false
+
+  defp maybe_sleep_before_retry(reason, attempt_index, opts) do
+    delay_ms = retry_delay_ms(reason, attempt_index, opts)
+    if delay_ms > 0, do: Process.sleep(delay_ms)
+  end
+
+  defp retry_delay_ms({:llm_busy, retry_after}, _attempt_index, opts) do
+    retry_after
+    |> positive_integer(default_retry_base_delay_ms(opts))
+    |> min(default_retry_max_delay_ms(opts))
+  end
+
+  defp retry_delay_ms({:rate_limited, retry_after}, _attempt_index, opts) do
+    retry_after
+    |> positive_integer(default_retry_base_delay_ms(opts))
+    |> min(default_retry_max_delay_ms(opts))
+  end
+
+  defp retry_delay_ms(_reason, attempt_index, opts) do
+    base = default_retry_base_delay_ms(opts)
+    max_delay = default_retry_max_delay_ms(opts)
+    min((base * :math.pow(2, attempt_index)) |> round(), max_delay)
+  end
+
+  defp default_retry_base_delay_ms(opts) do
+    policy_value(opts, :model_retry_base_delay_ms, @default_model_retry_base_delay_ms)
+    |> positive_integer(@default_model_retry_base_delay_ms)
+  end
+
+  defp default_retry_max_delay_ms(opts) do
+    policy_value(opts, :model_retry_max_delay_ms, @default_model_retry_max_delay_ms)
+    |> positive_integer(@default_model_retry_max_delay_ms)
+  end
 
   defp configured_llm_complete do
     :maraithon

@@ -8,7 +8,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
-  alias Maraithon.Todos.Intelligence
+  alias Maraithon.Todos.{AttentionRanker, Intelligence}
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
@@ -180,6 +180,38 @@ defmodule Maraithon.Todos do
 
   def dismiss(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
+  def mark_important(user_id, todo_id, opts \\ [])
+
+  def mark_important(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
+    source = Keyword.get(opts, :source)
+
+    Repo.transaction(fn ->
+      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+           {:ok, updated} <-
+             todo
+             |> Todo.changeset(%{
+               attention_mode: "act_now",
+               priority: max(todo.priority || 0, 90),
+               status: if(todo.status == "snoozed", do: "open", else: todo.status),
+               snoozed_until: nil,
+               metadata: put_importance_override(todo.metadata || %{}, source)
+             })
+             |> Repo.update() do
+        updated
+      else
+        nil -> Repo.rollback(:not_found)
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def mark_important(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
   def snooze(user_id, todo_id, until_datetime, opts \\ [])
 
   def snooze(user_id, todo_id, until_datetime, opts)
@@ -338,6 +370,9 @@ defmodule Maraithon.Todos do
       source_account_label: todo.source_account_label,
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
+      inserted_at: todo.inserted_at,
+      updated_at: todo.updated_at,
+      attention_profile: AttentionRanker.profile(todo),
       metadata: summarize_metadata(todo.metadata || %{})
     }
   end
@@ -763,6 +798,22 @@ defmodule Maraithon.Todos do
     })
   end
 
+  defp put_importance_override(metadata, source) when is_map(metadata) do
+    recorded_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    metadata
+    |> Map.put("assistant_feedback", %{
+      "value" => "important",
+      "source" => source,
+      "recorded_at" => recorded_at
+    })
+    |> Map.put("importance_override", %{
+      "value" => "important",
+      "source" => source,
+      "recorded_at" => recorded_at
+    })
+  end
+
   defp put_scope_metadata(metadata, attrs) when is_map(metadata) and is_map(attrs) do
     metadata
     |> Map.merge(scope_metadata_attrs(attrs))
@@ -785,13 +836,30 @@ defmodule Maraithon.Todos do
   end
 
   defp summarize_metadata(metadata) when is_map(metadata) do
-    Map.take(metadata, [
+    metadata
+    |> Map.take([
       "thread_id",
       "google_account_email",
       "from",
       "subject",
       "account_email",
       "source_account_label",
+      "person",
+      "company",
+      "organization",
+      "relationship",
+      "relationship_context",
+      "relationship_strength",
+      "interaction_count",
+      "communication_frequency",
+      "context",
+      "context_brief",
+      "why_it_matters",
+      "project",
+      "project_name",
+      "life_domain",
+      "source_tags",
+      "commitment_direction",
       "team_name",
       "workspace_name",
       "owner",
@@ -809,9 +877,37 @@ defmodule Maraithon.Todos do
       "scope_confidence",
       "scope_reasoning"
     ])
+    |> maybe_put("record", summarize_record_metadata(fetch_attr(metadata, "record")))
   end
 
   defp summarize_metadata(_metadata), do: %{}
+
+  defp summarize_record_metadata(record) when is_map(record) do
+    summarized =
+      record
+      |> Map.take([
+        "person",
+        "company",
+        "organization",
+        "relationship",
+        "relationship_context",
+        "relationship_strength",
+        "interaction_count",
+        "communication_frequency",
+        "summary",
+        "ask",
+        "commitment",
+        "context",
+        "why_it_matters",
+        "project",
+        "project_name"
+      ])
+      |> compact_map()
+
+    if summarized == %{}, do: nil, else: summarized
+  end
+
+  defp summarize_record_metadata(_record), do: nil
 
   defp normalize_kind(kind) when kind in ~w(general gmail_triage), do: kind
   defp normalize_kind(_kind), do: "general"

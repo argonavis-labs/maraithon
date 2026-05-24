@@ -10,7 +10,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias MaraithonWeb.Endpoint
 
   @callback_prefix "tgtodo"
-  @feedback_values ~w(helpful not_helpful)
+  @feedback_values ~w(important helpful not_helpful)
 
   def telegram_payload(todo) when is_map(todo) do
     telegram_payload(todo, [])
@@ -62,7 +62,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(value) when is_binary(value) do
     case Regex.run(
-           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|helpful|not_helpful)$/i,
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|important|helpful|not_helpful)$/i,
            value,
            capture: :all_but_first
          ) do
@@ -79,6 +79,10 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp dispatch_action(user_id, todo_id, "dismiss") do
     Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram todo message.")
+  end
+
+  defp dispatch_action(user_id, todo_id, "important") do
+    Todos.mark_important(user_id, todo_id, source: "telegram")
   end
 
   defp dispatch_action(user_id, todo_id, feedback) when feedback in @feedback_values do
@@ -116,8 +120,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         rows ++
           [
             [
-              %{"text" => "Mark Done", "callback_data" => callback_data(todo_id, "done")},
-              %{"text" => "Not Interested", "callback_data" => callback_data(todo_id, "dismiss")}
+              %{"text" => "Done", "callback_data" => callback_data(todo_id, "done")},
+              %{"text" => "Dismiss", "callback_data" => callback_data(todo_id, "dismiss")}
             ]
           ]
 
@@ -137,8 +141,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         rows ++
           [
             [
-              %{"text" => "Helpful", "callback_data" => callback_data(todo_id, "helpful")},
-              %{"text" => "Not Helpful", "callback_data" => callback_data(todo_id, "not_helpful")}
+              %{"text" => "Important", "callback_data" => callback_data(todo_id, "important")},
+              %{
+                "text" => "Not Important",
+                "callback_data" => callback_data(todo_id, "not_helpful")
+              }
             ]
           ]
 
@@ -374,10 +381,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
     if generic_commitment_summary?(summary) and present?(commitment) do
       person = read_string(record, "person")
+      context = person_context_suffix(metadata, record)
       commitment = commitment |> single_line() |> soften_sentence_breaks()
 
       if present?(person) do
-        "#{person} is waiting on this commitment: #{commitment}"
+        "#{person}#{context} is waiting on this commitment: #{commitment}"
       else
         "This commitment is still open: #{commitment}"
       end
@@ -404,7 +412,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     [
       read_string(metadata, "context"),
       read_string(metadata, "context_brief"),
+      relationship_memory_jog(metadata, record),
       read_string(metadata, "why_now"),
+      read_string(metadata, "why_it_matters"),
       read_string(metadata, "source_summary"),
       read_string(record, "context"),
       read_string(record, "summary"),
@@ -510,6 +520,61 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp soften_sentence_breaks(text), do: text
 
+  defp person_context_suffix(metadata, record) do
+    details =
+      [
+        first_present([read_string(record, "company"), read_string(metadata, "company")]),
+        first_present([
+          read_string(record, "organization"),
+          read_string(record, "org"),
+          read_string(metadata, "organization")
+        ]),
+        first_present([
+          read_string(record, "relationship_context"),
+          read_string(metadata, "relationship_context"),
+          read_string(record, "relationship"),
+          read_string(metadata, "relationship")
+        ])
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.uniq()
+
+    case details do
+      [] -> ""
+      values -> " (#{Enum.join(values, "; ")})"
+    end
+  end
+
+  defp relationship_memory_jog(metadata, record) do
+    person = read_string(record, "person") || read_string(metadata, "person")
+
+    details =
+      [
+        first_present([read_string(record, "company"), read_string(metadata, "company")]),
+        first_present([
+          read_string(record, "organization"),
+          read_string(metadata, "organization")
+        ]),
+        first_present([
+          read_string(record, "relationship_context"),
+          read_string(metadata, "relationship_context"),
+          read_string(record, "relationship"),
+          read_string(metadata, "relationship")
+        ]),
+        read_string(metadata, "why_it_matters")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.uniq()
+
+    cond do
+      blank?(person) or details == [] -> nil
+      true -> "#{person}: #{Enum.join(details, "; ")}."
+    end
+  end
+
+  defp first_present(values) when is_list(values), do: Enum.find(values, &present?/1)
+  defp first_present(_values), do: nil
+
   defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
 
   defp todo_metadata(todo) when is_map(todo),
@@ -533,13 +598,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp feedback_label("helpful"), do: "Helpful"
-  defp feedback_label("not_helpful"), do: "Not Helpful"
+  defp feedback_label("important"), do: "Important"
+  defp feedback_label("not_helpful"), do: "Not Important"
   defp feedback_label(_value), do: nil
 
   defp callback_notice("done"), do: "Marked done"
-  defp callback_notice("dismiss"), do: "Marked not interested"
+  defp callback_notice("dismiss"), do: "Dismissed"
+  defp callback_notice("important"), do: "Marked important"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
-  defp callback_notice("not_helpful"), do: "Saved not helpful feedback"
+  defp callback_notice("not_helpful"), do: "Marked not important"
 
   defp callback_error_text(reason) when is_binary(reason),
     do: "I couldn't update that todo yet: #{reason}"

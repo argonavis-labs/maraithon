@@ -357,13 +357,15 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp todo_digest_candidate(%Brief{} = brief, todos) when is_list(todos) do
+    payload = Briefs.telegram_payload(brief)
+
     %{
       user_id: brief.user_id,
       source: "brief",
       source_id: brief.id,
       dedupe_key: "brief:#{brief.id}",
       title: brief.title,
-      body: Briefs.todo_digest_intro_text(brief, todos),
+      body: payload.text,
       urgency: 0.7,
       why_now: brief.summary,
       structured_data:
@@ -372,7 +374,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
         |> Map.put("todo_ids", Enum.map(todos, & &1.id))
         |> Map.put("todo_count", length(todos))
         |> Map.put("brief_cadence", brief.cadence),
-      telegram_opts: %{"parse_mode" => "HTML"}
+      telegram_opts:
+        compact_map(%{"parse_mode" => "HTML", "reply_markup" => payload.reply_markup})
     }
   end
 
@@ -417,7 +420,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     if todos == [] do
       deliver_standard_brief(brief)
     else
-      intro_text = Briefs.todo_digest_intro_text(brief, todos)
+      payload = Briefs.telegram_payload(brief)
 
       case deliver(%{
              user_id: brief.user_id,
@@ -426,7 +429,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              origin_id: brief.id,
              dedupe_key: "brief:#{brief.id}",
              title: brief.title,
-             body: intro_text,
+             body: payload.text,
              urgency: 0.7,
              interrupt_now: true,
              why_now: brief.summary,
@@ -438,7 +441,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              conversation_metadata:
                brief_conversation_metadata(brief)
                |> Map.put("brief_cadence", brief.cadence),
-             telegram_opts: [parse_mode: "HTML"]
+             telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
            }) do
         {:ok, %{decision: "sent_now", message_id: message_id, conversation_id: conversation_id}} ->
           case load_conversation(conversation_id) do
