@@ -325,6 +325,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :name, :string, default: nil
   attr :value, :any, default: nil
   attr :class, :string, default: nil
+  attr :disabled, :boolean, default: false
   attr :rest, :global
   slot :inner_block, required: true
 
@@ -334,6 +335,7 @@ defmodule MaraithonWeb.CoreComponents do
       id={@id}
       name={@name}
       value={@value}
+      disabled={@disabled}
       class={["block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
       {@rest}
     >

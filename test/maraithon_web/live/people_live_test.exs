@@ -35,6 +35,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Runner teammate"
     assert html =~ "Email: charlie@example.com"
     assert html =~ "Strength 72"
+    assert html =~ "Set relationship"
+    assert html =~ "Merge duplicate"
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/operator/people'][aria-current='page']", "People")
   end
@@ -64,5 +66,81 @@ defmodule MaraithonWeb.PeopleLiveTest do
     html = render(view)
     assert html =~ "Dana Lee"
     assert html =~ "Charlie Smith"
+  end
+
+  test "assigns relationship context from presets", %{conn: conn} do
+    {:ok, christina} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "cgiannone@framgroup.com"
+      })
+
+    {:ok, view, _html} = live(conn, "/operator/people?q=Christina")
+
+    view
+    |> form("#relationship-form-#{christina.id}",
+      relationship: %{
+        "preset" => "family_event_organizer",
+        "relationship" => "",
+        "communication_frequency" => "frequent",
+        "preferred_communication_method" => "email"
+      }
+    )
+    |> render_submit()
+
+    updated = Crm.get_person_for_user(@user_email, christina.id)
+
+    assert updated.relationship == "Family event organizer"
+    assert updated.communication_frequency == "frequent"
+    assert updated.preferred_communication_method == "email"
+    assert updated.metadata["relationship_preset"] == "family_event_organizer"
+    assert updated.metadata["relationship_domain"] == "family"
+
+    html = render(view)
+    assert html =~ "Family event organizer"
+    assert html =~ "Frequent"
+  end
+
+  test "merges duplicate people from the visible list", %{conn: conn} do
+    {:ok, canonical} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "christina.giannone@gmail.com",
+        "relationship" => "Personal contact"
+      })
+
+    {:ok, duplicate} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "cgiannone@framgroup.com",
+        "communication_frequency" => "frequent"
+      })
+
+    {:ok, view, html} = live(conn, "/operator/people?q=Christina")
+
+    assert html =~ "christina.giannone@gmail.com"
+    assert html =~ "cgiannone@framgroup.com"
+
+    view
+    |> form("#merge-form-#{canonical.id}",
+      merge: %{
+        "surviving_person_id" => canonical.id,
+        "merged_person_id" => duplicate.id
+      }
+    )
+    |> render_submit()
+
+    survivor = Crm.get_person_for_user(@user_email, canonical.id)
+    merged = Crm.get_person_for_user(@user_email, duplicate.id)
+
+    assert merged.status == "merged"
+    assert merged.merged_into_id == canonical.id
+    assert "christina.giannone@gmail.com" in survivor.contact_details["emails"]
+    assert "cgiannone@framgroup.com" in survivor.contact_details["emails"]
+
+    html = render(view)
+    assert html =~ "Merged Christina Giannone into Christina Giannone."
+    assert html =~ "christina.giannone@gmail.com"
+    refute html =~ "cgiannone@framgroup.com"
   end
 end
