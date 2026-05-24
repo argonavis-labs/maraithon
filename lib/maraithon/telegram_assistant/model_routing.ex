@@ -67,6 +67,15 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwaiting\s+on\b/u
   ]
 
+  @person_context_patterns [
+    ~r/\bwho\s+(is|are)\s+(?!this|that|they|them|he|she|it|person)\p{L}/u,
+    ~r/\b(tell|remind)\s+me\s+about\s+\p{L}/u,
+    ~r/\bwhat\s+should\s+i\s+know\s+about\s+\p{L}/u,
+    ~r/\bwhat\s+do\s+i\s+owe\s+\p{L}/u,
+    ~r/\bwhat\s+does\s+\p{L}.*\b(need|want|expect)\b/u,
+    ~r/\bwhy\s+(am\s+i\s+meeting|do\s+i\s+know|are\s+we\s+meeting)\b.*\p{L}/u
+  ]
+
   @connector_status_patterns [
     ~r/\b(which|what|show|list)\b.*\b(connections?|connectors?|integrations?|accounts?|sources?)\b.*\b(connected|active|enabled|working|status)\b/u,
     ~r/\b(connected|active|enabled|working)\b.*\b(connections?|connectors?|integrations?|accounts?|sources?)\b/u,
@@ -134,6 +143,12 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
       Enum.any?(@quick_chat_patterns, &Regex.match?(&1, normalized)) ->
         :chat
 
+      source_hint_person_question?(normalized) ->
+        :chat
+
+      Enum.any?(@person_context_patterns, &Regex.match?(&1, normalized)) ->
+        :reasoning
+
       Enum.any?(@planning_patterns, &Regex.match?(&1, normalized)) ->
         :reasoning
 
@@ -163,6 +178,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
       Enum.any?(@today_mode_patterns, &Regex.match?(&1, normalized)) ->
         :today_mode
+
+      Enum.any?(@person_context_patterns, &Regex.match?(&1, normalized)) ->
+        :person_context
 
       Enum.any?(@waiting_on_patterns, &Regex.match?(&1, normalized)) ->
         :waiting_on
@@ -228,6 +246,18 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:tool_scope, :waiting_on)
   end
 
+  defp maybe_put_focus(keyword, :person_context) do
+    keyword
+    |> Keyword.put(:request_focus, :person_context)
+    |> Keyword.put(:context_scope, :person_context)
+    |> Keyword.put(:tool_scope, :person_context)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 10)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
   defp maybe_put_focus(keyword, _focus), do: keyword
 
   defp linked_reply?(attrs) when is_map(attrs) do
@@ -248,6 +278,15 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   defp linked_item_context_request?(_text), do: false
+
+  defp source_hint_person_question?(text) when is_binary(text) do
+    Regex.match?(
+      ~r/\bwho\s+(is|are)\s+\p{L}.*\b(from|in|on)\s+(slack|gmail|email|calendar|crm|contacts?|google|connected\s+(app|source))\b/u,
+      text
+    )
+  end
+
+  defp source_hint_person_question?(_text), do: false
 
   defp model_for_tier(:reasoning), do: non_empty(LLM.model()) || non_empty(LLM.chat_model())
   defp model_for_tier(:chat), do: non_empty(LLM.chat_model()) || non_empty(LLM.model())

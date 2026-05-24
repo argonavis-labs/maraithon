@@ -192,6 +192,23 @@ defmodule Maraithon.TelegramAssistant.Context do
     ])
   end
 
+  defp select_fetchers_for_focus(fetchers, :person_context) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
   defp select_fetchers_for_focus(fetchers, _request_focus), do: fetchers
 
   defp take_fetchers(fetchers, allowed_keys) do
@@ -221,6 +238,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       "today_mode" -> :today_mode
       "waiting_on" -> :waiting_on
       "linked_item_context" -> :linked_item_context
+      "person_context" -> :person_context
       _other -> nil
     end
   end

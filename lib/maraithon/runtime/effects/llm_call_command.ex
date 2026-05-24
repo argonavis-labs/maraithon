@@ -29,10 +29,11 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
   @default_rate_limited_backoff_ms 30_000
   @fallback_max_tokens 8_000
   @fallback_reasoning_effort "medium"
+  @default_primary_max_tokens 32_000
 
   @impl true
   def execute(%Effect{} = effect) do
-    params = effect.params
+    params = effect.params |> cap_primary_tokens()
     _timeout = params["timeout_ms"] || 120_000
 
     Logger.info("Starting LLM call for effect #{effect.id}",
@@ -162,21 +163,35 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
     |> Map.put("reasoning_effort", @fallback_reasoning_effort)
   end
 
-  defp cap_fallback_tokens(params) do
+  defp cap_primary_tokens(params) when is_map(params) do
+    cap = primary_max_tokens()
+
     params
-    |> cap_token_key("max_tokens")
-    |> cap_token_key("max_output_tokens")
+    |> cap_token_key("max_tokens", cap)
+    |> cap_token_key("max_output_tokens", cap)
   end
 
-  defp cap_token_key(params, key) do
+  defp cap_primary_tokens(params), do: params
+
+  defp cap_fallback_tokens(params) do
+    params
+    |> cap_token_key("max_tokens", @fallback_max_tokens)
+    |> cap_token_key("max_output_tokens", @fallback_max_tokens)
+  end
+
+  defp cap_token_key(params, key, cap) do
     case Map.get(params, key) do
-      value when is_integer(value) and value > @fallback_max_tokens ->
-        Map.put(params, key, @fallback_max_tokens)
+      value when is_integer(value) and value > cap ->
+        params
+        |> Map.put(key, cap)
+        |> note_token_cap(key, value, cap)
 
       value when is_binary(value) ->
         case Integer.parse(value) do
-          {parsed, ""} when parsed > @fallback_max_tokens ->
-            Map.put(params, key, @fallback_max_tokens)
+          {parsed, ""} when parsed > cap ->
+            params
+            |> Map.put(key, cap)
+            |> note_token_cap(key, parsed, cap)
 
           _other ->
             params
@@ -186,6 +201,34 @@ defmodule Maraithon.Runtime.Effects.LLMCallCommand do
         params
     end
   end
+
+  defp note_token_cap(params, key, original, cap) do
+    Logger.info("Capped oversized LLM effect request",
+      token_key: key,
+      original: original,
+      cap: cap
+    )
+
+    params
+  end
+
+  defp primary_max_tokens do
+    :maraithon
+    |> Application.get_env(Maraithon.Runtime, [])
+    |> Keyword.get(:llm_primary_max_tokens, @default_primary_max_tokens)
+    |> positive_integer(@default_primary_max_tokens)
+  end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _other -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
 
   defp configured_model_fallbacks do
     :maraithon

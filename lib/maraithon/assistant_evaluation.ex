@@ -7,6 +7,7 @@ defmodule Maraithon.AssistantEvaluation do
   """
 
   alias Maraithon.ActionLedger
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.ToolPolicy
   alias Maraithon.ToolPolicy.Decision
 
@@ -35,11 +36,15 @@ defmodule Maraithon.AssistantEvaluation do
 
     output_diffs = diff(Map.get(expected, "output", %{}), observed)
     policy_result = evaluate_policy(Map.get(expected, "policy"), scenario)
+    tool_result = evaluate_tool_usage(expected, observed)
+    surface_result = evaluate_surface_quality(Map.get(expected, "surface_quality"), observed)
     ledger_result = maybe_record_ledger(expected, scenario, policy_result, opts)
 
     diffs =
       output_diffs
       |> Enum.concat(policy_result.diffs)
+      |> Enum.concat(tool_result.diffs)
+      |> Enum.concat(surface_result.diffs)
       |> Enum.concat(ledger_result.diffs)
 
     %{
@@ -50,6 +55,8 @@ defmodule Maraithon.AssistantEvaluation do
       observed: %{
         output: observed,
         policy: Map.take(policy_result, [:status, :reason_code]),
+        tools: Map.take(tool_result, [:tools]),
+        surface_quality: Map.get(surface_result, :quality),
         ledger: Map.take(ledger_result, [:event_type, :status, :action_id])
       }
     }
@@ -173,6 +180,86 @@ defmodule Maraithon.AssistantEvaluation do
         end
     end
   end
+
+  defp evaluate_tool_usage(expected, observed) when is_map(expected) and is_map(observed) do
+    tools = observed_tools(observed)
+    required = Map.get(expected, "required_tools", [])
+    forbidden = Map.get(expected, "forbidden_tools", [])
+
+    missing = Enum.reject(required, &(&1 in tools))
+    present_forbidden = Enum.filter(forbidden, &(&1 in tools))
+
+    diffs =
+      []
+      |> maybe_tool_diff("tools.required", missing, [])
+      |> maybe_tool_diff("tools.forbidden", present_forbidden, [])
+
+    %{tools: tools, diffs: diffs}
+  end
+
+  defp evaluate_tool_usage(_expected, _observed), do: %{tools: [], diffs: []}
+
+  defp evaluate_surface_quality(nil, _observed), do: %{quality: nil, diffs: []}
+
+  defp evaluate_surface_quality(expected, observed)
+       when is_map(expected) and is_map(observed) do
+    todo = Map.get(observed, "todo") || Map.get(observed, "linked_todo") || observed
+    quality = SurfaceQuality.assess(todo)
+
+    expected_surfaceable = Map.get(expected, "surfaceable")
+    minimum_score = Map.get(expected, "minimum_score")
+
+    diffs =
+      []
+      |> maybe_diff("surface_quality.surfaceable", expected_surfaceable, quality["surfaceable"])
+      |> maybe_minimum_score_diff(minimum_score, quality["score"])
+
+    %{quality: quality, diffs: diffs}
+  end
+
+  defp evaluate_surface_quality(_expected, _observed), do: %{quality: nil, diffs: []}
+
+  defp observed_tools(observed) do
+    direct =
+      observed
+      |> Map.get("tool_calls", [])
+      |> List.wrap()
+      |> Enum.map(fn
+        %{"tool" => tool} when is_binary(tool) -> tool
+        %{"name" => tool} when is_binary(tool) -> tool
+        tool when is_binary(tool) -> tool
+        _other -> nil
+      end)
+
+    sequence =
+      observed
+      |> Map.get("tool_sequence", [])
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+
+    (direct ++ sequence)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp maybe_tool_diff(diffs, _path, [], _expected), do: diffs
+
+  defp maybe_tool_diff(diffs, path, actual, expected) do
+    [%{path: path, expected: expected, actual: actual} | diffs]
+  end
+
+  defp maybe_minimum_score_diff(diffs, nil, _actual), do: diffs
+
+  defp maybe_minimum_score_diff(diffs, minimum_score, actual)
+       when is_integer(minimum_score) and is_integer(actual) do
+    if actual >= minimum_score do
+      diffs
+    else
+      [%{path: "surface_quality.score", expected: ">= #{minimum_score}", actual: actual} | diffs]
+    end
+  end
+
+  defp maybe_minimum_score_diff(diffs, _minimum_score, _actual), do: diffs
 
   defp diff(expected, actual, path \\ "$")
   defp diff(nil, _actual, _path), do: []

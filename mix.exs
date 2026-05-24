@@ -20,7 +20,9 @@ defmodule Maraithon.MixProject do
         "coveralls.post": :test,
         "coveralls.html": :test,
         "coveralls.json": :test,
-        precommit: :test
+        precommit: :test,
+        "maraithon.assistant.eval": :test,
+        "maraithon.verify_telegram_chat": :test
       ]
     ]
   end
@@ -102,7 +104,13 @@ defmodule Maraithon.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test --no-start"],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "deps.unlock --unused",
+        "format",
+        "test",
+        "maraithon.assistant.eval --fail-on-issues"
+      ]
     ]
   end
 end

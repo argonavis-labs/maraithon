@@ -19,7 +19,10 @@ defmodule Maraithon.BriefsTest do
     Application.put_env(
       :maraithon,
       :telegram_assistant,
-      Keyword.merge(original_assistant, telegram_unified_push_enabled: false)
+      Keyword.merge(original_assistant,
+        telegram_unified_push_enabled: false,
+        proactive_delivery_planner_enabled: false
+      )
     )
 
     on_exit(fn ->
@@ -31,6 +34,8 @@ defmodule Maraithon.BriefsTest do
       id: :capturing_telegram_recorder,
       start: {Agent, :start_link, [fn -> [] end, [name: :capturing_telegram_recorder]]}
     })
+
+    Repo.delete_all(Brief)
 
     user_id = "briefs-user@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

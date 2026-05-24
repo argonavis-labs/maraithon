@@ -15,7 +15,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveDeliveryConfigTest do
     %{original_assistant: original_assistant}
   end
 
-  test "proactive delivery planner flag is dormant by default", %{
+  test "proactive delivery planner flag is enabled by default", %{
     original_assistant: original_assistant
   } do
     Application.put_env(
@@ -24,7 +24,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveDeliveryConfigTest do
       Keyword.delete(original_assistant, :proactive_delivery_planner_enabled)
     )
 
-    refute TelegramAssistant.proactive_delivery_planner_enabled?()
+    assert TelegramAssistant.proactive_delivery_planner_enabled?()
   end
 
   test "proactive delivery planner flag accepts explicit true values", %{

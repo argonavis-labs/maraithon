@@ -40,7 +40,8 @@ defmodule Maraithon.TravelTest do
       :telegram_assistant,
       Keyword.merge(original_assistant,
         telegram_full_chat_enabled: true,
-        telegram_unified_push_enabled: true
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: false
       )
     )
 

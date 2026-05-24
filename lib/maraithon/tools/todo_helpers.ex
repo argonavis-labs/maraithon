@@ -3,6 +3,8 @@ defmodule Maraithon.Tools.TodoHelpers do
 
   import Maraithon.Tools.ActionHelpers
 
+  alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Todos.Todo
 
   def list_opts(args, default_limit \\ 50) when is_map(args) do
@@ -56,6 +58,8 @@ defmodule Maraithon.Tools.TodoHelpers do
       source_item_id: todo.source_item_id,
       source_occurred_at: todo.source_occurred_at,
       metadata: todo.metadata || %{},
+      attention_profile: AttentionRanker.profile(todo),
+      surface_quality: SurfaceQuality.assess(todo),
       updated_at: todo.updated_at
     }
   end

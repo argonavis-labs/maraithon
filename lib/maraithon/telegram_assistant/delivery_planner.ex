@@ -24,6 +24,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Tracing
 
   @default_batch_size 25
@@ -67,10 +68,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           with chat_id when is_binary(chat_id) <- telegram_destination(user_id, opts),
                payload <- build_payload(user_id, chat_id, candidates, opts),
                {:ok, raw_plan} <- AssistantHarness.plan_delivery(payload, opts) do
-            plan = ProactiveQualityGate.verify_delivery_plan(raw_plan, payload, opts)
+            plan =
+              raw_plan
+              |> ProactiveQualityGate.verify_delivery_plan(payload, opts)
+              |> apply_interruption_budget_to_plan(payload)
+
             planned = persist_plan(candidates, plan, payload)
             counts = disposition_counts(planned)
-            record_planning_decision(user_id, candidates, plan, counts)
+            record_planning_decision(user_id, candidates, plan, counts, payload)
 
             dispatch? = Keyword.get(opts, :dispatch, true)
 
@@ -122,7 +127,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
           candidate_snapshot(candidate, context, rank)
         end),
       context: context,
-      recent_pushes: recent_pushes
+      recent_pushes: recent_pushes,
+      interruption_budget: PushBroker.interruption_budget(user_id, now: now_from_context(context))
     }
   end
 
@@ -245,7 +251,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       "due_at" => read_field(todo, "due_at"),
       "source_occurred_at" => read_field(todo, "source_occurred_at"),
       "inserted_at" => read_field(todo, "inserted_at"),
-      "attention_profile" => AttentionRanker.profile(todo)
+      "attention_profile" => AttentionRanker.profile(todo),
+      "surface_quality" => SurfaceQuality.assess(todo)
     }
   end
 
@@ -288,6 +295,14 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Map.new(fn {candidate, index} -> {read_field(candidate, "id"), index} end)
   end
 
+  defp candidates_by_id(payload) do
+    payload
+    |> read_field("candidates")
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+    |> Map.new(fn candidate -> {read_field(candidate, "id"), candidate} end)
+  end
+
   defp dispatch(user_id, chat_id, planned, plan) do
     interrupt_now = Enum.filter(planned, &(&1.disposition == "interrupt_now"))
     digest = Enum.filter(planned, &(&1.disposition == "digest"))
@@ -302,6 +317,71 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       failed: interrupt_counts.failed + digest_counts.failed,
       held: held_count
     }
+  end
+
+  defp apply_interruption_budget_to_plan(plan, payload) when is_map(plan) do
+    budget = read_field(payload, "interruption_budget") || %{}
+    remaining = read_integer(budget, "remaining_immediate", 1)
+    quiet_hours? = read_field(budget, "quiet_hours") == true
+    candidates_by_id = candidates_by_id(payload)
+
+    dispositions =
+      plan
+      |> read_field("dispositions")
+      |> List.wrap()
+      |> Enum.with_index()
+      |> Enum.map(fn {disposition, index} ->
+        candidate = Map.get(candidates_by_id, read_field(disposition, "candidate_id"))
+
+        if read_field(disposition, "disposition") == "interrupt_now" and
+             should_downgrade_interrupt?(
+               candidate,
+               index,
+               remaining,
+               quiet_hours?
+             ) do
+          disposition
+          |> Map.put("disposition", "digest")
+          |> Map.put("reason", budget_digest_reason(budget))
+        else
+          disposition
+        end
+      end)
+
+    Map.put(plan, "dispositions", dispositions)
+  end
+
+  defp apply_interruption_budget_to_plan(plan, _payload), do: plan
+
+  defp should_downgrade_interrupt?(candidate_snapshot, index, remaining, quiet_hours?) do
+    profile = read_field(candidate_snapshot || %{}, "attention_profile") || %{}
+    urgency = read_float(candidate_snapshot || %{}, "urgency", 0.0)
+
+    protected? =
+      read_field(profile, "personal_family") == true or
+        read_field(profile, "bucket") == "strong_relationship_waiting" or
+        urgency >= 0.95
+
+    cond do
+      protected? -> false
+      remaining <= 0 -> true
+      quiet_hours? -> true
+      index >= remaining -> true
+      true -> false
+    end
+  end
+
+  defp budget_digest_reason(budget) do
+    cond do
+      read_field(budget, "quiet_hours") == true ->
+        "Interruption budget: quiet hours active, so this is batched instead of interrupting."
+
+      read_integer(budget, "remaining_immediate", 0) <= 0 ->
+        "Interruption budget exhausted for the hour, so this is batched."
+
+      true ->
+        "Interruption budget kept this batched."
+    end
   end
 
   defp dispatch_interrupts(candidates, chat_id) do
@@ -481,7 +561,8 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
                origin_id: candidate.source_id,
                structured_data: %{
                  "message_class" => "todo_item",
-                 "linked_todo" => Todos.serialize_for_prompt(todo)
+                 "linked_todo" => Todos.serialize_for_prompt(todo),
+                 "surface_quality" => SurfaceQuality.assess(todo)
                },
                telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
              ) do
@@ -533,7 +614,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     _error -> :ok
   end
 
-  defp record_planning_decision(user_id, candidates, plan, counts) do
+  defp record_planning_decision(user_id, candidates, plan, counts, payload) do
     ActionLedger.record(%{
       user_id: user_id,
       surface: "telegram",
@@ -550,7 +631,9 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       metadata: %{
         "interrupt_now_count" => counts.interrupt_now,
         "digest_count" => counts.digest,
-        "hold_count" => counts.hold
+        "hold_count" => counts.hold,
+        "interruption_budget" =>
+          Map.get(payload, :interruption_budget) || payload["interruption_budget"]
       }
     })
 
@@ -607,6 +690,25 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
     |> Enum.max(fn -> 0.0 end)
   end
 
+  defp now_from_context(context) when is_map(context) do
+    context
+    |> read_field("current_time")
+    |> read_field("now_utc")
+    |> parse_datetime()
+  end
+
+  defp now_from_context(_context), do: DateTime.utc_now()
+
+  defp parse_datetime(value) when is_binary(value) do
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _offset} -> datetime
+      _other -> DateTime.utc_now()
+    end
+  end
+
+  defp parse_datetime(%DateTime{} = datetime), do: datetime
+  defp parse_datetime(_value), do: DateTime.utc_now()
+
   defp empty_due_summary do
     %{users: 0, planned: 0, interrupt_now: 0, digest: 0, held: 0, delivered: 0, failed: 0}
   end
@@ -648,4 +750,43 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   end
 
   defp read_field(_map, _key), do: nil
+
+  defp read_integer(map, key, default) when is_map(map) do
+    case read_field(map, key) do
+      value when is_integer(value) ->
+        value
+
+      value when is_binary(value) ->
+        case Integer.parse(String.trim(value)) do
+          {parsed, ""} -> parsed
+          _other -> default
+        end
+
+      _other ->
+        default
+    end
+  end
+
+  defp read_integer(_map, _key, default), do: default
+
+  defp read_float(map, key, default) when is_map(map) do
+    case read_field(map, key) do
+      value when is_float(value) ->
+        value
+
+      value when is_integer(value) ->
+        value / 1
+
+      value when is_binary(value) ->
+        case Float.parse(String.trim(value)) do
+          {parsed, ""} -> parsed
+          _other -> default
+        end
+
+      _other ->
+        default
+    end
+  end
+
+  defp read_float(_map, _key, default), do: default
 end

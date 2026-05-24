@@ -59,7 +59,7 @@ defmodule Maraithon.TelegramAssistant do
     case Keyword.get(config(), :proactive_delivery_planner_enabled) do
       true -> true
       false -> false
-      nil -> false
+      nil -> true
       value when is_binary(value) -> String.downcase(String.trim(value)) in ~w(true 1 yes)
       _value -> false
     end

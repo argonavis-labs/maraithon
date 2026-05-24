@@ -9,10 +9,19 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{ModelRouting, Run, TodoActions, Toolbox}
+
+  alias Maraithon.TelegramAssistant.{
+    ConnectedContextPreflight,
+    ModelRouting,
+    Run,
+    TodoActions,
+    Toolbox
+  }
+
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Tools
   alias Maraithon.Tracing
   alias Maraithon.UserMemory
@@ -34,6 +43,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     model_profile = ModelRouting.profile_for(attrs)
     context_attrs = attrs_with_model_profile(attrs, model_profile)
     context = ContextEngine.build_context(context_attrs)
+    context = ConnectedContextPreflight.apply(context, context_attrs)
     conversation = Map.get(attrs, :conversation)
 
     case start_run(attrs, context, model_profile) do
@@ -986,7 +996,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
           "run_id" => run.id,
           "message_class" => "todo_item",
           "summary" => "Delivered one actionable todo item.",
-          "linked_todo" => serialize_linked_todo(todo_record)
+          "linked_todo" => serialize_linked_todo(todo_record),
+          "surface_quality" => SurfaceQuality.assess(todo_record)
         },
         telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
       ]

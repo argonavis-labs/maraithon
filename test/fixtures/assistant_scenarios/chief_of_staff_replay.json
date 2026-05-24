@@ -1,0 +1,168 @@
+[
+  {
+    "id": "chief_replay_001",
+    "category": "chief_of_staff_replay",
+    "summary": "General chat stays fast and does not search connected systems.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Can you make this sentence clearer?"},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "assistant_message": "Here is a clearer version.",
+      "tool_calls": []
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "forbidden_tools": ["list_todos", "list_people", "review_connected_context"]
+    }
+  },
+  {
+    "id": "chief_replay_002",
+    "category": "chief_of_staff_replay",
+    "summary": "Person identity questions require connected context review.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Who is Matthew Raue?"},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "assistant_message": "Matthew Raue is the Raue Automation contact asking about setup help and pricing.",
+      "tool_calls": [{"tool": "review_connected_context"}, {"tool": "learn_relationship_context"}]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["review_connected_context"]
+    }
+  },
+  {
+    "id": "chief_replay_003",
+    "category": "chief_of_staff_replay",
+    "summary": "Linked 'who is this' answers from the linked todo plus source context.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Who is this?", "reply_to_message_id": "todo-card-1"},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "assistant_message": "This is Matthew Raue from Raue Automation; he is waiting on setup path, pricing owner, and ETA.",
+      "tool_sequence": ["review_connected_context", "get_relationship_context"]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["review_connected_context"]
+    }
+  },
+  {
+    "id": "chief_replay_004",
+    "category": "chief_of_staff_replay",
+    "summary": "Todo reads use todos and avoid CRM writes.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "What todos are open?"},
+    "mock_output": {
+      "message_class": "todo_digest",
+      "tool_calls": [{"tool": "list_todos"}]
+    },
+    "expected": {
+      "output": {"message_class": "todo_digest"},
+      "required_tools": ["list_todos"],
+      "forbidden_tools": ["upsert_person"]
+    }
+  },
+  {
+    "id": "chief_replay_005",
+    "category": "chief_of_staff_replay",
+    "summary": "Todo creation writes through a source-backed, action-card-ready todo.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Add reply to Matthew about pricing by Friday."},
+    "mock_output": {
+      "decision": "create_todo",
+      "tool_calls": [{"tool": "upsert_todos"}],
+      "todo": {
+        "id": "todo-matthew-pricing",
+        "source": "telegram",
+        "kind": "general",
+        "attention_mode": "act_now",
+        "title": "Reply to Matthew Raue about pricing",
+        "summary": "Matthew Raue from Raue Automation is waiting on the setup path, pricing owner, and ETA.",
+        "next_action": "Send Matthew the setup path, pricing owner, and ETA by Friday.",
+        "dedupe_key": "telegram:matthew-raue-pricing",
+        "metadata": {
+          "company": "Raue Automation",
+          "relationship_context": "automation tools contact",
+          "why_now": "Kent asked to add this with a Friday commitment.",
+          "source_evidence": "Add reply to Matthew about pricing by Friday.",
+          "confidence": 0.93,
+          "people": [{"display_name": "Matthew Raue", "relationship": "automation tools contact"}]
+        }
+      }
+    },
+    "expected": {
+      "output": {"decision": "create_todo"},
+      "required_tools": ["upsert_todos"],
+      "surface_quality": {"surfaceable": true, "minimum_score": 95}
+    }
+  },
+  {
+    "id": "chief_replay_006",
+    "category": "chief_of_staff_replay",
+    "summary": "CRM updates write relationship context instead of only replying.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Remember Priya Shah is my design partner and prefers Slack."},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "tool_calls": [{"tool": "upsert_person"}, {"tool": "write_memory"}]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["upsert_person"]
+    }
+  },
+  {
+    "id": "chief_replay_007",
+    "category": "chief_of_staff_replay",
+    "summary": "Stale low-priority work becomes a single important-or-dismiss decision.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "proactive check-in"},
+    "mock_output": {
+      "message_class": "todo_digest",
+      "assistant_message": "This older follow-up has been sitting a while, so I am not treating it as urgent. Dan Bourke is the A-Team video project contact tied to the artifact-status commitment. Mark it important if it still matters, or dismiss it.",
+      "tool_calls": [{"tool": "list_todos"}]
+    },
+    "expected": {
+      "output": {"message_class": "todo_digest"},
+      "required_tools": ["list_todos"],
+      "forbidden_tools": ["gmail_send"]
+    }
+  },
+  {
+    "id": "chief_replay_008",
+    "category": "chief_of_staff_replay",
+    "summary": "Weekend ranking prioritizes personal calendar before stale work.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "What matters this weekend?"},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "assistant_message": "First: Emma Soccer Practice from kent.fenwick@gmail.com. Then prep next week meetings.",
+      "tool_sequence": ["calendar_events_around", "list_todos"]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["calendar_events_around"]
+    }
+  },
+  {
+    "id": "chief_replay_009",
+    "category": "chief_of_staff_replay",
+    "summary": "Meeting prep combines calendar, CRM, todos, and connected context.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Prep me for Matthew tomorrow."},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "tool_sequence": ["calendar_events_for_person", "review_connected_context", "list_todos"]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["calendar_events_for_person", "review_connected_context", "list_todos"]
+    }
+  },
+  {
+    "id": "chief_replay_010",
+    "category": "chief_of_staff_replay",
+    "summary": "Long-running work is queued instead of blocking chat.",
+    "input": {"user_id": "assistant-eval@example.com", "text": "Queue a job to review my CRM, calendar, and todos tomorrow morning."},
+    "mock_output": {
+      "message_class": "assistant_reply",
+      "tool_calls": [{"tool": "create_scheduled_task"}]
+    },
+    "expected": {
+      "output": {"message_class": "assistant_reply"},
+      "required_tools": ["create_scheduled_task"]
+    }
+  }
+]

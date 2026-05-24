@@ -9,6 +9,7 @@ defmodule Maraithon.Todos.Intelligence do
 
   alias Maraithon.{Crm, LLM, Memory}
   alias Maraithon.Todos
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Todos.Todo
 
   @sentinel "TODO_INTELLIGENCE_JSON_V1"
@@ -394,6 +395,7 @@ defmodule Maraithon.Todos.Intelligence do
         summary,
         opts
       )
+      |> SurfaceQuality.annotate_attrs()
 
     cond do
       action == "update" and is_nil(existing_todo) ->

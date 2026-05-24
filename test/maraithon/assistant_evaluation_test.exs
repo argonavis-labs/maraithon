@@ -6,18 +6,19 @@ defmodule Maraithon.AssistantEvaluationTest do
   test "loads and passes the seed assistant trust fixtures" do
     scenarios = AssistantEvaluation.load_fixture_dir!()
 
-    assert length(scenarios) == 50
+    assert length(scenarios) == 60
 
     result = AssistantEvaluation.run_fixtures(scenarios, record_ledger?: true)
 
     assert result.status == "passed"
-    assert result.summary.total == 50
+    assert result.summary.total == 60
     assert result.summary.failed == 0
     assert result.summary.by_category["gmail_triage"].total == 10
     assert result.summary.by_category["relationship_learning"].total == 10
     assert result.summary.by_category["proactive_send_hold"].total == 10
     assert result.summary.by_category["correction_to_memory"].total == 10
     assert result.summary.by_category["confirmation_required"].total == 10
+    assert result.summary.by_category["chief_of_staff_replay"].total == 10
   end
 
   test "reports behavior diffs with concrete paths" do

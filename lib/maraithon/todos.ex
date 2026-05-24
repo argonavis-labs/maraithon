@@ -8,7 +8,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
-  alias Maraithon.Todos.{AttentionRanker, Intelligence}
+  alias Maraithon.Todos.{AttentionRanker, Intelligence, SurfaceQuality}
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
@@ -403,6 +403,7 @@ defmodule Maraithon.Todos do
       inserted_at: todo.inserted_at,
       updated_at: todo.updated_at,
       attention_profile: AttentionRanker.profile(todo),
+      surface_quality: SurfaceQuality.assess(todo),
       metadata: summarize_metadata(todo.metadata || %{})
     }
   end
@@ -1062,7 +1063,8 @@ defmodule Maraithon.Todos do
       "suggested_project_name",
       "suggested_life_domain",
       "scope_confidence",
-      "scope_reasoning"
+      "scope_reasoning",
+      "surface_quality"
     ])
     |> maybe_put("record", summarize_record_metadata(fetch_attr(metadata, "record")))
   end

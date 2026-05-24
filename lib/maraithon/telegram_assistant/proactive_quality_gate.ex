@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   """
 
   alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.SurfaceQuality
 
   @max_iterations 2
   @urgent_terms ~w(urgent immediately immediate now high-priority high priority overdue)
@@ -248,6 +249,12 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
            "Feedback verification: named person needed company, relationship, or why-it-matters context."
          ), [:missing_person_context]}
 
+      value in ["interrupt_now", "digest"] and missing_surface_quality?(candidate) ->
+        {hold_disposition(
+           disposition,
+           "Feedback verification: held todo card without source/person/action context."
+         ), [:missing_surface_quality]}
+
       value == "interrupt_now" and stale_unprotected?(profile) ->
         revise_stale_delivery_disposition(disposition, body)
 
@@ -365,6 +372,24 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   end
 
   defp candidate_profile(_candidate), do: %{}
+
+  defp missing_surface_quality?(candidate) when is_map(candidate) do
+    candidate
+    |> read_field("related_todos")
+    |> List.wrap()
+    |> Enum.filter(&is_map/1)
+    |> Enum.any?(fn todo ->
+      quality =
+        case read_field(todo, "surface_quality") do
+          value when is_map(value) -> value
+          _other -> SurfaceQuality.assess(todo)
+        end
+
+      read_field(quality, "surfaceable") == false
+    end)
+  end
+
+  defp missing_surface_quality?(_candidate), do: false
 
   defp limit_stale_confirmation_digest(dispositions, candidates_by_id, findings) do
     {limited, _seen, findings} =

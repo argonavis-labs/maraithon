@@ -37,15 +37,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   alias Maraithon.TelegramAssistant.{
     Client.LLMJson,
+    ConnectedContextPreflight,
     Context,
     ModelRouting,
     ProactiveQualityGate,
+    PushBroker,
     Toolbox
   }
 
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos
+  alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Todos.Todo
 
   @default_max_attempts 3
@@ -164,6 +167,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :linked_routing,
+        kind: :static
+      },
+      %{
+        id: :person_context_contract,
+        kind: :static
+      },
+      %{
+        id: :todo_surface_quality_contract,
+        kind: :static
+      },
+      %{
+        id: :delivery_planner_default_contract,
         kind: :static
       },
       %{
@@ -786,6 +801,97 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
   end
 
+  defp run_scenario(%{kind: :static, id: :person_context_contract} = scenario, _env, _opts) do
+    profile = ModelRouting.profile_for(%{text: "Who is Matthew Raue?"})
+
+    payload =
+      focused_payload_for(
+        profile,
+        "Who is Matthew Raue?",
+        Toolbox.tool_definitions(%{})
+      )
+
+    tool_names = payload_tool_names(payload)
+    context_keys = Context.fetcher_keys_for_focus(:person_context)
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(profile, :request_focus) == :person_context,
+        "named person questions must use person_context focus"
+      )
+      |> require_finding(
+        Map.get(profile, :tier) == :reasoning,
+        "named person questions must route to reasoning for connected context"
+      )
+      |> require_finding(
+        Enum.all?(
+          ["review_connected_context", "get_relationship_context", "list_todos"],
+          &(&1 in tool_names)
+        ),
+        "person_context must expose connected review, CRM, and todo tools"
+      )
+      |> require_finding(
+        Enum.all?(
+          [:relationships, :todos, :calendar, :connected_accounts],
+          &(&1 in context_keys)
+        ),
+        "person_context must load CRM, todos, calendar, and connected account state"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :todo_surface_quality_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    todo = verification_surface_todo()
+    quality = SurfaceQuality.assess(todo)
+
+    weak_todo =
+      todo
+      |> Map.put("summary", "Reply to Dan.")
+      |> Map.put("metadata", %{})
+      |> Map.delete("source_item_id")
+      |> Map.delete("dedupe_key")
+
+    weak_quality = SurfaceQuality.assess(weak_todo)
+
+    findings =
+      []
+      |> require_finding(
+        quality["surfaceable"] == true and quality["score"] >= 95,
+        "source-backed todo with person/company/why-now context must score as surfaceable"
+      )
+      |> require_finding(
+        weak_quality["surfaceable"] == false and "source_evidence" in weak_quality["missing"],
+        "generic todo without source evidence must not be surfaceable"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :delivery_planner_default_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    findings =
+      []
+      |> require_finding(
+        TelegramAssistant.proactive_delivery_planner_enabled?(),
+        "proactive delivery planner must be enabled by default"
+      )
+      |> require_finding(
+        is_map(PushBroker.interruption_budget("verification@example.com")),
+        "push broker must expose an interruption budget"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
   defp run_scenario(%{} = scenario, env, opts) do
     run_result = run_chat_turn(scenario, env, opts)
     findings = score_chat_scenario(scenario, env, run_result)
@@ -935,6 +1041,11 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> Map.put(:model_profile, profile)
       |> Map.put(:request_focus, Map.get(profile, :request_focus))
       |> ContextEngine.build_context()
+      |> ConnectedContextPreflight.apply(
+        attrs
+        |> Map.put(:model_profile, profile)
+        |> Map.put(:request_focus, Map.get(profile, :request_focus))
+      )
 
     runtime_context =
       build_runtime_context(env, conversation, context, profile)
@@ -1396,6 +1507,35 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           %{
             "display_name" => "Dan Bourke",
             "relationship_strength" => 35,
+            "relationship" => "video project contact"
+          }
+        ]
+      }
+    }
+  end
+
+  defp verification_surface_todo do
+    %{
+      "id" => "surface-quality-dan",
+      "source" => "gmail",
+      "kind" => "general",
+      "attention_mode" => "act_now",
+      "title" => "Decide whether Dan Bourke follow-up still matters",
+      "summary" =>
+        "Dan Bourke is the A-Team video project contact tied to the video artifact status commitment.",
+      "next_action" =>
+        "Mark the Dan Bourke artifact-status follow-up important if it still matters, otherwise dismiss it.",
+      "source_item_id" => "gmail-thread-dan-bourke",
+      "dedupe_key" => "gmail:dan-bourke-artifact-status",
+      "metadata" => %{
+        "company" => "A-Team",
+        "relationship_context" => "video project contact",
+        "why_now" => "The stale follow-up needs an important-or-dismiss decision.",
+        "source_evidence" => "Dan asked for artifact status and ETA.",
+        "confidence" => 0.91,
+        "people" => [
+          %{
+            "display_name" => "Dan Bourke",
             "relationship" => "video project contact"
           }
         ]

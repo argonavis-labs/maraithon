@@ -266,6 +266,7 @@ config :maraithon, Maraithon.Runtime,
   tool_allowed_paths: tool_allowed_paths,
   # Timeouts
   llm_timeout_ms: String.to_integer(System.get_env("LLM_TIMEOUT_MS", "120000")),
+  llm_primary_max_tokens: String.to_integer(System.get_env("LLM_PRIMARY_MAX_TOKENS", "32000")),
   tool_timeout_ms: String.to_integer(System.get_env("TOOL_TIMEOUT_MS", "30000")),
   # Retries
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
@@ -275,7 +276,7 @@ config :maraithon, :telegram_assistant,
   telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),
   telegram_unified_push_enabled: optional_boolean_env.("TELEGRAM_UNIFIED_PUSH_ENABLED"),
   telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false),
-  proactive_delivery_planner_enabled: boolean_env.("PROACTIVE_DELIVERY_PLANNER_ENABLED", false),
+  proactive_delivery_planner_enabled: boolean_env.("PROACTIVE_DELIVERY_PLANNER_ENABLED", true),
   proactive_candidate_ttl_minutes:
     String.to_integer(System.get_env("PROACTIVE_CANDIDATE_TTL_MINUTES", "120"))
 

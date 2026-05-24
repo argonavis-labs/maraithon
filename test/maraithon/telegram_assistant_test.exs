@@ -59,6 +59,7 @@ defmodule Maraithon.TelegramAssistantTest do
         telegram_full_chat_enabled: true,
         telegram_unified_push_enabled: true,
         telegram_liveness_enabled: true,
+        proactive_delivery_planner_enabled: false,
         typing_initial_delay_ms: 10_000,
         typing_refresh_ms: 4_000,
         contextual_progress_delay_ms: 20_000,

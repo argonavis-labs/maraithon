@@ -333,6 +333,7 @@ defmodule Maraithon.AssistantHarness do
     - If a non-destructive agent control tool already executed, return `action_result`.
     - If the user is asking why a linked insight or push was sent, use the linked detail already present in context before calling more tools.
     - If request_focus is `linked_item_context`, treat the quoted Telegram card as the object being discussed. Start from `linked_item.todo`, `linked_item.detail`, `linked_item.insight`, or `linked_item.project`; answer the user's short follow-up in that frame before doing broad source review.
+    - If request_focus is `person_context`, the runtime has already run mandatory connected-source preflight when possible. Use `connected_context_review` plus CRM/todos/calendar/memory to answer who the person is, why they matter, what they want, and what the operator owes. If preflight found source observations, prefer source-backed specifics over generic CRM labels.
     - For linked-item questions like `Who is this?`, `What is this?`, `Why did you send this?`, or `What do I owe them?`, give the person/company/source context, why it matters, the concrete ask, and confidence. Use the linked todo or insight text directly when it is enough; call one focused CRM/open-loop/source review tool only when the linked item lacks identity or relationship context.
     - A good chief of staff should not surface a person-name-plus-task answer when the user needs orientation. Unless the person is clearly a frequent close contact in context, include who they are, the company/project/source they are attached to, and why the item exists.
     - The assistant is a single operator assistant for one linked user. No cross-user access.
@@ -541,6 +542,9 @@ defmodule Maraithon.AssistantHarness do
     Recent proactive push receipts JSON:
     #{PromptStability.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
 
+    Interruption budget JSON:
+    #{PromptStability.encode!(Map.get(payload, :interruption_budget) || Map.get(payload, "interruption_budget") || %{})}
+
     Runtime policy JSON:
     #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
     """
@@ -565,6 +569,7 @@ defmodule Maraithon.AssistantHarness do
     - Use hold when the item should not be delivered in this cycle.
     - The pending candidates are already pre-ranked with attention_profile hints. Re-rank again from all evidence before assigning dispositions.
     - Prefer interrupt_now for genuinely new, newly changed, personal/family, close-relationship, or active external-waiting items.
+    - Respect the interruption budget. If remaining_immediate is zero or quiet_hours is true, interrupt only for personal/family, true deadline, or very high-risk close-relationship items; otherwise digest or hold.
     - Prefer hold for old backlog during daytime/evening cycles unless the attention_profile shows personal/family, strong relationship waiting, or a real deadline.
     - If a stale candidate should be checked but not pushed as urgent, use digest with a concise confirmation-style body already present on the candidate; otherwise hold it.
     - When digesting multiple candidates, keep the digest order aligned with highest current importance: personal/family, strong relationships, active project/customer waits, intros, then meetings.
@@ -583,6 +588,9 @@ defmodule Maraithon.AssistantHarness do
 
     Recent push receipts JSON:
     #{PromptStability.encode!(Map.get(payload, :recent_pushes) || Map.get(payload, "recent_pushes") || [])}
+
+    Interruption budget JSON:
+    #{PromptStability.encode!(Map.get(payload, :interruption_budget) || Map.get(payload, "interruption_budget") || %{})}
 
     Runtime policy JSON:
     #{PromptStability.encode!(map_value(payload, "runtime_policy", runtime_policy()))}
@@ -1302,6 +1310,31 @@ defmodule Maraithon.AssistantHarness do
       :projects,
       :active_agents,
       :defaults,
+      :connected_context_review,
+      :context_diagnostics
+    ])
+  end
+
+  defp focus_context(context, :person_context) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :current_time,
+      :connected_accounts,
+      :source_freshness,
+      :defaults,
+      :connected_context_review,
       :context_diagnostics
     ])
   end
@@ -1408,6 +1441,34 @@ defmodule Maraithon.AssistantHarness do
         inspect_project
         list_projects
         list_implementation_runs
+      ))
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
+  end
+
+  defp focus_tools(tools, :person_context) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        list_todos
+        get_open_loops
+        list_people
+        get_person
+        get_relationship_context
+        review_connected_context
+        learn_relationship_context
+        link_person_data
+        upsert_person
+        recall_memory
+        recall_anywhere
+        list_memories
+        write_memory
+        calendar_events_around
+        calendar_events_for_person
+        calendar_search
+        calendar_event_get
+        list_connected_accounts
       ))
 
     Enum.filter(tools, fn tool ->

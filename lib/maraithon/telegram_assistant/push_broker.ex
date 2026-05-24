@@ -17,6 +17,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
+  alias Maraithon.Todos.SurfaceQuality
 
   @default_push_limit_per_hour 3
 
@@ -130,6 +131,38 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     end
   end
 
+  def interruption_budget(user_id, opts \\ [])
+
+  def interruption_budget(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    limit =
+      opts
+      |> Keyword.get(:limit, push_limit_per_hour())
+      |> positive_integer(push_limit_per_hour())
+
+    sent_last_hour = recent_sent_push_count(user_id)
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+
+    %{
+      "max_immediate_per_hour" => limit,
+      "sent_last_hour" => sent_last_hour,
+      "remaining_immediate" => max(limit - sent_last_hour, 0),
+      "quiet_hours" => quiet_hours?(now),
+      "quiet_hours_start_local" => quiet_hours_start_local(),
+      "quiet_hours_end_local" => quiet_hours_end_local()
+    }
+  end
+
+  def interruption_budget(_user_id, _opts) do
+    %{
+      "max_immediate_per_hour" => push_limit_per_hour(),
+      "sent_last_hour" => 0,
+      "remaining_immediate" => push_limit_per_hour(),
+      "quiet_hours" => false,
+      "quiet_hours_start_local" => quiet_hours_start_local(),
+      "quiet_hours_end_local" => quiet_hours_end_local()
+    }
+  end
+
   defp send_candidate(candidate) do
     case TelegramResponder.send(candidate.chat_id, candidate.body, candidate.telegram_opts) do
       {:ok, result} ->
@@ -221,6 +254,20 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       recent_sent_push_count(candidate.user_id) >= push_limit_per_hour()
   end
 
+  defp quiet_hours?(%DateTime{} = now) do
+    local_hour = now.hour
+    start_hour = quiet_hours_start_local()
+    end_hour = quiet_hours_end_local()
+
+    if start_hour < end_hour do
+      local_hour >= start_hour and local_hour < end_hour
+    else
+      local_hour >= start_hour or local_hour < end_hour
+    end
+  end
+
+  defp quiet_hours?(_now), do: false
+
   defp recent_sent_push_count(user_id) when is_binary(user_id) do
     threshold = DateTime.add(DateTime.utc_now(), -3600, :second)
 
@@ -237,7 +284,43 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   defp push_limit_per_hour do
     Application.get_env(:maraithon, :telegram_assistant, [])
     |> Keyword.get(:max_immediate_pushes_per_hour, @default_push_limit_per_hour)
+    |> positive_integer(@default_push_limit_per_hour)
   end
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _other -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
+
+  defp quiet_hours_start_local do
+    Application.get_env(:maraithon, :telegram_assistant, [])
+    |> Keyword.get(:quiet_hours_start_local, 22)
+    |> normalize_hour(22)
+  end
+
+  defp quiet_hours_end_local do
+    Application.get_env(:maraithon, :telegram_assistant, [])
+    |> Keyword.get(:quiet_hours_end_local, 7)
+    |> normalize_hour(7)
+  end
+
+  defp normalize_hour(value, _default) when is_integer(value) and value >= 0 and value <= 23,
+    do: value
+
+  defp normalize_hour(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed >= 0 and parsed <= 23 -> parsed
+      _other -> default
+    end
+  end
+
+  defp normalize_hour(_value, default), do: default
 
   defp telegram_destination(user_id) when is_binary(user_id) do
     ConnectedAccounts.telegram_destination(user_id)
@@ -497,7 +580,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              structured_data: %{
                "message_class" => "todo_item",
                "brief_cadence" => brief.cadence,
-               "linked_todo" => Todos.serialize_for_prompt(todo)
+               "linked_todo" => Todos.serialize_for_prompt(todo),
+               "surface_quality" => SurfaceQuality.assess(todo)
              },
              telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
            ) do
