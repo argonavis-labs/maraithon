@@ -108,7 +108,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         "List the linked user's connector, integration, connected-account, and source-freshness status.",
         %{
           "type" => "object",
-          "properties" => %{}
+          "properties" => %{
+            "include_tools" => %{"type" => "boolean"},
+            "include_freshness" => %{"type" => "boolean"},
+            "include_disconnected" => %{"type" => "boolean"}
+          }
         }
       ),
       tool_definition(
@@ -1244,7 +1248,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         get_open_work_summary(runtime_context, args)
 
       "list_connected_accounts" ->
-        list_connected_accounts(runtime_context)
+        list_connected_accounts(runtime_context, args)
 
       "get_open_loops" ->
         get_open_loops(runtime_context, args)
@@ -1626,89 +1630,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
      }}
   end
 
-  defp list_connected_accounts(runtime_context) do
-    context = Map.get(runtime_context, :context) || Map.get(runtime_context, "context") || %{}
-    user_id = Map.get(runtime_context, :user_id) || Map.get(runtime_context, "user_id")
+  defp list_connected_accounts(runtime_context, args) do
+    args =
+      args
+      |> Map.take(["include_tools", "include_freshness", "include_disconnected"])
+      |> Map.put_new("include_tools", true)
+      |> Map.put_new("include_freshness", true)
 
-    connected_accounts =
-      case context_list(context, :connected_accounts) do
-        [] ->
-          user_id
-          |> ConnectedAccounts.list_for_user()
-          |> Enum.map(&serialize_connected_account_status/1)
-
-        accounts ->
-          Enum.map(accounts, &serialize_connected_account_status/1)
-      end
-
-    source_freshness =
-      case context_list(context, :source_freshness) do
-        [] -> SourceFreshness.compact_for_prompt(user_id)
-        freshness -> freshness
-      end
-
-    {:ok,
-     %{
-       connected_count: connected_account_count(connected_accounts),
-       status_counts: status_counts(connected_accounts),
-       connected_accounts: connected_accounts,
-       source_freshness: source_freshness
-     }}
+    inject_user_and_execute("list_connected_accounts", runtime_context, args)
   end
-
-  defp serialize_connected_account_status(%Maraithon.Accounts.ConnectedAccount{} = account) do
-    %{
-      provider: account.provider,
-      external_account_id: account.external_account_id,
-      status: account.status,
-      scopes: account.scopes || [],
-      metadata: redact_connection_metadata(account.metadata || %{}),
-      connected_at: account.connected_at && DateTime.to_iso8601(account.connected_at),
-      last_refreshed_at:
-        account.last_refreshed_at && DateTime.to_iso8601(account.last_refreshed_at)
-    }
-  end
-
-  defp serialize_connected_account_status(%{} = account), do: account
-  defp serialize_connected_account_status(other), do: other
-
-  defp connected_account_count(accounts) when is_list(accounts) do
-    Enum.count(accounts, &(read_status(&1) == "connected"))
-  end
-
-  defp status_counts(accounts) when is_list(accounts) do
-    accounts
-    |> Enum.map(&read_status/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.frequencies()
-  end
-
-  defp read_status(%{} = account), do: Map.get(account, :status) || Map.get(account, "status")
-  defp read_status(_account), do: nil
-
-  defp context_list(context, key) when is_map(context) and is_atom(key) do
-    case Map.get(context, key) || Map.get(context, Atom.to_string(key)) do
-      value when is_list(value) -> value
-      _value -> []
-    end
-  end
-
-  defp redact_connection_metadata(metadata) when is_map(metadata) do
-    Map.drop(metadata, [
-      "access_token",
-      "refresh_token",
-      "authorization",
-      "bot_token",
-      "token",
-      :access_token,
-      :refresh_token,
-      :authorization,
-      :bot_token,
-      :token
-    ])
-  end
-
-  defp redact_connection_metadata(_metadata), do: %{}
 
   defp get_open_loops(runtime_context, args) do
     limit = normalize_limit(Map.get(args, "limit"), 12, 50)

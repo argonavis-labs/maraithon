@@ -149,9 +149,11 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     telegram = Enum.find(result.connected_accounts, &(&1.provider == "telegram"))
     assert telegram.metadata["username"] == "kentfenwick"
-    refute Map.has_key?(telegram.metadata, "token")
+    assert telegram.metadata["token"] == "[redacted]"
 
     assert Enum.any?(result.source_freshness, &(&1.provider == "telegram"))
+    assert Enum.any?(result.built_in_resources, &(&1.resource == "todos"))
+    assert Enum.any?(result.tool_coverage, &(&1.connector_id == "gmail"))
   end
 
   test "explain_action_ledger returns redacted why path and source freshness" do

@@ -30,6 +30,7 @@ defmodule Maraithon.Tools.DeleteTodo do
            %{
              source: "maraithon_todos",
              deleted: true,
+             delete_mode: "dismiss_as_no_longer_relevant",
              todo: TodoHelpers.serialize_todo(todo),
              remaining_count: length(remaining),
              remaining_todos: Enum.map(remaining, &TodoHelpers.serialize_todo/1)

@@ -297,6 +297,63 @@ defmodule Maraithon.Capabilities do
     gmail_batch_modify notaui_update_task notion_update_page
   ))
 
+  @todo_resource_tools ~w(
+    get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo
+  )
+
+  @relationship_resource_tools ~w(
+    list_people get_person upsert_person delete_person link_person_data merge_people
+    get_relationship_context learn_relationship_context
+  )
+
+  @memory_resource_tools ~w(
+    list_memories write_memory recall_memory forget_memory record_memory_feedback
+    update_memory_confidence
+  )
+
+  @built_in_resource_specs [
+    %{
+      resource: "todos",
+      resource_types: ["todo", "open_loop"],
+      tools: @todo_resource_tools
+    },
+    %{
+      resource: "crm_people",
+      resource_types: ["person", "relationship"],
+      tools: @relationship_resource_tools
+    },
+    %{
+      resource: "memory",
+      resource_types: ["memory"],
+      tools: @memory_resource_tools
+    }
+  ]
+
+  @crud_operation_tags %{
+    "read" => ["read"],
+    "list" => ["read"],
+    "get" => ["read"],
+    "search" => ["read"],
+    "aggregate" => ["read"],
+    "audit" => ["read"],
+    "create" => ["create"],
+    "send" => ["create"],
+    "update" => ["update"],
+    "patch" => ["update"],
+    "complete" => ["update"],
+    "snooze" => ["update"],
+    "merge" => ["update"],
+    "feedback" => ["update"],
+    "upsert" => ["create", "update"],
+    "write" => ["create", "update"],
+    "delete" => ["delete"],
+    "dismiss" => ["delete"],
+    "archive" => ["delete"],
+    "supersede" => ["delete"],
+    "reject" => ["delete"],
+    "unlink" => ["delete"]
+  }
+
   @default_status_labels %{
     "connected" => "Connected",
     "error" => "Needs attention",
@@ -572,6 +629,28 @@ defmodule Maraithon.Capabilities do
 
   def tool_annotations(_name), do: nil
 
+  def built_in_resource_coverage do
+    Enum.map(@built_in_resource_specs, fn spec ->
+      Map.put(spec, :operations, operations_for_tools(spec.tools))
+    end)
+  end
+
+  def operations_for_tools(tool_names) when is_list(tool_names) do
+    tool_names
+    |> Enum.reduce(%{}, fn tool_name, acc ->
+      tool_name
+      |> tool_operation_tags()
+      |> crud_operations()
+      |> Enum.reduce(acc, fn operation, nested ->
+        Map.update(nested, operation, [tool_name], &[tool_name | &1])
+      end)
+    end)
+    |> Enum.map(fn {operation, tools} -> {operation, Enum.sort(Enum.uniq(tools))} end)
+    |> Map.new()
+  end
+
+  def operations_for_tools(_tool_names), do: %{}
+
   def connector_metadata_for(id) when is_binary(id), do: Map.get(@connector_specs, id)
   def connector_metadata_for(_id), do: nil
 
@@ -765,13 +844,13 @@ defmodule Maraithon.Capabilities do
 
   defp tool_resource_types(name) do
     cond do
-      name in ~w(get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo) ->
+      name in @todo_resource_tools ->
         ["todo", "open_loop"]
 
-      name in ~w(list_people get_person upsert_person delete_person link_person_data merge_people get_relationship_context learn_relationship_context) ->
+      name in @relationship_resource_tools ->
         ["person", "relationship"]
 
-      name in ~w(list_memories write_memory recall_memory forget_memory record_memory_feedback update_memory_confidence) ->
+      name in @memory_resource_tools ->
         ["memory"]
 
       name == "list_connected_accounts" ->
@@ -852,6 +931,12 @@ defmodule Maraithon.Capabilities do
       MapSet.member?(@external_send_tools, name) -> ~w(send)
       true -> []
     end
+  end
+
+  defp crud_operations(tags) when is_list(tags) do
+    tags
+    |> Enum.flat_map(&Map.get(@crud_operation_tags, &1, []))
+    |> Enum.uniq()
   end
 
   defp titleize(name) do

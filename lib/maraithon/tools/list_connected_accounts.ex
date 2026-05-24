@@ -23,6 +23,8 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
         |> ConnectedAccounts.list_for_user()
         |> Enum.map(&serialize_account/1)
 
+      connected_account_count = count_status(accounts, "connected")
+
       providers =
         snapshot
         |> Map.get(:providers, [])
@@ -33,11 +35,13 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
         %{
           source: "maraithon_connected_accounts",
           degraded: snapshot_status == :degraded,
-          connected_count: Map.get(snapshot, :connected_count, 0),
+          connected_count: connected_account_count,
+          connected_account_count: connected_account_count,
+          connected_provider_count: Map.get(snapshot, :connected_count, 0),
           status_counts: status_counts(accounts),
           connected_accounts: accounts,
           providers: providers,
-          built_in_resources: built_in_resources()
+          built_in_resources: Capabilities.built_in_resource_coverage()
         }
         |> maybe_put(
           :source_freshness,
@@ -74,14 +78,14 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
         status: status,
         status_note: Map.get(provider, :status_note),
         connected?: status in ["connected", "partial"],
-        updated_at: Map.get(provider, :updated_at),
+        updated_at: timestamp(Map.get(provider, :updated_at)),
         account_count: length(Map.get(provider, :accounts, [])),
         accounts: Enum.map(Map.get(provider, :accounts, []), &redact_map/1),
         services:
           Enum.map(Map.get(provider, :services, []), &serialize_service(&1, include_tools?)),
         connector_id: connector_id,
         tools: tools,
-        operations: operations_for_tools(tools)
+        operations: Capabilities.operations_for_tools(tools)
       }
     end
   end
@@ -140,7 +144,7 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
     |> Map.merge(%{
       connector_id: connector_id,
       tools: tools,
-      operations: operations_for_tools(tools)
+      operations: Capabilities.operations_for_tools(tools)
     })
   end
 
@@ -153,9 +157,9 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
       status: account.status,
       scopes: account.scopes || [],
       metadata: redact_map(account.metadata || %{}),
-      connected_at: account.connected_at,
-      last_refreshed_at: account.last_refreshed_at,
-      updated_at: account.updated_at
+      connected_at: timestamp(account.connected_at),
+      last_refreshed_at: timestamp(account.last_refreshed_at),
+      updated_at: timestamp(account.updated_at)
     }
   end
 
@@ -168,99 +172,24 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
         provider: connector.provider,
         oauth_scopes: connector.oauth_scopes,
         tools: connector.tool_names,
-        operations: operations_for_tools(connector.tool_names)
+        operations: Capabilities.operations_for_tools(connector.tool_names)
       }
     end)
-  end
-
-  defp built_in_resources do
-    [
-      %{
-        resource: "todos",
-        tools:
-          ~w(get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo),
-        operations: %{
-          create: ~w(upsert_todos),
-          read: ~w(get_open_loops get_todo list_todos),
-          update: ~w(upsert_todos update_todo resolve_todo),
-          delete: ~w(delete_todo resolve_todo)
-        }
-      },
-      %{
-        resource: "crm_people",
-        tools:
-          ~w(list_people get_person upsert_person delete_person link_person_data merge_people get_relationship_context learn_relationship_context),
-        operations: %{
-          create: ~w(upsert_person link_person_data learn_relationship_context),
-          read: ~w(list_people get_person get_relationship_context),
-          update: ~w(upsert_person link_person_data merge_people learn_relationship_context),
-          delete: ~w(delete_person link_person_data merge_people)
-        }
-      },
-      %{
-        resource: "memory",
-        tools:
-          ~w(list_memories recall_memory write_memory forget_memory record_memory_feedback update_memory_confidence),
-        operations: %{
-          create: ~w(write_memory record_memory_feedback),
-          read: ~w(list_memories recall_memory),
-          update: ~w(write_memory update_memory_confidence),
-          delete: ~w(forget_memory)
-        }
-      }
-    ]
-  end
-
-  defp operations_for_tools(tool_names) when is_list(tool_names) do
-    tool_names
-    |> Enum.reduce(%{}, fn tool_name, acc ->
-      operation_tags =
-        tool_name
-        |> Capabilities.tool_annotations()
-        |> case do
-          %{} = annotations -> Map.get(annotations, "operationTags", [])
-          _ -> []
-        end
-
-      operation_tags
-      |> crud_operations()
-      |> Enum.reduce(acc, fn operation, nested ->
-        Map.update(nested, operation, [tool_name], &[tool_name | &1])
-      end)
-    end)
-    |> Enum.map(fn {operation, tools} -> {operation, Enum.sort(Enum.uniq(tools))} end)
-    |> Map.new()
-  end
-
-  defp operations_for_tools(_tool_names), do: %{}
-
-  defp crud_operations(tags) when is_list(tags) do
-    tags
-    |> Enum.flat_map(fn
-      tag when tag in ["read", "list", "get", "search", "aggregate", "audit"] ->
-        [:read]
-
-      tag when tag in ["create", "send"] ->
-        [:create]
-
-      tag when tag in ["update", "patch", "complete", "snooze", "merge", "feedback"] ->
-        [:update]
-
-      tag when tag in ["delete", "dismiss", "archive", "supersede", "reject", "unlink"] ->
-        [:delete]
-
-      _ ->
-        []
-    end)
-    |> Enum.uniq()
   end
 
   defp status_counts(accounts) when is_list(accounts) do
     Enum.reduce(accounts, %{}, fn account, acc ->
-      status = Map.get(account, :status) || "unknown"
+      status = read_status(account) || "unknown"
       Map.update(acc, status, 1, &(&1 + 1))
     end)
   end
+
+  defp count_status(accounts, status) when is_list(accounts) and is_binary(status) do
+    Enum.count(accounts, &(read_status(&1) == status))
+  end
+
+  defp read_status(%{} = account), do: Map.get(account, :status) || Map.get(account, "status")
+  defp read_status(_account), do: nil
 
   defp maybe_put(map, _key, false, _value), do: map
   defp maybe_put(map, key, true, value), do: Map.put(map, key, value)
@@ -282,6 +211,11 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
   defp redact_value(value) when is_map(value), do: redact_map(value)
   defp redact_value(value) when is_list(value), do: Enum.map(value, &redact_value/1)
   defp redact_value(value), do: value
+
+  defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp timestamp(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp timestamp(%Date{} = value), do: Date.to_iso8601(value)
+  defp timestamp(value), do: value
 
   defp sensitive_key?(key) do
     normalized = String.downcase(key)

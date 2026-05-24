@@ -52,6 +52,27 @@ defmodule Maraithon.CapabilitiesTest do
              )
   end
 
+  test "built-in resource coverage is derived from tool annotations" do
+    todo_coverage =
+      Capabilities.built_in_resource_coverage()
+      |> Enum.find(&(&1.resource == "todos"))
+
+    assert todo_coverage.resource_types == ["todo", "open_loop"]
+    assert "get_todo" in todo_coverage.tools
+    assert "update_todo" in todo_coverage.tools
+    assert "delete_todo" in todo_coverage.tools
+    assert "upsert_todos" in todo_coverage.operations["create"]
+    assert "update_todo" in todo_coverage.operations["update"]
+    assert "delete_todo" in todo_coverage.operations["delete"]
+
+    assert Capabilities.operations_for_tools(["gmail_drafts"]) == %{
+             "create" => ["gmail_drafts"],
+             "delete" => ["gmail_drafts"],
+             "read" => ["gmail_drafts"],
+             "update" => ["gmail_drafts"]
+           }
+  end
+
   test "register helpers validate capability metadata without mutating runtime registry" do
     assert {:error, :missing_policy_metadata} =
              Capabilities.register_tool(%{
