@@ -80,6 +80,9 @@ defmodule MaraithonWeb.DashboardLive do
         memory_rules: [],
         todos: [],
         open_todo_count: 0,
+        todo_review_index: 0,
+        todo_review_session: %{completed: 0, dismissed: 0, kept: 0, important: 0},
+        todo_review_decided_ids: MapSet.new(),
         projects: [],
         agent_overviews: [],
         project_form: to_form(default_project_form_params(), as: :project),
@@ -472,6 +475,95 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  def handle_event("review_previous_todo", _params, socket) do
+    previous_index = socket.assigns.todo_review_index - 1
+    reviewable_count = reviewable_todo_count(socket)
+
+    {:noreply,
+     assign(
+       socket,
+       :todo_review_index,
+       clamp_review_index(previous_index, reviewable_count)
+     )}
+  end
+
+  def handle_event("review_next_todo", _params, socket) do
+    next_index = socket.assigns.todo_review_index + 1
+    reviewable_count = reviewable_todo_count(socket)
+
+    {:noreply,
+     assign(
+       socket,
+       :todo_review_index,
+       clamp_review_index(next_index, reviewable_count)
+     )}
+  end
+
+  def handle_event("review_keep_todo", %{"id" => todo_id}, socket) do
+    socket = mark_todo_reviewed(socket, todo_id)
+
+    {:noreply,
+     socket
+     |> increment_todo_review_session(:kept)
+     |> clamp_todo_review_index()}
+  end
+
+  def handle_event("review_complete_todo", %{"id" => todo_id}, socket) do
+    case Todos.mark_done(current_user_id(socket), todo_id,
+           note: "Completed from dashboard review."
+         ) do
+      {:ok, _todo} ->
+        {:noreply,
+         socket
+         |> mark_todo_reviewed(todo_id)
+         |> increment_todo_review_session(:completed)
+         |> refresh_dashboard()
+         |> put_flash(:info, "Todo completed")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to complete todo: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("review_dismiss_todo", %{"id" => todo_id}, socket) do
+    case Todos.dismiss(current_user_id(socket), todo_id, note: "Dismissed from dashboard review.") do
+      {:ok, _todo} ->
+        {:noreply,
+         socket
+         |> mark_todo_reviewed(todo_id)
+         |> increment_todo_review_session(:dismissed)
+         |> refresh_dashboard()
+         |> put_flash(:info, "Todo dismissed")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to dismiss todo: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("review_mark_important", %{"id" => todo_id}, socket) do
+    case Todos.mark_important(current_user_id(socket), todo_id, source: "dashboard_review") do
+      {:ok, _todo} ->
+        {:noreply,
+         socket
+         |> mark_todo_reviewed(todo_id)
+         |> increment_todo_review_session(:important)
+         |> refresh_dashboard()
+         |> put_flash(:info, "Todo marked important")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to mark important: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("toggle_insight_detail", %{"id" => insight_id}, socket) do
     case insight_card(socket, insight_id) do
       %{insight: insight, detail: detail} ->
@@ -748,6 +840,13 @@ defmodule MaraithonWeb.DashboardLive do
         </.alert>
       <% end %>
 
+      <.todo_review_board
+        todos={@todos}
+        todo_review_index={@todo_review_index}
+        todo_review_session={@todo_review_session}
+        todo_review_decided_ids={@todo_review_decided_ids}
+      />
+
       <section>
         <div class="border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Overview</h2>
@@ -794,7 +893,7 @@ defmodule MaraithonWeb.DashboardLive do
           <% else %>
             <ul role="list" class="divide-y divide-zinc-950/5">
               <li
-                :for={todo <- @todos}
+                :for={todo <- Enum.take(@todos, 6)}
                 id={"todo-#{todo.id}"}
                 class="flex flex-wrap items-start justify-between gap-3 py-4"
               >
@@ -805,7 +904,7 @@ defmodule MaraithonWeb.DashboardLive do
                     </span>
                     <span><%= todo_source_label(todo.source) %></span>
                     <span aria-hidden="true">·</span>
-                    <span>priority <%= todo.priority %></span>
+                    <span><%= todo_priority_label(todo) %></span>
                   </div>
                   <p class="mt-1.5 text-sm/6 font-medium text-zinc-950"><%= todo.title %></p>
                   <p :if={todo.summary && todo.summary != ""} class="mt-0.5 text-sm/6 text-zinc-600">
@@ -2464,11 +2563,53 @@ defmodule MaraithonWeb.DashboardLive do
   defp refresh_todos(socket) do
     user_id = current_user_id(socket)
     todos = Todos.list_for_user(user_id, limit: 50, statuses: ["open", "snoozed"])
+    decided_ids = prune_todo_review_decided_ids(socket.assigns.todo_review_decided_ids, todos)
+    reviewable_count = length(reviewable_todos(todos, decided_ids))
 
     assign(socket,
-      todos: Enum.take(todos, 6),
-      open_todo_count: length(todos)
+      todos: todos,
+      open_todo_count: length(todos),
+      todo_review_decided_ids: decided_ids,
+      todo_review_index:
+        clamp_review_index(Map.get(socket.assigns, :todo_review_index, 0), reviewable_count)
     )
+  end
+
+  defp increment_todo_review_session(socket, key)
+       when key in [:completed, :dismissed, :kept, :important] do
+    session =
+      socket.assigns
+      |> Map.get(:todo_review_session, %{})
+      |> Map.update(key, 1, &(&1 + 1))
+
+    assign(socket, :todo_review_session, session)
+  end
+
+  defp mark_todo_reviewed(socket, todo_id) when is_binary(todo_id) do
+    decided_ids =
+      socket.assigns
+      |> Map.get(:todo_review_decided_ids, MapSet.new())
+      |> MapSet.put(todo_id)
+
+    assign(socket, :todo_review_decided_ids, decided_ids)
+  end
+
+  defp mark_todo_reviewed(socket, _todo_id), do: socket
+
+  defp clamp_todo_review_index(socket) do
+    reviewable_count = reviewable_todo_count(socket)
+
+    assign(
+      socket,
+      :todo_review_index,
+      clamp_review_index(socket.assigns.todo_review_index, reviewable_count)
+    )
+  end
+
+  defp reviewable_todo_count(socket) do
+    socket.assigns.todos
+    |> reviewable_todos(Map.get(socket.assigns, :todo_review_decided_ids, MapSet.new()))
+    |> length()
   end
 
   defp refresh_agent_overviews(socket) do
@@ -3132,6 +3273,458 @@ defmodule MaraithonWeb.DashboardLive do
   defp blank_metadata?(""), do: true
   defp blank_metadata?("N/A"), do: true
   defp blank_metadata?(_value), do: false
+
+  defp reviewable_todos(todos, decided_ids) when is_list(todos) do
+    decided_ids = normalize_todo_review_decided_ids(decided_ids)
+
+    Enum.reject(todos, fn todo ->
+      MapSet.member?(decided_ids, todo.id)
+    end)
+  end
+
+  defp reviewable_todos(_todos, _decided_ids), do: []
+
+  defp prune_todo_review_decided_ids(decided_ids, todos) when is_list(todos) do
+    current_ids = MapSet.new(Enum.map(todos, & &1.id))
+
+    decided_ids
+    |> normalize_todo_review_decided_ids()
+    |> MapSet.intersection(current_ids)
+  end
+
+  defp prune_todo_review_decided_ids(_decided_ids, _todos), do: MapSet.new()
+
+  defp normalize_todo_review_decided_ids(%MapSet{} = decided_ids), do: decided_ids
+  defp normalize_todo_review_decided_ids(_decided_ids), do: MapSet.new()
+
+  defp review_todo(todos, index) when is_list(todos) do
+    Enum.at(todos, clamp_review_index(index, length(todos)))
+  end
+
+  defp review_todo(_todos, _index), do: nil
+
+  defp review_queue_preview(todos, index) when is_list(todos) do
+    todos
+    |> Enum.drop(clamp_review_index(index, length(todos)) + 1)
+    |> Enum.take(4)
+  end
+
+  defp review_queue_preview(_todos, _index), do: []
+
+  defp todo_review_position(todos, index) when is_list(todos) do
+    case length(todos) do
+      0 -> "0 of 0"
+      count -> "#{clamp_review_index(index, count) + 1} of #{count}"
+    end
+  end
+
+  defp todo_review_position(_todos, _index), do: "0 of 0"
+
+  defp todo_review_progress_width(todos, index) when is_list(todos) do
+    case length(todos) do
+      0 -> 0
+      count -> round((clamp_review_index(index, count) + 1) * 100 / count)
+    end
+  end
+
+  defp todo_review_progress_width(_todos, _index), do: 0
+
+  defp todo_review_session_label(session) when is_map(session) do
+    reviewed =
+      [:completed, :dismissed, :kept, :important]
+      |> Enum.map(&Map.get(session, &1, 0))
+      |> Enum.sum()
+
+    if reviewed == 0 do
+      "No review actions yet"
+    else
+      "#{reviewed} reviewed this session"
+    end
+  end
+
+  defp todo_review_session_label(_session), do: "No review actions yet"
+
+  defp clamp_review_index(_index, count) when not is_integer(count) or count <= 0, do: 0
+
+  defp clamp_review_index(index, count) when is_integer(index) do
+    index
+    |> max(0)
+    |> min(count - 1)
+  end
+
+  defp clamp_review_index(_index, count), do: clamp_review_index(0, count)
+
+  defp todo_context_items(todo) do
+    metadata = todo.metadata || %{}
+
+    [
+      %{
+        label: "Person",
+        value:
+          todo_metadata_text(
+            metadata,
+            ~w(person contact requested_by requester sender sender_name)
+          )
+      },
+      %{
+        label: "Company",
+        value:
+          todo_metadata_text(metadata, ~w(company organization account_name customer partner))
+      },
+      %{
+        label: "Relationship",
+        value: todo_metadata_text(metadata, ~w(relationship relationship_context context_brief))
+      },
+      %{
+        label: "Project",
+        value: todo_metadata_text(metadata, ~w(project project_name omni_project topic))
+      },
+      %{label: "Account", value: todo_source_account_label(todo)},
+      %{label: "Due", value: todo.due_at && format_datetime(todo.due_at)}
+    ]
+    |> Enum.reject(fn item -> blank_metadata?(item.value) end)
+    |> Enum.take(6)
+  end
+
+  defp todo_why_important(todo) do
+    metadata = todo.metadata || %{}
+
+    todo_metadata_text(metadata, ~w(why_now why_it_matters why rationale urgency_reason))
+    |> case do
+      nil when not is_nil(todo.due_at) ->
+        "Due #{format_datetime(todo.due_at)}."
+
+      nil ->
+        "#{attention_mode_label(todo.attention_mode)} item from #{todo_source_label(todo.source)}. Last updated #{format_datetime(todo.updated_at)}."
+
+      value ->
+        value
+    end
+  end
+
+  defp todo_source_excerpt(todo) do
+    todo.metadata
+    |> todo_metadata_text(
+      ~w(source_quote quote source_excerpt body_excerpt excerpt evidence source_body source_evidence checked_evidence)
+    )
+    |> case do
+      nil -> nil
+      value -> truncate(value, 280)
+    end
+  end
+
+  defp todo_action_hint(todo) do
+    next_action = String.downcase(todo.next_action || "")
+
+    cond do
+      todo_action_draft_present?(todo) ->
+        "Draft material is ready for approval."
+
+      todo.source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
+        "Maraithon can draft the reply for approval."
+
+      todo.source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
+        "Maraithon can draft the Slack response for approval."
+
+      true ->
+        nil
+    end
+  end
+
+  defp todo_priority_label(%{attention_mode: "monitor"}), do: "watching"
+
+  defp todo_priority_label(%{priority: priority}) when is_integer(priority) and priority >= 85,
+    do: "high priority"
+
+  defp todo_priority_label(%{priority: priority}) when is_integer(priority) and priority >= 70,
+    do: "priority"
+
+  defp todo_priority_label(_todo), do: "normal priority"
+
+  defp todo_metadata_text(metadata, keys) when is_map(metadata) and is_list(keys) do
+    Enum.find_value(keys, fn key ->
+      metadata
+      |> fetch_map_value(key)
+      |> display_metadata_value()
+    end)
+  end
+
+  defp todo_metadata_text(_metadata, _keys), do: nil
+
+  defp display_metadata_value(value) when is_binary(value), do: normalized_text(value)
+
+  defp display_metadata_value(value) when is_atom(value),
+    do: value |> Atom.to_string() |> normalized_text()
+
+  defp display_metadata_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp display_metadata_value(value) when is_float(value), do: Float.to_string(value)
+  defp display_metadata_value(%DateTime{} = value), do: format_datetime(value)
+  defp display_metadata_value(%NaiveDateTime{} = value), do: format_datetime(value)
+
+  defp display_metadata_value(values) when is_list(values) do
+    values
+    |> Enum.map(&display_metadata_value/1)
+    |> Enum.reject(&blank_metadata?/1)
+    |> case do
+      [] -> nil
+      parts -> Enum.join(parts, "; ")
+    end
+  end
+
+  defp display_metadata_value(value) when is_map(value) do
+    Enum.find_value(
+      ~w(display_name name title email company organization relationship summary text body value),
+      fn key ->
+        value
+        |> fetch_map_value(key)
+        |> display_metadata_value()
+      end
+    )
+  end
+
+  defp display_metadata_value(_value), do: nil
+
+  defp todo_action_draft_present?(%{action_draft: draft}) when is_map(draft) do
+    draft
+    |> Map.values()
+    |> Enum.any?(&present_action_draft_value?/1)
+  end
+
+  defp todo_action_draft_present?(_todo), do: false
+
+  defp present_action_draft_value?(value) when is_binary(value), do: String.trim(value) != ""
+
+  defp present_action_draft_value?(values) when is_list(values),
+    do: Enum.any?(values, &present_action_draft_value?/1)
+
+  defp present_action_draft_value?(value) when is_map(value) do
+    value
+    |> Map.values()
+    |> Enum.any?(&present_action_draft_value?/1)
+  end
+
+  defp present_action_draft_value?(value), do: not is_nil(value)
+
+  attr :todos, :list, required: true
+  attr :todo_review_index, :integer, required: true
+  attr :todo_review_session, :map, required: true
+  attr :todo_review_decided_ids, :any, required: true
+
+  defp todo_review_board(assigns) do
+    review_todos = reviewable_todos(assigns.todos, assigns.todo_review_decided_ids)
+    current_todo = review_todo(review_todos, assigns.todo_review_index)
+
+    assigns =
+      assigns
+      |> assign(:current_todo, current_todo)
+      |> assign(:queue_preview, review_queue_preview(review_todos, assigns.todo_review_index))
+      |> assign(:review_position, todo_review_position(review_todos, assigns.todo_review_index))
+      |> assign(
+        :progress_width,
+        todo_review_progress_width(review_todos, assigns.todo_review_index)
+      )
+      |> assign(:can_go_previous, assigns.todo_review_index > 0)
+      |> assign(:can_go_next, assigns.todo_review_index + 1 < length(review_todos))
+
+    ~H"""
+    <section id="todo-review" class="overflow-hidden rounded-lg border border-zinc-950/10 bg-white shadow-sm">
+      <div class="border-b border-zinc-950/10 px-4 py-4 sm:px-6">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div class="flex flex-wrap items-center gap-2">
+              <h2 class="text-base/7 font-semibold text-zinc-950">Today's cards</h2>
+              <.badge color="emerald" class="bg-white">
+                Review queue
+              </.badge>
+            </div>
+            <p class="mt-1 text-sm/6 text-zinc-600">
+              Decide open loops one at a time.
+            </p>
+          </div>
+          <div class="text-right">
+            <p class="text-sm/6 font-medium text-zinc-950"><%= @review_position %></p>
+            <p class="text-xs/5 text-zinc-500">
+              <%= todo_review_session_label(@todo_review_session) %>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <%= if @current_todo do %>
+        <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_18rem] lg:divide-x lg:divide-zinc-950/10">
+          <article id={"todo-review-card-#{@current_todo.id}"} class="px-4 py-5 sm:px-6">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class={todo_status_class(@current_todo.status)}>
+                <%= todo_status_label(@current_todo.status) %>
+              </span>
+              <span class={attention_mode_class(@current_todo.attention_mode)}>
+                <%= attention_mode_label(@current_todo.attention_mode) %>
+              </span>
+              <span class="inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700">
+                <%= todo_source_label(@current_todo.source) %>
+              </span>
+              <span :if={@current_todo.due_at} class="text-xs/5 font-medium text-amber-700">
+                due <%= format_datetime(@current_todo.due_at) %>
+              </span>
+            </div>
+
+            <h3 class="mt-3 text-xl/7 font-semibold tracking-tight text-zinc-950 sm:text-lg/7">
+              <%= @current_todo.title %>
+            </h3>
+            <p :if={@current_todo.summary not in [nil, ""]} class="mt-2 text-sm/6 text-zinc-600">
+              <%= @current_todo.summary %>
+            </p>
+
+            <dl :if={todo_context_items(@current_todo) != []} class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+              <div :for={item <- todo_context_items(@current_todo)} class="border-l border-zinc-950/10 pl-3">
+                <dt class="text-xs/5 font-medium text-zinc-500"><%= item.label %></dt>
+                <dd class="mt-0.5 text-sm/6 text-zinc-800"><%= item.value %></dd>
+              </div>
+            </dl>
+
+            <div class="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
+              <div class="border-l border-zinc-950/10 pl-3">
+                <p class="text-xs/5 font-medium text-zinc-500">Why important</p>
+                <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo) %></p>
+              </div>
+              <div class="border-l border-zinc-950/10 pl-3">
+                <p class="text-xs/5 font-medium text-zinc-500">Suggested next step</p>
+                <p class="mt-1 text-sm/6 text-zinc-700"><%= @current_todo.next_action %></p>
+                <p :if={todo_action_hint(@current_todo)} class="mt-2 text-sm/6 font-medium text-indigo-700">
+                  <%= todo_action_hint(@current_todo) %>
+                </p>
+              </div>
+            </div>
+
+            <div :if={todo_source_excerpt(@current_todo)} class="mt-5 border-l border-zinc-950/10 pl-3">
+              <p class="text-xs/5 font-medium text-zinc-500">Source context</p>
+              <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_excerpt(@current_todo) %></p>
+            </div>
+
+            <div class="mt-6 flex flex-wrap items-center gap-2">
+              <.button
+                type="button"
+                phx-click="review_complete_todo"
+                phx-value-id={@current_todo.id}
+              >
+                Mark done
+              </.button>
+              <.button
+                type="button"
+                phx-click="review_mark_important"
+                phx-value-id={@current_todo.id}
+                variant="outline"
+                class="text-amber-800"
+              >
+                Important
+              </.button>
+              <.button
+                type="button"
+                phx-click="review_keep_todo"
+                phx-value-id={@current_todo.id}
+                variant="outline"
+              >
+                Keep open
+              </.button>
+              <.button
+                type="button"
+                phx-click="review_dismiss_todo"
+                phx-value-id={@current_todo.id}
+                variant="outline"
+                class="text-rose-700"
+              >
+                Dismiss
+              </.button>
+
+              <div class="ml-auto flex items-center gap-1">
+                <.button
+                  type="button"
+                  phx-click="review_previous_todo"
+                  variant="plain"
+                  disabled={not @can_go_previous}
+                  class="text-xs text-zinc-500"
+                >
+                  Previous
+                </.button>
+                <.button
+                  type="button"
+                  phx-click="review_next_todo"
+                  variant="plain"
+                  disabled={not @can_go_next}
+                  class="text-xs text-zinc-500"
+                >
+                  Next
+                </.button>
+              </div>
+            </div>
+          </article>
+
+          <aside class="bg-zinc-50 px-4 py-5 sm:px-6">
+            <div class="h-1.5 overflow-hidden rounded-full bg-zinc-200">
+              <div class="h-full rounded-full bg-zinc-950" style={"width: #{@progress_width}%"} />
+            </div>
+
+            <dl class="mt-4 grid grid-cols-2 gap-3 text-sm/6">
+              <div>
+                <dt class="text-xs/5 font-medium text-zinc-500">Done</dt>
+                <dd class="mt-0.5 font-semibold text-zinc-950">
+                  <%= Map.get(@todo_review_session, :completed, 0) %>
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs/5 font-medium text-zinc-500">Dismissed</dt>
+                <dd class="mt-0.5 font-semibold text-zinc-950">
+                  <%= Map.get(@todo_review_session, :dismissed, 0) %>
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs/5 font-medium text-zinc-500">Kept</dt>
+                <dd class="mt-0.5 font-semibold text-zinc-950">
+                  <%= Map.get(@todo_review_session, :kept, 0) %>
+                </dd>
+              </div>
+              <div>
+                <dt class="text-xs/5 font-medium text-zinc-500">Important</dt>
+                <dd class="mt-0.5 font-semibold text-zinc-950">
+                  <%= Map.get(@todo_review_session, :important, 0) %>
+                </dd>
+              </div>
+            </dl>
+
+            <div :if={@queue_preview != []} class="mt-6">
+              <p class="text-xs/5 font-medium text-zinc-500">Up next</p>
+              <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
+                <li :for={todo <- @queue_preview} class="py-2">
+                  <p class="line-clamp-2 text-sm/6 font-medium text-zinc-950"><%= todo.title %></p>
+                  <p class="mt-0.5 text-xs/5 text-zinc-500">
+                    <%= todo_source_label(todo.source) %> · <%= todo_priority_label(todo) %>
+                  </p>
+                </li>
+              </ul>
+            </div>
+            <p :if={@queue_preview == []} class="mt-6 text-sm/6 text-zinc-500">
+              No more cards in this queue.
+            </p>
+          </aside>
+        </div>
+      <% else %>
+        <div class="px-4 py-8 sm:px-6">
+          <%= if @todos == [] do %>
+            <p class="text-sm/6 font-medium text-zinc-950">No open cards.</p>
+            <p class="mt-1 text-sm/6 text-zinc-500">
+              Maraithon will add cards here as it turns connected activity into durable todos.
+            </p>
+          <% else %>
+            <p class="text-sm/6 font-medium text-zinc-950">Review complete for this session.</p>
+            <p class="mt-1 text-sm/6 text-zinc-500">
+              <%= length(@todos) %> open <%= if length(@todos) == 1, do: "card remains", else: "cards remain" %> in Today.
+            </p>
+          <% end %>
+        </div>
+      <% end %>
+    </section>
+    """
+  end
 
   attr :title, :string, required: true
   attr :subtitle, :string, default: nil

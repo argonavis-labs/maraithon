@@ -19,6 +19,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
 
     assert has_element?(view, "h2", "Overview")
+    assert has_element?(view, "h2", "Today's cards")
     assert has_element?(view, "h2", "Today")
     assert has_element?(view, "h2", "Workspace")
     assert html =~ "New project"
@@ -359,6 +360,85 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     refute has_element?(view, "#todo-#{todo.id}")
     assert Todos.list_open_for_user(@user_email) == []
+  end
+
+  test "renders a one-by-one todo card review queue with action context", %{conn: conn} do
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+                 "summary" =>
+                   "Michael is waiting for confirmation on campaign materials and ownership.",
+                 "next_action" =>
+                   "Reply with the exact asset status, owner, and delivery timing.",
+                 "priority" => 92,
+                 "dedupe_key" => "dashboard:todo:starteryou",
+                 "metadata" => %{
+                   "person" => "Michael Berlingo",
+                   "company" => "Starteryou",
+                   "relationship" => "UGC campaign contact",
+                   "why_now" => "Deadline is today and no later follow-through was found.",
+                   "source_excerpt" =>
+                     "Can you confirm whether the UGC campaign materials are ready?"
+                 }
+               },
+               %{
+                 "source" => "calendar",
+                 "title" => "Prepare Monday board notes",
+                 "summary" => "Collect the three updates needed before the Monday board prep.",
+                 "next_action" => "Write the top three updates and owner for each.",
+                 "priority" => 80,
+                 "dedupe_key" => "dashboard:todo:board-notes",
+                 "metadata" => %{
+                   "project" => "Board prep",
+                   "why_it_matters" => "This feeds Monday's meeting prep."
+                 }
+               }
+             ])
+
+    [first, second] = Todos.list_for_user(@user_email, limit: 2, statuses: ["open"])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert has_element?(view, "#todo-review")
+    assert html =~ "1 of 2"
+    assert html =~ "Michael Berlingo"
+    assert html =~ "Starteryou"
+    assert html =~ "UGC campaign contact"
+    assert html =~ "Suggested next step"
+    assert html =~ "Maraithon can draft the reply for approval."
+    assert html =~ "Can you confirm whether the UGC campaign materials are ready?"
+
+    view
+    |> element("#todo-review button[phx-click='review_next_todo']")
+    |> render_click()
+
+    assert render(view) =~ "Prepare Monday board notes"
+
+    view
+    |> element("#todo-review button[phx-click='review_previous_todo']")
+    |> render_click()
+
+    view
+    |> element(
+      "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{first.id}']"
+    )
+    |> render_click()
+
+    refute has_element?(view, "#todo-review-card-#{first.id}")
+    assert Todos.get_for_user(@user_email, first.id).status == "done"
+
+    view
+    |> element(
+      "#todo-review button[phx-click='review_dismiss_todo'][phx-value-id='#{second.id}']"
+    )
+    |> render_click()
+
+    assert render(view) =~ "No open cards."
+    assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
   end
 
   test "redirects legacy selected-agent dashboard URLs to the agents workspace", %{conn: conn} do
