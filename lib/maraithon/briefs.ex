@@ -185,7 +185,7 @@ defmodule Maraithon.Briefs do
   end
 
   def mark_sent(%Brief{} = brief, message_id \\ nil) do
-    mark_fallback_sent(brief, message_id)
+    mark_fallback_sent(brief, normalize_message_id(message_id))
   end
 
   def todo_digest_brief?(%Brief{metadata: metadata}) when is_map(metadata) do
@@ -306,7 +306,7 @@ defmodule Maraithon.Briefs do
     |> Ecto.Changeset.change(%{
       status: "sent",
       sent_at: DateTime.utc_now(),
-      provider_message_id: message_id,
+      provider_message_id: normalize_message_id(message_id),
       error_message: nil
     })
     |> Repo.update()
@@ -394,6 +394,10 @@ defmodule Maraithon.Briefs do
 
   defp read_message_id(%{"message_id" => value}) when is_binary(value), do: value
   defp read_message_id(_), do: nil
+
+  defp normalize_message_id(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_message_id(value) when is_binary(value), do: value
+  defp normalize_message_id(_value), do: nil
 
   def order_todo_digest_items(todos, brief) do
     todos

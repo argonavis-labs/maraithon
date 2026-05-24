@@ -541,7 +541,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     |> Ecto.Changeset.change(%{
       status: "sent",
       sent_at: DateTime.utc_now(),
-      provider_message_id: message_id,
+      provider_message_id: normalize_id(message_id),
       error_message: nil
     })
     |> Repo.update()

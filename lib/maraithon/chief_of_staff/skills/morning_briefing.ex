@@ -1175,9 +1175,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.map(fn {chunk, index} -> "Part #{index}/#{total}\n\n#{chunk}" end)
   end
 
-  defp read_message_id(%{"message_id" => message_id}), do: message_id
-  defp read_message_id(%{message_id: message_id}), do: message_id
+  defp read_message_id(%{"message_id" => message_id}), do: normalize_message_id(message_id)
+  defp read_message_id(%{message_id: message_id}), do: normalize_message_id(message_id)
   defp read_message_id(_result), do: nil
+
+  defp normalize_message_id(message_id) when is_integer(message_id),
+    do: Integer.to_string(message_id)
+
+  defp normalize_message_id(message_id) when is_binary(message_id), do: message_id
+  defp normalize_message_id(_message_id), do: nil
 
   defp llm_params(brief_input, state) do
     with {:ok, prompt} <- morning_prompt(brief_input) do
