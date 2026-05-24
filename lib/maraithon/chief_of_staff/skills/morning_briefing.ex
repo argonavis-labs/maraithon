@@ -1914,7 +1914,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         do_ingest_todos_with_retry(user_id, candidates, opts, remaining, attempt + 1)
 
       other ->
-        other
+        case other do
+          {:error, reason} ->
+            fallback_persist_todos(user_id, candidates, reason)
+
+          result ->
+            result
+        end
+    end
+  end
+
+  defp fallback_persist_todos(user_id, candidates, reason) do
+    Logger.warning(
+      "morning_briefing todo LLM persistence failed; using direct source-backed upsert",
+      reason: inspect(reason),
+      candidate_count: length(candidates)
+    )
+
+    case Todos.upsert_many(user_id, candidates) do
+      {:ok, todos} ->
+        {:ok,
+         %{
+           todos: todos,
+           decisions:
+             todos
+             |> Enum.with_index()
+             |> Enum.map(fn {todo, index} ->
+               %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
+             end),
+           skipped_count: 0,
+           usage: %{},
+           fallback_reason: inspect(reason)
+         }}
+
+      {:error, direct_reason} ->
+        {:error, {:todo_ingest_failed, reason, direct_reason}}
     end
   end
 
