@@ -33,7 +33,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.ScheduledTasks.Run, as: ScheduledTaskRun
   alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Client.LLMJson, ModelRouting, Toolbox}
+  alias Maraithon.TelegramAssistant.{Client.LLMJson, Context, ModelRouting, Toolbox}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos
@@ -123,6 +123,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :routing_contract,
+        kind: :static
+      },
+      %{
+        id: :responsiveness_contract,
+        kind: :static
+      },
+      %{
+        id: :otp_runtime_contract,
+        kind: :static
+      },
+      %{
+        id: :context_fault_tolerance,
         kind: :static
       },
       %{
@@ -275,6 +287,123 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         ModelRouting.tier_for_text("2+2") == :chat,
         "simple general chat must stay on the fast chat tier"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :responsiveness_contract} = scenario, _env, _opts) do
+    policy = AssistantHarness.runtime_policy()
+    connector_profile = ModelRouting.profile_for(%{text: "What accounts are connected?"})
+
+    chat_profile =
+      ModelRouting.profile_for(%{text: "Give me a quick reply saying Tuesday works."})
+
+    deep_profile = ModelRouting.profile_for(%{text: "What should I know before my meeting?"})
+
+    findings =
+      []
+      |> require_finding(
+        policy.loop.max_wall_clock_ms <= 25_000,
+        "default assistant loop must have a tight wall-clock budget"
+      )
+      |> require_finding(
+        policy.loop.max_llm_turns <= 6 and policy.loop.max_tool_steps <= 10,
+        "default assistant loop must be bounded by turn and tool-step limits"
+      )
+      |> require_finding(
+        policy.tool_calls.max_per_step <= 3,
+        "assistant must cap parallel tool calls per model turn"
+      )
+      |> require_finding(
+        Map.get(chat_profile, :tier) == :chat,
+        "simple conversational work must stay on the fast chat tier"
+      )
+      |> require_finding(
+        Map.get(deep_profile, :tier) == :reasoning,
+        "meeting prep/deep work must route to the reasoning tier"
+      )
+      |> require_finding(
+        Map.get(connector_profile, :request_focus) == :connector_status,
+        "connector-status requests must use narrow context/tool focus"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :otp_runtime_contract} = scenario, _env, _opts) do
+    findings =
+      []
+      |> require_finding(
+        Process.whereis(Maraithon.TelegramAssistant.ChatRegistry) != nil,
+        "per-chat Registry must be supervised"
+      )
+      |> require_finding(
+        Process.whereis(Maraithon.TelegramAssistant.ChatSupervisor) != nil,
+        "per-chat DynamicSupervisor must be supervised"
+      )
+      |> require_finding(
+        Process.whereis(Maraithon.TelegramAssistant.LivenessSupervisor) != nil,
+        "liveness supervisor must be running for timeout/progress feedback"
+      )
+      |> require_finding(
+        Process.whereis(Maraithon.Runtime.AgentRegistry) != nil,
+        "runtime agent Registry must be supervised"
+      )
+      |> require_finding(
+        Process.whereis(Maraithon.Runtime.EffectSupervisor) != nil,
+        "runtime Task.Supervisor must isolate effect work"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :context_fault_tolerance} = scenario, _env, _opts) do
+    started = System.monotonic_time(:millisecond)
+
+    fetched =
+      Context.safe_parallel_fetch(
+        [
+          {:fast, fn -> "ready" end},
+          {:crash, fn -> raise "simulated fetch crash" end},
+          {:slow,
+           fn ->
+             Process.sleep(250)
+             "late"
+           end}
+        ],
+        defaults: %{crash: "default", slow: "default"},
+        timeout_ms: 25,
+        max_concurrency: 3
+      )
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started
+    diagnostics = Map.get(fetched, :context_fetch, %{})
+    failures = Map.get(diagnostics, :failures, [])
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(fetched, :fast) == "ready",
+        "context fetch must preserve successful parallel fetches"
+      )
+      |> require_finding(
+        Map.get(fetched, :crash) == "default" and Map.get(fetched, :slow) == "default",
+        "context fetch must keep defaults for crashed or timed-out fetches"
+      )
+      |> require_finding(
+        Map.get(diagnostics, :status) == "degraded" and
+          Map.get(diagnostics, :failure_count, 0) >= 2,
+        "context fetch must report degraded diagnostics for failures"
+      )
+      |> require_finding(
+        Enum.any?(failures, &(Map.get(&1, :reason) == "timeout")) or
+          Enum.any?(failures, &(Map.get(&1, :reason) =~ "timeout")),
+        "context fetch must kill and report timed-out fetches"
+      )
+      |> require_finding(
+        elapsed_ms < 250,
+        "context fetch must return quickly instead of waiting for slow sources"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})

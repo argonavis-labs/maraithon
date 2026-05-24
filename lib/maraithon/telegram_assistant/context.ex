@@ -30,9 +30,12 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Travel
   alias Maraithon.UserMemory
 
+  require Logger
+
   @calendar_context_lookback_hours 2
   @calendar_context_forward_hours 72
   @calendar_context_limit 40
+  @default_context_fetch_timeout_ms 4_000
   @personal_calendar_terms ~w(
     appointment birthday camp child children dad dentist doctor daughter emma family home jack
     kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband
@@ -82,6 +85,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       projects: fetched.projects,
       active_agents: fetched.active_agents,
       defaults: fetched.defaults,
+      context_fetch: fetched.context_fetch,
       today_digest: today_digest
     }
   end
@@ -111,16 +115,64 @@ defmodule Maraithon.TelegramAssistant.Context do
     ]
 
     fetchers
-    |> Task.async_stream(
-      fn {key, fun} -> {key, fun.()} end,
-      ordered: false,
-      timeout: :infinity,
+    |> safe_parallel_fetch(
+      defaults: default_fetch_values(),
+      timeout_ms: context_fetch_timeout_ms(),
       max_concurrency: length(fetchers)
     )
-    |> Enum.reduce(%{}, fn
-      {:ok, {key, value}}, acc -> Map.put(acc, key, value)
-      {:exit, reason}, _acc -> raise "context fetch failed: #{inspect(reason)}"
-    end)
+  end
+
+  def safe_parallel_fetch(fetchers, opts \\ []) when is_list(fetchers) and is_list(opts) do
+    timeout_ms =
+      opts
+      |> Keyword.get(:timeout_ms, @default_context_fetch_timeout_ms)
+      |> positive_integer(@default_context_fetch_timeout_ms)
+
+    max_concurrency =
+      opts
+      |> Keyword.get(:max_concurrency, length(fetchers))
+      |> positive_integer(max(length(fetchers), 1))
+
+    defaults = Keyword.get(opts, :defaults, %{})
+    started_monotonic_ms = System.monotonic_time(:millisecond)
+
+    {values, failures} =
+      fetchers
+      |> Enum.with_index()
+      |> Task.async_stream(
+        fn {{key, fun}, _index} ->
+          run_context_fetcher(key, fun)
+        end,
+        ordered: true,
+        timeout: timeout_ms,
+        on_timeout: :kill_task,
+        max_concurrency: max_concurrency
+      )
+      |> Stream.zip(Enum.with_index(fetchers))
+      |> Enum.reduce({defaults, []}, fn
+        {{:ok, {:ok, key, value, elapsed_ms}}, _fetcher}, {acc, failures} ->
+          {Map.put(acc, key, value), maybe_note_slow_fetch(failures, key, elapsed_ms, timeout_ms)}
+
+        {{:ok, {:error, key, reason, elapsed_ms}}, _fetcher}, {acc, failures} ->
+          {acc, [context_fetch_failure(key, reason, elapsed_ms) | failures]}
+
+        {{:exit, reason}, {{key, _fun}, _index}}, {acc, failures} ->
+          {acc, [context_fetch_failure(key, reason, timeout_ms) | failures]}
+      end)
+
+    elapsed_ms = System.monotonic_time(:millisecond) - started_monotonic_ms
+    failures = Enum.reverse(failures)
+    diagnostics = context_fetch_diagnostics(elapsed_ms, timeout_ms, max_concurrency, failures)
+    emit_context_fetch_telemetry(diagnostics)
+
+    if failures != [] do
+      Logger.warning("Telegram assistant context fetch degraded",
+        elapsed_ms: elapsed_ms,
+        failure_count: length(failures)
+      )
+    end
+
+    Map.put(values, :context_fetch, diagnostics)
   end
 
   defp current_time_context(briefing_schedule) do
@@ -140,6 +192,117 @@ defmodule Maraithon.TelegramAssistant.Context do
       local_timezone: read_field(briefing_schedule, "local_timezone") || "UTC-5",
       timezone_offset_hours: offset_hours
     }
+  end
+
+  defp default_fetch_values do
+    %{
+      preference_memory: %{
+        timezone_offset_hours: -5,
+        rules: [],
+        summary: [],
+        operator_memory_summaries: []
+      },
+      operator_memory: [],
+      user_memory: %{},
+      deep_memory: [],
+      open_loops: %{},
+      relationships: [],
+      open_insights: [],
+      todos: [],
+      calendar: empty_calendar_context(),
+      briefing_schedule: BriefingSchedules.summarize_for_prompt(nil),
+      connected_accounts: [],
+      source_freshness: [],
+      projects: [],
+      active_agents: [],
+      defaults: %{}
+    }
+  end
+
+  defp empty_calendar_context do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    %{
+      window: %{
+        since: DateTime.to_iso8601(now),
+        until: DateTime.to_iso8601(DateTime.add(now, @calendar_context_forward_hours, :hour))
+      },
+      policy:
+        "Upcoming personal/family calendar events are first-class attention signals and outrank routine work.",
+      preferred_source: "none",
+      upcoming_events: [],
+      personal_events: [],
+      counts: %{upcoming: 0, personal: 0, local: 0, google: 0},
+      source_status: %{local: "unavailable", google: "unavailable"}
+    }
+  end
+
+  defp run_context_fetcher(key, fun) when is_function(fun, 0) do
+    started = System.monotonic_time(:millisecond)
+
+    try do
+      {:ok, key, fun.(), System.monotonic_time(:millisecond) - started}
+    rescue
+      exception ->
+        {:error, key, Exception.message(exception), System.monotonic_time(:millisecond) - started}
+    catch
+      kind, reason ->
+        {:error, key, "#{kind}: #{inspect(reason)}",
+         System.monotonic_time(:millisecond) - started}
+    end
+  end
+
+  defp context_fetch_failure(key, reason, elapsed_ms) do
+    %{
+      key: to_string(key),
+      reason: normalize_fetch_reason(reason),
+      elapsed_ms: elapsed_ms
+    }
+  end
+
+  defp maybe_note_slow_fetch(failures, key, elapsed_ms, timeout_ms) do
+    if timeout_ms > 0 and elapsed_ms > div(timeout_ms * 3, 4) do
+      [context_fetch_failure(key, "slow_fetch", elapsed_ms) | failures]
+    else
+      failures
+    end
+  end
+
+  defp context_fetch_diagnostics(elapsed_ms, timeout_ms, max_concurrency, failures) do
+    %{
+      status: if(failures == [], do: "ready", else: "degraded"),
+      elapsed_ms: elapsed_ms,
+      timeout_ms: timeout_ms,
+      max_concurrency: max_concurrency,
+      failure_count: length(failures),
+      failures: failures
+    }
+  end
+
+  defp emit_context_fetch_telemetry(diagnostics) do
+    :telemetry.execute(
+      [:maraithon, :telegram_assistant, :context_fetch],
+      %{
+        elapsed_ms: diagnostics.elapsed_ms,
+        failure_count: diagnostics.failure_count
+      },
+      %{
+        status: diagnostics.status,
+        timeout_ms: diagnostics.timeout_ms,
+        max_concurrency: diagnostics.max_concurrency
+      }
+    )
+  end
+
+  defp normalize_fetch_reason(:timeout), do: "timeout"
+  defp normalize_fetch_reason(reason) when is_binary(reason), do: reason
+  defp normalize_fetch_reason(reason), do: inspect(reason)
+
+  defp context_fetch_timeout_ms do
+    :maraithon
+    |> Application.get_env(__MODULE__, [])
+    |> Keyword.get(:context_fetch_timeout_ms, @default_context_fetch_timeout_ms)
+    |> positive_integer(@default_context_fetch_timeout_ms)
   end
 
   def prompt_snapshot(context) when is_map(context), do: context
@@ -773,6 +936,17 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp normalize_text(_value), do: ""
+
+  defp positive_integer(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp positive_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp positive_integer(_value, default), do: default
 
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
   defp blank?(nil), do: true
