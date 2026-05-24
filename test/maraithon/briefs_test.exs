@@ -243,9 +243,13 @@ defmodule Maraithon.BriefsTest do
     agent: agent
   } do
     assert BriefTodoReview.text_review_request?("Let's go through my todos one at a time")
-    assert BriefTodoReview.text_review_request?("List Todos")
+    refute BriefTodoReview.text_review_request?("List Todos")
     refute BriefTodoReview.text_review_request?("Add buy milk to my todo list")
     refute BriefTodoReview.text_review_request?("What's on my todo list?")
+    assert BriefTodoReview.text_review_intent("List Todos").intent == :show_list
+
+    assert BriefTodoReview.text_review_intent("Can you review my todos?").intent ==
+             :clarify_review
 
     {:ok, [first_todo, second_todo]} =
       Todos.upsert_many(user_id, [
@@ -299,6 +303,63 @@ defmodule Maraithon.BriefsTest do
     assert List.last(sends).text =~ "Todo 2 of 2"
     assert List.last(sends).text =~ second_todo.next_action
   end
+
+  test "ambiguous typed todo review requests ask before starting the action queue", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-clarify-review:first", "Reply to math tutor about Sunday"),
+        todo_attrs("briefs-clarify-review:second", "Confirm the grocery pickup window")
+      ])
+
+    {:ok, %Brief{} = _brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: clarify review",
+        "summary" => "Two todos need a decision.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:clarify-review",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    assert :ok =
+             TelegramAssistant.handle_inbound(%{
+               user_id: user_id,
+               chat_id: "777123",
+               text: "Can you review my todos?",
+               source_message_id: "text-review-ambiguous"
+             })
+
+    [question] = sent_messages()
+    assert question.text =~ "one at a time"
+    assert question.text =~ "just see the list"
+
+    start_button =
+      question.opts
+      |> Keyword.fetch!(:reply_markup)
+      |> Map.fetch!("inline_keyboard")
+      |> List.flatten()
+      |> Enum.find(&(&1["text"] == "One by One"))
+
+    assert start_button["callback_data"] == "brftd:latest:start"
+
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: "777123",
+               callback_id: "cb-clarified-start",
+               data: start_button["callback_data"]
+             })
+
+    sends = sent_messages()
+    assert length(sends) == 2
+    assert List.last(sends).text =~ "Todo 1 of 2"
+    assert List.last(sends).text =~ first_todo.next_action
+  end
+
+  defp todo_attrs(thread_id, title), do: todo_attrs(thread_id, title, [])
 
   defp todo_attrs(thread_id, title, overrides) when is_list(overrides) do
     defaults = %{

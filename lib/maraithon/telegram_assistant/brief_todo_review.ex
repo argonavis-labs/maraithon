@@ -16,6 +16,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   alias Maraithon.Todos.Todo
 
   @callback_prefix "brftd"
+  @latest_callback_id "latest"
   @review_key "todo_review"
   @open_statuses ["open", "snoozed"]
   @text_review_limit 12
@@ -23,41 +24,16 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
 
+  def text_review_intent(text) when is_binary(text) do
+    text
+    |> normalize_text()
+    |> classify_text_intent()
+  end
+
+  def text_review_intent(_text), do: %{intent: :none, confidence: 0.0, reason: :non_text}
+
   def text_review_request?(text) when is_binary(text) do
-    normalized =
-      text
-      |> String.downcase()
-      |> String.replace(~r/[^\p{L}\p{N}\s-]/u, " ")
-      |> String.replace(~r/\s+/, " ")
-      |> String.trim()
-
-    todo_request? =
-      Regex.match?(~r/\b(to-?dos?|tasks?|open loops?)\b/u, normalized)
-
-    direct_list_command? =
-      normalized in [
-        "list todos",
-        "list todo",
-        "list tasks",
-        "list task",
-        "list open loops",
-        "list open loop"
-      ]
-
-    review_action? =
-      Regex.match?(
-        ~r/\b(go through|walk through|work through|review|process|triage)\b/u,
-        normalized
-      )
-
-    one_at_a_time? =
-      Regex.match?(~r/\b(one at a time|1 at a time|one by one|next one|queue)\b/u, normalized)
-
-    creation_request? =
-      Regex.match?(~r/\b(add|create|make|new|save|remember|remind me)\b/u, normalized)
-
-    todo_request? and (direct_list_command? or review_action? or one_at_a_time?) and
-      not creation_request?
+    match?(%{intent: :start_review}, text_review_intent(text))
   end
 
   def text_review_request?(_text), do: false
@@ -65,17 +41,194 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   def handle_text_request(attrs) when is_map(attrs) do
     text = read_string(attrs, "text")
 
-    if text_review_request?(text) do
-      user_id = read_string(attrs, "user_id")
-      chat_id = read_id_string(attrs, "chat_id")
+    case pending_review_answer(attrs, text) do
+      :start ->
+        clear_pending_review_clarification(attrs)
 
-      start_latest_review(user_id, chat_id)
-    else
-      :ignored
+        user_id = read_string(attrs, "user_id")
+        chat_id = read_id_string(attrs, "chat_id")
+
+        start_latest_review(user_id, chat_id)
+
+      :list ->
+        clear_pending_review_clarification(attrs)
+
+        user_id = read_string(attrs, "user_id")
+        chat_id = read_id_string(attrs, "chat_id")
+
+        send_todo_list_summary(user_id, chat_id)
+
+      :cancel ->
+        clear_pending_review_clarification(attrs)
+        chat_id = read_id_string(attrs, "chat_id")
+        send_review_canceled(chat_id)
+
+      :unknown ->
+        handle_text_intent(attrs, text_review_intent(text))
     end
   end
 
   def handle_text_request(_attrs), do: :ignored
+
+  defp handle_text_intent(attrs, intent) do
+    case intent do
+      %{intent: :start_review} ->
+        user_id = read_string(attrs, "user_id")
+        chat_id = read_id_string(attrs, "chat_id")
+
+        start_latest_review(user_id, chat_id)
+
+      %{intent: :show_list} ->
+        user_id = read_string(attrs, "user_id")
+        chat_id = read_id_string(attrs, "chat_id")
+
+        send_todo_list_summary(user_id, chat_id)
+
+      %{intent: :clarify_review} = intent ->
+        ask_review_mode(attrs, intent)
+
+      _intent ->
+        :ignored
+    end
+  end
+
+  defp normalize_text(text) when is_binary(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[^\p{L}\p{N}\s'-]/u, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp classify_text_intent(""), do: %{intent: :none, confidence: 0.0, reason: :blank}
+
+  defp classify_text_intent(text) do
+    todo_subject? = todo_subject?(text)
+    sequential? = sequential_review_request?(text)
+    review? = review_request?(text)
+    direct_list? = direct_list_request?(text)
+    read_question? = todo_read_question?(text)
+    mutation? = todo_mutation_request?(text)
+
+    cond do
+      not todo_subject? ->
+        %{intent: :none, confidence: 0.0, reason: :not_todo_related}
+
+      mutation? and not sequential? ->
+        %{intent: :none, confidence: 0.92, reason: :todo_write_request}
+
+      sequential? ->
+        %{intent: :start_review, confidence: 0.95, reason: :sequential_review_request}
+
+      direct_list? ->
+        %{intent: :show_list, confidence: 0.9, reason: :direct_list_request}
+
+      read_question? ->
+        %{intent: :none, confidence: 0.88, reason: :todo_read_question}
+
+      review? ->
+        %{intent: :clarify_review, confidence: 0.72, reason: :review_mode_ambiguous}
+
+      true ->
+        %{intent: :none, confidence: 0.4, reason: :todo_related_but_not_review}
+    end
+  end
+
+  defp todo_subject?(text) do
+    Regex.match?(~r/\b(to-?dos?|tasks?|open loops?|action items?)\b/u, text)
+  end
+
+  defp sequential_review_request?(text) do
+    Regex.match?(
+      ~r/\b(one at a time|1 at a time|one by one|each one|next one|with buttons|action buttons)\b/u,
+      text
+    ) or
+      (review_request?(text) and
+         Regex.match?(~r/\b(start|let'?s|let us|walk|go|work|move|take|help me)\b/u, text))
+  end
+
+  defp review_request?(text) do
+    Regex.match?(
+      ~r/\b(review|triage|process|go through|go over|walk through|work through|clear|knock out|handle|decide on|make decisions? on)\b/u,
+      text
+    )
+  end
+
+  defp direct_list_request?(text) do
+    Regex.match?(
+      ~r/^(list|show|pull up|give me|send me|surface)\b.*\b(to-?dos?|tasks?|open loops?|action items?)\b/u,
+      text
+    )
+  end
+
+  defp todo_read_question?(text) do
+    Regex.match?(~r/\b(what'?s|what is|what are|which|anything|status of|overview of)\b/u, text) and
+      todo_subject?(text)
+  end
+
+  defp todo_mutation_request?(text) do
+    Regex.match?(
+      ~r/\b(add|create|make|new|save|remember|remind me|delete|remove|mark all|complete all|dismiss all|snooze all)\b/u,
+      text
+    )
+  end
+
+  defp pending_review_answer(attrs, text) do
+    if pending_review_clarification?(attrs) do
+      text
+      |> normalize_text()
+      |> classify_pending_review_answer()
+    else
+      :unknown
+    end
+  end
+
+  defp classify_pending_review_answer(text) do
+    cond do
+      Regex.match?(
+        ~r/\b(one by one|one at a time|1 at a time|triage|review|buttons|do that|yes|yep|start)\b/u,
+        text
+      ) ->
+        :start
+
+      Regex.match?(~r/\b(list|quick list|show|just show|overview)\b/u, text) ->
+        :list
+
+      Regex.match?(~r/\b(cancel|stop|never mind|nevermind|no)\b/u, text) ->
+        :cancel
+
+      true ->
+        :unknown
+    end
+  end
+
+  defp pending_review_clarification?(attrs) do
+    case Map.get(attrs, :conversation) || Map.get(attrs, "conversation") do
+      %{metadata: metadata} when is_map(metadata) ->
+        Map.get(metadata, "pending_todo_review_clarification") == true
+
+      _ ->
+        false
+    end
+  end
+
+  defp clear_pending_review_clarification(attrs) do
+    case Map.get(attrs, :conversation) || Map.get(attrs, "conversation") do
+      %Maraithon.TelegramConversations.Conversation{} = conversation ->
+        _ =
+          Maraithon.TelegramConversations.update_metadata(conversation, %{
+            "pending_clarification" => false,
+            "pending_todo_review_clarification" => false,
+            "last_clarifying_question" => nil,
+            "todo_review_clarification_reason" => nil
+          })
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   def list_button(%Brief{} = brief) do
     if reviewable?(brief) do
@@ -87,7 +240,10 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   def handle_callback(data) when is_map(data) do
     case parse_callback(read_string(data, "data", "")) do
-      {:ok, brief_id, "start"} ->
+      {:ok, :latest, action} when action in ["start", "list", "cancel"] ->
+        handle_latest_callback(data, action)
+
+      {:ok, brief_id, "start"} when is_binary(brief_id) ->
         start_review(data, brief_id)
 
       {:error, :invalid_callback} ->
@@ -128,6 +284,33 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     end
   end
 
+  defp handle_latest_callback(data, action) do
+    chat_id = read_id_string(data, "chat_id")
+    callback_id = read_string(data, "callback_id")
+
+    with chat_id when is_binary(chat_id) <- chat_id,
+         %{user_id: user_id} <-
+           ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
+      case action do
+        "start" ->
+          maybe_answer_callback(callback_id, "Sending the first todo")
+          start_latest_review(user_id, chat_id)
+
+        "list" ->
+          maybe_answer_callback(callback_id, "Sending a quick list")
+          send_todo_list_summary(user_id, chat_id)
+
+        "cancel" ->
+          maybe_answer_callback(callback_id, "Canceled")
+          :ok
+      end
+    else
+      _ ->
+        maybe_answer_callback(callback_id, "I couldn't match that to this chat.")
+        :ok
+    end
+  end
+
   defp start_latest_review(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
     case active_review_for_chat(user_id, chat_id) do
       %Brief{} = brief ->
@@ -148,6 +331,44 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp start_latest_review(_user_id, _chat_id), do: :ignored
+
+  defp send_todo_list_summary(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
+    todos =
+      user_id
+      |> Todos.list_open_for_user(limit: @text_review_limit)
+      |> Briefs.order_todo_digest_items(%Brief{metadata: %{}})
+
+    text =
+      case todos do
+        [] ->
+          "I don't see any open todos ready to review right now."
+
+        todos ->
+          lines =
+            todos
+            |> Enum.with_index(1)
+            |> Enum.map(fn {todo, index} -> "#{index}. #{safe(todo.title)}" end)
+            |> Enum.join("\n")
+
+          """
+          <b>Open todos</b>
+          #{lines}
+
+          Want to work through them with buttons? Tap One by One.
+          """
+          |> String.trim()
+      end
+
+    case TelegramResponder.send(chat_id, text,
+           parse_mode: "HTML",
+           reply_markup: maybe_review_choice_markup(todos)
+         ) do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp send_todo_list_summary(_user_id, _chat_id), do: :ignored
 
   defp start_review_for_brief(%Brief{} = brief, chat_id, opts \\ []) do
     todos = review_todos(brief)
@@ -314,6 +535,80 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       {:ok, _result} -> :ok
       {:error, _reason} -> :ok
     end
+  end
+
+  defp send_review_canceled(chat_id) when is_binary(chat_id) do
+    case TelegramResponder.send(chat_id, "Okay, I won't start a todo review.", parse_mode: "HTML") do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp send_review_canceled(_chat_id), do: :ignored
+
+  defp ask_review_mode(attrs, intent) do
+    user_id = read_string(attrs, "user_id")
+    chat_id = read_id_string(attrs, "chat_id")
+
+    with user_id when is_binary(user_id) <- user_id,
+         chat_id when is_binary(chat_id) <- chat_id do
+      maybe_mark_pending_clarification(attrs, intent)
+
+      text = """
+      Do you want to review your todos one at a time with action buttons, or just see the list?
+      """
+
+      case TelegramResponder.send(chat_id, String.trim(text),
+             parse_mode: "HTML",
+             reply_markup: review_mode_markup()
+           ) do
+        {:ok, _result} -> :ok
+        {:error, _reason} -> :ok
+      end
+    else
+      _ -> :ignored
+    end
+  end
+
+  defp maybe_mark_pending_clarification(attrs, intent) do
+    case Map.get(attrs, :conversation) || Map.get(attrs, "conversation") do
+      %Maraithon.TelegramConversations.Conversation{} = conversation ->
+        _ =
+          Maraithon.TelegramConversations.update_metadata(conversation, %{
+            "pending_clarification" => true,
+            "pending_todo_review_clarification" => true,
+            "last_clarifying_question" => "todo_review_mode",
+            "todo_review_clarification_reason" =>
+              Atom.to_string(Map.get(intent, :reason, :unknown))
+          })
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp review_mode_markup do
+    %{
+      "inline_keyboard" => [
+        [
+          %{"text" => "One by One", "callback_data" => latest_callback_data("start")},
+          %{"text" => "Quick List", "callback_data" => latest_callback_data("list")}
+        ],
+        [%{"text" => "Cancel", "callback_data" => latest_callback_data("cancel")}]
+      ]
+    }
+  end
+
+  defp maybe_review_choice_markup([]), do: nil
+
+  defp maybe_review_choice_markup(_todos) do
+    %{
+      "inline_keyboard" => [
+        [%{"text" => "One by One", "callback_data" => latest_callback_data("start")}]
+      ]
+    }
   end
 
   defp summary_text(%Brief{} = brief) do
@@ -515,17 +810,33 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp review_metadata(_brief), do: %{}
 
   defp parse_callback(value) when is_binary(value) do
-    case Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(start)$/i, value,
-           capture: :all_but_first
-         ) do
-      [brief_id, action] -> {:ok, brief_id, String.downcase(action)}
-      _ -> {:error, :invalid_callback}
+    cond do
+      match =
+          Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(start)$/i, value,
+            capture: :all_but_first
+          ) ->
+        [brief_id, action] = match
+        {:ok, brief_id, String.downcase(action)}
+
+      match =
+          Regex.run(
+            ~r/^#{@callback_prefix}:#{@latest_callback_id}:(start|list|cancel)$/i,
+            value,
+            capture: :all_but_first
+          ) ->
+        [action] = match
+        {:ok, :latest, String.downcase(action)}
+
+      true ->
+        {:error, :invalid_callback}
     end
   end
 
   defp parse_callback(_value), do: {:error, :invalid_callback}
 
   defp callback_data(brief_id, action), do: "#{@callback_prefix}:#{brief_id}:#{action}"
+
+  defp latest_callback_data(action), do: "#{@callback_prefix}:#{@latest_callback_id}:#{action}"
 
   defp maybe_answer_callback(callback_id, text)
        when is_binary(callback_id) and is_binary(text) and text != "" do

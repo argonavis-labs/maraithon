@@ -989,8 +989,17 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "natural-language todo review requests must enter the fast local review flow"
       )
       |> require_finding(
-        BriefTodoReview.text_review_request?("List todos"),
-        "the List Todos button label must also work as a chat command"
+        not BriefTodoReview.text_review_request?("List todos"),
+        "typed List Todos must not be a magic phrase that starts the review queue"
+      )
+      |> require_finding(
+        BriefTodoReview.text_review_intent("List todos").intent == :show_list,
+        "typed List Todos should be interpreted as a list request, not a hidden command"
+      )
+      |> require_finding(
+        BriefTodoReview.text_review_intent("Can you review my todos?").intent ==
+          :clarify_review,
+        "ambiguous todo review requests must ask whether the user wants one-by-one triage or a list"
       )
       |> require_finding(
         not BriefTodoReview.text_review_request?("Add buy milk to my todo list"),
