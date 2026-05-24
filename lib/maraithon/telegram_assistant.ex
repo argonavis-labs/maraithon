@@ -88,7 +88,10 @@ defmodule Maraithon.TelegramAssistant do
 
   def handle_inbound(attrs) when is_map(attrs) do
     if enabled?() do
-      Runner.run_inbound(attrs)
+      case BriefTodoReview.handle_text_request(attrs) do
+        :ok -> :ok
+        :ignored -> Runner.run_inbound(attrs)
+      end
     else
       {:fallback, :disabled}
     end

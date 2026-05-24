@@ -7,6 +7,8 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
 
@@ -22,6 +24,7 @@ defmodule Maraithon.BriefsTest do
       :maraithon,
       :telegram_assistant,
       Keyword.merge(original_assistant,
+        telegram_full_chat_enabled: true,
         telegram_unified_push_enabled: false,
         proactive_delivery_planner_enabled: false
       )
@@ -190,7 +193,7 @@ defmodule Maraithon.BriefsTest do
     assert button["callback_data"] =~ "brftd:"
 
     :ok =
-      Maraithon.TelegramAssistant.BriefTodoReview.handle_callback(%{
+      BriefTodoReview.handle_callback(%{
         chat_id: 777_123,
         callback_id: "cb-list",
         data: button["callback_data"]
@@ -233,6 +236,68 @@ defmodule Maraithon.BriefsTest do
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
     assert get_in(updated_brief.metadata, ["todo_review", "summary", "done_count"]) == 1
+  end
+
+  test "telegram text request starts latest todo review and advances after each action", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert BriefTodoReview.text_review_request?("Let's go through my todos one at a time")
+    assert BriefTodoReview.text_review_request?("List Todos")
+    refute BriefTodoReview.text_review_request?("Add buy milk to my todo list")
+    refute BriefTodoReview.text_review_request?("What's on my todo list?")
+
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-text-review:first", "Reply to school about the pickup form",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z"
+        ),
+        todo_attrs("briefs-text-review:second", "Confirm the Sunday prep notes",
+          source_occurred_at: "2026-04-02T15:00:00Z"
+        )
+      ])
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: text review",
+        "summary" => "Two todos need a one-at-a-time review.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:text-review",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    assert :ok =
+             TelegramAssistant.handle_inbound(%{
+               user_id: user_id,
+               chat_id: "777123",
+               text: "Let's go through my todos one at a time",
+               source_message_id: "text-review-request"
+             })
+
+    sends = sent_messages()
+    assert length(sends) == 1
+    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ first_todo.next_action
+
+    updated_brief = Repo.get!(Brief, brief.id)
+    assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "active"
+    assert get_in(updated_brief.metadata, ["todo_review", "current_todo_id"]) == first_todo.id
+
+    :ok =
+      TodoActions.handle_callback(%{
+        chat_id: "777123",
+        message_id: "todo-text-1",
+        callback_id: "cb-text-done",
+        data: "tgtodo:#{first_todo.id}:done"
+      })
+
+    sends = sent_messages()
+    assert length(sends) == 2
+    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ second_todo.next_action
   end
 
   defp todo_attrs(thread_id, title, overrides) when is_list(overrides) do

@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   import Ecto.Query
 
+  alias Maraithon.Agents
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
@@ -17,9 +18,64 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   @callback_prefix "brftd"
   @review_key "todo_review"
   @open_statuses ["open", "snoozed"]
+  @text_review_limit 12
 
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
+
+  def text_review_request?(text) when is_binary(text) do
+    normalized =
+      text
+      |> String.downcase()
+      |> String.replace(~r/[^\p{L}\p{N}\s-]/u, " ")
+      |> String.replace(~r/\s+/, " ")
+      |> String.trim()
+
+    todo_request? =
+      Regex.match?(~r/\b(to-?dos?|tasks?|open loops?)\b/u, normalized)
+
+    direct_list_command? =
+      normalized in [
+        "list todos",
+        "list todo",
+        "list tasks",
+        "list task",
+        "list open loops",
+        "list open loop"
+      ]
+
+    review_action? =
+      Regex.match?(
+        ~r/\b(go through|walk through|work through|review|process|triage)\b/u,
+        normalized
+      )
+
+    one_at_a_time? =
+      Regex.match?(~r/\b(one at a time|1 at a time|one by one|next one|queue)\b/u, normalized)
+
+    creation_request? =
+      Regex.match?(~r/\b(add|create|make|new|save|remember|remind me)\b/u, normalized)
+
+    todo_request? and (direct_list_command? or review_action? or one_at_a_time?) and
+      not creation_request?
+  end
+
+  def text_review_request?(_text), do: false
+
+  def handle_text_request(attrs) when is_map(attrs) do
+    text = read_string(attrs, "text")
+
+    if text_review_request?(text) do
+      user_id = read_string(attrs, "user_id")
+      chat_id = read_id_string(attrs, "chat_id")
+
+      start_latest_review(user_id, chat_id)
+    else
+      :ignored
+    end
+  end
+
+  def handle_text_request(_attrs), do: :ignored
 
   def list_button(%Brief{} = brief) do
     if reviewable?(brief) do
@@ -60,31 +116,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
          %Brief{} = brief <- Repo.get(Brief, brief_id),
          true <- brief.user_id == user_id do
-      todos = review_todos(brief)
-
-      review =
-        %{
-          "status" => "active",
-          "chat_id" => chat_id,
-          "started_at" => now_iso8601(),
-          "todo_ids" => Enum.map(todos, & &1.id),
-          "reviewed" => []
-        }
-
-      brief = put_review!(brief, review)
-
-      case next_unreviewed_open_todo(brief) do
-        {%Todo{} = todo, position, total} ->
-          brief = set_current_todo!(brief, todo.id)
-          maybe_answer_callback(callback_id, "Sending #{position}/#{total}")
-          send_review_todo(chat_id, brief, todo, position, total)
-
-        nil ->
-          brief = complete_review!(brief)
-          maybe_answer_callback(callback_id, "No open todos")
-          send_summary(chat_id, brief)
-      end
-
+      start_review_for_brief(brief, chat_id, callback_id: callback_id)
       :ok
     else
       {:error, :invalid_callback} ->
@@ -93,6 +125,66 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       _ ->
         maybe_answer_callback(callback_id, "I couldn't open that todo list.")
         :ok
+    end
+  end
+
+  defp start_latest_review(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
+    case active_review_for_chat(user_id, chat_id) do
+      %Brief{} = brief ->
+        resume_review(brief, chat_id)
+        :ok
+
+      nil ->
+        case latest_reviewable_brief(user_id) || build_open_todo_review_brief(user_id) do
+          %Brief{} = brief ->
+            start_review_for_brief(brief, chat_id)
+            :ok
+
+          nil ->
+            send_no_todos(chat_id)
+            :ok
+        end
+    end
+  end
+
+  defp start_latest_review(_user_id, _chat_id), do: :ignored
+
+  defp start_review_for_brief(%Brief{} = brief, chat_id, opts \\ []) do
+    todos = review_todos(brief)
+
+    review =
+      %{
+        "status" => "active",
+        "chat_id" => chat_id,
+        "started_at" => now_iso8601(),
+        "todo_ids" => Enum.map(todos, & &1.id),
+        "reviewed" => []
+      }
+
+    brief = put_review!(brief, review)
+
+    case next_unreviewed_open_todo(brief) do
+      {%Todo{} = todo, position, total} ->
+        brief = set_current_todo!(brief, todo.id)
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "Sending #{position}/#{total}")
+        send_review_todo(chat_id, brief, todo, position, total)
+
+      nil ->
+        brief = complete_review!(brief)
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open todos")
+        send_summary(chat_id, brief)
+    end
+  end
+
+  defp resume_review(%Brief{} = brief, chat_id) do
+    case next_unreviewed_open_todo(brief) do
+      {%Todo{} = todo, position, total} ->
+        brief = set_current_todo!(brief, todo.id)
+        send_review_todo(chat_id, brief, todo, position, total)
+
+      nil ->
+        brief = complete_review!(brief)
+        send_summary(chat_id, brief)
     end
   end
 
@@ -115,6 +207,20 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     :ok
   end
 
+  defp active_review_for_chat(user_id, chat_id) do
+    Brief
+    |> where([brief], brief.user_id == ^user_id)
+    |> order_by([brief], desc: brief.updated_at, desc: brief.inserted_at)
+    |> limit(30)
+    |> Repo.all()
+    |> Enum.find(fn brief ->
+      review = review_metadata(brief)
+
+      read_string(review, "status") == "active" and
+        read_string(review, "chat_id") == chat_id
+    end)
+  end
+
   defp active_review_for(user_id, chat_id, todo_id) do
     Brief
     |> where([brief], brief.user_id == ^user_id)
@@ -128,6 +234,56 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         read_string(review, "chat_id") == chat_id and
         read_string(review, "current_todo_id") == todo_id
     end)
+  end
+
+  defp latest_reviewable_brief(user_id) do
+    Brief
+    |> where([brief], brief.user_id == ^user_id)
+    |> order_by([brief],
+      desc_nulls_last: brief.sent_at,
+      desc: brief.updated_at,
+      desc: brief.inserted_at
+    )
+    |> limit(50)
+    |> Repo.all()
+    |> Enum.find(fn brief -> linked_todo_ids(brief) != [] and review_todos(brief) != [] end)
+  end
+
+  defp build_open_todo_review_brief(user_id) do
+    todos =
+      user_id
+      |> Todos.list_open_for_user(limit: @text_review_limit)
+      |> Briefs.order_todo_digest_items(%Brief{metadata: %{}})
+
+    with [_ | _] <- todos,
+         agent_id when is_binary(agent_id) <- latest_agent_id(user_id),
+         {:ok, brief} <-
+           Briefs.record(user_id, agent_id, %{
+             "cadence" => "check_in",
+             "title" => "Open todo review",
+             "summary" => "Review open todos one at a time.",
+             "body" => "Natural-language Telegram todo review queue.",
+             "scheduled_for" => now_iso8601(),
+             "dedupe_key" => "telegram_todo_review:#{Ecto.UUID.generate()}",
+             "status" => "sent",
+             "metadata" => %{
+               "origin" => "telegram_text_request",
+               "linked_todo_ids" => Enum.map(todos, & &1.id)
+             }
+           }) do
+      brief
+    else
+      _ -> nil
+    end
+  end
+
+  defp latest_agent_id(user_id) do
+    Agents.list_agents(user_id: user_id)
+    |> List.first()
+    |> case do
+      %{id: id} when is_binary(id) -> id
+      _ -> nil
+    end
   end
 
   defp send_review_todo(chat_id, %Brief{} = _brief, %Todo{} = todo, position, total) do
@@ -144,6 +300,15 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp send_summary(chat_id, %Brief{} = brief) do
     text = summary_text(brief)
+
+    case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp send_no_todos(chat_id) do
+    text = "I don't see any open todos ready to review right now."
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok

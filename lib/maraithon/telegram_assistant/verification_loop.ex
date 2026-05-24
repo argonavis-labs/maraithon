@@ -37,6 +37,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   alias Maraithon.TelegramAssistant.{
     Client.LLMJson,
+    BriefTodoReview,
     ConnectedContextPreflight,
     Context,
     ModelRouting,
@@ -179,6 +180,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :todo_surface_quality_contract,
+        kind: :static
+      },
+      %{
+        id: :todo_review_text_request_contract,
         kind: :static
       },
       %{
@@ -968,6 +973,33 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         {:error, reason} ->
           ["todo id lookup must not raise on external source ids: #{reason}"]
       end
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :todo_review_text_request_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    findings =
+      []
+      |> require_finding(
+        BriefTodoReview.text_review_request?("Let's go through my todos one at a time"),
+        "natural-language todo review requests must enter the fast local review flow"
+      )
+      |> require_finding(
+        BriefTodoReview.text_review_request?("List todos"),
+        "the List Todos button label must also work as a chat command"
+      )
+      |> require_finding(
+        not BriefTodoReview.text_review_request?("Add buy milk to my todo list"),
+        "todo creation requests must still route to the normal assistant"
+      )
+      |> require_finding(
+        not BriefTodoReview.text_review_request?("What's on my todo list?"),
+        "ordinary todo read questions must still route to the normal assistant"
+      )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
   end
