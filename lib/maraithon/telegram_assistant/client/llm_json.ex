@@ -17,6 +17,9 @@ defmodule Maraithon.TelegramAssistant.Client.LLMJson do
     :temperature,
     :model_fallbacks,
     :model_failover_max_attempts,
+    :model_busy_max_retries,
+    :model_retry_base_delay_ms,
+    :model_retry_max_delay_ms,
     :llm_complete
   ]
 
