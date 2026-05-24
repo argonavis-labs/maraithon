@@ -545,7 +545,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       |> candidate_structured_data()
       |> Map.get("message_class")
 
-    if message_class == "todo_digest" and todo_ids != [] do
+    if candidate.source != "brief" and message_class == "todo_digest" and todo_ids != [] do
       candidate.user_id
       |> Todos.list_by_ids(todo_ids, statuses: ["open", "snoozed"])
       |> Enum.reduce(%{delivered: 0, failed: 0}, fn todo, acc ->

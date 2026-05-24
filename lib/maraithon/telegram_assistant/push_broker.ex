@@ -12,12 +12,8 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramConversations
-  alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
-  alias Maraithon.Todos
-  alias Maraithon.Todos.SurfaceQuality
 
   @default_push_limit_per_hour 3
 
@@ -526,31 +522,9 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
                |> Map.put("brief_cadence", brief.cadence),
              telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
            }) do
-        {:ok, %{decision: "sent_now", message_id: message_id, conversation_id: conversation_id}} ->
-          case load_conversation(conversation_id) do
-            %Conversation{} = conversation ->
-              case send_todo_push_messages(conversation, brief, todos) do
-                :ok ->
-                  mark_brief_sent(brief, message_id)
-                  :ok
-
-                {:error, reason} ->
-                  brief
-                  |> Ecto.Changeset.change(%{
-                    status: "sent",
-                    sent_at: DateTime.utc_now(),
-                    provider_message_id: message_id,
-                    error_message: "partial_todo_delivery_failed: #{inspect(reason)}"
-                  })
-                  |> Repo.update()
-
-                  :ok
-              end
-
-            nil ->
-              mark_brief_sent(brief, message_id)
-              :ok
-          end
+        {:ok, %{decision: "sent_now", message_id: message_id}} ->
+          mark_brief_sent(brief, message_id)
+          :ok
 
         {:ok, %{decision: decision}} when decision in ["suppressed", "merged", "queued_digest"] ->
           :ok
@@ -561,47 +535,6 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       end
     end
   end
-
-  defp send_todo_push_messages(%Conversation{} = conversation, %Brief{} = brief, todos) do
-    Enum.reduce_while(todos, conversation, fn todo, acc_conversation ->
-      payload =
-        TodoActions.telegram_payload(todo,
-          prefix_text: Briefs.todo_digest_prefix_text(brief, todo)
-        )
-
-      case TelegramAssistant.send_turn(
-             acc_conversation,
-             acc_conversation.chat_id,
-             payload.text,
-             send_mode: :send,
-             turn_kind: "assistant_push",
-             origin_type: "brief",
-             origin_id: brief.id,
-             structured_data: %{
-               "message_class" => "todo_item",
-               "brief_cadence" => brief.cadence,
-               "linked_todo" => Todos.serialize_for_prompt(todo),
-               "surface_quality" => SurfaceQuality.assess(todo)
-             },
-             telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
-           ) do
-        {:ok, updated_conversation, _turn, _telegram_result} ->
-          {:cont, updated_conversation}
-
-        {:error, reason} ->
-          {:halt, {:error, reason}}
-      end
-    end)
-    |> case do
-      %Conversation{} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp load_conversation(conversation_id) when is_binary(conversation_id),
-    do: Repo.get(Conversation, conversation_id)
-
-  defp load_conversation(_conversation_id), do: nil
 
   defp mark_brief_sent(%Brief{} = brief, message_id) do
     brief

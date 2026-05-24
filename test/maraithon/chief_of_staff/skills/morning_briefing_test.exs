@@ -358,7 +358,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
              "chief_of_staff_morning_briefing"
   end
 
-  test "invalid model output records an explicit generation error instead of a heuristic fallback",
+  test "invalid model output records a compact source-backed fallback briefing",
        %{
          user_id: user_id,
          agent: agent
@@ -394,27 +394,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    {:emit, {:brief_generation_failed, payload}, _state} =
+    {:emit, {:briefs_recorded, payload}, _state} =
       MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
 
-    assert payload.generation_mode == "error"
+    assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "model_response_invalid"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
 
-    assert brief.title == "Morning briefing generation failed"
+    assert brief.title == "Morning briefing - 2026-05-07"
     assert brief.status == "pending"
     assert brief.error_message =~ "model_response_invalid"
-    assert brief.metadata["generation_mode"] == "error"
+    assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.metadata["error_message"] =~ "model_response_invalid"
-    assert brief.body =~ "No heuristic or keyword-based fallback was used."
-    refute brief.body =~ "## Inbox"
-    refute brief.body =~ "## Slack"
-    refute brief.body =~ "## News"
-    refute brief.body =~ "Notify Justin Dean"
+    assert brief.body =~ "## Source Status"
+    assert brief.body =~ "Compact mode used because full model synthesis did not finish"
   end
 
-  test "model provider errors record an explicit generation error", %{
+  test "model provider errors record a compact source-backed fallback briefing", %{
     user_id: user_id,
     agent: agent
   } do
@@ -438,7 +435,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
 
-    {:emit, {:brief_generation_failed, payload}, _state} =
+    {:emit, {:briefs_recorded, payload}, _state} =
       MorningBriefing.handle_effect_error(
         :llm_call,
         {:incomplete_response, %{"reason" => "max_output_tokens"}},
@@ -446,18 +443,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         context
       )
 
-    assert payload.generation_mode == "error"
+    assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "max_output_tokens"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning briefing generation failed"
+    assert brief.title == "Morning briefing - 2026-05-07"
     assert brief.error_message =~ "max_output_tokens"
     assert brief.metadata["llm_finish_reason"] == "error"
     assert brief.metadata["max_tokens_used"] == 16_000
     assert brief.metadata["reasoning_effort_used"] == "high"
     assert brief.metadata["llm_request"]["max_tokens"] == 16_000
     assert brief.metadata["llm_request"]["reasoning_effort"] == "high"
-    assert brief.body =~ "No heuristic or keyword-based fallback was used."
+    assert brief.metadata["generation_mode"] == "source_fallback"
+    assert brief.body =~ "## Source Status"
+    assert brief.body =~ "Compact mode used because full model synthesis did not finish"
   end
 
   test "lets skill config override the LLM budget while capping risky intelligence", %{

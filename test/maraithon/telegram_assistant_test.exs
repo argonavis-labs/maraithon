@@ -1591,7 +1591,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert turn.origin_id == delivery.id
   end
 
-  test "check-in briefs deliver an intro plus one push card per todo", %{
+  test "check-in briefs deliver an intro with a List Todos review button", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1628,26 +1628,16 @@ defmodule Maraithon.TelegramAssistantTest do
       telegram_events()
       |> Enum.filter(&(&1.type == :send))
 
-    assert length(sends) == 3
-    [intro, first_todo_message, second_todo_message] = sends
+    assert length(sends) == 1
+    [intro] = sends
 
     assert intro.text =~ "<b>Chief of staff check-in</b>"
     assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
     assert intro.text =~ "Superseded by todo delivery."
 
-    refute first_todo_message.text =~ "New Today"
-    assert first_todo_message.text =~ "Reply in-thread and close the loop."
-    refute first_todo_message.text =~ "Reply to Charlie about the budget"
-    refute first_todo_message.text =~ "Maraithon Todo"
-    refute first_todo_message.text =~ "About:"
-    refute second_todo_message.text =~ "Still Open"
-    assert second_todo_message.text =~ "Reply in-thread and close the loop."
-    refute second_todo_message.text =~ "Confirm the old shipping ETA"
-    refute second_todo_message.text =~ "Maraithon Todo"
-    refute second_todo_message.text =~ "About:"
-
-    keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Dismiss"))
+    keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "List Todos"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
 
     updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
     assert updated_brief.status == "sent"
@@ -1668,17 +1658,11 @@ defmodule Maraithon.TelegramAssistantTest do
           order_by: [asc: turn.inserted_at]
       )
 
-    assert Enum.map(turns, & &1.turn_kind) == [
-             "assistant_push",
-             "assistant_push",
-             "assistant_push"
-           ]
-
-    assert get_in(Enum.at(turns, 1).structured_data, ["linked_todo", "id"]) == new_todo.id
-    assert get_in(Enum.at(turns, 2).structured_data, ["linked_todo", "id"]) == older_todo.id
+    assert Enum.map(turns, & &1.turn_kind) == ["assistant_push"]
+    assert get_in(hd(turns).structured_data, ["todo_ids"]) == [new_todo.id, older_todo.id]
   end
 
-  test "end-of-day briefs deliver an intro plus one push card per todo", %{
+  test "end-of-day briefs deliver an intro with a List Todos review button", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1715,27 +1699,16 @@ defmodule Maraithon.TelegramAssistantTest do
       telegram_events()
       |> Enum.filter(&(&1.type == :send))
 
-    assert length(sends) == 3
-    [intro, first_todo_message, second_todo_message] = sends
+    assert length(sends) == 1
+    [intro] = sends
 
     assert intro.text =~ "<b>End-of-day debt</b>"
     assert intro.text =~ "<b>End-of-day debt: 2 items still open</b>"
     assert intro.text =~ "Superseded by todo delivery."
 
-    refute first_todo_message.text =~ "Opened Today"
-    assert first_todo_message.text =~ "Reply in-thread and close the loop."
-    refute first_todo_message.text =~ "Reply to David about the laptop"
-    refute first_todo_message.text =~ "Maraithon Todo"
-    refute first_todo_message.text =~ "About:"
-    refute second_todo_message.text =~ "Still Open Tonight"
-    assert second_todo_message.text =~ "Reply in-thread and close the loop."
-    refute second_todo_message.text =~ "Close the Cowrie status loop"
-    refute second_todo_message.text =~ "Maraithon Todo"
-    refute second_todo_message.text =~ "About:"
-
-    keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Done"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Dismiss"))
+    keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "List Todos"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
   end
 
   test "medium runs emit native typing without a progress note" do

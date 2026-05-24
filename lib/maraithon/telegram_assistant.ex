@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramAssistant.{
     LivenessSession,
     LivenessSupervisor,
+    BriefTodoReview,
     PreparedAction,
     Proactive,
     ProactiveQueue,
@@ -179,7 +180,10 @@ defmodule Maraithon.TelegramAssistant do
         :ok
 
       {:error, :invalid_callback} ->
-        TodoActions.handle_callback(data)
+        case BriefTodoReview.handle_callback(data) do
+          :ok -> :ok
+          _ -> TodoActions.handle_callback(data)
+        end
     end
   end
 

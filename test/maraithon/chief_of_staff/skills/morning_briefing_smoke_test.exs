@@ -227,7 +227,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert todo.title == "Prep for Dawn Nguyen"
     assert todo.metadata["origin_skill_id"] == "morning_briefing"
 
-    [message, todo_card] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    [message | _] = messages = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
 
     assert message.chat_id == "444123"
     assert message.opts[:parse_mode] == "HTML"
@@ -236,10 +236,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     refute message.text =~ "## Today's Schedule"
     refute message.text =~ "**Prep"
 
-    assert todo_card.chat_id == "444123"
-    assert todo_card.opts[:parse_mode] == "HTML"
-    assert todo_card.text =~ "<b>Review Dawn and Kiln Studio context before the meeting.</b>"
-    assert todo_card.text =~ "I found this in Calendar."
-    assert get_in(todo_card.opts, [:reply_markup, "inline_keyboard"]) != nil
+    refute Enum.any?(messages, &String.contains?(&1.text, "Review Dawn and Kiln Studio context"))
+
+    keyboard = get_in(List.last(messages).opts, [:reply_markup, "inline_keyboard"]) || []
+    assert keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "List Todos"))
+    assert diagnostics.telegram_delivery.todo_review_brief_id
   end
 end

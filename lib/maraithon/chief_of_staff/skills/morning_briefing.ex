@@ -25,7 +25,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   alias Maraithon.Memory
   alias Maraithon.Spend
   alias Maraithon.OpenLoops
-  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
   alias Maraithon.Tracing
 
@@ -792,6 +791,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
               case parsed do
                 {:ok, brief} ->
                   finalize_smoke_brief(
+                    agent.id,
                     user_id,
                     brief,
                     brief_input,
@@ -811,6 +811,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                     brief_or_error_notice({:error, reason}, response, brief_input)
 
                   finalize_smoke_brief(
+                    agent.id,
                     user_id,
                     brief,
                     brief_input,
@@ -838,6 +839,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
                 )
 
               finalize_smoke_brief(
+                agent.id,
                 user_id,
                 brief,
                 brief_input,
@@ -864,6 +866,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp finalize_smoke_brief(
+         agent_id,
          user_id,
          brief,
          brief_input,
@@ -891,7 +894,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     {delivery_result, delivery_elapsed_ms} =
       if Keyword.get(opts, :send, false) do
-        timed(fn -> deliver_smoke_brief(user_id, brief, diagnostics, todo_result) end)
+        timed(fn -> deliver_smoke_brief(agent_id, user_id, brief, diagnostics, todo_result) end)
       else
         {{:ok, :not_sent}, 0}
       end
@@ -978,7 +981,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp deliver_smoke_brief(user_id, brief, _diagnostics, todo_result) do
+  defp deliver_smoke_brief(agent_id, user_id, brief, _diagnostics, todo_result) do
     case ConnectedAccounts.telegram_destination(user_id) do
       nil ->
         {:error, :no_telegram_destination}
@@ -992,12 +995,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             other -> to_string(other)
           end
 
+        {review_brief, reply_markup} = smoke_review_brief(agent_id, user_id, brief, todo_result)
+
         with {:ok, result} <-
                brief
                |> smoke_brief_telegram_chunks()
-               |> send_telegram_html_chunks(chat_id),
-             {:ok, todo_messages} <- send_smoke_todo_messages(chat_id, todo_result) do
-          {:ok, Map.put(result, "todo_messages", todo_messages)}
+               |> send_telegram_html_chunks(chat_id, reply_markup) do
+          _ = mark_smoke_review_brief_sent(review_brief, result)
+          {:ok, Map.put(result, "todo_review_brief_id", review_brief_id(review_brief))}
         else
           {:error, reason} -> {:error, reason}
         end
@@ -1017,10 +1022,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.map(&Maraithon.TelegramMarkdown.to_html/1)
   end
 
-  defp send_telegram_html_chunks(chunks, chat_id) do
+  defp send_telegram_html_chunks(chunks, chat_id, reply_markup) do
+    last_index = max(length(chunks) - 1, 0)
+
     chunks
-    |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, message_ids} ->
-      case Maraithon.TelegramResponder.send(chat_id, chunk, parse_mode: "HTML") do
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {chunk, index}, {:ok, message_ids} ->
+      opts =
+        [parse_mode: "HTML"]
+        |> maybe_put_keyword(:reply_markup, if(index == last_index, do: reply_markup, else: nil))
+
+      case Maraithon.TelegramResponder.send(chat_id, chunk, opts) do
         {:ok, result} ->
           {:cont, {:ok, [read_message_id(result) | message_ids]}}
 
@@ -1037,24 +1049,72 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp send_smoke_todo_messages(chat_id, {:ok, result}) when is_map(result) do
+  defp smoke_review_brief(agent_id, user_id, brief, {:ok, result})
+       when is_binary(agent_id) and is_binary(user_id) and is_map(result) do
     todos = Map.get(result, :todos, [])
 
-    todos
-    |> Enum.reduce_while({:ok, 0}, fn todo, {:ok, count} ->
-      payload = TodoActions.telegram_payload(todo)
+    if todos == [] do
+      {nil, nil}
+    else
+      attrs = %{
+        "cadence" => "morning",
+        "title" => brief |> read_string("title", "Morning briefing") |> truncate_text(180),
+        "summary" =>
+          brief
+          |> read_string("summary", "Review the morning briefing todos.")
+          |> truncate_text(500),
+        "body" => brief |> read_string("body", "") |> truncate_text(3_900),
+        "scheduled_for" => DateTime.utc_now() |> DateTime.to_iso8601(),
+        "dedupe_key" => "morning_briefing:manual:#{Ecto.UUID.generate()}",
+        "status" => "sent",
+        "metadata" => %{
+          "origin_skill_id" => id(),
+          "manual_smoke_test" => true,
+          "source_backed" => true
+        }
+      }
 
-      case Maraithon.TelegramResponder.send(chat_id, payload.text,
-             parse_mode: "HTML",
-             reply_markup: payload.reply_markup
-           ) do
-        {:ok, _result} -> {:cont, {:ok, count + 1}}
-        {:error, reason} -> {:halt, {:error, reason}}
+      with {:ok, brief_record} <- Briefs.record(user_id, agent_id, attrs),
+           {:ok, linked_brief} <- Briefs.attach_linked_todos(brief_record, todos) do
+        payload = Briefs.telegram_payload(linked_brief)
+        {linked_brief, payload.reply_markup}
+      else
+        _ -> {nil, nil}
       end
-    end)
+    end
   end
 
-  defp send_smoke_todo_messages(_chat_id, _todo_result), do: {:ok, 0}
+  defp smoke_review_brief(_agent_id, _user_id, _brief, _todo_result), do: {nil, nil}
+
+  defp mark_smoke_review_brief_sent(nil, _result), do: :ok
+
+  defp mark_smoke_review_brief_sent(brief, %{"message_ids" => [message_id | _]}) do
+    _ = Briefs.mark_sent(brief, message_id)
+    :ok
+  end
+
+  defp mark_smoke_review_brief_sent(brief, result) when is_map(result) do
+    _ = Briefs.mark_sent(brief, read_message_id(result))
+    :ok
+  end
+
+  defp review_brief_id(nil), do: nil
+  defp review_brief_id(%Maraithon.Briefs.Brief{id: id}), do: id
+
+  defp maybe_put_keyword(keyword, _key, nil), do: keyword
+  defp maybe_put_keyword(keyword, key, value), do: Keyword.put(keyword, key, value)
+
+  defp truncate_text(value, max_length) when is_binary(value) and is_integer(max_length) do
+    if String.length(value) > max_length do
+      value
+      |> String.slice(0, max_length)
+      |> String.trim()
+    else
+      value
+    end
+  end
+
+  defp truncate_text(value, _max_length), do: value
 
   defp markdown_chunks(text, limit) when is_binary(text) do
     text
@@ -1602,7 +1662,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "active_waiting_business_objectives_before_intros_and_meetings",
         "stale_work_framed_as_decision_not_urgent_dump",
         "person_company_relationship_context_for_non-obvious_people",
-        "structured_todos_delivered_as_individual_telegram_cards"
+        "structured_todos_available_behind_list_todos_button_and_sent_one_at_a_time"
       ]
     }
 
@@ -1996,6 +2056,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       chunks: Map.get(result, "chunks", 0),
       message_ids: Map.get(result, "message_ids", [])
     }
+    |> maybe_put(:todo_review_brief_id, Map.get(result, "todo_review_brief_id"))
   end
 
   defp delivery_event_payload({:ok, :not_sent}), do: %{status: "not_sent"}

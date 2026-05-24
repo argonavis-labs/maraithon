@@ -11,7 +11,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.TodoActions
+  alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Travel
@@ -184,6 +184,10 @@ defmodule Maraithon.Briefs do
     }
   end
 
+  def mark_sent(%Brief{} = brief, message_id \\ nil) do
+    mark_fallback_sent(brief, message_id)
+  end
+
   def todo_digest_brief?(%Brief{metadata: metadata}) when is_map(metadata) do
     metadata
     |> fetch_attr("linked_todo_ids")
@@ -233,7 +237,7 @@ defmodule Maraithon.Briefs do
     #{greeting}
 
     #{detail_line}
-    I'm sending them one by one so you can mark each done, important, not important, or dismiss it.
+    Tap List Todos on the brief and I'll send them one by one so you can mark each done, important, not important, or dismiss it.
     """
     |> String.trim()
   end
@@ -283,41 +287,17 @@ defmodule Maraithon.Briefs do
   end
 
   defp send_fallback_brief(%Brief{} = brief, destination) do
-    todos =
-      if todo_digest_brief?(brief) do
-        todo_digest_todos(brief)
-      else
-        []
-      end
+    payload = telegram_payload(brief)
 
-    if todos == [] do
-      payload = telegram_payload(brief)
-
-      case telegram_module().send_message(
-             destination,
-             payload.text,
-             parse_mode: "HTML",
-             reply_markup: payload.reply_markup
-           ) do
-        {:ok, result} ->
-          mark_fallback_sent(brief, read_message_id(result))
-
-        {:error, reason} ->
-          {:error, reason}
-      end
-    else
-      payload = telegram_payload(brief)
-
-      with {:ok, result} <-
-             telegram_module().send_message(destination, payload.text,
-               parse_mode: "HTML",
-               reply_markup: payload.reply_markup
-             ),
-           :ok <- send_fallback_todo_messages(destination, brief, todos) do
+    case telegram_module().send_message(destination, payload.text,
+           parse_mode: "HTML",
+           reply_markup: payload.reply_markup
+         ) do
+      {:ok, result} ->
         mark_fallback_sent(brief, read_message_id(result))
-      else
-        {:error, reason} -> {:error, reason}
-      end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -332,32 +312,18 @@ defmodule Maraithon.Briefs do
     |> Repo.update()
   end
 
-  defp send_fallback_todo_messages(destination, brief, todos) do
-    Enum.reduce_while(todos, :ok, fn todo, :ok ->
-      payload =
-        TodoActions.telegram_payload(todo,
-          prefix_text: todo_digest_prefix_text(brief, todo)
-        )
-
-      case telegram_module().send_message(destination, payload.text,
-             parse_mode: "HTML",
-             reply_markup: payload.reply_markup
-           ) do
-        {:ok, _result} -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, reason}}
-      end
-    end)
-  end
-
   defp brief_reply_markup(%Brief{} = brief) do
     if travel_brief?(brief) or failed_brief?(brief) do
       nil
     else
-      buttons = [
-        [
-          %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
-        ]
-      ]
+      buttons =
+        []
+        |> maybe_add_list_todos_button(brief)
+        |> Kernel.++([
+          [
+            %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
+          ]
+        ])
 
       case brief.metadata do
         %{"agent_behavior" => behavior} when is_binary(behavior) and behavior != "" ->
@@ -377,6 +343,13 @@ defmodule Maraithon.Briefs do
         _ ->
           %{"inline_keyboard" => buttons}
       end
+    end
+  end
+
+  defp maybe_add_list_todos_button(rows, %Brief{} = brief) do
+    case BriefTodoReview.list_button(brief) do
+      nil -> rows
+      button -> rows ++ [[button]]
     end
   end
 
@@ -422,7 +395,7 @@ defmodule Maraithon.Briefs do
   defp read_message_id(%{"message_id" => value}) when is_binary(value), do: value
   defp read_message_id(_), do: nil
 
-  defp order_todo_digest_items(todos, brief) do
+  def order_todo_digest_items(todos, brief) do
     todos
     |> AttentionRanker.sort()
     |> Enum.with_index()

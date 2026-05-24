@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   alias Maraithon.AppUrl
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -37,6 +38,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          {:ok, todo} <- dispatch_action(user_id, todo_id, action),
          :ok <- refresh_message(chat_id, message_id, todo) do
       maybe_answer_callback(callback_id, callback_notice(action))
+      _ = BriefTodoReview.after_todo_action(user_id, chat_id, todo, action)
       :ok
     else
       {:error, :invalid_callback} ->

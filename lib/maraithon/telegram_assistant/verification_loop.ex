@@ -767,12 +767,12 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "weekend morning brief must add next-week prep context"
       )
       |> require_finding(
-        "structured_todos_delivered_as_individual_telegram_cards" in Map.get(
+        "structured_todos_available_behind_list_todos_button_and_sent_one_at_a_time" in Map.get(
           verification,
           "criteria",
           []
         ),
-        "morning brief score must include separate actionable todo cards in the rubric"
+        "morning brief score must include List Todos plus sequential actionable todo cards in the rubric"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})

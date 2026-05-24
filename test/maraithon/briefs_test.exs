@@ -7,10 +7,12 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.Todos
 
   setup do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+    original_insights = Application.get_env(:maraithon, :insights, [])
 
     Application.put_env(:maraithon, :briefs,
       telegram_module: Maraithon.TestSupport.CapturingTelegram
@@ -25,9 +27,14 @@ defmodule Maraithon.BriefsTest do
       )
     )
 
+    Application.put_env(:maraithon, :insights,
+      telegram_module: Maraithon.TestSupport.CapturingTelegram
+    )
+
     on_exit(fn ->
       Application.delete_env(:maraithon, :briefs)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
+      Application.put_env(:maraithon, :insights, original_insights)
     end)
 
     start_supervised!(%{
@@ -142,8 +149,90 @@ defmodule Maraithon.BriefsTest do
     assert intro =~ "checking on these today"
     assert intro =~ "1 new today"
     assert intro =~ "1 still open from earlier"
+    assert intro =~ "Tap List Todos"
     assert is_nil(Briefs.todo_digest_prefix_text(brief, first_todo))
     assert is_nil(Briefs.todo_digest_prefix_text(brief, second_todo))
+  end
+
+  test "brief todo review lists one todo at a time and summarizes decisions", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-review:first", "Reply to finance about the receipt",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z"
+        ),
+        todo_attrs("briefs-review:second", "Confirm the shipment ETA",
+          source_occurred_at: "2026-04-02T15:00:00Z"
+        )
+      ])
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: 2 todos",
+        "summary" => "Two todos need a decision.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:review",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    button =
+      brief
+      |> Briefs.telegram_payload()
+      |> get_in([:reply_markup, "inline_keyboard"])
+      |> List.flatten()
+      |> Enum.find(&(&1["text"] == "List Todos"))
+
+    assert button["callback_data"] =~ "brftd:"
+
+    :ok =
+      Maraithon.TelegramAssistant.BriefTodoReview.handle_callback(%{
+        chat_id: 777_123,
+        callback_id: "cb-list",
+        data: button["callback_data"]
+      })
+
+    sends = sent_messages()
+    assert length(sends) == 1
+    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ first_todo.next_action
+
+    :ok =
+      TodoActions.handle_callback(%{
+        chat_id: 777_123,
+        message_id: "todo-1",
+        callback_id: "cb-done",
+        data: "tgtodo:#{first_todo.id}:done"
+      })
+
+    sends = sent_messages()
+    assert length(sends) == 2
+    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ second_todo.next_action
+    assert Todos.get_for_user(user_id, first_todo.id).status == "done"
+
+    :ok =
+      TodoActions.handle_callback(%{
+        chat_id: 777_123,
+        message_id: "todo-2",
+        callback_id: "cb-dismiss",
+        data: "tgtodo:#{second_todo.id}:dismiss"
+      })
+
+    summary = sent_messages() |> List.last()
+    assert summary.text =~ "Todo review complete"
+    assert summary.text =~ "Done: 1"
+    assert summary.text =~ "Dismissed: 1"
+    assert summary.text =~ "Still open: 0"
+    assert summary.text =~ "Tomorrow's briefing will build on this"
+
+    updated_brief = Repo.get!(Brief, brief.id)
+    assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
+    assert get_in(updated_brief.metadata, ["todo_review", "summary", "done_count"]) == 1
   end
 
   defp todo_attrs(thread_id, title, overrides) when is_list(overrides) do
@@ -175,4 +264,10 @@ defmodule Maraithon.BriefsTest do
   end
 
   defp user_account_email, do: "briefs-user@example.com"
+
+  defp sent_messages do
+    :capturing_telegram_recorder
+    |> Agent.get(&Enum.reverse/1)
+    |> Enum.filter(&(&1.type == :send))
+  end
 end
