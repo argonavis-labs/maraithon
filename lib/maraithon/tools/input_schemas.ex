@@ -138,8 +138,18 @@ defmodule Maraithon.Tools.InputSchemas do
           "max_results" => @integer
         })
 
+      "list_connected_accounts" ->
+        user_object(%{
+          "include_tools" => @boolean,
+          "include_freshness" => @boolean,
+          "include_disconnected" => @boolean
+        })
+
       "get_open_loops" ->
         user_object(%{"query" => @string, "limit" => @integer, "include_memory" => @boolean})
+
+      "get_todo" ->
+        user_object(%{"todo_id" => @string, "id" => @string, "query" => @string})
 
       "list_todos" ->
         user_object(todo_filter_fields())
@@ -149,12 +159,25 @@ defmodule Maraithon.Tools.InputSchemas do
           "todos"
         ])
 
+      "update_todo" ->
+        user_object(todo_update_fields(), ["todo_id"])
+
       "resolve_todo" ->
         user_object(
           %{
             "todo_id" => @string,
             "status" => enum(~w(done dismissed snoozed)),
             "snooze_until" => @string,
+            "resolution_note" => @string,
+            "include_remaining" => @boolean
+          },
+          ["todo_id"]
+        )
+
+      "delete_todo" ->
+        user_object(
+          %{
+            "todo_id" => @string,
             "resolution_note" => @string,
             "include_remaining" => @boolean
           },
@@ -651,6 +674,35 @@ defmodule Maraithon.Tools.InputSchemas do
       "owner_user_id" => @string,
       "due_before" => @string,
       "due_after" => @string
+    }
+  end
+
+  defp todo_update_fields do
+    %{
+      "todo_id" => @string,
+      "title" => @string,
+      "summary" => @string,
+      "todo" => @string,
+      "next_action" => @string,
+      "due_at" => @string,
+      "due_date" => @string,
+      "notes" => @string,
+      "action_plan" => @string,
+      "action_draft" => @object,
+      "owner_user_id" => @string,
+      "owner_label" => @string,
+      "priority" => @integer,
+      "attention_mode" => enum(~w(act_now monitor)),
+      "status" => enum(~w(open done dismissed snoozed)),
+      "snoozed_until" => @string,
+      "source" => @string,
+      "source_account_id" => @integer,
+      "source_account_label" => @string,
+      "source_item_id" => @string,
+      "source_occurred_at" => @string,
+      "dedupe_key" => @string,
+      "metadata" => @object,
+      "replace_metadata" => @boolean
     }
   end
 

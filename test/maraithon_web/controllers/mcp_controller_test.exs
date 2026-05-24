@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.McpControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
-  alias Maraithon.Accounts
+  alias Maraithon.{Accounts, ConnectedAccounts, Todos}
 
   setup do
     previous_api_auth = Application.get_env(:maraithon, :api_auth)
@@ -43,7 +43,11 @@ defmodule MaraithonWeb.McpControllerTest do
 
     assert "list_todos" in names
     assert "upsert_todos" in names
+    assert "get_todo" in names
+    assert "update_todo" in names
     assert "resolve_todo" in names
+    assert "delete_todo" in names
+    assert "list_connected_accounts" in names
     assert "get_open_loops" in names
     assert "list_people" in names
     assert "get_person" in names
@@ -68,6 +72,16 @@ defmodule MaraithonWeb.McpControllerTest do
     assert "user_id" in get_in(list_todos, ["inputSchema", "required"])
     assert get_in(list_todos, ["annotations", "readOnlyHint"]) == true
     assert get_in(list_todos, ["annotations", "destructiveHint"]) == false
+    assert get_in(list_todos, ["annotations", "resourceTypes"]) == ["todo", "open_loop"]
+    assert get_in(list_todos, ["annotations", "operationTags"]) == ["read", "list"]
+
+    update_todo =
+      response
+      |> get_in(["result", "tools"])
+      |> Enum.find(&(&1["name"] == "update_todo"))
+
+    assert get_in(update_todo, ["annotations", "sideEffect"]) == "write"
+    assert get_in(update_todo, ["annotations", "operationTags"]) == ["update", "patch"]
   end
 
   test "filters tool discovery over MCP", %{conn: conn} do
@@ -111,6 +125,167 @@ defmodule MaraithonWeb.McpControllerTest do
     text = response |> get_in(["result", "content"]) |> hd() |> Map.fetch!("text")
     assert {:ok, _decoded} = Jason.decode(text)
     refute String.contains?(text, "\n")
+  end
+
+  test "supports explicit todo CRUD tools over MCP", %{conn: conn} do
+    user_id = "mcp-todo-crud-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "mcp_test",
+          "title" => "Review MCP CRUD",
+          "summary" => "Verify todo CRUD tools work over hosted MCP.",
+          "next_action" => "Read, patch, and dismiss the seeded todo.",
+          "dedupe_key" => "mcp:test:crud"
+        }
+      ])
+
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "get",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "get_todo",
+          "arguments" => %{"user_id" => user_id, "todo_id" => todo.id}
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == false
+    assert get_in(response, ["result", "structuredContent", "todo", "id"]) == todo.id
+
+    conn =
+      build_conn()
+      |> post("/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "update",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "update_todo",
+          "arguments" => %{
+            "user_id" => user_id,
+            "todo_id" => todo.id,
+            "title" => "Review MCP CRUD coverage",
+            "priority" => 91,
+            "metadata" => %{"audit" => "mcp_crud"}
+          }
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == false
+
+    assert get_in(response, ["result", "structuredContent", "todo", "title"]) ==
+             "Review MCP CRUD coverage"
+
+    assert get_in(response, ["result", "structuredContent", "todo", "priority"]) == 91
+
+    assert get_in(response, ["result", "structuredContent", "todo", "metadata", "audit"]) ==
+             "mcp_crud"
+
+    conn =
+      build_conn()
+      |> post("/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "delete-needs-confirmation",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "delete_todo",
+          "arguments" => %{"user_id" => user_id, "todo_id" => todo.id}
+        }
+      })
+
+    response = json_response(conn, 200)
+    assert get_in(response, ["error", "code"]) == -32071
+
+    conn =
+      build_conn()
+      |> post("/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "delete-confirmed",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "delete_todo",
+          "confirmed" => true,
+          "arguments" => %{
+            "user_id" => user_id,
+            "todo_id" => todo.id,
+            "resolution_note" => "No longer relevant."
+          }
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == false
+    assert get_in(response, ["result", "structuredContent", "deleted"]) == true
+    assert get_in(response, ["result", "structuredContent", "todo", "status"]) == "dismissed"
+  end
+
+  test "lists connected account status and tool coverage over MCP", %{conn: conn} do
+    user_id = "mcp-connected-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{
+        external_account_id: "12345",
+        metadata: %{"chat_id" => "12345", "bot_token" => "secret"}
+      })
+
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "connected",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "list_connected_accounts",
+          "arguments" => %{"user_id" => user_id}
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == false
+
+    assert get_in(response, ["result", "structuredContent", "source"]) ==
+             "maraithon_connected_accounts"
+
+    assert get_in(response, ["result", "structuredContent", "connected_accounts"])
+           |> Enum.any?(&(&1["provider"] == "telegram"))
+
+    assert get_in(response, [
+             "result",
+             "structuredContent",
+             "connected_accounts",
+             Access.at(0),
+             "metadata",
+             "bot_token"
+           ]) == "[redacted]"
+
+    todo_coverage =
+      response
+      |> get_in(["result", "structuredContent", "built_in_resources"])
+      |> Enum.find(&(&1["resource"] == "todos"))
+
+    assert "get_todo" in todo_coverage["tools"]
+    assert "update_todo" in todo_coverage["tools"]
+    assert "delete_todo" in todo_coverage["tools"]
+
+    gmail_coverage =
+      response
+      |> get_in(["result", "structuredContent", "tool_coverage"])
+      |> Enum.find(&(&1["connector_id"] == "gmail"))
+
+    assert "gmail_drafts" in gmail_coverage["tools"]
+    assert "gmail_labels" in gmail_coverage["tools"]
+    assert "gmail_filters" in gmail_coverage["tools"]
+    assert "gmail_drafts" in gmail_coverage["operations"]["create"]
+    assert "gmail_drafts" in gmail_coverage["operations"]["delete"]
   end
 
   test "calls the built-in open-loop snapshot tool over MCP", %{conn: conn} do

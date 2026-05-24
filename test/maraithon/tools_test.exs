@@ -33,10 +33,14 @@ defmodule Maraithon.ToolsTest do
       assert "gmail_get_message" in tools
       assert "google_calendar_list_events" in tools
       assert "review_connected_context" in tools
+      assert "list_connected_accounts" in tools
       assert "get_open_loops" in tools
+      assert "get_todo" in tools
       assert "list_todos" in tools
       assert "upsert_todos" in tools
+      assert "update_todo" in tools
       assert "resolve_todo" in tools
+      assert "delete_todo" in tools
       assert "list_people" in tools
       assert "get_person" in tools
       assert "upsert_person" in tools
@@ -77,6 +81,8 @@ defmodule Maraithon.ToolsTest do
       assert descriptor.annotations["readOnlyHint"] == false
       assert descriptor.annotations["idempotentHint"] == true
       assert descriptor.annotations["sideEffect"] == "write"
+      assert descriptor.annotations["resourceTypes"] == ["todo", "open_loop"]
+      assert descriptor.annotations["operationTags"] == ["create", "update", "upsert"]
 
       [review_descriptor] = Tools.describe(["review_connected_context"])
       assert review_descriptor.annotations["readOnlyHint"] == true
@@ -105,10 +111,14 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("gmail_list_recent")
       assert Tools.exists?("google_calendar_list_events")
       assert Tools.exists?("review_connected_context")
+      assert Tools.exists?("list_connected_accounts")
       assert Tools.exists?("get_open_loops")
+      assert Tools.exists?("get_todo")
       assert Tools.exists?("list_todos")
       assert Tools.exists?("upsert_todos")
+      assert Tools.exists?("update_todo")
       assert Tools.exists?("resolve_todo")
+      assert Tools.exists?("delete_todo")
       assert Tools.exists?("list_people")
       assert Tools.exists?("get_person")
       assert Tools.exists?("upsert_person")

@@ -1,5 +1,5 @@
 ---
-{"id":"morning_briefing","name":"Morning Briefing","description":"Produce a complete Chief of Staff morning brief from connected sources.","connectors":["google","slack","telegram"],"tools":["gmail.search","gmail.read","calendar.list","slack.search","slack.read","telegram.send","llm.complete","list_todos","upsert_todos","list_people","get_relationship_context","upsert_person","link_person_data","merge_people","recall_memory","write_memory","record_memory_feedback"]}
+{"id":"morning_briefing","name":"Morning Briefing","description":"Produce a complete Chief of Staff morning brief from connected sources.","connectors":["google","slack","telegram"],"tools":["gmail.search","gmail.read","calendar.list","slack.search","slack.read","telegram.send","llm.complete","list_connected_accounts","get_open_loops","get_todo","list_todos","upsert_todos","update_todo","resolve_todo","list_people","get_relationship_context","upsert_person","link_person_data","merge_people","recall_memory","write_memory","record_memory_feedback"]}
 ---
 
 Create a complete executive brief from the connector payloads.

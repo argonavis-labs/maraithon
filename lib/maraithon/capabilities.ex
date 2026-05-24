@@ -27,10 +27,14 @@ defmodule Maraithon.Capabilities do
     "google_contacts_search" => Maraithon.Tools.GoogleContactsSearch,
     "google_calendar_list_events" => Maraithon.Tools.GoogleCalendarListEvents,
     "review_connected_context" => Maraithon.Tools.ReviewConnectedContext,
+    "list_connected_accounts" => Maraithon.Tools.ListConnectedAccounts,
     "get_open_loops" => Maraithon.Tools.GetOpenLoops,
+    "get_todo" => Maraithon.Tools.GetTodo,
     "list_todos" => Maraithon.Tools.ListTodos,
     "upsert_todos" => Maraithon.Tools.UpsertTodos,
+    "update_todo" => Maraithon.Tools.UpdateTodo,
     "resolve_todo" => Maraithon.Tools.ResolveTodo,
+    "delete_todo" => Maraithon.Tools.DeleteTodo,
     "list_people" => Maraithon.Tools.ListPeople,
     "get_person" => Maraithon.Tools.GetPerson,
     "upsert_person" => Maraithon.Tools.UpsertPerson,
@@ -123,12 +127,18 @@ defmodule Maraithon.Capabilities do
     "google_calendar_list_events" => "List Google Calendar events.",
     "review_connected_context" =>
       "Review connected CRM, Gmail, contacts, calendar, Slack, open loops, and memory for source-grounded context.",
+    "list_connected_accounts" =>
+      "List connected accounts, freshness, connector status, and MCP tool coverage for a user.",
     "get_open_loops" =>
       "Fetch the built-in open-loop snapshot across todos, CRM relationships, and deep memory.",
+    "get_todo" => "Get one built-in persistent todo by id, or the best query match.",
     "list_todos" => "List the built-in persistent todo list for a user.",
     "upsert_todos" =>
       "Use model-level todo intelligence to create, update, or skip built-in persistent todos.",
+    "update_todo" =>
+      "Patch one built-in persistent todo by id without rerunning model-level ingestion.",
     "resolve_todo" => "Mark one built-in persistent todo done, dismissed, or snoozed.",
+    "delete_todo" => "Dismiss one built-in persistent todo as no longer relevant.",
     "list_people" => "List CRM people and relationship metadata for a user.",
     "get_person" => "Get one CRM person by id, query, or contact detail.",
     "upsert_person" => "Create or update one CRM person with contact and relationship details.",
@@ -241,7 +251,8 @@ defmodule Maraithon.Capabilities do
     time http_get read_file list_files file_tree search_files
     gmail_list_recent gmail_search gmail_get_message
     google_contacts_search google_calendar_list_events
-    review_connected_context get_open_loops list_todos list_people get_person get_relationship_context
+    review_connected_context list_connected_accounts get_open_loops get_todo list_todos
+    list_people get_person get_relationship_context
     list_memories recall_memory
     slack_list_conversations slack_list_messages slack_get_thread_replies slack_search_messages
     linear_get_issue linear_list_issues linear_list_teams
@@ -261,7 +272,7 @@ defmodule Maraithon.Capabilities do
   ))
 
   @destructive_tools MapSet.new(~w(
-    delete_person resolve_todo forget_memory gmail_batch_modify gmail_filters gmail_labels
+    delete_person delete_todo resolve_todo forget_memory gmail_batch_modify gmail_filters gmail_labels
     gmail_drafts notaui_complete_task notaui_update_task notion_update_page notion_blocks
   ))
 
@@ -272,7 +283,7 @@ defmodule Maraithon.Capabilities do
   ))
 
   @write_tools MapSet.new(~w(
-    upsert_todos upsert_person link_person_data merge_people learn_relationship_context
+    upsert_todos update_todo upsert_person link_person_data merge_people learn_relationship_context
     write_memory record_memory_feedback update_memory_confidence
   ))
 
@@ -281,7 +292,7 @@ defmodule Maraithon.Capabilities do
   ))
 
   @idempotent_tools MapSet.new(~w(
-    upsert_todos upsert_person learn_relationship_context write_memory
+    upsert_todos update_todo upsert_person learn_relationship_context write_memory
     record_memory_feedback update_memory_confidence link_person_data
     gmail_batch_modify notaui_update_task notion_update_page
   ))
@@ -550,7 +561,11 @@ defmodule Maraithon.Capabilities do
         "destructiveHint" => policy_metadata.destructive?,
         "idempotentHint" => policy_metadata.idempotent?,
         "sideEffect" => policy_metadata.side_effect,
-        "confirmationRequired" => policy_metadata.confirmation_required?
+        "confirmationRequired" => policy_metadata.confirmation_required?,
+        "userContextRequired" => policy_metadata.user_required?,
+        "connectors" => tool_connector_ids(name),
+        "resourceTypes" => tool_resource_types(name),
+        "operationTags" => tool_operation_tags(name)
       }
     end
   end
@@ -740,6 +755,103 @@ defmodule Maraithon.Capabilities do
 
   defp confirmation_required_tool?(name) do
     MapSet.member?(@destructive_tools, name) or MapSet.member?(@external_send_tools, name)
+  end
+
+  defp tool_connector_ids(name) do
+    name
+    |> tool_requirements()
+    |> Map.get(:connectors, [])
+  end
+
+  defp tool_resource_types(name) do
+    cond do
+      name in ~w(get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo) ->
+        ["todo", "open_loop"]
+
+      name in ~w(list_people get_person upsert_person delete_person link_person_data merge_people get_relationship_context learn_relationship_context) ->
+        ["person", "relationship"]
+
+      name in ~w(list_memories write_memory recall_memory forget_memory record_memory_feedback update_memory_confidence) ->
+        ["memory"]
+
+      name == "list_connected_accounts" ->
+        ["connected_account", "connector", "tool_coverage"]
+
+      String.starts_with?(name, "gmail_") ->
+        ["gmail"]
+
+      String.starts_with?(name, "slack_") ->
+        ["slack"]
+
+      String.starts_with?(name, "linear_") ->
+        ["linear"]
+
+      String.starts_with?(name, "notion_") ->
+        ["notion"]
+
+      String.starts_with?(name, "notaui_") ->
+        ["notaui_task"]
+
+      String.starts_with?(name, "google_") ->
+        ["google"]
+
+      true ->
+        []
+    end
+  end
+
+  defp tool_operation_tags(name) do
+    case name do
+      "list_connected_accounts" -> ~w(read list audit)
+      "get_open_loops" -> ~w(read list aggregate)
+      "get_todo" -> ~w(read get)
+      "list_todos" -> ~w(read list)
+      "upsert_todos" -> ~w(create update upsert)
+      "update_todo" -> ~w(update patch)
+      "resolve_todo" -> ~w(update complete dismiss snooze)
+      "delete_todo" -> ~w(delete dismiss)
+      "list_people" -> ~w(read list)
+      "get_person" -> ~w(read get)
+      "upsert_person" -> ~w(create update upsert)
+      "delete_person" -> ~w(delete)
+      "link_person_data" -> ~w(create update delete link unlink)
+      "merge_people" -> ~w(update merge delete)
+      "get_relationship_context" -> ~w(read get)
+      "learn_relationship_context" -> ~w(create update upsert)
+      "list_memories" -> ~w(read list)
+      "write_memory" -> ~w(create update upsert)
+      "recall_memory" -> ~w(read search)
+      "forget_memory" -> ~w(delete archive supersede reject)
+      "record_memory_feedback" -> ~w(create feedback)
+      "update_memory_confidence" -> ~w(update)
+      "gmail_labels" -> ~w(read list create update delete)
+      "gmail_drafts" -> ~w(read list get create update send delete)
+      "gmail_filters" -> ~w(read list get create delete)
+      "gmail_batch_modify" -> ~w(update archive label)
+      "gmail_send_message" -> ~w(create send)
+      "slack_post_message" -> ~w(create send)
+      "slack_open_conversation" -> ~w(create read)
+      "linear_create_issue" -> ~w(create)
+      "linear_create_comment" -> ~w(create)
+      "linear_update_issue" -> ~w(update patch)
+      "linear_update_issue_state" -> ~w(update)
+      "notaui_complete_task" -> ~w(update complete)
+      "notaui_update_task" -> ~w(update patch)
+      "notion_create_page" -> ~w(create)
+      "notion_update_page" -> ~w(update delete archive)
+      "notion_blocks" -> ~w(read list create update delete archive)
+      _ -> default_operation_tags(name)
+    end
+  end
+
+  defp default_operation_tags(name) do
+    cond do
+      MapSet.member?(@read_only_tools, name) -> ~w(read)
+      MapSet.member?(@write_tools, name) -> ~w(write)
+      MapSet.member?(@destructive_tools, name) -> ~w(delete)
+      MapSet.member?(@external_send_tools, name) -> ~w(send)
+      true -> []
+    end
   end
 
   defp titleize(name) do

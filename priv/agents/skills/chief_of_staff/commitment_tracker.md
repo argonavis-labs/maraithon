@@ -1,5 +1,5 @@
 ---
-{"id":"commitment_tracker","name":"Commitment Tracker","description":"Scan connected work sources for promises and asks, then create durable model-deduped todos.","category":"workflow","icon":"\ud83c\udfaf","connectors":["google","telegram"],"tools":["gmail.search","gmail.read","calendar.list","llm.complete","get_open_loops","list_todos","upsert_todos","resolve_todo","list_people","get_person","upsert_person","link_person_data","merge_people","get_relationship_context","recall_memory","write_memory","record_memory_feedback"]}
+{"id":"commitment_tracker","name":"Commitment Tracker","description":"Scan connected work sources for promises and asks, then create durable model-deduped todos.","category":"workflow","icon":"\ud83c\udfaf","connectors":["google","telegram"],"tools":["gmail.search","gmail.read","calendar.list","llm.complete","list_connected_accounts","get_open_loops","get_todo","list_todos","upsert_todos","update_todo","resolve_todo","delete_todo","list_people","get_person","upsert_person","link_person_data","merge_people","get_relationship_context","recall_memory","write_memory","record_memory_feedback"]}
 ---
 
 # Commitment Tracker

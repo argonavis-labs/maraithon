@@ -6,6 +6,7 @@ defmodule MaraithonWeb.McpController do
   @protocol_version "2025-03-26"
   @batch_timeout_ms 30_000
   @batch_max_concurrency 8
+  @tool_call_timeout_ms 25_000
 
   def handle(conn, %{"_json" => requests}) when is_list(requests), do: handle(conn, requests)
 
@@ -60,7 +61,7 @@ defmodule MaraithonWeb.McpController do
     arguments = Map.get(params, "arguments", %{})
 
     with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil} do
-      case Tools.execute(name, arguments, %{surface: "mcp"}) do
+      case execute_tool(name, arguments, params) do
         {:ok, result} ->
           normalized = normalize(result)
 
@@ -95,6 +96,45 @@ defmodule MaraithonWeb.McpController do
 
   defp dispatch("tools/call", _params), do: {:error, -32602, "Tool name is required", nil}
   defp dispatch(method, _params), do: {:error, -32601, "Method not found: #{method}", nil}
+
+  defp execute_tool(name, arguments, params) do
+    task =
+      Task.Supervisor.async_nolink(Maraithon.Runtime.ToolCallSupervisor, fn ->
+        Tools.execute(name, arguments, tool_context(params))
+      end)
+
+    case Task.yield(task, @tool_call_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, "tool_crashed: #{inspect(reason)}"}
+      nil -> {:error, "tool_timeout: #{name} exceeded #{@tool_call_timeout_ms}ms"}
+    end
+  end
+
+  defp tool_context(params) when is_map(params) do
+    %{
+      surface: "mcp",
+      confirmed?: confirmed?(params),
+      confirmation_state: confirmation_state(params)
+    }
+  end
+
+  defp confirmed?(params) when is_map(params) do
+    truthy?(Map.get(params, "confirmed")) or
+      truthy?(get_in(params, ["_meta", "confirmed"])) or
+      truthy?(get_in(params, ["arguments", "confirmed"])) or
+      confirmation_state(params) == "confirmed"
+  end
+
+  defp confirmation_state(params) when is_map(params) do
+    case Map.get(params, "confirmation_state") || get_in(params, ["_meta", "confirmation_state"]) ||
+           get_in(params, ["arguments", "confirmation_state"]) do
+      value when is_binary(value) -> String.trim(value)
+      _ -> nil
+    end
+  end
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_value), do: false
 
   defp response_for(%{"jsonrpc" => "2.0", "method" => method} = request) do
     id = Map.get(request, "id")

@@ -22,7 +22,7 @@ defmodule Maraithon.OpenLoops do
   @prompt_limit 8
   @todo_ingest_busy_retry_delays_ms [1_000, 2_000, 5_000, 10_000, 15_000]
   @open_statuses ~w(open snoozed)
-  @open_loop_tool_names ~w(get_open_loops list_todos upsert_todos resolve_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence)
+  @open_loop_tool_names ~w(get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence)
   @read_key_atoms %{
     "contact_details" => :contact_details,
     "contacts" => :contacts,

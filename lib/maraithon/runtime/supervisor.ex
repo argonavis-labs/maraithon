@@ -21,6 +21,10 @@ defmodule Maraithon.Runtime.Supervisor do
       # Task supervisor for effect worker tasks
       {Task.Supervisor, name: Maraithon.Runtime.EffectSupervisor},
 
+      # Isolates hosted MCP/tool calls from request processes while still
+      # allowing hard wall-clock limits.
+      {Task.Supervisor, name: Maraithon.Runtime.ToolCallSupervisor},
+
       # Shared provider backpressure for effect-driven LLM calls
       Maraithon.Runtime.Effects.LLMRateLimiter,
 

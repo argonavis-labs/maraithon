@@ -280,6 +280,36 @@ defmodule Maraithon.Todos do
 
   def record_feedback(_user_id, _todo_id, _feedback, _opts), do: {:error, :not_found}
 
+  def update_for_user(user_id, todo_id, attrs)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) do
+    Repo.transaction(fn ->
+      with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id) do
+        changes = update_attrs(todo, attrs)
+
+        if changes == %{} do
+          Repo.rollback(:empty_update)
+        else
+          with {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
+               {:ok, _insight} <- sync_linked_insight(updated) do
+            updated
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end
+      else
+        nil -> Repo.rollback(:not_found)
+      end
+    end)
+    |> case do
+      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, :empty_update} -> {:error, :empty_update}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def update_for_user(_user_id, _todo_id, _attrs), do: {:error, :not_found}
+
   def annotate_scope(user_id, todo_id, attrs \\ [])
 
   def annotate_scope(user_id, todo_id, attrs)
@@ -553,6 +583,163 @@ defmodule Maraithon.Todos do
   end
 
   defp merge_status(_existing_status, incoming_status), do: incoming_status
+
+  defp update_attrs(%Todo{} = todo, attrs) when is_map(attrs) do
+    %{}
+    |> update_text_attr(attrs, "source", "source")
+    |> update_integer_attr(attrs, "source_account_id", "source_account_id")
+    |> update_text_attr(attrs, "source_account_label", "source_account_label")
+    |> update_kind_attr(attrs)
+    |> update_attention_mode_attr(attrs)
+    |> update_text_attr(attrs, "title", "title")
+    |> update_text_attr(attrs, "todo", "summary")
+    |> update_text_attr(attrs, "summary", "summary")
+    |> update_text_attr(attrs, "next_action", "next_action")
+    |> update_datetime_attr(attrs, "due_at", "due_at")
+    |> update_datetime_attr(attrs, "due_date", "due_at")
+    |> update_text_attr(attrs, "notes", "notes")
+    |> update_text_attr(attrs, "action_plan", "action_plan")
+    |> update_action_draft_attr(attrs)
+    |> update_text_attr(attrs, "owner_user_id", "owner_user_id")
+    |> update_text_attr(attrs, "owner_label", "owner_label")
+    |> update_integer_attr(attrs, "priority", "priority", &clamp_integer(&1, 0, 100))
+    |> update_status_attrs(todo, attrs)
+    |> update_text_attr(attrs, "source_item_id", "source_item_id")
+    |> update_datetime_attr(attrs, "source_occurred_at", "source_occurred_at")
+    |> update_text_attr(attrs, "dedupe_key", "dedupe_key")
+    |> update_metadata_attr(todo, attrs)
+  end
+
+  defp update_text_attr(changes, attrs, key, field) do
+    if attr_present?(attrs, key) do
+      case read_string(attrs, key, nil) do
+        nil -> changes
+        value -> Map.put(changes, field, value)
+      end
+    else
+      changes
+    end
+  end
+
+  defp update_integer_attr(changes, attrs, key, field, transform \\ & &1) do
+    if attr_present?(attrs, key) do
+      case read_integer(attrs, key, nil) do
+        nil -> changes
+        value -> Map.put(changes, field, transform.(value))
+      end
+    else
+      changes
+    end
+  end
+
+  defp update_datetime_attr(changes, attrs, key, field) do
+    if attr_present?(attrs, key) do
+      case read_datetime(attrs, key) do
+        nil -> changes
+        value -> Map.put(changes, field, value)
+      end
+    else
+      changes
+    end
+  end
+
+  defp update_kind_attr(changes, attrs) do
+    if attr_present?(attrs, "kind") do
+      Map.put(changes, "kind", normalize_kind(read_string(attrs, "kind", "general")))
+    else
+      changes
+    end
+  end
+
+  defp update_attention_mode_attr(changes, attrs) do
+    if attr_present?(attrs, "attention_mode") do
+      Map.put(
+        changes,
+        "attention_mode",
+        normalize_attention_mode(read_string(attrs, "attention_mode", "act_now"))
+      )
+    else
+      changes
+    end
+  end
+
+  defp update_action_draft_attr(changes, attrs) do
+    if attr_present?(attrs, "action_draft") or attr_present?(attrs, "draft") do
+      Map.put(changes, "action_draft", read_action_draft(attrs))
+    else
+      changes
+    end
+  end
+
+  defp update_status_attrs(changes, %Todo{} = todo, attrs) do
+    changes =
+      if attr_present?(attrs, "status") do
+        status = normalize_status(read_string(attrs, "status", "open"))
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        case status do
+          "open" ->
+            changes
+            |> Map.put("status", "open")
+            |> Map.put("closed_at", nil)
+            |> Map.put("snoozed_until", nil)
+
+          "done" ->
+            changes
+            |> Map.put("status", "done")
+            |> Map.put("closed_at", todo.closed_at || now)
+            |> Map.put("snoozed_until", nil)
+
+          "dismissed" ->
+            changes
+            |> Map.put("status", "dismissed")
+            |> Map.put("closed_at", todo.closed_at || now)
+            |> Map.put("snoozed_until", nil)
+
+          "snoozed" ->
+            snoozed_until =
+              read_datetime(attrs, "snoozed_until") || todo.snoozed_until ||
+                DateTime.add(now, 24, :hour)
+
+            changes
+            |> Map.put("status", "snoozed")
+            |> Map.put("closed_at", nil)
+            |> Map.put("snoozed_until", snoozed_until)
+        end
+      else
+        changes
+      end
+
+    update_datetime_attr(changes, attrs, "snoozed_until", "snoozed_until")
+  end
+
+  defp update_metadata_attr(changes, %Todo{} = todo, attrs) do
+    if attr_present?(attrs, "metadata") do
+      metadata = read_map(attrs, "metadata") |> stringify_top_level_keys()
+
+      merged_metadata =
+        if truthy?(fetch_attr(attrs, "replace_metadata")) do
+          metadata
+        else
+          Map.merge(todo.metadata || %{}, metadata)
+        end
+
+      Map.put(changes, "metadata", merged_metadata)
+    else
+      changes
+    end
+  end
+
+  defp attr_present?(attrs, key) when is_map(attrs) and is_binary(key) do
+    Map.has_key?(attrs, key) or
+      case existing_atom_key(key) do
+        atom_key when is_atom(atom_key) -> Map.has_key?(attrs, atom_key)
+        _ -> false
+      end
+  end
+
+  defp truthy?(value) when value in [true, "true", "1", 1], do: true
+  defp truthy?(_value), do: false
 
   defp normalize_attrs(user_id, attrs) do
     metadata = read_map(attrs, "metadata")
