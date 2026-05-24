@@ -178,6 +178,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         kind: :static
       },
       %{
+        id: :todo_id_casting_contract,
+        kind: :static
+      },
+      %{
         id: :delivery_planner_default_contract,
         kind: :static
       },
@@ -869,6 +873,41 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         weak_quality["surfaceable"] == false and "source_evidence" in weak_quality["missing"],
         "generic todo without source evidence must not be surfaceable"
       )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :todo_id_casting_contract} = scenario,
+         env,
+         _opts
+       ) do
+    result =
+      try do
+        {:ok,
+         Todos.list_by_ids(env.user_id, [
+           env.matthew_todo.id,
+           "open-linked-todo-emma-01",
+           "",
+           nil,
+           env.resolution_todo.id
+         ])}
+      rescue
+        error -> {:error, Exception.message(error)}
+      end
+
+    findings =
+      case result do
+        {:ok, todos} ->
+          []
+          |> require_finding(
+            Enum.map(todos, & &1.id) == [env.matthew_todo.id, env.resolution_todo.id],
+            "todo id lookup must ignore external source ids and preserve valid todo order"
+          )
+
+        {:error, reason} ->
+          ["todo id lookup must not raise on external source ids: #{reason}"]
+      end
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
   end

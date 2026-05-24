@@ -90,7 +90,7 @@ defmodule Maraithon.Todos do
       when is_binary(user_id) and is_list(todo_ids) do
     ids =
       todo_ids
-      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.flat_map(&cast_todo_id/1)
       |> Enum.uniq()
 
     if ids == [] do
@@ -110,6 +110,17 @@ defmodule Maraithon.Todos do
   end
 
   def list_by_ids(_user_id, _todo_ids, _opts), do: []
+
+  defp cast_todo_id(value) when is_binary(value) do
+    value = String.trim(value)
+
+    case Ecto.UUID.cast(value) do
+      {:ok, uuid} -> [uuid]
+      :error -> []
+    end
+  end
+
+  defp cast_todo_id(_value), do: []
 
   def sync_many_from_insights(insights) when is_list(insights) do
     insights
