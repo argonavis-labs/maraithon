@@ -24,7 +24,15 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bnext\s+best\s+action\b/u,
     ~r/\b(triage|prioriti[sz]e|rank)\b.*\b(todos?|to-dos?|tasks?|work|open\s+loops?|inbox)\b/u,
     ~r/\b(todos?|to-dos?|tasks?|open\s+loops?)\b.*\b(full|detail|detailed|complete|all|everything|list)\b/u,
-    ~r/\b(full|detailed|complete|all)\b.*\b(todos?|to-dos?|tasks?|open\s+loops?)\b/u
+    ~r/\b(full|detailed|complete|all)\b.*\b(todos?|to-dos?|tasks?|open\s+loops?)\b/u,
+    ~r/\b(meeting\s+prep|prep\s+for|prepare\s+for)\b.*\b(meeting|call|conversation)\b/u,
+    ~r/\bwhat\s+should\s+i\s+know\b.*\b(meeting|call|conversation|before)\b/u,
+    ~r/\bwho\s+(am\s+i\s+meeting|is\s+on\s+my\s+calendar)\b/u,
+    ~r/\b(draft|write)\b.*\b(reply|response|email|message)\b/u,
+    ~r/\b(queue|schedule|create)\b.*\b(job|task|review|brief|prep)\b/u,
+    ~r/\b(long[-\s]?running|background)\s+(job|task|work)\b/u,
+    ~r/\b(connected\s+apps?|connected\s+sources?|crm|calendar|todos?|memory)\b.*\b(search|look|review|context)\b/u,
+    ~r/\blook\s+across\b.*\b(accounts?|apps?|sources?|crm|calendar|todos?)\b/u
   ]
 
   @connector_status_patterns [

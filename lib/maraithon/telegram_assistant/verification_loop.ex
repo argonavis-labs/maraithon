@@ -17,7 +17,21 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.ContextEngine
   alias Maraithon.Crm
   alias Maraithon.Crm.{Person, PersonLink}
+  alias Maraithon.LocalBrowserHistory
+  alias Maraithon.LocalBrowserHistory.LocalVisit
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalCalendar.LocalEvent
+  alias Maraithon.Memory
+  alias Maraithon.Memory.Event, as: MemoryEvent
+  alias Maraithon.Memory.Item, as: MemoryItem
+  alias Maraithon.PreferenceMemory
+  alias Maraithon.PreferenceMemory.Profile, as: PreferenceProfile
+  alias Maraithon.PreferenceMemory.Rule, as: PreferenceRule
+  alias Maraithon.PreferenceMemory.RuleEvent, as: PreferenceRuleEvent
   alias Maraithon.Repo
+  alias Maraithon.ScheduledTasks
+  alias Maraithon.ScheduledTasks.Run, as: ScheduledTaskRun
+  alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.{Client.LLMJson, ModelRouting, Toolbox}
   alias Maraithon.TelegramConversations
@@ -104,6 +118,14 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         kind: :static
       },
       %{
+        id: :chief_of_staff_contract,
+        kind: :static
+      },
+      %{
+        id: :routing_contract,
+        kind: :static
+      },
+      %{
         id: :linked_routing,
         kind: :static
       },
@@ -141,12 +163,120 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       %{
         id: :connector_status,
         text: "What accounts are connected?"
+      },
+      %{
+        id: :meeting_prep,
+        text:
+          "What should I know before my meeting with Matthew Raue tomorrow? Include who he is, why we are meeting, what I owe him, and the best next move."
+      },
+      %{
+        id: :draft_reply,
+        text: "Draft a reply to Matthew Raue about the setup path, pricing owner, and ETA."
+      },
+      %{
+        id: :memory_write,
+        text:
+          "Remember as durable memory: in chief-of-staff mode, family and personal calendar commitments outrank routine stale work unless the work is a close relationship or active deliverable."
+      },
+      %{
+        id: :scheduled_job,
+        text: fn env ->
+          "Queue a one-time job for #{DateTime.to_iso8601(env.scheduled_job_at)} to review my open loops, calendar, CRM, and todos, then send me a prep note."
+        end
+      },
+      %{
+        id: :browser_context,
+        text:
+          "I was researching the Matthew Raue setup and pricing project online. What did I look at?"
+      },
+      %{
+        id: :chief_of_staff_priority,
+        text:
+          "What needs my attention first today? Re-rank personal, close relationships, active business deliverables, intros, and meetings instead of dumping stale work."
       }
     ]
   end
 
   defp run_scenario(%{kind: :static, id: :retry_options} = scenario, _env, _opts) do
     findings = retry_option_findings()
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :chief_of_staff_contract} = scenario, _env, _opts) do
+    tool_names =
+      %{}
+      |> Toolbox.tool_definitions()
+      |> Enum.map(&(Map.get(&1, "name") || Map.get(&1, :name)))
+
+    prompt =
+      AssistantHarness.build_prompt(%{
+        current_user_request: %{text: "chief of staff contract check"},
+        request_focus: nil,
+        context: %{},
+        tools: [],
+        tool_history: [],
+        runtime_policy: AssistantHarness.runtime_policy(),
+        iteration: 1,
+        llm_turns: 0,
+        tool_steps: 0
+      })
+
+    findings =
+      []
+      |> require_finding(
+        Enum.all?(
+          ~w(calendar_events_around calendar_events_for_person review_connected_context browser_history_search write_memory create_scheduled_task gmail_drafts),
+          &(&1 in tool_names)
+        ),
+        "Telegram tool surface must expose calendar, connected-source, browser, memory, scheduled-task, and draft tools"
+      )
+      |> require_finding(
+        String.contains?(prompt, "meeting-prep") and
+          String.contains?(prompt, "calendar_events_for_person"),
+        "assistant contract must explicitly cover meeting prep with calendar + relationship context"
+      )
+      |> require_finding(
+        String.contains?(prompt, "gmail_drafts") and
+          String.contains?(prompt, "ready-to-send draft"),
+        "assistant contract must explicitly cover reply drafting and Gmail draft creation"
+      )
+      |> require_finding(
+        String.contains?(prompt, "create_scheduled_task") and
+          String.contains?(prompt, "long-running job"),
+        "assistant contract must explicitly cover queued/background work"
+      )
+      |> require_finding(
+        String.contains?(prompt, "browser_history_search") and
+          String.contains?(prompt, "connected web context"),
+        "assistant contract must explicitly cover connected web/browser context"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :routing_contract} = scenario, _env, _opts) do
+    findings =
+      []
+      |> require_finding(
+        ModelRouting.tier_for_text("What should I know before my meeting with Matthew tomorrow?") ==
+          :reasoning,
+        "meeting prep must route to the reasoning tier"
+      )
+      |> require_finding(
+        ModelRouting.tier_for_text("Queue a job tomorrow morning to review open loops") ==
+          :reasoning,
+        "queued/background work must route to the reasoning tier"
+      )
+      |> require_finding(
+        ModelRouting.tier_for_text("Draft a reply to Matthew about setup and pricing") ==
+          :reasoning,
+        "contextual draft requests must route to the reasoning tier"
+      )
+      |> require_finding(
+        ModelRouting.tier_for_text("2+2") == :chat,
+        "simple general chat must stay on the fast chat tier"
+      )
+
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
   end
 
@@ -254,7 +384,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   end
 
   defp run_chat_turn(scenario, env, _opts) do
-    text = Map.fetch!(scenario, :text)
+    text = scenario_text(scenario, env)
     source_message_id = unique_id("verify-user-msg")
     reply_to_message_id = linked_reply_to_message_id(scenario, env)
 
@@ -318,6 +448,9 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         }
     end
   end
+
+  defp scenario_text(%{text: text}, env) when is_function(text, 1), do: text.(env)
+  defp scenario_text(%{text: text}, _env) when is_binary(text), do: text
 
   defp build_runtime_context(env, %Conversation{} = conversation, context, profile) do
     defaults = Map.get(context, :defaults) || Map.get(context, "defaults") || %{}
@@ -458,13 +591,17 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   defp score_chat_scenario(%{id: :todo_create}, env, run) do
     persisted? =
       env.user_id
-      |> Todos.list_for_user(query: "verification passport", statuses: ["open"], limit: 10)
-      |> Enum.any?()
+      |> Todos.list_for_user(query: "passport", statuses: ["open"], limit: 20)
+      |> Enum.any?(fn todo ->
+        todo
+        |> todo_text()
+        |> contains_all?(["passport", "renew"])
+      end)
 
     []
     |> require_success(run)
     |> require_tool(run, "upsert_todos")
-    |> require_finding(persisted?, "todo create must persist the requested passport todo")
+    |> require_finding(persisted?, "todo create must persist the requested passport renewal todo")
   end
 
   defp score_chat_scenario(%{id: :todo_resolve_linked}, env, run) do
@@ -581,6 +718,134 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     )
   end
 
+  defp score_chat_scenario(%{id: :meeting_prep}, _env, run) do
+    evidence_text = response_evidence_text(run)
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "calendar_events_for_person")
+    |> require_finding(
+      tool_used?(run, "get_relationship_context") or tool_used?(run, "review_connected_context") or
+        contains_any?(evidence_text, ["raue automation", "automation tools"]),
+      "meeting prep must combine calendar with CRM/source relationship context"
+    )
+    |> require_finding(
+      contains_all?(evidence_text, ["matthew", "meeting"]) and
+        contains_any?(evidence_text, ["setup", "pricing", "eta"]),
+      "meeting prep must include who, meeting purpose, and attached commitment context"
+    )
+    |> require_finding(
+      contains_any?(evidence_text, ["next", "ask", "reply", "owner", "eta", "talk"]),
+      "meeting prep must include a practical next move or talk track"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :draft_reply}, _env, run) do
+    final_text = final_text(run)
+
+    []
+    |> require_success(run)
+    |> require_finding(
+      contains_any?(final_text, ["hi matthew", "matthew"]),
+      "draft reply must address Matthew directly"
+    )
+    |> require_finding(
+      contains_all?(final_text, ["setup", "pricing"]) and
+        contains_any?(final_text, ["eta", "by"]),
+      "draft reply must cover setup path, pricing owner, and ETA"
+    )
+    |> require_finding(
+      contains_any?(final_text, ["automation", "raue", "owner", "path"]),
+      "draft reply must include enough context to be usable"
+    )
+    |> require_finding(
+      not tool_used?(run, "gmail_drafts"),
+      "plain draft request should not create a Gmail draft unless asked"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :memory_write}, env, run) do
+    memory_text =
+      [
+        env.user_id
+        |> Memory.list_items(limit: 30)
+        |> Enum.map(&memory_item_text/1)
+        |> Enum.join("\n"),
+        preference_memory_text(env.user_id),
+        response_evidence_text(run)
+      ]
+      |> Enum.join("\n")
+
+    memory_tool_used? = tool_used?(run, "write_memory") or tool_used?(run, "remember_preferences")
+
+    []
+    |> require_success(run)
+    |> require_finding(
+      memory_tool_used?,
+      "must call write_memory or remember_preferences for durable learning"
+    )
+    |> require_finding(
+      contains_any?(memory_text, ["family"]) and
+        contains_any?(memory_text, ["personal", "calendar"]) and
+        contains_any?(memory_text, ["stale", "work", "deliverable", "relationship"]),
+      "memory write must persist the chief-of-staff priority preference"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :scheduled_job}, env, run) do
+    task_text =
+      env.user_id
+      |> ScheduledTasks.list_tasks(status: "active", limit: 20)
+      |> Enum.map(&scheduled_task_text/1)
+      |> Enum.join("\n")
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "create_scheduled_task")
+    |> require_finding(
+      contains_all?(task_text, ["open loops", "calendar"]) and
+        contains_any?(task_text, ["crm", "todos", "prep"]),
+      "scheduled job must persist the requested open-loop/calendar/CRM/todo review scope"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :browser_context}, _env, run) do
+    evidence_text = response_evidence_text(run)
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "browser_history_search")
+    |> require_finding(
+      contains_all?(evidence_text, ["matthew", "setup"]) and
+        contains_any?(evidence_text, ["pricing", "raue", "browser"]),
+      "browser context answer must use connected browser history evidence"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :chief_of_staff_priority}, _env, run) do
+    evidence_text = response_evidence_text(run)
+
+    []
+    |> require_success(run)
+    |> require_finding(
+      tool_used?(run, "get_open_loops") or tool_used?(run, "list_todos") or
+        context_has_open_work?(run),
+      "priority review must inspect current open loops/todos or use already-loaded current open-work context"
+    )
+    |> require_finding(
+      contains_any?(evidence_text, ["emma", "dentist", "family", "personal"]),
+      "priority review must include personal/family context"
+    )
+    |> require_finding(
+      contains_any?(evidence_text, ["matthew", "setup", "pricing"]),
+      "priority review must still include active relationship/business commitments"
+    )
+    |> require_finding(
+      message_class(run) in ["todo_digest", "assistant_reply"],
+      "priority review must return a Telegram-ready response class"
+    )
+  end
+
   defp score_chat_scenario(scenario, _env, run) do
     []
     |> require_success(run)
@@ -607,6 +872,11 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         external_account_id: "T-#{run_id}",
         metadata: %{"workspace_name" => "Verification Slack", "team_id" => "T-#{run_id}"}
       })
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    scheduled_job_at = DateTime.add(now, 26 * 60 * 60, :second)
+    calendar_device_id = seed_local_calendar(user_id, run_id, now)
+    browser_device_id = seed_browser_history(user_id, run_id, now)
 
     {:ok, matthew} =
       Crm.upsert_person(user_id, %{
@@ -692,8 +962,61 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       matthew_card_id: matthew_card_id,
       resolution_todo: resolution_todo,
       resolution_card_id: resolution_card_id,
-      dentist_todo: dentist_todo
+      dentist_todo: dentist_todo,
+      calendar_device_id: calendar_device_id,
+      browser_device_id: browser_device_id,
+      scheduled_job_at: scheduled_job_at
     }
+  end
+
+  defp seed_local_calendar(user_id, run_id, now) do
+    device_id = Ecto.UUID.generate()
+    meeting_start = DateTime.add(now, 24 * 60 * 60, :second)
+    meeting_end = DateTime.add(meeting_start, 45 * 60, :second)
+
+    {:ok, _summary} =
+      LocalCalendar.ingest_batch(user_id, device_id, [
+        %{
+          "source" => "calendar",
+          "guid" => "#{run_id}:matthew-raue-meeting",
+          "local_id" => "#{run_id}:matthew-raue-meeting",
+          "calendar_name" => "kent.fenwick@gmail.com",
+          "calendar_color" => "#2f80ed",
+          "title" => "Matthew Raue setup and pricing prep",
+          "notes" =>
+            "Meeting with Matthew Raue from Raue Automation about the setup path, pricing owner, and ETA. Kent should bring a concrete recommendation and next step.",
+          "location" => "Zoom",
+          "start_at" => DateTime.to_iso8601(meeting_start),
+          "end_at" => DateTime.to_iso8601(meeting_end),
+          "organizer_email" => "matthew@raue.example",
+          "attendee_emails" => ["matthew@raue.example", user_id],
+          "attendees_count" => 2
+        }
+      ])
+
+    device_id
+  end
+
+  defp seed_browser_history(user_id, run_id, now) do
+    device_id = Ecto.UUID.generate()
+
+    {:ok, _summary} =
+      LocalBrowserHistory.ingest_batch(user_id, device_id, [
+        %{
+          "source" => "browser_history",
+          "browser" => "chrome",
+          "guid" => "#{run_id}:raue-setup-pricing",
+          "local_id" => "#{run_id}:raue-setup-pricing",
+          "url" => "https://raue.example/setup-pricing",
+          "host" => "raue.example",
+          "title" => "Matthew Raue - Raue Automation setup pricing notes",
+          "visit_count" => 2,
+          "last_visited_at" => DateTime.to_iso8601(DateTime.add(now, -60 * 60, :second)),
+          "is_typed_url" => true
+        }
+      ])
+
+    device_id
   end
 
   defp create_linked_card(user_id, chat_id, run_id, %Todo{} = todo, suffix) do
@@ -730,6 +1053,15 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   defp cleanup_environment(user_id) do
     Repo.delete_all(from action in Action, where: action.user_id == ^user_id)
+    Repo.delete_all(from run in ScheduledTaskRun, where: run.user_id == ^user_id)
+    Repo.delete_all(from task in ScheduledTask, where: task.user_id == ^user_id)
+    Repo.delete_all(from event in MemoryEvent, where: event.user_id == ^user_id)
+    Repo.delete_all(from item in MemoryItem, where: item.user_id == ^user_id)
+    Repo.delete_all(from event in PreferenceRuleEvent, where: event.user_id == ^user_id)
+    Repo.delete_all(from rule in PreferenceRule, where: rule.user_id == ^user_id)
+    Repo.delete_all(from profile in PreferenceProfile, where: profile.user_id == ^user_id)
+    Repo.delete_all(from visit in LocalVisit, where: visit.user_id == ^user_id)
+    Repo.delete_all(from event in LocalEvent, where: event.user_id == ^user_id)
     Repo.delete_all(from link in PersonLink, where: link.user_id == ^user_id)
     Repo.delete_all(from todo in Todo, where: todo.user_id == ^user_id)
 
@@ -844,6 +1176,45 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   defp contains_any?(_text, _needles), do: false
 
+  defp contains_all?(text, needles) when is_binary(text) and is_list(needles) do
+    normalized = String.downcase(text)
+    Enum.all?(needles, &String.contains?(normalized, String.downcase(&1)))
+  end
+
+  defp contains_all?(_text, _needles), do: false
+
+  defp message_class(%{response: %{} = response}) do
+    response
+    |> Map.get("message_class", "")
+    |> to_string()
+  end
+
+  defp message_class(_run), do: ""
+
+  defp context_has_open_work?(%{context: context}) when is_map(context) do
+    todos = Map.get(context, :todos) || Map.get(context, "todos") || []
+    open_loops = Map.get(context, :open_loops) || Map.get(context, "open_loops") || %{}
+
+    (is_list(todos) and todos != []) or
+      open_loop_count(open_loops) > 0
+  end
+
+  defp context_has_open_work?(_run), do: false
+
+  defp open_loop_count(open_loops) when is_map(open_loops) do
+    open_loops
+    |> Map.take([:todos, "todos", :relationships, "relationships", :memory, "memory"])
+    |> Map.values()
+    |> Enum.map(fn
+      value when is_list(value) -> length(value)
+      value when is_map(value) -> map_size(value)
+      _value -> 0
+    end)
+    |> Enum.sum()
+  end
+
+  defp open_loop_count(_open_loops), do: 0
+
   defp tool_used?(run, tool_name) do
     run
     |> tool_names()
@@ -865,6 +1236,50 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   end
 
   defp tool_names(_run), do: []
+
+  defp todo_text(%Todo{} = todo) do
+    [
+      todo.title,
+      todo.summary,
+      todo.next_action,
+      todo.notes,
+      inspect(todo.metadata || %{})
+    ]
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp memory_item_text(%MemoryItem{} = item) do
+    [
+      item.title,
+      item.content,
+      item.summary,
+      item.kind,
+      inspect(item.tags || []),
+      inspect(item.metadata || %{})
+    ]
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp preference_memory_text(user_id) do
+    (PreferenceMemory.active_rules(user_id) ++ PreferenceMemory.pending_rules(user_id))
+    |> Enum.map(&inspect/1)
+    |> Enum.join("\n")
+    |> String.downcase()
+  end
+
+  defp scheduled_task_text(%ScheduledTask{} = task) do
+    [
+      task.title,
+      task.description,
+      inspect(task.schedule || %{}),
+      inspect(task.command || %{}),
+      inspect(task.metadata || %{})
+    ]
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
 
   defp stringify_map(map) when is_map(map) do
     Enum.reduce(map, %{}, fn {key, value}, acc ->

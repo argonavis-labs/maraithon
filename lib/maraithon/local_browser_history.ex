@@ -158,7 +158,10 @@ defmodule Maraithon.LocalBrowserHistory do
 
     user_id
     |> recent_visits(limit: 1000, browser: browser)
-    |> Enum.filter(&matches_term?(&1, needle))
+    |> Enum.map(&{&1, match_score(&1, needle)})
+    |> Enum.filter(fn {_visit, score} -> score > 0 end)
+    |> Enum.sort_by(fn {visit, score} -> {-score, -visited_at_unix(visit.last_visited_at)} end)
+    |> Enum.map(fn {visit, _score} -> visit end)
     |> Enum.take(limit)
   end
 
@@ -345,13 +348,47 @@ defmodule Maraithon.LocalBrowserHistory do
 
   defp parse_datetime(_), do: nil
 
-  defp matches_term?(%LocalVisit{title: title, url: url, host: host}, needle) do
-    haystack =
-      [title, url, host]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&String.downcase/1)
-      |> Enum.join(" ")
+  defp match_score(%LocalVisit{} = visit, needle) do
+    haystack = searchable_text(visit)
 
-    String.contains?(haystack, needle)
+    cond do
+      needle != "" and String.contains?(haystack, needle) ->
+        1_000
+
+      true ->
+        token_score(haystack, search_tokens(needle))
+    end
   end
+
+  defp searchable_text(%LocalVisit{title: title, url: url, host: host}) do
+    [title, url, host]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.join(" ")
+  end
+
+  defp search_tokens(term) when is_binary(term) do
+    term
+    |> String.split(~r/[^a-z0-9]+/u, trim: true)
+    |> Enum.reject(
+      &(String.length(&1) < 3 or &1 in ~w(and the for with from about online project))
+    )
+    |> Enum.uniq()
+  end
+
+  defp token_score(_haystack, []), do: 0
+
+  defp token_score(haystack, tokens) do
+    matches = Enum.count(tokens, &String.contains?(haystack, &1))
+    threshold = min(2, length(tokens))
+
+    if matches >= threshold do
+      matches
+    else
+      0
+    end
+  end
+
+  defp visited_at_unix(%DateTime{} = datetime), do: DateTime.to_unix(datetime)
+  defp visited_at_unix(_datetime), do: 0
 end

@@ -88,7 +88,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     decide_project_recommendation grant_project_repo_access start_implementation_run
     update_implementation_run prepare_project_action prepare_agent_action
     prepare_external_action query_agent create_scheduled_task pause_scheduled_task
-    cancel_scheduled_task
+    cancel_scheduled_task gmail_drafts
   ))
 
   def tool_definitions(_context) do
@@ -637,6 +637,27 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           "required" => ["message_id"],
           "properties" => %{
             "message_id" => %{"type" => "string"},
+            "google_provider" => %{"type" => "string"},
+            "google_account_email" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "gmail_drafts",
+        "List, get, create, update, send, or delete Gmail drafts. Use create/update only when the user asks to save an email draft; never send or delete without explicit confirmation.",
+        %{
+          "type" => "object",
+          "required" => ["action"],
+          "properties" => %{
+            "action" => %{"type" => "string"},
+            "draft_id" => %{"type" => "string"},
+            "to" => %{"type" => "string"},
+            "subject" => %{"type" => "string"},
+            "body" => %{"type" => "string"},
+            "cc" => %{"type" => "string"},
+            "bcc" => %{"type" => "string"},
+            "thread_id" => %{"type" => "string"},
+            "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
             "google_provider" => %{"type" => "string"},
             "google_account_email" => %{"type" => "string"}
           }
@@ -1315,6 +1336,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "gmail_get_message" ->
         inject_user_and_execute("gmail_get_message", runtime_context, args)
 
+      "gmail_drafts" ->
+        inject_user_and_execute("gmail_drafts", runtime_context, args)
+
       "calendar_list_events" ->
         inject_user_and_execute("google_calendar_list_events", runtime_context, args)
 
@@ -1467,12 +1491,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         conversation_id: Map.get(runtime_context, :conversation_id),
         chat_id: Map.get(runtime_context, :chat_id)
       },
-      tool_metadata: toolbox_policy_metadata(tool_name)
+      tool_metadata: toolbox_policy_metadata(tool_name, args)
     }
   end
 
-  defp toolbox_policy_metadata(tool_name) do
+  defp toolbox_policy_metadata(tool_name, args) do
     cond do
+      tool_name == "gmail_drafts" ->
+        gmail_drafts_policy_metadata(args)
+
       MapSet.member?(@toolbox_read_tools, tool_name) ->
         %{
           side_effect: "read",
@@ -1495,6 +1522,46 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       true ->
         Tools.policy_metadata_for(tool_name)
+    end
+  end
+
+  defp gmail_drafts_policy_metadata(args) when is_map(args) do
+    action =
+      args
+      |> Map.get("action", "list")
+      |> to_string()
+      |> String.downcase()
+
+    cond do
+      action in ["list", "get"] ->
+        %{
+          side_effect: "read",
+          read_only?: true,
+          destructive?: false,
+          idempotent?: true,
+          user_required?: true,
+          confirmation_required?: false
+        }
+
+      action in ["send", "delete"] ->
+        %{
+          side_effect: if(action == "send", do: "external_send", else: "destructive"),
+          read_only?: false,
+          destructive?: action == "delete",
+          idempotent?: false,
+          user_required?: true,
+          confirmation_required?: true
+        }
+
+      true ->
+        %{
+          side_effect: "write",
+          read_only?: false,
+          destructive?: false,
+          idempotent?: false,
+          user_required?: true,
+          confirmation_required?: false
+        }
     end
   end
 

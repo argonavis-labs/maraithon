@@ -74,7 +74,9 @@ defmodule Maraithon.TelegramAssistant.Context do
       relationships: fetched.relationships,
       open_insights: fetched.open_insights,
       todos: fetched.todos,
+      calendar: fetched.calendar,
       briefing_schedule: fetched.briefing_schedule,
+      current_time: current_time_context(fetched.briefing_schedule),
       connected_accounts: fetched.connected_accounts,
       source_freshness: fetched.source_freshness,
       projects: fetched.projects,
@@ -119,6 +121,25 @@ defmodule Maraithon.TelegramAssistant.Context do
       {:ok, {key, value}}, acc -> Map.put(acc, key, value)
       {:exit, reason}, _acc -> raise "context fetch failed: #{inspect(reason)}"
     end)
+  end
+
+  defp current_time_context(briefing_schedule) do
+    now_utc = DateTime.utc_now() |> DateTime.truncate(:second)
+    offset_hours = read_field(briefing_schedule, "timezone_offset_hours") || -5
+
+    local_now =
+      if is_integer(offset_hours) do
+        DateTime.add(now_utc, offset_hours, :hour)
+      else
+        now_utc
+      end
+
+    %{
+      now_utc: DateTime.to_iso8601(now_utc),
+      local_now: DateTime.to_iso8601(local_now),
+      local_timezone: read_field(briefing_schedule, "local_timezone") || "UTC-5",
+      timezone_offset_hours: offset_hours
+    }
   end
 
   def prompt_snapshot(context) when is_map(context), do: context
