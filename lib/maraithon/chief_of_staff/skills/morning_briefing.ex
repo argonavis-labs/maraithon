@@ -1233,7 +1233,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
      }, "error", error_message}
   end
 
-  defp verify_and_revise_morning_brief(brief, brief_input, generation_mode) do
+  @doc """
+  Scores and revises a model-produced morning brief against the Chief of Staff
+  quality contract used in production delivery.
+  """
+  def verify_quality(brief, brief_input, generation_mode \\ "llm")
+      when is_map(brief) and is_map(brief_input) do
     initial_findings = morning_brief_findings(brief, brief_input, generation_mode)
     revised_brief = revise_morning_brief(brief, brief_input, initial_findings)
     final_findings = morning_brief_findings(revised_brief, brief_input, generation_mode)
@@ -1255,6 +1260,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     }
 
     {revised_brief, verification}
+  end
+
+  defp verify_and_revise_morning_brief(brief, brief_input, generation_mode) do
+    verify_quality(brief, brief_input, generation_mode)
   end
 
   defp morning_brief_findings(brief, brief_input, generation_mode) do

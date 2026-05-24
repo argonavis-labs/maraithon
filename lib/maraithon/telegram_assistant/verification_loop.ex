@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ActionLedger.Action
   alias Maraithon.AssistantHarness
+  alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ConnectedAccounts
   alias Maraithon.ContextEngine
   alias Maraithon.Crm
@@ -33,7 +34,15 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.ScheduledTasks.Run, as: ScheduledTaskRun
   alias Maraithon.ScheduledTasks.Task, as: ScheduledTask
   alias Maraithon.TelegramAssistant
-  alias Maraithon.TelegramAssistant.{Client.LLMJson, Context, ModelRouting, Toolbox}
+
+  alias Maraithon.TelegramAssistant.{
+    Client.LLMJson,
+    Context,
+    ModelRouting,
+    ProactiveQualityGate,
+    Toolbox
+  }
+
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos
@@ -135,6 +144,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :context_fault_tolerance,
+        kind: :static
+      },
+      %{
+        id: :proactive_quality_gate_contract,
+        kind: :static
+      },
+      %{
+        id: :delivery_quality_gate_contract,
+        kind: :static
+      },
+      %{
+        id: :morning_brief_quality_contract,
         kind: :static
       },
       %{
@@ -404,6 +425,231 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         elapsed_ms < 250,
         "context fetch must return quickly instead of waiting for slow sources"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :proactive_quality_gate_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    stale_todo = verification_stale_work_todo(now)
+    personal_event = verification_personal_event(now)
+
+    payload = %{
+      "trigger" => %{
+        "id" => "verification-weekend-check",
+        "cadence" => "proactive",
+        "local_time" => %{"weekend" => true, "weekday" => "Sunday"}
+      },
+      "context" => %{
+        "calendar" => %{"personal_events" => [personal_event]},
+        "todos" => [stale_todo],
+        "open_loops" => %{"buckets" => %{"work" => [stale_todo]}},
+        "relationships" => []
+      },
+      "recent_pushes" => []
+    }
+
+    bad_plan = %{
+      "decision" => "send_now",
+      "assistant_message" => """
+      Kent, several overdue follow-ups need your attention now:
+      • Dan Bourke: Confirm artifact status and give a clear ETA.
+      • Matthew Diakonov: Confirm status and book time.
+      • Faye Pang: Share update on next steps.
+      """,
+      "message_class" => "todo_digest",
+      "urgency" => 0.92,
+      "interrupt_now" => true,
+      "todo_ids" => ["stale-dan-bourke"],
+      "summary" => "Bad backlog dump used by the verifier."
+    }
+
+    verified = ProactiveQualityGate.verify_proactive_plan(bad_plan, payload)
+    message = Map.get(verified, "assistant_message", "")
+    verification = Map.get(verified, "_quality_verification", %{})
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(verification, "score") == 10,
+        "proactive quality gate must revise known-bad proactive copy to 10/10"
+      )
+      |> require_finding(
+        Map.get(verified, "decision") == "send_now",
+        "proactive quality gate should still send when a personal/family item deserves attention"
+      )
+      |> require_finding(
+        contains_all?(message, ["emma", "soccer"]) and
+          contains_any?(message, ["kent.fenwick@gmail.com", "personal", "family"]),
+        "revised proactive copy must prioritize the personal calendar item with context"
+      )
+      |> require_finding(
+        not contains_any?(message, ["several overdue follow-ups", "high-priority", "urgent"]),
+        "revised proactive copy must remove stale-backlog urgency framing"
+      )
+      |> require_finding(
+        Map.get(verified, "todo_ids") == [],
+        "personal-calendar revision must not keep stale work todo cards attached"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :delivery_quality_gate_contract} = scenario, _env, _opts) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    stale_todo = verification_stale_work_todo(now)
+
+    stale_candidate = %{
+      "id" => "candidate-stale-work",
+      "body" =>
+        "Dan Bourke (A-Team video project contact) is attached to the artifact-status commitment. Mark it important if it still matters, otherwise dismiss it.",
+      "planning_rank" => 2,
+      "attention_profile" => %{
+        "bucket" => "business_project_waiting",
+        "bucket_rank" => 2,
+        "score" => 260,
+        "stale_confirmation_candidate" => true,
+        "personal_family" => false
+      },
+      "related_todos" => [stale_todo]
+    }
+
+    personal_candidate = %{
+      "id" => "candidate-personal",
+      "body" =>
+        "Emma Soccer Practice is on kent.fenwick@gmail.com at 6:00 PM. Anything I should help prep or confirm?",
+      "planning_rank" => 1,
+      "attention_profile" => %{
+        "bucket" => "personal_family",
+        "bucket_rank" => 0,
+        "score" => 720,
+        "stale_confirmation_candidate" => false,
+        "personal_family" => true
+      },
+      "related_todos" => []
+    }
+
+    payload = %{
+      "candidates" => [personal_candidate, stale_candidate],
+      "context" => %{"todos" => [stale_todo]},
+      "recent_pushes" => []
+    }
+
+    bad_plan = %{
+      "dispositions" => [
+        %{
+          "candidate_id" => "candidate-stale-work",
+          "disposition" => "interrupt_now",
+          "reason" => "Overdue work."
+        },
+        %{
+          "candidate_id" => "candidate-personal",
+          "disposition" => "hold",
+          "reason" => "Not business."
+        }
+      ],
+      "digest_intro" => "Several overdue follow-ups need your attention now.",
+      "summary" => "Bad delivery ordering used by the verifier."
+    }
+
+    verified = ProactiveQualityGate.verify_delivery_plan(bad_plan, payload)
+    dispositions = Map.get(verified, "dispositions", [])
+    personal = Enum.find(dispositions, &(Map.get(&1, "candidate_id") == "candidate-personal"))
+    stale = Enum.find(dispositions, &(Map.get(&1, "candidate_id") == "candidate-stale-work"))
+    verification = Map.get(verified, "_quality_verification", %{})
+    intro = Map.get(verified, "digest_intro", "")
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(verification, "score") == 10,
+        "delivery quality gate must revise known-bad delivery ordering to 10/10"
+      )
+      |> require_finding(
+        Map.get(personal || %{}, "disposition") == "digest",
+        "delivery quality gate must promote personal/family context over stale work"
+      )
+      |> require_finding(
+        Map.get(stale || %{}, "disposition") == "hold",
+        "delivery quality gate must hold stale unprotected work when higher-priority context exists"
+      )
+      |> require_finding(
+        contains_any?(intro, ["personal/family", "worth attention"]) and
+          not contains_any?(intro, ["overdue", "follow-ups"]),
+        "delivery digest intro must match the revised attention plan"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :morning_brief_quality_contract} = scenario, _env, _opts) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    personal_event = verification_personal_event(now)
+
+    brief_input = %{
+      "date" => "2026-05-24",
+      "calendar" => %{
+        "today_events" => [personal_event],
+        "upcoming_local" => [personal_event],
+        "tomorrow_first_event" => %{
+          "summary" => "Boardy Pro Kickoff",
+          "display_start" => "9:00 AM",
+          "calendar_name" => "Work"
+        }
+      }
+    }
+
+    brief = %{
+      "title" => "Sunday, May 24 - Work backlog",
+      "summary" => "A few follow-ups are open.",
+      "body" =>
+        "## Needs Your Attention\n- Dan Bourke is still attached to the A-Team video artifact status decision.",
+      "todos" => [
+        %{
+          "title" => "Decide whether Dan Bourke still matters",
+          "summary" =>
+            "Dan Bourke is the A-Team video project contact attached to the stale artifact-status commitment.",
+          "next_action" =>
+            "Mark the A-Team artifact follow-up important if it still matters, otherwise dismiss it.",
+          "metadata" => %{
+            "company" => "A-Team",
+            "relationship_context" => "video project contact",
+            "why_it_matters" => "open artifact status commitment"
+          }
+        }
+      ]
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, brief_input, "llm")
+    body = Map.get(revised, "body", "")
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(verification, "score") == 10,
+        "morning brief quality verifier must revise the brief to 10/10"
+      )
+      |> require_finding(
+        contains_all?(body, ["emma", "soccer"]) and
+          contains_any?(body, ["kent.fenwick@gmail.com", "personal", "family"]),
+        "morning brief revision must add personal/family calendar context"
+      )
+      |> require_finding(
+        contains_any?(body, ["look ahead", "tomorrow", "next week"]),
+        "weekend morning brief must add next-week prep context"
+      )
+      |> require_finding(
+        "structured_todos_delivered_as_individual_telegram_cards" in Map.get(
+          verification,
+          "criteria",
+          []
+        ),
+        "morning brief score must include separate actionable todo cards in the rubric"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -979,6 +1225,54 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     []
     |> require_success(run)
     |> require_finding(final_text(run) != "", "#{scenario.id} must return a final answer")
+  end
+
+  defp verification_stale_work_todo(%DateTime{} = now) do
+    occurred_at =
+      now
+      |> DateTime.add(-5 * 86_400, :second)
+      |> DateTime.to_iso8601()
+
+    %{
+      "id" => "stale-dan-bourke",
+      "source" => "telegram_verification",
+      "kind" => "relationship_followup",
+      "attention_mode" => "act_now",
+      "title" => "Confirm artifact status for Dan Bourke",
+      "summary" =>
+        "Dan Bourke is the A-Team video project contact attached to the stale artifact-status commitment.",
+      "next_action" =>
+        "Decide whether the A-Team artifact follow-up still matters; mark it important or dismiss it.",
+      "priority" => 50,
+      "source_occurred_at" => occurred_at,
+      "metadata" => %{
+        "company" => "A-Team",
+        "relationship_context" => "video project contact",
+        "why_it_matters" => "open video artifact status commitment",
+        "people" => [
+          %{
+            "display_name" => "Dan Bourke",
+            "relationship_strength" => 35,
+            "relationship" => "video project contact"
+          }
+        ]
+      }
+    }
+  end
+
+  defp verification_personal_event(%DateTime{} = now) do
+    start_at =
+      now
+      |> DateTime.add(2 * 60 * 60, :second)
+      |> DateTime.to_iso8601()
+
+    %{
+      "summary" => "Emma Soccer Practice",
+      "calendar_name" => "kent.fenwick@gmail.com",
+      "display_start" => "6:00 PM",
+      "start" => start_at,
+      "attention_profile" => %{"personal_family" => true}
+    }
   end
 
   defp seed_environment(user_id, chat_id, run_id) do

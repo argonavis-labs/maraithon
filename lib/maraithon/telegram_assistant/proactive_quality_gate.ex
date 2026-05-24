@@ -207,13 +207,16 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
       end)
 
     {dispositions, findings} =
+      protect_attention_order(dispositions, candidates_by_id, findings)
+
+    {dispositions, findings} =
       limit_stale_confirmation_digest(dispositions, candidates_by_id, findings)
 
     plan =
       plan
       |> Map.put("dispositions", dispositions)
       |> maybe_clear_digest_intro(dispositions)
-      |> maybe_neutralize_bad_digest_intro()
+      |> maybe_neutralize_bad_digest_intro(dispositions, candidates_by_id)
 
     {plan, findings}
   end
@@ -271,6 +274,97 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     end
   end
 
+  defp protect_attention_order(dispositions, candidates_by_id, findings) do
+    stale_sent =
+      dispositions
+      |> Enum.filter(&deliverable_disposition?/1)
+      |> Enum.filter(fn disposition ->
+        candidate = Map.get(candidates_by_id, read_field(disposition, "candidate_id"))
+        candidate |> candidate_profile() |> stale_unprotected?()
+      end)
+
+    priority_held =
+      dispositions
+      |> Enum.filter(&(read_field(&1, "disposition") == "hold"))
+      |> Enum.filter(fn disposition ->
+        candidate = Map.get(candidates_by_id, read_field(disposition, "candidate_id"))
+        priority_candidate?(candidate)
+      end)
+      |> Enum.sort_by(fn disposition ->
+        candidate = Map.get(candidates_by_id, read_field(disposition, "candidate_id"))
+        priority_candidate_sort_key(candidate)
+      end)
+
+    if stale_sent != [] and priority_held != [] do
+      promoted_id = priority_held |> List.first() |> read_field("candidate_id")
+      stale_ids = MapSet.new(Enum.map(stale_sent, &read_field(&1, "candidate_id")))
+
+      dispositions =
+        Enum.map(dispositions, fn disposition ->
+          candidate_id = read_field(disposition, "candidate_id")
+
+          cond do
+            candidate_id == promoted_id ->
+              disposition
+              |> Map.put("disposition", "digest")
+              |> Map.put(
+                "reason",
+                "Feedback verification: personal/family or close-relationship item outranks stale work in this cycle."
+              )
+
+            MapSet.member?(stale_ids, candidate_id) ->
+              hold_disposition(
+                disposition,
+                "Feedback verification: held stale work because higher-priority personal/family or close-relationship context exists."
+              )
+
+            true ->
+              disposition
+          end
+        end)
+
+      {dispositions, findings ++ [:wrong_order]}
+    else
+      {dispositions, findings}
+    end
+  end
+
+  defp deliverable_disposition?(disposition) do
+    read_field(disposition, "disposition") in ["interrupt_now", "digest"]
+  end
+
+  defp priority_candidate?(candidate) when is_map(candidate) do
+    bucket =
+      candidate
+      |> candidate_profile()
+      |> read_field("bucket")
+
+    bucket in ["personal_family", "strong_relationship_waiting"]
+  end
+
+  defp priority_candidate?(_candidate), do: false
+
+  defp priority_candidate_sort_key(candidate) when is_map(candidate) do
+    profile = candidate_profile(candidate)
+
+    {
+      read_integer(profile, "bucket_rank", 99),
+      -read_integer(profile, "score", 0),
+      read_field(candidate, "planning_rank") || 999_999
+    }
+  end
+
+  defp priority_candidate_sort_key(_candidate), do: {99, 0, 999_999}
+
+  defp candidate_profile(candidate) when is_map(candidate) do
+    case read_field(candidate, "attention_profile") do
+      profile when is_map(profile) -> profile
+      _other -> %{}
+    end
+  end
+
+  defp candidate_profile(_candidate), do: %{}
+
   defp limit_stale_confirmation_digest(dispositions, candidates_by_id, findings) do
     {limited, _seen, findings} =
       Enum.reduce(dispositions, {[], false, findings}, fn disposition, {acc, seen?, findings} ->
@@ -305,17 +399,49 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     end
   end
 
-  defp maybe_neutralize_bad_digest_intro(plan) do
+  defp maybe_neutralize_bad_digest_intro(plan, dispositions, candidates_by_id) do
     intro = read_field(plan, "digest_intro") || ""
 
-    if backlog_dump?(intro) or personal_as_business?(intro) do
+    if backlog_dump?(intro) or personal_as_business?(intro) or
+         stale_intro_without_stale_digest?(intro, dispositions, candidates_by_id) do
       Map.put(
         plan,
         "digest_intro",
-        "I grouped only the items that still look worth attention now."
+        replacement_digest_intro(dispositions, candidates_by_id)
       )
     else
       plan
+    end
+  end
+
+  defp stale_intro_without_stale_digest?(intro, dispositions, candidates_by_id) do
+    contains_any?(intro, ~w(overdue stale older follow-up followups follow-ups)) and
+      not Enum.any?(dispositions, fn disposition ->
+        read_field(disposition, "disposition") == "digest" and
+          disposition
+          |> read_field("candidate_id")
+          |> then(&Map.get(candidates_by_id, &1))
+          |> candidate_profile()
+          |> stale_unprotected?()
+      end)
+  end
+
+  defp replacement_digest_intro(dispositions, candidates_by_id) do
+    has_personal? =
+      Enum.any?(dispositions, fn disposition ->
+        read_field(disposition, "disposition") == "digest" and
+          disposition
+          |> read_field("candidate_id")
+          |> then(&Map.get(candidates_by_id, &1))
+          |> candidate_profile()
+          |> read_field("bucket")
+          |> Kernel.==("personal_family")
+      end)
+
+    if has_personal? do
+      "I grouped the personal/family item that looks worth attention now."
+    else
+      "I grouped only the item that still looks worth attention now."
     end
   end
 
