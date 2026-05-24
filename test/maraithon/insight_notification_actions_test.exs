@@ -130,6 +130,8 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Gmail"
     assert sent.text =~ "<b>Why important</b>"
     assert sent.text =~ "<b>Next</b>"
+    assert sent.text =~ "tap Draft Email"
+    assert sent.text =~ "approval before sending"
 
     assert sent.text =~
              "Send the promised follow-through now and explicitly confirm delivery"
@@ -285,6 +287,8 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Renat asked for the intro launch video update."
     assert sent.text =~ "Renat Gabitov"
     assert sent.text =~ "Suggested:"
+    assert sent.text =~ "tap Draft Email"
+    assert sent.text =~ "approval before sending"
     assert sent.text =~ "open the Intro launch video thread"
     assert sent.text =~ "confirm what Renat Gabitov is waiting on"
     assert String.length(sent.text) <= 700
@@ -337,11 +341,15 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "contact on Starteryou UGC Campaigns thread"
     assert sent.text =~ "Gmail · kent@runner.now"
     assert sent.text =~ "Suggested:"
+    assert sent.text =~ "tap Draft Email"
+    assert sent.text =~ "approval before sending"
+    assert sent.text =~ "open the Starteryou UGC Campaigns thread"
     assert sent.text =~ "confirm what Michael Berlingo is waiting on"
-    assert sent.text =~ "mark it not important if it no longer matters"
+    assert sent.text =~ "dismiss if stale"
     assert String.length(sent.text) <= 700
     refute sent.text =~ "exact artifact or update"
     refute sent.text =~ "Reply now with owner, ETA"
+    assert button_labels(sent.opts) |> Enum.member?("Draft Email")
   end
 
   test "drafts and sends a Slack reply directly from Telegram", %{agent: agent, user_id: user_id} do
@@ -400,6 +408,8 @@ defmodule Maraithon.InsightNotificationActionsTest do
       Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
 
     sent = last_telegram_message(:send)
+    assert sent.text =~ "tap Draft Slack"
+    assert sent.text =~ "approval before posting"
     assert button_labels(sent.opts) |> Enum.member?("Draft Slack")
 
     :ok =

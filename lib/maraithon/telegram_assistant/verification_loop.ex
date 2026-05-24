@@ -959,6 +959,13 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
     text = Map.get(payload, :text, "")
 
+    button_labels =
+      payload
+      |> Map.get(:reply_markup, %{})
+      |> Map.get("inline_keyboard", [])
+      |> List.flatten()
+      |> Enum.map(& &1["text"])
+
     findings =
       []
       |> require_finding(
@@ -976,6 +983,15 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         String.contains?(text, "Suggested:"),
         "todo card next step must be framed as suggested next actions"
+      )
+      |> require_finding(
+        String.contains?(text, "tap Draft Email") and
+          String.contains?(text, "approval before sending"),
+        "todo card must proactively suggest an executable draft step while keeping Kent in the approval loop"
+      )
+      |> require_finding(
+        "Draft Email" in button_labels,
+        "todo card must expose the draft action button when the assistant can prepare the reply"
       )
       |> require_finding(
         String.contains?(text, "confirm what Michael Berlingo is waiting on"),

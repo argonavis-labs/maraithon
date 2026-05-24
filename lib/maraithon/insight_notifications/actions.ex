@@ -812,6 +812,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       true ->
         inferred_next_action(insight, metadata)
     end
+    |> proactive_next_step_text(insight, metadata)
   end
 
   defp person_name(metadata) do
@@ -1040,6 +1041,70 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
+  defp proactive_next_step_text(base_text, %Insight{} = insight, metadata)
+       when is_binary(base_text) do
+    case primary_action(insight) do
+      %{label: label} ->
+        action_intro =
+          "Suggested: tap #{label}; I'll draft for approval before #{delivery_verb(insight)}."
+
+        action_detail = proactive_action_detail(base_text, insight, metadata)
+
+        [action_intro, action_detail]
+        |> Enum.reject(&blank?/1)
+        |> Enum.join(" ")
+
+      _ ->
+        base_text
+    end
+  end
+
+  defp proactive_next_step_text(base_text, _insight, _metadata), do: base_text
+
+  defp proactive_action_detail(base_text, %Insight{} = insight, metadata) do
+    person = person_name(metadata) || "them"
+    subject = subject_text(metadata)
+
+    cond do
+      present?(subject) and inferred_next_action_text?(base_text) ->
+        "Then open the #{subject} thread to confirm what #{person} is waiting on; dismiss if stale."
+
+      present?(base_text) ->
+        "Next: #{strip_suggested_prefix(base_text)}"
+
+      true ->
+        case insight.source do
+          "slack" ->
+            "Next: answer the thread with only the owner, next step, and timing the evidence supports."
+
+          _ ->
+            "Next: reply with only the concrete update, owner, and timing the evidence supports."
+        end
+    end
+  end
+
+  defp inferred_next_action_text?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    String.contains?(text, [
+      "confirm what",
+      "confirm the real ask",
+      "mark it not important",
+      "if it no longer matters"
+    ])
+  end
+
+  defp inferred_next_action_text?(_text), do: false
+
+  defp strip_suggested_prefix(text) when is_binary(text) do
+    text
+    |> String.replace(~r/^suggested:\s*/i, "")
+    |> compact_sentence()
+  end
+
+  defp delivery_verb(%Insight{source: "slack"}), do: "posting"
+  defp delivery_verb(_insight), do: "sending"
+
   defp contains_ci?(text, fragment) when is_binary(text) and is_binary(fragment) do
     String.contains?(String.downcase(text), String.downcase(fragment))
   end
@@ -1067,12 +1132,33 @@ defmodule Maraithon.InsightNotifications.Actions do
       nil
     else
       case insight.source do
-        "gmail" -> %{label: "Draft Email", callback_action: "draft"}
-        "slack" -> %{label: "Draft Slack", callback_action: "draft"}
-        _ -> nil
+        "gmail" ->
+          if draft_action_available?(insight),
+            do: %{label: "Draft Email", callback_action: "draft"},
+            else: nil
+
+        "slack" ->
+          if draft_action_available?(insight),
+            do: %{label: "Draft Slack", callback_action: "draft"},
+            else: nil
+
+        _ ->
+          nil
       end
     end
   end
+
+  defp draft_action_available?(%Insight{source: "gmail"} = insight) do
+    metadata = insight.metadata || %{}
+    present?(gmail_target_address(insight, metadata))
+  end
+
+  defp draft_action_available?(%Insight{source: "slack"} = insight) do
+    metadata = insight.metadata || %{}
+    present?(read_string(metadata, "team_id")) and present?(read_string(metadata, "channel_id"))
+  end
+
+  defp draft_action_available?(_insight), do: false
 
   defp ackable_insight?(%Insight{} = insight) do
     insight.category == "important_fyi" or
