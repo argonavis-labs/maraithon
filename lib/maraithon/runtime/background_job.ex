@@ -64,6 +64,7 @@ defmodule Maraithon.Runtime.BackgroundJob do
     |> normalize_string(:job_type)
     |> normalize_string(:user_id)
     |> normalize_string(:dedupe_key)
+    |> foreign_key_constraint(:user_id, name: :background_jobs_user_id_fkey)
     |> unique_constraint(:dedupe_key,
       name: :background_jobs_dedupe_key_index,
       message: "already has an active background job"

@@ -31,9 +31,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp do_run_inbound(attrs) do
-    context = ContextEngine.build_context(attrs)
-    conversation = Map.get(attrs, :conversation)
     model_profile = ModelRouting.profile_for(attrs)
+    context_attrs = attrs_with_model_profile(attrs, model_profile)
+    context = ContextEngine.build_context(context_attrs)
+    conversation = Map.get(attrs, :conversation)
 
     case start_run(attrs, context, model_profile) do
       {:ok, run} ->
@@ -1212,6 +1213,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp runner_policy_opts(runtime_context \\ %{}) do
     [max_wall_clock_ms: TelegramAssistant.hard_timeout_ms()]
     |> Keyword.merge(Map.get(runtime_context, :llm_opts, []))
+  end
+
+  defp attrs_with_model_profile(attrs, model_profile)
+       when is_map(attrs) and is_map(model_profile) do
+    attrs
+    |> Map.put(:model_profile, model_profile)
+    |> Map.put(:request_focus, Map.get(model_profile, :request_focus))
   end
 
   defp conversation_id(%Conversation{id: id}), do: id

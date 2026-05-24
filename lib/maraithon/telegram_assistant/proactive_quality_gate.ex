@@ -24,8 +24,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   )
   @context_stop_words ~w(
     a an and are as at be by do for from has have he her him his i if in is it its me my
-    of on or our she so status that the their them they this to update we who why with you
+    next of on or our she so status that the their them they this to update we who why with you
   )
+  @person_line_stop_labels ~w(action context eta next note notes owner status summary todo update why)
   @rubric [
     "personal/family before routine work",
     "new or newly changed items during proactive dayparts",
@@ -764,6 +765,13 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     ~r/(?:^|\n)\s*(?:[-*•]|\d+[.)])?\s*([A-Z][A-Za-z'@.-]+(?:\s+[A-Z][A-Za-z'.-]+){0,3})\s*:\s*([^\n]+)/u
     |> Regex.scan(text)
     |> Enum.map(fn [full, name, _rest] -> {String.trim(name), String.trim(full)} end)
+    |> Enum.reject(fn {name, _line} ->
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9_ -]/, "")
+      |> String.trim()
+      |> then(&(&1 in @person_line_stop_labels or &1 in @context_stop_words))
+    end)
   end
 
   defp person_lines(_text), do: []

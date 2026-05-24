@@ -83,12 +83,25 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   Enqueue the `relationship_ingestion` job that runs once a `Crm.Ingest.Window`
   has been guarded into `flushed` status. Idempotent on `window_id`.
   """
-  def enqueue_relationship_ingestion(window_id) when is_binary(window_id) do
-    enqueue("relationship_ingestion", %{
+  def enqueue_relationship_ingestion(window_id, user_id \\ nil) when is_binary(window_id) do
+    attrs = %{
+      "user_id" => user_id,
       "queue" => "relationships",
       "payload" => %{"window_id" => window_id},
       "dedupe_key" => "crm_ingest:flush:#{window_id}"
-    })
+    }
+
+    case enqueue("relationship_ingestion", attrs) do
+      {:error, %Ecto.Changeset{} = changeset} = error ->
+        if is_binary(user_id) and user_foreign_key_error?(changeset) do
+          enqueue("relationship_ingestion", Map.put(attrs, "user_id", nil))
+        else
+          error
+        end
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -229,6 +242,17 @@ defmodule Maraithon.Runtime.BackgroundJobs do
   end
 
   defp handle_dedupe_conflict({:error, changeset}, _attrs), do: {:error, changeset}
+
+  defp user_foreign_key_error?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {:user_id, {_message, opts}} ->
+        Keyword.get(opts, :constraint) == :foreign and
+          Keyword.get(opts, :constraint_name) == "background_jobs_user_id_fkey"
+
+      _other ->
+        false
+    end)
+  end
 
   defp default_queue("email_processing"), do: "email"
   defp default_queue("relationship_learning"), do: "relationships"

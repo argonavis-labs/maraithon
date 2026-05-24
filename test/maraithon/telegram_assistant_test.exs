@@ -160,7 +160,7 @@ defmodule Maraithon.TelegramAssistantTest do
         end)
 
       if sequence == 0 do
-        assert Enum.any?(payload.tools, &(&1["name"] == "get_open_work_summary"))
+        assert Enum.any?(payload.tools, &(&1["name"] == "get_open_loops"))
         assert payload.runtime_policy.loop.max_llm_turns == 6
         assert payload.runtime_policy.tool_calls.max_per_step == 3
 
@@ -170,13 +170,13 @@ defmodule Maraithon.TelegramAssistantTest do
            "assistant_message" => "",
            "message_class" => "assistant_reply",
            "tool_calls" => [
-             %{"tool" => "get_open_work_summary", "arguments" => %{"limit" => 3}}
+             %{"tool" => "get_open_loops", "arguments" => %{"limit" => 3}}
            ],
            "summary" => "Need a fresh work summary."
          }}
       else
         [history_entry] = payload.tool_history
-        assert history_entry["tool"] == "get_open_work_summary"
+        assert history_entry["tool"] == "get_open_loops"
 
         {:ok,
          %{
@@ -209,7 +209,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert run.status == "completed"
     assert run.trigger_type == "inbound_message"
-    assert get_in(run.prompt_snapshot, ["open_insights"]) != []
+    assert is_map(run.prompt_snapshot["open_loops"] || run.prompt_snapshot[:open_loops])
     assert is_map(run.prompt_snapshot["user_memory"] || run.prompt_snapshot[:user_memory])
 
     steps =
@@ -1404,9 +1404,9 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert callback_texts == [
              "Marked done",
-             "Marked not interested",
+             "Dismissed",
              "Saved helpful feedback",
-             "Saved not helpful feedback"
+             "Marked not important"
            ]
 
     assert Enum.count(Enum.filter(telegram_events(), &(&1.type == :edit))) == 4
@@ -1630,8 +1630,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert length(sends) == 3
     [intro, first_todo_message, second_todo_message] = sends
 
-    assert intro.text ==
-             "Hey Kent, checking on these today.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
+    assert intro.text =~ "<b>Chief of staff check-in</b>"
+    assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
+    assert intro.text =~ "Superseded by todo delivery."
 
     refute first_todo_message.text =~ "New Today"
     assert first_todo_message.text =~ "Reply in-thread and close the loop."
@@ -1645,7 +1646,7 @@ defmodule Maraithon.TelegramAssistantTest do
     refute second_todo_message.text =~ "About:"
 
     keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Not Interested"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Dismiss"))
 
     updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
     assert updated_brief.status == "sent"
@@ -1716,8 +1717,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert length(sends) == 3
     [intro, first_todo_message, second_todo_message] = sends
 
-    assert intro.text ==
-             "Hey Kent, these still need movement tonight.\n\n1 new today. 1 still open from earlier.\nI'm sending them one by one so you can mark them done or say not interested."
+    assert intro.text =~ "<b>End-of-day debt</b>"
+    assert intro.text =~ "<b>End-of-day debt: 2 items still open</b>"
+    assert intro.text =~ "Superseded by todo delivery."
 
     refute first_todo_message.text =~ "Opened Today"
     assert first_todo_message.text =~ "Reply in-thread and close the loop."
@@ -1731,8 +1733,8 @@ defmodule Maraithon.TelegramAssistantTest do
     refute second_todo_message.text =~ "About:"
 
     keyboard = get_in(first_todo_message.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Mark Done"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Not Interested"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Done"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Dismiss"))
   end
 
   test "medium runs emit native typing without a progress note" do

@@ -79,7 +79,7 @@ defmodule Maraithon.Crm.IngestTest do
       assert buffered_count == threshold - 1
       assert flushed_count == 1
 
-      assert [job] = Repo.all(BackgroundJob)
+      assert [job] = relationship_ingestion_jobs(user_id)
       assert job.job_type == "relationship_ingestion"
       assert job.queue == "relationships"
       assert is_binary(job.payload["window_id"])
@@ -97,12 +97,14 @@ defmodule Maraithon.Crm.IngestTest do
       Ingest.observe(user_id, sample_changeset(user_id, "f-2", "b@example.com", "B"))
 
       assert {:ok, :flushed, _job_id} = Ingest.flush_pending(user_id, "gmail")
-      assert [%BackgroundJob{job_type: "relationship_ingestion"}] = Repo.all(BackgroundJob)
+
+      assert [%BackgroundJob{job_type: "relationship_ingestion"}] =
+               relationship_ingestion_jobs(user_id)
     end
 
     test "is a no-op when there is no open window", %{user_id: user_id} do
       assert {:ok, :nothing_to_flush} = Ingest.flush_pending(user_id, "gmail")
-      assert Repo.aggregate(BackgroundJob, :count, :id) == 0
+      assert relationship_ingestion_job_count(user_id) == 0
     end
   end
 
@@ -131,14 +133,16 @@ defmodule Maraithon.Crm.IngestTest do
 
       reloaded = Repo.get!(Window, window.id)
       assert reloaded.status == "flushed"
-      assert [%BackgroundJob{job_type: "relationship_ingestion"}] = Repo.all(BackgroundJob)
+
+      assert [%BackgroundJob{job_type: "relationship_ingestion"}] =
+               relationship_ingestion_jobs(user_id)
     end
 
     test "leaves fresh windows alone", %{user_id: user_id} do
       Ingest.observe(user_id, sample_changeset(user_id, "fr-1", "fresh@example.com", "Fresh"))
 
       assert {:ok, 0} = Ingest.sweep_stale_windows()
-      assert Repo.aggregate(BackgroundJob, :count, :id) == 0
+      assert relationship_ingestion_job_count(user_id) == 0
     end
   end
 
@@ -160,5 +164,23 @@ defmodule Maraithon.Crm.IngestTest do
       "subject" => "Hello from #{display_name}",
       "excerpt" => "Hi Kent, just checking in."
     })
+  end
+
+  defp relationship_ingestion_jobs(user_id) do
+    Repo.all(
+      from j in BackgroundJob,
+        where: j.user_id == ^user_id and j.job_type == "relationship_ingestion",
+        order_by: [asc: j.inserted_at]
+    )
+  end
+
+  defp relationship_ingestion_job_count(user_id) do
+    Repo.aggregate(
+      from(j in BackgroundJob,
+        where: j.user_id == ^user_id and j.job_type == "relationship_ingestion"
+      ),
+      :count,
+      :id
+    )
   end
 end

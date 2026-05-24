@@ -139,6 +139,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         kind: :static
       },
       %{
+        id: :focus_speed_contract,
+        kind: :static
+      },
+      %{
         id: :otp_runtime_contract,
         kind: :static
       },
@@ -347,6 +351,102 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         Map.get(connector_profile, :request_focus) == :connector_status,
         "connector-status requests must use narrow context/tool focus"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(%{kind: :static, id: :focus_speed_contract} = scenario, _env, _opts) do
+    quick_profile =
+      ModelRouting.profile_for(%{
+        text:
+          "Give me a concise two-sentence reply to someone asking to move our meeting to next week."
+      })
+
+    today_profile = ModelRouting.profile_for(%{text: "What can I handle in 15 minutes today?"})
+    waiting_profile = ModelRouting.profile_for(%{text: "Who am I waiting on?"})
+    connector_profile = ModelRouting.profile_for(%{text: "What accounts are connected?"})
+
+    tool_definitions = Toolbox.tool_definitions(%{})
+
+    quick_payload =
+      focused_payload_for(
+        quick_profile,
+        "Give me a concise two-sentence reply to someone asking to move our meeting to next week.",
+        tool_definitions
+      )
+
+    today_payload =
+      focused_payload_for(
+        today_profile,
+        "What can I handle in 15 minutes today?",
+        tool_definitions
+      )
+
+    waiting_payload =
+      focused_payload_for(
+        waiting_profile,
+        "Who am I waiting on?",
+        tool_definitions
+      )
+
+    quick_tools = payload_tool_names(quick_payload)
+    today_tools = payload_tool_names(today_payload)
+    waiting_tools = payload_tool_names(waiting_payload)
+
+    quick_fetchers = Context.fetcher_keys_for_focus(:quick_chat)
+    connector_fetchers = Context.fetcher_keys_for_focus(:connector_status)
+    today_fetchers = Context.fetcher_keys_for_focus(:today_mode)
+    waiting_fetchers = Context.fetcher_keys_for_focus(:waiting_on)
+
+    findings =
+      []
+      |> require_finding(
+        Map.get(quick_profile, :request_focus) == :quick_chat and
+          Map.get(quick_profile, :tier) == :chat,
+        "simple reply-writing must use quick_chat on the fast chat tier"
+      )
+      |> require_finding(
+        quick_tools == [] and
+          quick_fetchers --
+            [:preference_memory, :operator_memory, :user_memory, :briefing_schedule] ==
+            [],
+        "quick_chat must not expose tools or fetch open-loop/CRM/calendar context"
+      )
+      |> require_finding(
+        Map.get(connector_profile, :request_focus) == :connector_status and
+          not Enum.any?(
+            connector_fetchers,
+            &(&1 in [:todos, :open_loops, :relationships, :calendar])
+          ),
+        "connector-status must avoid todos, open loops, CRM, and calendar fetches"
+      )
+      |> require_finding(
+        Map.get(today_profile, :request_focus) == :today_mode and
+          Map.get(today_profile, :tier) == :reasoning,
+        "today-mode questions must route to the reasoning tier with a today_mode focus"
+      )
+      |> require_finding(
+        Enum.all?([:open_loops, :todos, :relationships, :calendar], &(&1 in today_fetchers)) and
+          Enum.all?(
+            ["get_open_loops", "list_todos", "calendar_events_around"],
+            &(&1 in today_tools)
+          ),
+        "today_mode must include open loops, todos, CRM relationships, calendar, and focused tools"
+      )
+      |> require_finding(
+        Map.get(waiting_profile, :request_focus) == :waiting_on and
+          Map.get(waiting_profile, :tier) == :reasoning,
+        "waiting-on questions must route to the reasoning tier with a waiting_on focus"
+      )
+      |> require_finding(
+        Enum.all?([:open_loops, :todos, :relationships], &(&1 in waiting_fetchers)) and
+          :calendar not in waiting_fetchers and
+          Enum.all?(
+            ["get_open_loops", "get_relationship_context", "review_connected_context"],
+            &(&1 in waiting_tools)
+          ),
+        "waiting_on must focus on open loops and CRM without paying the calendar fetch cost"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -699,6 +799,44 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       })
   end
 
+  defp focused_payload_for(profile, text, tools) do
+    context = %{
+      recent_turns: [%{role: "user", text: text, turn_kind: "user_message"}],
+      preference_memory: %{},
+      operator_memory: [],
+      user_memory: %{},
+      deep_memory: [],
+      open_loops: %{"buckets" => %{"todos" => []}},
+      relationships: [],
+      open_insights: [],
+      todos: [],
+      calendar: %{
+        "upcoming_events" => [],
+        "personal_events" => [],
+        "source_status" => %{"local" => "ready", "google" => "ready"}
+      },
+      briefing_schedule: %{"timezone_offset_hours" => -5},
+      current_time: %{"local_timezone" => "America/Toronto"},
+      connected_accounts: [%{"provider" => "telegram", "status" => "connected"}],
+      source_freshness: [],
+      defaults: %{},
+      today_digest: %{},
+      context_diagnostics: %{}
+    }
+
+    %{context: context, tools: tools}
+    |> AssistantHarness.build_loop_request_payload(
+      AssistantHarness.initial_loop_state(),
+      Map.get(profile, :llm_opts, [])
+    )
+  end
+
+  defp payload_tool_names(%{tools: tools}) when is_list(tools) do
+    Enum.map(tools, &(Map.get(&1, "name") || Map.get(&1, :name)))
+  end
+
+  defp payload_tool_names(_payload), do: []
+
   defp retry_option_findings do
     {:ok, counter} = Agent.start_link(fn -> 0 end)
 
@@ -791,7 +929,12 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     }
 
     profile = ModelRouting.profile_for(attrs)
-    context = ContextEngine.build_context(attrs)
+
+    context =
+      attrs
+      |> Map.put(:model_profile, profile)
+      |> Map.put(:request_focus, Map.get(profile, :request_focus))
+      |> ContextEngine.build_context()
 
     runtime_context =
       build_runtime_context(env, conversation, context, profile)

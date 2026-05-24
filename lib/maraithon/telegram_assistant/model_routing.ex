@@ -18,9 +18,16 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bmorning\s+brief(?:ing)?\b/u,
     ~r/\bdaily\s+brief(?:ing)?\b/u,
     ~r/\bbrief\s+me\b/u,
+    ~r/\bwhat\s+matters\s+today\b/u,
+    ~r/\bwhat\s+can\s+i\s+handle\b.*\b(\d+\s*)?(minutes?|mins?)\b/u,
+    ~r/\bwhat\s+should\s+i\s+do\s+(next|today)\b/u,
     ~r/\bwhat\s+should\s+i\s+(do|work\s+on|focus\s+on|review)\b/u,
     ~r/\bwhat\s+needs\s+my\s+attention\b/u,
     ~r/\bwhat\s+am\s+i\s+missing\b/u,
+    ~r/\bwho\s+am\s+i\s+waiting\s+on\b/u,
+    ~r/\bwho\s+is\s+waiting\s+on\s+me\b/u,
+    ~r/\bwho\s+owes\s+me\b/u,
+    ~r/\bwhat\s+do\s+i\s+owe\b/u,
     ~r/\bnext\s+best\s+action\b/u,
     ~r/\b(triage|prioriti[sz]e|rank)\b.*\b(todos?|to-dos?|tasks?|work|open\s+loops?|inbox)\b/u,
     ~r/\b(todos?|to-dos?|tasks?|open\s+loops?)\b.*\b(full|detail|detailed|complete|all|everything|list)\b/u,
@@ -33,6 +40,31 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\b(long[-\s]?running|background)\s+(job|task|work)\b/u,
     ~r/\b(connected\s+apps?|connected\s+sources?|crm|calendar|todos?|memory)\b.*\b(search|look|review|context)\b/u,
     ~r/\blook\s+across\b.*\b(accounts?|apps?|sources?|crm|calendar|todos?)\b/u
+  ]
+
+  @quick_chat_patterns [
+    ~r/\bgive\s+me\s+a\s+concise\b.*\breply\s+to\s+someone\b/u,
+    ~r/\bwrite\s+a\s+quick\b.*\breply\s+to\s+someone\b/u,
+    ~r/\brewrite\s+this\b/u,
+    ~r/\bmake\s+this\s+clearer\b/u,
+    ~r/\bwordsmith\s+this\b/u
+  ]
+
+  @today_mode_patterns [
+    ~r/\bwhat\s+matters\s+today\b/u,
+    ~r/\bwhat\s+can\s+i\s+handle\b.*\b(\d+\s*)?(minutes?|mins?)\b/u,
+    ~r/\bwhat\s+should\s+i\s+do\s+(next|today)\b/u,
+    ~r/\bwhat\s+should\s+i\s+(work\s+on|focus\s+on)\b/u,
+    ~r/\bwhat\s+needs\s+my\s+attention\b/u,
+    ~r/\bnext\s+best\s+action\b/u
+  ]
+
+  @waiting_on_patterns [
+    ~r/\bwho\s+am\s+i\s+waiting\s+on\b/u,
+    ~r/\bwho\s+is\s+waiting\s+on\s+me\b/u,
+    ~r/\bwho\s+owes\s+me\b/u,
+    ~r/\bwhat\s+do\s+i\s+owe\b/u,
+    ~r/\bwaiting\s+on\b/u
   ]
 
   @connector_status_patterns [
@@ -98,10 +130,15 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   def tier_for_text(text) when is_binary(text) do
     normalized = normalize_text(text)
 
-    if Enum.any?(@planning_patterns, &Regex.match?(&1, normalized)) do
-      :reasoning
-    else
-      :chat
+    cond do
+      Enum.any?(@quick_chat_patterns, &Regex.match?(&1, normalized)) ->
+        :chat
+
+      Enum.any?(@planning_patterns, &Regex.match?(&1, normalized)) ->
+        :reasoning
+
+      true ->
+        :chat
     end
   end
 
@@ -123,6 +160,15 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     cond do
       Enum.any?(@connector_status_patterns, &Regex.match?(&1, normalized)) ->
         :connector_status
+
+      Enum.any?(@today_mode_patterns, &Regex.match?(&1, normalized)) ->
+        :today_mode
+
+      Enum.any?(@waiting_on_patterns, &Regex.match?(&1, normalized)) ->
+        :waiting_on
+
+      Enum.any?(@quick_chat_patterns, &Regex.match?(&1, normalized)) ->
+        :quick_chat
 
       true ->
         nil
@@ -156,6 +202,30 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:max_tool_steps, 8)
     |> Keyword.put(:model_busy_max_retries, 20)
     |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
+  defp maybe_put_focus(keyword, :quick_chat) do
+    keyword
+    |> Keyword.put(:request_focus, :quick_chat)
+    |> Keyword.put(:context_scope, :quick_chat)
+    |> Keyword.put(:tool_scope, :quick_chat)
+    |> Keyword.put(:max_wall_clock_ms, 15_000)
+    |> Keyword.put(:max_llm_turns, 3)
+    |> Keyword.put(:max_tool_steps, 1)
+  end
+
+  defp maybe_put_focus(keyword, :today_mode) do
+    keyword
+    |> Keyword.put(:request_focus, :today_mode)
+    |> Keyword.put(:context_scope, :today_mode)
+    |> Keyword.put(:tool_scope, :today_mode)
+  end
+
+  defp maybe_put_focus(keyword, :waiting_on) do
+    keyword
+    |> Keyword.put(:request_focus, :waiting_on)
+    |> Keyword.put(:context_scope, :waiting_on)
+    |> Keyword.put(:tool_scope, :waiting_on)
   end
 
   defp maybe_put_focus(keyword, _focus), do: keyword

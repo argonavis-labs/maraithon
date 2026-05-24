@@ -227,7 +227,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert todo.title == "Prep for Dawn Nguyen"
     assert todo.metadata["origin_skill_id"] == "morning_briefing"
 
-    [message] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
+    [message, todo_card] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
 
     assert message.chat_id == "444123"
     assert message.opts[:parse_mode] == "HTML"
@@ -235,5 +235,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert message.text =~ "• <b>Prep for Dawn Nguyen</b>"
     refute message.text =~ "## Today's Schedule"
     refute message.text =~ "**Prep"
+
+    assert todo_card.chat_id == "444123"
+    assert todo_card.opts[:parse_mode] == "HTML"
+    assert todo_card.text =~ "<b>Review Dawn and Kiln Studio context before the meeting.</b>"
+    assert todo_card.text =~ "I found this in Calendar."
+    assert get_in(todo_card.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 end

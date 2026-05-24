@@ -49,12 +49,13 @@ defmodule Maraithon.TelegramAssistant.Context do
     linked_travel = linked_travel_itinerary(conversation, user_id)
     linked_todo = linked_todo(attrs, user_id)
     linked_project = linked_project(attrs, user_id)
+    request_focus = request_focus(attrs)
 
     today_digest = ContextCache.get_digest(user_id)
     _ = Maraithon.ContextCache.Builder.maybe_refresh_async(user_id)
     user_text = latest_user_text(conversation)
 
-    fetched = parallel_fetch(user_id, user_text)
+    fetched = parallel_fetch(user_id, user_text, request_focus)
 
     %{
       user: %{id: user_id},
@@ -90,8 +91,32 @@ defmodule Maraithon.TelegramAssistant.Context do
     }
   end
 
-  defp parallel_fetch(user_id, user_text) do
-    fetchers = [
+  @doc false
+  def fetcher_keys_for_focus(request_focus) do
+    nil
+    |> fetchers_for_focus(nil, request_focus)
+    |> Enum.map(fn {key, _fun} -> key end)
+  end
+
+  defp parallel_fetch(user_id, user_text, request_focus) do
+    fetchers = fetchers_for_focus(user_id, user_text, request_focus)
+
+    fetchers
+    |> safe_parallel_fetch(
+      defaults: default_fetch_values(),
+      timeout_ms: context_fetch_timeout_ms(),
+      max_concurrency: length(fetchers)
+    )
+  end
+
+  defp fetchers_for_focus(user_id, user_text, request_focus) do
+    user_id
+    |> all_fetchers(user_text)
+    |> select_fetchers_for_focus(normalize_focus(request_focus))
+  end
+
+  defp all_fetchers(user_id, user_text) do
+    [
       {:preference_memory, fn -> PreferenceMemory.prompt_context(user_id) end},
       {:operator_memory, fn -> OperatorMemory.summaries_for_prompt(user_id) end},
       {:user_memory, fn -> UserMemory.prompt_context(user_id) end},
@@ -113,14 +138,94 @@ defmodule Maraithon.TelegramAssistant.Context do
       {:active_agents, fn -> serialize_agents(user_id) end},
       {:defaults, fn -> tool_defaults(user_id) end}
     ]
-
-    fetchers
-    |> safe_parallel_fetch(
-      defaults: default_fetch_values(),
-      timeout_ms: context_fetch_timeout_ms(),
-      max_concurrency: length(fetchers)
-    )
   end
+
+  defp select_fetchers_for_focus(fetchers, :quick_chat) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :briefing_schedule
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :connector_status) do
+    take_fetchers(fetchers, [
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :today_mode) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :open_insights,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, :waiting_on) do
+    take_fetchers(fetchers, [
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :connected_accounts,
+      :source_freshness,
+      :defaults
+    ])
+  end
+
+  defp select_fetchers_for_focus(fetchers, _request_focus), do: fetchers
+
+  defp take_fetchers(fetchers, allowed_keys) do
+    allowed = MapSet.new(allowed_keys)
+    Enum.filter(fetchers, fn {key, _fun} -> MapSet.member?(allowed, key) end)
+  end
+
+  defp request_focus(attrs) when is_map(attrs) do
+    Map.get(attrs, :request_focus) ||
+      Map.get(attrs, "request_focus") ||
+      get_in(attrs, [:model_profile, :request_focus]) ||
+      get_in(attrs, ["model_profile", "request_focus"])
+  end
+
+  defp request_focus(_attrs), do: nil
+
+  defp normalize_focus(value) when is_atom(value), do: value
+
+  defp normalize_focus(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> case do
+      "quick_chat" -> :quick_chat
+      "connector_status" -> :connector_status
+      "today_mode" -> :today_mode
+      "waiting_on" -> :waiting_on
+      "linked_item_context" -> :linked_item_context
+      _other -> nil
+    end
+  end
+
+  defp normalize_focus(_value), do: nil
 
   def safe_parallel_fetch(fetchers, opts \\ []) when is_list(fetchers) and is_list(opts) do
     timeout_ms =

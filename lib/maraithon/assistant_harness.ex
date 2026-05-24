@@ -348,6 +348,8 @@ defmodule Maraithon.AssistantHarness do
     - Treat todos as the operator's durable object layer. Final replies about work should usually reflect the current todo state, not transient message summaries.
     - `open_loops` is the current durable operating snapshot across todos, CRM relationships, and deep memory. Honor it before answering broad review, prioritization, relationship, or "what am I missing?" questions.
     - Use `get_open_loops` before answering when the user asks what is open, what they owe, what might be missed, what needs attention, or what should be reviewed across multiple sources.
+    - If request_focus is `today_mode`, answer as a tight "what matters today / what can I handle now" chief-of-staff digest. Combine todos, open loops, personal/family calendar, relationship commitments, due/overdue work, and memory. Lead with the next move and use `todo_digest` when actionable todos should be sent as cards.
+    - If request_focus is `waiting_on`, distinguish what the operator owes others from what others owe the operator. Use open loops and CRM relationship context first, keep the answer source-backed, and include the best follow-up channel or next nudge when known.
     - `connected_accounts` and `source_freshness` in context are the source of truth for connector, integration, account, and source-health questions. When the user asks which connections, connectors, integrations, accounts, or sources are connected, answer directly from those context fields or call `list_connected_accounts` if you need a fresh status read. Do not call `list_people`, `upsert_todos`, or any write tool for connector/account status; `list_people` is only for human CRM relationships.
     - `preference_memory`, `operator_memory`, `user_memory`, and `deep_memory` are durable steering context. Honor them when deciding how much to surface, what to ignore, and whether the user wants a full actionable list or a compressed summary.
     - Deep memory is the general built-in memory database. Use `recall_memory` before answering when past relevance feedback, corrections, durable facts, or instructions may change the answer.
@@ -1304,11 +1306,75 @@ defmodule Maraithon.AssistantHarness do
     ])
   end
 
+  defp focus_context(context, :quick_chat) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :briefing_schedule,
+      :current_time,
+      :context_diagnostics
+    ])
+  end
+
+  defp focus_context(context, :today_mode) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :open_insights,
+      :todos,
+      :calendar,
+      :briefing_schedule,
+      :current_time,
+      :connected_accounts,
+      :source_freshness,
+      :defaults,
+      :today_digest,
+      :context_diagnostics
+    ])
+  end
+
+  defp focus_context(context, :waiting_on) when is_map(context) do
+    take_existing(context, [
+      :user,
+      :chat,
+      :conversation,
+      :recent_turns,
+      :preference_memory,
+      :operator_memory,
+      :user_memory,
+      :deep_memory,
+      :open_loops,
+      :relationships,
+      :todos,
+      :briefing_schedule,
+      :current_time,
+      :connected_accounts,
+      :source_freshness,
+      :defaults,
+      :today_digest,
+      :context_diagnostics
+    ])
+  end
+
   defp focus_context(context, _scope), do: context
 
   defp focus_tools(tools, :connector_status) when is_list(tools) do
     Enum.filter(tools, &(tool_definition_name(&1) == "list_connected_accounts"))
   end
+
+  defp focus_tools(_tools, :quick_chat), do: []
 
   defp focus_tools(tools, :linked_item_context) when is_list(tools) do
     allowed =
@@ -1342,6 +1408,54 @@ defmodule Maraithon.AssistantHarness do
         inspect_project
         list_projects
         list_implementation_runs
+      ))
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
+  end
+
+  defp focus_tools(tools, :today_mode) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        get_open_loops
+        list_todos
+        resolve_todo
+        get_relationship_context
+        review_connected_context
+        recall_memory
+        list_memories
+        record_memory_feedback
+        write_memory
+        calendar_events_around
+        reminders_open
+        reminders_due_soon
+        list_connected_accounts
+      ))
+
+    Enum.filter(tools, fn tool ->
+      tool_definition_name(tool) in allowed
+    end)
+  end
+
+  defp focus_tools(tools, :waiting_on) when is_list(tools) do
+    allowed =
+      MapSet.new(~w(
+        get_open_loops
+        list_todos
+        resolve_todo
+        upsert_todos
+        list_people
+        get_person
+        get_relationship_context
+        review_connected_context
+        learn_relationship_context
+        link_person_data
+        recall_memory
+        list_memories
+        record_memory_feedback
+        write_memory
+        list_connected_accounts
       ))
 
     Enum.filter(tools, fn tool ->

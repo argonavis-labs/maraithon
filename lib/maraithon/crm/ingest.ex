@@ -24,6 +24,7 @@ defmodule Maraithon.Crm.Ingest do
 
   import Ecto.Query
 
+  alias Maraithon.Accounts
   alias Ecto.Multi
   alias Maraithon.Crm
   alias Maraithon.Crm.Ingest.Window
@@ -372,7 +373,10 @@ defmodule Maraithon.Crm.Ingest do
   end
 
   defp enqueue_flush(%Window{} = window) do
-    case BackgroundJobs.enqueue_relationship_ingestion(window.id) do
+    case BackgroundJobs.enqueue_relationship_ingestion(
+           window.id,
+           existing_user_id(window.user_id)
+         ) do
       {:ok, job} ->
         Repo.update_all(
           from(w in Window, where: w.id == ^window.id),
@@ -385,6 +389,12 @@ defmodule Maraithon.Crm.Ingest do
         {:error, reason}
     end
   end
+
+  defp existing_user_id(user_id) when is_binary(user_id) do
+    if Accounts.get_user(user_id), do: user_id
+  end
+
+  defp existing_user_id(_user_id), do: nil
 
   defp recent_flush_count(user_id, source) do
     cutoff = DateTime.add(DateTime.utc_now(), -3_600, :second)
