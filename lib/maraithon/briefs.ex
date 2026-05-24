@@ -6,6 +6,7 @@ defmodule Maraithon.Briefs do
   import Ecto.Query
 
   alias Maraithon.Briefs.Brief
+  alias Maraithon.AppUrl
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
@@ -14,7 +15,6 @@ defmodule Maraithon.Briefs do
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Travel
-  alias MaraithonWeb.Endpoint
 
   require Logger
 
@@ -355,7 +355,7 @@ defmodule Maraithon.Briefs do
     else
       buttons = [
         [
-          %{"text" => "Open Dashboard", "url" => "#{Endpoint.url()}/dashboard"}
+          %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
         ]
       ]
 
@@ -368,8 +368,7 @@ defmodule Maraithon.Briefs do
                   [
                     %{
                       "text" => "Tune Agent",
-                      "url" =>
-                        "#{Endpoint.url()}/agents/new?behavior=#{URI.encode_www_form(behavior)}"
+                      "url" => AppUrl.url("/agents/new?behavior=#{URI.encode_www_form(behavior)}")
                     }
                   ]
                 ]

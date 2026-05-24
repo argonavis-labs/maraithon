@@ -466,7 +466,7 @@ defmodule Maraithon.ConnectedAccounts do
   defp reconnect_url(provider) when is_binary(provider) do
     base =
       Application.get_env(:maraithon, :connected_accounts, [])
-      |> Keyword.get_lazy(:reconnect_base_url, fn -> MaraithonWeb.Endpoint.url() end)
+      |> Keyword.get_lazy(:reconnect_base_url, fn -> Maraithon.AppUrl.base_url() end)
       |> to_string()
       |> String.trim_trailing("/")
 

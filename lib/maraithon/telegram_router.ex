@@ -772,12 +772,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp action_failure_text(reason), do: "I couldn't do that yet: #{inspect(reason)}"
 
-  defp connector_url(provider), do: "#{base_app_url()}/connectors/#{provider}"
-
-  defp base_app_url do
-    System.get_env("APP_BASE_URL") ||
-      Application.get_env(:maraithon, :app_base_url, "https://maraithon.com")
-  end
+  defp connector_url(provider), do: Maraithon.AppUrl.url("/connectors/#{provider}")
 
   defp send_ephemeral_reply(chat_id, reply_to_message_id, text) do
     _ = TelegramResponder.reply(chat_id, reply_to_message_id, text)

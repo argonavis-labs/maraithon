@@ -1886,9 +1886,7 @@ defmodule Maraithon.Connections do
   end
 
   defp callback_url(path) do
-    MaraithonWeb.Endpoint.url()
-    |> String.trim_trailing("/")
-    |> Kernel.<>(path)
+    Maraithon.AppUrl.url(path)
   end
 
   defp config_value(namespace, key) do

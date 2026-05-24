@@ -3,11 +3,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   Telegram-native rendering and callback handling for assistant todo items.
   """
 
+  alias Maraithon.AppUrl
   alias Maraithon.ConnectedAccounts
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
-  alias MaraithonWeb.Endpoint
 
   @callback_prefix "tgtodo"
   @feedback_values ~w(important helpful not_helpful)
@@ -160,7 +160,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     buttons =
       [
         source_link_button(todo),
-        %{"text" => "Open Dashboard", "url" => "#{Endpoint.url()}/dashboard"}
+        %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
       ]
       |> Enum.reject(&is_nil/1)
 
