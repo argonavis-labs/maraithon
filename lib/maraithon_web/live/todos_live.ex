@@ -151,6 +151,30 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
+  def handle_event("see_less_todo", %{"id" => todo_id}, socket) do
+    selected? = socket.assigns.selected_todo_id == todo_id
+
+    case Todos.see_less_like(current_user_id(socket), todo_id, source: "todos_page") do
+      {:ok, _result} ->
+        socket =
+          socket
+          |> refresh_todos()
+          |> put_flash(:info, "Maraithon will show fewer todos like that.")
+
+        socket =
+          if selected? do
+            push_patch(socket, to: todos_path(socket.assigns.filters))
+          else
+            socket
+          end
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Failed to save todo feedback: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("open_todo_detail", %{"id" => todo_id}, socket) do
     if visible_todo_id?(socket, todo_id) do
       {:noreply,
@@ -268,7 +292,7 @@ defmodule MaraithonWeb.TodosLive do
                     <.sortable_table_header filters={@filters} field="priority">Priority</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="due">Due</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="updated">Updated</.sortable_table_header>
-                    <.table_header class="w-36 text-right">Actions</.table_header>
+                    <.table_header class="w-48 text-right">Actions</.table_header>
                   </.table_row>
                 </.table_head>
                 <.table_body>
@@ -347,6 +371,16 @@ defmodule MaraithonWeb.TodosLive do
                           class="text-xs text-zinc-500 hover:text-zinc-950"
                         >
                           Dismiss
+                        </.button>
+                        <.button
+                          type="button"
+                          phx-click="see_less_todo"
+                          phx-value-id={todo.id}
+                          onclick="event.stopPropagation()"
+                          variant="plain"
+                          class="text-xs text-zinc-500 hover:text-zinc-950"
+                        >
+                          See less
                         </.button>
                       </div>
                     </.table_cell>
@@ -466,6 +500,18 @@ defmodule MaraithonWeb.TodosLive do
           <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
         </div>
       </dl>
+
+      <div :if={@todo.status in ["open", "snoozed"]} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
+        <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
+          Done
+        </.button>
+        <.button type="button" phx-click="dismiss_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
+          Dismiss
+        </.button>
+        <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
+          See less
+        </.button>
+      </div>
 
       <div :if={todo_metadata_pairs(@todo) != []} class="mt-4 border-t border-zinc-950/10 pt-4">
         <p class="text-xs/5 font-medium text-zinc-500">Source metadata</p>

@@ -8,7 +8,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
-  alias Maraithon.Todos.{AttentionRanker, Intelligence, SurfaceQuality}
+  alias Maraithon.Todos.{AttentionRanker, FeedbackTrainer, Intelligence, SurfaceQuality}
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
@@ -267,6 +267,32 @@ defmodule Maraithon.Todos do
 
   def record_feedback(_user_id, _todo_id, _feedback, _opts), do: {:error, :not_found}
 
+  def see_less_like(user_id, todo_id, opts \\ [])
+
+  def see_less_like(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
+    source = normalize_feedback_source(Keyword.get(opts, :source, "todo_surface"))
+
+    with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
+         {:ok, %{memory: memory, training: training}} <-
+           FeedbackTrainer.train_see_less(user_id, todo, opts),
+         {:ok, dismissed} <-
+           update_status(
+             user_id,
+             todo_id,
+             "dismissed",
+             see_less_resolution_note(source),
+             put_see_less_feedback(%{}, source, memory, training)
+           ) do
+      {:ok, %{todo: dismissed, memory: memory, training: training}}
+    else
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :todo_see_less_failed}
+    end
+  end
+
+  def see_less_like(_user_id, _todo_id, _opts), do: {:error, :not_found}
+
   def update_for_user(user_id, todo_id, attrs)
       when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) do
     Repo.transaction(fn ->
@@ -427,7 +453,7 @@ defmodule Maraithon.Todos do
     end
   end
 
-  defp update_status(user_id, todo_id, status, note) do
+  defp update_status(user_id, todo_id, status, note, extra_metadata \\ %{}) do
     Repo.transaction(fn ->
       with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
            {:ok, updated} <-
@@ -436,7 +462,10 @@ defmodule Maraithon.Todos do
                status: status,
                snoozed_until: nil,
                closed_at: DateTime.utc_now() |> DateTime.truncate(:second),
-               metadata: put_resolution_note(todo.metadata || %{}, note)
+               metadata:
+                 (todo.metadata || %{})
+                 |> put_resolution_note(note)
+                 |> Map.merge(extra_metadata || %{})
              })
              |> Repo.update(),
            {:ok, _insight} <- sync_linked_insight(updated) do
@@ -1122,6 +1151,40 @@ defmodule Maraithon.Todos do
     })
   end
 
+  defp put_see_less_feedback(metadata, source, memory, training) when is_map(metadata) do
+    recorded_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    feedback = %{
+      "value" => "see_less",
+      "source" => source,
+      "memory_id" => memory.id,
+      "memory_title" => memory.title,
+      "pattern_key" => Map.get(training, "pattern_key"),
+      "summary" => Map.get(training, "summary"),
+      "recorded_at" => recorded_at
+    }
+
+    metadata
+    |> Map.put("assistant_feedback", feedback)
+    |> Map.put("see_less_feedback", feedback)
+  end
+
+  defp see_less_resolution_note(source) when is_binary(source) and source != "" do
+    "See less feedback recorded from #{source}."
+  end
+
+  defp see_less_resolution_note(_source), do: "See less feedback recorded."
+
+  defp normalize_feedback_source(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> "todo_surface"
+      source -> source
+    end
+  end
+
+  defp normalize_feedback_source(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_feedback_source(_value), do: "todo_surface"
+
   defp put_importance_override(metadata, source) when is_map(metadata) do
     recorded_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
@@ -1193,6 +1256,7 @@ defmodule Maraithon.Todos do
       "life_domain",
       "resolution_note",
       "assistant_feedback",
+      "see_less_feedback",
       "source_insight_id",
       "source_insight_status",
       "suggested_project_id",

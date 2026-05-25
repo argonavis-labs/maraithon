@@ -3,6 +3,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias Maraithon.Memory
   alias Maraithon.Todos
 
   @user_email "todos-live@example.com"
@@ -210,5 +211,75 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert_patch(click_view, "/todos?todo_id=#{todo.id}")
     assert render(click_view) =~ "Review detail todo"
+  end
+
+  test "see less action records feedback memory and removes todo from active list", %{conn: conn} do
+    install_see_less_model()
+
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Read vendor newsletter",
+                 "summary" => "A generic vendor newsletter has no direct ask.",
+                 "next_action" => "No action needed.",
+                 "priority" => 42,
+                 "dedupe_key" => "todos-live:see-less"
+               }
+             ])
+
+    {:ok, view, html} = live(conn, "/todos")
+    assert html =~ "Read vendor newsletter"
+
+    view
+    |> element("#todo-#{todo.id} button[phx-click='see_less_todo']")
+    |> render_click()
+
+    html = render(view)
+    refute html =~ "Read vendor newsletter"
+    assert html =~ "Maraithon will show fewer todos like that."
+
+    [memory] =
+      Memory.list_items(@user_email,
+        kind: "relevance_feedback",
+        tag: "todo_relevance",
+        limit: 5
+      )
+
+    assert memory.polarity == "negative"
+    assert memory.source_ref_id == todo.id
+
+    dismissed = Todos.get_for_user(@user_email, todo.id)
+    assert dismissed.status == "dismissed"
+    assert get_in(dismissed.metadata, ["assistant_feedback", "value"]) == "see_less"
+  end
+
+  defp install_see_less_model do
+    original = Application.get_env(:maraithon, :todos, [])
+
+    Application.put_env(
+      :maraithon,
+      :todos,
+      Keyword.put(original, :see_less_llm_complete, fn prompt ->
+        assert prompt =~ "TODO_SEE_LESS_TRAINING_JSON_V1"
+
+        {:ok,
+         Jason.encode!(%{
+           "title" => "See less: generic newsletters",
+           "summary" => "Generic newsletters without direct asks should not become todos.",
+           "content" =>
+             "When a newsletter has no direct ask, decision, deadline, or personal impact, skip it instead of creating a todo.",
+           "pattern_key" => "generic_newsletters_without_direct_asks",
+           "categories" => ["newsletter", "no_direct_ask"],
+           "negative_signals" => ["generic update", "no direct ask"],
+           "exceptions" => ["explicit deadline"],
+           "confidence" => 0.88,
+           "reasoning" => "The selected todo is not actionable."
+         })}
+      end)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :todos, original) end)
   end
 end
