@@ -22,6 +22,13 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "How it works", path: "/how-it-works", icon: :book}
   ]
 
+  @mobile_nav [
+    %{label: "Home", path: "/dashboard", icon: :home},
+    %{label: "Todos", path: "/todos", icon: :todos},
+    %{label: "People", path: "/operator/people", icon: :people},
+    %{label: "Agents", path: "/agents", icon: :agents}
+  ]
+
   @admin_nav [
     %{label: "Settings", path: "/settings", icon: :settings}
   ]
@@ -36,16 +43,13 @@ defmodule MaraithonWeb.AdminNavigation do
       assigns
       |> assign(:normalized_path, normalize_path(assigns.current_path))
       |> assign(:primary_nav, @primary_nav)
+      |> assign(:mobile_nav, @mobile_nav)
       |> assign(:secondary_nav, secondary_nav())
       |> assign(:admin_nav, if(admin_user?(assigns.current_user), do: @admin_nav, else: []))
 
     ~H"""
     <div class="relative isolate flex min-h-svh w-full bg-zinc-50 max-lg:flex-col lg:bg-zinc-100">
-      <.command_palette
-        :if={@current_user}
-        current_path={@normalized_path}
-        current_user={@current_user}
-      />
+      <.command_palette current_path={@normalized_path} current_user={@current_user} />
 
       <aside
         id="maraithon-sidebar"
@@ -92,7 +96,7 @@ defmodule MaraithonWeb.AdminNavigation do
         phx-click={hide_mobile_sidebar()}
       />
 
-      <header class="flex items-center gap-2 px-4 py-2 lg:hidden">
+      <header class="sticky top-0 z-20 flex items-center gap-2 border-b border-zinc-950/10 bg-white/90 px-4 py-2 pt-[calc(0.5rem+env(safe-area-inset-top))] backdrop-blur lg:hidden">
         <button
           type="button"
           phx-click={show_mobile_sidebar()}
@@ -106,7 +110,7 @@ defmodule MaraithonWeb.AdminNavigation do
         <span class="text-sm/5 font-semibold tracking-tight text-zinc-950">Maraithon</span>
       </header>
 
-      <main class="flex flex-1 flex-col pb-2 lg:min-w-0 lg:pt-2 lg:pr-2 lg:pl-64">
+      <main class="flex flex-1 flex-col pb-[calc(5rem+env(safe-area-inset-bottom))] lg:min-w-0 lg:pt-2 lg:pr-2 lg:pb-2 lg:pl-64">
         <div class="grow p-4 sm:p-6 lg:rounded-lg lg:bg-white lg:p-10 lg:shadow-xs lg:ring-1 lg:ring-zinc-950/5">
           <div class="mx-auto w-full max-w-6xl">
             <%= render_slot(@flash) %>
@@ -114,6 +118,33 @@ defmodule MaraithonWeb.AdminNavigation do
           </div>
         </div>
       </main>
+
+      <nav
+        id="maraithon-mobile-tabbar"
+        class="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-950/10 bg-white/95 px-2 pt-1.5 pb-[calc(0.35rem+env(safe-area-inset-bottom))] shadow-[0_-1px_12px_rgba(24,24,27,0.08)] backdrop-blur lg:hidden"
+        aria-label="Primary navigation"
+      >
+        <div class="mx-auto grid max-w-md grid-cols-5 gap-1">
+          <.link
+            :for={item <- @mobile_nav}
+            navigate={item.path}
+            class={mobile_tab_class(@normalized_path, item.path)}
+            aria-current={active?(@normalized_path, item.path) && "page"}
+          >
+            <.icon name={item.icon} class="size-5" />
+            <span class="mt-0.5 truncate text-[11px]/4 font-medium"><%= item.label %></span>
+          </.link>
+          <button
+            type="button"
+            data-command-palette-trigger="true"
+            class="flex min-w-0 flex-col items-center justify-center rounded-lg px-1 py-1.5 text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+            aria-label="Open command palette"
+          >
+            <.icon name={:search} class="size-5" />
+            <span class="mt-0.5 truncate text-[11px]/4 font-medium">Search</span>
+          </button>
+        </div>
+      </nav>
     </div>
     """
   end
@@ -143,7 +174,6 @@ defmodule MaraithonWeb.AdminNavigation do
       <.sidebar_header>
         <.sidebar_brand title="Maraithon" subtitle="Agent runtime" navigate="/dashboard" />
         <button
-          :if={@current_user}
           type="button"
           data-command-palette-trigger="true"
           aria-label="Open command palette"
@@ -257,6 +287,17 @@ defmodule MaraithonWeb.AdminNavigation do
     do: String.starts_with?(current_path, "/settings")
 
   defp active?(current_path, path), do: current_path == path
+
+  defp mobile_tab_class(current_path, path) do
+    [
+      "flex min-w-0 flex-col items-center justify-center rounded-lg px-1 py-1.5",
+      "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40",
+      if(active?(current_path, path),
+        do: "bg-zinc-950/[0.04] text-zinc-950",
+        else: "text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
+      )
+    ]
+  end
 
   defp admin_user?(%{is_admin: true}), do: true
   defp admin_user?(_), do: false

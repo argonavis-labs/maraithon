@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Maraithon</title>
+  <rect width="512" height="512" rx="112" fill="#18181b"/>
+  <path d="M122 132h70l64 118 64-118h70v248h-58V230l-57 103h-38l-57-103v150h-58V132Z" fill="#ffffff"/>
+  <path d="M256 88c92.8 0 168 75.2 168 168h-38c0-71.8-58.2-130-130-130S126 184.2 126 256H88c0-92.8 75.2-168 168-168Z" fill="#a1a1aa"/>
+</svg>

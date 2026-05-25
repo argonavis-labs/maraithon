@@ -359,12 +359,12 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp context_commands("/operator/people") do
     [
-      command("Merge duplicate contacts", "/operator/people", :people, "Suggested",
+      command("Merge contacts", "/operator/people", :people, "Suggested",
         description: "Select duplicate people, then merge them from bulk actions.",
         keywords: "crm people contacts duplicates merge same person",
         priority: 150
       ),
-      command("Set relationship context", "/operator/people", :people, "Suggested",
+      command("Update relationship context", "/operator/people", :people, "Suggested",
         description:
           "Classify family, business, investor, customer, vendor, or friend relationships.",
         keywords: "crm relationship context family business labels classify",

@@ -4,9 +4,19 @@
     <% phoenix_version = Application.spec(:phoenix, :vsn) |> to_string() %>
     <% live_view_version = Application.spec(:phoenix_live_view, :vsn) |> to_string() %>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="theme-color" content="#18181b" />
+    <meta name="color-scheme" content="light" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Maraithon" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="format-detection" content="telephone=no" />
     <title>Maraithon - Agent Runtime</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/images/app-icon.svg" />
+    <link rel="apple-touch-icon" href="/images/app-icon-192.png" />
     <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
     <script>
       window.tailwind = window.tailwind || {}
@@ -42,11 +52,17 @@
         window.liveSocket = liveSocket
       })
 
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("/sw.js", {scope: "/"}).catch(() => {})
+        })
+      }
+
       window.addEventListener("phx:page-loading-start", info => console.log("loading", info))
       window.addEventListener("phx:page-loading-stop", info => console.log("loaded", info))
     </script>
   </head>
-  <body class="h-full font-sans antialiased">
+  <body class="h-full bg-zinc-50 font-sans text-zinc-950 antialiased">
     <%= @inner_content %>
   </body>
 </html>

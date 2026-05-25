@@ -24,7 +24,8 @@ defmodule MaraithonWeb.Endpoint do
     websocket: [connect_info: [peer_data: true, user_agent: true]],
     longpoll: false
 
-  # Serve at "/" the static files from "priv/static" directory.
+  # Serve at "/" the static files from "priv/static" directory, including
+  # the lightweight PWA shell assets.
   #
   # When code reloading is disabled (e.g., in production),
   # the `gzip` option is enabled to serve compressed
