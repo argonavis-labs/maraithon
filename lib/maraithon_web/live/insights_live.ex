@@ -52,6 +52,24 @@ defmodule MaraithonWeb.InsightsLive do
      |> refresh_crm_insights()}
   end
 
+  def handle_event("merge_duplicate_suggestion", %{"id" => suggestion_id}, socket) do
+    user_id = current_user_id(socket)
+    suggestion = fresh_duplicate_suggestion(user_id, suggestion_id)
+
+    socket =
+      case suggestion do
+        nil ->
+          socket
+          |> refresh_crm_insights()
+          |> put_flash(:error, "That duplicate suggestion is no longer available.")
+
+        suggestion ->
+          merge_duplicate_suggestion(socket, suggestion)
+      end
+
+    {:noreply, socket}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -153,9 +171,22 @@ defmodule MaraithonWeb.InsightsLive do
               </div>
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
+              <p class="mt-2 text-sm/6 text-zinc-950">
+                Suggested action:
+                <span class="font-medium">
+                  merge these records and keep <%= duplicate_survivor_name(suggestion) %>.
+                </span>
+              </p>
               <.evidence_list evidence={suggestion.evidence} />
             </div>
-            <div class="flex justify-start lg:justify-end">
+            <div class="flex flex-wrap justify-start gap-2 lg:justify-end">
+              <.button
+                type="button"
+                phx-click="merge_duplicate_suggestion"
+                phx-value-id={suggestion.id}
+              >
+                Merge contacts
+              </.button>
               <.button navigate={suggestion.action.path} variant="outline">
                 Review in People
               </.button>
@@ -256,6 +287,13 @@ defmodule MaraithonWeb.InsightsLive do
     |> Enum.find(&(&1.id == suggestion_id))
   end
 
+  defp fresh_duplicate_suggestion(user_id, suggestion_id) do
+    user_id
+    |> CrmInsights.list_for_user()
+    |> Map.get(:duplicate_suggestions, [])
+    |> Enum.find(&(&1.id == suggestion_id))
+  end
+
   defp apply_relationship_suggestion(socket, suggestion) do
     person = suggestion.person
 
@@ -288,6 +326,60 @@ defmodule MaraithonWeb.InsightsLive do
     end
   end
 
+  defp merge_duplicate_suggestion(socket, suggestion) do
+    user_id = current_user_id(socket)
+
+    case merge_suggested_people(user_id, suggestion) do
+      {:ok, survivor, merged_count} ->
+        socket
+        |> put_flash(:info, duplicate_merge_flash(survivor, merged_count))
+        |> refresh_crm_insights()
+
+      {:error, reason} ->
+        socket
+        |> refresh_crm_insights()
+        |> put_flash(:error, duplicate_merge_error(reason))
+    end
+  end
+
+  defp merge_suggested_people(user_id, %{people: people, evidence: evidence})
+       when is_binary(user_id) and is_list(people) do
+    people = Enum.filter(people, &match?(%Maraithon.Crm.Person{}, &1))
+
+    if length(people) < 2 do
+      {:error, :not_enough_people}
+    else
+      survivor = duplicate_survivor(people)
+      duplicate_ids = people |> Enum.reject(&(&1.id == survivor.id)) |> Enum.map(& &1.id)
+
+      case merge_duplicate_ids(user_id, survivor, duplicate_ids, evidence) do
+        {:ok, merged_count} -> {:ok, survivor, merged_count}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  end
+
+  defp merge_suggested_people(_user_id, _suggestion), do: {:error, :invalid_suggestion}
+
+  defp merge_duplicate_ids(user_id, survivor, duplicate_ids, evidence) do
+    evidence_summary =
+      evidence
+      |> List.wrap()
+      |> Enum.map_join("; ", fn item -> "#{item.label}: #{item.detail}" end)
+
+    Enum.reduce_while(duplicate_ids, {:ok, 0}, fn duplicate_id, {:ok, count} ->
+      case Crm.merge_people(user_id, survivor.id, duplicate_id, %{
+             "performed_by" => "operator_insights",
+             "evidence" => evidence_summary,
+             "model_rationale" =>
+               "Maraithon suggested this duplicate group from CRM cleanup and the user confirmed Merge contacts from Insights."
+           }) do
+        {:ok, _result} -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
   defp empty_insights do
     %{duplicate_suggestions: [], relationship_suggestions: [], total_count: 0}
   end
@@ -306,6 +398,75 @@ defmodule MaraithonWeb.InsightsLive do
   defp format_confidence(value) when is_float(value), do: "#{round(value * 100)}%"
   defp format_confidence(value) when is_integer(value), do: "#{value}%"
   defp format_confidence(_value), do: "unknown"
+
+  defp duplicate_survivor_name(%{people: people}) when is_list(people) do
+    people
+    |> duplicate_survivor()
+    |> case do
+      %{display_name: name} when is_binary(name) -> name
+      _person -> "the strongest CRM record"
+    end
+  end
+
+  defp duplicate_survivor_name(_suggestion), do: "the strongest CRM record"
+
+  defp duplicate_survivor([person | _] = people) do
+    Enum.max_by(people, &duplicate_survivor_score/1, fn -> person end)
+  end
+
+  defp duplicate_survivor([]), do: nil
+
+  defp duplicate_survivor_score(person) do
+    {
+      present_score(person.relationship),
+      present_score(person.notes),
+      person.relationship_strength || 0,
+      person.interaction_count || 0,
+      person.affinity_score || 0,
+      contact_detail_count(person.contact_details),
+      timestamp_score(person.last_interaction_at),
+      timestamp_score(person.updated_at),
+      timestamp_score(person.inserted_at)
+    }
+  end
+
+  defp present_score(value) when is_binary(value) do
+    if String.trim(value) == "", do: 0, else: 1
+  end
+
+  defp present_score(_value), do: 0
+
+  defp contact_detail_count(contact_details) when is_map(contact_details) do
+    contact_details
+    |> Map.values()
+    |> Enum.reduce(0, fn
+      value, count when is_list(value) -> count + length(value)
+      value, count when is_binary(value) -> count + present_score(value)
+      value, count when is_map(value) -> count + map_size(value)
+      _value, count -> count
+    end)
+  end
+
+  defp contact_detail_count(_contact_details), do: 0
+
+  defp timestamp_score(%DateTime{} = datetime), do: DateTime.to_unix(datetime, :microsecond)
+  defp timestamp_score(_datetime), do: 0
+
+  defp duplicate_merge_flash(survivor, 1),
+    do: "Merged 1 duplicate into #{survivor.display_name}."
+
+  defp duplicate_merge_flash(survivor, count),
+    do: "Merged #{count} duplicates into #{survivor.display_name}."
+
+  defp duplicate_merge_error(:not_enough_people), do: "Select at least two people to merge."
+  defp duplicate_merge_error(:person_not_found), do: "One of those people could not be found."
+
+  defp duplicate_merge_error(:person_already_merged),
+    do: "That duplicate has already been merged."
+
+  defp duplicate_merge_error(:survivor_already_merged), do: "Choose an active person to keep."
+  defp duplicate_merge_error(:person_not_active), do: "Only active people can be merged."
+  defp duplicate_merge_error(_reason), do: "Could not merge those contacts."
 
   defp current_user_id(socket), do: socket.assigns.current_user.id
 end

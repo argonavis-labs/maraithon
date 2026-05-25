@@ -51,9 +51,58 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert html =~ "CRM cleanup"
     assert html =~ "Relationship suggestions"
     assert html =~ "Possible duplicate: Christina Giannone"
+    assert html =~ "Merge contacts"
+    assert html =~ "Suggested action:"
     assert html =~ "I think Emma Fenwick is your daughter"
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/insights'][aria-current='page']", "Insights")
+  end
+
+  test "merges a duplicate suggestion from the insight card", %{conn: conn} do
+    {:ok, canonical} =
+      Crm.create_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "christina@example.com",
+        "relationship" => "family event organizer",
+        "notes" => "Coordinates family logistics.",
+        "interaction_count" => 12,
+        "relationship_strength" => 80
+      })
+
+    {:ok, duplicate} =
+      Crm.create_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "cgiannone@example.com",
+        "interaction_count" => 1,
+        "relationship_strength" => 10
+      })
+
+    suggestion =
+      @user_email
+      |> CrmInsights.list_for_user()
+      |> Map.fetch!(:duplicate_suggestions)
+      |> List.first()
+
+    {:ok, view, html} = live(conn, "/insights")
+    assert html =~ "Suggested action:"
+    assert html =~ "keep Christina Giannone"
+
+    html =
+      view
+      |> element(
+        "button[phx-click='merge_duplicate_suggestion'][phx-value-id='#{suggestion.id}']",
+        "Merge contacts"
+      )
+      |> render_click()
+
+    merged = Crm.get_person_for_user(@user_email, duplicate.id)
+    survivor = Crm.get_person_for_user(@user_email, canonical.id)
+
+    assert merged.status == "merged"
+    assert merged.merged_into_id == survivor.id
+    assert survivor.relationship == "family event organizer"
+    refute html =~ "Possible duplicate: Christina Giannone"
+    assert html =~ "Merged 1 duplicate into Christina Giannone."
   end
 
   test "applies a relationship suggestion and removes the card", %{conn: conn} do
