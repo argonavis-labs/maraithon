@@ -900,195 +900,18 @@ defmodule MaraithonWeb.DashboardLive do
       />
 
       <section id="todos">
-        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
-          <span :if={@open_todo_count > 0} class="text-xs/5 text-zinc-500">
-            <%= @open_todo_count %> open
-          </span>
-        </div>
-
-        <div
-          :if={MapSet.size(@selected_todo_ids) > 0}
-          id="todo-bulk-actions"
-          class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2"
-        >
-          <p class="text-sm/6 font-medium text-zinc-950">
-            <%= MapSet.size(@selected_todo_ids) %> selected
-          </p>
-          <div class="flex flex-wrap items-center gap-1">
-            <.button
-              type="button"
-              phx-click="complete_selected_todos"
-              variant="plain"
-              class="text-xs text-zinc-600 hover:text-zinc-950"
-            >
-              Mark done
-            </.button>
-            <.button
-              type="button"
-              phx-click="dismiss_selected_todos"
-              variant="plain"
-              class="text-xs text-zinc-600 hover:text-zinc-950"
-            >
-              Dismiss
-            </.button>
-            <.button
-              type="button"
-              phx-click="clear_todo_selection"
-              variant="plain"
-              class="text-xs text-zinc-500 hover:text-zinc-950"
-            >
-              Clear
-            </.button>
-          </div>
-        </div>
-
-        <div class={["mt-4 grid grid-cols-1 gap-4", @selected_todo && "xl:grid-cols-[minmax(0,1fr)_24rem]"]}>
-          <%= if @todos == [] do %>
-            <p class="text-sm/6 text-zinc-500">
-              All caught up. Maraithon will surface work here as agents notice it.
+        <div class="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-950/10 pb-3">
+          <div>
+            <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
+            <p class="mt-1 text-sm/6 text-zinc-500">
+              <%= if @open_todo_count > 0 do %>
+                <%= @open_todo_count %> open cards are ready to review.
+              <% else %>
+                All caught up. Maraithon will surface work here as agents notice it.
+              <% end %>
             </p>
-          <% else %>
-            <.table class="rounded-lg border border-zinc-950/10 bg-white">
-              <.table_head>
-                <.table_row>
-                  <.table_header class="w-10 px-3 py-3">
-                    <input
-                      type="checkbox"
-                      aria-label="Select all todos"
-                      checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
-                      phx-click="toggle_all_todos"
-                      class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
-                    />
-                  </.table_header>
-                  <.table_header class="min-w-[22rem] py-3">Todo</.table_header>
-                  <.table_header class="py-3">Source</.table_header>
-                  <.table_header class="py-3">Priority</.table_header>
-                  <.table_header class="py-3">Updated</.table_header>
-                  <.table_header class="w-36 py-3 text-right">Actions</.table_header>
-                </.table_row>
-              </.table_head>
-              <.table_body>
-                <.table_row
-                  :for={todo <- @todos}
-                  id={"todo-#{todo.id}"}
-                  phx-click="open_todo_detail"
-                  phx-value-id={todo.id}
-                  class={todo_row_class(todo, @selected_todo_ids, @selected_todo_id)}
-                >
-                  <.table_cell class="w-10 px-3 py-3 align-top">
-                    <input
-                      type="checkbox"
-                      aria-label={"Select #{todo.title}"}
-                      checked={MapSet.member?(@selected_todo_ids, todo.id)}
-                      phx-click="toggle_todo_selection"
-                      phx-value-id={todo.id}
-                      onclick="event.stopPropagation()"
-                      class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
-                    />
-                  </.table_cell>
-                  <.table_cell class="min-w-[22rem] whitespace-normal py-3 align-top">
-                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs/5 text-zinc-500">
-                      <span class={todo_status_class(todo.status)}>
-                        <%= todo_status_label(todo.status) %>
-                      </span>
-                      <span><%= todo_source_label(todo.source) %></span>
-                    </div>
-                    <p class="mt-1 text-sm/6 font-medium text-zinc-950">
-                      <%= todo.title %>
-                    </p>
-                    <p :if={todo.summary && todo.summary != ""} class="mt-0.5 text-sm/6 text-zinc-600">
-                      <%= todo.summary %>
-                    </p>
-                    <p :if={todo.next_action && todo.next_action != ""} class="mt-1 text-sm/6 text-zinc-700">
-                      <span class="font-medium text-zinc-950">Next:</span> <%= todo.next_action %>
-                    </p>
-                  </.table_cell>
-                  <.table_cell class="whitespace-normal py-3 align-top text-sm/6 text-zinc-600">
-                    <p class="font-medium text-zinc-950"><%= todo_source_label(todo.source) %></p>
-                    <p :if={todo_source_account_value(todo)} class="mt-0.5 text-xs/5 text-zinc-500">
-                      <%= todo_source_account_value(todo) %>
-                    </p>
-                  </.table_cell>
-                  <.table_cell class="py-3 align-top text-sm/6 text-zinc-600">
-                    <%= todo.priority %>
-                  </.table_cell>
-                  <.table_cell class="whitespace-normal py-3 align-top text-xs/5 text-zinc-500">
-                    <%= format_datetime(todo.updated_at) %>
-                  </.table_cell>
-                  <.table_cell class="py-3 align-top text-right">
-                    <div class="flex shrink-0 items-center justify-end gap-1">
-                      <.button
-                        type="button"
-                        phx-click="complete_todo"
-                        phx-value-id={todo.id}
-                        onclick="event.stopPropagation()"
-                        variant="plain"
-                        class="text-xs text-zinc-500 hover:text-zinc-950"
-                      >
-                        Mark done
-                      </.button>
-                      <.button
-                        type="button"
-                        phx-click="dismiss_todo"
-                        phx-value-id={todo.id}
-                        onclick="event.stopPropagation()"
-                        variant="plain"
-                        class="text-xs text-zinc-500 hover:text-zinc-950"
-                      >
-                        Dismiss
-                      </.button>
-                    </div>
-                  </.table_cell>
-                </.table_row>
-              </.table_body>
-            </.table>
-          <% end %>
-
-          <aside
-            :if={@selected_todo}
-            id="todo-detail"
-            class="rounded-lg border border-zinc-950/10 bg-white px-4 py-4 shadow-sm"
-          >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <span class={todo_status_class(@selected_todo.status)}>
-                    <%= todo_status_label(@selected_todo.status) %>
-                  </span>
-                  <span class="text-xs/5 text-zinc-500">
-                    priority <%= @selected_todo.priority %>
-                  </span>
-                </div>
-                <h3 class="mt-2 text-base/7 font-semibold text-zinc-950">
-                  <%= @selected_todo.title %>
-                </h3>
-              </div>
-              <.link
-                patch="/dashboard"
-                class="rounded-md px-2 py-1 text-xs/5 font-medium text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
-              >
-                Close
-              </.link>
-            </div>
-
-            <dl class="mt-4 divide-y divide-zinc-950/5">
-              <div :for={field <- todo_detail_fields(@selected_todo)} class="grid grid-cols-1 gap-1 py-3">
-                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
-                <dd class="text-sm/6 text-zinc-700"><%= field.value %></dd>
-              </div>
-            </dl>
-
-            <div :if={todo_metadata_pairs(@selected_todo) != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-              <p class="text-xs/5 font-medium text-zinc-500">Source metadata</p>
-              <dl class="mt-2 space-y-2">
-                <div :for={field <- todo_metadata_pairs(@selected_todo)} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
-                  <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
-                  <dd class="break-words text-xs/5 text-zinc-700"><%= field.value %></dd>
-                </div>
-              </dl>
-            </div>
-          </aside>
+          </div>
+          <.button navigate="/todos" variant="outline">Open Todos</.button>
         </div>
       </section>
 
@@ -3279,16 +3102,6 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp todo_source_label(source), do: insight_source_label(source)
 
-  defp todo_row_class(todo, selected_todo_ids, selected_todo_id) do
-    [
-      "cursor-pointer transition-colors hover:bg-zinc-950/[0.025]",
-      MapSet.member?(selected_todo_ids, todo.id) && "bg-blue-50/70",
-      selected_todo_id == todo.id && "outline outline-1 -outline-offset-1 outline-zinc-950/10"
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" ")
-  end
-
   defp todo_source_account_value(todo) do
     metadata = todo.metadata || %{}
 
@@ -3301,42 +3114,6 @@ defmodule MaraithonWeb.DashboardLive do
 
     normalized_text(metadata_account)
   end
-
-  defp todo_detail_fields(todo) do
-    [
-      %{label: "Source", value: todo_source_label(todo.source)},
-      %{label: "Account", value: todo_source_account_value(todo)},
-      %{label: "Summary", value: todo.summary},
-      %{label: "Next action", value: todo.next_action},
-      %{label: "Due", value: todo_detail_datetime(todo.due_at)},
-      %{label: "Snoozed until", value: todo_detail_datetime(todo.snoozed_until)},
-      %{label: "Updated", value: todo_detail_datetime(todo.updated_at)},
-      %{label: "Notes", value: todo.notes},
-      %{label: "Action plan", value: todo.action_plan}
-    ]
-    |> Enum.reject(fn field -> blank_metadata?(field.value) end)
-  end
-
-  defp todo_detail_datetime(nil), do: nil
-  defp todo_detail_datetime(datetime), do: format_datetime(datetime)
-
-  defp todo_metadata_pairs(todo) do
-    (todo.metadata || %{})
-    |> Enum.map(fn {key, value} ->
-      %{
-        label: humanize_text_token(key) || to_string(key),
-        value: todo_metadata_value(value)
-      }
-    end)
-    |> Enum.reject(fn field -> blank_metadata?(field.value) end)
-    |> Enum.take(8)
-  end
-
-  defp todo_metadata_value(value) when is_binary(value), do: normalized_text(value)
-  defp todo_metadata_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp todo_metadata_value(value) when is_float(value), do: Float.to_string(value)
-  defp todo_metadata_value(value) when is_boolean(value), do: to_string(value)
-  defp todo_metadata_value(_value), do: nil
 
   defp agent_display_name(agent) do
     get_in(agent.config || %{}, ["name"]) ||

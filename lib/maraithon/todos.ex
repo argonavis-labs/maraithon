@@ -22,47 +22,23 @@ defmodule Maraithon.Todos do
   def get_for_user(_user_id, _todo_id), do: nil
 
   def list_for_user(user_id, opts \\ []) when is_binary(user_id) do
-    limit = Keyword.get(opts, :limit, 20)
-    source = Keyword.get(opts, :source)
-    source_account_id = Keyword.get(opts, :source_account_id)
-    kind = Keyword.get(opts, :kind)
-    attention_mode = Keyword.get(opts, :attention_mode)
-    owner_user_id = Keyword.get(opts, :owner_user_id)
-    due_before = Keyword.get(opts, :due_before) || Keyword.get(opts, :due_before_or_at)
-    due_after = Keyword.get(opts, :due_after) || Keyword.get(opts, :due_after_or_at)
-    statuses = normalize_status_filters(Keyword.get(opts, :statuses))
-    query_text = normalize_query_text(Keyword.get(opts, :query))
-    open_due_only? = Keyword.get(opts, :open_due_only, false)
+    limit = normalize_limit(Keyword.get(opts, :limit, 20), 20)
+    sort_by = normalize_sort_by(Keyword.get(opts, :sort_by, "rank"))
+    sort_dir = normalize_sort_dir(Keyword.get(opts, :sort_dir, "desc"))
 
-    Todo
-    |> where([todo], todo.user_id == ^user_id)
-    |> maybe_filter_statuses(statuses)
-    |> maybe_filter_open_due_only(open_due_only?)
-    |> maybe_filter_source(source)
-    |> maybe_filter_source_account_id(source_account_id)
-    |> maybe_filter_kind(kind)
-    |> maybe_filter_attention_mode(attention_mode)
-    |> maybe_filter_owner_user_id(owner_user_id)
-    |> maybe_filter_due_after(due_after)
-    |> maybe_filter_due_before(due_before)
-    |> maybe_filter_query(query_text)
-    |> order_by(
-      [
-        todo
-      ],
-      asc:
-        fragment(
-          "CASE WHEN ? = 'act_now' THEN 0 WHEN ? = 'monitor' THEN 1 ELSE 2 END",
-          todo.attention_mode,
-          todo.attention_mode
-        ),
-      desc: todo.priority,
-      asc_nulls_last: todo.due_at,
-      desc: todo.updated_at,
-      desc: todo.inserted_at
-    )
+    user_id
+    |> filtered_todo_query(opts)
+    |> apply_todo_order(sort_by, sort_dir)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  def count_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    user_id
+    |> filtered_todo_query(opts)
+    |> exclude(:order_by)
+    |> select([todo], count(todo.id))
+    |> Repo.one()
   end
 
   def list_open_for_user(user_id, opts \\ []) when is_binary(user_id) do
@@ -880,8 +856,41 @@ defmodule Maraithon.Todos do
     |> maybe_put("confidence", insight.confidence)
   end
 
+  defp filtered_todo_query(user_id, opts) do
+    source = Keyword.get(opts, :source)
+    source_account_id = Keyword.get(opts, :source_account_id)
+    kind = Keyword.get(opts, :kind)
+    attention_mode = Keyword.get(opts, :attention_mode)
+    owner_user_id = Keyword.get(opts, :owner_user_id)
+    due_before = Keyword.get(opts, :due_before) || Keyword.get(opts, :due_before_or_at)
+    due_after = Keyword.get(opts, :due_after) || Keyword.get(opts, :due_after_or_at)
+    due_nil? = Keyword.get(opts, :due_nil?, false)
+    statuses = normalize_status_filters(Keyword.get(opts, :statuses))
+    query_text = normalize_query_text(Keyword.get(opts, :query))
+    open_due_only? = Keyword.get(opts, :open_due_only, false)
+
+    Todo
+    |> where([todo], todo.user_id == ^user_id)
+    |> maybe_filter_statuses(statuses)
+    |> maybe_filter_open_due_only(open_due_only?)
+    |> maybe_filter_source(source)
+    |> maybe_filter_source_account_id(source_account_id)
+    |> maybe_filter_kind(kind)
+    |> maybe_filter_attention_mode(attention_mode)
+    |> maybe_filter_owner_user_id(owner_user_id)
+    |> maybe_filter_due_after(due_after)
+    |> maybe_filter_due_before(due_before)
+    |> maybe_filter_due_nil(due_nil?)
+    |> maybe_filter_query(query_text)
+  end
+
   defp maybe_filter_source(query, nil), do: query
   defp maybe_filter_source(query, ""), do: query
+  defp maybe_filter_source(query, "all"), do: query
+
+  defp maybe_filter_source(query, "calendar") do
+    where(query, [todo], todo.source in ["calendar", "google_calendar"])
+  end
 
   defp maybe_filter_source(query, source) when is_binary(source) do
     where(query, [todo], todo.source == ^source)
@@ -924,6 +933,7 @@ defmodule Maraithon.Todos do
 
   defp maybe_filter_attention_mode(query, nil), do: query
   defp maybe_filter_attention_mode(query, ""), do: query
+  defp maybe_filter_attention_mode(query, "all"), do: query
 
   defp maybe_filter_attention_mode(query, attention_mode) when is_binary(attention_mode) do
     where(query, [todo], todo.attention_mode == ^attention_mode)
@@ -956,6 +966,121 @@ defmodule Maraithon.Todos do
       nil -> query
       due_before -> where(query, [todo], not is_nil(todo.due_at) and todo.due_at <= ^due_before)
     end
+  end
+
+  defp maybe_filter_due_nil(query, true), do: where(query, [todo], is_nil(todo.due_at))
+  defp maybe_filter_due_nil(query, "true"), do: where(query, [todo], is_nil(todo.due_at))
+  defp maybe_filter_due_nil(query, _due_nil?), do: query
+
+  defp apply_todo_order(query, "title", "asc"),
+    do: order_by(query, [todo], asc: todo.title, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "title", "desc"),
+    do: order_by(query, [todo], desc: todo.title, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "source", "asc"),
+    do: order_by(query, [todo], asc: todo.source, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "source", "desc"),
+    do: order_by(query, [todo], desc: todo.source, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "status", "asc"),
+    do: order_by(query, [todo], asc: todo.status, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "status", "desc"),
+    do: order_by(query, [todo], desc: todo.status, desc: todo.priority, desc: todo.updated_at)
+
+  defp apply_todo_order(query, "attention", "asc"),
+    do:
+      order_by(query, [todo],
+        asc:
+          fragment(
+            "CASE WHEN ? = 'act_now' THEN 0 WHEN ? = 'monitor' THEN 1 ELSE 2 END",
+            todo.attention_mode,
+            todo.attention_mode
+          ),
+        desc: todo.priority,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "attention", "desc"),
+    do:
+      order_by(query, [todo],
+        desc:
+          fragment(
+            "CASE WHEN ? = 'act_now' THEN 0 WHEN ? = 'monitor' THEN 1 ELSE 2 END",
+            todo.attention_mode,
+            todo.attention_mode
+          ),
+        desc: todo.priority,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "priority", "asc"),
+    do:
+      order_by(query, [todo],
+        asc: todo.priority,
+        asc_nulls_last: todo.due_at,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "priority", "desc"),
+    do:
+      order_by(query, [todo],
+        desc: todo.priority,
+        asc_nulls_last: todo.due_at,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "due", "asc"),
+    do:
+      order_by(query, [todo],
+        asc_nulls_last: todo.due_at,
+        desc: todo.priority,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "due", "desc"),
+    do:
+      order_by(query, [todo],
+        desc_nulls_last: todo.due_at,
+        desc: todo.priority,
+        desc: todo.updated_at
+      )
+
+  defp apply_todo_order(query, "updated", "asc"),
+    do:
+      order_by(query, [todo],
+        asc: todo.updated_at,
+        desc: todo.priority,
+        asc_nulls_last: todo.due_at
+      )
+
+  defp apply_todo_order(query, "updated", "desc"),
+    do:
+      order_by(query, [todo],
+        desc: todo.updated_at,
+        desc: todo.priority,
+        asc_nulls_last: todo.due_at
+      )
+
+  defp apply_todo_order(query, _sort_by, _sort_dir) do
+    order_by(
+      query,
+      [
+        todo
+      ],
+      asc:
+        fragment(
+          "CASE WHEN ? = 'act_now' THEN 0 WHEN ? = 'monitor' THEN 1 ELSE 2 END",
+          todo.attention_mode,
+          todo.attention_mode
+        ),
+      desc: todo.priority,
+      asc_nulls_last: todo.due_at,
+      desc: todo.updated_at,
+      desc: todo.inserted_at
+    )
   end
 
   defp maybe_filter_query(query, nil), do: query
@@ -1135,6 +1260,29 @@ defmodule Maraithon.Todos do
   end
 
   defp normalize_status_filters(_statuses), do: []
+
+  defp normalize_sort_by(value)
+       when value in ~w(rank title source status attention priority due updated),
+       do: value
+
+  defp normalize_sort_by("due_at"), do: "due"
+  defp normalize_sort_by("updated_at"), do: "updated"
+  defp normalize_sort_by("inserted_at"), do: "updated"
+  defp normalize_sort_by(_value), do: "rank"
+
+  defp normalize_sort_dir(value) when value in ~w(asc desc), do: value
+  defp normalize_sort_dir(_value), do: "desc"
+
+  defp normalize_limit(value, _default) when is_integer(value) and value > 0, do: value
+
+  defp normalize_limit(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} when parsed > 0 -> parsed
+      _ -> default
+    end
+  end
+
+  defp normalize_limit(_value, default), do: default
 
   defp normalize_query_text(value) when is_binary(value) do
     case String.trim(value) do

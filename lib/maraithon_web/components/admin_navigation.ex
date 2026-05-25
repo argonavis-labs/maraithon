@@ -13,6 +13,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @primary_nav [
     %{label: "Dashboard", path: "/dashboard", icon: :home},
+    %{label: "Todos", path: "/todos", icon: :todos},
     %{label: "Agents", path: "/agents", icon: :agents},
     %{label: "Connectors", path: "/connectors", icon: :connectors},
     %{label: "People", path: "/operator/people", icon: :people},
