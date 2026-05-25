@@ -63,29 +63,37 @@ defmodule Maraithon.Diagnostics.Export do
   )
 
   def run(opts \\ []) when is_list(opts) do
-    generated_at = DateTime.utc_now() |> DateTime.truncate(:second)
-    user_id = normalize_blank(Keyword.get(opts, :user_id))
-    limit = opts |> Keyword.get(:limit, @default_limit) |> normalize_limit()
-    output_dir = opts |> Keyword.get(:output_dir) |> output_dir(generated_at)
+    try do
+      generated_at = DateTime.utc_now() |> DateTime.truncate(:second)
+      user_id = normalize_blank(Keyword.get(opts, :user_id))
+      limit = opts |> Keyword.get(:limit, @default_limit) |> normalize_limit()
+      output_dir = opts |> Keyword.get(:output_dir) |> output_dir(generated_at)
 
-    File.mkdir_p!(output_dir)
+      File.mkdir_p!(output_dir)
 
-    sections = build_sections(generated_at, user_id, limit)
+      sections = build_sections(generated_at, user_id, limit)
 
-    files =
-      sections
-      |> Enum.map(fn {filename, payload} ->
-        path = Path.join(output_dir, filename)
-        File.write!(path, Jason.encode!(normalize_for_json(payload), pretty: true))
-        filename
-      end)
+      files =
+        sections
+        |> Enum.map(fn {filename, payload} ->
+          path = Path.join(output_dir, filename)
+          File.write!(path, Jason.encode!(normalize_for_json(payload), pretty: true))
+          filename
+        end)
 
-    {:ok,
-     %{
-       output_dir: output_dir,
-       generated_at: DateTime.to_iso8601(generated_at),
-       files: files
-     }}
+      {:ok,
+       %{
+         output_dir: output_dir,
+         generated_at: DateTime.to_iso8601(generated_at),
+         files: files
+       }}
+    rescue
+      exception ->
+        {:error, exception}
+    catch
+      kind, reason ->
+        {:error, {kind, reason}}
+    end
   end
 
   defp build_sections(generated_at, user_id, limit) do

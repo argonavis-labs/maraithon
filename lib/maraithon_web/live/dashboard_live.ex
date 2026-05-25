@@ -83,6 +83,9 @@ defmodule MaraithonWeb.DashboardLive do
         todo_review_index: 0,
         todo_review_session: %{completed: 0, dismissed: 0, kept: 0, important: 0},
         todo_review_decided_ids: MapSet.new(),
+        selected_todo_ids: MapSet.new(),
+        selected_todo_id: nil,
+        selected_todo: nil,
         projects: [],
         agent_overviews: [],
         project_form: to_form(default_project_form_params(), as: :project),
@@ -564,6 +567,50 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  def handle_event("toggle_todo_selection", %{"id" => todo_id}, socket) do
+    selected_todo_ids =
+      if visible_todo_id?(socket, todo_id) do
+        toggle_mapset_member(socket.assigns.selected_todo_ids, todo_id)
+      else
+        socket.assigns.selected_todo_ids
+      end
+
+    {:noreply, assign(socket, :selected_todo_ids, selected_todo_ids)}
+  end
+
+  def handle_event("toggle_all_todos", _params, socket) do
+    visible_ids = visible_todo_ids(socket)
+
+    selected_todo_ids =
+      if all_visible_todos_selected?(socket.assigns.todos, socket.assigns.selected_todo_ids) do
+        MapSet.difference(socket.assigns.selected_todo_ids, visible_ids)
+      else
+        MapSet.union(socket.assigns.selected_todo_ids, visible_ids)
+      end
+
+    {:noreply, assign(socket, :selected_todo_ids, selected_todo_ids)}
+  end
+
+  def handle_event("clear_todo_selection", _params, socket) do
+    {:noreply, assign(socket, :selected_todo_ids, MapSet.new())}
+  end
+
+  def handle_event("complete_selected_todos", _params, socket) do
+    {:noreply, apply_bulk_todo_action(socket, :complete)}
+  end
+
+  def handle_event("dismiss_selected_todos", _params, socket) do
+    {:noreply, apply_bulk_todo_action(socket, :dismiss)}
+  end
+
+  def handle_event("open_todo_detail", %{"id" => todo_id}, socket) do
+    if visible_todo_id?(socket, todo_id) do
+      {:noreply, push_patch(socket, to: todo_detail_path(todo_id))}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_event("toggle_insight_detail", %{"id" => insight_id}, socket) do
     case insight_card(socket, insight_id) do
       %{insight: insight, detail: detail} ->
@@ -810,9 +857,14 @@ defmodule MaraithonWeb.DashboardLive do
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-10">
       <header class="flex flex-wrap items-end justify-between gap-3">
-        <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-          <%= dashboard_greeting(@current_user) %>
-        </h1>
+        <div>
+          <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
+            Todos
+          </h1>
+          <p class="mt-1 text-sm/6 text-zinc-500">
+            <%= dashboard_greeting(@current_user) %>
+          </p>
+        </div>
         <div class="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -847,6 +899,199 @@ defmodule MaraithonWeb.DashboardLive do
         todo_review_decided_ids={@todo_review_decided_ids}
       />
 
+      <section id="todos">
+        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
+          <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
+          <span :if={@open_todo_count > 0} class="text-xs/5 text-zinc-500">
+            <%= @open_todo_count %> open
+          </span>
+        </div>
+
+        <div
+          :if={MapSet.size(@selected_todo_ids) > 0}
+          id="todo-bulk-actions"
+          class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2"
+        >
+          <p class="text-sm/6 font-medium text-zinc-950">
+            <%= MapSet.size(@selected_todo_ids) %> selected
+          </p>
+          <div class="flex flex-wrap items-center gap-1">
+            <.button
+              type="button"
+              phx-click="complete_selected_todos"
+              variant="plain"
+              class="text-xs text-zinc-600 hover:text-zinc-950"
+            >
+              Mark done
+            </.button>
+            <.button
+              type="button"
+              phx-click="dismiss_selected_todos"
+              variant="plain"
+              class="text-xs text-zinc-600 hover:text-zinc-950"
+            >
+              Dismiss
+            </.button>
+            <.button
+              type="button"
+              phx-click="clear_todo_selection"
+              variant="plain"
+              class="text-xs text-zinc-500 hover:text-zinc-950"
+            >
+              Clear
+            </.button>
+          </div>
+        </div>
+
+        <div class={["mt-4 grid grid-cols-1 gap-4", @selected_todo && "xl:grid-cols-[minmax(0,1fr)_24rem]"]}>
+          <%= if @todos == [] do %>
+            <p class="text-sm/6 text-zinc-500">
+              All caught up. Maraithon will surface work here as agents notice it.
+            </p>
+          <% else %>
+            <.table class="rounded-lg border border-zinc-950/10 bg-white">
+              <.table_head>
+                <.table_row>
+                  <.table_header class="w-10 px-3 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all todos"
+                      checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
+                      phx-click="toggle_all_todos"
+                      class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                    />
+                  </.table_header>
+                  <.table_header class="min-w-[22rem] py-3">Todo</.table_header>
+                  <.table_header class="py-3">Source</.table_header>
+                  <.table_header class="py-3">Priority</.table_header>
+                  <.table_header class="py-3">Updated</.table_header>
+                  <.table_header class="w-36 py-3 text-right">Actions</.table_header>
+                </.table_row>
+              </.table_head>
+              <.table_body>
+                <.table_row
+                  :for={todo <- @todos}
+                  id={"todo-#{todo.id}"}
+                  phx-click="open_todo_detail"
+                  phx-value-id={todo.id}
+                  class={todo_row_class(todo, @selected_todo_ids, @selected_todo_id)}
+                >
+                  <.table_cell class="w-10 px-3 py-3 align-top">
+                    <input
+                      type="checkbox"
+                      aria-label={"Select #{todo.title}"}
+                      checked={MapSet.member?(@selected_todo_ids, todo.id)}
+                      phx-click="toggle_todo_selection"
+                      phx-value-id={todo.id}
+                      onclick="event.stopPropagation()"
+                      class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                    />
+                  </.table_cell>
+                  <.table_cell class="min-w-[22rem] whitespace-normal py-3 align-top">
+                    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs/5 text-zinc-500">
+                      <span class={todo_status_class(todo.status)}>
+                        <%= todo_status_label(todo.status) %>
+                      </span>
+                      <span><%= todo_source_label(todo.source) %></span>
+                    </div>
+                    <p class="mt-1 text-sm/6 font-medium text-zinc-950">
+                      <%= todo.title %>
+                    </p>
+                    <p :if={todo.summary && todo.summary != ""} class="mt-0.5 text-sm/6 text-zinc-600">
+                      <%= todo.summary %>
+                    </p>
+                    <p :if={todo.next_action && todo.next_action != ""} class="mt-1 text-sm/6 text-zinc-700">
+                      <span class="font-medium text-zinc-950">Next:</span> <%= todo.next_action %>
+                    </p>
+                  </.table_cell>
+                  <.table_cell class="whitespace-normal py-3 align-top text-sm/6 text-zinc-600">
+                    <p class="font-medium text-zinc-950"><%= todo_source_label(todo.source) %></p>
+                    <p :if={todo_source_account_value(todo)} class="mt-0.5 text-xs/5 text-zinc-500">
+                      <%= todo_source_account_value(todo) %>
+                    </p>
+                  </.table_cell>
+                  <.table_cell class="py-3 align-top text-sm/6 text-zinc-600">
+                    <%= todo.priority %>
+                  </.table_cell>
+                  <.table_cell class="whitespace-normal py-3 align-top text-xs/5 text-zinc-500">
+                    <%= format_datetime(todo.updated_at) %>
+                  </.table_cell>
+                  <.table_cell class="py-3 align-top text-right">
+                    <div class="flex shrink-0 items-center justify-end gap-1">
+                      <.button
+                        type="button"
+                        phx-click="complete_todo"
+                        phx-value-id={todo.id}
+                        onclick="event.stopPropagation()"
+                        variant="plain"
+                        class="text-xs text-zinc-500 hover:text-zinc-950"
+                      >
+                        Mark done
+                      </.button>
+                      <.button
+                        type="button"
+                        phx-click="dismiss_todo"
+                        phx-value-id={todo.id}
+                        onclick="event.stopPropagation()"
+                        variant="plain"
+                        class="text-xs text-zinc-500 hover:text-zinc-950"
+                      >
+                        Dismiss
+                      </.button>
+                    </div>
+                  </.table_cell>
+                </.table_row>
+              </.table_body>
+            </.table>
+          <% end %>
+
+          <aside
+            :if={@selected_todo}
+            id="todo-detail"
+            class="rounded-lg border border-zinc-950/10 bg-white px-4 py-4 shadow-sm"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class={todo_status_class(@selected_todo.status)}>
+                    <%= todo_status_label(@selected_todo.status) %>
+                  </span>
+                  <span class="text-xs/5 text-zinc-500">
+                    priority <%= @selected_todo.priority %>
+                  </span>
+                </div>
+                <h3 class="mt-2 text-base/7 font-semibold text-zinc-950">
+                  <%= @selected_todo.title %>
+                </h3>
+              </div>
+              <.link
+                patch="/dashboard"
+                class="rounded-md px-2 py-1 text-xs/5 font-medium text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
+              >
+                Close
+              </.link>
+            </div>
+
+            <dl class="mt-4 divide-y divide-zinc-950/5">
+              <div :for={field <- todo_detail_fields(@selected_todo)} class="grid grid-cols-1 gap-1 py-3">
+                <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+                <dd class="text-sm/6 text-zinc-700"><%= field.value %></dd>
+              </div>
+            </dl>
+
+            <div :if={todo_metadata_pairs(@selected_todo) != []} class="mt-4 border-t border-zinc-950/10 pt-4">
+              <p class="text-xs/5 font-medium text-zinc-500">Source metadata</p>
+              <dl class="mt-2 space-y-2">
+                <div :for={field <- todo_metadata_pairs(@selected_todo)} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
+                  <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
+                  <dd class="break-words text-xs/5 text-zinc-700"><%= field.value %></dd>
+                </div>
+              </dl>
+            </div>
+          </aside>
+        </div>
+      </section>
+
       <section>
         <div class="border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Overview</h2>
@@ -875,72 +1120,6 @@ defmodule MaraithonWeb.DashboardLive do
             note={"#{@queue_metrics.effects.failed} failed"}
           />
         </dl>
-      </section>
-
-      <section>
-        <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
-          <span :if={@open_todo_count > 0} class="text-xs/5 text-zinc-500">
-            <%= @open_todo_count %> open
-          </span>
-        </div>
-
-        <div class="mt-4">
-          <%= if @todos == [] do %>
-            <p class="text-sm/6 text-zinc-500">
-              All caught up. Maraithon will surface work here as agents notice it.
-            </p>
-          <% else %>
-            <ul role="list" class="divide-y divide-zinc-950/5">
-              <li
-                :for={todo <- Enum.take(@todos, 6)}
-                id={"todo-#{todo.id}"}
-                class="flex flex-wrap items-start justify-between gap-3 py-4"
-              >
-                <div class="min-w-0 flex-1">
-                  <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs/5 text-zinc-500">
-                    <span class={todo_status_class(todo.status)}>
-                      <%= todo_status_label(todo.status) %>
-                    </span>
-                    <span><%= todo_source_label(todo.source) %></span>
-                    <span aria-hidden="true">·</span>
-                    <span><%= todo_priority_label(todo) %></span>
-                  </div>
-                  <p class="mt-1.5 text-sm/6 font-medium text-zinc-950"><%= todo.title %></p>
-                  <p :if={todo.summary && todo.summary != ""} class="mt-0.5 text-sm/6 text-zinc-600">
-                    <%= todo.summary %>
-                  </p>
-                  <p :if={todo.next_action && todo.next_action != ""} class="mt-1.5 text-sm/6 text-zinc-700">
-                    <span class="font-medium text-zinc-950">Next:</span> <%= todo.next_action %>
-                  </p>
-                  <p class="mt-1 text-xs/5 text-zinc-500">
-                    <%= todo_context_line(todo) %>
-                  </p>
-                </div>
-                <div class="flex shrink-0 items-center gap-1">
-                  <.button
-                    type="button"
-                    phx-click="complete_todo"
-                    phx-value-id={todo.id}
-                    variant="plain"
-                    class="text-xs text-zinc-500 hover:text-zinc-950"
-                  >
-                    Mark done
-                  </.button>
-                  <.button
-                    type="button"
-                    phx-click="dismiss_todo"
-                    phx-value-id={todo.id}
-                    variant="plain"
-                    class="text-xs text-zinc-500 hover:text-zinc-950"
-                  >
-                    Dismiss
-                  </.button>
-                </div>
-              </li>
-            </ul>
-          <% end %>
-        </div>
       </section>
 
       <section>
@@ -2565,13 +2744,17 @@ defmodule MaraithonWeb.DashboardLive do
     todos = Todos.list_for_user(user_id, limit: 50, statuses: ["open", "snoozed"])
     decided_ids = prune_todo_review_decided_ids(socket.assigns.todo_review_decided_ids, todos)
     reviewable_count = length(reviewable_todos(todos, decided_ids))
+    visible_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
+    selected_todo_ids = MapSet.intersection(socket.assigns.selected_todo_ids, visible_ids)
 
     assign(socket,
       todos: todos,
       open_todo_count: length(todos),
       todo_review_decided_ids: decided_ids,
       todo_review_index:
-        clamp_review_index(Map.get(socket.assigns, :todo_review_index, 0), reviewable_count)
+        clamp_review_index(Map.get(socket.assigns, :todo_review_index, 0), reviewable_count),
+      selected_todo_ids: selected_todo_ids,
+      selected_todo: selected_todo_for_user(user_id, socket.assigns.selected_todo_id)
     )
   end
 
@@ -2611,6 +2794,108 @@ defmodule MaraithonWeb.DashboardLive do
     |> reviewable_todos(Map.get(socket.assigns, :todo_review_decided_ids, MapSet.new()))
     |> length()
   end
+
+  defp apply_bulk_todo_action(socket, action) do
+    todo_ids = selected_visible_todo_ids(socket)
+
+    if todo_ids == [] do
+      put_flash(socket, :error, "Select at least one todo first")
+    else
+      {updated_count, errors} =
+        Enum.reduce(todo_ids, {0, []}, fn todo_id, {count, errors} ->
+          case run_todo_action(action, current_user_id(socket), todo_id, bulk_todo_note(action)) do
+            {:ok, _todo} -> {count + 1, errors}
+            {:error, reason} -> {count, [{todo_id, reason} | errors]}
+          end
+        end)
+
+      socket =
+        socket
+        |> assign(:selected_todo_ids, MapSet.new())
+        |> refresh_dashboard()
+
+      put_flash(
+        socket,
+        bulk_todo_flash_kind(updated_count, errors),
+        bulk_todo_flash(action, updated_count, errors)
+      )
+    end
+  end
+
+  defp run_todo_action(:complete, user_id, todo_id, note),
+    do: Todos.mark_done(user_id, todo_id, note: note)
+
+  defp run_todo_action(:dismiss, user_id, todo_id, note),
+    do: Todos.dismiss(user_id, todo_id, note: note)
+
+  defp bulk_todo_note(:complete), do: "Completed from dashboard bulk action."
+  defp bulk_todo_note(:dismiss), do: "Dismissed from dashboard bulk action."
+
+  defp bulk_todo_flash_kind(0, [_ | _]), do: :error
+  defp bulk_todo_flash_kind(_updated_count, _errors), do: :info
+
+  defp bulk_todo_flash(action, updated_count, errors) do
+    base =
+      case action do
+        :complete -> "Marked #{pluralize_todo(updated_count)} done"
+        :dismiss -> "Dismissed #{pluralize_todo(updated_count)}"
+      end
+
+    case length(errors) do
+      0 -> base
+      error_count -> "#{base}; #{error_count} could not be updated"
+    end
+  end
+
+  defp pluralize_todo(1), do: "1 todo"
+  defp pluralize_todo(count), do: "#{count} todos"
+
+  defp selected_visible_todo_ids(socket) do
+    socket.assigns.selected_todo_ids
+    |> MapSet.intersection(visible_todo_ids(socket))
+    |> MapSet.to_list()
+  end
+
+  defp visible_todo_id?(socket, todo_id) when is_binary(todo_id) do
+    MapSet.member?(visible_todo_ids(socket), todo_id)
+  end
+
+  defp visible_todo_id?(_socket, _todo_id), do: false
+
+  defp visible_todo_ids(socket) do
+    socket.assigns.todos
+    |> Enum.map(& &1.id)
+    |> MapSet.new()
+  end
+
+  defp all_visible_todos_selected?([], _selected_todo_ids), do: false
+
+  defp all_visible_todos_selected?(todos, selected_todo_ids) when is_list(todos) do
+    visible_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
+    MapSet.subset?(visible_ids, selected_todo_ids)
+  end
+
+  defp all_visible_todos_selected?(_todos, _selected_todo_ids), do: false
+
+  defp toggle_mapset_member(mapset, value) do
+    if MapSet.member?(mapset, value) do
+      MapSet.delete(mapset, value)
+    else
+      MapSet.put(mapset, value)
+    end
+  end
+
+  defp selected_todo_for_user(_user_id, nil), do: nil
+  defp selected_todo_for_user(_user_id, ""), do: nil
+
+  defp selected_todo_for_user(user_id, todo_id) when is_binary(user_id) and is_binary(todo_id) do
+    Todos.get_for_user(user_id, todo_id)
+  end
+
+  defp selected_todo_for_user(_user_id, _todo_id), do: nil
+
+  defp todo_detail_path(nil), do: "/dashboard"
+  defp todo_detail_path(todo_id), do: "/dashboard?todo_id=#{URI.encode_www_form(todo_id)}"
 
   defp refresh_agent_overviews(socket) do
     projects_by_id =
@@ -2705,7 +2990,20 @@ defmodule MaraithonWeb.DashboardLive do
         onboarding_preview_eligible?: OnboardingProof.eligible?(user_id)
       )
 
-    maybe_put_oauth_flash(socket, params)
+    socket
+    |> assign_selected_todo_from_params(params)
+    |> maybe_put_oauth_flash(params)
+  end
+
+  defp assign_selected_todo_from_params(socket, params) do
+    user_id = current_user_id(socket)
+    todo_id = normalized_text(Map.get(params, "todo_id"))
+    selected_todo = selected_todo_for_user(user_id, todo_id)
+
+    assign(socket,
+      selected_todo_id: selected_todo && selected_todo.id,
+      selected_todo: selected_todo
+    )
   end
 
   defp maybe_put_oauth_flash(socket, %{"oauth_status" => "connected", "oauth_message" => message})
@@ -2981,30 +3279,64 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp todo_source_label(source), do: insight_source_label(source)
 
-  defp todo_context_line(todo) do
+  defp todo_row_class(todo, selected_todo_ids, selected_todo_id) do
     [
-      todo_source_account_label(todo),
-      todo.snoozed_until && "snoozed until #{format_datetime(todo.snoozed_until)}",
-      "updated #{format_datetime(todo.updated_at)}"
+      "cursor-pointer transition-colors hover:bg-zinc-950/[0.025]",
+      MapSet.member?(selected_todo_ids, todo.id) && "bg-blue-50/70",
+      selected_todo_id == todo.id && "outline outline-1 -outline-offset-1 outline-zinc-950/10"
     ]
-    |> Enum.reject(&blank_metadata?/1)
-    |> Enum.join(" · ")
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
   end
 
-  defp todo_source_account_label(todo) do
+  defp todo_source_account_value(todo) do
     metadata = todo.metadata || %{}
 
     metadata_account =
-      fetch_map_value(metadata, "account") ||
+      todo.source_account_label ||
+        fetch_map_value(metadata, "account") ||
         fetch_map_value(metadata, "account_email") ||
         fetch_map_value(metadata, "mailbox") ||
         fetch_map_value(metadata, "workspace_name")
 
-    case normalized_text(metadata_account) do
-      nil -> nil
-      value -> "account #{value}"
-    end
+    normalized_text(metadata_account)
   end
+
+  defp todo_detail_fields(todo) do
+    [
+      %{label: "Source", value: todo_source_label(todo.source)},
+      %{label: "Account", value: todo_source_account_value(todo)},
+      %{label: "Summary", value: todo.summary},
+      %{label: "Next action", value: todo.next_action},
+      %{label: "Due", value: todo_detail_datetime(todo.due_at)},
+      %{label: "Snoozed until", value: todo_detail_datetime(todo.snoozed_until)},
+      %{label: "Updated", value: todo_detail_datetime(todo.updated_at)},
+      %{label: "Notes", value: todo.notes},
+      %{label: "Action plan", value: todo.action_plan}
+    ]
+    |> Enum.reject(fn field -> blank_metadata?(field.value) end)
+  end
+
+  defp todo_detail_datetime(nil), do: nil
+  defp todo_detail_datetime(datetime), do: format_datetime(datetime)
+
+  defp todo_metadata_pairs(todo) do
+    (todo.metadata || %{})
+    |> Enum.map(fn {key, value} ->
+      %{
+        label: humanize_text_token(key) || to_string(key),
+        value: todo_metadata_value(value)
+      }
+    end)
+    |> Enum.reject(fn field -> blank_metadata?(field.value) end)
+    |> Enum.take(8)
+  end
+
+  defp todo_metadata_value(value) when is_binary(value), do: normalized_text(value)
+  defp todo_metadata_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp todo_metadata_value(value) when is_float(value), do: Float.to_string(value)
+  defp todo_metadata_value(value) when is_boolean(value), do: to_string(value)
+  defp todo_metadata_value(_value), do: nil
 
   defp agent_display_name(agent) do
     get_in(agent.config || %{}, ["name"]) ||
@@ -3379,7 +3711,7 @@ defmodule MaraithonWeb.DashboardLive do
         label: "Project",
         value: todo_metadata_text(metadata, ~w(project project_name omni_project topic))
       },
-      %{label: "Account", value: todo_source_account_label(todo)},
+      %{label: "Account", value: todo_source_account_value(todo)},
       %{label: "Due", value: todo.due_at && format_datetime(todo.due_at)}
     ]
     |> Enum.reject(fn item -> blank_metadata?(item.value) end)

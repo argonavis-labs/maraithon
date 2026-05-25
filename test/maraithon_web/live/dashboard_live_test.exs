@@ -441,6 +441,117 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
   end
 
+  test "renders all loaded open todos in a table-first inbox", %{conn: conn} do
+    attrs =
+      for index <- 1..8 do
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Table todo #{index}",
+          "summary" => "Todo #{index} needs a response.",
+          "next_action" => "Reply to todo #{index}.",
+          "priority" => 80 + index,
+          "dedupe_key" => "dashboard:todo:table:#{index}",
+          "metadata" => %{"account" => @user_email}
+        }
+      end
+
+    assert {:ok, _todos} = Todos.upsert_many(@user_email, attrs)
+
+    {:ok, view, html} = live(conn, "/dashboard")
+
+    assert has_element?(view, "table")
+    assert html =~ "Todo"
+    assert html =~ "Source"
+    assert html =~ "Priority"
+    assert html =~ "Table todo 1"
+    assert html =~ "Table todo 8"
+  end
+
+  test "bulk marks selected todos done from the dashboard", %{conn: conn} do
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Bulk todo one",
+                 "summary" => "First selected todo.",
+                 "next_action" => "Handle the first selected todo.",
+                 "priority" => 91,
+                 "dedupe_key" => "dashboard:todo:bulk:one"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Bulk todo two",
+                 "summary" => "Second selected todo.",
+                 "next_action" => "Handle the second selected todo.",
+                 "priority" => 90,
+                 "dedupe_key" => "dashboard:todo:bulk:two"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    [first, second] = Todos.list_open_for_user(@user_email, limit: 2)
+
+    view
+    |> element("input[phx-click='toggle_todo_selection'][phx-value-id='#{first.id}']")
+    |> render_click()
+
+    view
+    |> element("input[phx-click='toggle_todo_selection'][phx-value-id='#{second.id}']")
+    |> render_click()
+
+    assert render(view) =~ "2 selected"
+
+    view
+    |> element("#todo-bulk-actions button[phx-click='complete_selected_todos']")
+    |> render_click()
+
+    assert Todos.list_open_for_user(@user_email) == []
+    refute has_element?(view, "#todo-#{first.id}")
+    refute has_element?(view, "#todo-#{second.id}")
+  end
+
+  test "opens a todo detail panel from the selected todo URL and row click", %{conn: conn} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Review detail todo",
+                 "summary" => "This todo should show a fuller detail view.",
+                 "next_action" => "Open the thread and reply.",
+                 "notes" => "Keep the answer short.",
+                 "action_plan" => "Check context, draft reply, send.",
+                 "priority" => 94,
+                 "dedupe_key" => "dashboard:todo:detail",
+                 "metadata" => %{
+                   "account" => @user_email,
+                   "thread_id" => "thread-123"
+                 }
+               }
+             ])
+
+    {:ok, view, html} = live(conn, "/dashboard?todo_id=#{todo.id}")
+
+    assert has_element?(view, "#todo-detail")
+    assert html =~ "Review detail todo"
+    assert html =~ "This todo should show a fuller detail view."
+    assert html =~ "Open the thread and reply."
+    assert html =~ "Keep the answer short."
+    assert html =~ "Source metadata"
+
+    {:ok, click_view, _html} = live(conn, "/dashboard")
+
+    click_view
+    |> element("#todo-#{todo.id}")
+    |> render_click()
+
+    assert_patch(click_view, "/dashboard?todo_id=#{todo.id}")
+    assert render(click_view) =~ "Review detail todo"
+  end
+
   test "redirects legacy selected-agent dashboard URLs to the agents workspace", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{
