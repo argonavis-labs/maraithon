@@ -36,8 +36,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Email: charlie@example.com"
     assert html =~ "Strength 72"
     assert html =~ "Select duplicates to merge"
-    refute html =~ "Set relationship"
-    refute html =~ "Merge duplicate"
+    refute html =~ "Save context"
+    refute html =~ "relationship-form-"
+    refute html =~ ~s(id="people-bulk-actions")
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/operator/people'][aria-current='page']", "People")
   end

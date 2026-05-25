@@ -22,6 +22,7 @@ defmodule Maraithon.Capabilities do
     "gmail_send_message" => Maraithon.Tools.GmailSendMessage,
     "gmail_labels" => Maraithon.Tools.GmailLabels,
     "gmail_drafts" => Maraithon.Tools.GmailDrafts,
+    "draft_message" => Maraithon.Tools.DraftMessage,
     "gmail_batch_modify" => Maraithon.Tools.GmailBatchModify,
     "gmail_filters" => Maraithon.Tools.GmailFilters,
     "google_contacts_search" => Maraithon.Tools.GoogleContactsSearch,
@@ -120,6 +121,8 @@ defmodule Maraithon.Capabilities do
     "gmail_send_message" => "Send a Gmail message or threaded reply.",
     "gmail_labels" => "List, create, update, and delete Gmail labels.",
     "gmail_drafts" => "List, get, create, update, send, and delete Gmail drafts.",
+    "draft_message" =>
+      "Generate approval-ready Gmail or Slack drafts using durable user voice memory.",
     "gmail_batch_modify" =>
       "Batch archive, unarchive, mark read/unread, label, or unlabel Gmail messages.",
     "gmail_filters" => "List, get, create, and delete Gmail filters.",
@@ -284,7 +287,7 @@ defmodule Maraithon.Capabilities do
 
   @write_tools MapSet.new(~w(
     upsert_todos update_todo upsert_person link_person_data merge_people learn_relationship_context
-    write_memory record_memory_feedback update_memory_confidence
+    write_memory record_memory_feedback update_memory_confidence draft_message
   ))
 
   @user_optional_tools MapSet.new(~w(
@@ -853,6 +856,9 @@ defmodule Maraithon.Capabilities do
       name in @memory_resource_tools ->
         ["memory"]
 
+      name == "draft_message" ->
+        ["draft", "gmail", "slack", "memory"]
+
       name == "list_connected_accounts" ->
         ["connected_account", "connector", "tool_coverage"]
 
@@ -903,6 +909,7 @@ defmodule Maraithon.Capabilities do
       "forget_memory" -> ~w(delete archive supersede reject)
       "record_memory_feedback" -> ~w(create feedback)
       "update_memory_confidence" -> ~w(update)
+      "draft_message" -> ~w(create write)
       "gmail_labels" -> ~w(read list create update delete)
       "gmail_drafts" -> ~w(read list get create update send delete)
       "gmail_filters" -> ~w(read list get create delete)

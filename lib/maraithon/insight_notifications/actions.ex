@@ -6,10 +6,12 @@ defmodule Maraithon.InsightNotifications.Actions do
   import Ecto.Query
 
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.Drafts
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.Insights.Insight
   alias Maraithon.LLM
+  alias Maraithon.Memory.UserVoice
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
@@ -357,8 +359,8 @@ defmodule Maraithon.InsightNotifications.Actions do
       when is_binary(subject) and is_binary(body) ->
         {:ok,
          fallback
-         |> Map.put("subject", String.trim(subject))
-         |> Map.put("body", String.trim(body))}
+         |> Map.put("subject", Drafts.sanitize_text(subject))
+         |> Map.put("body", Drafts.sanitize_text(body))}
 
       _ ->
         {:ok, fallback}
@@ -378,7 +380,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
     case llm_json(prompt) do
       {:ok, %{"text" => text}} when is_binary(text) ->
-        {:ok, Map.put(fallback, "text", String.trim(text))}
+        {:ok, Map.put(fallback, "text", Drafts.sanitize_text(text))}
 
       _ ->
         {:ok, fallback}
@@ -1227,6 +1229,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Write in Kent's first-person voice, not as Maraithon or an assistant.
     - Be concrete, direct, calm, and brief.
     - Avoid corporate filler, over-apologizing, and vague "circling back" phrasing.
+    - Do not use em dashes. Use commas, periods, colons, or parentheses.
+    - Do not include AI-ish filler such as "I hope this finds you well", "circling back", "just wanted to", or assistant sign-offs.
     - Include only the next step, owner, and ETA that the source evidence supports.
     - Do not claim attachments, delivery, or completed work unless explicitly proven.
     - If the promised artifact is not clearly available, send an honest progress update plus a firm ETA.
@@ -1260,6 +1264,8 @@ defmodule Maraithon.InsightNotifications.Actions do
     - Write in Kent's first-person voice, not as Maraithon or an assistant.
     - Be direct, short, calm, and useful.
     - Avoid corporate filler, over-apologizing, and vague status language.
+    - Do not use em dashes. Use commas, periods, colons, or parentheses.
+    - Do not include AI-ish filler such as "I hope this finds you well", "circling back", "just wanted to", or assistant sign-offs.
     - Include owner / next step / ETA when appropriate.
     - Do not claim work is already done unless proven.
     - Use draft_plan and suggested_reply_points as drafting instructions, not text to quote.
@@ -1281,7 +1287,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     %{
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_summaries: OperatorMemory.summaries_for_prompt(user_id),
-      user_memory_profile: UserMemory.prompt_context(user_id)
+      user_memory_profile: UserMemory.prompt_context(user_id),
+      email_voice: UserVoice.prompt_context(user_id, "gmail"),
+      slack_voice: UserVoice.prompt_context(user_id, "slack")
     }
   end
 
@@ -1289,7 +1297,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     %{
       preference_memory: PreferenceMemory.prompt_context(nil),
       operator_summaries: [],
-      user_memory_profile: UserMemory.prompt_context(nil)
+      user_memory_profile: UserMemory.prompt_context(nil),
+      email_voice: UserVoice.prompt_context(nil, "gmail"),
+      slack_voice: UserVoice.prompt_context(nil, "slack")
     }
   end
 
