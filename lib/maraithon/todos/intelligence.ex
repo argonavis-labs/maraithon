@@ -64,11 +64,14 @@ defmodule Maraithon.Todos.Intelligence do
       "existing_people" =>
         Crm.summarize_for_prompt(user_id, Keyword.get(opts, :people_limit, 24)),
       "memory_context" => safe_memory_context(user_id, candidates, opts),
+      "todo_relevance_memories" => todo_relevance_memories(user_id, opts),
       "candidate_todos" => candidates
     }
 
     with {:ok, existing_json} <- Jason.encode(normalize_json_value(payload["existing_todos"])),
          {:ok, candidates_json} <- Jason.encode(normalize_json_value(candidates)),
+         {:ok, todo_relevance_memories_json} <-
+           Jason.encode(normalize_json_value(payload["todo_relevance_memories"])),
          {:ok, payload_json} <- Jason.encode(normalize_json_value(payload)) do
       {:ok,
        """
@@ -128,6 +131,22 @@ defmodule Maraithon.Todos.Intelligence do
        - If an old open item appears repeatedly and Kent has not acted, do not
          inflate it as urgent unless the evidence shows personal/family impact,
          a close relationship, or an active project/customer wait.
+       - Apply `todo_relevance_memories` as durable relevance steering. These
+         memories are negative "see less like this" examples written from
+         explicit human feedback.
+       - Decide semantically whether a candidate matches a negative todo memory.
+         Do not rely on exact keywords, sender, thread id, account, or source
+         type alone. Compare the source evidence, ask/no-ask, owner, urgency,
+         relationship, life domain, and whether someone is actually waiting.
+       - If a candidate matches negative todo-relevance memory and no exception
+         signal applies, return action "skip" and explain the matching memory in
+         reasoning.
+       - If a candidate partly matches negative feedback but may be worth keeping
+         for later, create/update it as `attention_mode: "monitor"` with lower
+         priority instead of putting it in act-now.
+       - Negative todo memories are not global blocks. Stronger fresh evidence,
+         personal/family impact, a direct deadline, close relationship, customer
+         wait, or user/customer impact can override them.
        - Write next_action as the sentence Kent should act on directly. Avoid
          ticket/report language such as "covering current state" when a human
          version like "ask if it is fixed, who owns it, and whether customers
@@ -181,6 +200,9 @@ defmodule Maraithon.Todos.Intelligence do
        EXISTING_TODOS_JSON:
        #{existing_json}
 
+       TODO_RELEVANCE_MEMORIES_JSON:
+       #{todo_relevance_memories_json}
+
        CANDIDATE_TODOS_JSON:
        #{candidates_json}
        """}
@@ -208,6 +230,47 @@ defmodule Maraithon.Todos.Intelligence do
     _error -> %{}
   catch
     _kind, _reason -> %{}
+  end
+
+  defp todo_relevance_memories(user_id, opts) do
+    limit = Keyword.get(opts, :todo_relevance_memory_limit, 12)
+
+    Memory.list_items(user_id,
+      kind: "relevance_feedback",
+      tag: "todo_relevance",
+      status: "active",
+      limit: limit
+    )
+    |> Enum.filter(&(&1.polarity == "negative"))
+    |> Enum.map(&Memory.serialize_item/1)
+    |> Enum.map(&todo_relevance_memory_for_prompt/1)
+  rescue
+    _error -> []
+  catch
+    _kind, _reason -> []
+  end
+
+  defp todo_relevance_memory_for_prompt(%{} = memory) do
+    %{
+      "id" => Map.get(memory, :id) || Map.get(memory, "id"),
+      "title" => Map.get(memory, :title) || Map.get(memory, "title"),
+      "summary" => Map.get(memory, :summary) || Map.get(memory, "summary"),
+      "content" => Map.get(memory, :content) || Map.get(memory, "content"),
+      "polarity" => Map.get(memory, :polarity) || Map.get(memory, "polarity"),
+      "confidence" => Map.get(memory, :confidence) || Map.get(memory, "confidence"),
+      "tags" => Map.get(memory, :tags) || Map.get(memory, "tags") || [],
+      "metadata" =>
+        (Map.get(memory, :metadata) || Map.get(memory, "metadata") || %{})
+        |> Map.take([
+          "pattern_key",
+          "categories",
+          "negative_signals",
+          "exceptions",
+          "reasoning",
+          "feedback_source"
+        ])
+    }
+    |> compact_map()
   end
 
   defp llm_complete(opts) do

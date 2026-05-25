@@ -40,6 +40,9 @@ defmodule Maraithon.LLM.MockProvider do
       String.contains?(prompt, Maraithon.Todos.Intelligence.sentinel()) ->
         todo_intelligence_response(prompt)
 
+      String.contains?(prompt, Maraithon.Todos.FeedbackTrainer.sentinel()) ->
+        todo_see_less_training_response(prompt)
+
       String.contains?(prompt, Maraithon.Memory.Intelligence.sentinel()) ->
         memory_intelligence_response(prompt)
 
@@ -121,6 +124,22 @@ defmodule Maraithon.LLM.MockProvider do
     Jason.encode!(%{
       "summary" => "Mock memory intelligence selected relevant memories.",
       "selected" => selected
+    })
+  end
+
+  defp todo_see_less_training_response(_prompt) do
+    Jason.encode!(%{
+      "title" => "See less: low-value routine todo",
+      "summary" => "Show fewer routine items that do not require a direct action.",
+      "content" =>
+        "When an incoming item is routine information and does not ask for a decision, reply, approval, or personal action, skip it instead of creating an action todo.",
+      "pattern_key" => "low_value_routine_no_direct_action",
+      "categories" => ["routine", "no_direct_action"],
+      "negative_signals" => ["informational update", "no explicit ask", "no deadline"],
+      "exceptions" => ["personal impact", "customer waiting", "explicit deadline"],
+      "confidence" => 0.82,
+      "reasoning" =>
+        "Mock feedback trainer generalized the selected todo into a narrow negative relevance rule."
     })
   end
 

@@ -2,6 +2,7 @@ defmodule Maraithon.Todos.IntelligenceTest do
   use Maraithon.DataCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Memory
   alias Maraithon.Todos
 
   test "ingest_many applies model create, update, and skip decisions" do
@@ -144,6 +145,73 @@ defmodule Maraithon.Todos.IntelligenceTest do
              )
 
     assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many exposes negative todo relevance memories to model decisions" do
+    user_id = unique_user_email("todo-intelligence-memory")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, memory} =
+             Memory.write(user_id, %{
+               "kind" => "relevance_feedback",
+               "title" => "See less: routine newsletters",
+               "content" =>
+                 "Routine newsletters without a direct ask should be skipped instead of creating todos.",
+               "summary" => "Skip routine newsletters when there is no direct ask.",
+               "source" => "todo_see_less",
+               "source_ref_type" => "todo",
+               "source_ref_id" => Ecto.UUID.generate(),
+               "author_type" => "user",
+               "tags" => ["todo_relevance", "see_less"],
+               "polarity" => "negative",
+               "importance" => 85,
+               "confidence" => 0.9,
+               "dedupe_key" => "todo-intelligence-memory:newsletter"
+             })
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Vendor newsletter",
+        "summary" => "A routine vendor update with no direct ask.",
+        "next_action" => "No action needed.",
+        "dedupe_key" => "gmail:vendor-newsletter"
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      assert prompt =~ Todos.Intelligence.sentinel()
+      assert prompt =~ "TODO_RELEVANCE_MEMORIES_JSON"
+      assert prompt =~ memory.id
+      assert prompt =~ "routine newsletters"
+      assert prompt =~ "Do not rely on exact keywords"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Skipped one candidate using negative todo relevance memory.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "skip",
+                 "reasoning" =>
+                   "Matches negative todo relevance memory #{memory.id}: routine newsletter with no direct ask."
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+    assert hd(result.skipped).reasoning =~ memory.id
   end
 
   defp unique_user_email(prefix) do

@@ -11,7 +11,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.Todos.Todo
 
   @callback_prefix "tgtodo"
-  @feedback_values ~w(important helpful not_helpful)
+  @feedback_values ~w(important helpful not_helpful see_less)
+  @record_feedback_values ~w(helpful not_helpful)
 
   def telegram_payload(todo) when is_map(todo) do
     telegram_payload(todo, [])
@@ -64,7 +65,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(value) when is_binary(value) do
     case Regex.run(
-           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|important|helpful|not_helpful)$/i,
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|important|helpful|not_helpful|see_less)$/i,
            value,
            capture: :all_but_first
          ) do
@@ -87,7 +88,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     Todos.mark_important(user_id, todo_id, source: "telegram")
   end
 
-  defp dispatch_action(user_id, todo_id, feedback) when feedback in @feedback_values do
+  defp dispatch_action(user_id, todo_id, "see_less") do
+    case Todos.see_less_like(user_id, todo_id, source: "telegram") do
+      {:ok, %{todo: todo}} -> {:ok, todo}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp dispatch_action(user_id, todo_id, feedback) when feedback in @record_feedback_values do
     Todos.record_feedback(user_id, todo_id, feedback, source: "telegram")
   end
 
@@ -147,6 +155,10 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
               %{
                 "text" => "Not Important",
                 "callback_data" => callback_data(todo_id, "not_helpful")
+              },
+              %{
+                "text" => "See Less",
+                "callback_data" => callback_data(todo_id, "see_less")
               }
             ]
           ]
@@ -602,6 +614,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp feedback_label("helpful"), do: "Helpful"
   defp feedback_label("important"), do: "Important"
   defp feedback_label("not_helpful"), do: "Not Important"
+  defp feedback_label("see_less"), do: "See Less"
   defp feedback_label(_value), do: nil
 
   defp callback_notice("done"), do: "Marked done"
@@ -609,6 +622,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp callback_notice("important"), do: "Marked important"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
   defp callback_notice("not_helpful"), do: "Marked not important"
+  defp callback_notice("see_less"), do: "I'll show fewer todos like this"
 
   defp callback_error_text(reason) when is_binary(reason),
     do: "I couldn't update that todo yet: #{reason}"

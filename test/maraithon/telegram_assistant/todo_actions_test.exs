@@ -4,6 +4,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.InsightNotifications
+  alias Maraithon.Memory
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.Todos
@@ -99,10 +100,84 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert payload.text =~ "Claude Cowork killer artifact"
   end
 
+  test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do
+    install_see_less_model()
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "title" => "Read generic vendor newsletter",
+          "summary" => "A broad vendor newsletter has no direct ask.",
+          "next_action" => "No action needed.",
+          "priority" => 40,
+          "dedupe_key" => "todo-actions:see-less"
+        }
+      ])
+
+    payload = TodoActions.telegram_payload(todo)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+    assert Enum.any?(buttons, &(&1["text"] == "See Less"))
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-see-less",
+          callback_id: "cb-see-less",
+          data: "tgtodo:#{todo.id}:see_less"
+        }
+      })
+
+    updated = Todos.get_for_user(user_id, todo.id)
+    assert updated.status == "dismissed"
+    assert get_in(updated.metadata, ["assistant_feedback", "value"]) == "see_less"
+
+    [memory] =
+      Memory.list_items(user_id,
+        kind: "relevance_feedback",
+        tag: "todo_relevance",
+        limit: 5
+      )
+
+    assert memory.polarity == "negative"
+    assert memory.source_ref_id == todo.id
+    assert last_telegram_message(:callback).opts[:text] == "I'll show fewer todos like this"
+  end
+
   defp last_telegram_message(type) do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)
     |> Enum.filter(&(&1.type == type))
     |> List.last()
+  end
+
+  defp install_see_less_model do
+    original = Application.get_env(:maraithon, :todos, [])
+
+    Application.put_env(
+      :maraithon,
+      :todos,
+      Keyword.put(original, :see_less_llm_complete, fn prompt ->
+        assert prompt =~ "TODO_SEE_LESS_TRAINING_JSON_V1"
+
+        {:ok,
+         Jason.encode!(%{
+           "title" => "See less: generic vendor newsletters",
+           "summary" => "Generic vendor newsletters without direct asks should not become todos.",
+           "content" =>
+             "When a vendor newsletter is informational and has no direct ask, skip it instead of creating a todo.",
+           "pattern_key" => "generic_vendor_newsletters_without_direct_asks",
+           "categories" => ["newsletter", "vendor", "no_direct_ask"],
+           "negative_signals" => ["broadcast update", "no direct ask"],
+           "exceptions" => ["explicit deadline", "customer impact"],
+           "confidence" => 0.87,
+           "reasoning" => "The selected todo is not actionable."
+         })}
+      end)
+    )
+
+    on_exit(fn -> Application.put_env(:maraithon, :todos, original) end)
   end
 end
