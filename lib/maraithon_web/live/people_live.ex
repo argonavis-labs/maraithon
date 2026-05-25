@@ -19,6 +19,8 @@ defmodule MaraithonWeb.PeopleLive do
        selected_person_ids: MapSet.new(),
        selected_person_id: nil,
        selected_person: nil,
+       bulk_action_menu_open?: false,
+       bulk_action_mode: nil,
        bulk_merge_form: to_form(%{"surviving_person_id" => ""}, as: :merge)
      )}
   end
@@ -56,7 +58,7 @@ defmodule MaraithonWeb.PeopleLive do
         socket.assigns.selected_person_ids
       end
 
-    {:noreply, assign(socket, :selected_person_ids, selected_person_ids)}
+    {:noreply, assign_people_selection(socket, selected_person_ids)}
   end
 
   def handle_event("toggle_all_people", _params, socket) do
@@ -69,11 +71,46 @@ defmodule MaraithonWeb.PeopleLive do
         MapSet.union(socket.assigns.selected_person_ids, visible_ids)
       end
 
-    {:noreply, assign(socket, :selected_person_ids, selected_person_ids)}
+    {:noreply, assign_people_selection(socket, selected_person_ids)}
   end
 
   def handle_event("clear_people_selection", _params, socket) do
-    {:noreply, assign(socket, :selected_person_ids, MapSet.new())}
+    {:noreply, assign_people_selection(socket, MapSet.new())}
+  end
+
+  def handle_event("toggle_people_bulk_menu", _params, socket) do
+    if MapSet.size(socket.assigns.selected_person_ids) > 0 do
+      {:noreply,
+       socket
+       |> assign(:bulk_action_menu_open?, !socket.assigns.bulk_action_menu_open?)
+       |> assign(:bulk_action_mode, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("choose_people_bulk_action", %{"action" => "merge"}, socket) do
+    if MapSet.size(socket.assigns.selected_person_ids) >= 2 do
+      {:noreply, assign_bulk_action(socket, "merge")}
+    else
+      {:noreply, put_flash(socket, :error, "Select at least two people to merge.")}
+    end
+  end
+
+  def handle_event("choose_people_bulk_action", %{"action" => "delete"}, socket) do
+    if MapSet.size(socket.assigns.selected_person_ids) > 0 do
+      {:noreply, assign_bulk_action(socket, "delete")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("choose_people_bulk_action", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel_people_bulk_action", _params, socket) do
+    {:noreply, assign_bulk_action(socket, nil)}
   end
 
   def handle_event("open_person_detail", %{"id" => person_id}, socket) do
@@ -123,6 +160,28 @@ defmodule MaraithonWeb.PeopleLive do
 
         {:error, reason} ->
           put_flash(socket, :error, merge_error(reason))
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("delete_selected_people", _params, socket) do
+    user_id = current_user_id(socket)
+    selected_ids = selected_visible_person_ids(socket)
+
+    socket =
+      case delete_selected_people(user_id, selected_ids) do
+        {:ok, deleted_count} ->
+          socket
+          |> put_flash(:info, delete_people_flash(deleted_count))
+          |> assign(:selected_person_ids, MapSet.new())
+          |> assign(:selected_person_id, nil)
+          |> assign(:selected_person, nil)
+          |> assign_bulk_action(nil)
+          |> push_patch(to: people_path(socket.assigns.filters))
+
+        {:error, reason} ->
+          put_flash(socket, :error, delete_error(reason))
       end
 
     {:noreply, socket}
@@ -192,14 +251,12 @@ defmodule MaraithonWeb.PeopleLive do
             </div>
           </:header>
 
-          <div class={["grid grid-cols-1 gap-4 py-4", @selected_person && "xl:grid-cols-[minmax(0,1fr)_26rem]"]}>
+          <div class={[
+            "grid grid-cols-1 gap-4 py-4",
+            @selected_person && "xl:grid-cols-[minmax(0,1fr)_26rem]",
+            MapSet.size(@selected_person_ids) > 0 && "pb-28"
+          ]}>
             <div class="min-w-0">
-              <.people_bulk_toolbar
-                people={@people}
-                selected_person_ids={@selected_person_ids}
-                bulk_merge_form={@bulk_merge_form}
-              />
-
               <.table>
                 <.table_head>
                   <.table_row>
@@ -286,6 +343,14 @@ defmodule MaraithonWeb.PeopleLive do
             <.person_detail_panel :if={@selected_person} person={@selected_person} filters={@filters} />
           </div>
         </.panel>
+
+        <.people_bulk_action_bar
+          people={@people}
+          selected_person_ids={@selected_person_ids}
+          menu_open?={@bulk_action_menu_open?}
+          action_mode={@bulk_action_mode}
+          bulk_merge_form={@bulk_merge_form}
+        />
       </div>
     </Layouts.app>
     """
@@ -300,10 +365,13 @@ defmodule MaraithonWeb.PeopleLive do
 
     visible_ids = people |> Enum.map(& &1.id) |> MapSet.new()
     selected_person_ids = MapSet.intersection(socket.assigns.selected_person_ids, visible_ids)
+    has_selection? = MapSet.size(selected_person_ids) > 0
 
     assign(socket,
       people: people,
       selected_person_ids: selected_person_ids,
+      bulk_action_menu_open?: has_selection? && socket.assigns.bulk_action_menu_open?,
+      bulk_action_mode: if(has_selection?, do: socket.assigns.bulk_action_mode, else: nil),
       selected_person:
         selected_person_for_user(current_user_id(socket), socket.assigns.selected_person_id)
     )
@@ -311,9 +379,11 @@ defmodule MaraithonWeb.PeopleLive do
 
   attr :people, :list, required: true
   attr :selected_person_ids, :any, required: true
+  attr :menu_open?, :boolean, required: true
+  attr :action_mode, :string, default: nil
   attr :bulk_merge_form, :any, required: true
 
-  defp people_bulk_toolbar(assigns) do
+  defp people_bulk_action_bar(assigns) do
     assigns =
       assigns
       |> assign(:selected_people, selected_people(assigns.people, assigns.selected_person_ids))
@@ -323,39 +393,171 @@ defmodule MaraithonWeb.PeopleLive do
     <div
       :if={@selected_count > 0}
       id="people-bulk-actions"
-      class="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2"
+      class="fixed inset-x-0 bottom-6 z-40 flex justify-center px-4"
     >
-      <div>
-        <p class="text-sm/6 font-medium text-zinc-950"><%= @selected_count %> selected</p>
-        <p class="text-xs/5 text-zinc-500">Choose the canonical person, then merge selected duplicates.</p>
+      <div class="relative">
+        <.people_bulk_action_panel
+          :if={@action_mode == "merge"}
+          selected_count={@selected_count}
+          selected_people={@selected_people}
+          bulk_merge_form={@bulk_merge_form}
+        />
+
+        <.people_bulk_delete_panel
+          :if={@action_mode == "delete"}
+          selected_count={@selected_count}
+        />
+
+        <.people_bulk_menu
+          :if={@menu_open?}
+          selected_count={@selected_count}
+        />
+
+        <div class="flex items-center gap-2 rounded-lg border border-zinc-950/10 bg-zinc-950 px-3 py-2 text-white shadow-lg">
+          <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium">
+            <%= @selected_count %> selected
+          </span>
+          <button
+            type="button"
+            phx-click="clear_people_selection"
+            aria-label="Clear selection"
+            class="rounded-md px-2 py-1.5 text-sm/6 text-zinc-300 hover:bg-white/10 hover:text-white"
+          >
+            ×
+          </button>
+          <span class="h-6 w-px bg-white/15" aria-hidden="true"></span>
+          <button
+            id="people-bulk-actions-button"
+            type="button"
+            phx-click="toggle_people_bulk_menu"
+            aria-expanded={@menu_open?}
+            aria-controls="people-bulk-action-menu"
+            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15"
+          >
+            Actions
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :selected_count, :integer, required: true
+
+  defp people_bulk_menu(assigns) do
+    ~H"""
+    <div
+      id="people-bulk-action-menu"
+      class="absolute bottom-full left-1/2 mb-2 w-72 -translate-x-1/2 overflow-hidden rounded-lg border border-zinc-950/10 bg-white p-1.5 text-zinc-950 shadow-lg"
+    >
+      <button
+        type="button"
+        phx-click="choose_people_bulk_action"
+        phx-value-action="merge"
+        disabled={@selected_count < 2}
+        class="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm/6 hover:bg-zinc-950/5 disabled:cursor-not-allowed disabled:text-zinc-400 disabled:hover:bg-transparent"
+      >
+        <span>Merge contacts</span>
+        <span class="text-xs/5 text-zinc-500">Keep one</span>
+      </button>
+      <button
+        type="button"
+        phx-click="choose_people_bulk_action"
+        phx-value-action="delete"
+        class="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm/6 text-red-700 hover:bg-red-50"
+      >
+        <span>Delete contacts</span>
+        <span class="text-xs/5 text-red-500"><%= @selected_count %></span>
+      </button>
+      <button
+        type="button"
+        phx-click="clear_people_selection"
+        class="flex w-full items-center rounded-md px-3 py-2 text-left text-sm/6 hover:bg-zinc-950/5"
+      >
+        <span>Clear selection</span>
+      </button>
+    </div>
+    """
+  end
+
+  attr :selected_count, :integer, required: true
+  attr :selected_people, :list, required: true
+  attr :bulk_merge_form, :any, required: true
+
+  defp people_bulk_action_panel(assigns) do
+    ~H"""
+    <div class="absolute bottom-full left-1/2 mb-2 w-[min(92vw,30rem)] -translate-x-1/2 rounded-lg border border-zinc-950/10 bg-white p-4 text-zinc-950 shadow-lg">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-sm/6 font-semibold text-zinc-950">Merge contacts</p>
+          <p class="mt-1 text-xs/5 text-zinc-500">
+            Choose the canonical CRM person. The other selected contacts will be folded into it.
+          </p>
+        </div>
+        <button
+          type="button"
+          phx-click="cancel_people_bulk_action"
+          aria-label="Cancel merge"
+          class="rounded-md px-2 py-1 text-sm/6 text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
+        >
+          ×
+        </button>
       </div>
 
-      <div class="flex flex-wrap items-end gap-2">
-        <.form
-          for={@bulk_merge_form}
-          id="people-bulk-merge"
-          phx-submit="merge_selected_people"
-          class="flex flex-wrap items-end gap-2"
+      <.form
+        for={@bulk_merge_form}
+        id="people-bulk-merge"
+        phx-submit="merge_selected_people"
+        class="mt-3 flex flex-wrap items-end gap-2"
+      >
+        <.field label="Keep" for="people-bulk-survivor-id" class="min-w-64 flex-1">
+          <.c_select
+            id="people-bulk-survivor-id"
+            name={@bulk_merge_form[:surviving_person_id].name}
+            disabled={@selected_count < 2}
+          >
+            <option :for={person <- @selected_people} value={person.id}>
+              <%= merge_candidate_label(person) %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.button type="submit" variant="outline" disabled={@selected_count < 2}>
+          Merge contacts
+        </.button>
+      </.form>
+    </div>
+    """
+  end
+
+  attr :selected_count, :integer, required: true
+
+  defp people_bulk_delete_panel(assigns) do
+    ~H"""
+    <div class="absolute bottom-full left-1/2 mb-2 w-[min(92vw,26rem)] -translate-x-1/2 rounded-lg border border-red-200 bg-white p-4 text-zinc-950 shadow-lg">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-sm/6 font-semibold text-zinc-950">Delete contacts?</p>
+          <p class="mt-1 text-xs/5 text-zinc-500">
+            This removes <%= pluralize_people(@selected_count) %> and their CRM links.
+          </p>
+        </div>
+        <button
+          type="button"
+          phx-click="cancel_people_bulk_action"
+          aria-label="Cancel delete"
+          class="rounded-md px-2 py-1 text-sm/6 text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950"
         >
-          <.field label="Keep" for="people-bulk-survivor-id" class="min-w-56">
-            <.c_select
-              id="people-bulk-survivor-id"
-              name={@bulk_merge_form[:surviving_person_id].name}
-              disabled={@selected_count < 2}
-            >
-              <option :for={person <- @selected_people} value={person.id}>
-                <%= merge_candidate_label(person) %>
-              </option>
-            </.c_select>
-          </.field>
+          ×
+        </button>
+      </div>
 
-          <.button type="submit" variant="outline" disabled={@selected_count < 2}>
-            Merge selected
-          </.button>
-        </.form>
-
-        <.button type="button" variant="plain" phx-click="clear_people_selection" class="text-zinc-500">
-          Clear
+      <div class="mt-4 flex justify-end gap-2">
+        <.button type="button" variant="plain" phx-click="cancel_people_bulk_action">
+          Cancel
+        </.button>
+        <.button type="button" color="red" phx-click="delete_selected_people">
+          Delete contacts
         </.button>
       </div>
     </div>
@@ -573,6 +775,23 @@ defmodule MaraithonWeb.PeopleLive do
     Enum.filter(people, &MapSet.member?(selected_person_ids, &1.id))
   end
 
+  defp assign_people_selection(socket, selected_person_ids) do
+    if MapSet.size(selected_person_ids) == 0 do
+      socket
+      |> assign(:selected_person_ids, selected_person_ids)
+      |> assign(:bulk_action_menu_open?, false)
+      |> assign(:bulk_action_mode, nil)
+    else
+      assign(socket, :selected_person_ids, selected_person_ids)
+    end
+  end
+
+  defp assign_bulk_action(socket, action_mode) do
+    socket
+    |> assign(:bulk_action_menu_open?, false)
+    |> assign(:bulk_action_mode, action_mode)
+  end
+
   defp selected_visible_person_ids(socket) do
     socket.assigns.selected_person_ids
     |> MapSet.intersection(visible_person_ids(socket))
@@ -681,6 +900,17 @@ defmodule MaraithonWeb.PeopleLive do
     end
   end
 
+  defp delete_selected_people(_user_id, []), do: {:error, :no_people_selected}
+
+  defp delete_selected_people(user_id, person_ids) do
+    Enum.reduce_while(person_ids, {:ok, 0}, fn person_id, {:ok, count} ->
+      case Crm.delete_person(user_id, person_id) do
+        {:ok, _person} -> {:cont, {:ok, count + 1}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
   defp merge_candidate_label(%Person{} = person) do
     "#{person.display_name} - #{contact_preview(person)}"
   end
@@ -690,6 +920,12 @@ defmodule MaraithonWeb.PeopleLive do
 
   defp bulk_merge_flash(%Person{} = survivor, count),
     do: "Merged #{count} duplicates into #{survivor.display_name}."
+
+  defp delete_people_flash(1), do: "Deleted 1 contact."
+  defp delete_people_flash(count), do: "Deleted #{count} contacts."
+
+  defp pluralize_people(1), do: "1 person"
+  defp pluralize_people(count), do: "#{count} people"
 
   defp maybe_put(attrs, _key, nil), do: attrs
   defp maybe_put(attrs, key, value), do: Map.put(attrs, key, value)
@@ -710,6 +946,10 @@ defmodule MaraithonWeb.PeopleLive do
   defp merge_error(:survivor_already_merged), do: "Choose an active person to keep."
   defp merge_error(:person_not_active), do: "Only active people can be merged."
   defp merge_error(_reason), do: "Could not merge those people."
+
+  defp delete_error(:no_people_selected), do: "Select at least one person to delete."
+  defp delete_error(:person_not_found), do: "One of those people could not be found."
+  defp delete_error(_reason), do: "Could not delete those people."
 
   defp normalize_filters(params) do
     %{"q" => normalize_text(Map.get(params, "q")) || ""}

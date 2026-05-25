@@ -157,7 +157,27 @@ defmodule MaraithonWeb.PeopleLiveTest do
     |> element("input[phx-click='toggle_person_selection'][phx-value-id='#{duplicate.id}']")
     |> render_click()
 
-    assert render(view) =~ "2 selected"
+    html = render(view)
+    assert html =~ "2 selected"
+
+    assert has_element?(
+             view,
+             "#people-bulk-actions-button",
+             "Actions"
+           )
+
+    view
+    |> element("#people-bulk-actions-button", "Actions")
+    |> render_click()
+
+    assert render(view) =~ "Merge contacts"
+    assert render(view) =~ "Delete contacts"
+
+    view
+    |> element("button[phx-click='choose_people_bulk_action'][phx-value-action='merge']")
+    |> render_click()
+
+    assert has_element?(view, "#people-bulk-merge")
 
     view
     |> form("#people-bulk-merge", merge: %{"surviving_person_id" => canonical.id})
@@ -176,5 +196,52 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "christina.giannone@gmail.com"
     assert html =~ "cgiannone@framgroup.com"
     refute has_element?(view, "#person-#{duplicate.id}")
+  end
+
+  test "bulk deletes selected people from the floating actions menu", %{conn: conn} do
+    {:ok, first} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Delete Me One",
+        "email" => "delete-one@example.com"
+      })
+
+    {:ok, second} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Delete Me Two",
+        "email" => "delete-two@example.com"
+      })
+
+    {:ok, view, _html} = live(conn, "/operator/people?q=Delete Me")
+
+    view
+    |> element("input[phx-click='toggle_person_selection'][phx-value-id='#{first.id}']")
+    |> render_click()
+
+    view
+    |> element("input[phx-click='toggle_person_selection'][phx-value-id='#{second.id}']")
+    |> render_click()
+
+    view
+    |> element("#people-bulk-actions-button", "Actions")
+    |> render_click()
+
+    view
+    |> element("button[phx-click='choose_people_bulk_action'][phx-value-action='delete']")
+    |> render_click()
+
+    assert render(view) =~ "Delete contacts?"
+
+    view
+    |> element("button[phx-click='delete_selected_people']", "Delete contacts")
+    |> render_click()
+
+    assert Crm.get_person_for_user(@user_email, first.id) == nil
+    assert Crm.get_person_for_user(@user_email, second.id) == nil
+
+    html = render(view)
+    assert html =~ "Deleted 2 contacts."
+    refute html =~ "Delete Me One"
+    refute html =~ "Delete Me Two"
+    refute has_element?(view, "#people-bulk-actions")
   end
 end
