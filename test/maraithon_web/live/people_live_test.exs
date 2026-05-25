@@ -30,13 +30,14 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
     {:ok, view, html} = live(conn, "/operator/people")
 
-    assert html =~ "CRM people"
+    assert html =~ "Relationships"
     assert html =~ "Charlie Smith"
     assert html =~ "Runner teammate"
     assert html =~ "Email: charlie@example.com"
     assert html =~ "Strength 72"
-    assert html =~ "Set relationship"
-    assert html =~ "Merge duplicate"
+    assert html =~ "Select duplicates to merge"
+    refute html =~ "Set relationship"
+    refute html =~ "Merge duplicate"
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/operator/people'][aria-current='page']", "People")
   end
@@ -75,15 +76,20 @@ defmodule MaraithonWeb.PeopleLiveTest do
         "email" => "cgiannone@framgroup.com"
       })
 
-    {:ok, view, _html} = live(conn, "/operator/people?q=Christina")
+    {:ok, view, html} = live(conn, "/operator/people?q=Christina&person_id=#{christina.id}")
+
+    assert html =~ "Save context"
+    assert html =~ "Contact points"
 
     view
     |> form("#relationship-form-#{christina.id}",
       relationship: %{
+        "display_name" => "Christina Giannone",
         "preset" => "family_event_organizer",
         "relationship" => "",
         "communication_frequency" => "frequent",
-        "preferred_communication_method" => "email"
+        "preferred_communication_method" => "email",
+        "notes" => "Coordinates family and social calendars."
       }
     )
     |> render_submit()
@@ -93,6 +99,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert updated.relationship == "Family event organizer"
     assert updated.communication_frequency == "frequent"
     assert updated.preferred_communication_method == "email"
+    assert updated.notes == "Coordinates family and social calendars."
     assert updated.metadata["relationship_preset"] == "family_event_organizer"
     assert updated.metadata["relationship_domain"] == "family"
 
@@ -101,7 +108,28 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Frequent"
   end
 
-  test "merges duplicate people from the visible list", %{conn: conn} do
+  test "opens detail panel from row click", %{conn: conn} do
+    {:ok, christina} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Christina Giannone",
+        "email" => "cgiannone@framgroup.com",
+        "notes" => "Coordinates family and social calendars."
+      })
+
+    {:ok, view, _html} = live(conn, "/operator/people?q=Christina")
+
+    view
+    |> element("#person-#{christina.id}")
+    |> render_click()
+
+    assert_patch(view, "/operator/people?person_id=#{christina.id}&q=Christina")
+
+    html = render(view)
+    assert html =~ "Save context"
+    assert html =~ "Coordinates family and social calendars."
+  end
+
+  test "bulk merges duplicate people from the visible list", %{conn: conn} do
     {:ok, canonical} =
       Crm.upsert_person(@user_email, %{
         "display_name" => "Christina Giannone",
@@ -122,12 +150,17 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "cgiannone@framgroup.com"
 
     view
-    |> form("#merge-form-#{canonical.id}",
-      merge: %{
-        "surviving_person_id" => canonical.id,
-        "merged_person_id" => duplicate.id
-      }
-    )
+    |> element("input[phx-click='toggle_person_selection'][phx-value-id='#{canonical.id}']")
+    |> render_click()
+
+    view
+    |> element("input[phx-click='toggle_person_selection'][phx-value-id='#{duplicate.id}']")
+    |> render_click()
+
+    assert render(view) =~ "2 selected"
+
+    view
+    |> form("#people-bulk-merge", merge: %{"surviving_person_id" => canonical.id})
     |> render_submit()
 
     survivor = Crm.get_person_for_user(@user_email, canonical.id)
@@ -139,8 +172,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert "cgiannone@framgroup.com" in survivor.contact_details["emails"]
 
     html = render(view)
-    assert html =~ "Merged Christina Giannone into Christina Giannone."
+    assert html =~ "Merged 1 duplicate into Christina Giannone."
     assert html =~ "christina.giannone@gmail.com"
-    refute html =~ "cgiannone@framgroup.com"
+    assert html =~ "cgiannone@framgroup.com"
+    refute has_element?(view, "#person-#{duplicate.id}")
   end
 end
