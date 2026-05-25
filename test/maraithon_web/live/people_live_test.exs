@@ -38,6 +38,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Select duplicates to merge"
     refute has_element?(view, "#person-detail")
     refute has_element?(view, "#people-bulk-actions")
+    refute has_element?(view, "form[phx-submit='save_relationship']")
+    refute has_element?(view, "#people-bulk-merge")
     refute html =~ "Save context"
     refute html =~ "relationship-form-"
     refute html =~ ~s(id="people-bulk-actions")

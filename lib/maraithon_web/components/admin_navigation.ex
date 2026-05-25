@@ -15,6 +15,7 @@ defmodule MaraithonWeb.AdminNavigation do
   @primary_nav [
     %{label: "Dashboard", path: "/dashboard", icon: :home},
     %{label: "Todos", path: "/todos", icon: :todos},
+    %{label: "Insights", path: "/insights", icon: :insights},
     %{label: "Agents", path: "/agents", icon: :agents},
     %{label: "Connectors", path: "/connectors", icon: :connectors},
     %{label: "People", path: "/operator/people", icon: :people},
@@ -282,6 +283,9 @@ defmodule MaraithonWeb.AdminNavigation do
 
   defp active?(current_path, "/connectors"),
     do: String.starts_with?(current_path, "/connectors")
+
+  defp active?(current_path, "/insights"),
+    do: String.starts_with?(current_path, "/insights")
 
   defp active?(current_path, "/settings"),
     do: String.starts_with?(current_path, "/settings")

@@ -1,0 +1,64 @@
+{
+  "spec_id": "crm-insight-cards",
+  "slug": "crm-insight-cards",
+  "title": "CRM Insight Cards",
+  "stage": "done",
+  "spec_path": "../specs/crm-insight-cards.md",
+  "created_at": "2026-05-25T02:41:13Z",
+  "started_at": "2026-05-25T02:41:13Z",
+  "completed_at": "2026-05-25T02:57:05Z",
+  "updated_at": "2026-05-25T02:57:05Z",
+  "summary": "Implemented a dedicated Insights nav page with computed CRM duplicate and relationship suggestion cards.",
+  "next_action": "Done. Review and commit the crm-insight-cards worktree when ready.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/crm-people-browser-ui.md",
+    "DESIGN.md"
+  ],
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "not_applicable",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Ran focused CRM insights tests, focused Insights LiveView tests, People LiveView regression tests, and MIX_ENV=test mix precommit."
+  },
+  "resume_context": {
+    "last_completed_step": "Implementation complete and precommit passed.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "UX Contract",
+      "Backend Contract",
+      "Testing Contract",
+      "Acceptance Checks",
+      "Implementation Result"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/crm-insight-cards.md",
+      "docs/spectacula/done/crm-insight-cards.json",
+      "lib/maraithon/crm/insights.ex",
+      "lib/maraithon_web/live/insights_live.ex",
+      "test/maraithon/crm/insights_test.exs",
+      "test/maraithon_web/live/insights_live_test.exs"
+    ],
+    "notes": "CRM insight generation is deterministic and evidence-backed; no request-path LLM calls were added."
+  },
+  "history": [
+    {
+      "at": "2026-05-25T02:41:13Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "inprogress",
+      "note": "Initial implementation-ready spec created and work started."
+    },
+    {
+      "at": "2026-05-25T02:57:05Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implementation finished and MIX_ENV=test mix precommit passed."
+    }
+  ]
+}
