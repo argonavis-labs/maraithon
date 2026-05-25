@@ -393,9 +393,9 @@ defmodule MaraithonWeb.PeopleLive do
     <div
       :if={@selected_count > 0}
       id="people-bulk-actions"
-      class="fixed inset-x-0 bottom-6 z-40 flex justify-center px-4"
+      class="pointer-events-none fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex justify-center sm:inset-x-6 lg:left-64 lg:bottom-6"
     >
-      <div class="relative">
+      <div class="pointer-events-auto relative max-w-[calc(100vw-1.5rem)]">
         <.people_bulk_action_panel
           :if={@action_mode == "merge"}
           selected_count={@selected_count}
@@ -413,26 +413,45 @@ defmodule MaraithonWeb.PeopleLive do
           selected_count={@selected_count}
         />
 
-        <div class="flex items-center gap-2 rounded-lg border border-zinc-950/10 bg-zinc-950 px-3 py-2 text-white shadow-lg">
-          <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium">
+        <div class="flex flex-wrap items-center justify-center gap-1.5 rounded-lg border border-zinc-950/20 bg-zinc-950/95 px-2.5 py-2 text-white shadow-xl ring-1 ring-white/10 backdrop-blur">
+          <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-semibold">
             <%= @selected_count %> selected
           </span>
           <button
             type="button"
             phx-click="clear_people_selection"
             aria-label="Clear selection"
-            class="rounded-md px-2 py-1.5 text-sm/6 text-zinc-300 hover:bg-white/10 hover:text-white"
+            class="rounded-md px-2 py-1.5 text-sm/6 text-zinc-300 hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
           >
             ×
           </button>
-          <span class="h-6 w-px bg-white/15" aria-hidden="true"></span>
+          <span class="mx-0.5 hidden h-6 w-px bg-white/15 sm:block" aria-hidden="true"></span>
+          <button
+            id="people-bulk-merge-direct"
+            type="button"
+            phx-click="choose_people_bulk_action"
+            phx-value-action="merge"
+            disabled={@selected_count < 2}
+            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/30 disabled:cursor-not-allowed disabled:text-zinc-500 disabled:hover:bg-white/10"
+          >
+            Merge
+          </button>
+          <button
+            id="people-bulk-delete-direct"
+            type="button"
+            phx-click="choose_people_bulk_action"
+            phx-value-action="delete"
+            class="rounded-md px-3 py-1.5 text-sm/6 font-medium text-red-100 hover:bg-red-500/20 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-200/40"
+          >
+            Delete
+          </button>
           <button
             id="people-bulk-actions-button"
             type="button"
             phx-click="toggle_people_bulk_menu"
             aria-expanded={@menu_open?}
             aria-controls="people-bulk-action-menu"
-            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15"
+            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/30"
           >
             Actions
           </button>

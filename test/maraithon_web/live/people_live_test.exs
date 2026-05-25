@@ -164,6 +164,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
     html = render(view)
     assert html =~ "2 selected"
+    assert html =~ ~s(id="people-bulk-merge-direct")
+    assert html =~ ~s(id="people-bulk-delete-direct")
 
     assert has_element?(
              view,
@@ -179,7 +181,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert render(view) =~ "Delete contacts"
 
     view
-    |> element("button[phx-click='choose_people_bulk_action'][phx-value-action='merge']")
+    |> element(
+      "#people-bulk-action-menu button[phx-click='choose_people_bulk_action'][phx-value-action='merge']"
+    )
     |> render_click()
 
     assert has_element?(view, "#people-bulk-merge")
@@ -231,7 +235,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
     |> render_click()
 
     view
-    |> element("button[phx-click='choose_people_bulk_action'][phx-value-action='delete']")
+    |> element(
+      "#people-bulk-action-menu button[phx-click='choose_people_bulk_action'][phx-value-action='delete']"
+    )
     |> render_click()
 
     assert render(view) =~ "Delete contacts?"
