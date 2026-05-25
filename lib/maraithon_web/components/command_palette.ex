@@ -515,6 +515,11 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp people_commands do
     [
+      command("Review CRM insights", "/insights", :insights, "People",
+        description: "Review duplicate contacts and relationship suggestions.",
+        keywords: "insights crm duplicates relationships suggestions review",
+        priority: 92
+      ),
       command("People CRM", "/operator/people", :people, "People",
         description: "Manage contacts, relationships, context, and duplicate merges.",
         keywords: "people crm contacts relationships context merge",
@@ -596,6 +601,12 @@ defmodule MaraithonWeb.Components.CommandPalette do
         keywords: "tasks todos todo list table",
         shortcut: "G T",
         priority: 60
+      ),
+      command("Insights", "/insights", :insights, "Navigate",
+        description: "CRM cleanup and relationship suggestion cards.",
+        keywords: "insights crm duplicate relationship suggestions cards",
+        shortcut: "G I",
+        priority: 59
       ),
       command("Agents", "/agents", :agents, "Navigate",
         description: "Manage running agents.",
