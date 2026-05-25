@@ -327,6 +327,10 @@ defmodule MaraithonWeb.Components.Sidebar do
     do:
       ~s|<path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" />|
 
+  defp icon_path(:search),
+    do:
+      ~s|<path fill-rule="evenodd" d="M9 3.5a5.5 5.5 0 1 0 3.44 9.79l2.64 2.64a.75.75 0 0 0 1.06-1.06l-2.64-2.64A5.5 5.5 0 0 0 9 3.5ZM5 9a4 4 0 1 1 8 0 4 4 0 0 1-8 0Z" clip-rule="evenodd" />|
+
   defp icon_path(_), do: ""
 
   defp initials_for(text) when is_binary(text) do

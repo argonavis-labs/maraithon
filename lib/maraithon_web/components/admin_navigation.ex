@@ -9,6 +9,7 @@ defmodule MaraithonWeb.AdminNavigation do
 
   use MaraithonWeb, :html
 
+  import MaraithonWeb.Components.CommandPalette
   import MaraithonWeb.Components.Sidebar
 
   @primary_nav [
@@ -40,6 +41,12 @@ defmodule MaraithonWeb.AdminNavigation do
 
     ~H"""
     <div class="relative isolate flex min-h-svh w-full bg-zinc-50 max-lg:flex-col lg:bg-zinc-100">
+      <.command_palette
+        :if={@current_user}
+        current_path={@normalized_path}
+        current_user={@current_user}
+      />
+
       <aside
         id="maraithon-sidebar"
         class={[
@@ -135,6 +142,23 @@ defmodule MaraithonWeb.AdminNavigation do
     <.sidebar class="border-r border-zinc-950/5">
       <.sidebar_header>
         <.sidebar_brand title="Maraithon" subtitle="Agent runtime" navigate="/dashboard" />
+        <button
+          :if={@current_user}
+          type="button"
+          data-command-palette-trigger="true"
+          aria-label="Open command palette"
+          class={[
+            "mt-3 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm/5 font-medium",
+            "text-zinc-500 hover:bg-zinc-950/5 hover:text-zinc-950",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/40"
+          ]}
+        >
+          <.icon name={:search} class="size-5" />
+          <span class="min-w-0 flex-1 truncate">Search</span>
+          <kbd class="rounded border border-zinc-950/10 bg-zinc-50 px-1.5 py-0.5 text-[11px]/5 font-medium text-zinc-500">
+            Cmd K
+          </kbd>
+        </button>
       </.sidebar_header>
 
       <.sidebar_body>
