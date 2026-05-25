@@ -88,7 +88,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     decide_project_recommendation grant_project_repo_access start_implementation_run
     update_implementation_run prepare_project_action prepare_agent_action
     prepare_external_action query_agent create_scheduled_task pause_scheduled_task
-    cancel_scheduled_task gmail_drafts
+    cancel_scheduled_task gmail_drafts draft_message
   ))
 
   def tool_definitions(_context) do
@@ -662,6 +662,33 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "bcc" => %{"type" => "string"},
             "thread_id" => %{"type" => "string"},
             "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+            "google_provider" => %{"type" => "string"},
+            "google_account_email" => %{"type" => "string"}
+          }
+        }
+      ),
+      tool_definition(
+        "draft_message",
+        "Generate an approval-ready Gmail or Slack draft in the user's learned voice. Use this for drafting copy; for Gmail, set save_to_provider only when the user asks to create a Gmail draft. Slack returns draft text only and does not post.",
+        %{
+          "type" => "object",
+          "required" => ["channel", "purpose"],
+          "properties" => %{
+            "channel" => %{"type" => "string", "enum" => ["gmail", "email", "slack"]},
+            "purpose" => %{"type" => "string"},
+            "recipient" => %{"type" => "string"},
+            "to" => %{"type" => "string"},
+            "subject" => %{"type" => "string"},
+            "context" => %{"type" => "object"},
+            "instructions" => %{"type" => "string"},
+            "tone" => %{"type" => "string"},
+            "thread_id" => %{"type" => "string"},
+            "reply_to_message_id" => %{"type" => "string"},
+            "save_to_provider" => %{"type" => "boolean"},
+            "refresh_voice" => %{"type" => "boolean"},
+            "sample_texts" => %{"type" => "array", "items" => %{"type" => "string"}},
+            "team_id" => %{"type" => "string"},
+            "slack_user_id" => %{"type" => "string"},
             "google_provider" => %{"type" => "string"},
             "google_account_email" => %{"type" => "string"}
           }
@@ -1342,6 +1369,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "gmail_drafts" ->
         inject_user_and_execute("gmail_drafts", runtime_context, args)
+
+      "draft_message" ->
+        inject_user_and_execute("draft_message", runtime_context, args)
 
       "calendar_list_events" ->
         inject_user_and_execute("google_calendar_list_events", runtime_context, args)

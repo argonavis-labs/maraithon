@@ -79,6 +79,33 @@ defmodule Maraithon.Tools.InputSchemas do
           })
         )
 
+      "draft_message" ->
+        user_object(
+          google_account_fields(
+            slack_base_fields(%{
+              "channel" => enum(~w(gmail email slack)),
+              "purpose" => @string,
+              "recipient" => @string,
+              "to" => @string,
+              "subject" => @string,
+              "body" => @string,
+              "context" => @object,
+              "instructions" => @string,
+              "tone" => @string,
+              "cc" => @string,
+              "bcc" => @string,
+              "thread_id" => @string,
+              "reply_to_message_id" => @string,
+              "save_to_provider" => @boolean,
+              "refresh_voice" => @boolean,
+              "sample_texts" => @string_array,
+              "max_samples" => @integer,
+              "lookback_days" => @integer
+            })
+          ),
+          ["channel", "purpose"]
+        )
+
       "gmail_batch_modify" ->
         user_object(
           google_account_fields(%{

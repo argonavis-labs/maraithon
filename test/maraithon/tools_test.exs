@@ -31,6 +31,7 @@ defmodule Maraithon.ToolsTest do
       assert "gmail_list_recent" in tools
       assert "gmail_search" in tools
       assert "gmail_get_message" in tools
+      assert "draft_message" in tools
       assert "google_calendar_list_events" in tools
       assert "review_connected_context" in tools
       assert "list_connected_accounts" in tools
@@ -109,6 +110,7 @@ defmodule Maraithon.ToolsTest do
       assert Tools.exists?("time")
       assert Tools.exists?("read_file")
       assert Tools.exists?("gmail_list_recent")
+      assert Tools.exists?("draft_message")
       assert Tools.exists?("google_calendar_list_events")
       assert Tools.exists?("review_connected_context")
       assert Tools.exists?("list_connected_accounts")

@@ -102,6 +102,8 @@ defmodule Maraithon.AssistantHarnessTest do
     assert [%{"role" => "system"}, %{"role" => "user", "content" => prompt}] = request["messages"]
     assert prompt =~ "Runtime policy JSON"
     assert prompt =~ "\"contract_version\":2"
+    assert prompt =~ "draft_message"
+    assert prompt =~ "Do not use em dashes"
   end
 
   test "uses chat-tier models for proactive planning requests" do
