@@ -5,7 +5,7 @@ defmodule Maraithon.Tools.TodoHelpers do
 
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Todos.SurfaceQuality
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{Todo, UserFacingCopy}
 
   def list_opts(args, default_limit \\ 50) when is_map(args) do
     limit =
@@ -37,6 +37,8 @@ defmodule Maraithon.Tools.TodoHelpers do
   end
 
   def serialize_todo(%Todo{} = todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     %{
       id: todo.id,
       source: todo.source,

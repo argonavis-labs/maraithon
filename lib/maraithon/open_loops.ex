@@ -14,7 +14,7 @@ defmodule Maraithon.OpenLoops do
   alias Maraithon.Memory
   alias Maraithon.Memory.Item
   alias Maraithon.Todos
-  alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.{AttentionRanker, UserFacingCopy}
   alias Maraithon.Todos.Todo
 
   @default_limit 12
@@ -416,12 +416,20 @@ defmodule Maraithon.OpenLoops do
 
     Hard rules:
     - Only propose a candidate when the observation clearly implies a
-      commitment Kent made, an ask Kent received, or a time-bound follow-up
-      Kent should not forget. Casual chatter, automated receipts, FYIs,
+      commitment you made, an ask you received, or a time-bound follow-up
+      you should not forget. Casual chatter, automated receipts, FYIs,
       newsletters, and pure social greetings do not become todos.
     - Prefer fewer, sharper candidates over many speculative ones.
     - Keep titles short and human ("Reply to Charlie about pricing"), not
       a paste of the source body.
+    - Write summaries and next actions directly to the operator as "you",
+      never "the user" or "User committed".
+    - For every person-linked candidate, include who the person is, the
+      company/project/source thread when known, what they need, why it matters,
+      and the concrete next step Maraithon can help with.
+    - Never write generic action text such as "confirm artifact status",
+      "reply with owner/ETA", or "exact artifact or update" unless those exact
+      words appear in the source and are explained by the thread.
     - Set due_at only when the source body genuinely communicates a time.
     - Set source/source_account/source_item_id from the originating
       observation so existing semantic dedup can collapse repeats.
@@ -432,6 +440,7 @@ defmodule Maraithon.OpenLoops do
         {
           "title": "Short imperative title",
           "summary": "One-paragraph context the user can scan.",
+          "next_action": "Specific next action with person, topic, and timing/decision needed.",
           "due_at": null,
           "source": "gmail | google_calendar | slack",
           "source_account": "primary",
@@ -944,6 +953,8 @@ defmodule Maraithon.OpenLoops do
   end
 
   defp serialize_todo(%Todo{} = todo) do
+    todo = polish_todo_copy(todo)
+
     %{
       id: todo.id,
       source: todo.source,
@@ -969,6 +980,28 @@ defmodule Maraithon.OpenLoops do
       metadata: todo.metadata || %{},
       attention_profile: AttentionRanker.profile(todo),
       updated_at: todo.updated_at
+    }
+  end
+
+  defp polish_todo_copy(%Todo{} = todo) do
+    attrs =
+      %{
+        title: todo.title,
+        summary: todo.summary,
+        next_action: todo.next_action,
+        notes: todo.notes,
+        action_plan: todo.action_plan,
+        metadata: todo.metadata || %{}
+      }
+      |> UserFacingCopy.polish_attrs()
+
+    %Todo{
+      todo
+      | title: read_string(attrs, "title", todo.title),
+        summary: read_string(attrs, "summary", todo.summary),
+        next_action: read_string(attrs, "next_action", todo.next_action),
+        notes: read_string(attrs, "notes", todo.notes),
+        action_plan: read_string(attrs, "action_plan", todo.action_plan)
     }
   end
 

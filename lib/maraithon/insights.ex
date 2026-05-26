@@ -401,8 +401,11 @@ defmodule Maraithon.Insights do
     status = read_string(record, "status", read_string(metadata, "status", nil))
 
     []
-    |> maybe_append("Concrete artifact, answer, or owner to send", status == "unresolved")
-    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(deadline))
+    |> maybe_append(
+      "Specific answer or promised item to send from the source thread",
+      status == "unresolved"
+    )
+    |> maybe_append("Timing you are comfortable committing to", is_nil(deadline))
     |> Enum.take(3)
   end
 
@@ -410,15 +413,15 @@ defmodule Maraithon.Insights do
     [
       "Acknowledge #{person}.",
       suggested_middle_reply_point(source),
-      "Give a concrete timing commitment#{deadline_suffix(deadline)}."
+      "Give timing only if the source thread supports it#{deadline_suffix(deadline)}."
     ]
   end
 
   defp suggested_middle_reply_point(source) do
     if String.contains?(source || "", "slack") do
-      "State whether the promised artifact or update is ready or still in progress."
+      "Name the actual promise from the Slack thread and whether it is ready or still in progress."
     else
-      "Answer the ask or name the owner."
+      "Answer the specific ask from the thread or say what you will check next."
     end
   end
 
@@ -435,9 +438,9 @@ defmodule Maraithon.Insights do
 
       _ ->
         if String.contains?(source || "", "slack") do
-          "Draft as Kent: close the Slack loop with #{person} by confirming status, owner, next step, and ETA."
+          "Draft as Kent: close the Slack loop with #{person} by naming the actual promise, current status, and the timing you can safely stand behind."
         else
-          "Draft as Kent: reply to #{person} with the direct answer, owner, next step, and ETA."
+          "Draft as Kent: reply to #{person} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
         end
     end
   end

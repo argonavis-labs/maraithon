@@ -38,7 +38,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   @impl true
   def description do
-    "Looks for openings in the work day and proactively checks in to see if Kent needs anything."
+    "Looks for openings in the work day and proactively checks in to see if the operator needs anything."
   end
 
   @impl true
@@ -387,7 +387,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     You are Kent's chief of staff, deciding whether to send a short proactive
     check-in over Telegram right now.
 
-    It is a work day and Kent has one or more openings in his calendar (see the
+    It is a work day and the operator has one or more openings in the calendar (see the
     input JSON). Send a check-in only when it would genuinely help: point at a
     real opening and, when possible, one or two concrete things he could use the
     time for — a specific open todo, prep for an upcoming meeting, or a reply he

@@ -16,6 +16,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
   alias Maraithon.UserMemory
 
@@ -612,42 +613,36 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp chief_message(%Insight{} = insight, metadata) do
-    sections =
-      if monitor_insight?(insight) do
-        [
-          {"Watching", todo_text(insight, metadata)},
-          {"Context", context_text(insight, metadata)},
-          {"Person", person_text(insight, metadata)},
-          {"Why important", why_important_text(insight, metadata)},
-          {"Next", next_text(insight, metadata)}
-        ]
-      else
-        [
-          {"Todo", todo_text(insight, metadata)},
-          {"Context", context_text(insight, metadata)},
-          {"Person", person_text(insight, metadata)},
-          {"Why important", why_important_text(insight, metadata)},
-          {"Next", next_text(insight, metadata)}
-        ]
-      end
-
-    sections
+    insight_sections(insight, metadata)
     |> Enum.map(fn {label, text} -> message_section(label, text) end)
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n\n")
   end
 
   defp fallback_chief_message(%Insight{} = insight, metadata) do
-    [
-      {"Todo", todo_text(insight, metadata)},
-      {"Context", context_text(insight, metadata)},
-      {"Person", person_text(insight, metadata)},
-      {"Why important", why_important_text(insight, metadata)},
-      {"Next", next_text(insight, metadata)}
-    ]
+    insight_sections(insight, metadata)
     |> Enum.map(fn {label, text} -> message_section(label, text, 120) end)
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n\n")
+  end
+
+  defp insight_sections(%Insight{} = insight, metadata) do
+    label = if monitor_insight?(insight), do: "Watching", else: "Todo"
+
+    polished =
+      UserFacingCopy.polish_attrs(%{
+        "title" => todo_text(insight, metadata),
+        "summary" => context_text(insight, metadata),
+        "metadata" => metadata || %{}
+      })
+
+    [
+      {label, Map.get(polished, "title")},
+      {"Context", Map.get(polished, "summary")},
+      {"Person", person_text(insight, metadata) |> UserFacingCopy.polish_text()},
+      {"Why important", why_important_text(insight, metadata) |> UserFacingCopy.polish_text()},
+      {"Next", next_text(insight, metadata) |> UserFacingCopy.polish_text()}
+    ]
   end
 
   defp verify_chief_message(message) when is_binary(message) do
@@ -724,6 +719,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp context_text(%Insight{} = insight, metadata) do
     subject = subject_text(metadata)
+    person = person_name(metadata)
 
     context =
       read_string(metadata, "context_brief") ||
@@ -735,9 +731,8 @@ defmodule Maraithon.InsightNotifications.Actions do
         present?(subject) and blank?(context) ->
           subject_thread_sentence(subject)
 
-        present?(subject) and generic_followup_context?(context) and
-            not contains_ci?(context, subject) ->
-          "#{subject_thread_sentence(subject)} #{context}"
+        present?(subject) and generic_followup_context?(context) ->
+          "#{subject_thread_sentence(subject)} #{waiting_context_sentence(person)}"
 
         true ->
           context
@@ -852,6 +847,14 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp subject_thread_sentence(subject) when is_binary(subject) do
     "Thread: #{subject}."
+  end
+
+  defp waiting_context_sentence(person) when is_binary(person) do
+    "#{person} appears to be waiting for the next step; I found no later reply that closes the loop."
+  end
+
+  defp waiting_context_sentence(_person) do
+    "This still looks open; I found no later reply that closes the loop."
   end
 
   defp generic_followup_context?(context) when is_binary(context) do
@@ -994,8 +997,10 @@ defmodule Maraithon.InsightNotifications.Actions do
     String.match?(point, ~r/^acknowledge\s+[a-z]/) or
       String.contains?(point, [
         "answer the ask",
+        "answer the specific ask",
         "name the owner",
         "concrete timing commitment",
+        "give timing only if",
         "owner, next step",
         "owner / next step",
         "owner, eta",
@@ -1077,10 +1082,10 @@ defmodule Maraithon.InsightNotifications.Actions do
       true ->
         case insight.source do
           "slack" ->
-            "Next: answer the thread with only the owner, next step, and timing the evidence supports."
+            "Next: answer the Slack thread with the specific update, next step, and timing the evidence supports."
 
           _ ->
-            "Next: reply with only the concrete update, owner, and timing the evidence supports."
+            "Next: reply with the specific update, next step, and timing the evidence supports."
         end
     end
   end
@@ -1106,12 +1111,6 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp delivery_verb(%Insight{source: "slack"}), do: "posting"
   defp delivery_verb(_insight), do: "sending"
-
-  defp contains_ci?(text, fragment) when is_binary(text) and is_binary(fragment) do
-    String.contains?(String.downcase(text), String.downcase(fragment))
-  end
-
-  defp contains_ci?(_text, _fragment), do: false
 
   defp first_present(values) do
     Enum.find(values, &present?/1)
@@ -1333,7 +1332,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       "On it.",
       fallback_context_sentence(insight),
       fallback_reply_points_sentence(reply_points),
-      "I'll close the loop with owner, next step, and exact ETA shortly."
+      "I'll confirm the actual ask from the thread, send the next step I can stand behind, and only commit to timing the evidence supports."
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
@@ -1468,13 +1467,13 @@ defmodule Maraithon.InsightNotifications.Actions do
     explicit ||
       cond do
         read_string(context, "notification_posture") == "heads_up" ->
-          "Acknowledge the thread is moving, confirm whether Kent still owns the final loop, and avoid implying nobody responded."
+          "Acknowledge the thread is moving, confirm whether you still own the final loop, and avoid implying nobody responded."
 
         insight.source == "gmail" and read_string(record, "commitment") != nil ->
-          "Reply in-thread as Kent with the concrete next step, owner, and ETA."
+          "Reply in-thread as Kent with the actual promise, current status, and timing you can safely stand behind."
 
         insight.source == "slack" ->
-          "Reply in the Slack thread as Kent with the shortest useful status, owner, and ETA."
+          "Reply in the Slack thread as Kent with the shortest useful status, next step, and evidence-backed timing."
 
         true ->
           nil

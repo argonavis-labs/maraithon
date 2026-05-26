@@ -192,7 +192,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
         "Conversation context could not be fully evaluated, so this should be monitored instead of treated as direct debt."
 
       _ ->
-        "No later reply or follow-through was found in the conversation."
+        "I found no later reply or delivery that clearly closes the loop."
     end
   end
 

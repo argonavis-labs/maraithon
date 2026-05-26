@@ -23,6 +23,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   alias Maraithon.PreferenceMemory
   alias Maraithon.RelationshipIntelligence
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Repo
   alias Maraithon.Tools.GmailHelpers
 
@@ -1498,6 +1499,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                 inferred_deadline || DateTime.add(occurred_at || DateTime.utc_now(), 8, :hour)
 
               commitment = "Reply to #{person} on \"#{truncate(subject, 70)}\""
+              topic = subject_context(subject)
 
               evidence =
                 []
@@ -1514,7 +1516,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                 |> Enum.take(@max_evidence_points)
 
               next_action =
-                "Reply now with owner, ETA, and the exact artifact or update you committed to."
+                if is_binary(topic) do
+                  "Reply to #{person} about #{topic} with the specific update they asked for, the next step, and timing."
+                else
+                  "Open the source thread, confirm what #{person} asked for, then reply with the next step and timing."
+                end
 
               confidence =
                 0.66
@@ -1527,7 +1533,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               priority = urgency_priority(due_at, 82)
 
               summary =
-                "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+                if is_binary(topic) do
+                  "You still owe #{person} a response about #{topic} #{deadline_phrase(due_at)}. No sent follow-up was detected."
+                else
+                  "You still owe #{person} a response #{deadline_phrase(due_at)}. No sent follow-up was detected."
+                end
 
               record =
                 commitment_record(
@@ -1563,7 +1573,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                       "labels" => labels,
                       "body_excerpt" => email_body_excerpt(email),
                       "signals" => reply_matches,
-                      "context_brief" => "Incoming request from #{person}.",
+                      "context_brief" =>
+                        if(is_binary(topic),
+                          do: "Incoming request from #{person} about #{topic}.",
+                          else: "Incoming request from #{person}."
+                        ),
                       "missing_inputs" =>
                         gmail_missing_inputs("reply_urgent", nil, inferred_deadline, person),
                       "suggested_reply_points" =>
@@ -1628,14 +1642,18 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
           commitment = extract_commitment_line(subject, snippet, person)
           artifact_hint = extract_artifact_hint(body)
+          commitment_topic = commitment_topic(subject, commitment, artifact_hint)
 
           nudge_line =
-            case artifact_hint do
-              nil ->
-                "You committed to #{person} and no follow-up has gone out yet."
+            cond do
+              is_binary(artifact_hint) ->
+                "You said you'd send #{artifact_hint} to #{person} #{deadline_phrase(due_at)}. No reply has gone out yet."
 
-              artifact ->
-                "You said you'd send #{artifact} to #{person} #{deadline_phrase(due_at)}. No reply has gone out yet."
+              is_binary(commitment_topic) ->
+                "You committed to follow up with #{person} about #{commitment_topic}. No reply has gone out yet."
+
+              true ->
+                "You committed to follow up with #{person}. No reply has gone out yet."
             end
 
           evidence =
@@ -1653,7 +1671,11 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             |> Enum.take(@max_evidence_points)
 
           next_action =
-            "Send the promised follow-through now and explicitly confirm delivery in the same thread."
+            if is_binary(commitment_topic) do
+              "Reply to #{person} about #{commitment_topic} with the promised update, current status, and a concrete ETA."
+            else
+              "Open the source thread, confirm exactly what you promised, then reply with status and ETA."
+            end
 
           confidence =
             0.74
@@ -1683,8 +1705,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               source_occurred_at: occurred_at,
               category: "commitment_unresolved",
               title: truncate(nudge_line, 180),
-              summary:
-                "The commitment still appears open for #{person} #{deadline_phrase(due_at)}. No completion evidence was found in sent email.",
+              summary: sent_commitment_summary(person, commitment_topic, artifact_hint, due_at),
               recommended_action: next_action,
               priority: priority,
               confidence: confidence,
@@ -1699,7 +1720,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "subject" => subject,
                   "body_excerpt" => email_body_excerpt(sent_email),
                   "signals" => Enum.uniq(promise_matches ++ action_matches),
-                  "context_brief" => "Explicit promise made to #{person}.",
+                  "topic" => commitment_topic,
+                  "context_brief" =>
+                    sent_commitment_context_brief(person, commitment_topic, artifact_hint),
                   "missing_inputs" =>
                     gmail_missing_inputs(
                       "commitment_unresolved",
@@ -1719,6 +1742,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
                   "record" => record
                 })
             }
+            |> UserFacingCopy.polish_attrs()
             |> normalize_candidate(state)
             |> ConversationContext.apply_to_candidate(conversation_context)
             |> apply_gmail_attention_fields(
@@ -2591,6 +2615,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Keep confidence between 0 and 1.
     - Estimate telegram_fit_score between 0 and 1, where 1 means "send to Telegram now".
     - Write concise nudge language that is concrete and actionable.
+    - Use second-person, human chief-of-staff copy: write "you committed",
+      never "the user committed" or "User committed".
+    - Every returned title, summary, recommended_action, and record.commitment
+      must say what the follow-up is about. Use the strongest available
+      subject, project, company, artifact, ask, or quoted source line. If the
+      exact ask is missing, say that the source thread should be opened to
+      confirm the exact promise instead of pretending generic "follow-up" is
+      enough context.
+    - Include why the person matters when known: company, relationship, project,
+      or why they are waiting.
     - Include draft-ready context for founder response actions:
       missing_inputs, suggested_reply_points, draft_plan
     - Write draft_plan as an instruction for drafting in Kent's first-person voice.
@@ -3097,6 +3131,67 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     end
   end
 
+  defp commitment_topic(subject, commitment, artifact_hint) do
+    first_present_string([
+      subject_context(subject),
+      artifact_hint,
+      commitment_context(commitment)
+    ])
+  end
+
+  defp sent_commitment_summary(person, topic, artifact_hint, due_at) do
+    topic =
+      cond do
+        is_binary(topic) -> " about #{topic}"
+        is_binary(artifact_hint) -> " about #{artifact_hint}"
+        true -> ""
+      end
+
+    "You committed to follow up with #{person}#{topic} #{deadline_phrase(due_at)}. I found no later reply or delivery that clearly closes the loop."
+  end
+
+  defp sent_commitment_context_brief(person, topic, artifact_hint) do
+    cond do
+      is_binary(topic) ->
+        "You made an explicit promise to #{person} about #{topic}."
+
+      is_binary(artifact_hint) ->
+        "You made an explicit promise to #{person} about #{artifact_hint}."
+
+      true ->
+        "You made an explicit promise to #{person}; the source thread should be opened to confirm exactly what you promised."
+    end
+  end
+
+  defp subject_context(subject) when is_binary(subject) do
+    subject
+    |> String.trim()
+    |> String.replace(~r/^\s*(re|fw|fwd):\s*/i, "")
+    |> String.trim(~s("'))
+    |> case do
+      "" -> nil
+      "(no subject)" -> nil
+      "Quick follow-up" -> nil
+      "Quick follow up" -> nil
+      value -> truncate(value, 120)
+    end
+  end
+
+  defp subject_context(_subject), do: nil
+
+  defp commitment_context(commitment) when is_binary(commitment) do
+    commitment
+    |> String.replace(~r/^\s*follow through on\s+/i, "")
+    |> String.replace(~r/^\s*reply to\s+[^"]+\s+on\s+/i, "")
+    |> String.trim(~s("'))
+    |> case do
+      "" -> nil
+      value -> truncate(value, 120)
+    end
+  end
+
+  defp commitment_context(_commitment), do: nil
+
   defp extract_artifact_hint(body) when is_binary(body) do
     cond do
       String.contains?(body, "deck") -> "the deck"
@@ -3233,23 +3328,23 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp gmail_missing_inputs(category, artifact_hint, inferred_deadline, person) do
     []
     |> maybe_append(
-      "Concrete artifact or answer to send to #{person || "the recipient"}",
+      "Specific answer or promised item to send to #{person || "the recipient"} from the source thread",
       category == "commitment_unresolved" and is_nil(artifact_hint)
     )
-    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(inferred_deadline))
+    |> maybe_append("Timing you are comfortable committing to", is_nil(inferred_deadline))
     |> Enum.take(3)
   end
 
   defp gmail_suggested_reply_points("reply_urgent", person, due_at, _artifact_hint) do
     [
       "Acknowledge #{person || "the sender"} directly.",
-      "Answer the ask or name the owner.",
-      "Give a concrete timing commitment: #{deadline_phrase(due_at)}."
+      "Answer the specific ask from the thread or say what you will check next.",
+      "Give timing only if the source thread supports it: #{deadline_phrase(due_at)}."
     ]
   end
 
   defp gmail_suggested_reply_points("commitment_unresolved", person, due_at, artifact_hint) do
-    artifact_text = artifact_hint || "the promised artifact or update"
+    artifact_text = artifact_hint || "the thing you promised in the source thread"
 
     [
       "Acknowledge the open loop with #{person || "the recipient"}.",
@@ -3261,7 +3356,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp gmail_suggested_reply_points(_category, person, due_at, _artifact_hint) do
     [
       "Acknowledge #{person || "the recipient"}.",
-      "Name owner, next step, and timing: #{deadline_phrase(due_at)}."
+      "Answer the specific ask from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
     ]
   end
 
@@ -3276,10 +3371,10 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       _ ->
         case category do
           "reply_urgent" ->
-            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, owner, next step, and ETA."
+            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft as Kent: close the loop with #{person || "the recipient"} by confirming artifact status and a concrete ETA."
+            "Draft as Kent: close the loop with #{person || "the recipient"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
             "Draft as Kent: be direct, useful, and grounded in the source evidence."

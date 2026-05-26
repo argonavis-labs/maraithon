@@ -147,7 +147,10 @@ defmodule Maraithon.InsightsTest do
       assert todo.title == "Reply to the billing thread"
       assert todo.dedupe_key == "insight:billing-thread"
       assert DateTime.compare(todo.due_at, due_at) == :eq
-      assert todo.action_plan == "Reply as Kent with payment status, owner, and ETA."
+
+      assert todo.action_plan ==
+               "Draft as Kent: reply to the recipient about Billing account past due with the actual promise, current status, and timing you can safely stand behind."
+
       assert todo.source_account_label == "ops@example.com"
       assert get_in(todo.metadata, ["source_insight_id"]) == insight.id
 

@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.Intelligence do
 
   alias Maraithon.{Crm, LLM, Memory}
   alias Maraithon.Todos
-  alias Maraithon.Todos.SurfaceQuality
+  alias Maraithon.Todos.{SurfaceQuality, UserFacingCopy}
   alias Maraithon.Todos.Todo
 
   @sentinel "TODO_INTELLIGENCE_JSON_V1"
@@ -119,6 +119,10 @@ defmodule Maraithon.Todos.Intelligence do
          Use `you` or `Kent`, never `the user`. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
+       - Never write generic copy such as "User committed to follow-up" or
+         "confirm artifact status" without the subject. Every person-linked todo
+         must say follow up about what, why the person is involved, and what
+         concrete reply/draft/action Maraithon can help prepare.
        - Every person-linked todo needs enough context for Kent to remember why it
          matters: company/organization when known, relationship, why the person is
          in the thread, what they want, and what they are waiting on. Put structured
@@ -128,7 +132,7 @@ defmodule Maraithon.Todos.Intelligence do
          commitments first; strongest relationships who need something; people
          actively waiting on a business objective, project, or deliverable; intro
          requests; meeting requests; routine backlog last.
-       - If an old open item appears repeatedly and Kent has not acted, do not
+       - If an old open item appears repeatedly and the operator has not acted, do not
          inflate it as urgent unless the evidence shows personal/family impact,
          a close relationship, or an active project/customer wait.
        - Apply `todo_relevance_memories` as durable relevance steering. These
@@ -147,7 +151,7 @@ defmodule Maraithon.Todos.Intelligence do
        - Negative todo memories are not global blocks. Stronger fresh evidence,
          personal/family impact, a direct deadline, close relationship, customer
          wait, or user/customer impact can override them.
-       - Write next_action as the sentence Kent should act on directly. Avoid
+       - Write next_action as a sentence the operator can act on directly. Avoid
          ticket/report language such as "covering current state" when a human
          version like "ask if it is fixed, who owns it, and whether customers
          were affected" is clearer.
@@ -458,6 +462,7 @@ defmodule Maraithon.Todos.Intelligence do
         summary,
         opts
       )
+      |> UserFacingCopy.polish_attrs()
       |> SurfaceQuality.annotate_attrs()
 
     cond do

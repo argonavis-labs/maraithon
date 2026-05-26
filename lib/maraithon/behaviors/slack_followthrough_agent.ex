@@ -504,7 +504,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
           due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 8, :hour)
 
           next_action =
-            "Send a Slack reply now with owner, next step, and a concrete timing commitment."
+            "Reply in Slack with the specific answer from the thread, the next step you can stand behind, and timing only if the evidence supports it."
 
           evidence =
             []
@@ -1108,23 +1108,23 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_missing_inputs(category, artifact, due_at) do
     []
     |> maybe_append(
-      "Concrete artifact or answer to post in Slack",
+      "Specific answer or promised item to post from the Slack thread",
       category == "commitment_unresolved" and is_nil(artifact)
     )
-    |> maybe_append("Specific ETA Kent is comfortable committing to", is_nil(due_at))
+    |> maybe_append("Timing you are comfortable committing to", is_nil(due_at))
     |> Enum.take(3)
   end
 
   defp slack_suggested_reply_points("reply_urgent", person, due_at, _artifact) do
     [
       "Acknowledge #{person || "the sender"} in-thread.",
-      "Answer the ask or name the current owner.",
-      "Give a concrete timing commitment: #{deadline_phrase(due_at)}."
+      "Answer the specific ask from the thread or say what you will check next.",
+      "Give timing only if the source thread supports it: #{deadline_phrase(due_at)}."
     ]
   end
 
   defp slack_suggested_reply_points("commitment_unresolved", person, due_at, artifact) do
-    artifact_text = artifact || "the promised artifact or update"
+    artifact_text = artifact || "the thing you promised in the source thread"
 
     [
       "Acknowledge the open loop with #{person || "the thread"}.",
@@ -1136,7 +1136,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_suggested_reply_points(_category, person, due_at, _artifact) do
     [
       "Acknowledge #{person || "the thread"}.",
-      "Name owner, next step, and timing: #{deadline_phrase(due_at)}."
+      "Answer the specific ask from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
     ]
   end
 
@@ -1151,10 +1151,10 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       _ ->
         case category do
           "reply_urgent" ->
-            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, owner, next step, and ETA."
+            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft as Kent: close the Slack loop with #{person || "the thread"} by confirming artifact status and a concrete ETA."
+            "Draft as Kent: close the Slack loop with #{person || "the thread"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
             "Draft as Kent: be direct, useful, and grounded in the source evidence."

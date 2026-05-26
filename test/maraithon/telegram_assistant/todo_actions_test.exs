@@ -100,6 +100,39 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert payload.text =~ "Claude Cowork killer artifact"
   end
 
+  test "legacy generic commitment cards are rewritten with person, topic, and next step" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "gmail",
+      "status" => "open",
+      "title" => "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+      "summary" => "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+      "next_action" =>
+        "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+      "metadata" => %{
+        "subject" => "Starteryou UGC Campaigns",
+        "company" => "Starteryou",
+        "why_it_matters" => "Alex is waiting on the UGC campaign materials decision.",
+        "source_evidence" => "You said you would follow up on Starteryou UGC campaign timing.",
+        "record" => %{
+          "person" => "Alex Müller",
+          "relationship_context" => "Starteryou UGC campaign contact",
+          "commitment" => "Follow through on \"Starteryou UGC Campaigns\" for Alex Müller"
+        }
+      }
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "Alex Müller"
+    assert payload.text =~ "Starteryou UGC Campaigns"
+    assert payload.text =~ "Starteryou UGC campaign contact"
+    assert payload.text =~ "Reply to Alex Müller about Starteryou UGC Campaigns"
+    refute payload.text =~ "User committed"
+    refute payload.text =~ "owner, ETA"
+    refute payload.text =~ "exact artifact or update"
+  end
+
   test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do
     install_see_less_model()
 

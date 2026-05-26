@@ -452,6 +452,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        todo list; OmniFocus/calendar mirrors are future integrations unless tools
        are explicitly present in the source_access payload.
 
+       User-facing copy requirements:
+       - Write directly to Kent as "you"; never write "the user" or
+         "User committed".
+       - Every todo title, summary, next_action, notes, and action_plan must
+         answer: who is involved, what the commitment is about, why it matters,
+         and the best next step.
+       - If the exact ask is ambiguous, say "open the source thread to confirm
+         the exact promise" rather than creating a generic "follow-up" todo.
+       - Include company, organization, relationship context, project, source
+         quote/body excerpt, and confidence in metadata whenever available.
+
        Skill instructions:
        #{skill.instructions}
 

@@ -120,4 +120,47 @@ defmodule Maraithon.ActionCardsTest do
     assert rendered =~ "Keep or dismiss"
     assert rendered =~ "teach Maraithon"
   end
+
+  test "legacy generic todo copy is personalized before card rendering", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+      summary: "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+      next_action:
+        "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+      source_item_id: "gmail-thread-alex-starteryou",
+      dedupe_key: "action-card:alex-starteryou",
+      priority: 86,
+      status: "open",
+      metadata: %{
+        "subject" => "Starteryou UGC Campaigns",
+        "company" => "Starteryou",
+        "why_it_matters" => "Alex is waiting on the UGC campaign materials decision.",
+        "source_evidence" => "You said you would follow up on Starteryou UGC campaign timing.",
+        "confidence" => "high",
+        "record" => %{
+          "person" => "Alex Müller",
+          "relationship_context" => "Starteryou UGC campaign contact",
+          "commitment" => "Follow through on \"Starteryou UGC Campaigns\" for Alex Müller"
+        }
+      }
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert card["headline"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
+    assert get_in(card, ["context_pack", "summary"]) =~ "Alex Müller"
+    assert get_in(card, ["context_pack", "summary"]) =~ "Starteryou"
+    assert get_in(card, ["context_pack", "summary"]) =~ "UGC campaign contact"
+    assert card["next_best_action"] =~ "Reply to Alex Müller about Starteryou UGC Campaigns"
+    assert rendered =~ "You committed to follow up"
+    refute rendered =~ "User committed"
+    refute rendered =~ "owner, ETA"
+    refute rendered =~ "exact artifact or update"
+  end
 end

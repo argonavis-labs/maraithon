@@ -9,7 +9,7 @@ defmodule Maraithon.ActionCards do
 
   alias Maraithon.SourceFreshness
   alias Maraithon.Todos
-  alias Maraithon.Todos.{AttentionRanker, SurfaceQuality, Todo}
+  alias Maraithon.Todos.{AttentionRanker, SurfaceQuality, Todo, UserFacingCopy}
 
   @open_statuses ~w(open snoozed)
   @assistant_sources ~w(
@@ -47,6 +47,7 @@ defmodule Maraithon.ActionCards do
   def for_todo(todo, opts \\ [])
 
   def for_todo(%Todo{} = todo, opts) when is_list(opts) do
+    todo = polish_todo_copy(todo)
     metadata = todo.metadata || %{}
     profile = AttentionRanker.profile(todo)
     quality = SurfaceQuality.assess(todo)
@@ -175,7 +176,7 @@ defmodule Maraithon.ActionCards do
     source_health = read_map(card, "source_health")
 
     [
-      {"specific_headline", present?(read_field(card, "headline"))},
+      {"personalized_copy", personalized_copy?(card)},
       {"decision_prompt", present?(read_field(card, "decision_prompt"))},
       {"why_now", present?(read_field(card, "why_now"))},
       {"person_or_explicit_unknown",
@@ -198,6 +199,24 @@ defmodule Maraithon.ActionCards do
   defp ensure_card(%{"context_pack" => _context} = card), do: card
   defp ensure_card(%{context_pack: _context} = card), do: stringify_keys(card)
   defp ensure_card(map) when is_map(map), do: for_todo(map)
+
+  defp polish_todo_copy(%Todo{} = todo) do
+    attrs =
+      %{
+        "title" => todo.title,
+        "summary" => todo.summary,
+        "next_action" => todo.next_action,
+        "metadata" => todo.metadata || %{}
+      }
+      |> UserFacingCopy.polish_attrs()
+
+    %Todo{
+      todo
+      | title: read_string(attrs, "title") || todo.title,
+        summary: read_string(attrs, "summary") || todo.summary,
+        next_action: read_string(attrs, "next_action") || todo.next_action
+    }
+  end
 
   defp context_pack(%Todo{} = todo, metadata, profile) do
     record = read_map(metadata, "record")
@@ -274,17 +293,17 @@ defmodule Maraithon.ActionCards do
 
   defp headline(todo, context, _attention_mode) do
     person = primary_person_name(context)
-    project = read_field(context, "project_or_topic")
+    title = clean_title(todo.title || todo.next_action || "Review this item")
 
     cond do
-      present?(person) and present?(project) ->
-        "#{person}: #{clean_title(todo.title || todo.next_action)}"
+      present?(person) and title_mentions_person?(title, person) ->
+        title
 
       present?(person) ->
-        "#{person}: #{clean_title(todo.title || todo.next_action)}"
+        "#{person}: #{title}"
 
       true ->
-        clean_title(todo.title || todo.next_action || "Review this item")
+        title
     end
   end
 
@@ -334,7 +353,7 @@ defmodule Maraithon.ActionCards do
     first_present([
       todo.next_action,
       read_string(todo.metadata || %{}, "next_action"),
-      "Review and decide the next step."
+      "Open the source item, confirm the real ask, and decide whether this still matters."
     ])
     |> naturalize_action_copy()
   end
@@ -359,8 +378,8 @@ defmodule Maraithon.ActionCards do
   defp rank_reason(profile) do
     case read_field(profile, "bucket") do
       "personal_family" -> "Personal or family logistics are ranked first."
-      "strong_relationship_waiting" -> "A close relationship appears to be waiting on the user."
-      "business_project_waiting" -> "An active business objective may be waiting on the user."
+      "strong_relationship_waiting" -> "A close relationship appears to be waiting on you."
+      "business_project_waiting" -> "An active business objective may be waiting on you."
       "intro_request" -> "This looks like relationship-capital work."
       "meeting_request" -> "This appears to be meeting or scheduling work."
       _ -> "This remains open and reviewable."
@@ -564,11 +583,14 @@ defmodule Maraithon.ActionCards do
     identity = identity_label(person, company, relationship)
 
     cond do
-      present?(identity) and present?(commitment) ->
-        "#{identity} is tied to this open commitment: #{externalize_copy(commitment)}"
+      present?(person) and present?(summary) and title_mentions_person?(summary, person) ->
+        externalize_copy(summary)
 
       present?(identity) and present?(summary) ->
         "#{identity}. #{externalize_copy(summary)}"
+
+      present?(identity) and present?(commitment) ->
+        "#{identity} is tied to this open commitment: #{externalize_copy(commitment)}"
 
       present?(summary) ->
         externalize_copy(summary)
@@ -812,6 +834,51 @@ defmodule Maraithon.ActionCards do
 
   defp people_present?(_people), do: false
 
+  defp personalized_copy?(card) do
+    card
+    |> user_visible_card_text()
+    |> Enum.reject(&blank?/1)
+    |> then(fn values ->
+      values != [] and Enum.all?(values, &(not generic_user_facing_copy?(&1)))
+    end)
+  end
+
+  defp user_visible_card_text(card) do
+    context = read_map(card, "context_pack")
+
+    [
+      read_field(card, "headline"),
+      read_field(card, "decision_prompt"),
+      read_field(card, "why_now"),
+      read_field(card, "next_best_action"),
+      read_field(context, "summary"),
+      read_field(context, "relationship_context"),
+      read_field(context, "project_or_topic")
+    ]
+  end
+
+  defp generic_user_facing_copy?(value) when is_binary(value) do
+    text = String.downcase(value)
+
+    Enum.any?(
+      [
+        "user committed",
+        "the user committed",
+        "follow-up not yet sent",
+        "no later reply or follow-through",
+        "reply now with owner",
+        "owner, eta",
+        "owner and eta",
+        "exact artifact or update",
+        "confirm artifact status",
+        "review and decide the next step"
+      ],
+      &String.contains?(text, &1)
+    )
+  end
+
+  defp generic_user_facing_copy?(_value), do: false
+
   defp primary_person_name(context) do
     case read_field(context, "people") do
       [%{"name" => name} | _] when is_binary(name) -> name
@@ -845,7 +912,7 @@ defmodule Maraithon.ActionCards do
         "Personal or family logistics are ranked first."
 
       read_field(profile, "actively_waiting") == true ->
-        "This appears to be waiting on the user."
+        "This appears to be waiting on you."
 
       read_field(profile, "business_project") == true ->
         "This is tied to an active business objective."
@@ -955,6 +1022,7 @@ defmodule Maraithon.ActionCards do
 
   defp naturalize_action_copy(value) when is_binary(value) do
     value
+    |> UserFacingCopy.polish_text()
     |> String.replace(
       ~r/\s+for a one-line status update covering current state, owner, fix window if still open, and any user or customer impact\.?/i,
       ": is it resolved, who owns it, and were any users or customers affected?"
@@ -970,6 +1038,7 @@ defmodule Maraithon.ActionCards do
 
   defp externalize_copy(value) when is_binary(value) do
     value
+    |> UserFacingCopy.polish_text()
     |> strip_internal_lines()
     |> replace_internal_language()
     |> naturalize_action_copy()
@@ -1010,12 +1079,28 @@ defmodule Maraithon.ActionCards do
 
   defp clean_title(value) when is_binary(value) do
     value
+    |> UserFacingCopy.polish_text()
     |> String.replace(~r/^\s*(todo|action|next)\s*:\s*/i, "")
     |> single_line()
     |> truncate(120)
   end
 
   defp clean_title(_value), do: "Review this item"
+
+  defp title_mentions_person?(title, person) when is_binary(title) and is_binary(person) do
+    title = String.downcase(title)
+
+    person
+    |> String.downcase()
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.reject(&(String.length(&1) < 2))
+    |> case do
+      [] -> false
+      parts -> Enum.all?(parts, &String.contains?(title, &1))
+    end
+  end
+
+  defp title_mentions_person?(_title, _person), do: false
 
   defp map_to_todo(map) do
     metadata = read_map(map, "metadata")
@@ -1029,7 +1114,9 @@ defmodule Maraithon.ActionCards do
       attention_mode: read_string(map, "attention_mode") || "act_now",
       title: read_string(map, "title") || read_string(map, "next_action") || "Review this item",
       summary: read_string(map, "summary") || "Review this item.",
-      next_action: read_string(map, "next_action") || "Review and decide the next step.",
+      next_action:
+        read_string(map, "next_action") ||
+          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply.",
       due_at: read_datetime(map, "due_at"),
       notes: read_string(map, "notes"),
       action_draft: read_map(map, "action_draft"),

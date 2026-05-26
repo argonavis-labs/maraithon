@@ -27,6 +27,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.ToolPolicy
   alias Maraithon.Tools
   alias Maraithon.UserMemory
@@ -3438,6 +3439,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp serialize_todo_summary(todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     %{
       id: todo.id,
       source: todo.source,
@@ -3456,6 +3459,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp serialize_todo_detail(todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     %{
       id: todo.id,
       source: todo.source,

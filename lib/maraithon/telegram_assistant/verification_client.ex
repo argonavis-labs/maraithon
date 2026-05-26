@@ -375,7 +375,14 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
     kind = read_string(candidate, "kind", "general")
     title = read_string(candidate, "title", "Open todo")
     summary = read_string(candidate, "summary", read_string(candidate, "todo", title))
-    next_action = read_string(candidate, "next_action", "Review and decide the next step.")
+
+    next_action =
+      read_string(
+        candidate,
+        "next_action",
+        "Open the source item, confirm the real ask, and decide whether this still matters."
+      )
+
     source_item_id = read_string(candidate, "source_item_id", nil)
 
     dedupe_key =

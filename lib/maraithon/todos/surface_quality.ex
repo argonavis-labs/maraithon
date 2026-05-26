@@ -22,6 +22,12 @@ defmodule Maraithon.Todos.SurfaceQuality do
     deadline due_by due_date due_at next_event_at source_insight_due_at why_it_matters why_now
   )
 
+  @specific_context_keys ~w(
+    body_excerpt context context_brief email_subject evidence excerpt message_subject project
+    project_name quote relationship_context source_evidence source_excerpt source_subject subject
+    thread_subject topic why_it_matters why_now
+  )
+
   @confidence_keys ~w(confidence false_positive_risk scope_confidence telegram_fit_score)
 
   @doc """
@@ -36,8 +42,10 @@ defmodule Maraithon.Todos.SurfaceQuality do
 
     checks = %{
       "action" => present?(read_field(todo, "next_action")),
+      "personalized_copy" => personalized_copy?(todo),
       "source_evidence" => source_evidence?(todo, metadata),
       "human_context" => human_context?(todo, metadata, profile, named_person?, familiar?),
+      "specific_context" => specific_context?(todo, metadata),
       "why_now" => why_now?(todo, metadata, profile),
       "action_buttons" => not Map.has_key?(todo, "id") or present?(read_field(todo, "id"))
     }
@@ -54,6 +62,7 @@ defmodule Maraithon.Todos.SurfaceQuality do
         "crm_write_through",
         named_person? and not crm_write_through?(metadata, profile)
       )
+      |> maybe_warn("generic_copy", not personalized_copy?(todo))
       |> maybe_warn("confidence", not confidence_present?(metadata))
       |> maybe_warn("source_quote", not source_quote_present?(todo, metadata))
 
@@ -64,6 +73,7 @@ defmodule Maraithon.Todos.SurfaceQuality do
       "warnings" => warnings,
       "source_backed" => checks["source_evidence"],
       "human_context" => checks["human_context"],
+      "specific_context" => checks["specific_context"],
       "why_now" => checks["why_now"],
       "crm_write_through" => crm_write_through?(metadata, profile),
       "named_person" => named_person?,
@@ -132,6 +142,14 @@ defmodule Maraithon.Todos.SurfaceQuality do
       read_field(profile, "stale_confirmation_candidate") == true
   end
 
+  defp specific_context?(todo, metadata) do
+    any_present?(metadata, @specific_context_keys) or
+      record_has_context?(read_map(metadata, "record")) or
+      source_text_mentions_topic?(read_field(todo, "title")) or
+      source_text_mentions_topic?(read_field(todo, "summary")) or
+      source_text_mentions_topic?(read_field(todo, "next_action"))
+  end
+
   defp crm_write_through?(metadata, profile) do
     people_present?(read_field(metadata, "people")) or
       people_present?(read_field(metadata, "crm_people")) or
@@ -160,6 +178,62 @@ defmodule Maraithon.Todos.SurfaceQuality do
   end
 
   defp record_has_context?(_record), do: false
+
+  defp personalized_copy?(todo) do
+    not generic_copy?(user_facing_text(todo))
+  end
+
+  defp user_facing_text(todo) when is_map(todo) do
+    [
+      read_field(todo, "title"),
+      read_field(todo, "summary"),
+      read_field(todo, "next_action"),
+      read_field(todo, "recommended_action")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&to_string/1)
+    |> Enum.join(" ")
+  end
+
+  defp user_facing_text(_todo), do: ""
+
+  defp generic_copy?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    Enum.any?(
+      [
+        "user committed",
+        "the user committed",
+        "follow-up not yet sent",
+        "follow up not yet sent",
+        "no later reply or follow-through",
+        "no sent follow-up",
+        "reply now with owner, eta",
+        "owner, eta",
+        "owner and eta",
+        "exact artifact or update",
+        "confirm artifact status",
+        "confirm the artifact status",
+        "review and decide the next step",
+        "open this item and decide whether it still needs action"
+      ],
+      &String.contains?(text, &1)
+    )
+  end
+
+  defp generic_copy?(_text), do: false
+
+  defp source_text_mentions_topic?(text) when is_binary(text) do
+    text = String.downcase(text)
+
+    not generic_copy?(text) and
+      (String.contains?(text, " about ") or
+         String.contains?(text, " on ") or
+         String.contains?(text, " because ") or
+         String.contains?(text, " context: "))
+  end
+
+  defp source_text_mentions_topic?(_text), do: false
 
   defp people_present?(people) when is_list(people), do: Enum.any?(people, &is_map/1)
   defp people_present?(%{}), do: true

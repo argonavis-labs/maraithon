@@ -9,6 +9,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.Todos.{AttentionRanker, FeedbackTrainer, Intelligence, SurfaceQuality}
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
@@ -16,7 +17,9 @@ defmodule Maraithon.Todos do
 
   def get_for_user(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do
-    Repo.get_by(Todo, id: todo_id, user_id: user_id)
+    Todo
+    |> Repo.get_by(id: todo_id, user_id: user_id)
+    |> polish_todo_copy()
   end
 
   def get_for_user(_user_id, _todo_id), do: nil
@@ -31,6 +34,7 @@ defmodule Maraithon.Todos do
     |> apply_todo_order(sort_by, sort_dir)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&polish_todo_copy/1)
   end
 
   def count_for_user(user_id, opts \\ []) when is_binary(user_id) do
@@ -58,6 +62,7 @@ defmodule Maraithon.Todos do
     |> order_by([todo], desc: todo.updated_at, desc: todo.inserted_at)
     |> limit(^limit)
     |> Repo.all()
+    |> Enum.map(&polish_todo_copy/1)
   end
 
   def list_by_ids(user_id, todo_ids, opts \\ [])
@@ -82,6 +87,7 @@ defmodule Maraithon.Todos do
       |> maybe_filter_open_due_only(open_due_only?)
       |> Repo.all()
       |> Enum.sort_by(fn todo -> Map.get(order, todo.id, map_size(order)) end)
+      |> Enum.map(&polish_todo_copy/1)
     end
   end
 
@@ -97,6 +103,9 @@ defmodule Maraithon.Todos do
   end
 
   defp cast_todo_id(_value), do: []
+
+  defp polish_todo_copy(%Todo{} = todo), do: UserFacingCopy.polish_attrs(todo)
+  defp polish_todo_copy(other), do: other
 
   def sync_many_from_insights(insights) when is_list(insights) do
     insights
@@ -191,7 +200,7 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -224,7 +233,7 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -254,6 +263,7 @@ defmodule Maraithon.Todos do
     end)
     |> case do
       {:ok, %Todo{} = todo} ->
+        todo = polish_todo_copy(todo)
         _ = maybe_learn_from_feedback(todo, feedback)
         {:ok, todo}
 
@@ -314,7 +324,7 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, :empty_update} -> {:error, :empty_update}
       {:error, reason} -> {:error, reason}
@@ -344,7 +354,7 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -393,6 +403,8 @@ defmodule Maraithon.Todos do
   def summarize_for_prompt(_user_id, _limit), do: []
 
   def serialize_for_prompt(%Todo{} = todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     %{
       id: todo.id,
       source: todo.source,
@@ -422,7 +434,10 @@ defmodule Maraithon.Todos do
   end
 
   defp upsert_one(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
-    normalized_attrs = normalize_attrs(user_id, attrs)
+    normalized_attrs =
+      user_id
+      |> normalize_attrs(attrs)
+      |> UserFacingCopy.polish_attrs()
 
     case Repo.get_by(Todo, user_id: user_id, dedupe_key: normalized_attrs["dedupe_key"]) do
       %Todo{} = todo ->
@@ -476,7 +491,7 @@ defmodule Maraithon.Todos do
       end
     end)
     |> case do
-      {:ok, %Todo{} = todo} -> {:ok, todo}
+      {:ok, %Todo{} = todo} -> {:ok, polish_todo_copy(todo)}
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
@@ -625,6 +640,7 @@ defmodule Maraithon.Todos do
     |> update_datetime_attr(attrs, "source_occurred_at", "source_occurred_at")
     |> update_text_attr(attrs, "dedupe_key", "dedupe_key")
     |> update_metadata_attr(todo, attrs)
+    |> UserFacingCopy.polish_attrs()
   end
 
   defp update_text_attr(changes, attrs, key, field) do
@@ -791,7 +807,12 @@ defmodule Maraithon.Todos do
         normalize_attention_mode(read_string(attrs, "attention_mode", "act_now")),
       "title" => read_string(attrs, "title", "Open todo"),
       "summary" => read_string(attrs, "summary", read_string(attrs, "todo", "Review this item.")),
-      "next_action" => read_string(attrs, "next_action", "Review and decide the next step."),
+      "next_action" =>
+        read_string(
+          attrs,
+          "next_action",
+          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply."
+        ),
       "due_at" => due_at,
       "notes" => read_string(attrs, "notes", nil),
       "action_plan" => action_plan,
@@ -836,7 +857,7 @@ defmodule Maraithon.Todos do
       next_action:
         normalize_required_text(
           insight.recommended_action,
-          "Review and decide the next step."
+          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply."
         ),
       due_at: insight.due_at,
       notes: notes_from_metadata(metadata),
@@ -851,6 +872,7 @@ defmodule Maraithon.Todos do
       dedupe_key: todo_dedupe_key_for_insight(insight),
       metadata: todo_metadata_from_insight(insight)
     }
+    |> UserFacingCopy.polish_attrs()
   end
 
   defp todo_kind_from_insight(%Insight{source: "gmail"}), do: "gmail_triage"

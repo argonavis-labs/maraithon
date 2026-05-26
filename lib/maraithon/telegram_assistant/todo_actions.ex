@@ -9,7 +9,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{Todo, UserFacingCopy}
 
   @callback_prefix "tgtodo"
   @feedback_values ~w(important helpful not_helpful see_less)
@@ -193,6 +193,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp render_message(todo, prefix_text) when is_map(todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
     metadata = todo_metadata(todo)
     account = metadata_account(metadata)
     todo_source = todo_source(todo)
@@ -535,17 +536,21 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp metadata_context(_metadata), do: nil
 
   defp todo_next_action(%Todo{next_action: next_action, title: title}),
-    do: next_action || title || "Review and decide the next step."
+    do:
+      next_action || title ||
+        "Open the source item, confirm the real ask, and decide whether this still matters."
 
   defp todo_next_action(todo) when is_map(todo),
     do:
       map_string(todo, "next_action") || map_string(todo, "title") ||
-        "Review and decide the next step."
+        "Open the source item, confirm the real ask, and decide whether this still matters."
 
-  defp todo_next_action(_todo), do: "Review and decide the next step."
+  defp todo_next_action(_todo),
+    do: "Open the source item, confirm the real ask, and decide whether this still matters."
 
   defp display_text(text) when is_binary(text) do
     text
+    |> UserFacingCopy.polish_text()
     |> strip_internal_lines()
     |> replace_internal_language()
     |> normalize_display_whitespace()

@@ -57,7 +57,7 @@ defmodule Maraithon.Todos.FeedbackTrainer do
     todo creation. Do not create brittle rules based on exact title text, exact
     sender, exact thread id, or source name alone. Use semantic judgment over
     actionability, ask/no-ask, owner, relationship, urgency, life domain, source
-    evidence, and whether someone is actually waiting on Kent.
+    evidence, and whether someone is actually waiting on the operator.
 
     Return ONLY valid JSON:
     {

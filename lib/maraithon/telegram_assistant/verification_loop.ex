@@ -1044,6 +1044,28 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
     weak_quality = SurfaceQuality.assess(weak_todo)
 
+    generic_quality =
+      todo
+      |> Map.put("title", "User committed to follow-up with Alex Müller; follow-up not yet sent.")
+      |> Map.put(
+        "summary",
+        "User committed to follow-up with Alex Müller; follow-up not yet sent."
+      )
+      |> Map.put(
+        "next_action",
+        "Reply now with owner, ETA, and the exact artifact or update you committed to."
+      )
+      |> put_in(
+        ["metadata", "record"],
+        %{
+          "person" => "Alex Müller",
+          "company" => "Starteryou",
+          "relationship_context" => "UGC campaign contact"
+        }
+      )
+      |> put_in(["metadata", "subject"], "Starteryou UGC Campaigns")
+      |> SurfaceQuality.assess()
+
     findings =
       []
       |> require_finding(
@@ -1053,6 +1075,11 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         weak_quality["surfaceable"] == false and "source_evidence" in weak_quality["missing"],
         "generic todo without source evidence must not be surfaceable"
+      )
+      |> require_finding(
+        generic_quality["surfaceable"] == false and
+          "personalized_copy" in generic_quality["missing"],
+        "generic todo copy must not be surfaceable even when source context exists"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -2090,7 +2117,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "relationship_strength" => 42,
         "affinity_score" => 35,
         "notes" =>
-          "Matthew is tied to the setup-help/pricing conversation. Kent owes a concrete owner and ETA before this becomes stale.",
+          "Matthew is tied to the setup-help/pricing conversation. You owe him a concrete recommendation before this becomes stale.",
         "metadata" => %{"company" => "Raue Automation", "verification_run_id" => run_id}
       })
 
@@ -2112,7 +2139,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           "attention_mode" => "act_now",
           "title" => "Reply to Matthew Raue about setup help and pricing",
           "summary" =>
-            "Matthew Raue is the automation tools contact who asked about setup help and pricing; he needs a clear owner and ETA.",
+            "Matthew Raue is the automation tools contact who asked about setup help and pricing; he needs the setup path, pricing owner, and delivery timing.",
           "next_action" =>
             "Send Matthew the recommended setup path, pricing owner, and concrete ETA.",
           "priority" => 80,
@@ -2252,7 +2279,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           "calendar_color" => "#2f80ed",
           "title" => "Matthew Raue setup and pricing prep",
           "notes" =>
-            "Meeting with Matthew Raue from Raue Automation about the setup path, pricing owner, and ETA. Kent should bring a concrete recommendation and next step.",
+            "Meeting with Matthew Raue from Raue Automation about the setup path, pricing owner, and delivery timing. Bring a concrete recommendation and next step.",
           "location" => "Zoom",
           "start_at" => DateTime.to_iso8601(meeting_start),
           "end_at" => DateTime.to_iso8601(meeting_end),
