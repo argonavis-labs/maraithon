@@ -2,7 +2,10 @@
   <.flash_group flash={@flash} />
 
   <header class="absolute inset-x-0 top-0 z-10">
-    <nav class="mx-auto flex max-w-7xl items-center justify-between px-6 py-6 lg:px-8" aria-label="Global">
+    <nav
+      class="mx-auto flex max-w-7xl items-center justify-between px-6 py-6 lg:px-8"
+      aria-label="Global"
+    >
       <a href="/" class="flex items-center gap-3">
         <span class="flex size-9 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
           <svg viewBox="0 0 16 16" class="size-5 fill-current" aria-hidden="true">
@@ -12,10 +15,9 @@
         <span class="font-display text-2xl text-olive-950">Maraithon</span>
       </a>
       <div class="hidden gap-8 text-sm/6 text-olive-700 sm:flex">
-        <a href="/#features" class="hover:text-olive-950">Features</a>
-        <a href="/#mobile" class="hover:text-olive-950">Mobile</a>
-        <a href="/support" class="hover:text-olive-950">Support</a>
-        <a href="/changelog" class="hover:text-olive-950">Changelog</a>
+        <a href="#how" class="hover:text-olive-950">How it works</a>
+        <a href="#apps" class="hover:text-olive-950">iPhone &amp; Mac</a>
+        <a href="/support" class="hover:text-olive-950">Help</a>
       </div>
       <a
         href="/login"
@@ -27,175 +29,320 @@
   </header>
 
   <main>
-    <section class="relative isolate overflow-hidden pt-32 pb-20 sm:pt-40 sm:pb-28">
-      <div class="mx-auto max-w-4xl px-6 lg:px-8">
-        <div class="flex flex-col items-center gap-7 text-center">
-          <span class="inline-flex items-center gap-2 rounded-full border border-olive-300 bg-white/60 px-3 py-1 text-xs/6 text-olive-700">
+    <%!-- HERO --%>
+    <section class="relative isolate overflow-hidden pt-32 pb-20 sm:pt-44 sm:pb-28">
+      <div
+        class="absolute inset-x-0 top-0 -z-10 h-[520px] bg-gradient-to-b from-olive-200 to-olive-100"
+        aria-hidden="true"
+      >
+      </div>
+      <div class="mx-auto max-w-5xl px-6 lg:px-8">
+        <div class="flex flex-col items-center gap-8 text-center">
+          <span class="inline-flex items-center gap-2 rounded-full border border-olive-300 bg-white/70 px-3 py-1 text-xs/6 text-olive-700 backdrop-blur">
             <span class="size-1.5 rounded-full bg-olive-600"></span>
-            Now in private TestFlight beta
+            Now in beta. Free while we&rsquo;re here.
           </span>
-          <h1 class="font-display text-5xl leading-[1.05] tracking-tight text-olive-950 sm:text-7xl">
-            A chief of staff that <em class="font-display italic">stays</em> with you.
+
+          <h1 class="font-display text-5xl leading-[1.02] tracking-tight text-olive-950 sm:text-7xl md:text-[5.5rem]">
+            The <em class="font-display italic">chief of staff</em> <br class="hidden sm:block" /> you can finally afford.
           </h1>
-          <p class="max-w-2xl text-lg/8 text-olive-700">
-            Maraithon is a long-running AI agent runtime. It watches your inbox, your calendar, and your tools — then surfaces only what needs you. The mobile app is where you act on it.
+
+          <p class="max-w-2xl text-lg/8 text-olive-700 sm:text-xl/8">
+            Maraithon quietly handles the things that fill your day &mdash; the inbox, the follow-ups, the people you keep meaning to get back to &mdash; so you can spend your attention on what actually matters.
           </p>
-          <form action="/auth/magic-link" method="post" class="mt-2 flex w-full max-w-md flex-col gap-3 sm:flex-row">
-            <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
-            <label for="hero-email" class="sr-only">Email address</label>
-            <input
-              id="hero-email"
-              type="email"
-              name="magic_link[email]"
-              required
-              autocomplete="email"
-              placeholder="you@company.com"
-              class="flex-1 rounded-md border border-olive-300 bg-white px-4 py-3 text-base text-olive-950 shadow-xs placeholder:text-olive-400 focus:outline-none focus:ring-2 focus:ring-olive-600"
-            />
-            <button
-              type="submit"
-              class="inline-flex items-center justify-center rounded-md bg-olive-950 px-5 py-3 text-base font-medium text-olive-50 shadow-xs hover:bg-olive-800"
+
+          <div class="mt-2 flex flex-col items-center gap-3 sm:flex-row">
+            <a
+              href="https://apps.apple.com/app/id6773374784"
+              class="group inline-flex items-center gap-3 rounded-xl bg-olive-950 px-5 py-3 text-olive-50 transition hover:bg-olive-800"
             >
-              Email me a link
-            </button>
-          </form>
-          <p class="text-xs/6 text-olive-600">Magic link sign-in. No passwords. Links expire in 15 minutes.</p>
+              <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+                <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+              </svg>
+              <span class="flex flex-col items-start leading-none">
+                <span class="text-[10px] uppercase tracking-wide text-olive-300">Download on the</span>
+                <span class="mt-1 font-display text-xl">App Store</span>
+              </span>
+            </a>
+
+            <a
+              href="https://apps.apple.com/app/id6758162243"
+              class="group inline-flex items-center gap-3 rounded-xl border border-olive-300 bg-white px-5 py-3 text-olive-950 transition hover:border-olive-950 hover:bg-olive-50"
+            >
+              <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+                <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+              </svg>
+              <span class="flex flex-col items-start leading-none">
+                <span class="text-[10px] uppercase tracking-wide text-olive-600">Download on the</span>
+                <span class="mt-1 font-display text-xl">Mac App Store</span>
+              </span>
+            </a>
+          </div>
+          <p class="text-xs/6 text-olive-600">Free during beta &middot; iPhone &amp; Mac &middot; No credit card</p>
         </div>
       </div>
     </section>
 
-    <section id="features" class="border-t border-olive-200 bg-white">
+    <%!-- THE PROMISE --%>
+    <section class="border-t border-olive-200 bg-white">
+      <div class="mx-auto max-w-5xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="mx-auto max-w-3xl text-center">
+          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">
+            For people who run things
+          </p>
+          <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+            You shouldn&rsquo;t need a 6&middot;a.m. wake-up just to remember what you owe people.
+          </h2>
+          <p class="mt-6 text-lg/8 text-olive-700">
+            Most days you&rsquo;re holding the whole picture in your head. The reply you owe Sarah. The follow-up from Tuesday&rsquo;s call. The Stripe invoice you keep meaning to check. The intro you promised back in March.
+          </p>
+          <p class="mt-4 text-lg/8 text-olive-700">
+            Maraithon is the assistant who quietly remembers all of it &mdash; and gently tells you when it&rsquo;s your turn to move.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <%!-- HOW IT WORKS --%>
+    <section id="how" class="border-t border-olive-200 bg-olive-50">
       <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
         <div class="mx-auto max-w-2xl text-center">
-          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Built for operators</p>
+          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">What you get</p>
           <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
-            One calm surface for your day.
+            One calm screen. The whole picture.
           </h2>
-          <p class="mt-4 text-lg/8 text-olive-700">
-            Maraithon agents run in the background on durable OTP processes. The app is where the work lands.
-          </p>
         </div>
 
         <dl class="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-x-10 gap-y-12 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <dt class="font-display text-2xl text-olive-950">Today</dt>
+            <span class="flex size-10 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
+              <svg viewBox="0 0 24 24" class="size-5 fill-current" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm.75 5a.75.75 0 00-1.5 0v5.25c0 .2.08.39.22.53l3 3a.75.75 0 101.06-1.06l-2.78-2.78V7z" /></svg>
+            </span>
+            <dt class="mt-4 font-display text-2xl text-olive-950">Today</dt>
             <dd class="mt-2 text-base/7 text-olive-700">
-              One screen for what actually needs you right now. Calendar, open loops, drafts waiting on your call.
+              The five things that actually need you, picked from your inbox, calendar, and open threads. Open the app, see the day. Close the app, get on with it.
             </dd>
           </div>
           <div>
-            <dt class="font-display text-2xl text-olive-950">Todos</dt>
+            <span class="flex size-10 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
+              <svg viewBox="0 0 24 24" class="size-5 fill-current" aria-hidden="true"><path d="M9 16.2L5.5 12.7 4.1 14.1 9 19l11-11-1.4-1.4z" /></svg>
+            </span>
+            <dt class="mt-4 font-display text-2xl text-olive-950">Todos</dt>
             <dd class="mt-2 text-base/7 text-olive-700">
-              Quick capture, fast triage, a real waiting-on list. What you owe people and what they owe you.
+              Capture in a word. The agent fills in the rest &mdash; who it&rsquo;s for, when it&rsquo;s due, where it came from. Waiting on someone? It nudges them so you don&rsquo;t have to.
             </dd>
           </div>
           <div>
-            <dt class="font-display text-2xl text-olive-950">People</dt>
+            <span class="flex size-10 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
+              <svg viewBox="0 0 24 24" class="size-5 fill-current" aria-hidden="true"><path d="M12 12a4 4 0 100-8 4 4 0 000 8zm0 2c-3.3 0-8 1.7-8 5v1h16v-1c0-3.3-4.7-5-8-5z" /></svg>
+            </span>
+            <dt class="mt-4 font-display text-2xl text-olive-950">People</dt>
             <dd class="mt-2 text-base/7 text-olive-700">
-              Lightweight CRM that remembers what matters. Last contact, open threads, what you promised them.
+              Every conversation, in one place. Last time you talked. What you promised them. What they promised you. The intro you owe. The birthday you almost missed.
             </dd>
           </div>
           <div>
-            <dt class="font-display text-2xl text-olive-950">Chat</dt>
+            <span class="flex size-10 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
+              <svg viewBox="0 0 24 24" class="size-5 fill-current" aria-hidden="true"><path d="M20 2H4a2 2 0 00-2 2v18l4-4h14a2 2 0 002-2V4a2 2 0 00-2-2z" /></svg>
+            </span>
+            <dt class="mt-4 font-display text-2xl text-olive-950">Chat</dt>
             <dd class="mt-2 text-base/7 text-olive-700">
-              Direct line to your agent. Ask, delegate, redirect, see what it&rsquo;s working on in the background.
+              Tell it what you need. &ldquo;Draft a reply to Mark.&rdquo; &ldquo;Remind me to ask Yitong about the redesign.&rdquo; &ldquo;Who haven&rsquo;t I talked to in a month?&rdquo; It just&hellip; handles it.
             </dd>
           </div>
         </dl>
       </div>
     </section>
 
-    <section class="border-t border-olive-200 bg-olive-50">
-      <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
-        <div class="mx-auto grid max-w-5xl grid-cols-1 items-start gap-12 lg:grid-cols-2">
-          <div>
-            <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">How it works</p>
-            <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
-              Event-first agents. Always alive.
-            </h2>
-            <p class="mt-4 text-lg/8 text-olive-700">
-              Traditional assistants are request-response. You ask, they answer, they die. Maraithon agents are different — each one is a long-running OTP process with state, subscriptions, and tools.
-            </p>
-            <p class="mt-4 text-lg/8 text-olive-700">
-              They react to inbound events the moment they happen, persist across restarts, and stay coherent across days. Your job is judgment. Theirs is everything else.
-            </p>
+    <%!-- BEFORE / AFTER --%>
+    <section class="border-t border-olive-200 bg-white">
+      <div class="mx-auto max-w-6xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="mx-auto max-w-2xl text-center">
+          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Before &amp; after</p>
+          <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+            The same day. Different week.
+          </h2>
+        </div>
+        <div class="mt-14 grid grid-cols-1 gap-8 md:grid-cols-2">
+          <div class="rounded-2xl border border-olive-200 bg-olive-50 p-8">
+            <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Without Maraithon</p>
+            <ul class="mt-4 space-y-3 text-base/7 text-olive-800">
+              <li>&middot; Three apps open, none of them right.</li>
+              <li>&middot; &ldquo;I&rsquo;ll get back to you next week&rdquo; emails piling up.</li>
+              <li>&middot; You forgot to reply to your investor again.</li>
+              <li>&middot; You meant to introduce them six weeks ago.</li>
+              <li>&middot; Sunday night feels like a homework deadline.</li>
+            </ul>
           </div>
-          <div class="rounded-2xl border border-olive-200 bg-white p-6 shadow-xs">
-            <div class="space-y-4 font-mono text-sm text-olive-700">
-              <p><span class="text-olive-500">Agent</span> = Prompt + State + Subscriptions + Tools</p>
-              <ul class="space-y-3">
-                <li><span class="text-olive-950 font-medium">Prompt</span> — who the agent is, how it thinks</li>
-                <li><span class="text-olive-950 font-medium">State</span> — what it remembers, what it&rsquo;s seen</li>
-                <li><span class="text-olive-950 font-medium">Subscriptions</span> — event streams it&rsquo;s watching</li>
-                <li><span class="text-olive-950 font-medium">Tools</span> — actions it can take</li>
-              </ul>
-              <p class="pt-2 text-xs text-olive-500">Backed by Elixir, OTP, and Postgres on Fly.io.</p>
+          <div class="rounded-2xl bg-olive-950 p-8 text-olive-50 ring-1 ring-olive-950">
+            <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-400">With Maraithon</p>
+            <ul class="mt-4 space-y-3 text-base/7 text-olive-100">
+              <li>&middot; One screen. Five things. Done by lunch.</li>
+              <li>&middot; A reply is drafted; you tap send.</li>
+              <li>&middot; You knew about the investor before they nudged you.</li>
+              <li>&middot; The intro went out on Tuesday.</li>
+              <li>&middot; Sunday night feels like Sunday night.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <%!-- MAC COMPANION --%>
+    <section class="border-t border-olive-200 bg-olive-50">
+      <div class="mx-auto max-w-6xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="grid grid-cols-1 items-center gap-12 lg:grid-cols-2">
+          <div>
+            <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Mac companion</p>
+            <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+              Your assistant sees what you see.
+            </h2>
+            <p class="mt-6 text-lg/8 text-olive-700">
+              Install the Mac companion and Maraithon quietly catches up on everything that lives on your laptop &mdash; iMessage, Notes, voice memos, calendar invites, Reminders. It connects the dots between a Slack message at 9, a Notes outline at 11, and an email at 3.
+            </p>
+            <p class="mt-4 text-lg/8 text-olive-700">
+              You stay in control. Pause it whenever you want. Delete what you want gone.
+            </p>
+            <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+              <a
+                href="https://apps.apple.com/app/id6758162243"
+                class="inline-flex items-center gap-3 rounded-xl bg-olive-950 px-5 py-3 text-olive-50 hover:bg-olive-800"
+              >
+                <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+                  <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+                </svg>
+                <span class="flex flex-col items-start leading-none">
+                  <span class="text-[10px] uppercase tracking-wide text-olive-300">Download on the</span>
+                  <span class="mt-1 font-display text-xl">Mac App Store</span>
+                </span>
+              </a>
             </div>
           </div>
+          <div class="rounded-2xl border border-olive-200 bg-white p-8 shadow-xs">
+            <ul class="space-y-4 text-base/7 text-olive-800">
+              <li class="flex items-start gap-3">
+                <span class="mt-1 size-2 shrink-0 rounded-full bg-olive-600"></span>
+                <span><strong class="text-olive-950">iMessage &amp; SMS.</strong> The thread you forgot you were in.</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <span class="mt-1 size-2 shrink-0 rounded-full bg-olive-600"></span>
+                <span><strong class="text-olive-950">Apple Notes.</strong> The thought you jotted at 2 a.m.</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <span class="mt-1 size-2 shrink-0 rounded-full bg-olive-600"></span>
+                <span><strong class="text-olive-950">Voice memos.</strong> The walk you talked through last week.</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <span class="mt-1 size-2 shrink-0 rounded-full bg-olive-600"></span>
+                <span><strong class="text-olive-950">Calendar.</strong> The meeting you forgot to prep for.</span>
+              </li>
+              <li class="flex items-start gap-3">
+                <span class="mt-1 size-2 shrink-0 rounded-full bg-olive-600"></span>
+                <span><strong class="text-olive-950">Reminders.</strong> The things you told Siri so you wouldn&rsquo;t forget.</span>
+              </li>
+            </ul>
+            <p class="mt-6 border-t border-olive-200 pt-4 text-sm/6 text-olive-600">
+              Stored privately in your account. Never shared. Never sold. Deleted when you say so.
+            </p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section id="mobile" class="border-t border-olive-200 bg-white">
-      <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
-        <div class="mx-auto max-w-3xl text-center">
-          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">iOS</p>
-          <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
-            The mobile app is the operational surface.
-          </h2>
-          <p class="mt-4 text-lg/8 text-olive-700">
-            Scan what needs you. Decide. Move on. Native iOS, built on SwiftUI for iOS 26.
-          </p>
-          <div class="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-            <a
-              href="/login"
-              class="inline-flex items-center justify-center rounded-md bg-olive-950 px-5 py-3 text-base font-medium text-olive-50 hover:bg-olive-800"
-            >
-              Get a sign-in link
-            </a>
-            <span class="text-sm/6 text-olive-600">
-              TestFlight is invite-only during beta. <a href="/support" class="underline hover:text-olive-950">Request access &rarr;</a>
+    <%!-- APPS BLOCK --%>
+    <section id="apps" class="border-t border-olive-200 bg-white">
+      <div class="mx-auto max-w-5xl px-6 py-20 text-center sm:py-28 lg:px-8">
+        <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Everywhere you are</p>
+        <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+          One assistant. iPhone &amp; Mac.
+        </h2>
+        <p class="mx-auto mt-4 max-w-xl text-lg/8 text-olive-700">
+          The iPhone app is where you check in. The Mac companion runs quietly in the background. The two stay in sync without you thinking about it.
+        </p>
+        <div class="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <a
+            href="https://apps.apple.com/app/id6773374784"
+            class="inline-flex items-center gap-3 rounded-xl bg-olive-950 px-5 py-3 text-olive-50 hover:bg-olive-800"
+          >
+            <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+              <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+            </svg>
+            <span class="flex flex-col items-start leading-none">
+              <span class="text-[10px] uppercase tracking-wide text-olive-300">Download on the</span>
+              <span class="mt-1 font-display text-xl">App Store</span>
             </span>
-          </div>
+          </a>
+
+          <a
+            href="https://apps.apple.com/app/id6758162243"
+            class="inline-flex items-center gap-3 rounded-xl border border-olive-300 bg-white px-5 py-3 text-olive-950 hover:border-olive-950 hover:bg-olive-50"
+          >
+            <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+              <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+            </svg>
+            <span class="flex flex-col items-start leading-none">
+              <span class="text-[10px] uppercase tracking-wide text-olive-600">Download on the</span>
+              <span class="mt-1 font-display text-xl">Mac App Store</span>
+            </span>
+          </a>
         </div>
+        <p class="mt-6 text-xs/6 text-olive-600">
+          Already have an account? <a href="/login" class="underline hover:text-olive-950">Sign in</a>.
+        </p>
       </div>
     </section>
 
+    <%!-- QUOTE --%>
     <section class="border-t border-olive-200 bg-olive-100">
-      <div class="mx-auto max-w-3xl px-6 py-20 sm:py-24 lg:px-8">
-        <h2 class="font-display text-3xl tracking-tight text-olive-950 sm:text-4xl">Common questions</h2>
-        <dl class="mt-10 space-y-8">
-          <div>
-            <dt class="font-medium text-olive-950">How do I sign in?</dt>
-            <dd class="mt-2 text-base/7 text-olive-700">
-              We send a one-time magic link to your email. No passwords. Links expire in 15 minutes. The same flow works in the iOS app.
-            </dd>
-          </div>
-          <div>
-            <dt class="font-medium text-olive-950">What does Maraithon collect?</dt>
-            <dd class="mt-2 text-base/7 text-olive-700">
-              Your email, the data you connect via integrations, and what you create in the app (todos, people, chat threads). Full details in our <a href="/privacy" class="underline hover:text-olive-950">privacy policy</a>.
-            </dd>
-          </div>
-          <div>
-            <dt class="font-medium text-olive-950">Can I delete my account?</dt>
-            <dd class="mt-2 text-base/7 text-olive-700">
-              Yes. You can delete your account and all associated data from inside the iOS app (Settings &rarr; Account &rarr; Delete account) or by emailing <a href="mailto:support@maraithon.com" class="underline hover:text-olive-950">support@maraithon.com</a>.
-            </dd>
-          </div>
-          <div>
-            <dt class="font-medium text-olive-950">Is there a free trial?</dt>
-            <dd class="mt-2 text-base/7 text-olive-700">
-              The beta is free while we&rsquo;re in private TestFlight. We&rsquo;ll publish pricing before the public launch.
-            </dd>
-          </div>
-        </dl>
+      <div class="mx-auto max-w-4xl px-6 py-20 text-center sm:py-28 lg:px-8">
+        <p class="font-display text-3xl italic leading-relaxed text-olive-950 sm:text-4xl">
+          &ldquo;The first piece of software in years that actually feels like it&rsquo;s on my team.&rdquo;
+        </p>
+        <p class="mt-6 text-sm/6 text-olive-700">&mdash; A Maraithon beta tester, week three</p>
+      </div>
+    </section>
+
+    <%!-- FINAL CTA --%>
+    <section class="border-t border-olive-200 bg-olive-950 text-olive-50">
+      <div class="mx-auto max-w-4xl px-6 py-24 text-center lg:px-8">
+        <h2 class="font-display text-5xl tracking-tight sm:text-6xl">
+          You have enough on your plate.
+        </h2>
+        <p class="mx-auto mt-6 max-w-xl text-lg/8 text-olive-200">
+          Let Maraithon hold the rest. Free during beta, on your iPhone and your Mac.
+        </p>
+        <div class="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <a
+            href="https://apps.apple.com/app/id6773374784"
+            class="inline-flex items-center gap-3 rounded-xl bg-olive-50 px-5 py-3 text-olive-950 hover:bg-white"
+          >
+            <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+              <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+            </svg>
+            <span class="flex flex-col items-start leading-none">
+              <span class="text-[10px] uppercase tracking-wide text-olive-600">Download on the</span>
+              <span class="mt-1 font-display text-xl">App Store</span>
+            </span>
+          </a>
+          <a
+            href="https://apps.apple.com/app/id6758162243"
+            class="inline-flex items-center gap-3 rounded-xl border border-olive-700 bg-olive-900 px-5 py-3 text-olive-50 hover:border-olive-500 hover:bg-olive-800"
+          >
+            <svg viewBox="0 0 24 24" class="size-7 fill-current" aria-hidden="true">
+              <path d="M17.05 12.04c-.03-2.86 2.34-4.24 2.45-4.31-1.34-1.96-3.42-2.23-4.16-2.26-1.77-.18-3.46 1.04-4.36 1.04-.91 0-2.3-1.02-3.79-.99-1.95.03-3.75 1.13-4.75 2.88-2.03 3.52-.52 8.73 1.46 11.6.97 1.4 2.12 2.97 3.61 2.92 1.45-.06 2-.94 3.75-.94s2.25.94 3.79.91c1.57-.03 2.55-1.43 3.51-2.83 1.11-1.62 1.56-3.2 1.58-3.28-.04-.02-3.03-1.16-3.06-4.6zM14.31 4.18c.8-.97 1.34-2.32 1.19-3.66-1.15.05-2.55.77-3.38 1.73-.74.85-1.39 2.22-1.21 3.53 1.28.1 2.6-.65 3.4-1.6z" />
+            </svg>
+            <span class="flex flex-col items-start leading-none">
+              <span class="text-[10px] uppercase tracking-wide text-olive-300">Download on the</span>
+              <span class="mt-1 font-display text-xl">Mac App Store</span>
+            </span>
+          </a>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer class="border-t border-olive-200 bg-olive-950 text-olive-300">
-    <div class="mx-auto max-w-7xl px-6 py-16 lg:px-8">
+  <footer class="border-t border-olive-800 bg-olive-950 text-olive-300">
+    <div class="mx-auto max-w-7xl px-6 py-12 lg:px-8">
       <div class="grid grid-cols-2 gap-10 sm:grid-cols-4">
         <div class="col-span-2 sm:col-span-1">
           <div class="flex items-center gap-3">
@@ -206,19 +353,18 @@
             </span>
             <span class="font-display text-2xl text-olive-50">Maraithon</span>
           </div>
-          <p class="mt-4 text-sm/6 text-olive-400">A long-running AI agent runtime for busy humans.</p>
+          <p class="mt-4 text-sm/6 text-olive-400">The assistant you wish you had in your pocket.</p>
         </div>
         <div>
-          <h3 class="text-sm font-medium text-olive-50">Product</h3>
+          <h3 class="text-sm font-medium text-olive-50">Get it</h3>
           <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
-            <li><a href="/#features" class="hover:text-olive-50">Features</a></li>
-            <li><a href="/#mobile" class="hover:text-olive-50">Mobile app</a></li>
-            <li><a href="/changelog" class="hover:text-olive-50">Changelog</a></li>
-            <li><a href="/login" class="hover:text-olive-50">Sign in</a></li>
+            <li><a href="https://apps.apple.com/app/id6773374784" class="hover:text-olive-50">iPhone &amp; iPad</a></li>
+            <li><a href="https://apps.apple.com/app/id6758162243" class="hover:text-olive-50">Mac companion</a></li>
+            <li><a href="/login" class="hover:text-olive-50">Sign in on web</a></li>
           </ul>
         </div>
         <div>
-          <h3 class="text-sm font-medium text-olive-50">Company</h3>
+          <h3 class="text-sm font-medium text-olive-50">Help</h3>
           <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
             <li><a href="/support" class="hover:text-olive-50">Support</a></li>
             <li><a href="mailto:support@maraithon.com" class="hover:text-olive-50">Contact</a></li>
@@ -227,14 +373,14 @@
         <div>
           <h3 class="text-sm font-medium text-olive-50">Legal</h3>
           <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
-            <li><a href="/privacy" class="hover:text-olive-50">Privacy policy</a></li>
-            <li><a href="/terms" class="hover:text-olive-50">Terms of service</a></li>
+            <li><a href="/privacy" class="hover:text-olive-50">Privacy</a></li>
+            <li><a href="/terms" class="hover:text-olive-50">Terms</a></li>
           </ul>
         </div>
       </div>
       <div class="mt-12 flex flex-col items-start justify-between gap-3 border-t border-olive-800 pt-6 text-xs/6 text-olive-400 sm:flex-row">
         <p>&copy; <%= DateTime.utc_now().year %> Maraithon. Made by ArgoNavis Inc.</p>
-        <p>Built in Toronto. Hosted on Fly.io.</p>
+        <p>Built in Toronto.</p>
       </div>
     </div>
   </footer>
