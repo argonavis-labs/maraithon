@@ -6,6 +6,22 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPANION_DIR="${ROOT_DIR}/apps/companion"
 MOBILE_DIR="${ROOT_DIR}/apps/mobile"
 
+validate_component() {
+  local component="${1:-all}"
+  shift || true
+  local allowed=("$@")
+
+  for value in "${allowed[@]}"; do
+    if [[ "${component}" == "${value}" ]]; then
+      return
+    fi
+  done
+
+  echo "Unknown component: ${component}" >&2
+  echo "Expected one of: ${allowed[*]}" >&2
+  exit 64
+}
+
 require_command() {
   local name="$1"
 
@@ -27,6 +43,18 @@ run_in() {
 selected_component() {
   local requested="${1:-all}"
   local component="$2"
+
+  case "${requested}" in
+    api)
+      requested="web"
+      ;;
+    ios)
+      requested="mobile"
+      ;;
+    mac)
+      requested="companion"
+      ;;
+  esac
 
   [[ "${requested}" == "all" || "${requested}" == "${component}" || "${requested}" == "native" && "${component}" != "web" ]]
 }

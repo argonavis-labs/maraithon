@@ -220,11 +220,6 @@ let entries: [IconEntry] = [
 print("Generating Maraithon app icon…")
 print("  target: \(appiconset.path)")
 
-// 1024 master — used by AppIcon.icon and as the 512@2x output.
-let master1024 = appiconset.appendingPathComponent("icon_1024.png")
-try renderPNG(pixelSize: 1024, to: master1024)
-print("  wrote icon_1024.png (1024x1024)")
-
 // Per-entry PNGs.
 for entry in entries {
     let url = appiconset.appendingPathComponent(entry.filename)

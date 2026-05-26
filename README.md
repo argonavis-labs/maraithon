@@ -161,6 +161,17 @@ make verify
 make deploy
 ```
 
+Each stack slice can also be built independently:
+
+```bash
+make build-web
+make build-api
+make build-static
+make build-assets
+make build-companion
+make build-mobile
+```
+
 See [`docs/monorepo.md`](docs/monorepo.md) for the verification loop, native
 build details, and production mobile simulator gate.
 

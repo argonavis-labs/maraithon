@@ -6,6 +6,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 component="${1:-all}"
 
+validate_component "${component}" all native companion mac mobile ios
+
 if selected_component "${component}" "companion"; then
   generate_xcode_project "${COMPANION_DIR}"
 fi

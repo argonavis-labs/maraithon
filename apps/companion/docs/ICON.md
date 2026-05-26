@@ -54,7 +54,9 @@ The asset catalog covers every standard macOS app-icon-set size:
 | 512     | 1x    | 512x512   |
 | 512     | 2x    | 1024x1024 |
 
-Plus a 1024 master at `AppIcon.appiconset/icon_1024.png`.
+The 512@2x slot is the 1024px asset used by macOS. Keep standalone
+1024px source masters outside `AppIcon.appiconset`; unassigned images
+inside the asset catalog create noisy `actool` warnings.
 
 Every size is rendered by re-running the same CoreGraphics drawing at
 the target canvas size — there is no bitmap downscaling — so the

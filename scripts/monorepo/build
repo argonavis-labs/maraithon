@@ -6,6 +6,19 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 component="${1:-all}"
 
+validate_component "${component}" all native web api companion mac mobile ios assets static
+
+case "${component}" in
+  assets)
+    "${ROOT_DIR}/scripts/monorepo/assets" all
+    exit
+    ;;
+  static)
+    "${ROOT_DIR}/scripts/monorepo/assets" web
+    exit
+    ;;
+esac
+
 if selected_component "${component}" "web"; then
   run_in "${ROOT_DIR}" env MIX_ENV="${MARAITHON_WEB_BUILD_ENV:-dev}" mix compile --warnings-as-errors
 fi

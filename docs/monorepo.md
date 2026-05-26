@@ -19,6 +19,12 @@ make generate                 # regenerate Xcode projects
 make build                    # build web, companion, and mobile
 make test                     # run web tests plus native local tests
 make verify                   # full local verification loop
+make build-web                # compile the Phoenix web/API runtime
+make build-api                # alias for the Phoenix API/runtime build
+make build-static             # digest and validate Phoenix/PWA static files
+make build-assets             # build web static and native asset catalogs
+make build-companion          # build only the macOS companion app
+make build-mobile             # build only the iOS app
 make verify-native            # native-only generation/build/test loop
 make verify-production-mobile # production simulator flow, requires local config
 make deploy                   # deploy the Phoenix/Fly production app
@@ -29,6 +35,8 @@ The verification scripts use language-native tooling:
 - Phoenix: `mix precommit`
 - macOS companion: `swift build`, `swift test`, and `xcodebuild`
 - iOS mobile: `xcodegen` and `xcodebuild` against an available simulator
+- Assets: `mix phx.digest` for Phoenix/PWA static files and `actool` for
+  native asset catalogs
 
 Set `IOS_DESTINATION='platform=iOS Simulator,id=<UDID>'` when you want a
 specific simulator. Otherwise the scripts pick an available iPhone simulator.

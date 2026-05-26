@@ -6,6 +6,23 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 component="${1:-all}"
 
+validate_component "${component}" all native web api companion mac mobile ios assets static
+
+case "${component}" in
+  assets)
+    "${ROOT_DIR}/scripts/monorepo/assets" all
+    echo
+    echo "Monorepo verification passed for assets."
+    exit
+    ;;
+  static)
+    "${ROOT_DIR}/scripts/monorepo/assets" web
+    echo
+    echo "Monorepo verification passed for static assets."
+    exit
+    ;;
+esac
+
 if selected_component "${component}" "web"; then
   run_in "${ROOT_DIR}" env MIX_ENV=test mix precommit
 fi

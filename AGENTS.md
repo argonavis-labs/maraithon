@@ -9,6 +9,9 @@ This is a web application written using the Phoenix web framework.
 - Use the root `Makefile` for cross-stack workflows:
   `make generate`, `make build`, `make test`, `make verify`, and
   `make deploy`.
+- Use independent targets when you only need one slice:
+  `make build-web`, `make build-api`, `make build-static`,
+  `make build-assets`, `make build-companion`, and `make build-mobile`.
 - Native apps use XcodeGen. Treat each `project.yml` as the source of truth
   and do not commit generated `.xcodeproj` files.
 

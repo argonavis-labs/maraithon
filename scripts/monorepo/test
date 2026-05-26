@@ -6,6 +6,8 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 component="${1:-all}"
 
+validate_component "${component}" all native web api companion mac mobile ios
+
 if selected_component "${component}" "web"; then
   run_in "${ROOT_DIR}" env MIX_ENV=test mix test
 fi

@@ -44,6 +44,26 @@ run = "make generate"
 description = "Build web, companion, and mobile"
 run = "make build"
 
+[tasks."build:web"]
+description = "Build the Phoenix web/API runtime"
+run = "make build-web"
+
+[tasks."build:api"]
+description = "Build the Phoenix API/runtime"
+run = "make build-api"
+
+[tasks."build:assets"]
+description = "Build static and native assets"
+run = "make build-assets"
+
+[tasks."build:companion"]
+description = "Build the macOS companion app"
+run = "make build-companion"
+
+[tasks."build:mobile"]
+description = "Build the iOS app"
+run = "make build-mobile"
+
 [tasks.verify]
 description = "Run the monorepo verification loop"
 run = "make verify"
