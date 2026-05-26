@@ -35,20 +35,21 @@ defmodule Maraithon.Accounts do
   def get_or_create_user_by_email(email) when is_binary(email) do
     normalized = normalize_email(email)
 
-    case normalized do
-      "" ->
+    cond do
+      not valid_email?(normalized) ->
         {:error, :invalid_email}
 
-      value ->
-        case Repo.get(User, value) do
+      true ->
+        case Repo.get(User, normalized) do
           nil ->
             %User{}
             |> User.changeset(%{
-              id: value,
-              email: value,
-              is_admin: admin_email?(value)
+              id: normalized,
+              email: normalized,
+              is_admin: admin_email?(normalized)
             })
             |> Repo.insert()
+            |> normalize_user_changeset_error()
 
           user ->
             maybe_promote_admin(user)
@@ -222,6 +223,22 @@ defmodule Maraithon.Accounts do
       {:ok, user}
     end
   end
+
+  defp valid_email?(email) when is_binary(email) do
+    email != "" and byte_size(email) <= 320 and String.match?(email, ~r/^[^\s]+@[^\s]+$/)
+  end
+
+  defp valid_email?(_email), do: false
+
+  defp normalize_user_changeset_error({:error, %Ecto.Changeset{errors: errors}}) do
+    if Keyword.has_key?(errors, :email) do
+      {:error, :invalid_email}
+    else
+      {:error, :invalid_user}
+    end
+  end
+
+  defp normalize_user_changeset_error(result), do: result
 
   defp maybe_confirm_user(%User{confirmed_at: nil} = user) do
     user

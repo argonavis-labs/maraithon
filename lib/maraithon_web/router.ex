@@ -27,6 +27,10 @@ defmodule MaraithonWeb.Router do
     plug MaraithonWeb.Plugs.RequireApiToken
   end
 
+  pipeline :mobile_api_auth do
+    plug MaraithonWeb.Plugs.RequireMobileSession
+  end
+
   pipeline :companion_auth do
     plug MaraithonWeb.Plugs.CompanionDeviceAuth
   end
@@ -113,6 +117,27 @@ defmodule MaraithonWeb.Router do
   end
 
   # API v1
+  scope "/api/mobile", MaraithonWeb do
+    pipe_through :api
+
+    post "/auth/magic-link", MobileAuthController, :create_magic_link
+    get "/auth/magic/:token", MobileAuthController, :consume_magic_link
+    post "/auth/magic/:token", MobileAuthController, :consume_magic_link
+  end
+
+  scope "/api/mobile", MaraithonWeb do
+    pipe_through [:api, :mobile_api_auth]
+
+    get "/me", MobileAuthController, :me
+    delete "/session", MobileAuthController, :delete
+    get "/todos", MobileTodoController, :index
+    post "/todos", MobileTodoController, :create
+    patch "/todos/:id", MobileTodoController, :update
+    get "/people", MobilePeopleController, :index
+    post "/people", MobilePeopleController, :create
+    patch "/people/:id", MobilePeopleController, :update
+  end
+
   scope "/api/v1", MaraithonWeb do
     pipe_through [:api, :api_auth]
 
