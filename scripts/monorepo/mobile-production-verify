@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+config_file="${MARAITHON_VERIFY_CONFIG:-${MOBILE_DIR}/Config/production-verification.env}"
+
+if [[ ! -f "${config_file}" ]]; then
+  echo "Missing mobile production verification config: ${config_file}" >&2
+  echo "Copy apps/mobile/Config/production-verification.env.example to production-verification.env and fill local values." >&2
+  exit 1
+fi
+
+MARAITHON_VERIFY_CONFIG="${config_file}" run_in "${MOBILE_DIR}" ./scripts/verify-production-simulator.sh

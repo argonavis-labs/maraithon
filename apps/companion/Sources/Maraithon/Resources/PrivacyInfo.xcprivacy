@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Privacy manifest — not currently enforced for Developer ID
+      notarization (as of 2026-05), but shipped because it'll be required
+      the moment we ship as a Mac App Store build or are consumed as an
+      SDK. The manifest is "what we touch and why."
+
+      We do not track users across apps, do not collect data, do not link
+      identifiers to identity, and never embed third-party tracking SDKs.
+    -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array/>
+
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+        <!--
+          UserDefaults — store cursor + deviceId + per-source paused
+          state. Reason CA92.1: "Access info only available to the same
+          app (no third-party transmission)."
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!--
+          File timestamps — chat.db schema-detect via SQLite. Reason
+          C617.1: "Access timestamps for files inside the user's home."
+        -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+        <!--
+          System boot time — none currently used; placeholder removed if
+          we never call ProcessInfo.processInfo.systemUptime.
+        -->
+    </array>
+</dict>
+</plist>

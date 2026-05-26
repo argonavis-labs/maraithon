@@ -1,0 +1,62 @@
+import SwiftUI
+import AppKit
+
+/// Focused detail-pane content shown when a source is in
+/// `.needsAttention(...)`. Replaces stats / controls / activity entirely
+/// — per AGENTS.md rule 8 and the maraithon-mac convention that blocked
+/// panes should surface only the unblocking action.
+///
+/// The primary button deep-links into the right System Settings Privacy
+/// pane via `x-apple.systempreferences:`. The secondary button re-runs
+/// the source's `syncNow`, which re-evaluates authorization and flips
+/// the state to `.connected` / `.syncing` if the user has granted.
+struct SourceUnblockView: View {
+    let sourceID: String
+    let displayName: String
+    let hint: SourcePermissionHint
+
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(hint.title, systemImage: "exclamationmark.triangle.fill")
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(StatusTone.attention.color)
+        } description: {
+            VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
+                Text(hint.body)
+                if let note = hint.relaunchNote {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 480)
+        } actions: {
+            VStack(spacing: Tokens.Spacing.small) {
+                if let url = hint.settingsURL {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                        env.eventLog.info(
+                            "\(sourceID).open_settings",
+                            source: .ui
+                        )
+                    } label: {
+                        Label("Open System Settings", systemImage: "gear")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+                Button {
+                    env.sources.syncNow(id: sourceID)
+                } label: {
+                    Label("Check again", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut("r", modifiers: .command)
+            }
+        }
+        .navigationTitle(displayName)
+    }
+}

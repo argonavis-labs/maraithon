@@ -101,7 +101,22 @@ Thumbs.db
 
 *.log
 /log/
-logs/
+/logs/
+
+# =============================================================================
+# Monorepo Native Clients
+# =============================================================================
+
+/apps/**/.build/
+/apps/**/.swiftpm/
+/apps/**/build/
+/apps/**/*.xcodeproj/
+/apps/**/DerivedData/
+/apps/**/xcuserdata/
+/apps/**/*.xcuserstate
+/apps/**/*.dSYM/
+/apps/**/*.ipa
+/apps/mobile/Config/production-verification.env
 
 # =============================================================================
 # Dialyzer

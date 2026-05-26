@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Maraithon</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.maraithon.companion.deeplink</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>maraithon</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>MaraithonBaseURL</key>
+	<string>https://maraithon.com</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Maraithon mirrors your Mac calendar so the assistant can answer scheduling questions and prep you for meetings. Calendar data stays in your account and is never shared.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string></string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Maraithon mirrors your Mac reminders so the assistant can include them when you ask about your to-dos. Reminders stay in your account and are never shared.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Maraithon transcribes your Voice Memos locally on this Mac so you can search them by content. Audio never leaves your device for transcription.</string>
+	<key>SUFeedURL</key>
+	<string>https://maraithon.com/companion/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>$(SUPublicEDKey)</string>
+</dict>
+</plist>

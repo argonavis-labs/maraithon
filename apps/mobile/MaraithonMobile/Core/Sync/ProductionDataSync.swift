@@ -1,0 +1,205 @@
+import Foundation
+import SwiftData
+
+@MainActor
+enum ProductionDataSync {
+    static func refreshAll(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+        try await refreshPeople(sessionStore: sessionStore, modelContext: modelContext)
+        try await refreshTodos(sessionStore: sessionStore, modelContext: modelContext)
+    }
+
+    static func refreshTodos(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+        let remoteTodos = try await MobileAPIClient().listTodos(sessionToken: sessionToken)
+        let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
+        let localByID = Dictionary(uniqueKeysWithValues: localTodos.map { ($0.id, $0) })
+
+        for remoteTodo in remoteTodos {
+            guard let id = UUID(uuidString: remoteTodo.id) else { continue }
+            if let todo = localByID[id] {
+                apply(remoteTodo, to: todo)
+            } else {
+                modelContext.insert(todo(from: remoteTodo, id: id))
+            }
+        }
+
+        try modelContext.save()
+    }
+
+    static func refreshPeople(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+        let remotePeople = try await MobileAPIClient().listPeople(sessionToken: sessionToken)
+        let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
+        let localByID = Dictionary(uniqueKeysWithValues: localContacts.map { ($0.id, $0) })
+
+        for remotePerson in remotePeople {
+            guard let id = UUID(uuidString: remotePerson.id) else { continue }
+            if let contact = localByID[id] {
+                apply(remotePerson, to: contact)
+            } else {
+                modelContext.insert(contact(from: remotePerson, id: id))
+            }
+        }
+
+        try modelContext.save()
+    }
+
+    static func apply(_ remoteTodo: MobileAPIClient.RemoteTodo, to todo: TodoItem) {
+        todo.title = remoteTodo.title
+        todo.notes = remoteTodo.notes ?? remoteTodo.summary ?? ""
+        todo.priority = priority(from: remoteTodo.priority)
+        todo.dueDate = remoteTodo.dueAt
+        todo.isCompleted = remoteTodo.status == "done"
+        todo.completedAt = remoteTodo.closedAt
+    }
+
+    static func apply(_ remotePerson: MobileAPIClient.RemotePerson, to contact: CRMContact) {
+        contact.name = remotePerson.displayName
+        contact.company = company(from: remotePerson)
+        contact.email = firstContactValue(remotePerson.contactDetails, key: "emails") ?? ""
+        contact.phone = firstContactValue(remotePerson.contactDetails, key: "phones") ?? ""
+        contact.status = status(from: remotePerson)
+        contact.dealStage = dealStage(from: remotePerson)
+        contact.dealValue = remotePerson.metadata["deal_value"]?.decimal ?? 0
+        contact.lastContactedAt = remotePerson.lastInteractionAt
+        contact.notes = remotePerson.notes ?? ""
+    }
+
+    static func todoPayload(
+        title: String,
+        notes: String,
+        priority: TodoPriority,
+        dueDate: Date?,
+        isCompleted: Bool
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "source": "mobile",
+            "kind": "general",
+            "title": title,
+            "summary": notes.isEmpty ? title : notes,
+            "next_action": title,
+            "notes": notes,
+            "priority": priorityValue(from: priority),
+            "status": isCompleted ? "done" : "open"
+        ]
+
+        if let dueDate {
+            payload["due_at"] = isoString(for: dueDate)
+        }
+
+        return payload
+    }
+
+    static func personPayload(
+        name: String,
+        company: String,
+        email: String,
+        phone: String,
+        status: ContactStatus,
+        dealStage: DealStage,
+        dealValue: Decimal,
+        notes: String,
+        lastContactedAt: Date? = nil
+    ) -> [String: Any] {
+        let relationship = company.trimmingCharacters(in: .whitespacesAndNewlines)
+        var payload: [String: Any] = [
+            "display_name": name,
+            "relationship": relationship.isEmpty ? "Personal" : relationship,
+            "email": email,
+            "notes": notes,
+            "metadata": [
+                "mobile_status": status.rawValue,
+                "deal_stage": dealStage.rawValue,
+                "deal_value": NSDecimalNumber(decimal: dealValue).stringValue
+            ]
+        ]
+
+        if !phone.isEmpty {
+            payload["phone"] = phone
+        }
+
+        if let lastContactedAt {
+            payload["last_interaction_at"] = isoString(for: lastContactedAt)
+        }
+
+        return payload
+    }
+
+    static func todo(from remoteTodo: MobileAPIClient.RemoteTodo, id: UUID) -> TodoItem {
+        TodoItem(
+            id: id,
+            title: remoteTodo.title,
+            notes: remoteTodo.notes ?? remoteTodo.summary ?? "",
+            priority: priority(from: remoteTodo.priority),
+            dueDate: remoteTodo.dueAt,
+            isCompleted: remoteTodo.status == "done",
+            completedAt: remoteTodo.closedAt
+        )
+    }
+
+    static func contact(from remotePerson: MobileAPIClient.RemotePerson, id: UUID) -> CRMContact {
+        CRMContact(
+            id: id,
+            name: remotePerson.displayName,
+            company: company(from: remotePerson),
+            email: firstContactValue(remotePerson.contactDetails, key: "emails") ?? "",
+            phone: firstContactValue(remotePerson.contactDetails, key: "phones") ?? "",
+            status: status(from: remotePerson),
+            dealValue: remotePerson.metadata["deal_value"]?.decimal ?? 0,
+            dealStage: dealStage(from: remotePerson),
+            lastContactedAt: remotePerson.lastInteractionAt,
+            notes: remotePerson.notes ?? ""
+        )
+    }
+
+    private static func priority(from value: Int?) -> TodoPriority {
+        switch value ?? 50 {
+        case 75...100: .high
+        case 35..<75: .medium
+        default: .low
+        }
+    }
+
+    private static func priorityValue(from priority: TodoPriority) -> Int {
+        switch priority {
+        case .high: 90
+        case .medium: 55
+        case .low: 20
+        }
+    }
+
+    private static func status(from remotePerson: MobileAPIClient.RemotePerson) -> ContactStatus {
+        if let mobileStatus = remotePerson.metadata["mobile_status"]?.string,
+           let status = ContactStatus(rawValue: mobileStatus) {
+            return status
+        }
+
+        switch remotePerson.status {
+        case "archived", "merged":
+            return .closed
+        default:
+            return .active
+        }
+    }
+
+    private static func dealStage(from remotePerson: MobileAPIClient.RemotePerson) -> DealStage {
+        if let value = remotePerson.metadata["deal_stage"]?.string,
+           let stage = DealStage(rawValue: value) {
+            return stage
+        }
+        return .prospect
+    }
+
+    private static func company(from remotePerson: MobileAPIClient.RemotePerson) -> String {
+        let relationship = remotePerson.relationship?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return relationship?.isEmpty == false ? relationship! : "Maraithon"
+    }
+
+    private static func firstContactValue(_ values: [String: [String]], key: String) -> String? {
+        values[key]?.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private static func isoString(for date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+}

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+component="${1:-all}"
+
+if selected_component "${component}" "web"; then
+  run_in "${ROOT_DIR}" env MIX_ENV=test mix precommit
+fi
+
+"${ROOT_DIR}/scripts/monorepo/generate" "${component}"
+"${ROOT_DIR}/scripts/monorepo/build" "${component}"
+"${ROOT_DIR}/scripts/monorepo/test" "${component}"
+
+echo
+echo "Monorepo verification passed for ${component}."

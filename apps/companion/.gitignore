@@ -1,0 +1,44 @@
+# SwiftPM
+.build/
+.swiftpm/
+Packages/
+*.xcodeproj/
+!Package.swift
+
+# Xcode
+DerivedData/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.xcuserstate
+*.ipa
+*.dSYM/
+
+# macOS
+.DS_Store
+*.swp
+
+# Signing / secrets
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+ExportOptions.plist
+# …but DO commit the template (it has a __DEVELOPMENT_TEAM__
+# placeholder that scripts/release.sh substitutes at build time).
+!scripts/ExportOptions.plist
+secrets.local.json
+Config.local.xcconfig
+
+# Logs (we ship a log viewer; don't commit captured logs)
+*.log
+build/dd/

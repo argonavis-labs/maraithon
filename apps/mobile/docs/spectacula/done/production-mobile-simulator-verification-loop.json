@@ -1,0 +1,59 @@
+{
+  "spec_id": "production-mobile-simulator-verification-loop",
+  "slug": "production-mobile-simulator-verification-loop",
+  "title": "Production Mobile Simulator Verification Loop Specification",
+  "stage": "done",
+  "spec_path": "../specs/production-mobile-simulator-verification-loop.md",
+  "created_at": "2026-05-26T00:36:00Z",
+  "approved_at": "2026-05-26T00:36:00Z",
+  "started_at": "2026-05-26T00:36:00Z",
+  "completed_at": "2026-05-26T01:00:50Z",
+  "updated_at": "2026-05-26T01:00:50Z",
+  "summary": "Implemented and passed a repeatable production simulator verification loop for magic sign-in, Todo write/update, and CRM person write/update.",
+  "next_action": "Ready for production review.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Production simulator verification passed.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "2. Implementation Contract",
+      "3. Definition of Done"
+    ],
+    "artifacts": [
+      "scripts/verify-production-simulator.sh",
+      "MaraithonMobileUITests/ProductionIntegrationUITests.swift",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/router.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/controllers/mobile_auth_controller.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/controllers/mobile_todo_controller.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/controllers/mobile_people_controller.ex"
+    ],
+    "notes": "Production release v521 includes /api/mobile routes. Successful simulator run id: 20260526005817. Signup smoke email: mobile-signup-20260526010141@runner.now."
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "skipped",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "production_simulator": "passed",
+    "spec_review": "passed",
+    "notes": "Ran plutil, jq manifest validation, bash -n, iOS unit tests, backend mobile/session controller tests, direct production magic-token consume, production signup smoke, and scripts/verify-production-simulator.sh."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T00:36:00Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "User requested a verification loop that signs in/signs up against production and tests Simulator writes."
+    },
+    {
+      "at": "2026-05-26T01:00:50Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Production simulator loop passed for kent@runner.now and verified Todo/person writes via live API."
+    }
+  ]
+}

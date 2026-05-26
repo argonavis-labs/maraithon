@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Export options for `xcodebuild -exportArchive`.
+
+    `method=developer-id` tells Xcode to export a Developer-ID-signed
+    .app suitable for direct distribution (outside the App Store).
+    `signingStyle=automatic` lets Xcode select the matching cert from
+    the keychain. `teamID` is read from $DEVELOPMENT_TEAM by
+    `scripts/release.sh` via `plutil` substitution at build time —
+    the placeholder below is the literal env-var name so the script
+    can `sed` it. If you invoke `xcodebuild` directly, replace
+    `__DEVELOPMENT_TEAM__` with your 10-character Apple team ID first.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>developer-id</string>
+    <key>destination</key>
+    <string>export</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>teamID</key>
+    <string>__DEVELOPMENT_TEAM__</string>
+    <key>stripSwiftSymbols</key>
+    <true/>
+</dict>
+</plist>

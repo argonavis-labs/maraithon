@@ -22,8 +22,8 @@ description = "Start Phoenix server"
 run = "mix phx.server"
 
 [tasks.test]
-description = "Run tests"
-run = "mix test"
+description = "Run cross-stack tests"
+run = "make test"
 
 [tasks.format]
 description = "Format code"
@@ -35,3 +35,19 @@ run = """
 mix format --check-formatted
 mix compile --warnings-as-errors
 """
+
+[tasks.generate]
+description = "Regenerate native Xcode projects"
+run = "make generate"
+
+[tasks.build]
+description = "Build web, companion, and mobile"
+run = "make build"
+
+[tasks.verify]
+description = "Run the monorepo verification loop"
+run = "make verify"
+
+[tasks.deploy]
+description = "Deploy the Phoenix production app"
+run = "make deploy"

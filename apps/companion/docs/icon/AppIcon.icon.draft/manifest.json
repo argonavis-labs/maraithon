@@ -1,0 +1,10 @@
+{
+  "layers" : [
+    {
+      "image" : "icon_1024.png",
+      "name" : "Maraithon"
+    }
+  ],
+  "platform" : "macOS",
+  "schemaVersion" : 1
+}

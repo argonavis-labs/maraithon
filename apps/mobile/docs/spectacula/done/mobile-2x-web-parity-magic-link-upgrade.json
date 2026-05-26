@@ -1,0 +1,71 @@
+{
+  "spec_id": "mobile-2x-web-parity-magic-link-upgrade",
+  "slug": "mobile-2x-web-parity-magic-link-upgrade",
+  "title": "Mobile 2x Web-Parity Magic Link Upgrade Specification",
+  "stage": "done",
+  "spec_path": "../specs/mobile-2x-web-parity-magic-link-upgrade.md",
+  "created_at": "2026-05-26T00:12:01Z",
+  "approved_at": "2026-05-26T00:12:01Z",
+  "started_at": "2026-05-26T00:12:01Z",
+  "completed_at": "2026-05-26T00:20:01Z",
+  "updated_at": "2026-05-26T00:20:01Z",
+  "summary": "Implemented web-parity magic-link auth, unified sign-in/sign-up, custom-scheme handling, a Today cockpit, and focused tests.",
+  "next_action": "Ready for product review or backend wiring.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Completed implementation and verification.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "3. Authentication Contract",
+      "4. Product Upgrade Contract",
+      "7. Test Plan and Validation Matrix"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-2x-web-parity-magic-link-upgrade.md",
+      "/Users/kent/bliss/maraithon/lib/maraithon/accounts.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/controllers/session_controller.ex",
+      "/Users/kent/bliss/maraithon/lib/maraithon_web/controllers/home_html/index.html.heex"
+    ],
+    "notes": "Requested ~/bliss/maraithon-app is absent; /Users/kent/bliss/maraithon is the matching web repo and contains the magic-link flow. Verification passed with xcodegen generate, iOS Simulator build, iOS Simulator tests, plutil lint, and jq validation."
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "skipped",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "Ran xcodegen generate; xcodebuild build and test against iPhone 17 simulator 073C8C3D-4219-4C3A-A674-CDBBD0399A19; plutil -lint MaraithonMobile/Info.plist; jq empty on the manifest."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T00:12:01Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial 2x upgrade spec saved."
+    },
+    {
+      "at": "2026-05-26T00:12:01Z",
+      "event": "spec_approved",
+      "from_stage": "specs",
+      "to_stage": "ready",
+      "note": "User asked for spec and implementation and delegated decisions."
+    },
+    {
+      "at": "2026-05-26T00:12:01Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "Implementation started from the generated spec."
+    },
+    {
+      "at": "2026-05-26T00:20:01Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Auth parity, Today cockpit, tests, and verification completed."
+    }
+  ]
+}

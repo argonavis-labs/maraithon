@@ -1,0 +1,65 @@
+{
+  "spec_id": "telegram-style-chat-experience",
+  "slug": "telegram-style-chat-experience",
+  "title": "Telegram-Style Chat Experience Specification",
+  "stage": "done",
+  "spec_path": "../specs/telegram-style-chat-experience.md",
+  "created_at": "2026-05-26T02:02:22Z",
+  "approved_at": "2026-05-26T02:02:22Z",
+  "started_at": "2026-05-26T02:02:22Z",
+  "completed_at": "2026-05-26T02:06:49Z",
+  "updated_at": "2026-05-26T02:06:49Z",
+  "summary": "Telegram-style Chat upgrade completed: immediate new-chat navigation, inbox-style thread rows, grouped bubbles, day separators, copy/delete context actions, prompt menu, and bottom safe-area composer.",
+  "next_action": "Review the Chat tab interactively in the simulator and tune visual details if desired.",
+  "blockers": [],
+  "resume_context": {
+    "last_completed_step": "Implemented the chat experience, regenerated the project, built the app, ran unit tests, installed, and launched the current build on the configured simulator.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "3. UX Contract",
+      "4. Technical Design",
+      "6. Validation Matrix",
+      "7. Definition of Done"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/telegram-style-chat-experience.md",
+      "MaraithonMobile/Features/Chat",
+      "MaraithonMobile/Core/Utilities/Formatters.swift",
+      "MaraithonMobileTests/ChatMessageTimelineTests.swift"
+    ],
+    "notes": "Scope remained local/deterministic; no backend realtime, delivery receipts, media upload, or push notification work was added."
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "skipped",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "notes": "No dedicated Swift linter is configured. xcodegen generate passed. xcodebuild build passed on the configured iOS simulator. Focused ChatMessageTimelineTests passed. Full MaraithonMobileTests target passed. Current app build was installed and launched on the configured simulator."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T02:02:22Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial Telegram-style chat spec saved."
+    },
+    {
+      "at": "2026-05-26T02:02:22Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "User requested implementation and delegated product decisions."
+    },
+    {
+      "at": "2026-05-26T02:06:49Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Implemented Telegram-style chat UX and completed verification."
+    }
+  ]
+}

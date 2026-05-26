@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+component="${1:-all}"
+
+if selected_component "${component}" "web"; then
+  run_in "${ROOT_DIR}" env MIX_ENV="${MARAITHON_WEB_BUILD_ENV:-dev}" mix compile --warnings-as-errors
+fi
+
+if selected_component "${component}" "companion"; then
+  generate_xcode_project "${COMPANION_DIR}"
+  run_in "${COMPANION_DIR}" swift build
+  run_in "${COMPANION_DIR}" xcodebuild \
+    -project Maraithon.xcodeproj \
+    -scheme Maraithon \
+    -configuration Debug \
+    -destination "platform=macOS" \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+fi
+
+if selected_component "${component}" "mobile"; then
+  destination="$(ios_destination)"
+  generate_xcode_project "${MOBILE_DIR}"
+  run_in "${MOBILE_DIR}" xcodebuild \
+    -project MaraithonMobile.xcodeproj \
+    -scheme MaraithonMobile \
+    -configuration Debug \
+    -destination "${destination}" \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+fi
+
+echo
+echo "Build completed for ${component}."

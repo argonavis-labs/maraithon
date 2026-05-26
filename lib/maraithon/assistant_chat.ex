@@ -79,7 +79,8 @@ defmodule Maraithon.AssistantChat do
              user_id: user_id,
              surface: "mobile"
            ),
-         %Conversation{} = conversation <- Repo.get(Conversation, prepared_action.conversation_id),
+         %Conversation{} = conversation <-
+           Repo.get(Conversation, prepared_action.conversation_id),
          {:ok, client_message_id} <- optional_client_message_id(attrs) do
       if TelegramAssistant.prepared_action_expired?(prepared_action) do
         {:ok, expired_action} = TelegramAssistant.expire_prepared_action(prepared_action)

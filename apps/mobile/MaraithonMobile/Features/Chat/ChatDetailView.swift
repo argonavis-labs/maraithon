@@ -1,0 +1,414 @@
+import SwiftData
+import SwiftUI
+import UIKit
+
+struct ChatDetailView: View {
+    @Environment(SessionStore.self) private var sessionStore
+    @Environment(\.modelContext) private var modelContext
+    @Bindable var thread: ChatThread
+    var focusComposerOnAppear = false
+    var initialPrompt: String?
+    var autoSendInitialPrompt = false
+    var onInitialPromptConsumed: () -> Void = {}
+    @State private var draft = ""
+    @State private var errorMessage: String?
+    @State private var lastFailedMessage: String?
+    @State private var isSending = false
+    @State private var didConsumeInitialPrompt = false
+    @State private var sendTask: Task<Void, Never>?
+    @FocusState private var isComposerFocused: Bool
+
+    private let chatSyncService = ChatSyncService()
+    private let quickPrompts = ChiefOfStaffPrompt.chat
+    private let bottomAnchorID = "chat-bottom-anchor"
+
+    private var timelineRows: [ChatTimelineRow] {
+        ChatMessageTimeline.rows(for: thread.messages)
+    }
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if timelineRows.isEmpty {
+                            emptyConversation
+                                .padding(.top, 80)
+                        } else {
+                            ForEach(timelineRows) { row in
+                                if row.layout.showsDateHeader {
+                                    ChatDateHeader(date: row.message.sentAt)
+                                        .padding(.top, 8)
+                                        .padding(.bottom, 8)
+                                }
+
+                                MessageBubble(
+                                    message: row.message,
+                                    startsGroup: row.layout.startsGroup,
+                                    endsGroup: row.layout.endsGroup,
+                                    actionHandler: decide
+                                )
+                                .id(row.id)
+                                .padding(.top, row.layout.startsGroup ? 8 : 2)
+                                .contextMenu {
+                                    Button {
+                                        copy(row.message)
+                                    } label: {
+                                        Label("Copy", systemImage: "doc.on.doc")
+                                    }
+
+                                    Button(role: .destructive) {
+                                        delete(row.message)
+                                    } label: {
+                                        Label("Delete Message", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+
+                        if thread.pendingRunID != nil {
+                            assistantThinkingRow
+                                .padding(.top, 8)
+                        }
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomAnchorID)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
+                }
+                .scrollDismissesKeyboard(.interactively)
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: thread.messages.count) { _, _ in
+                    scrollToBottom(proxy)
+                }
+                .onAppear {
+                    scrollToBottom(proxy, animated: false)
+                    if focusComposerOnAppear || thread.messages.isEmpty {
+                        isComposerFocused = true
+                    }
+                    consumeInitialPromptIfNeeded()
+                }
+            }
+        }
+        .task {
+            await refreshAndPollIfNeeded()
+        }
+        .onDisappear {
+            sendTask?.cancel()
+        }
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                if shouldShowQuickPrompts {
+                    quickPromptBar
+                }
+                if let errorMessage {
+                    errorBanner(errorMessage)
+                }
+                composer
+            }
+            .background(.bar)
+        }
+        .navigationTitle(thread.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button {
+                        thread.title = "Follow-up planning"
+                        save()
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .accessibilityLabel("Thread Options")
+            }
+        }
+    }
+
+    private var composer: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            Menu {
+                Section("Prompts") {
+                    ForEach(quickPrompts) { prompt in
+                        Button {
+                            send(prompt.message)
+                        } label: {
+                            Label(prompt.title, systemImage: prompt.systemImage)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.headline)
+                    .frame(width: 36, height: 36)
+                    .appInteractiveGlassCircle()
+            }
+            .accessibilityLabel("Message Options")
+
+            TextField("Message", text: $draft, axis: .vertical)
+                .focused($isComposerFocused)
+                .lineLimit(1...6)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .submitLabel(.send)
+                .onSubmit(send)
+                .disabled(isComposerDisabled)
+                .accessibilityIdentifier("chat-message-field")
+
+            Button(action: send) {
+                Image(systemName: "arrow.up")
+                    .font(.headline.weight(.semibold))
+                    .frame(width: 36, height: 36)
+            }
+            .appProminentGlassCircleActionStyle()
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isComposerDisabled)
+            .accessibilityLabel("Send Message")
+            .accessibilityIdentifier("chat-send-button")
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+    }
+
+    private var shouldShowQuickPrompts: Bool {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isComposerDisabled
+    }
+
+    private var isComposerDisabled: Bool {
+        isSending || thread.pendingRunID != nil || sessionStore.user?.sessionToken == nil
+    }
+
+    private var quickPromptBar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(quickPrompts) { prompt in
+                    Button {
+                        send(prompt.message)
+                    } label: {
+                        Label(prompt.title, systemImage: prompt.systemImage)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                    }
+                    .appGlassActionStyle()
+                    .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .scrollIndicators(.hidden)
+        .padding(.top, 8)
+    }
+
+    private var emptyConversation: some View {
+        ContentUnavailableView(
+            "Ask Maraithon",
+            systemImage: "bubble.left.and.bubble.right",
+            description: Text("Plan the day, draft a follow-up, update a relationship, or capture a todo.")
+        )
+    }
+
+    private var assistantThinkingRow: some View {
+        HStack(alignment: .bottom, spacing: 7) {
+            ChatAvatar(title: "Maraithon", systemImage: "sparkles", size: 28, tint: .accentColor)
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Maraithon is thinking")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .accessibilityIdentifier("chat-assistant-pending")
+
+            Spacer(minLength: 56)
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.red)
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+
+            Button("Retry") {
+                retryAfterError()
+            }
+            .font(.footnote.weight(.semibold))
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+
+    private func send() {
+        send(draft)
+    }
+
+    private func send(_ text: String) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+
+        if text == draft {
+            draft = ""
+        }
+
+        errorMessage = nil
+        lastFailedMessage = nil
+        isComposerFocused = true
+        sendTask?.cancel()
+        sendTask = Task {
+            isSending = true
+            defer { isSending = false }
+
+            do {
+                try await chatSyncService.send(
+                    body,
+                    in: thread,
+                    modelContext: modelContext,
+                    sessionStore: sessionStore
+                )
+                try await chatSyncService.pollPendingRun(
+                    in: thread,
+                    modelContext: modelContext,
+                    sessionStore: sessionStore
+                )
+            } catch is CancellationError {
+            } catch {
+                lastFailedMessage = body
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func decide(_ action: ChatMessageAction) {
+        guard let decision = action.decision else { return }
+
+        errorMessage = nil
+        sendTask?.cancel()
+        sendTask = Task {
+            do {
+                try await chatSyncService.decidePreparedAction(
+                    action.actionID,
+                    decision: decision,
+                    in: thread,
+                    modelContext: modelContext,
+                    sessionStore: sessionStore
+                )
+            } catch is CancellationError {
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func refreshAndPollIfNeeded() async {
+        do {
+            try await chatSyncService.refreshThread(
+                thread,
+                modelContext: modelContext,
+                sessionStore: sessionStore
+            )
+            try await chatSyncService.pollPendingRun(
+                in: thread,
+                modelContext: modelContext,
+                sessionStore: sessionStore
+            )
+            errorMessage = nil
+            lastFailedMessage = nil
+        } catch is CancellationError {
+        } catch ChatSyncError.missingSession {
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func delete(_ message: ChatMessage) {
+        thread.messages.removeAll { $0.id == message.id }
+        modelContext.delete(message)
+        thread.updatedAt = Date()
+        save()
+    }
+
+    private func save() {
+        try? modelContext.save()
+    }
+
+    private func copy(_ message: ChatMessage) {
+        UIPasteboard.general.string = message.body
+    }
+
+    private func consumeInitialPromptIfNeeded() {
+        guard !didConsumeInitialPrompt,
+              let initialPrompt,
+              thread.messages.isEmpty else {
+            return
+        }
+
+        didConsumeInitialPrompt = true
+        onInitialPromptConsumed()
+
+        if autoSendInitialPrompt {
+            send(initialPrompt)
+        } else {
+            draft = initialPrompt
+            isComposerFocused = true
+        }
+    }
+
+    private func retryAfterError() {
+        if let lastFailedMessage {
+            send(lastFailedMessage)
+        } else {
+            Task {
+                await refreshAndPollIfNeeded()
+            }
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        let action = {
+            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+        }
+
+        if animated {
+            withAnimation(.snappy) {
+                action()
+            }
+        } else {
+            action()
+        }
+    }
+}
+
+private struct ChatDateHeader: View {
+    let date: Date
+
+    var body: some View {
+        Text(AppFormatters.chatDayString(for: date))
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.thinMaterial, in: Capsule())
+    }
+}

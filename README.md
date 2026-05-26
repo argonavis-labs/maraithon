@@ -143,6 +143,27 @@ curl -X POST http://localhost:4000/api/v1/events \
 curl http://localhost:4000/api/v1/agents/{id}/events
 ```
 
+## Monorepo
+
+Maraithon now lives in one repo across the full stack:
+
+- `.`: Phoenix web app, API, connectors, OTP runtime, and Fly deployment.
+- `apps/companion`: macOS companion app for secure local sync.
+- `apps/mobile`: iOS app for mobile chief-of-staff workflows.
+
+Use the root commands when working across the stack:
+
+```bash
+make generate
+make build
+make test
+make verify
+make deploy
+```
+
+See [`docs/monorepo.md`](docs/monorepo.md) for the verification loop, native
+build details, and production mobile simulator gate.
+
 ## Production Shape
 
 The current production shape is intentionally simple:

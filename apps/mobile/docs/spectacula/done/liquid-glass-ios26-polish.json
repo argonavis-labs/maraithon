@@ -1,0 +1,81 @@
+{
+  "spec_id": "liquid-glass-ios26-polish",
+  "slug": "liquid-glass-ios26-polish",
+  "title": "Liquid Glass iOS 26 Polish Specification",
+  "stage": "done",
+  "spec_path": "../specs/liquid-glass-ios26-polish.md",
+  "created_at": "2026-05-26T02:59:56Z",
+  "approved_at": "2026-05-26T02:59:56Z",
+  "started_at": "2026-05-26T02:59:56Z",
+  "completed_at": "2026-05-26T03:12:28Z",
+  "updated_at": "2026-05-26T03:12:28Z",
+  "summary": "Completed an iOS 26 Liquid Glass polish pass with shared design-system helpers, native tab-bar minimization, updated auth/chat actions, deterministic light/dark visual smoke capture, and production simulator verification.",
+  "next_action": "Future pass: add higher-fidelity chat assistant backend responses and richer interactive transcript tests when backend support exists.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/app-store-ux-polish-loop.md"
+  ],
+  "verification": {
+    "format": "passed: xcodegen generate",
+    "lint": "passed: bash -n scripts/verify-production-simulator.sh scripts/capture-visual-smoke.sh scripts/lib/production-magic-token.sh",
+    "typecheck": "passed: xcodebuild build",
+    "build": "passed",
+    "tests": "passed: MaraithonMobileTests",
+    "visual_review": "passed: light and dark screenshots captured and reviewed",
+    "production_simulator": "passed: scripts/verify-production-simulator.sh run 20260526031030",
+    "production_assertions": "passed: todo created/completed, person created/updated for kent@runner.now",
+    "spec_review": "passed",
+    "notes": "The verified app was launched in Simulator as com.bliss.maraithonmobile after production verification."
+  },
+  "resume_context": {
+    "last_completed_step": "Completed implementation, visual audit fixes, production simulator verification, and final simulator launch.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "1. Overview and Goals",
+      "5. Functional Requirements",
+      "6. Technical Design",
+      "7. Validation Matrix",
+      "10. Completion Notes",
+      "11. Verification"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/liquid-glass-ios26-polish.md",
+      "MaraithonMobile/Core/DesignSystem/LiquidGlassStyle.swift",
+      "MaraithonMobile/Features/AppShell/AppShellView.swift",
+      "MaraithonMobile/Features/Auth/MagicSigninView.swift",
+      "MaraithonMobile/Features/Chat/ChatThreadsView.swift",
+      "MaraithonMobile/Features/Chat/ChatDetailView.swift",
+      "MaraithonMobileUITests/VisualSmokeUITests.swift",
+      "scripts/lib/production-magic-token.sh",
+      "scripts/capture-visual-smoke.sh",
+      "scripts/verify-production-simulator.sh",
+      "build/verification/liquid-glass-light",
+      "build/verification/liquid-glass-dark"
+    ],
+    "notes": "Visual smoke now resets local app state for deterministic screenshots. Liquid Glass is intentionally limited to high-value controls and overlays; dense content remains standard SwiftUI content."
+  },
+  "history": [
+    {
+      "at": "2026-05-26T02:59:56Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial Liquid Glass iOS 26 polish spec saved."
+    },
+    {
+      "at": "2026-05-26T02:59:56Z",
+      "event": "implementation_started",
+      "from_stage": "ready",
+      "to_stage": "inprogress",
+      "note": "User requested implementation and verification using current iOS 26 best practices."
+    },
+    {
+      "at": "2026-05-26T03:12:28Z",
+      "event": "implementation_completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Completed Liquid Glass polish pass and passed final production simulator verification for run 20260526031030."
+    }
+  ]
+}

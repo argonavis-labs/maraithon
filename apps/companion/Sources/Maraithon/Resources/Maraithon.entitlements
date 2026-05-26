@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      App Sandbox is OFF.
+
+      The companion reads ~/Library/Messages/chat.db which requires Full
+      Disk Access. Full Disk Access is incompatible with the App Sandbox;
+      the user grants it manually in System Settings → Privacy & Security
+      → Full Disk Access. We still ship under Hardened Runtime + Developer
+      ID notarization so this remains a trustworthy install.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!-- Outbound network for /api/v1/companion/messages, whoami, etc. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

@@ -1,5 +1,17 @@
 This is a web application written using the Phoenix web framework.
 
+## Monorepo layout
+
+- The Phoenix web app, API, connectors, OTP runtime, migrations, Dockerfile,
+  and Fly deployment live at the repository root.
+- The native macOS companion app lives in `apps/companion`.
+- The native iOS app lives in `apps/mobile`.
+- Use the root `Makefile` for cross-stack workflows:
+  `make generate`, `make build`, `make test`, `make verify`, and
+  `make deploy`.
+- Native apps use XcodeGen. Treat each `project.yml` as the source of truth
+  and do not commit generated `.xcodeproj` files.
+
 ## Project guidelines
 
 - Use `mix precommit` alias when you are done with all changes and fix any pending issues

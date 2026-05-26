@@ -1,0 +1,21 @@
+# XcodeGen output
+*.xcodeproj/
+
+# Xcode local state
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.dSYM/
+*.ipa
+
+# SwiftPM / build output
+.build/
+.swiftpm/
+build/
+
+# Local production verification config
+Config/production-verification.env
+
+# OS / editor noise
+.DS_Store
+*.swp

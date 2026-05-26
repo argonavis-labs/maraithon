@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+component="${1:-all}"
+
+if selected_component "${component}" "companion"; then
+  generate_xcode_project "${COMPANION_DIR}"
+fi
+
+if selected_component "${component}" "mobile"; then
+  generate_xcode_project "${MOBILE_DIR}"
+fi
+
+echo
+echo "Generated Xcode projects for ${component}."
