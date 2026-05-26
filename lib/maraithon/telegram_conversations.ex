@@ -17,6 +17,7 @@ defmodule Maraithon.TelegramConversations do
   def start_or_continue(user_id, chat_id, attrs \\ %{})
       when is_binary(user_id) and is_binary(chat_id) and is_map(attrs) do
     metadata = read_map(attrs, "metadata")
+    surface = read_string(attrs, "surface", "telegram")
     mode = read_string(attrs, "mode") || read_string(metadata, "mode")
     linked_delivery_id = read_string(attrs, "linked_delivery_id")
     linked_insight_id = read_string(attrs, "linked_insight_id")
@@ -46,6 +47,7 @@ defmodule Maraithon.TelegramConversations do
         existing
         |> Conversation.changeset(%{
           status: existing.status,
+          surface: existing.surface || surface,
           last_turn_at: now,
           root_message_id: existing.root_message_id || root_message_id,
           linked_delivery_id: existing.linked_delivery_id || linked_delivery_id,
@@ -59,6 +61,7 @@ defmodule Maraithon.TelegramConversations do
         |> Conversation.changeset(%{
           user_id: user_id,
           chat_id: chat_id,
+          surface: surface,
           root_message_id: root_message_id,
           linked_delivery_id: linked_delivery_id,
           linked_insight_id: linked_insight_id,
@@ -68,6 +71,65 @@ defmodule Maraithon.TelegramConversations do
         })
         |> Repo.insert()
     end
+  end
+
+  def create_mobile_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do
+    client_thread_id = read_string(attrs, "client_thread_id") || Ecto.UUID.generate()
+    title = read_string(attrs, "title", "New conversation")
+    chat_id = "mobile:#{user_id}:#{client_thread_id}"
+    now = DateTime.utc_now()
+
+    %Conversation{}
+    |> Conversation.changeset(%{
+      user_id: user_id,
+      chat_id: chat_id,
+      surface: "mobile",
+      status: "open",
+      last_turn_at: now,
+      metadata: %{
+        "mobile_thread" => true,
+        "client_thread_id" => client_thread_id,
+        "title" => title,
+        "last_mobile_run_id" => nil
+      }
+    })
+    |> Repo.insert()
+  end
+
+  def list_mobile_threads(user_id, opts \\ []) when is_binary(user_id) do
+    limit = opts |> Keyword.get(:limit, 50) |> max(1) |> min(100)
+
+    Conversation
+    |> where([c], c.user_id == ^user_id and c.surface == "mobile")
+    |> order_by([c], desc_nulls_last: c.last_turn_at, desc: c.updated_at)
+    |> limit(^limit)
+    |> preload(:turns)
+    |> Repo.all()
+  end
+
+  def get_mobile_thread(user_id, conversation_id)
+      when is_binary(user_id) and is_binary(conversation_id) do
+    Conversation
+    |> where([c], c.user_id == ^user_id and c.id == ^conversation_id and c.surface == "mobile")
+    |> preload(:turns)
+    |> Repo.one()
+  end
+
+  def latest_run_for_conversation(conversation_id) when is_binary(conversation_id) do
+    Maraithon.TelegramAssistant.Run
+    |> where([run], run.conversation_id == ^conversation_id)
+    |> order_by([run], desc: run.started_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def active_run_for_conversation(conversation_id) when is_binary(conversation_id) do
+    Maraithon.TelegramAssistant.Run
+    |> where([run], run.conversation_id == ^conversation_id)
+    |> where([run], run.status in ["queued", "running", "waiting_confirmation"])
+    |> order_by([run], desc: run.started_at)
+    |> limit(1)
+    |> Repo.one()
   end
 
   def append_turn(%Conversation{} = conversation, attrs) when is_map(attrs) do
@@ -148,6 +210,18 @@ defmodule Maraithon.TelegramConversations do
   end
 
   def find_turn_by_message(_chat_id, _telegram_message_id), do: nil
+
+  def find_turn_by_client_message_id(conversation_id, client_message_id)
+      when is_binary(conversation_id) and is_binary(client_message_id) do
+    Turn
+    |> where([turn], turn.conversation_id == ^conversation_id)
+    |> where([turn], turn.client_message_id == ^client_message_id)
+    |> order_by([turn], desc: turn.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def find_turn_by_client_message_id(_conversation_id, _client_message_id), do: nil
 
   def find_by_reply(chat_id, reply_to_message_id)
       when is_binary(chat_id) and is_binary(reply_to_message_id) do

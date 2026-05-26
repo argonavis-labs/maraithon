@@ -59,6 +59,8 @@ config :maraithon, Maraithon.ContextCache.Builder, async_enabled: false
 # straight-line assertions on handle_telegram_event still hold.
 config :maraithon, Maraithon.TelegramAssistant.ChatWorker, async_enabled: false
 
+config :maraithon, Maraithon.AssistantChat.ThreadWorker, async_enabled: false
+
 config :maraithon, Maraithon.WebSearch, enabled: false
 
 # Initialize plugs at runtime for faster test compilation

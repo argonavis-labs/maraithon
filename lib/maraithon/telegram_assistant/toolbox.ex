@@ -1595,7 +1595,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp toolbox_policy_context(tool_name, args, runtime_context) do
     %{
-      surface: "telegram",
+      surface: runtime_surface(runtime_context),
       tool_name: tool_name,
       arguments: args,
       user_id: Map.get(runtime_context, :user_id) || Map.get(runtime_context, "user_id"),
@@ -2485,6 +2485,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         chat_id: runtime_context.chat_id,
         conversation_id: runtime_context.conversation_id,
         run_id: runtime_context.run_id,
+        surface: runtime_surface(runtime_context),
         action_type: action_type,
         target_type: spec.target_type,
         target_id: external_target_id(action_type, executable_payload),
@@ -2550,6 +2551,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         chat_id: runtime_context.chat_id,
         conversation_id: runtime_context.conversation_id,
         run_id: runtime_context.run_id,
+        surface: runtime_surface(runtime_context),
         action_type: "agent_create",
         target_type: "agent",
         payload: %{"start_params" => start_params, "launch" => launch},
@@ -2599,6 +2601,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           chat_id: runtime_context.chat_id,
           conversation_id: runtime_context.conversation_id,
           run_id: runtime_context.run_id,
+          surface: runtime_surface(runtime_context),
           action_type: "agent_update",
           target_type: "agent",
           target_id: agent.id,
@@ -2647,6 +2650,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         chat_id: runtime_context.chat_id,
         conversation_id: runtime_context.conversation_id,
         run_id: runtime_context.run_id,
+        surface: runtime_surface(runtime_context),
         action_type: "agent_delete",
         target_type: "agent",
         target_id: agent.id,
@@ -2689,6 +2693,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           chat_id: runtime_context.chat_id,
           conversation_id: runtime_context.conversation_id,
           run_id: runtime_context.run_id,
+          surface: runtime_surface(runtime_context),
           action_type: "agent_#{action}",
           target_type: "agent",
           target_id: agent.id,
@@ -2751,6 +2756,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           chat_id: runtime_context.chat_id,
           conversation_id: runtime_context.conversation_id,
           run_id: runtime_context.run_id,
+          surface: runtime_surface(runtime_context),
           action_type: "project_create",
           target_type: "project",
           payload: %{"user_id" => runtime_context.user_id, "attrs" => validated_attrs},
@@ -2794,6 +2800,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         chat_id: runtime_context.chat_id,
         conversation_id: runtime_context.conversation_id,
         run_id: runtime_context.run_id,
+        surface: runtime_surface(runtime_context),
         action_type: "project_update",
         target_type: "project",
         target_id: project.id,
@@ -2834,7 +2841,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp checked_tool_context(runtime_context) do
     %{
-      surface: "telegram",
+      surface: runtime_surface(runtime_context),
       user_id: runtime_context.user_id,
       agent_id: Map.get(runtime_context, :agent_id),
       policy_checked?: true
@@ -2844,6 +2851,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp normalize_tool_result({:ok, result}), do: {:ok, result}
   defp normalize_tool_result({:error, reason}) when is_binary(reason), do: {:error, reason}
   defp normalize_tool_result({:error, reason}), do: {:error, inspect(reason)}
+
+  defp runtime_surface(runtime_context) do
+    case Map.get(runtime_context, :surface) || Map.get(runtime_context, "surface") do
+      "mobile" -> "mobile"
+      :mobile -> "mobile"
+      _ -> "telegram"
+    end
+  end
 
   defp lookup_linear_issue(access_token, identifier) do
     query = """

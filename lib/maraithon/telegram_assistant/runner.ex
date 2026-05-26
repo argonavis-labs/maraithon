@@ -275,14 +275,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
         end
 
       action_type ->
-        execute_external_action(action_type, payload)
+        execute_external_action(action_type, payload, prepared_action)
     end
   end
 
   defp start_run(attrs, context, model_profile) do
-    TelegramAssistant.start_run(%{
+    run_attrs = %{
       user_id: Map.fetch!(attrs, :user_id),
       chat_id: Map.fetch!(attrs, :chat_id),
+      surface: surface(attrs),
       conversation_id: conversation_id(Map.get(attrs, :conversation)),
       trigger_type: trigger_type(attrs),
       status: "running",
@@ -290,8 +291,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
       model_name: Map.get(model_profile, :model) || TelegramAssistant.model_name(),
       prompt_snapshot: ContextEngine.prompt_snapshot(context),
       result_summary: %{model_tier: Map.get(model_profile, :tier)},
-      started_at: DateTime.utc_now()
-    })
+      started_at: Map.get(attrs, :started_at) || DateTime.utc_now()
+    }
+
+    case Map.get(attrs, :run) do
+      %Run{} = run -> TelegramAssistant.update_run(run, run_attrs)
+      _ -> TelegramAssistant.start_run(run_attrs)
+    end
   end
 
   defp record_context_fetch(run, context) do
@@ -602,11 +608,15 @@ defmodule Maraithon.TelegramAssistant.Runner do
             Map.fetch!(attrs, :chat_id),
             AssistantHarness.failure_message(reason),
             reply_to_message_id: Map.get(attrs, :source_message_id),
-            send_mode: send_mode_for_delivery(delivery),
+            send_mode: send_mode_for_delivery(delivery, attrs),
             message_id: delivery[:message_id],
             turn_kind: "system_notice",
             origin_type: "system",
-            structured_data: %{"run_id" => run.id, "error" => normalize_error(reason)}
+            structured_data: %{
+              "run_id" => run.id,
+              "surface" => surface(attrs),
+              "error" => normalize_error(reason)
+            }
           )
 
         :ok
@@ -623,7 +633,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
        ) do
     ActionLedger.record(%{
       user_id: run.user_id,
-      surface: "telegram",
+      surface: run_surface(run),
       event_type: "model.uncertainty",
       status: "failed",
       source_evidence: %{
@@ -673,6 +683,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       run_id: run.id,
       user_id: Map.fetch!(attrs, :user_id),
       chat_id: Map.fetch!(attrs, :chat_id),
+      surface: surface(attrs),
       conversation_id: conversation_id(Map.get(attrs, :conversation)),
       context: context,
       model_tier: Map.get(model_profile, :tier),
@@ -689,22 +700,28 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp maybe_start_liveness_session(run, attrs) do
-    case TelegramAssistant.start_liveness_session(run, attrs) do
-      {:ok, _pid} ->
-        :ok
+    if surface(attrs) == "mobile" do
+      :ok
+    else
+      case TelegramAssistant.start_liveness_session(run, attrs) do
+        {:ok, _pid} ->
+          :ok
 
-      {:error, :disabled} ->
-        :ok
+        {:error, :disabled} ->
+          :ok
 
-      {:error, reason} ->
-        Logger.warning("Telegram assistant liveness session failed to start",
-          run_id: run.id,
-          reason: inspect(reason)
-        )
+        {:error, reason} ->
+          Logger.warning("Telegram assistant liveness session failed to start",
+            run_id: run.id,
+            reason: inspect(reason)
+          )
 
-        :ok
+          :ok
+      end
     end
   end
+
+  defp note_context_loaded(%Run{surface: "mobile"}), do: :ok
 
   defp note_context_loaded(run) do
     _ = TelegramAssistant.note_liveness_context_loaded(run.id)
@@ -720,8 +737,13 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp apply_delivery_mode(turn_opts, _delivery), do: turn_opts
 
-  defp send_mode_for_delivery(%{mode: :edit}), do: :edit
-  defp send_mode_for_delivery(_delivery), do: :reply
+  defp send_mode_for_delivery(%{mode: :edit}, attrs) do
+    if surface(attrs) == "mobile", do: :persist, else: :edit
+  end
+
+  defp send_mode_for_delivery(_delivery, attrs) do
+    if surface(attrs) == "mobile", do: :persist, else: :reply
+  end
 
   defp build_result_summary(message_class, prepared_action_id, state, liveness_summary) do
     %{
@@ -973,6 +995,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
       origin_id: prepared_action_id,
       structured_data: %{
         "run_id" => run.id,
+        "surface" => surface(attrs),
+        "prepared_action_id" => prepared_action_id,
         "tool_history" =>
           AssistantHarness.execution_evidence(state.tool_history, runner_policy_opts()),
         "summary" => response_summary,
@@ -981,25 +1005,27 @@ defmodule Maraithon.TelegramAssistant.Runner do
     ]
     |> apply_delivery_mode(delivery)
     |> maybe_put_approval_markup(prepared_action_id, message_class)
+    |> apply_mobile_delivery(attrs)
   end
 
   defp send_todo_messages(conversation, attrs, run, todos) do
     Enum.reduce_while(todos, {:ok, conversation}, fn todo, {:ok, acc_conversation} ->
       todo_record = hydrate_todo_for_delivery(attrs, todo)
-      payload = TodoActions.telegram_payload(todo_record)
+      payload = todo_delivery_payload(attrs, todo_record)
 
       turn_opts = [
-        send_mode: :send,
+        send_mode: if(surface(attrs) == "mobile", do: :persist, else: :send),
         turn_kind: "assistant_reply",
         origin_type: "chat",
         structured_data: %{
           "run_id" => run.id,
+          "surface" => surface(attrs),
           "message_class" => "todo_item",
           "summary" => "Delivered one actionable todo item.",
           "linked_todo" => serialize_linked_todo(todo_record),
           "surface_quality" => SurfaceQuality.assess(todo_record)
         },
-        telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
+        telegram_opts: payload.telegram_opts
       ]
 
       case TelegramAssistant.send_turn(
@@ -1015,6 +1041,42 @@ defmodule Maraithon.TelegramAssistant.Runner do
           {:halt, {:error, reason}}
       end
     end)
+  end
+
+  defp apply_mobile_delivery(turn_opts, attrs) do
+    if surface(attrs) == "mobile" do
+      turn_opts
+      |> Keyword.put(:send_mode, :persist)
+      |> Keyword.delete(:telegram_opts)
+    else
+      turn_opts
+    end
+  end
+
+  defp todo_delivery_payload(attrs, todo_record) do
+    if surface(attrs) == "mobile" do
+      %{
+        text: mobile_todo_text(todo_record),
+        telegram_opts: []
+      }
+    else
+      telegram_payload = TodoActions.telegram_payload(todo_record)
+
+      %{
+        text: telegram_payload.text,
+        telegram_opts: [parse_mode: "HTML", reply_markup: telegram_payload.reply_markup]
+      }
+    end
+  end
+
+  defp mobile_todo_text(todo) do
+    title = map_value(todo, "title") || map_value(todo, "todo") || "Todo"
+    next_action = map_value(todo, "next_action")
+
+    case next_action do
+      value when is_binary(value) and value != "" -> "#{title}\n#{value}"
+      _ -> title
+    end
   end
 
   defp latest_todo_items(tool_history) when is_list(tool_history) do
@@ -1143,6 +1205,19 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
+  defp surface(attrs) when is_map(attrs) do
+    case Map.get(attrs, :surface) || Map.get(attrs, "surface") do
+      "mobile" -> "mobile"
+      :mobile -> "mobile"
+      _ -> "telegram"
+    end
+  end
+
+  defp surface(_attrs), do: "telegram"
+
+  defp run_surface(%Run{surface: surface}) when surface in ["telegram", "mobile"], do: surface
+  defp run_surface(_run), do: "telegram"
+
   defp maybe_compact_conversation_async(%Conversation{} = conversation) do
     if compaction_async_enabled?() do
       Task.start(fn ->
@@ -1236,41 +1311,67 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp conversation_id(%Conversation{id: id}), do: id
   defp conversation_id(_conversation), do: nil
 
-  defp execute_external_action(action_type, payload) do
+  defp execute_external_action(action_type, payload, prepared_action) do
     case action_type do
       "gmail_send" ->
-        execute_tool_action("gmail_send_message", payload, "Sent via Gmail.")
+        execute_tool_action("gmail_send_message", payload, "Sent via Gmail.", prepared_action)
 
       "slack_post" ->
-        execute_tool_action("slack_post_message", payload, "Posted the Slack message.")
+        execute_tool_action(
+          "slack_post_message",
+          payload,
+          "Posted the Slack message.",
+          prepared_action
+        )
 
       "linear_create_issue" ->
-        execute_tool_action("linear_create_issue", payload, "Created the Linear issue.")
+        execute_tool_action(
+          "linear_create_issue",
+          payload,
+          "Created the Linear issue.",
+          prepared_action
+        )
 
       "linear_create_comment" ->
-        execute_tool_action("linear_create_comment", payload, "Added the Linear comment.")
+        execute_tool_action(
+          "linear_create_comment",
+          payload,
+          "Added the Linear comment.",
+          prepared_action
+        )
 
       "linear_update_issue_state" ->
         execute_tool_action(
           "linear_update_issue_state",
           payload,
-          "Updated the Linear issue state."
+          "Updated the Linear issue state.",
+          prepared_action
         )
 
       "notaui_complete_task" ->
-        execute_tool_action("notaui_complete_task", payload, "Completed the task in Notaui.")
+        execute_tool_action(
+          "notaui_complete_task",
+          payload,
+          "Completed the task in Notaui.",
+          prepared_action
+        )
 
       "notaui_update_task" ->
-        execute_tool_action("notaui_update_task", payload, "Updated the task in Notaui.")
+        execute_tool_action(
+          "notaui_update_task",
+          payload,
+          "Updated the task in Notaui.",
+          prepared_action
+        )
 
       _ ->
         {:error, "unsupported_prepared_action"}
     end
   end
 
-  defp execute_tool_action(tool_name, payload, success_message) do
+  defp execute_tool_action(tool_name, payload, success_message, prepared_action) do
     policy_context = %{
-      surface: "telegram",
+      surface: Map.get(prepared_action, :surface) || "telegram",
       user_id: Map.get(payload, "user_id") || Map.get(payload, :user_id),
       confirmed?: true,
       confirmation_state: "confirmed"

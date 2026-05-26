@@ -14,10 +14,12 @@ defmodule Maraithon.TelegramAssistant.Run do
   @foreign_key_type :binary_id
 
   @trigger_types ~w(inbound_message reply agent_push brief insight_push follow_up scheduled_digest)
-  @statuses ~w(running waiting_confirmation completed failed cancelled degraded)
+  @statuses ~w(queued running waiting_confirmation completed failed cancelled degraded)
+  @surfaces ~w(telegram mobile)
 
   schema "telegram_assistant_runs" do
     field :chat_id, :string
+    field :surface, :string, default: "telegram"
     field :trigger_type, :string
     field :status, :string, default: "running"
     field :model_provider, :string
@@ -38,6 +40,7 @@ defmodule Maraithon.TelegramAssistant.Run do
   @required_fields [
     :user_id,
     :chat_id,
+    :surface,
     :trigger_type,
     :status,
     :model_provider,
@@ -52,6 +55,7 @@ defmodule Maraithon.TelegramAssistant.Run do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:chat_id, min: 1, max: 255)
+    |> validate_inclusion(:surface, @surfaces)
     |> validate_inclusion(:trigger_type, @trigger_types)
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:user_id)

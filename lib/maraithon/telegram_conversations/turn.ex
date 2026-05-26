@@ -14,10 +14,13 @@ defmodule Maraithon.TelegramConversations.Turn do
   @roles ~w(user assistant system)
   @turn_kinds ~w(user_message assistant_reply assistant_push approval_prompt action_result system_notice)
   @origin_types ~w(chat insight brief agent_push assistant_digest prepared_action system)
+  @delivery_states ~w(sending sent delivered failed)
 
   schema "telegram_conversation_turns" do
     field :role, :string
     field :telegram_message_id, :string
+    field :client_message_id, :string
+    field :delivery_state, :string, default: "delivered"
     field :reply_to_message_id, :string
     field :text, :string
     field :intent, :string
@@ -35,6 +38,8 @@ defmodule Maraithon.TelegramConversations.Turn do
   @required_fields [:conversation_id, :role, :text]
   @optional_fields [
     :telegram_message_id,
+    :client_message_id,
+    :delivery_state,
     :reply_to_message_id,
     :intent,
     :confidence,
@@ -53,9 +58,11 @@ defmodule Maraithon.TelegramConversations.Turn do
     |> validate_inclusion(:role, @roles)
     |> validate_inclusion(:turn_kind, @turn_kinds)
     |> validate_inclusion(:origin_type, @origin_types)
+    |> validate_inclusion(:delivery_state, @delivery_states)
     |> validate_number(:confidence, greater_than_or_equal_to: 0.0, less_than_or_equal_to: 1.0)
     |> foreign_key_constraint(:conversation_id)
     |> unique_constraint([:conversation_id, :telegram_message_id])
+    |> unique_constraint([:conversation_id, :client_message_id])
   end
 
   defp put_default_turn_kind(changeset) do

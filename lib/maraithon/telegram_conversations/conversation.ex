@@ -14,10 +14,12 @@ defmodule Maraithon.TelegramConversations.Conversation do
   @foreign_key_type :binary_id
 
   @statuses ~w(open awaiting_confirmation closed)
+  @surfaces ~w(telegram mobile)
 
   schema "telegram_conversations" do
     field :user_id, :string
     field :chat_id, :string
+    field :surface, :string, default: "telegram"
     field :root_message_id, :string
     field :status, :string, default: "open"
     field :summary, :string
@@ -34,6 +36,7 @@ defmodule Maraithon.TelegramConversations.Conversation do
 
   @required_fields [:user_id, :chat_id, :status]
   @optional_fields [
+    :surface,
     :root_message_id,
     :linked_delivery_id,
     :linked_insight_id,
@@ -48,6 +51,7 @@ defmodule Maraithon.TelegramConversations.Conversation do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_inclusion(:status, @statuses)
+    |> validate_inclusion(:surface, @surfaces)
     |> validate_length(:chat_id, min: 1, max: 255)
     |> foreign_key_constraint(:user_id)
     |> foreign_key_constraint(:linked_delivery_id)

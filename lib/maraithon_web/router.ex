@@ -142,6 +142,12 @@ defmodule MaraithonWeb.Router do
     patch "/people/:id", MobilePeopleController, :update
     delete "/people/:id", MobilePeopleController, :delete
     post "/people/:id/merge", MobilePeopleController, :merge
+    get "/chat/threads", MobileChatController, :index
+    post "/chat/threads", MobileChatController, :create
+    get "/chat/threads/:id", MobileChatController, :show
+    post "/chat/threads/:thread_id/messages", MobileChatController, :create_message
+    get "/chat/runs/:id", MobileChatController, :show_run
+    post "/chat/prepared-actions/:id/decision", MobileChatController, :decide_prepared_action
   end
 
   scope "/api/v1", MaraithonWeb do

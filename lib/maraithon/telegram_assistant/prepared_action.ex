@@ -14,9 +14,11 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   @foreign_key_type :binary_id
 
   @statuses ~w(awaiting_confirmation confirmed executed rejected expired failed)
+  @surfaces ~w(telegram mobile)
 
   schema "telegram_prepared_actions" do
     field :chat_id, :string
+    field :surface, :string, default: "telegram"
     field :action_type, :string
     field :target_type, :string
     field :target_id, :string
@@ -38,6 +40,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
   @required_fields [
     :user_id,
     :chat_id,
+    :surface,
     :run_id,
     :action_type,
     :target_type,
@@ -53,6 +56,7 @@ defmodule Maraithon.TelegramAssistant.PreparedAction do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:chat_id, min: 1, max: 255)
+    |> validate_inclusion(:surface, @surfaces)
     |> validate_length(:action_type, min: 2, max: 100)
     |> validate_length(:target_type, min: 2, max: 100)
     |> validate_inclusion(:status, @statuses)

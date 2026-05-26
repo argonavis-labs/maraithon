@@ -165,6 +165,12 @@ defmodule Maraithon.TelegramAssistant do
     complete_run(run, %{status: status, error: normalize_error(error)})
   end
 
+  def update_run(%Run{} = run, attrs) when is_map(attrs) do
+    run
+    |> Run.changeset(attrs)
+    |> Repo.update()
+  end
+
   defp handle_assistant_callback(data, callback_data) do
     case TelegramResponder.parse_action_callback(callback_data) do
       {:ok, prepared_action_id, decision} ->
@@ -275,12 +281,16 @@ defmodule Maraithon.TelegramAssistant do
     reply_to_message_id = Keyword.get(opts, :reply_to_message_id)
     send_mode = resolve_send_mode(reply_to_message_id, Keyword.get(opts, :send_mode, :reply))
     telegram_opts = Keyword.get(opts, :telegram_opts, [])
+    client_message_id = Keyword.get(opts, :client_message_id)
+    delivery_state = Keyword.get(opts, :delivery_state, "delivered")
 
     case dispatch_turn(chat_id, text, reply_to_message_id, send_mode, telegram_opts, opts) do
       {:ok, result, telegram_message_id} ->
         turn_attrs = %{
           "role" => Keyword.get(opts, :role, "assistant"),
           "telegram_message_id" => telegram_message_id,
+          "client_message_id" => client_message_id,
+          "delivery_state" => delivery_state,
           "reply_to_message_id" => reply_to_message_id,
           "text" => text,
           "intent" => Keyword.get(opts, :intent),
@@ -639,6 +649,7 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp resolve_send_mode(_reply_to_message_id, :edit), do: :edit
+  defp resolve_send_mode(_reply_to_message_id, :persist), do: :persist
   defp resolve_send_mode(nil, _mode), do: :send
   defp resolve_send_mode(_reply_to_message_id, mode) when mode in [:send, :reply], do: mode
   defp resolve_send_mode(_reply_to_message_id, _mode), do: :reply
@@ -648,6 +659,10 @@ defmodule Maraithon.TelegramAssistant do
       {:ok, result} -> {:ok, result, normalize_id(Map.get(result, "message_id"))}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp dispatch_turn(_chat_id, _text, _reply_to_message_id, :persist, _telegram_opts, _opts) do
+    {:ok, %{"delivery" => "persisted"}, nil}
   end
 
   defp dispatch_turn(chat_id, text, reply_to_message_id, :reply, telegram_opts, _opts) do
