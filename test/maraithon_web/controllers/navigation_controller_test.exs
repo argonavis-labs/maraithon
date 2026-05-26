@@ -2,7 +2,10 @@ defmodule MaraithonWeb.NavigationControllerTest do
   use MaraithonWeb.ConnCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Companion.Devices
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
   alias Maraithon.OAuth
 
   describe "tab pages" do
@@ -12,11 +15,66 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connectors"
       assert html =~ "Maraithon needs a Telegram chat"
+      assert html =~ "Maraithon Desktop App"
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
       assert html =~ "Slack"
       assert html =~ "Telegram required"
       assert html =~ "Connect Telegram first"
+      assert html =~ "Set up Desktop App"
+    end
+
+    test "GET /connectors surfaces detected Desktop App sources without requiring Telegram", %{
+      conn: conn
+    } do
+      user_id = "desktop-connectors@example.com"
+      device_id = Ecto.UUID.generate()
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+      {:ok, %{device: device}} = Devices.register(user_id, device_id, device_name: "Kent MacBook")
+
+      {:ok, %{accepted: 2}} =
+        LocalMessages.ingest_batch(user_id, device.device_id, [
+          %{
+            "guid" => "message-1",
+            "text" => "Can you send the files?",
+            "sent_at" => "2026-05-25T10:00:00Z"
+          },
+          %{
+            "guid" => "message-2",
+            "text" => "Following up here.",
+            "sent_at" => "2026-05-25T10:05:00Z"
+          }
+        ])
+
+      {:ok, %{accepted: 1}} =
+        LocalNotes.ingest_batch(user_id, device.device_id, [
+          %{
+            "guid" => "note-1",
+            "title" => "Family weekend plan",
+            "modified_at" => "2026-05-25T12:00:00Z"
+          }
+        ])
+
+      conn = conn |> log_in_test_user(user_id) |> get("/connectors")
+      html = html_response(conn, 200)
+
+      assert html =~ "Maraithon Desktop App"
+      assert html =~ "1 Mac connected"
+      assert html =~ "View Desktop App"
+
+      detail_conn = conn |> recycle() |> get("/connectors/desktop")
+      detail_html = html_response(detail_conn, 200)
+
+      assert detail_html =~ "Paired Macs"
+      assert detail_html =~ "Kent MacBook"
+      assert detail_html =~ "2 iMessages"
+      assert detail_html =~ "1 Apple Note"
+      assert detail_html =~ "iMessage"
+      assert detail_html =~ "Apple Notes"
+      assert detail_html =~ "Secure local sync"
+      refute detail_html =~ "Telegram required"
+      refute detail_html =~ "OAuth setup"
+      refute detail_html =~ "Disconnect"
     end
 
     test "GET /connectors renders with connected Slack tokens", %{conn: conn} do

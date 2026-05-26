@@ -19,7 +19,7 @@
     <%= if not telegram_connected?(@providers) do %>
       <.alert color="blue" title="Connect Telegram first">
         <p>
-          Maraithon needs a Telegram chat to message you before any other connector becomes available.
+          Maraithon needs a Telegram chat before OAuth connectors become available. The Desktop App can still sync local sources from your Mac.
         </p>
       </.alert>
     <% end %>
@@ -53,7 +53,7 @@
 
           <span class="flex items-center justify-end gap-3 lg:col-span-3">
             <%= cond do %>
-              <% provider.provider != "telegram" and not telegram_connected?(@providers) -> %>
+              <% requires_telegram_first?(provider) and not telegram_connected?(@providers) -> %>
                 <span class="text-xs/5 text-zinc-400">Telegram required</span>
               <% provider[:connect_blocked?] -> %>
                 <span class="text-xs/5 text-zinc-400">

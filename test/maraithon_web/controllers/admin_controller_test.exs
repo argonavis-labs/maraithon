@@ -418,8 +418,19 @@ defmodule MaraithonWeb.AdminControllerTest do
       response = json_response(conn, 200)
       assert response["user_id"] == "kent"
       assert response["connected_count"] >= 1
-      assert length(response["providers"]) == 7
+      assert length(response["providers"]) == 8
       assert Enum.any?(response["raw_tokens"], &(&1["provider"] == "github"))
+
+      desktop =
+        Enum.find(response["providers"], fn provider ->
+          provider["provider"] == "desktop"
+        end)
+
+      assert desktop["logo"] == "desktop"
+      assert desktop["setup_status"] == "configured"
+      assert desktop["requires_telegram?"] == false
+      assert Enum.any?(desktop["services"], &(&1["label"] == "iMessage"))
+      assert Enum.any?(desktop["permissions"], &(&1 =~ "Apple Notes"))
 
       github =
         Enum.find(response["providers"], fn provider ->

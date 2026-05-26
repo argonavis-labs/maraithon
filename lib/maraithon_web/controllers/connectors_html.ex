@@ -50,10 +50,18 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def provider_account_summary(_provider), do: "No accounts connected"
 
   def connected_accounts_heading(%{provider: "slack"}), do: "Connected Workspaces"
+  def connected_accounts_heading(%{provider: "desktop"}), do: "Paired Macs"
   def connected_accounts_heading(_provider), do: "Connected Accounts"
+
+  def requires_telegram_first?(provider) when is_map(provider) do
+    Map.get(provider, :provider) != "telegram" and Map.get(provider, :requires_telegram?, true)
+  end
+
+  def requires_telegram_first?(_provider), do: true
 
   def provider_grant_panels_visible?(provider) when is_map(provider) do
     case Map.get(provider, :provider) do
+      "desktop" -> false
       "google" -> false
       "slack" -> Map.get(provider, :accounts, []) == []
       _provider -> true
@@ -61,6 +69,12 @@ defmodule MaraithonWeb.ConnectorsHTML do
   end
 
   def provider_grant_panels_visible?(_provider), do: false
+
+  def provider_oauth_setup_visible?(%{provider: "desktop"}), do: false
+  def provider_oauth_setup_visible?(_provider), do: true
+
+  def refresh_token_badge_visible?(%{provider: "desktop"}), do: false
+  def refresh_token_badge_visible?(_provider), do: true
 
   def connection_primary_action(%{provider: "google", status: status})
       when status in [:connected, :partial],
@@ -79,6 +93,12 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def connection_primary_action(%{provider: "telegram"}), do: "Link Telegram"
 
+  def connection_primary_action(%{provider: "desktop", status: status})
+      when status in [:connected, :partial],
+      do: "View Desktop App"
+
+  def connection_primary_action(%{provider: "desktop"}), do: "Set up Desktop App"
+
   def connection_primary_action(%{provider: "slack", status: :connected}), do: "View Slack"
 
   def connection_primary_action(%{provider: "slack", status: status})
@@ -95,6 +115,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_action_enabled?(_provider), do: false
 
   def connection_primary_url(%{provider: "google"} = provider), do: provider.connect_url
+
+  def connection_primary_url(%{provider: "desktop"} = provider),
+    do: provider_detail_path(provider)
 
   def connection_primary_url(%{status: :connected} = provider), do: provider_detail_path(provider)
 
@@ -245,6 +268,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   end
 
   defp provider_account_unit(%{provider: "slack"}), do: "workspace"
+  defp provider_account_unit(%{provider: "desktop"}), do: "Mac"
   defp provider_account_unit(_provider), do: "account"
 
   defp pluralize_units(1, unit, status), do: "1 #{unit} #{status}"
@@ -287,6 +311,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   defp connector_logo_src(:notion), do: "/images/connector-logos/notion.png"
   defp connector_logo_src(:notaui), do: "/images/connector-logos/notaui.png"
   defp connector_logo_src(:telegram), do: "/images/connector-logos/telegram.png"
+  defp connector_logo_src(:desktop), do: "/favicon.ico"
   defp connector_logo_src(_provider), do: "/favicon.ico"
 
   defp connector_logo_alt(provider) when is_atom(provider) do

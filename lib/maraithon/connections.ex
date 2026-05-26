@@ -4,6 +4,7 @@ defmodule Maraithon.Connections do
   """
 
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Companion.Devices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
@@ -25,6 +26,51 @@ defmodule Maraithon.Connections do
       id: "contacts",
       label: "Google Contacts",
       description: "Read your People/Contacts graph for context."
+    }
+  ]
+
+  @desktop_services [
+    %{
+      id: "imessage",
+      stat_key: :messages_count,
+      label: "iMessage",
+      description: "Sync local conversation context from Messages on the paired Mac."
+    },
+    %{
+      id: "notes",
+      stat_key: :notes_count,
+      label: "Apple Notes",
+      description: "Sync local notes so Maraithon can recall private notes when asked."
+    },
+    %{
+      id: "voice_memos",
+      stat_key: :voice_memos_count,
+      label: "Voice Memos",
+      description: "Sync local voice memo metadata and transcripts when available."
+    },
+    %{
+      id: "calendar",
+      stat_key: :calendar_events_count,
+      label: "Apple Calendar",
+      description: "Sync local calendar events from the companion app."
+    },
+    %{
+      id: "reminders",
+      stat_key: :reminders_count,
+      label: "Reminders",
+      description: "Sync local reminders for personal follow-through."
+    },
+    %{
+      id: "files",
+      stat_key: :files_count,
+      label: "Files",
+      description: "Sync selected local file context from the desktop companion."
+    },
+    %{
+      id: "browser",
+      stat_key: :browser_visits_count,
+      label: "Browser History",
+      description: "Sync local browser history context when the user enables it."
     }
   ]
 
@@ -79,6 +125,7 @@ defmodule Maraithon.Connections do
     providers =
       [
         telegram_card(user_id, telegram_account, return_to),
+        desktop_card(user_id, return_to),
         google_card(user_id, google_tokens, account_by_provider, return_to),
         github_card(
           user_id,
@@ -225,6 +272,7 @@ defmodule Maraithon.Connections do
     providers =
       [
         telegram_card(user_id, nil, return_to),
+        desktop_card(user_id, return_to),
         google_card(user_id, [], %{}, return_to),
         github_card(user_id, nil, nil, return_to),
         slack_card(user_id, [], %{}, return_to),
@@ -338,6 +386,43 @@ defmodule Maraithon.Connections do
         ]),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
+    }
+    |> enrich_provider_setup()
+  end
+
+  defp desktop_card(user_id, _return_to) when is_binary(user_id) do
+    device_entries =
+      user_id
+      |> Devices.list_for_user()
+      |> Devices.enrich_with_stats()
+
+    active_entries = Enum.reject(device_entries, fn {device, _stats} -> device.revoked_at end)
+    totals = desktop_totals(active_entries)
+    total_synced = desktop_total_count(totals)
+
+    status =
+      cond do
+        active_entries == [] -> :disconnected
+        total_synced == 0 -> :partial
+        true -> :connected
+      end
+
+    %{
+      id: "desktop",
+      provider: "desktop",
+      label: "Maraithon Desktop App",
+      description:
+        "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
+      status: status,
+      configured?: true,
+      updated_at: latest_device_seen_at(active_entries),
+      disconnectable?: false,
+      connect_url: "/connectors/desktop",
+      disconnect_label: "Manage Desktop App",
+      refresh_token_status: :not_applicable,
+      details: desktop_details(active_entries, totals),
+      services: desktop_services(totals),
+      accounts: desktop_device_accounts(device_entries)
     }
     |> enrich_provider_setup()
   end
@@ -515,6 +600,145 @@ defmodule Maraithon.Connections do
       services: []
     }
     |> enrich_provider_setup()
+  end
+
+  defp desktop_totals(device_entries) do
+    empty_totals = Enum.into(@desktop_services, %{}, &{&1.stat_key, 0})
+
+    Enum.reduce(device_entries, empty_totals, fn {_device, stats}, totals ->
+      Enum.reduce(@desktop_services, totals, fn service, acc ->
+        Map.update!(acc, service.stat_key, &(&1 + Map.get(stats, service.stat_key, 0)))
+      end)
+    end)
+  end
+
+  defp desktop_total_count(totals) when is_map(totals) do
+    totals
+    |> Map.values()
+    |> Enum.sum()
+  end
+
+  defp desktop_details([], _totals) do
+    [
+      "No Mac paired yet.",
+      "Install the Maraithon Desktop App to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
+    ]
+  end
+
+  defp desktop_details(active_entries, totals) do
+    device_count = length(active_entries)
+    last_seen = latest_device_seen_at(active_entries)
+    source_summary = desktop_source_summary(totals)
+
+    [
+      "#{device_count} #{pluralize("Mac", device_count)} paired",
+      source_summary,
+      if(last_seen, do: "Last seen #{format_datetime(last_seen)}")
+    ]
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp desktop_services(totals) do
+    Enum.map(@desktop_services, fn service ->
+      count = Map.get(totals, service.stat_key, 0)
+
+      %{
+        id: service.id,
+        label: service.label,
+        description: desktop_service_description(service, count),
+        status: if(count > 0, do: :connected, else: :disconnected),
+        count: count
+      }
+    end)
+  end
+
+  defp desktop_service_description(service, 0), do: service.description
+
+  defp desktop_service_description(service, count) do
+    "#{service.description} #{desktop_count_label(service.stat_key, count)} synced."
+  end
+
+  defp desktop_device_accounts(device_entries) do
+    device_entries
+    |> Enum.map(fn {device, stats} ->
+      revoked? = not is_nil(device.revoked_at)
+      synced_count = desktop_total_count(stats)
+
+      %{
+        provider: "desktop:#{device.id}",
+        account: desktop_device_name(device),
+        updated_at: device.last_seen_at || device.updated_at || device.inserted_at,
+        status: if(revoked?, do: :disconnected, else: :connected),
+        status_note: if(revoked?, do: "Device is revoked.", else: "Healthy"),
+        details: desktop_device_details(stats, revoked?, synced_count),
+        reconnect_url: nil,
+        needs_reconnect?: false,
+        disconnectable?: false
+      }
+    end)
+    |> Enum.sort_by(&timestamp_sort_value(&1.updated_at), :desc)
+  end
+
+  defp desktop_device_name(device) do
+    normalize_text(device.device_name) || "Paired Mac"
+  end
+
+  defp desktop_device_details(_stats, true, _synced_count) do
+    ["Local data remains available until the device record is deleted."]
+  end
+
+  defp desktop_device_details(_stats, _revoked?, 0) do
+    ["Paired, but no local sources have synced yet."]
+  end
+
+  defp desktop_device_details(stats, _revoked?, _synced_count) do
+    stats
+    |> desktop_source_labels()
+    |> Enum.take(4)
+  end
+
+  defp desktop_source_summary(totals) do
+    case desktop_source_labels(totals) do
+      [] -> "No local sources synced yet."
+      labels -> "Synced #{Enum.join(labels, ", ")}."
+    end
+  end
+
+  defp desktop_source_labels(stats) when is_map(stats) do
+    @desktop_services
+    |> Enum.map(fn service ->
+      count = Map.get(stats, service.stat_key, 0)
+      if count > 0, do: desktop_count_label(service.stat_key, count)
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp desktop_count_label(:messages_count, count), do: count_label(count, "iMessage")
+  defp desktop_count_label(:notes_count, count), do: count_label(count, "Apple Note")
+  defp desktop_count_label(:voice_memos_count, count), do: count_label(count, "voice memo")
+
+  defp desktop_count_label(:calendar_events_count, count),
+    do: count_label(count, "calendar event")
+
+  defp desktop_count_label(:reminders_count, count), do: count_label(count, "reminder")
+  defp desktop_count_label(:files_count, count), do: count_label(count, "file")
+  defp desktop_count_label(:browser_visits_count, count), do: count_label(count, "browser visit")
+
+  defp count_label(1, label), do: "1 #{label}"
+  defp count_label(count, label), do: "#{count} #{pluralize(label, count)}"
+
+  defp pluralize(label, 1), do: label
+  defp pluralize("Apple Note", _count), do: "Apple Notes"
+  defp pluralize("iMessage", _count), do: "iMessages"
+  defp pluralize(label, _count), do: "#{label}s"
+
+  defp latest_device_seen_at(device_entries) do
+    device_entries
+    |> Enum.map(fn {device, _stats} ->
+      device.last_seen_at || device.updated_at || device.inserted_at
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(&timestamp_sort_value/1, fn -> nil end)
   end
 
   defp readiness_item(
@@ -767,6 +991,13 @@ defmodule Maraithon.Connections do
   defp connected_account?(_account), do: false
 
   defp enforce_telegram_first(%{provider: "telegram"} = provider, _telegram_connected?) do
+    provider
+    |> Map.put(:requires_telegram?, false)
+    |> Map.put(:connect_blocked?, false)
+    |> Map.put(:connect_block_reason, nil)
+  end
+
+  defp enforce_telegram_first(%{provider: "desktop"} = provider, _telegram_connected?) do
     provider
     |> Map.put(:requires_telegram?, false)
     |> Map.put(:connect_blocked?, false)
@@ -1834,6 +2065,24 @@ defmodule Maraithon.Connections do
         "Configure token endpoint auth as client_secret_basic.",
         "After connect, Maraithon discovers accessible Notaui accounts with account.list and stores a default account.",
         "When Maraithon targets a non-default Notaui account it sends X-Notaui-Account-ID with the MCP request."
+      ]
+    }
+  end
+
+  defp provider_setup("desktop") do
+    %{
+      logo: :desktop,
+      permissions: [
+        "Pair a desktop device with a one-time token",
+        "Sync local iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memo context",
+        "Scope all synced data to the signed-in Maraithon user"
+      ],
+      callback_urls: [],
+      env_requirements: [],
+      setup_notes: [
+        "Install the Maraithon Desktop App on a Mac you control.",
+        "Pair the app with Maraithon, then choose which local sources to sync.",
+        "Data is sent by the paired device token and stays scoped to the Maraithon account."
       ]
     }
   end
