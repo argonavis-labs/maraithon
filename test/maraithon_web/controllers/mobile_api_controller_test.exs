@@ -275,18 +275,34 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     assert %{"person" => %{"id" => ^person_id, "display_name" => "Production Test Person"}} =
              json_response(conn, 200)
 
+    last_contacted_at = "2026-05-26T13:45:00Z"
+    last_contacted_at_response = "2026-05-26T13:45:00.000000Z"
+
     conn =
       build_conn()
       |> put_req_header("authorization", "Bearer #{session_token}")
       |> patch(~p"/api/mobile/people/#{person_id}", %{
-        "person" => %{"notes" => "Updated from the mobile API test."}
+        "person" => %{
+          "notes" => "Updated from the mobile API test.",
+          "last_contacted_at" => last_contacted_at
+        }
       })
 
-    assert %{"person" => %{"notes" => "Updated from the mobile API test."}} =
+    assert %{
+             "person" => %{
+               "notes" => "Updated from the mobile API test.",
+               "last_interaction_at" => ^last_contacted_at_response
+             }
+           } =
              json_response(conn, 200)
 
     assert Crm.get_person_for_user(user.id, person_id).notes ==
              "Updated from the mobile API test."
+
+    assert DateTime.compare(
+             Crm.get_person_for_user(user.id, person_id).last_interaction_at,
+             ~U[2026-05-26 13:45:00Z]
+           ) == :eq
 
     assert Crm.get_person_for_user(user.id, person_id).interaction_count == 0
   end

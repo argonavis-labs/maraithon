@@ -9,7 +9,7 @@ defmodule MaraithonWeb.MobilePeopleController do
   @person_param_keys ~w(
     first_name last_name display_name contact_details contacts email emails phone phone_number
     phones slack_id slack_ids telegram_id telegram_ids preferred_communication_method
-    relationship communication_frequency notes metadata status
+    relationship communication_frequency notes metadata status last_interaction_at last_contacted_at
   )
 
   def index(conn, params) do
