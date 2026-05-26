@@ -21,6 +21,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.TelegramAssistant.PushReceipt
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
 
   def dashboard(conn, params) do
@@ -630,6 +631,8 @@ defmodule MaraithonWeb.AdminController do
   end
 
   defp serialize_todo(%Todo{} = todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     %{
       id: todo.id,
       user_id: todo.user_id,

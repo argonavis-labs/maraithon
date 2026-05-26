@@ -4,7 +4,7 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.ActionCards
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{Todo, UserFacingCopy}
 
   def user(%User{} = user, %UserSession{} = session) do
     %{
@@ -27,6 +27,8 @@ defmodule MaraithonWeb.MobileJSON do
   end
 
   def todo(%Todo{} = todo, opts \\ []) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     base = %{
       id: todo.id,
       source: todo.source,
