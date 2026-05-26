@@ -11,6 +11,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   alias Maraithon.Accounts
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.ActionCards
   alias Maraithon.ActionLedger.Action
   alias Maraithon.AssistantHarness
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
@@ -182,6 +183,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :todo_surface_quality_contract,
+        kind: :static
+      },
+      %{
+        id: :action_card_product_contract,
         kind: :static
       },
       %{
@@ -946,6 +951,55 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :action_card_product_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    todo =
+      verification_surface_todo()
+      |> Map.put("user_id", "verify@example.com")
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    score = Map.get(card, "product_score", %{})
+    context = Map.get(card, "context_pack", %{})
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    findings =
+      []
+      |> require_finding(
+        score["passed"] == true and score["score"] == 10,
+        "decision cards must hit the full 10/10 product bar"
+      )
+      |> require_finding(
+        String.contains?(Map.get(card, "headline", ""), "Dan Bourke"),
+        "decision card headline must name the person"
+      )
+      |> require_finding(
+        String.contains?(get_in(context, ["summary"]) || "", "A-Team") and
+          String.contains?(get_in(context, ["summary"]) || "", "video project contact"),
+        "decision card context must include company and relationship"
+      )
+      |> require_finding(
+        String.contains?(to_string(ActionCards.evidence_excerpt(card)), "artifact status"),
+        "decision card must carry source-backed evidence"
+      )
+      |> require_finding(
+        "important" in Map.get(card, "available_buttons", []) and
+          "dismiss" in Map.get(card, "available_buttons", []),
+        "decision card must expose safe decision actions"
+      )
+      |> require_finding(
+        String.contains?(rendered, "Why now:") and String.contains?(rendered, "Checked:"),
+        "Telegram rendering must show why-now and source-health context"
+      )
+
+    scenario_result(scenario, findings, %{
+      response: %{"assistant_message" => rendered},
+      tool_history: []
+    })
   end
 
   defp run_scenario(

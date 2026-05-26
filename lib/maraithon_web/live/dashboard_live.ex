@@ -2,6 +2,7 @@ defmodule MaraithonWeb.DashboardLive do
   use MaraithonWeb, :live_view
 
   alias Maraithon.AgentBuilder
+  alias Maraithon.ActionCards
   alias Maraithon.Admin
   alias Maraithon.AgentMarketplace
   alias Maraithon.Agents
@@ -3463,7 +3464,83 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp clamp_review_index(_index, count), do: clamp_review_index(0, count)
 
-  defp todo_context_items(todo) do
+  defp todo_context_items(card, todo) do
+    card_items =
+      card
+      |> ActionCards.context_items()
+      |> Enum.map(fn item ->
+        %{label: Map.get(item, :label), value: Map.get(item, :value)}
+      end)
+
+    fallback_items = fallback_todo_context_items(todo)
+
+    (card_items ++ fallback_items)
+    |> Enum.reject(fn item -> blank_metadata?(item.value) end)
+    |> Enum.uniq_by(fn item -> {item.label, item.value} end)
+    |> Enum.take(6)
+  end
+
+  defp todo_why_important(card, todo) do
+    case Map.get(card, "why_now") do
+      value when is_binary(value) and value != "" -> value
+      _ -> fallback_todo_why_important(todo)
+    end
+  end
+
+  defp todo_source_excerpt(card, todo) do
+    case ActionCards.evidence_excerpt(card) do
+      value when is_binary(value) and value != "" -> truncate(value, 280)
+      _ -> fallback_todo_source_excerpt(todo)
+    end
+  end
+
+  defp todo_action_hint(card, todo) do
+    case ActionCards.prepared_action_hint(card) do
+      value when is_binary(value) and value != "" -> value
+      _ -> fallback_todo_action_hint(todo)
+    end
+  end
+
+  defp todo_decision_prompt(card) do
+    card
+    |> Map.get("decision_prompt")
+    |> display_metadata_value()
+  end
+
+  defp todo_source_health_text(card) do
+    source_health =
+      Map.get(card || %{}, "source_health", %{})
+
+    blocking =
+      source_health
+      |> Map.get("blocking_gaps", [])
+      |> List.wrap()
+      |> Enum.reject(&blank_metadata?/1)
+
+    checked =
+      source_health
+      |> Map.get("checked_sources", [])
+      |> List.wrap()
+      |> Enum.reject(&blank_metadata?/1)
+
+    cond do
+      blocking != [] -> "Source gap: #{Enum.take(blocking, 2) |> Enum.join("; ")}"
+      checked != [] -> "Checked: #{Enum.take(checked, 4) |> Enum.join(", ")}"
+      true -> nil
+    end
+  end
+
+  defp todo_learning_text(card) do
+    case card do
+      %{"attention_mode" => "stale_check"} ->
+        "Your choice teaches Maraithon whether to keep surfacing items like this."
+
+      _ ->
+        nil
+    end
+  end
+
+  defp fallback_todo_context_items(todo) do
     metadata = todo.metadata || %{}
 
     [
@@ -3491,11 +3568,9 @@ defmodule MaraithonWeb.DashboardLive do
       %{label: "Account", value: todo_source_account_value(todo)},
       %{label: "Due", value: todo.due_at && format_datetime(todo.due_at)}
     ]
-    |> Enum.reject(fn item -> blank_metadata?(item.value) end)
-    |> Enum.take(6)
   end
 
-  defp todo_why_important(todo) do
+  defp fallback_todo_why_important(todo) do
     metadata = todo.metadata || %{}
 
     todo_metadata_text(metadata, ~w(why_now why_it_matters why rationale urgency_reason))
@@ -3511,7 +3586,7 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp todo_source_excerpt(todo) do
+  defp fallback_todo_source_excerpt(todo) do
     todo.metadata
     |> todo_metadata_text(
       ~w(source_quote quote source_excerpt body_excerpt excerpt evidence source_body source_evidence checked_evidence)
@@ -3522,7 +3597,7 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp todo_action_hint(todo) do
+  defp fallback_todo_action_hint(todo) do
     next_action = String.downcase(todo.next_action || "")
 
     cond do
@@ -3626,6 +3701,7 @@ defmodule MaraithonWeb.DashboardLive do
     assigns =
       assigns
       |> assign(:current_todo, current_todo)
+      |> assign(:current_todo_card, current_todo && ActionCards.for_todo(current_todo))
       |> assign(:queue_preview, review_queue_preview(review_todos, assigns.todo_review_index))
       |> assign(:review_position, todo_review_position(review_todos, assigns.todo_review_index))
       |> assign(
@@ -3684,8 +3760,16 @@ defmodule MaraithonWeb.DashboardLive do
               <%= @current_todo.summary %>
             </p>
 
-            <dl :if={todo_context_items(@current_todo) != []} class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-              <div :for={item <- todo_context_items(@current_todo)} class="border-l border-zinc-950/10 pl-3">
+            <div :if={todo_decision_prompt(@current_todo_card)} class="mt-5 border-l border-zinc-950/10 pl-3">
+              <p class="text-xs/5 font-medium text-zinc-500">Decision</p>
+              <p class="mt-1 text-sm/6 text-zinc-800"><%= todo_decision_prompt(@current_todo_card) %></p>
+              <p :if={todo_learning_text(@current_todo_card)} class="mt-2 text-xs/5 text-zinc-500">
+                <%= todo_learning_text(@current_todo_card) %>
+              </p>
+            </div>
+
+            <dl :if={todo_context_items(@current_todo_card, @current_todo) != []} class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+              <div :for={item <- todo_context_items(@current_todo_card, @current_todo)} class="border-l border-zinc-950/10 pl-3">
                 <dt class="text-xs/5 font-medium text-zinc-500"><%= item.label %></dt>
                 <dd class="mt-0.5 text-sm/6 text-zinc-800"><%= item.value %></dd>
               </div>
@@ -3694,20 +3778,25 @@ defmodule MaraithonWeb.DashboardLive do
             <div class="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
               <div class="border-l border-zinc-950/10 pl-3">
                 <p class="text-xs/5 font-medium text-zinc-500">Why important</p>
-                <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo) %></p>
+                <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo_card, @current_todo) %></p>
               </div>
               <div class="border-l border-zinc-950/10 pl-3">
                 <p class="text-xs/5 font-medium text-zinc-500">Suggested next step</p>
                 <p class="mt-1 text-sm/6 text-zinc-700"><%= @current_todo.next_action %></p>
-                <p :if={todo_action_hint(@current_todo)} class="mt-2 text-sm/6 font-medium text-indigo-700">
-                  <%= todo_action_hint(@current_todo) %>
+                <p :if={todo_action_hint(@current_todo_card, @current_todo)} class="mt-2 text-sm/6 font-medium text-indigo-700">
+                  <%= todo_action_hint(@current_todo_card, @current_todo) %>
                 </p>
               </div>
             </div>
 
-            <div :if={todo_source_excerpt(@current_todo)} class="mt-5 border-l border-zinc-950/10 pl-3">
+            <div :if={todo_source_excerpt(@current_todo_card, @current_todo)} class="mt-5 border-l border-zinc-950/10 pl-3">
               <p class="text-xs/5 font-medium text-zinc-500">Source context</p>
-              <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_excerpt(@current_todo) %></p>
+              <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_excerpt(@current_todo_card, @current_todo) %></p>
+            </div>
+
+            <div :if={todo_source_health_text(@current_todo_card)} class="mt-5 border-l border-zinc-950/10 pl-3">
+              <p class="text-xs/5 font-medium text-zinc-500">Source health</p>
+              <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_health_text(@current_todo_card) %></p>
             </div>
 
             <div class="mt-6 flex flex-wrap items-center gap-2">

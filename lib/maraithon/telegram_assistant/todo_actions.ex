@@ -4,6 +4,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   """
 
   alias Maraithon.AppUrl
+  alias Maraithon.ActionCards
   alias Maraithon.ConnectedAccounts
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
@@ -65,7 +66,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(value) when is_binary(value) do
     case Regex.run(
-           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|important|helpful|not_helpful|see_less)$/i,
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|snooze|important|helpful|not_helpful|see_less)$/i,
            value,
            capture: :all_but_first
          ) do
@@ -82,6 +83,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp dispatch_action(user_id, todo_id, "dismiss") do
     Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram todo message.")
+  end
+
+  defp dispatch_action(user_id, todo_id, "snooze") do
+    snoozed_until =
+      DateTime.utc_now()
+      |> DateTime.add(24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    Todos.snooze(user_id, todo_id, snoozed_until, note: "Snoozed from Telegram todo message.")
   end
 
   defp dispatch_action(user_id, todo_id, "important") do
@@ -131,6 +141,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
           [
             [
               %{"text" => "Done", "callback_data" => callback_data(todo_id, "done")},
+              %{"text" => "Snooze", "callback_data" => callback_data(todo_id, "snooze")},
               %{"text" => "Dismiss", "callback_data" => callback_data(todo_id, "dismiss")}
             ]
           ]
@@ -190,12 +201,19 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     next_action = display_text(todo_next_action(todo))
     context = display_text(todo_context(todo, metadata))
     assistant_source? = assistant_source?(todo_source)
+    card = ActionCards.for_todo(todo, include_disconnected: false)
 
     [
       display_text(prefix_text),
       action_line(next_action, assistant_source?),
       todo_context_line(context, next_action),
+      decision_line(card),
+      why_line(card),
+      prepared_action_line(card),
+      evidence_line(card, context),
       source_sentence(source, account, assistant_source?),
+      source_health_line(card),
+      learning_line(card),
       feedback && "Feedback noted: #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
@@ -316,6 +334,81 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp source_sentence(source, account, _assistant_source?),
     do: "I found this in #{safe(source)}#{render_account(account)}."
+
+  defp decision_line(card) when is_map(card) do
+    decision = Map.get(card, "decision_prompt")
+
+    if present?(decision) do
+      "Decision: #{safe(truncate(decision, 220))}"
+    end
+  end
+
+  defp decision_line(_card), do: nil
+
+  defp why_line(card) when is_map(card) do
+    why_now = Map.get(card, "why_now")
+
+    if present?(why_now) do
+      "Why now: #{safe(truncate(why_now, 220))}"
+    end
+  end
+
+  defp why_line(_card), do: nil
+
+  defp prepared_action_line(card) when is_map(card) do
+    case ActionCards.prepared_action_hint(card) do
+      hint when is_binary(hint) -> "Can handle: #{safe(hint)}"
+      _ -> nil
+    end
+  end
+
+  defp prepared_action_line(_card), do: nil
+
+  defp evidence_line(card, already_rendered_context) when is_map(card) do
+    case ActionCards.evidence_excerpt(card) do
+      excerpt when is_binary(excerpt) ->
+        if present?(already_rendered_context) and
+             String.contains?(already_rendered_context, excerpt) do
+          nil
+        else
+          "Evidence: #{safe(truncate(excerpt, 180))}"
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp evidence_line(_card, _already_rendered_context), do: nil
+
+  defp source_health_line(card) when is_map(card) do
+    source_health = Map.get(card, "source_health") || %{}
+
+    blocking =
+      source_health |> Map.get("blocking_gaps", []) |> List.wrap() |> Enum.reject(&blank?/1)
+
+    checked =
+      source_health |> Map.get("checked_sources", []) |> List.wrap() |> Enum.reject(&blank?/1)
+
+    cond do
+      blocking != [] ->
+        "Source gap: #{safe(Enum.take(blocking, 2) |> Enum.join("; "))}"
+
+      checked != [] ->
+        "Checked: #{safe(Enum.take(checked, 4) |> Enum.join(", "))}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp source_health_line(_card), do: nil
+
+  defp learning_line(%{"attention_mode" => "stale_check"}) do
+    "Mark Important to keep it active, or dismiss it to teach Maraithon to stop resurfacing it."
+  end
+
+  defp learning_line(_card), do: nil
 
   defp render_account(nil), do: ""
   defp render_account(account), do: " · #{safe(account)}"
@@ -619,6 +712,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp callback_notice("done"), do: "Marked done"
   defp callback_notice("dismiss"), do: "Dismissed"
+  defp callback_notice("snooze"), do: "Snoozed until tomorrow"
   defp callback_notice("important"), do: "Marked important"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
   defp callback_notice("not_helpful"), do: "Marked not important"
