@@ -17,17 +17,17 @@ defmodule MaraithonWeb.SessionController do
 
         conn
         |> put_flash(:info, "Check your email for a sign-in link.")
-        |> redirect(to: "/")
+        |> redirect(to: "/login")
 
       {:error, :invalid_email} ->
         conn
         |> put_flash(:error, "Please enter a valid email address.")
-        |> redirect(to: "/")
+        |> redirect(to: "/login")
 
       {:error, _reason} ->
         conn
         |> put_flash(:error, "Unable to send sign-in link right now.")
-        |> redirect(to: "/")
+        |> redirect(to: "/login")
     end
   end
 
@@ -46,12 +46,12 @@ defmodule MaraithonWeb.SessionController do
       {:error, :invalid_or_expired_link} ->
         conn
         |> put_flash(:error, "Sign-in link is invalid or expired.")
-        |> redirect(to: "/")
+        |> redirect(to: "/login")
 
       {:error, _reason} ->
         conn
         |> put_flash(:error, "Unable to sign in right now.")
-        |> redirect(to: "/")
+        |> redirect(to: "/login")
     end
   end
 

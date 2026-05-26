@@ -51,6 +51,10 @@ defmodule MaraithonWeb.Router do
     pipe_through :browser
 
     get "/", HomeController, :index
+    get "/login", HomeController, :login
+    get "/privacy", MarketingController, :privacy
+    get "/terms", MarketingController, :terms
+    get "/support", MarketingController, :support
     get "/changelog", ChangelogController, :index
     post "/auth/magic-link", SessionController, :create_magic_link
     get "/auth/magic/:token", SessionController, :consume_magic_link

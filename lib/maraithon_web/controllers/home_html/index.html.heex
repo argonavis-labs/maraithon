@@ -1,44 +1,241 @@
-<Layouts.app flash={@flash} show_nav={false}>
-  <main class="flex min-h-svh flex-col p-2 bg-zinc-100">
-    <div class="flex grow items-center justify-center p-6 lg:rounded-lg lg:bg-white lg:p-10 lg:shadow-xs lg:ring-1 lg:ring-zinc-950/5">
-      <div class="w-full max-w-sm">
-        <div class="flex items-center gap-3">
-          <span class="flex size-9 items-center justify-center rounded-lg bg-zinc-950 text-white">
-            <svg viewBox="0 0 16 16" class="size-5 fill-current" aria-hidden="true">
-              <path d="M2.5 2h2.4l3.1 5.4L11.1 2h2.4v12h-1.9V5.5L8.6 11.1H7.4L4.4 5.5V14H2.5V2Z" />
-            </svg>
+<div class="min-h-screen bg-olive-100 font-sans text-olive-950 antialiased">
+  <.flash_group flash={@flash} />
+
+  <header class="absolute inset-x-0 top-0 z-10">
+    <nav class="mx-auto flex max-w-7xl items-center justify-between px-6 py-6 lg:px-8" aria-label="Global">
+      <a href="/" class="flex items-center gap-3">
+        <span class="flex size-9 items-center justify-center rounded-lg bg-olive-950 text-olive-50">
+          <svg viewBox="0 0 16 16" class="size-5 fill-current" aria-hidden="true">
+            <path d="M2.5 2h2.4l3.1 5.4L11.1 2h2.4v12h-1.9V5.5L8.6 11.1H7.4L4.4 5.5V14H2.5V2Z" />
+          </svg>
+        </span>
+        <span class="font-display text-2xl text-olive-950">Maraithon</span>
+      </a>
+      <div class="hidden gap-8 text-sm/6 text-olive-700 sm:flex">
+        <a href="/#features" class="hover:text-olive-950">Features</a>
+        <a href="/#mobile" class="hover:text-olive-950">Mobile</a>
+        <a href="/support" class="hover:text-olive-950">Support</a>
+        <a href="/changelog" class="hover:text-olive-950">Changelog</a>
+      </div>
+      <a
+        href="/login"
+        class="inline-flex items-center rounded-md bg-olive-950 px-3.5 py-2 text-sm/6 font-medium text-olive-50 hover:bg-olive-800"
+      >
+        Sign in
+      </a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="relative isolate overflow-hidden pt-32 pb-20 sm:pt-40 sm:pb-28">
+      <div class="mx-auto max-w-4xl px-6 lg:px-8">
+        <div class="flex flex-col items-center gap-7 text-center">
+          <span class="inline-flex items-center gap-2 rounded-full border border-olive-300 bg-white/60 px-3 py-1 text-xs/6 text-olive-700">
+            <span class="size-1.5 rounded-full bg-olive-600"></span>
+            Now in private TestFlight beta
           </span>
-          <span class="text-sm/5 font-semibold tracking-tight text-zinc-950">Maraithon</span>
-        </div>
-
-        <h1 class="mt-10 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-          Sign in
-        </h1>
-        <p class="mt-1 text-sm/6 text-zinc-500">
-          Enter your email and we'll send a one-time link.
-        </p>
-
-        <.form for={@form} action={~p"/auth/magic-link"} method="post" class="mt-8 space-y-5">
-          <.field label="Email" for="magic_link_email">
-            <.c_input
-              id="magic_link_email"
+          <h1 class="font-display text-5xl leading-[1.05] tracking-tight text-olive-950 sm:text-7xl">
+            A chief of staff that <em class="font-display italic">stays</em> with you.
+          </h1>
+          <p class="max-w-2xl text-lg/8 text-olive-700">
+            Maraithon is a long-running AI agent runtime. It watches your inbox, your calendar, and your tools — then surfaces only what needs you. The mobile app is where you act on it.
+          </p>
+          <form action="/auth/magic-link" method="post" class="mt-2 flex w-full max-w-md flex-col gap-3 sm:flex-row">
+            <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+            <label for="hero-email" class="sr-only">Email address</label>
+            <input
+              id="hero-email"
               type="email"
               name="magic_link[email]"
-              value={@form[:email].value}
               required
               autocomplete="email"
-              placeholder="you@example.com"
+              placeholder="you@company.com"
+              class="flex-1 rounded-md border border-olive-300 bg-white px-4 py-3 text-base text-olive-950 shadow-xs placeholder:text-olive-400 focus:outline-none focus:ring-2 focus:ring-olive-600"
             />
-          </.field>
-          <.button type="submit" class="w-full">
-            Email me a link
-          </.button>
-        </.form>
+            <button
+              type="submit"
+              class="inline-flex items-center justify-center rounded-md bg-olive-950 px-5 py-3 text-base font-medium text-olive-50 shadow-xs hover:bg-olive-800"
+            >
+              Email me a link
+            </button>
+          </form>
+          <p class="text-xs/6 text-olive-600">Magic link sign-in. No passwords. Links expire in 15 minutes.</p>
+        </div>
+      </div>
+    </section>
 
-        <p class="mt-8 text-xs/5 text-zinc-500">
-          Long-running agent runtime · links expire in 15 minutes.
-        </p>
+    <section id="features" class="border-t border-olive-200 bg-white">
+      <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="mx-auto max-w-2xl text-center">
+          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">Built for operators</p>
+          <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+            One calm surface for your day.
+          </h2>
+          <p class="mt-4 text-lg/8 text-olive-700">
+            Maraithon agents run in the background on durable OTP processes. The app is where the work lands.
+          </p>
+        </div>
+
+        <dl class="mx-auto mt-16 grid max-w-5xl grid-cols-1 gap-x-10 gap-y-12 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <dt class="font-display text-2xl text-olive-950">Today</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              One screen for what actually needs you right now. Calendar, open loops, drafts waiting on your call.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-display text-2xl text-olive-950">Todos</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              Quick capture, fast triage, a real waiting-on list. What you owe people and what they owe you.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-display text-2xl text-olive-950">People</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              Lightweight CRM that remembers what matters. Last contact, open threads, what you promised them.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-display text-2xl text-olive-950">Chat</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              Direct line to your agent. Ask, delegate, redirect, see what it&rsquo;s working on in the background.
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="border-t border-olive-200 bg-olive-50">
+      <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="mx-auto grid max-w-5xl grid-cols-1 items-start gap-12 lg:grid-cols-2">
+          <div>
+            <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">How it works</p>
+            <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+              Event-first agents. Always alive.
+            </h2>
+            <p class="mt-4 text-lg/8 text-olive-700">
+              Traditional assistants are request-response. You ask, they answer, they die. Maraithon agents are different — each one is a long-running OTP process with state, subscriptions, and tools.
+            </p>
+            <p class="mt-4 text-lg/8 text-olive-700">
+              They react to inbound events the moment they happen, persist across restarts, and stay coherent across days. Your job is judgment. Theirs is everything else.
+            </p>
+          </div>
+          <div class="rounded-2xl border border-olive-200 bg-white p-6 shadow-xs">
+            <div class="space-y-4 font-mono text-sm text-olive-700">
+              <p><span class="text-olive-500">Agent</span> = Prompt + State + Subscriptions + Tools</p>
+              <ul class="space-y-3">
+                <li><span class="text-olive-950 font-medium">Prompt</span> — who the agent is, how it thinks</li>
+                <li><span class="text-olive-950 font-medium">State</span> — what it remembers, what it&rsquo;s seen</li>
+                <li><span class="text-olive-950 font-medium">Subscriptions</span> — event streams it&rsquo;s watching</li>
+                <li><span class="text-olive-950 font-medium">Tools</span> — actions it can take</li>
+              </ul>
+              <p class="pt-2 text-xs text-olive-500">Backed by Elixir, OTP, and Postgres on Fly.io.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="mobile" class="border-t border-olive-200 bg-white">
+      <div class="mx-auto max-w-7xl px-6 py-20 sm:py-28 lg:px-8">
+        <div class="mx-auto max-w-3xl text-center">
+          <p class="text-sm/6 font-medium uppercase tracking-wider text-olive-600">iOS</p>
+          <h2 class="mt-3 font-display text-4xl tracking-tight text-olive-950 sm:text-5xl">
+            The mobile app is the operational surface.
+          </h2>
+          <p class="mt-4 text-lg/8 text-olive-700">
+            Scan what needs you. Decide. Move on. Native iOS, built on SwiftUI for iOS 26.
+          </p>
+          <div class="mt-8 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            <a
+              href="/login"
+              class="inline-flex items-center justify-center rounded-md bg-olive-950 px-5 py-3 text-base font-medium text-olive-50 hover:bg-olive-800"
+            >
+              Get a sign-in link
+            </a>
+            <span class="text-sm/6 text-olive-600">
+              TestFlight is invite-only during beta. <a href="/support" class="underline hover:text-olive-950">Request access &rarr;</a>
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="border-t border-olive-200 bg-olive-100">
+      <div class="mx-auto max-w-3xl px-6 py-20 sm:py-24 lg:px-8">
+        <h2 class="font-display text-3xl tracking-tight text-olive-950 sm:text-4xl">Common questions</h2>
+        <dl class="mt-10 space-y-8">
+          <div>
+            <dt class="font-medium text-olive-950">How do I sign in?</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              We send a one-time magic link to your email. No passwords. Links expire in 15 minutes. The same flow works in the iOS app.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium text-olive-950">What does Maraithon collect?</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              Your email, the data you connect via integrations, and what you create in the app (todos, people, chat threads). Full details in our <a href="/privacy" class="underline hover:text-olive-950">privacy policy</a>.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium text-olive-950">Can I delete my account?</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              Yes. You can delete your account and all associated data from inside the iOS app (Settings &rarr; Account &rarr; Delete account) or by emailing <a href="mailto:support@maraithon.com" class="underline hover:text-olive-950">support@maraithon.com</a>.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-medium text-olive-950">Is there a free trial?</dt>
+            <dd class="mt-2 text-base/7 text-olive-700">
+              The beta is free while we&rsquo;re in private TestFlight. We&rsquo;ll publish pricing before the public launch.
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-olive-200 bg-olive-950 text-olive-300">
+    <div class="mx-auto max-w-7xl px-6 py-16 lg:px-8">
+      <div class="grid grid-cols-2 gap-10 sm:grid-cols-4">
+        <div class="col-span-2 sm:col-span-1">
+          <div class="flex items-center gap-3">
+            <span class="flex size-9 items-center justify-center rounded-lg bg-olive-50 text-olive-950">
+              <svg viewBox="0 0 16 16" class="size-5 fill-current" aria-hidden="true">
+                <path d="M2.5 2h2.4l3.1 5.4L11.1 2h2.4v12h-1.9V5.5L8.6 11.1H7.4L4.4 5.5V14H2.5V2Z" />
+              </svg>
+            </span>
+            <span class="font-display text-2xl text-olive-50">Maraithon</span>
+          </div>
+          <p class="mt-4 text-sm/6 text-olive-400">A long-running AI agent runtime for busy humans.</p>
+        </div>
+        <div>
+          <h3 class="text-sm font-medium text-olive-50">Product</h3>
+          <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
+            <li><a href="/#features" class="hover:text-olive-50">Features</a></li>
+            <li><a href="/#mobile" class="hover:text-olive-50">Mobile app</a></li>
+            <li><a href="/changelog" class="hover:text-olive-50">Changelog</a></li>
+            <li><a href="/login" class="hover:text-olive-50">Sign in</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="text-sm font-medium text-olive-50">Company</h3>
+          <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
+            <li><a href="/support" class="hover:text-olive-50">Support</a></li>
+            <li><a href="mailto:support@maraithon.com" class="hover:text-olive-50">Contact</a></li>
+          </ul>
+        </div>
+        <div>
+          <h3 class="text-sm font-medium text-olive-50">Legal</h3>
+          <ul class="mt-3 space-y-2 text-sm/6 text-olive-300">
+            <li><a href="/privacy" class="hover:text-olive-50">Privacy policy</a></li>
+            <li><a href="/terms" class="hover:text-olive-50">Terms of service</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="mt-12 flex flex-col items-start justify-between gap-3 border-t border-olive-800 pt-6 text-xs/6 text-olive-400 sm:flex-row">
+        <p>&copy; <%= DateTime.utc_now().year %> Maraithon. All rights reserved.</p>
+        <p>Built in Toronto. Hosted on Fly.io.</p>
       </div>
     </div>
-  </main>
-</Layouts.app>
+  </footer>
+</div>

@@ -3,6 +3,7 @@
 	build build-web build-api build-static build-assets build-native build-companion build-mobile \
 	test test-web test-api test-native test-companion test-mobile \
 	verify verify-web verify-api verify-static verify-assets verify-native verify-companion verify-mobile verify-production-mobile \
+	archive-mobile upload-mobile ship-mobile \
 	deploy deploy-web
 
 setup:
@@ -85,6 +86,14 @@ verify-mobile:
 
 verify-production-mobile:
 	scripts/monorepo/mobile-production-verify
+
+archive-mobile:
+	apps/mobile/scripts/archive.sh
+
+upload-mobile:
+	apps/mobile/scripts/upload.sh
+
+ship-mobile: archive-mobile upload-mobile
 
 deploy:
 	scripts/monorepo/deploy

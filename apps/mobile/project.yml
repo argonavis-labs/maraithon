@@ -4,11 +4,13 @@ options:
   createIntermediateGroups: true
 settings:
   base:
-    CURRENT_PROJECT_VERSION: 1
+    CURRENT_PROJECT_VERSION: 2
     MARKETING_VERSION: 1.0
     SWIFT_VERSION: 6.3
     IPHONEOS_DEPLOYMENT_TARGET: 26.0
     ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEVELOPMENT_TEAM: PS5W7BFTQ2
+    CODE_SIGN_STYLE: Automatic
 targets:
   MaraithonMobile:
     type: application

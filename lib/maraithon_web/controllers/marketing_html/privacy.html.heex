@@ -1,0 +1,127 @@
+<.shell title="Privacy policy" eyebrow="Last updated May 26, 2026">
+  <p class="lead text-lg/8 text-olive-700">
+    Maraithon is an operational tool for busy humans. We collect as little as possible to make it
+    work, store it securely, and never sell it. This page describes exactly what we collect, why,
+    and how to remove it.
+  </p>
+
+  <h2 class="mt-12 font-display text-3xl text-olive-950">Who we are</h2>
+  <p class="mt-3">
+    Maraithon is operated by Bliss Software Inc., based in Toronto, Canada. You can reach us at
+    <a href="mailto:support@maraithon.com" class="underline">support@maraithon.com</a>
+    for any privacy-related question or request.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">What we collect</h2>
+  <p class="mt-3">We collect three categories of data:</p>
+  <ol class="mt-3 list-decimal space-y-3 pl-6">
+    <li>
+      <strong>Account data.</strong>
+      Your email address, used to sign you in via magic link and to contact you about your account.
+      We do not store passwords because Maraithon does not use them.
+    </li>
+    <li>
+      <strong>Content you create.</strong>
+      Todos, contacts, chat messages, and notes you add to Maraithon. These are owned by you and stored
+      so the app can show them back to you on any device.
+    </li>
+    <li>
+      <strong>Connected data.</strong>
+      When you connect an integration (Gmail, Google Calendar, Slack, Linear, Notion, GitHub, etc.),
+      Maraithon reads the data needed to power your agents. We store OAuth tokens encrypted at rest,
+      and we cache only the data required to surface what needs your attention.
+    </li>
+  </ol>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">What we do not collect</h2>
+  <ul class="mt-3 list-disc space-y-2 pl-6">
+    <li>We do not sell or rent your data to anyone.</li>
+    <li>We do not use your data to train third-party AI models.</li>
+    <li>We do not track you across other websites or apps.</li>
+    <li>We do not run third-party advertising or marketing analytics on you.</li>
+  </ul>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">How we use it</h2>
+  <p class="mt-3">We use what we collect only to:</p>
+  <ul class="mt-3 list-disc space-y-2 pl-6">
+    <li>Authenticate you and keep your session live.</li>
+    <li>Run the agents you create and send you the results.</li>
+    <li>Send transactional email about your account (sign-in links, security alerts).</li>
+    <li>Operate, maintain, and improve the service.</li>
+    <li>Comply with legal obligations.</li>
+  </ul>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Where it lives</h2>
+  <p class="mt-3">
+    Account and content data is stored in a PostgreSQL database hosted on
+    <a href="https://fly.io" class="underline" target="_blank" rel="noopener">Fly.io</a>
+    in the Toronto (YYZ) region. We use the following sub-processors:
+  </p>
+  <ul class="mt-3 list-disc space-y-2 pl-6">
+    <li><strong>Fly.io</strong> — application hosting and database.</li>
+    <li><strong>OpenAI</strong> — large language model inference for agent reasoning.</li>
+    <li><strong>Postmark</strong> — transactional email delivery (sign-in links).</li>
+    <li><strong>Sentry</strong> — error monitoring (no personal content is logged).</li>
+  </ul>
+  <p class="mt-3">
+    Each sub-processor has contractual obligations to protect your data and is bound by their own
+    privacy policies. Connected integrations (Google, Slack, Linear, etc.) operate under their own
+    terms; Maraithon only requests the OAuth scopes needed for the agents you set up.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">How long we keep it</h2>
+  <p class="mt-3">
+    We retain your account and content for as long as your account is active. If you delete your
+    account, we delete account data, content, and connected-integration tokens within 30 days.
+    Anonymous aggregate logs may be retained longer for service reliability.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Your rights</h2>
+  <p class="mt-3">No matter where you live, you can:</p>
+  <ul class="mt-3 list-disc space-y-2 pl-6">
+    <li>Request a copy of the personal data we hold about you.</li>
+    <li>Correct any data that is inaccurate or out of date.</li>
+    <li>Delete your account and all associated data.</li>
+    <li>Disconnect any integration at any time, which revokes the related OAuth token.</li>
+    <li>Withdraw consent to processing at any time.</li>
+  </ul>
+  <p class="mt-3">
+    Email <a href="mailto:support@maraithon.com" class="underline">support@maraithon.com</a>
+    and we&rsquo;ll act on it within 30 days.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Deleting your account</h2>
+  <p class="mt-3">
+    You can delete your account in either the iOS app (Settings &rarr; Account &rarr; Delete account)
+    or by emailing <a href="mailto:support@maraithon.com" class="underline">support@maraithon.com</a>
+    from the address on file. Deletion is permanent and removes your todos, contacts, chat history,
+    OAuth tokens, and account record from our production database. Backups roll forward and are
+    purged within 30 days.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Children</h2>
+  <p class="mt-3">
+    Maraithon is not directed at children under 13 (or the equivalent age in your jurisdiction).
+    We do not knowingly collect data from children. If you believe a child has provided us data,
+    contact us and we&rsquo;ll delete it.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Security</h2>
+  <p class="mt-3">
+    Data is encrypted in transit (TLS) and at rest. OAuth tokens are encrypted at the application
+    layer with rotating keys. We follow standard secure-development practices and run automated
+    dependency audits. Security incidents that affect you will be disclosed without undue delay.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Changes to this policy</h2>
+  <p class="mt-3">
+    If we make material changes to this policy, we&rsquo;ll notify you by email and update the
+    &ldquo;Last updated&rdquo; date above before the changes take effect.
+  </p>
+
+  <h2 class="mt-10 font-display text-3xl text-olive-950">Contact</h2>
+  <p class="mt-3">
+    Questions, requests, or concerns:
+    <a href="mailto:support@maraithon.com" class="underline">support@maraithon.com</a>.
+  </p>
+</.shell>

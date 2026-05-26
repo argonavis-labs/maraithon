@@ -16,6 +16,9 @@ build/
 # Local production verification config
 Config/production-verification.env
 
+# App Store Connect API creds
+Config/appstore.env
+
 # OS / editor noise
 .DS_Store
 *.swp
