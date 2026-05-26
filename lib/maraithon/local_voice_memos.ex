@@ -12,6 +12,7 @@ defmodule Maraithon.LocalVoiceMemos do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.LocalVoiceMemos.EmbedJob
   alias Maraithon.LocalVoiceMemos.LocalVoiceMemo
+  alias Maraithon.LocalSearch
   alias Maraithon.Repo
 
   @max_audio_bytes 5 * 1024 * 1024
@@ -101,11 +102,11 @@ defmodule Maraithon.LocalVoiceMemos do
   def search(user_id, term, opts \\ [])
       when is_binary(user_id) and is_binary(term) do
     limit = Keyword.get(opts, :limit, 50)
-    needle = String.downcase(term)
+    query = LocalSearch.compile(term)
 
     user_id
     |> recent_for_user(limit: 500)
-    |> Enum.filter(&matches_term?(&1, needle))
+    |> Enum.filter(&matches_term?(&1, query))
     |> Enum.take(limit)
   end
 
@@ -287,15 +288,9 @@ defmodule Maraithon.LocalVoiceMemos do
 
   defp matches_term?(
          %LocalVoiceMemo{title: title, snippet: snippet, transcript: transcript},
-         needle
+         query
        ) do
-    haystack =
-      [title, snippet, transcript]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&String.downcase/1)
-      |> Enum.join(" ")
-
-    String.contains?(haystack, needle)
+    LocalSearch.matches?(query, [title, snippet, transcript])
   end
 
   # Accepts audio as raw binary (already decoded) or as a base64 string,

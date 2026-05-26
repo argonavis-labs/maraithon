@@ -40,7 +40,7 @@ defmodule Maraithon.TelegramRouter do
         send_ephemeral_reply(
           chat_id,
           source_message_id,
-          "You’re sending messages quickly. Reply to the exact item you want me to act on, or wait a moment and try again."
+          "I’m catching up with the last few messages. Reply to the exact item you want me to act on, or wait a moment before sending more."
         )
       else
         {:ok, conversation} =
@@ -544,7 +544,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp send_model_unavailable_turn(conversation, chat_id, reply_to_message_id, reason) do
     text =
-      "I could not run the model-backed assistant for that message, so I did not guess or route it with local rules. Try again in a moment."
+      "I saved that message in this thread, but the model-backed assistant is unavailable right now. I did not guess from local rules."
 
     send_assistant_turn(
       conversation,

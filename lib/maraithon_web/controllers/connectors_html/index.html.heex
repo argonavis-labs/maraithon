@@ -46,8 +46,15 @@
             <.badge color={connection_status_color(provider.status)} class="whitespace-nowrap">
               <%= connection_status_label(provider.status) %>
             </.badge>
-            <span class="truncate text-sm/6 text-zinc-500">
-              <%= provider_account_summary(provider) %>
+            <span class="min-w-0">
+              <span class="block truncate text-sm/6 text-zinc-500">
+                <%= provider_account_summary(provider) %>
+              </span>
+              <%= if local_source_summary = provider_local_source_summary(provider) do %>
+                <span class="mt-0.5 block truncate text-xs/5 text-zinc-500">
+                  <%= local_source_summary %>
+                </span>
+              <% end %>
             </span>
           </span>
 

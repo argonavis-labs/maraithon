@@ -109,8 +109,10 @@
 defmodule Maraithon.Runtime.AgentTest do
   use Maraithon.DataCase, async: false
 
+  alias Maraithon.Accounts
   alias Maraithon.Runtime.Agent, as: RuntimeAgent
   alias Maraithon.Agents
+  alias Maraithon.OperatorEvents
 
   # ----------------------------------------------------------------------------
   # Test Setup
@@ -708,6 +710,63 @@ defmodule Maraithon.Runtime.AgentTest do
       assert idle_data.current_message == nil
       assert idle_data.current_message_metadata == %{}
       assert idle_data.current_message_id == nil
+    end
+
+    test "hydrates recent operator events into the behavior prompt", %{
+      scheduler_pid: _scheduler_pid
+    } do
+      user_id = "runtime-context-events@example.com"
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _event} =
+        OperatorEvents.record(%{
+          user_id: user_id,
+          source: "gmail",
+          event_type: "email.received",
+          source_item_id: "starteryou-msg-1",
+          dedupe_key: "gmail:email.received:starteryou-msg-1",
+          occurred_at: ~U[2026-05-25 12:00:00Z],
+          payload: %{
+            "from" => "Michael Berlingo <michael@example.com>",
+            "subject" => "Starteryou UGC Campaigns",
+            "snippet" => "Can you confirm the campaign materials and next step?"
+          }
+        })
+
+      {:ok, agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "context_events_agent",
+            "prompt" => "Use connected context.",
+            "subscribe" => [],
+            "tools" => []
+          },
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      pid = start_supervised!({RuntimeAgent, agent})
+      Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), pid)
+
+      {:idle, _data} = :sys.get_state(pid)
+
+      message_id = Ecto.UUID.generate()
+      send(pid, {:message, "Who is waiting on me?", %{}, message_id})
+
+      {:waiting_effect, waiting_data} = :sys.get_state(pid)
+
+      prompt =
+        waiting_data.pending_effects
+        |> Map.values()
+        |> Enum.flat_map(fn effect -> effect.params["messages"] || [] end)
+        |> Enum.map_join("\n", & &1["content"])
+
+      assert prompt =~ "## Recent Connected Activity"
+      assert prompt =~ "gmail email.received"
+      assert prompt =~ "Starteryou UGC Campaigns"
+      assert prompt =~ "Michael Berlingo"
     end
   end
 

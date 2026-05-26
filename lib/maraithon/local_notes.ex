@@ -10,6 +10,7 @@ defmodule Maraithon.LocalNotes do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.LocalNotes.EmbedJob
   alias Maraithon.LocalNotes.LocalNote
+  alias Maraithon.LocalSearch
   alias Maraithon.Repo
 
   @doc """
@@ -115,11 +116,11 @@ defmodule Maraithon.LocalNotes do
   def search(user_id, term, opts \\ [])
       when is_binary(user_id) and is_binary(term) do
     limit = Keyword.get(opts, :limit, 50)
-    needle = String.downcase(term)
+    query = LocalSearch.compile(term)
 
     user_id
     |> recent_for_user(limit: 500)
-    |> Enum.filter(&matches_term?(&1, needle))
+    |> Enum.filter(&matches_term?(&1, query))
     |> Enum.take(limit)
   end
 
@@ -334,14 +335,8 @@ defmodule Maraithon.LocalNotes do
 
   defp parse_datetime(_), do: nil
 
-  defp matches_term?(%LocalNote{title: title, snippet: snippet, body: body}, needle) do
-    haystack =
-      [title, snippet, body]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&String.downcase/1)
-      |> Enum.join(" ")
-
-    String.contains?(haystack, needle)
+  defp matches_term?(%LocalNote{title: title, snippet: snippet, body: body}, query) do
+    LocalSearch.matches?(query, [title, snippet, body])
   end
 
   defp enqueue_embed_jobs(_user_id, []), do: :ok

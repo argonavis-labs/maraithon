@@ -410,10 +410,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp advance_after_action(%Brief{} = brief, chat_id, %Todo{} = todo, action) do
-    brief =
-      brief
-      |> append_reviewed_action!(todo, action)
-      |> clear_current_todo!()
+    brief = record_reviewed_action!(brief, todo, action)
 
     case next_unreviewed_open_todo(brief) do
       {%Todo{} = next_todo, position, total} ->
@@ -733,16 +730,6 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     put_review!(brief, review)
   end
 
-  defp clear_current_todo!(%Brief{} = brief) do
-    review =
-      brief
-      |> review_metadata()
-      |> Map.delete("current_todo_id")
-      |> Map.put("updated_at", now_iso8601())
-
-    put_review!(brief, review)
-  end
-
   defp complete_review!(%Brief{} = brief) do
     review =
       brief
@@ -755,7 +742,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     put_review!(brief, review)
   end
 
-  defp append_reviewed_action!(%Brief{} = brief, %Todo{} = todo, action) do
+  defp record_reviewed_action!(%Brief{} = brief, %Todo{} = todo, action) do
     review = review_metadata(brief)
 
     reviewed =
@@ -771,7 +758,13 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       "at" => now_iso8601()
     }
 
-    put_review!(brief, Map.put(review, "reviewed", reviewed ++ [entry]))
+    updated_review =
+      review
+      |> Map.put("reviewed", reviewed ++ [entry])
+      |> Map.delete("current_todo_id")
+      |> Map.put("updated_at", now_iso8601())
+
+    put_review!(brief, updated_review)
   end
 
   defp summary_snapshot(%Brief{} = brief) do

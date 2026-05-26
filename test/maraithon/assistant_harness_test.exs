@@ -90,6 +90,36 @@ defmodule Maraithon.AssistantHarnessTest do
     assert failover_policy.model_failover.max_attempts == 3
   end
 
+  test "failure messages preserve context instead of handing work back to the user" do
+    disallowed = [
+      "internal issue",
+      "ran out of time",
+      "try again",
+      "ask me for a narrower",
+      "taking longer than it should",
+      "model is still busy"
+    ]
+
+    messages = [
+      AssistantHarness.failure_message(:timeout),
+      AssistantHarness.failure_message(:llm_turn_limit),
+      AssistantHarness.failure_message(:tool_step_limit),
+      AssistantHarness.failure_message({:llm_busy, 1_000}),
+      AssistantHarness.failure_message({:assistant_harness_tool_loop_detected, "list_todos", 3}),
+      AssistantHarness.failure_message(
+        {:assistant_harness_tool_loop_detected, "list_todos", 3, "same_tool_args", %{}}
+      ),
+      AssistantHarness.failure_message(:unexpected)
+    ]
+
+    assert Enum.all?(messages, &String.contains?(&1, "saved"))
+
+    refute Enum.any?(messages, fn message ->
+             normalized = String.downcase(message)
+             Enum.any?(disallowed, &String.contains?(normalized, &1))
+           end)
+  end
+
   test "builds model requests with runtime policy instead of prompt text alone" do
     request =
       AssistantHarness.build_step_request(payload("What should I review?"),

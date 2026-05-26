@@ -1,6 +1,8 @@
 defmodule MaraithonWeb.EventControllerTest do
   use MaraithonWeb.ConnCase, async: true
 
+  alias Maraithon.Agents
+
   describe "POST /api/v1/events" do
     test "publishes event to topic", %{conn: conn} do
       conn =
@@ -35,11 +37,44 @@ defmodule MaraithonWeb.EventControllerTest do
   end
 
   describe "GET /api/v1/events/topics" do
-    test "returns not implemented message", %{conn: conn} do
+    test "returns active subscriber topic summaries", %{conn: conn} do
+      {:ok, first_agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "calendar watcher",
+            "prompt" => "Watch calendar events.",
+            "subscribe" => ["calendar:primary", "gmail:inbox"]
+          },
+          status: "running"
+        })
+
+      {:ok, second_agent} =
+        Agents.create_agent(%{
+          behavior: "prompt_agent",
+          config: %{
+            "name" => "calendar helper",
+            "prompt" => "Also watch calendar events.",
+            "subscribe" => ["calendar:primary"]
+          },
+          status: "running"
+        })
+
       conn = get(conn, "/api/v1/events/topics")
 
       response = json_response(conn, 200)
-      assert response["message"] =~ "not yet implemented"
+      assert response["count"] == 2
+
+      calendar_topic = Enum.find(response["topics"], &(&1["topic"] == "calendar:primary"))
+      gmail_topic = Enum.find(response["topics"], &(&1["topic"] == "gmail:inbox"))
+
+      assert calendar_topic["subscriber_count"] == 2
+      assert first_agent.id in calendar_topic["agent_ids"]
+      assert second_agent.id in calendar_topic["agent_ids"]
+      assert is_binary(calendar_topic["updated_at"])
+
+      assert gmail_topic["subscriber_count"] == 1
+      assert first_agent.id in gmail_topic["agent_ids"]
     end
   end
 end

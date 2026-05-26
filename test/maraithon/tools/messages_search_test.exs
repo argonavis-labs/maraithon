@@ -82,7 +82,8 @@ defmodule Maraithon.Tools.MessagesSearchTest do
           }),
           sample_message("g2", %{
             "text" => "same topic",
-            "sender_handle" => "dave@example.com"
+            "sender_handle" => "dave@example.com",
+            "chat_display_name" => "Dave"
           })
         ])
 

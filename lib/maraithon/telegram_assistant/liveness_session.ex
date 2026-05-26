@@ -10,7 +10,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   require Logger
 
   @registry Maraithon.TelegramAssistant.LivenessRegistry
-  @default_timeout_text "I'm still checking this, and it's taking longer than it should. I won't guess from partial context. I'll update this if the lookup finishes."
+  @default_timeout_text "I saved this request and am finishing the lookup with the context I have. I won't guess from partial evidence; I'll send the answer here when it is ready."
   @stream_flush_interval_ms 1_000
   @stream_placeholder "…"
 
@@ -659,7 +659,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   defp progress_text(_state), do: "Still working on that."
 
   defp timeout_text(%{hint_category: "relationships", hint_labels: [name | _]}) do
-    "I'm still checking who #{name} is across CRM and connected sources, and it's taking longer than it should. I won't guess from a name alone. I'll update this if the lookup finishes."
+    "I saved the question about #{name} and am checking CRM plus connected sources. I won't guess from a name alone; I'll send the answer here when the lookup is ready."
   end
 
   defp timeout_text(%{hint_category: "connected_accounts", hint_labels: labels}) do
@@ -675,7 +675,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         _ -> "your connected accounts"
       end
 
-    "I'm still checking #{source}, and it's taking longer than it should. I won't guess from partial context. I'll update this if the lookup finishes."
+    "I saved this request and am checking #{source} with the context I have. I won't guess from partial evidence; I'll send the answer here when it is ready."
   end
 
   defp timeout_text(_state), do: @default_timeout_text

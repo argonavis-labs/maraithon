@@ -1,6 +1,8 @@
 defmodule MaraithonWeb.EventController do
   use MaraithonWeb, :controller
 
+  alias Maraithon.AgentSubscriptions
+
   require Logger
 
   @doc """
@@ -47,12 +49,28 @@ defmodule MaraithonWeb.EventController do
   Useful for debugging and observability.
   """
   def topics(conn, _params) do
-    # Note: Phoenix.PubSub doesn't provide a way to list topics
-    # This would need custom tracking if needed
+    topics =
+      AgentSubscriptions.list_active_topic_summaries()
+      |> Enum.map(&serialize_topic_summary/1)
+
     conn
     |> json(%{
-      message: "Topic listing not yet implemented",
-      hint: "Subscribe agents to topics via config['subscribe']"
+      count: length(topics),
+      topics: topics
     })
   end
+
+  defp serialize_topic_summary(summary) do
+    %{
+      topic: summary.topic,
+      subscriber_count: summary.subscriber_count,
+      agent_ids: summary.agent_ids,
+      user_ids: summary.user_ids,
+      project_ids: summary.project_ids,
+      updated_at: format_datetime(summary.updated_at)
+    }
+  end
+
+  defp format_datetime(nil), do: nil
+  defp format_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
 end

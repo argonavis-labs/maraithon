@@ -18,6 +18,7 @@ defmodule Maraithon.LocalReminders do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.LocalReminders.EmbedJob
   alias Maraithon.LocalReminders.LocalReminder
+  alias Maraithon.LocalSearch
   alias Maraithon.Repo
 
   @upsert_fields [
@@ -201,7 +202,7 @@ defmodule Maraithon.LocalReminders do
       when is_binary(user_id) and is_binary(term) do
     limit = Keyword.get(opts, :limit, 25)
     list_name = Keyword.get(opts, :list_name)
-    needle = String.downcase(term)
+    query = LocalSearch.compile(term)
 
     base =
       from reminder in LocalReminder,
@@ -212,7 +213,7 @@ defmodule Maraithon.LocalReminders do
     base
     |> maybe_filter_list(list_name)
     |> Repo.all()
-    |> Enum.filter(&matches_term?(&1, needle))
+    |> Enum.filter(&matches_term?(&1, query))
     |> Enum.take(limit)
   end
 
@@ -414,14 +415,8 @@ defmodule Maraithon.LocalReminders do
 
   defp parse_datetime(_), do: nil
 
-  defp matches_term?(%LocalReminder{title: title, notes: notes, list_name: list_name}, needle) do
-    haystack =
-      [title, notes, list_name]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&String.downcase/1)
-      |> Enum.join(" ")
-
-    String.contains?(haystack, needle)
+  defp matches_term?(%LocalReminder{title: title, notes: notes, list_name: list_name}, query) do
+    LocalSearch.matches?(query, [title, notes, list_name])
   end
 
   defp enqueue_embed_jobs(_user_id, []), do: :ok

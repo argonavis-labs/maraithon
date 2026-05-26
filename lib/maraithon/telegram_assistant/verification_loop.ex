@@ -25,6 +25,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.LocalBrowserHistory.LocalVisit
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalCalendar.LocalEvent
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalMessages.LocalMessage
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalNotes.LocalNote
   alias Maraithon.Memory
   alias Maraithon.Memory.Event, as: MemoryEvent
   alias Maraithon.Memory.Item, as: MemoryItem
@@ -51,6 +55,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Tools
   alias Maraithon.Todos
   alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Todos.Todo
@@ -182,6 +187,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         kind: :static
       },
       %{
+        id: :connected_context_local_sources_contract,
+        kind: :static
+      },
+      %{
         id: :todo_surface_quality_contract,
         kind: :static
       },
@@ -195,6 +204,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       },
       %{
         id: :todo_review_text_request_contract,
+        kind: :static
+      },
+      %{
+        id: :toolbox_crud_contract,
         kind: :static
       },
       %{
@@ -219,9 +232,19 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         text: "Add renew the verification passport by Friday to my todo list."
       },
       %{
+        id: :todo_update_linked,
+        text: "Change this todo next action to return the book today and set priority to 88.",
+        linked_todo_key: :resolution_todo
+      },
+      %{
         id: :todo_resolve_linked,
         text: "Mark this done.",
         linked_todo_key: :resolution_todo
+      },
+      %{
+        id: :todo_delete_linked,
+        text: "Dismiss this todo as no longer relevant.",
+        linked_todo_key: :delete_todo
       },
       %{
         id: :crm_read,
@@ -230,6 +253,12 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       %{
         id: :crm_upsert,
         text: "Remember that Priya Shah is my design partner and prefers Slack."
+      },
+      %{
+        id: :crm_merge,
+        text: fn env ->
+          "Merge CRM person #{env.matthew_duplicate.id} into #{env.matthew.id}; I confirm they are the same person."
+        end
       },
       %{
         id: :linked_context,
@@ -468,10 +497,16 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         Enum.all?([:open_loops, :todos, :relationships, :calendar], &(&1 in today_fetchers)) and
           Enum.all?(
-            ["get_open_loops", "list_todos", "calendar_events_around"],
+            [
+              "get_open_loops",
+              "list_todos",
+              "update_todo",
+              "delete_todo",
+              "calendar_events_around"
+            ],
             &(&1 in today_tools)
           ),
-        "today_mode must include open loops, todos, CRM relationships, calendar, and focused tools"
+        "today_mode must include open loops, todos, CRM relationships, calendar, and todo action tools"
       )
       |> require_finding(
         Map.get(waiting_profile, :request_focus) == :waiting_on and
@@ -482,10 +517,17 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         Enum.all?([:open_loops, :todos, :relationships], &(&1 in waiting_fetchers)) and
           :calendar not in waiting_fetchers and
           Enum.all?(
-            ["get_open_loops", "get_relationship_context", "review_connected_context"],
+            [
+              "get_open_loops",
+              "get_relationship_context",
+              "review_connected_context",
+              "update_todo",
+              "delete_todo",
+              "merge_people"
+            ],
             &(&1 in waiting_tools)
           ),
-        "waiting_on must focus on open loops and CRM without paying the calendar fetch cost"
+        "waiting_on must focus on open loops and CRM CRUD without paying the calendar fetch cost"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -855,6 +897,9 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     profile = ModelRouting.profile_for(attrs)
     escalated = ModelRouting.escalated_profile_for(profile)
 
+    linked_payload = focused_payload_for(profile, attrs.text, Toolbox.tool_definitions(%{}))
+    linked_tool_names = payload_tool_names(linked_payload)
+
     findings =
       []
       |> require_finding(
@@ -876,6 +921,13 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         Map.get(escalated, :request_focus) == :linked_item_context,
         "escalated profile must preserve linked_item_context"
+      )
+      |> require_finding(
+        Enum.all?(
+          ["update_todo", "delete_todo", "merge_people"],
+          &(&1 in linked_tool_names)
+        ),
+        "linked_item_context must keep todo update/delete and CRM merge available"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -906,10 +958,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         Enum.all?(
-          ["review_connected_context", "get_relationship_context", "list_todos"],
+          [
+            "review_connected_context",
+            "get_relationship_context",
+            "list_todos",
+            "update_todo",
+            "delete_todo",
+            "merge_people",
+            "delete_person"
+          ],
           &(&1 in tool_names)
         ),
-        "person_context must expose connected review, CRM, and todo tools"
+        "person_context must expose connected review plus todo/CRM read-write tools"
       )
       |> require_finding(
         Enum.all?(
@@ -917,6 +977,51 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           &(&1 in context_keys)
         ),
         "person_context must load CRM, todos, calendar, and connected account state"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :connected_context_local_sources_contract} = scenario,
+         env,
+         _opts
+       ) do
+    review_result =
+      Tools.execute("review_connected_context", %{
+        "user_id" => env.user_id,
+        "query" => "Matthew setup",
+        "sources" => ["imessage", "apple_notes"],
+        "max_results" => 5,
+        "timeout_ms" => 1_000
+      })
+
+    {review, error} =
+      case review_result do
+        {:ok, review} -> {review, nil}
+        {:error, reason} -> {%{}, reason}
+      end
+
+    observations =
+      Map.get(review, :source_observations) || Map.get(review, "source_observations") || []
+
+    reviewed_sources =
+      Map.get(review, :reviewed_sources) || Map.get(review, "reviewed_sources") || []
+
+    findings =
+      []
+      |> require_finding(is_nil(error), "connected context local-source review must not error")
+      |> require_finding(
+        Enum.sort(reviewed_sources) == ["messages", "notes"],
+        "iMessage and Apple Notes source aliases must normalize to local source reviews"
+      )
+      |> require_finding(
+        local_observation?(observations, "imessage", ["matthew", "setup"]),
+        "connected context must return iMessage observations for matching local texts"
+      )
+      |> require_finding(
+        local_observation?(observations, "apple_notes", ["matthew", "setup"]),
+        "connected context must return Apple Notes observations for matching local notes"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -1132,6 +1237,36 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         not BriefTodoReview.text_review_request?("What's on my todo list?"),
         "ordinary todo read questions must still route to the normal assistant"
+      )
+
+    scenario_result(scenario, findings, %{response: nil, tool_history: []})
+  end
+
+  defp run_scenario(
+         %{kind: :static, id: :toolbox_crud_contract} = scenario,
+         _env,
+         _opts
+       ) do
+    tool_names =
+      %{}
+      |> Toolbox.tool_definitions()
+      |> Enum.map(&(Map.get(&1, "name") || Map.get(&1, :name)))
+
+    findings =
+      []
+      |> require_finding(
+        Enum.all?(
+          ~w(list_todos upsert_todos update_todo resolve_todo delete_todo),
+          &(&1 in tool_names)
+        ),
+        "Telegram toolbox must expose full todo CRUD: list, create/upsert, update, resolve, and delete/dismiss"
+      )
+      |> require_finding(
+        Enum.all?(
+          ~w(list_people get_person upsert_person get_relationship_context learn_relationship_context merge_people delete_person),
+          &(&1 in tool_names)
+        ),
+        "Telegram toolbox must expose CRM CRUD and relationship merge/update tools"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -1542,6 +1677,23 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     |> require_finding(persisted?, "todo create must persist the requested passport renewal todo")
   end
 
+  defp score_chat_scenario(%{id: :todo_update_linked}, env, run) do
+    todo = Todos.get_for_user(env.user_id, env.resolution_todo.id)
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "update_todo")
+    |> require_finding(
+      tool_argument_used?(run, "update_todo", "todo_id", env.resolution_todo.id),
+      "linked todo update must use the exact linked todo id"
+    )
+    |> require_finding(
+      todo && todo.priority == 88 and
+        contains_all?(todo.next_action || "", ["return", "book", "today"]),
+      "linked todo update must persist the requested priority and next action"
+    )
+  end
+
   defp score_chat_scenario(%{id: :todo_resolve_linked}, env, run) do
     todo = Todos.get_for_user(env.user_id, env.resolution_todo.id)
 
@@ -1553,6 +1705,22 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "linked todo resolution must use the exact linked todo id"
     )
     |> require_finding(todo && todo.status == "done", "linked todo must be marked done")
+  end
+
+  defp score_chat_scenario(%{id: :todo_delete_linked}, env, run) do
+    todo = Todos.get_for_user(env.user_id, env.delete_todo.id)
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "delete_todo")
+    |> require_finding(
+      tool_argument_used?(run, "delete_todo", "todo_id", env.delete_todo.id),
+      "linked todo delete must use the exact linked todo id"
+    )
+    |> require_finding(
+      todo && todo.status == "dismissed",
+      "linked todo delete must dismiss the requested todo"
+    )
   end
 
   defp score_chat_scenario(%{id: :crm_read}, _env, run) do
@@ -1601,6 +1769,23 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     |> require_finding(
       persisted?,
       "CRM upsert must persist Priya Shah with design + Slack context"
+    )
+  end
+
+  defp score_chat_scenario(%{id: :crm_merge}, env, run) do
+    duplicate = Crm.get_person_for_user(env.user_id, env.matthew_duplicate.id)
+
+    []
+    |> require_success(run)
+    |> require_tool(run, "merge_people")
+    |> require_finding(
+      tool_argument_used?(run, "merge_people", "surviving_person_id", env.matthew.id) and
+        tool_argument_used?(run, "merge_people", "merged_person_id", env.matthew_duplicate.id),
+      "CRM merge must use the requested survivor and merged person ids"
+    )
+    |> require_finding(
+      duplicate && duplicate.status == "merged" and duplicate.merged_into_id == env.matthew.id,
+      "CRM merge must mark the duplicate person merged into the survivor"
     )
   end
 
@@ -1892,6 +2077,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     scheduled_job_at = DateTime.add(now, 26 * 60 * 60, :second)
     calendar_device_id = seed_local_calendar(user_id, run_id, now)
     browser_device_id = seed_browser_history(user_id, run_id, now)
+    local_context_device_id = seed_local_messages_and_notes(user_id, run_id, now)
 
     {:ok, matthew} =
       Crm.upsert_person(user_id, %{
@@ -1908,7 +2094,17 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "metadata" => %{"company" => "Raue Automation", "verification_run_id" => run_id}
       })
 
-    {:ok, [matthew_todo, resolution_todo, dentist_todo]} =
+    {:ok, matthew_duplicate} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Matt Raue",
+        "first_name" => "Matt",
+        "last_name" => "Raue",
+        "email" => "matt.raue.#{run_id}@raue.example",
+        "relationship" => "Duplicate verification CRM record for Matthew Raue",
+        "metadata" => %{"company" => "Raue Automation", "verification_run_id" => run_id}
+      })
+
+    {:ok, [matthew_todo, resolution_todo, delete_todo, dentist_todo]} =
       Todos.upsert_many(user_id, [
         %{
           "source" => "telegram_verification",
@@ -1944,6 +2140,17 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           "source" => "telegram_verification",
           "kind" => "personal",
           "attention_mode" => "act_now",
+          "title" => "Cancel the obsolete verification errand",
+          "summary" => "A linked-card verification todo used to prove todo deletion/dismissal.",
+          "next_action" => "Dismiss this if the user says it no longer matters.",
+          "priority" => 65,
+          "dedupe_key" => "#{run_id}:delete-linked-todo",
+          "metadata" => %{"verification_run_id" => run_id}
+        },
+        %{
+          "source" => "telegram_verification",
+          "kind" => "personal",
+          "attention_mode" => "act_now",
           "title" => "Book Emma dentist appointment",
           "summary" => "Family/personal todo that should appear in todo reads.",
           "next_action" => "Book Emma's dentist appointment this week.",
@@ -1968,20 +2175,66 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     resolution_card_id =
       create_linked_card(user_id, chat_id, run_id, resolution_todo, "resolution-card")
 
+    delete_card_id = create_linked_card(user_id, chat_id, run_id, delete_todo, "delete-card")
+
     %{
       user_id: user_id,
       chat_id: chat_id,
       run_id: run_id,
       matthew: matthew,
+      matthew_duplicate: matthew_duplicate,
       matthew_todo: matthew_todo,
       matthew_card_id: matthew_card_id,
       resolution_todo: resolution_todo,
       resolution_card_id: resolution_card_id,
+      delete_todo: delete_todo,
+      delete_card_id: delete_card_id,
       dentist_todo: dentist_todo,
       calendar_device_id: calendar_device_id,
       browser_device_id: browser_device_id,
+      local_context_device_id: local_context_device_id,
       scheduled_job_at: scheduled_job_at
     }
+  end
+
+  defp seed_local_messages_and_notes(user_id, run_id, now) do
+    device_id = Ecto.UUID.generate()
+
+    {:ok, _summary} =
+      LocalMessages.ingest_batch(user_id, device_id, [
+        %{
+          "source" => "imessage",
+          "guid" => "#{run_id}:matthew-setup-text",
+          "local_id" => "#{run_id}:matthew-setup-text",
+          "service" => "iMessage",
+          "is_from_me" => false,
+          "sender_handle" => "matthew@raue.example",
+          "chat_handles" => ["matthew@raue.example"],
+          "chat_display_name" => "Matthew Raue",
+          "chat_style" => "im",
+          "text" => "Matthew asked for the setup path and pricing owner before the next call.",
+          "sent_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 60 * 60, :second)),
+          "has_attachments" => false,
+          "attachments" => []
+        }
+      ])
+
+    {:ok, _summary} =
+      LocalNotes.ingest_batch(user_id, device_id, [
+        %{
+          "source" => "notes",
+          "guid" => "#{run_id}:matthew-setup-note",
+          "local_id" => "#{run_id}:matthew-setup-note",
+          "title" => "Matthew setup notes",
+          "snippet" => "Need pricing owner, setup path, and concrete ETA for Matthew.",
+          "folder" => "Work",
+          "is_pinned" => false,
+          "created_at" => DateTime.to_iso8601(DateTime.add(now, -3 * 60 * 60, :second)),
+          "modified_at" => DateTime.to_iso8601(DateTime.add(now, -90 * 60, :second))
+        }
+      ])
+
+    device_id
   end
 
   defp seed_local_calendar(user_id, run_id, now) do
@@ -2064,6 +2317,8 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   defp linked_reply_to_message_id(%{linked_todo_key: :resolution_todo}, env),
     do: env.resolution_card_id
 
+  defp linked_reply_to_message_id(%{linked_todo_key: :delete_todo}, env), do: env.delete_card_id
+
   defp linked_reply_to_message_id(_scenario, _env), do: nil
 
   defp cleanup_environment(user_id) do
@@ -2077,6 +2332,8 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     Repo.delete_all(from profile in PreferenceProfile, where: profile.user_id == ^user_id)
     Repo.delete_all(from visit in LocalVisit, where: visit.user_id == ^user_id)
     Repo.delete_all(from event in LocalEvent, where: event.user_id == ^user_id)
+    Repo.delete_all(from message in LocalMessage, where: message.user_id == ^user_id)
+    Repo.delete_all(from note in LocalNote, where: note.user_id == ^user_id)
     Repo.delete_all(from link in PersonLink, where: link.user_id == ^user_id)
     Repo.delete_all(from todo in Todo, where: todo.user_id == ^user_id)
 
@@ -2176,6 +2433,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "ran out of time",
         "try again",
         "ask me for a narrower",
+        "taking longer than it should",
         "model is still busy"
       ],
       &String.contains?(normalized, &1)
@@ -2197,6 +2455,25 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   end
 
   defp contains_all?(_text, _needles), do: false
+
+  defp local_observation?(observations, source, needles)
+       when is_list(observations) and is_binary(source) and is_list(needles) do
+    Enum.any?(observations, fn observation ->
+      observation_source = Map.get(observation, :source) || Map.get(observation, "source")
+
+      text =
+        [
+          Map.get(observation, :title) || Map.get(observation, "title"),
+          Map.get(observation, :summary) || Map.get(observation, "summary")
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join(" ")
+
+      observation_source == source and contains_all?(text, needles)
+    end)
+  end
+
+  defp local_observation?(_observations, _source, _needles), do: false
 
   defp message_class(%{response: %{} = response}) do
     response

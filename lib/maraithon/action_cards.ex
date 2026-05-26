@@ -31,6 +31,7 @@ defmodule Maraithon.ActionCards do
 
   def list_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     limit = Keyword.get(opts, :limit, 20)
+    opts = put_source_health_snapshots(user_id, opts)
 
     user_id
     |> Todos.list_for_user(limit: limit, statuses: @open_statuses)
@@ -398,7 +399,7 @@ defmodule Maraithon.ActionCards do
     do: ["keep_active", "important", "dismiss", "see_less", "more_context"]
 
   defp available_buttons(_todo, _attention_mode),
-    do: ["done", "dismiss", "snooze", "important", "not_important", "see_less", "more_context"]
+    do: ["done", "dismiss", "snooze", "important", "not_helpful", "see_less", "more_context"]
 
   defp estimated_effort(todo) do
     action = String.downcase(todo.next_action || "")
@@ -434,7 +435,12 @@ defmodule Maraithon.ActionCards do
 
   defp source_health_snapshot(user_id, source, opts) do
     include_disconnected? = Keyword.get(opts, :include_disconnected, true)
-    snapshots = SourceFreshness.compact_for_prompt(user_id)
+
+    snapshots =
+      Keyword.get_lazy(opts, :source_health_snapshots, fn ->
+        SourceFreshness.compact_for_prompt(user_id)
+      end)
+
     checked_sources = checked_sources(source, snapshots)
     relevant = filter_source_snapshots(snapshots, source)
     fresh = Enum.filter(relevant, &(read_field(&1, "status") == "fresh"))
@@ -471,6 +477,14 @@ defmodule Maraithon.ActionCards do
       "blocking_gaps" => [],
       "setup_suggestion" => nil
     }
+  end
+
+  defp put_source_health_snapshots(user_id, opts) do
+    if Keyword.has_key?(opts, :source_health_snapshots) do
+      opts
+    else
+      Keyword.put(opts, :source_health_snapshots, SourceFreshness.compact_for_prompt(user_id))
+    end
   end
 
   defp source_evidence(todo, metadata, record) do

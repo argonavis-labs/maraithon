@@ -92,6 +92,16 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
       String.contains?(normalized, "todo list") or String.contains?(normalized, "todos are open") ->
         tool_calls([{"list_todos", %{"limit" => 20}}])
 
+      String.contains?(normalized, "change this todo") ->
+        tool_calls([
+          {"update_todo",
+           %{
+             "todo_id" => linked_todo_id(payload),
+             "priority" => 88,
+             "next_action" => "Return the verification library book today."
+           }}
+        ])
+
       String.contains?(normalized, "mark this done") ->
         tool_calls([
           {"resolve_todo",
@@ -100,6 +110,30 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
              "status" => "done",
              "include_remaining" => true,
              "limit" => 5
+           }}
+        ])
+
+      String.contains?(normalized, "dismiss this todo") ->
+        tool_calls([
+          {"delete_todo",
+           %{
+             "todo_id" => linked_todo_id(payload),
+             "resolution_note" => "No longer relevant.",
+             "include_remaining" => true
+           }}
+        ])
+
+      String.contains?(normalized, "merge crm person") ->
+        [merged_id, surviving_id] = crm_merge_ids(text)
+
+        tool_calls([
+          {"merge_people",
+           %{
+             "surviving_person_id" => surviving_id,
+             "merged_person_id" => merged_id,
+             "evidence" => "User explicitly confirmed these CRM records are the same person.",
+             "model_rationale" => "Verification merge request supplied both CRM ids.",
+             "performed_by" => "telegram_verification"
            }}
         ])
 
@@ -184,8 +218,17 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
       String.contains?(normalized, "add renew the verification passport") ->
         final("Added the passport renewal todo for Friday.", "assistant_reply")
 
+      String.contains?(normalized, "change this todo") ->
+        final("Updated the linked todo with the new priority and next action.")
+
       String.contains?(normalized, "mark this done") ->
         final("Done. I marked the linked todo complete.")
+
+      String.contains?(normalized, "dismiss this todo") ->
+        final("Dismissed the linked todo as no longer relevant.")
+
+      String.contains?(normalized, "merge crm person") ->
+        final("Merged the duplicate CRM person into the surviving relationship record.")
 
       String.contains?(normalized, "who is matthew raue") ->
         final(
@@ -280,6 +323,13 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
     |> read_field("linked_item")
     |> read_field("todo")
     |> read_field("id")
+  end
+
+  defp crm_merge_ids(text) when is_binary(text) do
+    case Regex.scan(~r/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i, text) do
+      [[merged_id], [surviving_id] | _rest] -> [merged_id, surviving_id]
+      _other -> [nil, nil]
+    end
   end
 
   defp scheduled_at(text) do

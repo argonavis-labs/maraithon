@@ -136,4 +136,42 @@ defmodule Maraithon.LocalMessagesTest do
       assert hd(rows).sent_at
     end
   end
+
+  describe "search/3" do
+    test "matches natural multi-token queries across chat labels and message text" do
+      user_id = "message-search-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          sample_message("search-1", %{
+            "sender_handle" => "matthew@raue.example",
+            "chat_display_name" => "Matthew Raue",
+            "text" => "Asked for the setup path and pricing owner before the next call."
+          })
+        ])
+
+      [match] = LocalMessages.search(user_id, "Matthew setup")
+
+      assert match.guid == "search-1"
+    end
+
+    test "from_handle can match the chat display name, not only the raw sender handle" do
+      user_id = "message-handle-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          sample_message("handle-1", %{
+            "sender_handle" => "+14165550199",
+            "chat_display_name" => "Matthew Raue",
+            "text" => "Can you send the setup notes?"
+          })
+        ])
+
+      [match] = LocalMessages.search(user_id, "setup", from_handle: "Matthew")
+
+      assert match.guid == "handle-1"
+    end
+  end
 end

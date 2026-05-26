@@ -234,6 +234,20 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     [billing_todo] = billing_search.todos
     assert billing_todo.title =~ "Billing"
 
+    assert {:ok, updated} =
+             Toolbox.execute(
+               "update_todo",
+               %{
+                 "todo_id" => billing_todo.id,
+                 "priority" => 88,
+                 "next_action" => "Confirm the billing account is current."
+               },
+               runtime_context
+             )
+
+    assert updated.todo.priority == 88
+    assert updated.todo.next_action == "Confirm the billing account is current."
+
     assert {:ok, resolved} =
              Toolbox.execute(
                "resolve_todo",
@@ -252,6 +266,22 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     [remaining_todo] = resolved.remaining_todos
     assert remaining_todo.title =~ "OAuth"
     refute remaining_todo.title =~ "Billing"
+
+    assert {:ok, deleted} =
+             Toolbox.execute(
+               "delete_todo",
+               %{
+                 "todo_id" => remaining_todo.id,
+                 "resolution_note" => "No longer relevant.",
+                 "include_remaining" => true,
+                 "kind" => "gmail_triage"
+               },
+               runtime_context
+             )
+
+    assert deleted.deleted == true
+    assert deleted.todo.status == "dismissed"
+    assert deleted.remaining_count == 0
   end
 
   test "CRM tools can persist people and return relationship context" do
@@ -323,6 +353,37 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert context.open_todo_count == 1
     assert [%{title: title}] = context.todos
     assert title =~ "Charlie"
+
+    assert {:ok, duplicate} =
+             Toolbox.execute(
+               "upsert_person",
+               %{
+                 "person" => %{
+                   "first_name" => "Charles",
+                   "last_name" => "Jones",
+                   "email" => "charles.jones@example.com",
+                   "relationship" => "Duplicate CRM record for Charlie"
+                 }
+               },
+               runtime_context
+             )
+
+    assert {:ok, merged} =
+             Toolbox.execute(
+               "merge_people",
+               %{
+                 "surviving_person_id" => person.id,
+                 "merged_person_id" => duplicate.person.id,
+                 "evidence" => "Same teammate and manually confirmed duplicate.",
+                 "model_rationale" => "Kent asked to merge duplicate Charlie records.",
+                 "performed_by" => "telegram_assistant_test"
+               },
+               runtime_context
+             )
+
+    assert merged.merge.surviving_person.id == person.id
+    assert merged.merge.merged_person.merged_into_id == person.id
+    assert is_binary(merged.merge.merge_audit_id)
   end
 
   test "briefing schedule tool updates morning briefings in the user's local timezone" do

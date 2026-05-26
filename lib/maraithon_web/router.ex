@@ -132,10 +132,16 @@ defmodule MaraithonWeb.Router do
     delete "/session", MobileAuthController, :delete
     get "/todos", MobileTodoController, :index
     post "/todos", MobileTodoController, :create
+    get "/todos/:id", MobileTodoController, :show
     patch "/todos/:id", MobileTodoController, :update
+    delete "/todos/:id", MobileTodoController, :delete
+    post "/todos/:id/actions/:action", MobileTodoController, :perform_action
     get "/people", MobilePeopleController, :index
     post "/people", MobilePeopleController, :create
+    get "/people/:id", MobilePeopleController, :show
     patch "/people/:id", MobilePeopleController, :update
+    delete "/people/:id", MobilePeopleController, :delete
+    post "/people/:id/merge", MobilePeopleController, :merge
   end
 
   scope "/api/v1", MaraithonWeb do

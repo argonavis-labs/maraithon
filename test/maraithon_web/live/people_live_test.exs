@@ -164,10 +164,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
     html = render(view)
     assert html =~ "2 selected"
-    assert html =~ ~s(id="people-selection-actions")
-    assert html =~ ~s(id="people-selection-merge-direct")
     assert html =~ ~s(id="people-bulk-merge-direct")
     assert html =~ ~s(id="people-bulk-delete-direct")
+    refute html =~ ~s(id="people-selection-actions")
 
     assert has_element?(
              view,
@@ -176,13 +175,13 @@ defmodule MaraithonWeb.PeopleLiveTest do
            )
 
     view
-    |> element("#people-selection-merge-direct", "Merge contacts")
+    |> element("#people-bulk-merge-direct", "Merge")
     |> render_click()
 
-    assert has_element?(view, "#people-context-merge")
+    assert has_element?(view, "#people-bulk-merge")
 
     view
-    |> form("#people-context-merge", merge: %{"surviving_person_id" => canonical.id})
+    |> form("#people-bulk-merge", merge: %{"surviving_person_id" => canonical.id})
     |> render_submit()
 
     survivor = Crm.get_person_for_user(@user_email, canonical.id)

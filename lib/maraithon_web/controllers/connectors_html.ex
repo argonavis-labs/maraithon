@@ -49,6 +49,13 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_account_summary(_provider), do: "No accounts connected"
 
+  def provider_local_source_summary(%{provider: "desktop", details: details})
+      when is_list(details) do
+    Enum.find(details, &String.starts_with?(&1, "Synced "))
+  end
+
+  def provider_local_source_summary(_provider), do: nil
+
   def connected_accounts_heading(%{provider: "slack"}), do: "Connected Workspaces"
   def connected_accounts_heading(%{provider: "desktop"}), do: "Paired Macs"
   def connected_accounts_heading(_provider), do: "Connected Accounts"

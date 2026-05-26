@@ -174,6 +174,53 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute has_element?(view, "#todo-#{second.id}")
   end
 
+  test "bulk see less records feedback and dismisses selected todos", %{conn: conn} do
+    install_see_less_model()
+
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Read vendor newsletter one",
+                 "summary" => "A generic vendor newsletter has no direct ask.",
+                 "next_action" => "No action needed.",
+                 "priority" => 42,
+                 "dedupe_key" => "todos-live:bulk-see-less:one"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Read vendor newsletter two",
+                 "summary" => "Another generic vendor newsletter with no direct ask.",
+                 "next_action" => "No action needed.",
+                 "priority" => 41,
+                 "dedupe_key" => "todos-live:bulk-see-less:two"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/todos")
+
+    view
+    |> element("input[phx-click='toggle_todo_selection'][phx-value-id='#{first.id}']")
+    |> render_click()
+
+    view
+    |> element("input[phx-click='toggle_todo_selection'][phx-value-id='#{second.id}']")
+    |> render_click()
+
+    view
+    |> element("#todo-bulk-actions button[phx-click='see_less_selected_todos']")
+    |> render_click()
+
+    html = render(view)
+    refute html =~ "Read vendor newsletter one"
+    refute html =~ "Read vendor newsletter two"
+    assert html =~ "Saved see-less feedback for 2 todos"
+    assert Todos.get_for_user(@user_email, first.id).status == "dismissed"
+    assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
+  end
+
   test "opens detail panel from selected todo URL and row click", %{conn: conn} do
     assert {:ok, [todo]} =
              Todos.upsert_many(@user_email, [

@@ -13,7 +13,7 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
   alias Maraithon.Proactive.LocalPatterns
 
   defp unique_user! do
-    user_id = "lp-#{System.unique_integer([:positive])}@example.com"
+    user_id = "lp-#{Ecto.UUID.generate()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
     user_id
   end

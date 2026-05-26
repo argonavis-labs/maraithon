@@ -631,7 +631,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         latest_tool: tool
       },
       model_summary: "Assistant tool loop stopped before repeating work.",
-      remediation_hint: "Ask a narrower question or inspect the source/tool result manually.",
+      remediation_hint: "Run a focused source lookup or inspect the latest tool result manually.",
       metadata: %{
         run_id: run.id,
         tool_name: tool,

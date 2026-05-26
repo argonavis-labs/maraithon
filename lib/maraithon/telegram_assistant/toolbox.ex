@@ -75,6 +75,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     notes_search notes_get notes_list_recent
     voice_memos_search voice_memos_get voice_memos_list_recent
     files_search files_get files_list_recent
+    messages_search messages_get messages_list_recent messages_chats_recent
     reminders_open reminders_due_soon reminders_search reminders_get
     calendar_events_around calendar_events_for_person calendar_search calendar_event_get
     browser_history_recent browser_history_by_host browser_history_search browser_history_get
@@ -83,8 +84,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   @toolbox_write_tools MapSet.new(~w(
     update_briefing_schedule remember_preferences forget_preference write_memory
-    record_memory_feedback update_memory_confidence forget_memory upsert_todos resolve_todo upsert_person
-    link_person_data learn_relationship_context delete_person update_project_scope
+    record_memory_feedback update_memory_confidence forget_memory upsert_todos update_todo
+    resolve_todo delete_todo upsert_person link_person_data learn_relationship_context
+    merge_people delete_person update_project_scope
     decide_project_recommendation grant_project_repo_access start_implementation_run
     update_implementation_run prepare_project_action prepare_agent_action
     prepare_external_action query_agent create_scheduled_task pause_scheduled_task
@@ -472,6 +474,57 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "update_todo",
+        "Patch one persisted todo's title, context, priority, due date, status, owner, metadata, or next action.",
+        %{
+          "type" => "object",
+          "required" => ["todo_id"],
+          "properties" => %{
+            "todo_id" => %{"type" => "string"},
+            "source" => %{"type" => "string"},
+            "kind" => %{"type" => "string"},
+            "attention_mode" => %{"type" => "string"},
+            "title" => %{"type" => "string"},
+            "summary" => %{"type" => "string"},
+            "next_action" => %{"type" => "string"},
+            "due_at" => %{"type" => "string"},
+            "due_date" => %{"type" => "string"},
+            "notes" => %{"type" => "string"},
+            "action_plan" => %{"type" => "string"},
+            "action_draft" => %{"type" => "object"},
+            "owner_user_id" => %{"type" => "string"},
+            "owner_label" => %{"type" => "string"},
+            "priority" => %{"type" => "integer", "minimum" => 0, "maximum" => 100},
+            "status" => %{"type" => "string"},
+            "snoozed_until" => %{"type" => "string"},
+            "source_item_id" => %{"type" => "string"},
+            "source_occurred_at" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
+        "delete_todo",
+        "Dismiss one persisted todo as no longer relevant, optionally returning the remaining open todos.",
+        %{
+          "type" => "object",
+          "required" => ["todo_id"],
+          "properties" => %{
+            "todo_id" => %{"type" => "string"},
+            "resolution_note" => %{"type" => "string"},
+            "include_remaining" => %{"type" => "boolean"},
+            "source" => %{"type" => "string"},
+            "source_account_id" => %{"type" => "integer"},
+            "kind" => %{"type" => "string"},
+            "attention_mode" => %{"type" => "string"},
+            "owner_user_id" => %{"type" => "string"},
+            "due_before" => %{"type" => "string"},
+            "due_after" => %{"type" => "string"},
+            "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 50}
+          }
+        }
+      ),
+      tool_definition(
         "list_people",
         "List the linked user's CRM people and relationship metadata.",
         %{
@@ -604,6 +657,22 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         }
       ),
       tool_definition(
+        "merge_people",
+        "Merge two CRM person records after the user explicitly confirms they represent the same person.",
+        %{
+          "type" => "object",
+          "required" => ["surviving_person_id", "merged_person_id"],
+          "properties" => %{
+            "surviving_person_id" => %{"type" => "string"},
+            "merged_person_id" => %{"type" => "string"},
+            "evidence" => %{"type" => "string"},
+            "model_rationale" => %{"type" => "string"},
+            "performed_by" => %{"type" => "string"},
+            "metadata" => %{"type" => "object"}
+          }
+        }
+      ),
+      tool_definition(
         "gmail_search_messages",
         "Search Gmail threads or messages for the linked user.",
         %{
@@ -617,7 +686,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "review_connected_context",
-        "Review connected CRM, Gmail, Google Contacts, Calendar, Slack, open loops, and memory in one fast source-gathering call.",
+        "Review connected CRM, Gmail, Google Contacts, Calendar, Slack, iMessage, Apple Notes, Reminders, Files, Browser History, Voice Memos, open loops, and memory in one fast source-gathering call.",
         %{
           "type" => "object",
           "properties" => %{
@@ -629,7 +698,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "time_min" => %{"type" => "string"},
             "time_max" => %{"type" => "string"},
             "since_days" => %{"type" => "integer", "minimum" => 1, "maximum" => 365},
-            "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => 12}
+            "max_results" => %{"type" => "integer", "minimum" => 1, "maximum" => 12},
+            "timeout_ms" => %{"type" => "integer", "minimum" => 1000, "maximum" => 30000}
           }
         }
       ),
@@ -1334,8 +1404,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       "upsert_todos" ->
         upsert_todos(runtime_context, args)
 
+      "update_todo" ->
+        inject_user_and_execute("update_todo", runtime_context, args)
+
       "resolve_todo" ->
         resolve_todo(runtime_context, args)
+
+      "delete_todo" ->
+        inject_user_and_execute("delete_todo", runtime_context, args)
 
       "list_people" ->
         inject_user_and_execute("list_people", runtime_context, args)
@@ -1354,6 +1430,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       "learn_relationship_context" ->
         inject_user_and_execute("learn_relationship_context", runtime_context, args)
+
+      "merge_people" ->
+        inject_user_and_execute("merge_people", runtime_context, args)
 
       "delete_person" ->
         inject_user_and_execute("delete_person", runtime_context, args)
@@ -1607,7 +1686,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp toolbox_idempotent?(tool_name) do
     tool_name in ~w(
       update_briefing_schedule remember_preferences write_memory record_memory_feedback update_memory_confidence
-      upsert_todos resolve_todo upsert_person link_person_data learn_relationship_context
+      upsert_todos update_todo resolve_todo upsert_person link_person_data learn_relationship_context
       update_project_scope decide_project_recommendation update_implementation_run
       create_scheduled_task pause_scheduled_task cancel_scheduled_task
     )

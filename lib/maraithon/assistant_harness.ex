@@ -192,31 +192,31 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def failure_message(:timeout) do
-    "I ran out of time while checking that. Ask me to narrow the source or try again."
+    "I couldn't complete the full lookup in this turn, so I saved the context gathered so far and avoided guessing from partial evidence."
   end
 
   def failure_message(:llm_turn_limit) do
-    "I hit the reasoning loop limit while working through that. Ask me for one narrower step."
+    "I stopped because the reasoning loop was no longer adding useful evidence. I saved the run context and avoided repeating work."
   end
 
   def failure_message(:tool_step_limit) do
-    "I hit the tool limit while checking that. Ask me to narrow the source or the person."
+    "I reached the tool budget before a complete answer, so I saved the evidence gathered so far and avoided guessing."
   end
 
   def failure_message({:llm_busy, _retry_after}) do
-    "The model is still busy with another request. I tried the fast path and the deeper path, but neither got a slot yet. Try again in a moment."
+    "Model capacity was saturated before I could complete that turn. I saved the request context so the next pass can continue cleanly."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
-    "I got the same result from #{human_tool_name(tool)} too many times, so I stopped instead of looping. Ask me to narrow the source or try again."
+    "I stopped after repeated identical results from #{human_tool_name(tool)}. I saved the useful evidence and avoided repeating the same call."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count, class, _loop}) do
-    "I hit a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}, so I stopped instead of repeating it. Ask me to narrow the source or try again."
+    "I stopped after a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}. I saved the useful evidence and avoided repeating the same call."
   end
 
   def failure_message(_reason) do
-    "I hit an internal issue while working on that. Try again or ask me for a narrower step."
+    "I couldn't complete that turn cleanly, so I saved the run context and avoided guessing from partial evidence."
   end
 
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -343,7 +343,7 @@ defmodule Maraithon.AssistantHarness do
     - For those specific email questions, call `gmail_search_messages` if you do not already have the exact message id, then call `gmail_get_message` before giving a final answer.
     - Only summarize or explain an email after `gmail_get_message` returns `message.text_body` or `message.html_body`. If the full body is unavailable, say you could not fetch the full body and do not guess.
     - If `source_health` says Gmail is `not_connected` or `error`, say that plainly instead of pretending you can see the inbox.
-    - `review_connected_context` is the first-class primitive for "look through my email/source context", "who is this person?", "what do I owe them?", and other connected-source review requests. Prefer it over a slow chain of separate source tools when the user wants you to find context across connected systems.
+    - `review_connected_context` is the first-class primitive for "look through my email/source context", "who is this person?", "what do I owe them?", and other connected-source review requests. It can review CRM, Gmail, contacts, calendar, Slack, open loops, memory, and Desktop App sources like iMessage, Apple Notes, Reminders, files, browser history, and voice memos. Prefer it over a slow chain of separate source tools when the user wants you to find context across connected systems.
     - Persist actionable work as todos. Use `upsert_todos` to create or refresh durable todos, `list_todos` to inspect them, and `resolve_todo` when the user says they handled or closed something.
     - The `upsert_todos` tool performs model-level semantic dedupe against the built-in todo list before writing. Pass rich candidate evidence and source metadata instead of relying on exact string matches.
     - Treat todos as the operator's durable object layer. Final replies about work should usually reflect the current todo state, not transient message summaries.
@@ -365,9 +365,9 @@ defmodule Maraithon.AssistantHarness do
     - For meeting prep with a named person, call `calendar_events_for_person` and combine it with CRM/open-loop context. The final answer should include who they are, the meeting purpose, any linked todos/commitments, and a practical next step.
     - For broad day/week prep, combine `calendar_events_around`, todos/open loops, CRM relationships, and memory; personal/family calendar items are first-class context, not decoration.
     - If the user gives durable relationship information like `Charlie prefers Slack`, `Justin is an investor`, or `I talk to Sam weekly`, persist it with `upsert_person` instead of only acknowledging it.
-    - When fresh Gmail, calendar, Slack, Telegram, WhatsApp, or future message observations contain meaningful people context, call `learn_relationship_context` so the app learns important recurring contacts and relationship proxies without requiring the user to correct each item.
+    - When fresh Gmail, calendar, Slack, Telegram, iMessage, Apple Notes, Reminders, WhatsApp, or future message observations contain meaningful people context, call `learn_relationship_context` so the app learns important recurring contacts and relationship proxies without requiring the user to correct each item.
     - Relationship learning should reason from source bodies, existing CRM, memory, and interaction patterns. Do not wait for the user to explicitly say a person matters when repeated human contact or proxy logistics clearly indicate it.
-    - Every real human contact observed in email, Slack, Telegram, WhatsApp, calendar, or another connected source should become or update a CRM person unless the source is clearly automated/machine-only. Relationship strength, affinity, communication frequency, and notes should grow from model-backed relationship learning over time.
+    - Every real human contact observed in email, Slack, Telegram, iMessage, WhatsApp, calendar, Apple Notes, Reminders, or another connected source should become or update a CRM person unless the source is clearly automated/machine-only. Relationship strength, affinity, communication frequency, and notes should grow from model-backed relationship learning over time.
     - When a todo, email, Slack thread, calendar item, or other object is clearly about a known person, attach it to the CRM person with `link_person_data` so future relationship questions include the work context.
     - If the user asks to add, remember, capture, or keep track of something for later, store it as a durable todo with `upsert_todos`.
     - For manually added conversational todos, prefer `source: "telegram"`, `kind: "general"`, `attention_mode: "act_now"`, and metadata that keeps the original user request text.
@@ -449,7 +449,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user says `Charlie prefers Slack and I talk to him weekly`, your next response should usually be `tool_calls` for `upsert_person` with `preferred_communication_method:"slack"` and `communication_frequency:"weekly"`.
     - If the user says `what do I owe Justin?`, your next response should usually be `tool_calls` for `get_relationship_context` with `query:"Justin"` before answering from the linked todos and relationship fields.
     - If `get_relationship_context` returns `person_not_found` for `Charlie` and connected-source tools are available, your next response should usually call `review_connected_context` for `Charlie`, then `learn_relationship_context` with source observations from the result, then answer. Do not stop with `I don't have Charlie in your CRM`.
-    - If the user says `look through my email to find it` after asking about Charlie, your next response should usually call `review_connected_context` with `query:"Charlie"` and `sources:["crm","gmail","google_contacts","calendar","slack","open_loops","memory"]`.
+    - If the user says `look through my email to find it` after asking about Charlie, your next response should usually call `review_connected_context` with `query:"Charlie"` and `sources:["crm","gmail","google_contacts","calendar","slack","messages","notes","reminders","files","browser_history","voice_memos","open_loops","memory"]`.
     - If the user says `What should I know before my meeting with Matthew tomorrow?`, your next response should usually call `calendar_events_for_person` with Matthew, then use CRM/open-loop context to answer with who Matthew is, why the meeting matters, and what the operator owes.
     - If the user says `Draft a reply to Matthew about setup and pricing`, your next response should usually call `draft_message` with `channel:"gmail"` or `channel:"slack"` based on the requested medium after calling relationship/todo tools if context is not already current.
     - If the user says `Create a Gmail draft to Matthew`, your next response should usually call `draft_message` with `channel:"gmail"` and `save_to_provider:true`, then confirm the draft was created or explain the connector failure.
@@ -791,7 +791,7 @@ defmodule Maraithon.AssistantHarness do
   # (e.g. status:"tool_calls" with an empty tool_calls array, an unknown
   # status, or a malformed tool call). A retry / fallback-model attempt
   # commonly recovers; treating these as fatal hands the user a generic
-  # "I hit an internal issue" message instead.
+  # system-failure message instead.
   defp retryable_model_error?(:assistant_harness_invalid_status), do: true
   defp retryable_model_error?(:assistant_harness_invalid_tool_calls), do: true
   defp retryable_model_error?(:assistant_harness_invalid_tool_call), do: true
@@ -1410,12 +1410,38 @@ defmodule Maraithon.AssistantHarness do
 
   defp focus_tools(_tools, :quick_chat), do: []
 
+  @local_context_tools ~w(
+    messages_search
+    messages_get
+    messages_list_recent
+    messages_chats_recent
+    notes_search
+    notes_get
+    notes_list_recent
+    reminders_open
+    reminders_due_soon
+    reminders_search
+    reminders_get
+    files_search
+    files_get
+    files_list_recent
+    browser_history_search
+    browser_history_recent
+    browser_history_by_host
+    browser_history_get
+    voice_memos_search
+    voice_memos_get
+    voice_memos_list_recent
+  )
+
   defp focus_tools(tools, :linked_item_context) when is_list(tools) do
     allowed =
       MapSet.new(~w(
         inspect_open_insight
         list_todos
         resolve_todo
+        update_todo
+        delete_todo
         upsert_todos
         get_open_loops
         list_people
@@ -1425,6 +1451,7 @@ defmodule Maraithon.AssistantHarness do
         learn_relationship_context
         link_person_data
         upsert_person
+        merge_people
         delete_person
         recall_memory
         recall_anywhere
@@ -1442,7 +1469,7 @@ defmodule Maraithon.AssistantHarness do
         inspect_project
         list_projects
         list_implementation_runs
-      ))
+      ) ++ @local_context_tools)
 
     Enum.filter(tools, fn tool ->
       tool_definition_name(tool) in allowed
@@ -1453,6 +1480,10 @@ defmodule Maraithon.AssistantHarness do
     allowed =
       MapSet.new(~w(
         list_todos
+        resolve_todo
+        update_todo
+        delete_todo
+        upsert_todos
         get_open_loops
         list_people
         get_person
@@ -1461,6 +1492,8 @@ defmodule Maraithon.AssistantHarness do
         learn_relationship_context
         link_person_data
         upsert_person
+        merge_people
+        delete_person
         recall_memory
         recall_anywhere
         list_memories
@@ -1470,7 +1503,7 @@ defmodule Maraithon.AssistantHarness do
         calendar_search
         calendar_event_get
         list_connected_accounts
-      ))
+      ) ++ @local_context_tools)
 
     Enum.filter(tools, fn tool ->
       tool_definition_name(tool) in allowed
@@ -1483,6 +1516,9 @@ defmodule Maraithon.AssistantHarness do
         get_open_loops
         list_todos
         resolve_todo
+        update_todo
+        delete_todo
+        upsert_todos
         get_relationship_context
         review_connected_context
         recall_memory
@@ -1493,7 +1529,7 @@ defmodule Maraithon.AssistantHarness do
         reminders_open
         reminders_due_soon
         list_connected_accounts
-      ))
+      ) ++ @local_context_tools)
 
     Enum.filter(tools, fn tool ->
       tool_definition_name(tool) in allowed
@@ -1506,6 +1542,8 @@ defmodule Maraithon.AssistantHarness do
         get_open_loops
         list_todos
         resolve_todo
+        update_todo
+        delete_todo
         upsert_todos
         list_people
         get_person
@@ -1513,12 +1551,14 @@ defmodule Maraithon.AssistantHarness do
         review_connected_context
         learn_relationship_context
         link_person_data
+        merge_people
+        delete_person
         recall_memory
         list_memories
         record_memory_feedback
         write_memory
         list_connected_accounts
-      ))
+      ) ++ @local_context_tools)
 
     Enum.filter(tools, fn tool ->
       tool_definition_name(tool) in allowed

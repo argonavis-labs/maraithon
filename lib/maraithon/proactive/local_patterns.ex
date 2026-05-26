@@ -713,10 +713,12 @@ defmodule Maraithon.Proactive.LocalPatterns do
   defp clamp(value, _min, max) when value > max, do: max
   defp clamp(value, _min, _max), do: value
 
-  defp chat_display_for(_user_id, chat_key) do
+  defp chat_display_for(user_id, chat_key) do
     case Repo.one(
            from msg in LocalMessage,
-             where: msg.chat_key == ^chat_key and not is_nil(msg.chat_display_name),
+             where:
+               msg.user_id == ^user_id and msg.chat_key == ^chat_key and
+                 not is_nil(msg.chat_display_name),
              order_by: [desc: msg.sent_at],
              limit: 1
          ) do
@@ -728,7 +730,9 @@ defmodule Maraithon.Proactive.LocalPatterns do
         # encrypted, so we have to decrypt in memory.
         case Repo.one(
                from msg in LocalMessage,
-                 where: msg.chat_key == ^chat_key and msg.is_from_me == false,
+                 where:
+                   msg.user_id == ^user_id and msg.chat_key == ^chat_key and
+                     msg.is_from_me == false,
                  order_by: [desc: msg.sent_at],
                  limit: 1
              ) do

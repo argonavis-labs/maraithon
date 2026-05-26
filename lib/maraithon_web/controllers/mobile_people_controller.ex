@@ -4,6 +4,13 @@ defmodule MaraithonWeb.MobilePeopleController do
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias MaraithonWeb.MobileJSON
+  alias MaraithonWeb.MobileParams
+
+  @person_param_keys ~w(
+    first_name last_name display_name contact_details contacts email emails phone phone_number
+    phones slack_id slack_ids telegram_id telegram_ids preferred_communication_method
+    relationship communication_frequency notes metadata status
+  )
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
@@ -34,6 +41,20 @@ defmodule MaraithonWeb.MobilePeopleController do
     end
   end
 
+  def show(conn, %{"id" => person_id}) do
+    user_id = conn.assigns.current_user.id
+
+    case Crm.get_person_for_user(user_id, person_id) do
+      %Person{} = person ->
+        json(conn, %{person: MobileJSON.person(person)})
+
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found"})
+    end
+  end
+
   def update(conn, %{"id" => person_id} = params) do
     user_id = conn.assigns.current_user.id
 
@@ -56,8 +77,85 @@ defmodule MaraithonWeb.MobilePeopleController do
     end
   end
 
-  defp person_params(%{"person" => person}) when is_map(person), do: person
-  defp person_params(params), do: Map.drop(params, ["id"])
+  def delete(conn, %{"id" => person_id}) do
+    user_id = conn.assigns.current_user.id
+
+    case Crm.delete_person(user_id, person_id) do
+      {:ok, _person} ->
+        json(conn, %{ok: true, deleted_person_id: person_id})
+
+      {:error, :person_not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found"})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(MobileJSON.error(reason))
+    end
+  end
+
+  def merge(conn, %{"id" => surviving_id} = params) do
+    user_id = conn.assigns.current_user.id
+
+    case merge_person_id(params) do
+      nil ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "missing_duplicate"})
+
+      merged_id ->
+        case Crm.merge_people(user_id, surviving_id, merged_id, merge_attrs(params)) do
+          {:ok, result} ->
+            json(conn, %{
+              merge: %{
+                surviving_person: MobileJSON.person(result.surviving_person),
+                merged_person: MobileJSON.person(result.merged_person),
+                repointed_link_count: result.repointed_link_count,
+                collapsed_link_count: result.collapsed_link_count
+              }
+            })
+
+          {:error, :person_not_found} ->
+            conn
+            |> put_status(:not_found)
+            |> json(%{error: "not_found"})
+
+          {:error, reason} ->
+            conn
+            |> put_status(:unprocessable_entity)
+            |> json(MobileJSON.error(reason))
+        end
+    end
+  end
+
+  defp person_params(%{"person" => person}) when is_map(person) do
+    MobileParams.sanitize(person, @person_param_keys)
+  end
+
+  defp person_params(params), do: MobileParams.sanitize(params, @person_param_keys)
+
+  defp merge_person_id(%{"merge" => %{} = merge_params}), do: merge_person_id(merge_params)
+
+  defp merge_person_id(params) do
+    text_param(params, "merged_person_id") ||
+      text_param(params, "duplicate_person_id") ||
+      text_param(params, "person_id")
+  end
+
+  defp merge_attrs(%{"merge" => %{} = merge_params}), do: merge_attrs(merge_params)
+
+  defp merge_attrs(params) do
+    %{
+      "performed_by" => "mobile_api",
+      "evidence" => text_param(params, "evidence") || "Manual CRM merge from the mobile API.",
+      "model_rationale" =>
+        text_param(params, "model_rationale") ||
+          text_param(params, "rationale") ||
+          "The user chose one CRM record to keep and another duplicate to merge."
+    }
+  end
 
   defp limit(params) do
     case Integer.parse(to_string(Map.get(params, "limit", "200"))) do

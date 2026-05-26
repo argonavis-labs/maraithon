@@ -125,6 +125,10 @@ defmodule MaraithonWeb.TodosLive do
     {:noreply, apply_bulk_todo_action(socket, :dismiss)}
   end
 
+  def handle_event("see_less_selected_todos", _params, socket) do
+    {:noreply, apply_bulk_todo_action(socket, :see_less)}
+  end
+
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
     case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from Todos page.") do
       {:ok, _todo} ->
@@ -267,7 +271,11 @@ defmodule MaraithonWeb.TodosLive do
             </div>
           </:header>
 
-          <div class={["grid grid-cols-1 gap-4 py-4", @selected_todo && "xl:grid-cols-[minmax(0,1fr)_26rem]"]}>
+          <div class={[
+            "grid grid-cols-1 gap-4 py-4",
+            @selected_todo && "xl:grid-cols-[minmax(0,1fr)_26rem]",
+            MapSet.size(@selected_todo_ids) > 0 && "pb-24"
+          ]}>
             <div class="min-w-0">
               <.todo_bulk_toolbar selected_todo_ids={@selected_todo_ids} />
 
@@ -424,21 +432,44 @@ defmodule MaraithonWeb.TodosLive do
     <div
       :if={@selected_count > 0}
       id="todo-bulk-actions"
-      class="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-950/10 bg-zinc-50 px-3 py-2"
+      class="pointer-events-none fixed inset-x-3 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-50 flex justify-center sm:inset-x-6 lg:left-64 lg:bottom-6"
     >
-      <div>
-        <p class="text-sm/6 font-medium text-zinc-950"><%= @selected_count %> selected</p>
-        <p class="text-xs/5 text-zinc-500">Apply an action to the visible selected todos.</p>
-      </div>
-      <div class="flex flex-wrap items-center gap-1">
-        <.button type="button" phx-click="complete_selected_todos" variant="plain" class="text-xs text-zinc-600">
+      <div class="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-zinc-950/20 bg-zinc-950/95 px-2.5 py-2 text-white shadow-xl ring-1 ring-white/10 backdrop-blur">
+        <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-semibold">
+          <%= @selected_count %> selected
+        </span>
+        <button
+          type="button"
+          phx-click="clear_todo_selection"
+          aria-label="Clear selection"
+          class="rounded-md px-2 py-1.5 text-sm/6 text-zinc-300 hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
+        >
+          ×
+        </button>
+        <span class="mx-0.5 hidden h-6 w-px bg-white/15 sm:block" aria-hidden="true"></span>
+        <.button
+          type="button"
+          phx-click="complete_selected_todos"
+          variant="plain"
+          class="text-xs text-zinc-200 hover:bg-white/10 hover:text-white"
+        >
           Mark done
         </.button>
-        <.button type="button" phx-click="dismiss_selected_todos" variant="plain" class="text-xs text-zinc-600">
+        <.button
+          type="button"
+          phx-click="dismiss_selected_todos"
+          variant="plain"
+          class="text-xs text-zinc-200 hover:bg-white/10 hover:text-white"
+        >
           Dismiss
         </.button>
-        <.button type="button" phx-click="clear_todo_selection" variant="plain" class="text-xs text-zinc-500">
-          Clear
+        <.button
+          type="button"
+          phx-click="see_less_selected_todos"
+          variant="plain"
+          class="text-xs text-zinc-200 hover:bg-white/10 hover:text-white"
+        >
+          See less
         </.button>
       </div>
     </div>
@@ -559,8 +590,16 @@ defmodule MaraithonWeb.TodosLive do
   defp run_todo_action(:dismiss, user_id, todo_id, note),
     do: Todos.dismiss(user_id, todo_id, note: note)
 
+  defp run_todo_action(:see_less, user_id, todo_id, _note) do
+    case Todos.see_less_like(user_id, todo_id, source: "todos_page_bulk") do
+      {:ok, %{todo: todo}} -> {:ok, todo}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp bulk_todo_note(:complete), do: "Completed from Todos bulk action."
   defp bulk_todo_note(:dismiss), do: "Dismissed from Todos bulk action."
+  defp bulk_todo_note(:see_less), do: "Dismissed from Todos bulk see less action."
 
   defp bulk_todo_flash_kind(0, [_ | _]), do: :error
   defp bulk_todo_flash_kind(_updated_count, _errors), do: :info
@@ -570,6 +609,7 @@ defmodule MaraithonWeb.TodosLive do
       case action do
         :complete -> "Marked #{pluralize_todo(updated_count)} done"
         :dismiss -> "Dismissed #{pluralize_todo(updated_count)}"
+        :see_less -> "Saved see-less feedback for #{pluralize_todo(updated_count)}"
       end
 
     case length(errors) do

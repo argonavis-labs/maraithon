@@ -24,8 +24,14 @@ defmodule MaraithonWeb.Plugs.RequireMobileSession do
 
   defp bearer_token(conn) do
     case get_req_header(conn, "authorization") do
-      ["Bearer " <> token] when token != "" -> {:ok, token}
-      _ -> :error
+      [header | _] ->
+        case Regex.run(~r/^\s*bearer\s+(.+?)\s*$/i, header) do
+          [_header, token] when token != "" -> {:ok, token}
+          _ -> :error
+        end
+
+      _ ->
+        :error
     end
   end
 

@@ -267,14 +267,6 @@ defmodule MaraithonWeb.PeopleLive do
             MapSet.size(@selected_person_ids) > 0 && "pb-28"
           ]}>
             <div class="min-w-0">
-              <.people_selection_context_actions
-                people={@people}
-                selected_person_ids={@selected_person_ids}
-                menu_open?={@bulk_action_menu_open? && @bulk_action_anchor == "context"}
-                action_mode={anchored_action_mode(@bulk_action_mode, @bulk_action_anchor, "context")}
-                bulk_merge_form={@bulk_merge_form}
-              />
-
               <.table>
                 <.table_head>
                   <.table_row>
@@ -394,89 +386,6 @@ defmodule MaraithonWeb.PeopleLive do
       selected_person:
         selected_person_for_user(current_user_id(socket), socket.assigns.selected_person_id)
     )
-  end
-
-  attr :people, :list, required: true
-  attr :selected_person_ids, :any, required: true
-  attr :menu_open?, :boolean, required: true
-  attr :action_mode, :string, default: nil
-  attr :bulk_merge_form, :any, required: true
-
-  defp people_selection_context_actions(assigns) do
-    assigns =
-      assigns
-      |> assign(:selected_people, selected_people(assigns.people, assigns.selected_person_ids))
-      |> assign(:selected_count, MapSet.size(assigns.selected_person_ids))
-
-    ~H"""
-    <div
-      :if={@selected_count > 0}
-      id="people-selection-actions"
-      class="pointer-events-none sticky top-3 z-30 mb-3 flex justify-center px-2"
-    >
-      <div class="pointer-events-auto relative max-w-full">
-        <.people_bulk_action_panel
-          :if={@action_mode == "merge"}
-          id="people-context-merge-panel"
-          form_id="people-context-merge"
-          placement="below"
-          selected_count={@selected_count}
-          selected_people={@selected_people}
-          bulk_merge_form={@bulk_merge_form}
-        />
-
-        <.people_bulk_delete_panel
-          :if={@action_mode == "delete"}
-          id="people-context-delete-panel"
-          placement="below"
-          selected_count={@selected_count}
-        />
-
-        <.people_bulk_menu
-          :if={@menu_open?}
-          id="people-selection-action-menu"
-          anchor="context"
-          placement="below"
-          selected_count={@selected_count}
-        />
-
-        <div class="flex flex-wrap items-center justify-center gap-1.5 rounded-lg border border-zinc-950/20 bg-zinc-950/95 px-2.5 py-2 text-white shadow-xl ring-1 ring-white/10 backdrop-blur">
-          <span class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-semibold">
-            <%= @selected_count %> selected
-          </span>
-          <button
-            id="people-selection-merge-direct"
-            type="button"
-            phx-click="choose_people_bulk_action"
-            phx-value-action="merge"
-            phx-value-anchor="context"
-            disabled={@selected_count < 2}
-            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/30 disabled:cursor-not-allowed disabled:text-zinc-500 disabled:hover:bg-white/10"
-          >
-            Merge contacts
-          </button>
-          <button
-            type="button"
-            phx-click="toggle_people_bulk_menu"
-            phx-value-anchor="context"
-            aria-expanded={@menu_open?}
-            aria-controls="people-selection-action-menu"
-            class="rounded-md border border-white/10 bg-white/10 px-3 py-1.5 text-sm/6 font-medium text-white hover:bg-white/15 focus:outline-none focus:ring-2 focus:ring-white/30"
-          >
-            Actions
-          </button>
-          <button
-            type="button"
-            phx-click="clear_people_selection"
-            aria-label="Clear selection"
-            class="rounded-md px-2 py-1.5 text-sm/6 text-zinc-300 hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-white/30"
-          >
-            ×
-          </button>
-        </div>
-      </div>
-    </div>
-    """
   end
 
   attr :people, :list, required: true
@@ -958,7 +867,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp anchored_action_mode(action_mode, anchor, anchor), do: action_mode
   defp anchored_action_mode(_action_mode, _anchor, _expected_anchor), do: nil
 
-  defp bulk_action_anchor(anchor, default \\ "context")
+  defp bulk_action_anchor(anchor, default \\ "bottom")
   defp bulk_action_anchor("context", _default), do: "context"
   defp bulk_action_anchor("bottom", _default), do: "bottom"
   defp bulk_action_anchor(_anchor, default), do: default

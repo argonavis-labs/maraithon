@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.MobileJSON do
   @moduledoc false
 
+  alias Maraithon.ActionCards
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
   alias Maraithon.Todos.Todo
@@ -25,8 +26,8 @@ defmodule MaraithonWeb.MobileJSON do
     }
   end
 
-  def todo(%Todo{} = todo) do
-    %{
+  def todo(%Todo{} = todo, opts \\ []) do
+    base = %{
       id: todo.id,
       source: todo.source,
       kind: todo.kind,
@@ -50,6 +51,12 @@ defmodule MaraithonWeb.MobileJSON do
       inserted_at: json_value(todo.inserted_at),
       updated_at: json_value(todo.updated_at)
     }
+
+    if Keyword.get(opts, :include_card, false) do
+      Map.put(base, :action_card, action_card(todo, opts))
+    else
+      base
+    end
   end
 
   def person(%Person{} = person) do
@@ -76,6 +83,60 @@ defmodule MaraithonWeb.MobileJSON do
 
   def error(reason) do
     %{error: format_error(reason)}
+  end
+
+  defp action_card(%Todo{} = todo, opts) do
+    card =
+      ActionCards.for_todo(
+        todo,
+        Keyword.put_new(opts, :include_disconnected, false)
+      )
+
+    %{
+      id: card["id"],
+      kind: card["kind"],
+      headline: card["headline"],
+      decision_prompt: card["decision_prompt"],
+      why_now: card["why_now"],
+      rank_reason: card["rank_reason"],
+      attention_mode: card["attention_mode"],
+      confidence: card["confidence"],
+      context_items: ActionCards.context_items(card),
+      evidence_excerpt: ActionCards.evidence_excerpt(card),
+      next_best_action: card["next_best_action"],
+      prepared_actions: card["prepared_actions"] || [],
+      available_buttons: format_buttons(card["available_buttons"] || []),
+      estimated_effort: card["estimated_effort"],
+      source_health: card["source_health"],
+      product_score: card["product_score"]
+    }
+  end
+
+  defp format_buttons(buttons) do
+    buttons
+    |> List.wrap()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(fn action ->
+      action = to_string(action)
+      %{action: action, label: button_label(action)}
+    end)
+  end
+
+  defp button_label(action) do
+    case action do
+      "done" -> "Done"
+      "dismiss" -> "Dismiss"
+      "snooze" -> "Snooze"
+      "important" -> "Important"
+      "not_important" -> "Not Important"
+      "not_helpful" -> "Not Important"
+      "helpful" -> "Helpful"
+      "keep_active" -> "Keep Active"
+      "see_less" -> "See Less"
+      "more_context" -> "More Context"
+      "open_dashboard" -> "Open Dashboard"
+      other -> other |> String.replace("_", " ") |> String.capitalize()
+    end
   end
 
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)

@@ -261,6 +261,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   defp build_thinking_prompt(state, event, context) do
     memory_context = format_memory(state.memory)
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
     tools_list = format_tools(state.allowed_tools)
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
     deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
@@ -274,6 +275,9 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
     ## Recent Events You've Seen
     #{memory_context}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
 
     ## Durable User Memory
     #{user_memory_text}
@@ -312,6 +316,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp build_proactive_prompt(state, context) do
     memory_context = format_memory(state.memory)
     timestamp = Map.get(context, :timestamp) || DateTime.utc_now()
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
     deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
     open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
@@ -321,6 +326,9 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
     ## Recent Events You've Seen
     #{memory_context}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
 
     ## Durable User Memory
     #{user_memory_text}
@@ -344,12 +352,16 @@ defmodule Maraithon.Behaviors.PromptAgent do
   end
 
   defp build_tool_result_prompt(state, tool_call, result, context) do
+    recent_events_text = format_recent_events(Map.get(context, :recent_events, []))
     user_memory_text = format_user_memory(Map.get(context, :user_memory, %{}))
     deep_memory_text = format_deep_memory(Map.get(context, :deep_memory, %{}))
     open_loops_text = format_open_loops(Map.get(context, :open_loops, %{}))
 
     """
     #{state.prompt}
+
+    ## Recent Connected Activity
+    #{recent_events_text}
 
     ## Durable User Memory
     #{user_memory_text}
@@ -403,6 +415,23 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   defp format_tools([]), do: "(No tools available)"
   defp format_tools(tools), do: Enum.join(tools, ", ")
+
+  defp format_recent_events([]), do: "No recent connected activity."
+
+  defp format_recent_events(events) when is_list(events) do
+    events
+    |> Enum.take(10)
+    |> Enum.map_join("\n", fn event ->
+      source = Map.get(event, :source) || Map.get(event, "source") || "connected app"
+      event_type = Map.get(event, :event_type) || Map.get(event, "event_type") || "event"
+      occurred_at = Map.get(event, :occurred_at) || Map.get(event, "occurred_at") || "unknown"
+      payload = Map.get(event, :payload) || Map.get(event, "payload") || %{}
+
+      "- [#{occurred_at}] #{source} #{event_type}: #{truncate(format_content(payload), 260)}"
+    end)
+  end
+
+  defp format_recent_events(_events), do: "No recent connected activity."
 
   defp format_user_memory(%{"summary" => summary, "profile" => profile}) do
     format_user_memory(%{summary: summary, profile: profile})

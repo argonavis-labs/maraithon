@@ -10,6 +10,7 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
   alias Maraithon.Tools
 
   @sources ~w(crm gmail google_contacts calendar slack open_loops memory)
+  @preflight_timeout_ms 8_000
 
   def apply(context, attrs) when is_map(context) and is_map(attrs) do
     with true <- should_review?(context, attrs),
@@ -30,7 +31,8 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
       "query" => query,
       "sources" => @sources,
       "max_results" => 5,
-      "since_days" => 180
+      "since_days" => 180,
+      "timeout_ms" => @preflight_timeout_ms
     }
 
     case Tools.execute("review_connected_context", args, %{

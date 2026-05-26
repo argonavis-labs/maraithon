@@ -89,6 +89,9 @@ defmodule Maraithon.ToolsTest do
       assert review_descriptor.annotations["readOnlyHint"] == true
       assert review_descriptor.annotations["sideEffect"] == "read"
       assert get_in(review_descriptor.input_schema, ["properties", "query", "type"]) == "string"
+
+      assert get_in(review_descriptor.input_schema, ["properties", "timeout_ms", "maximum"]) ==
+               30_000
     end
 
     test "every registered tool has policy metadata" do

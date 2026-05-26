@@ -6,6 +6,7 @@ defmodule Maraithon.Tools.InputSchemas do
   @boolean %{"type" => "boolean"}
   @object %{"type" => "object", "additionalProperties" => true}
   @string_array %{"type" => "array", "items" => @string}
+  @timeout_ms %{"type" => "integer", "minimum" => 1_000, "maximum" => 30_000}
 
   def schema_for(name) when is_binary(name) do
     case name do
@@ -162,7 +163,8 @@ defmodule Maraithon.Tools.InputSchemas do
           "time_min" => @string,
           "time_max" => @string,
           "since_days" => @integer,
-          "max_results" => @integer
+          "max_results" => @integer,
+          "timeout_ms" => @timeout_ms
         })
 
       "list_connected_accounts" ->

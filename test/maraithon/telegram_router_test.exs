@@ -23,6 +23,7 @@ defmodule Maraithon.TelegramRouterTest do
 
     original_insights = Application.get_env(:maraithon, :insights, [])
     original_interpreter = Application.get_env(:maraithon, :telegram_interpreter, [])
+    original_telegram_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
     original_operator_memory = Application.get_env(:maraithon, :operator_memory, [])
     original_google = Application.get_env(:maraithon, :gmail, [])
     original_runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
@@ -61,6 +62,7 @@ defmodule Maraithon.TelegramRouterTest do
     on_exit(fn ->
       Application.put_env(:maraithon, :insights, original_insights)
       Application.put_env(:maraithon, :telegram_interpreter, original_interpreter)
+      Application.put_env(:maraithon, :telegram_assistant, original_telegram_assistant)
       Application.put_env(:maraithon, :operator_memory, original_operator_memory)
       Application.put_env(:maraithon, :gmail, original_google)
       Application.put_env(:maraithon, Maraithon.Runtime, original_runtime)
@@ -732,6 +734,23 @@ defmodule Maraithon.TelegramRouterTest do
       )
 
     assert turn.text == "What do I owe right now?"
+  end
+
+  test "model-unavailable Telegram fallback avoids dead-end retry copy" do
+    Application.put_env(:maraithon, :telegram_assistant, telegram_full_chat_enabled: false)
+    set_interpreter(fn _prompt -> {:error, :model_down} end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9007, text: "Who is this?"}
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "I saved that message in this thread"
+    assert reply.text =~ "did not guess from local rules"
+    refute String.contains?(String.downcase(reply.text), "try again")
+    refute String.contains?(String.downcase(reply.text), "internal issue")
   end
 
   defp create_and_dispatch_gmail_delivery(user_id, agent_id, overrides \\ %{}) do

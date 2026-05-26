@@ -10,6 +10,7 @@ defmodule Maraithon.LocalMessages do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.LocalMessages.EmbedJob
   alias Maraithon.LocalMessages.LocalMessage
+  alias Maraithon.LocalSearch
   alias Maraithon.Repo
 
   @doc """
@@ -177,8 +178,8 @@ defmodule Maraithon.LocalMessages do
     from_handle = Keyword.get(opts, :from_handle)
     since = Keyword.get(opts, :since)
     before_ts = Keyword.get(opts, :before)
-    needle = String.downcase(term)
-    handle_needle = if is_binary(from_handle), do: String.downcase(from_handle), else: nil
+    query = LocalSearch.compile(term)
+    handle_needle = if is_binary(from_handle), do: LocalSearch.normalize(from_handle), else: nil
 
     base_query =
       from msg in LocalMessage,
@@ -192,7 +193,7 @@ defmodule Maraithon.LocalMessages do
 
     base_query
     |> Repo.all()
-    |> Enum.filter(&matches_text?(&1, needle))
+    |> Enum.filter(&matches_text?(&1, query))
     |> Enum.filter(&matches_handle?(&1, handle_needle))
     |> Enum.take(limit)
   end
@@ -480,19 +481,27 @@ defmodule Maraithon.LocalMessages do
 
   defp maybe_where_before(query, _other), do: query
 
-  defp matches_text?(%LocalMessage{text: nil}, _needle), do: false
-
-  defp matches_text?(%LocalMessage{text: text}, needle) when is_binary(text) do
-    String.contains?(String.downcase(text), needle)
+  defp matches_text?(%LocalMessage{} = msg, query) do
+    LocalSearch.matches?(query, [
+      msg.text,
+      msg.chat_display_name,
+      msg.sender_handle
+    ])
   end
 
-  defp matches_text?(_msg, _needle), do: false
+  defp matches_text?(_msg, _query), do: false
 
   defp matches_handle?(_msg, nil), do: true
 
-  defp matches_handle?(%LocalMessage{sender_handle: handle}, needle)
-       when is_binary(handle) do
-    String.contains?(String.downcase(handle), needle)
+  defp matches_handle?(%LocalMessage{} = msg, needle) do
+    [
+      msg.sender_handle,
+      msg.chat_key,
+      msg.chat_display_name
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&LocalSearch.normalize/1)
+    |> Enum.any?(&String.contains?(&1, needle))
   end
 
   defp matches_handle?(_msg, _needle), do: false

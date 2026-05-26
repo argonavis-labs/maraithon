@@ -14,6 +14,8 @@ defmodule Maraithon.Runtime.Agent do
   alias Maraithon.Insights.Refresh, as: InsightRefresh
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.OperatorEvents
+  alias Maraithon.OperatorEvents.OperatorEvent
   alias Maraithon.Runtime.Dispatch
   alias Maraithon.Runtime.Scheduler
   alias Maraithon.Runtime.Snapshot
@@ -852,8 +854,7 @@ defmodule Maraithon.Runtime.Agent do
       harness_manifest: data.config["_harness_manifest"],
       timestamp: DateTime.utc_now(),
       budget: data.budget,
-      # TODO: Load recent events
-      recent_events: [],
+      recent_events: recent_operator_events(data.user_id),
       user_memory: UserMemory.prompt_context(data.user_id),
       deep_memory:
         Memory.prompt_context(data.user_id,
@@ -877,6 +878,52 @@ defmodule Maraithon.Runtime.Agent do
       event: data.current_event
     }
   end
+
+  defp recent_operator_events(user_id) when is_binary(user_id) do
+    user_id
+    |> OperatorEvents.list_recent_for_user(20)
+    |> Enum.map(&serialize_operator_event_for_prompt/1)
+  end
+
+  defp recent_operator_events(_user_id), do: []
+
+  defp serialize_operator_event_for_prompt(%OperatorEvent{} = event) do
+    %{
+      id: event.id,
+      source: event.source,
+      event_type: event.event_type,
+      scope: event.scope,
+      source_item_id: event.source_item_id,
+      occurred_at: to_jsonable(event.occurred_at),
+      payload: compact_prompt_map(event.payload || %{}),
+      metadata: compact_prompt_map(event.metadata || %{})
+    }
+    |> maybe_put(:project_id, event.project_id)
+  end
+
+  defp compact_prompt_map(value) when is_map(value) do
+    value
+    |> Enum.take(12)
+    |> Map.new(fn {key, val} -> {to_string(key), compact_prompt_value(val)} end)
+  end
+
+  defp compact_prompt_map(_value), do: %{}
+
+  defp compact_prompt_value(value) when is_binary(value), do: String.slice(value, 0, 500)
+
+  defp compact_prompt_value(value) when is_list(value) do
+    value
+    |> Enum.take(6)
+    |> Enum.map(&compact_prompt_value/1)
+  end
+
+  defp compact_prompt_value(value) when is_map(value), do: compact_prompt_map(value)
+  defp compact_prompt_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp compact_prompt_value(%Date{} = value), do: Date.to_iso8601(value)
+  defp compact_prompt_value(value), do: value
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp maybe_inject_memory_into_effect(data, effect_type, params)
        when effect_type in [:llm_call, "llm_call"] and is_map(params) do

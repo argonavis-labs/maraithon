@@ -129,7 +129,7 @@ defmodule Maraithon.Capabilities do
     "google_contacts_search" => "Search connected Google Contacts.",
     "google_calendar_list_events" => "List Google Calendar events.",
     "review_connected_context" =>
-      "Review connected CRM, Gmail, contacts, calendar, Slack, open loops, and memory for source-grounded context.",
+      "Review connected CRM, Gmail, contacts, calendar, Slack, open loops, memory, and Desktop App sources like iMessage, Apple Notes, Reminders, files, browser history, and voice memos for source-grounded context.",
     "list_connected_accounts" =>
       "List connected accounts, freshness, connector status, and MCP tool coverage for a user.",
     "get_open_loops" =>

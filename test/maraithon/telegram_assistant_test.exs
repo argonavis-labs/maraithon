@@ -1080,6 +1080,87 @@ defmodule Maraithon.TelegramAssistantTest do
     refute Enum.at(sends, 2).text =~ "About:"
   end
 
+  test "natural one-at-a-time todo request starts review and advances after each action", %{
+    user_id: user_id
+  } do
+    assert {:ok, [first, second]} =
+             Todos.upsert_many(user_id, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Reply to Emma's soccer organizer",
+                 "summary" => "Emma's organizer needs confirmation for this weekend.",
+                 "next_action" => "Confirm the soccer practice timing.",
+                 "priority" => 98,
+                 "dedupe_key" => "telegram-assistant:one-at-a-time:1"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "attention_mode" => "act_now",
+                 "title" => "Reply to Matthew about setup",
+                 "summary" => "Matthew is waiting on setup help and pricing.",
+                 "next_action" => "Reply with the recommended setup path and pricing owner.",
+                 "priority" => 94,
+                 "dedupe_key" => "telegram-assistant:one-at-a-time:2"
+               }
+             ])
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{
+          chat_id: 12345,
+          message_id: 9220,
+          text: "Let's go through my todos one at a time"
+        }
+      })
+
+    sends = Enum.filter(telegram_events(), &(&1.type == :send))
+    assert length(sends) == 1
+    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ "Confirm the soccer practice timing."
+    assert hd(sends).text =~ "Emma's organizer needs confirmation"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-review-1",
+          callback_id: "todo-review-done",
+          data: "tgtodo:#{first.id}:done"
+        }
+      })
+
+    assert Todos.get_for_user(user_id, first.id).status == "done"
+
+    sends = Enum.filter(telegram_events(), &(&1.type == :send))
+    assert length(sends) == 2
+    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ "Reply with the recommended setup path"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-review-2",
+          callback_id: "todo-review-dismiss",
+          data: "tgtodo:#{second.id}:dismiss"
+        }
+      })
+
+    assert Todos.get_for_user(user_id, second.id).status == "dismissed"
+
+    sends = Enum.filter(telegram_events(), &(&1.type == :send))
+    assert List.last(sends).text =~ "Todo review complete"
+    assert List.last(sends).text =~ "Done: 1"
+    assert List.last(sends).text =~ "Dismissed: 1"
+    assert List.last(sends).text =~ "Tomorrow's briefing will build on this"
+  end
+
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
     user_id: user_id
   } do
@@ -1985,7 +2066,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert_receive {:assistant_waiting, run_pid}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
-    assert timeout_text =~ "taking longer than it should"
+    assert timeout_text =~ "I saved this request"
+    refute timeout_text =~ "taking longer than it should"
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
 

@@ -17,6 +17,7 @@ defmodule Maraithon.LocalFiles do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.LocalFiles.EmbedJob
   alias Maraithon.LocalFiles.LocalFile
+  alias Maraithon.LocalSearch
   alias Maraithon.Repo
 
   @max_text_bytes 200 * 1024
@@ -130,11 +131,11 @@ defmodule Maraithon.LocalFiles do
     limit = Keyword.get(opts, :limit, 50)
     extension = normalize_extension(Keyword.get(opts, :extension))
     path_substring = optional_substring(Keyword.get(opts, :path_substring))
-    needle = String.downcase(term)
+    query = LocalSearch.compile(term)
 
     user_id
     |> recent_for_user(limit: 500, extension: extension)
-    |> Enum.filter(&matches_term?(&1, needle, path_substring))
+    |> Enum.filter(&matches_term?(&1, query, path_substring))
     |> Enum.take(limit)
   end
 
@@ -339,16 +340,10 @@ defmodule Maraithon.LocalFiles do
 
   defp matches_term?(
          %LocalFile{filename: filename, text_content: text, path: path},
-         needle,
+         query,
          path_substring
        ) do
-    haystack =
-      [filename, text, path]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&String.downcase/1)
-      |> Enum.join(" ")
-
-    String.contains?(haystack, needle) and
+    LocalSearch.matches?(query, [filename, text, path]) and
       (is_nil(path_substring) or
          (is_binary(path) and String.contains?(String.downcase(path), path_substring)))
   end

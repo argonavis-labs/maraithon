@@ -61,6 +61,35 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert params["max_tokens"] == 2000
     end
 
+    test "includes recent connected activity in message prompts" do
+      state = PromptAgent.init(%{"name" => "test"})
+
+      context =
+        @context
+        |> Map.put(:last_message, "What changed?")
+        |> Map.put(:recent_events, [
+          %{
+            source: "gmail",
+            event_type: "email.received",
+            occurred_at: "2026-05-25T12:00:00Z",
+            payload: %{
+              "from" => "michael@example.com",
+              "subject" => "Starteryou UGC Campaigns"
+            }
+          }
+        ])
+
+      {:effect, {:llm_call, params}, _new_state} = PromptAgent.handle_wakeup(state, context)
+
+      prompt =
+        params["messages"]
+        |> Enum.map_join("\n", & &1["content"])
+
+      assert prompt =~ "## Recent Connected Activity"
+      assert prompt =~ "gmail email.received"
+      assert prompt =~ "Starteryou UGC Campaigns"
+    end
+
     test "does not reprocess same message" do
       state = PromptAgent.init(%{"name" => "test"})
       state = %{state | last_processed_message: "Hello agent"}
@@ -208,13 +237,28 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
 
       result = {:ok, "file contents here"}
 
+      context =
+        Map.put(@context, :recent_events, [
+          %{
+            source: "calendar",
+            event_type: "event.updated",
+            occurred_at: "2026-05-25T14:00:00Z",
+            payload: %{"summary" => "Boardy Pro Kickoff"}
+          }
+        ])
+
       {:effect, {:llm_call, params}, new_state} =
-        PromptAgent.handle_effect_result({:tool_call, result}, state, @context)
+        PromptAgent.handle_effect_result({:tool_call, result}, state, context)
 
       assert new_state.pending_tool_call == nil
       assert params["model"] == Maraithon.LLM.chat_model()
       assert params["reasoning_effort"] == "none"
       assert params["max_tokens"] == 1500
+
+      prompt = Enum.map_join(params["messages"], "\n", & &1["content"])
+      assert prompt =~ "## Recent Connected Activity"
+      assert prompt =~ "calendar event.updated"
+      assert prompt =~ "Boardy Pro Kickoff"
     end
 
     test "handles failed tool result" do
