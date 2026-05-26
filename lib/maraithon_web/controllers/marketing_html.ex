@@ -60,7 +60,7 @@ defmodule MaraithonWeb.MarketingHTML do
       <footer class="border-t border-olive-200 bg-olive-950 text-olive-300">
         <div class="mx-auto max-w-7xl px-6 py-12 lg:px-8">
           <div class="flex flex-col items-start justify-between gap-3 text-xs/6 text-olive-400 sm:flex-row">
-            <p>&copy; {DateTime.utc_now().year} ArgoNavis Inc. All rights reserved.</p>
+            <p>&copy; {DateTime.utc_now().year} Maraithon. Made by ArgoNavis Inc.</p>
             <div class="flex gap-5">
               <a href="/privacy" class="hover:text-olive-50">Privacy</a>
               <a href="/terms" class="hover:text-olive-50">Terms</a>
