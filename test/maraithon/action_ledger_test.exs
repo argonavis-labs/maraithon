@@ -74,7 +74,15 @@ defmodule Maraithon.ActionLedgerTest do
   test "purges entries older than the retention window" do
     user_id = "ledger-retention-#{System.unique_integer([:positive])}@example.com"
 
-    assert {:ok, action} =
+    assert {:ok, old_action} =
+             ActionLedger.record(%{
+               user_id: user_id,
+               surface: "telegram",
+               event_type: "tool.executed",
+               status: "completed"
+             })
+
+    assert {:ok, fresh_action} =
              ActionLedger.record(%{
                user_id: user_id,
                surface: "telegram",
@@ -86,10 +94,12 @@ defmodule Maraithon.ActionLedgerTest do
 
     {1, _rows} =
       Action
-      |> Ecto.Query.where([entry], entry.id == ^action.id)
+      |> Ecto.Query.where([entry], entry.id == ^old_action.id)
       |> Repo.update_all(set: [inserted_at: old, updated_at: old])
 
-    assert {:ok, 1} = ActionLedger.purge_expired(retention_days: 1)
-    assert ActionLedger.list_recent(user_id) == []
+    assert {:ok, deleted_count} = ActionLedger.purge_expired(retention_days: 1)
+    assert deleted_count >= 1
+    refute Repo.get(Action, old_action.id)
+    assert Repo.get(Action, fresh_action.id)
   end
 end

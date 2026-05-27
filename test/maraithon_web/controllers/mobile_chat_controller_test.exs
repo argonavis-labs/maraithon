@@ -50,7 +50,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     :ok
   end
 
-  test "mobile chat sends through assistant runtime without Telegram delivery", %{conn: conn} do
+  test "mobile chat answers simple greetings immediately", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn)
 
     conn =
@@ -77,6 +77,57 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user", "body" => "Hey"},
                  %{
                    "role" => "assistant",
+                   "body" => "Hey - I'm here.",
+                   "run_id" => run_id,
+                   "structured_data" => %{
+                     "direct_intent" => "fast_chat_reply",
+                     "fast_chat_kind" => "greeting"
+                   }
+                 }
+               ]
+             },
+             "run" => %{
+               "status" => "completed",
+               "id" => response_run_id,
+               "message_class" => "assistant_reply"
+             }
+           } = response
+
+    assert response_run_id == run_id
+
+    assert captured_telegram_events() == []
+  end
+
+  test "mobile chat sends non-trivial messages through assistant runtime without Telegram delivery",
+       %{
+         conn: conn
+       } do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-runtime-chat@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    assert %{"thread" => %{"id" => thread_id, "messages" => []}} = json_response(conn, 201)
+
+    conn =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "Please summarize this mobile verification sentence in one line."
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert %{
+             "thread" => %{
+               "messages" => [
+                 %{"role" => "user"},
+                 %{
+                   "role" => "assistant",
                    "body" => "Production assistant response from Maraithon.",
                    "run_id" => run_id
                  }
@@ -86,7 +137,6 @@ defmodule MaraithonWeb.MobileChatControllerTest do
            } = response
 
     assert response_run_id == run_id
-
     assert captured_telegram_events() == []
   end
 

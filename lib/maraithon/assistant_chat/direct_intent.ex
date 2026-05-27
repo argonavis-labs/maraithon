@@ -21,13 +21,75 @@ defmodule Maraithon.AssistantChat.DirectIntent do
     ~r/^\s*add\s+(.+?)\s+to\s+(?:my\s+)?(?:todo|to-do|task)\s+list(?:[.!?]\s*|$)/iu
   ]
 
+  @fast_chat_replies %{
+    greeting: "Hey - I'm here.",
+    acknowledgement: "Got it.",
+    thanks: "Anytime."
+  }
+
+  @fast_chat_phrases %{
+    greeting:
+      MapSet.new([
+        "hey",
+        "hi",
+        "hello",
+        "yo",
+        "gm",
+        "good morning",
+        "good afternoon",
+        "good evening"
+      ]),
+    acknowledgement:
+      MapSet.new([
+        "ok",
+        "okay",
+        "k",
+        "kk",
+        "got it",
+        "sounds good",
+        "makes sense",
+        "cool"
+      ]),
+    thanks:
+      MapSet.new([
+        "thanks",
+        "thank you",
+        "thx",
+        "ty",
+        "appreciate it"
+      ])
+  }
+
+  @context_keyword_patterns [
+    ~r/\btodos?\b/u,
+    ~r/\bto-dos?\b/u,
+    ~r/\btasks?\b/u,
+    ~r/\bcontacts?\b/u,
+    ~r/\bpeople\b/u,
+    ~r/\bpersons?\b/u,
+    ~r/\bcrm\b/u,
+    ~r/\bfollow\s*-?\s?ups?\b/u,
+    ~r/\bwaiting\b/u,
+    ~r/\bowe\b/u,
+    ~r/\bcalendar\b/u,
+    ~r/\bmeetings?\b/u,
+    ~r/\bopen\s+loops?\b/u,
+    ~r/\bconnected\b/u,
+    ~r/\bsources?\b/u,
+    ~r/\baccounts?\b/u,
+    ~r/\bprojects?\b/u
+  ]
+
   def classify(text) when is_binary(text) do
     case extract_todo_title(text) do
       title when is_binary(title) ->
         {:ok, %{type: :create_todo, title: title}}
 
       nil ->
-        :nomatch
+        case fast_chat_reply(text) do
+          {:ok, kind, reply} -> {:ok, %{type: :fast_chat_reply, kind: kind, reply: reply}}
+          :nomatch -> :nomatch
+        end
     end
   end
 
@@ -72,6 +134,42 @@ defmodule Maraithon.AssistantChat.DirectIntent do
     end
   end
 
+  def execute(
+        %Conversation{} = conversation,
+        %Run{} = run,
+        %Turn{} = user_turn,
+        %{type: :fast_chat_reply, kind: kind, reply: reply}
+      ) do
+    with {:ok, _conversation, _turn, _delivery} <-
+           MobileDelivery.deliver_turn(
+             conversation,
+             conversation.chat_id,
+             reply,
+             turn_kind: "assistant_reply",
+             origin_type: "chat",
+             origin_id: user_turn.id,
+             structured_data: %{
+               "surface" => "mobile",
+               "run_id" => run.id,
+               "message_class" => "assistant_reply",
+               "direct_intent" => "fast_chat_reply",
+               "fast_chat_kind" => Atom.to_string(kind)
+             }
+           ) do
+      TelegramAssistant.complete_run(run, %{
+        status: "completed",
+        result_summary: %{
+          surface: "mobile",
+          message_class: "assistant_reply",
+          direct_intent: "fast_chat_reply",
+          fast_chat_kind: Atom.to_string(kind),
+          tool_steps: 0,
+          llm_turns: 0
+        }
+      })
+    end
+  end
+
   defp extract_todo_title(text) do
     normalized = String.trim(text)
 
@@ -95,6 +193,43 @@ defmodule Maraithon.AssistantChat.DirectIntent do
       |> String.slice(0, @title_max_chars)
 
     if String.length(title) >= 4, do: title, else: nil
+  end
+
+  defp fast_chat_reply(text) do
+    normalized = normalize_fast_chat_text(text)
+
+    cond do
+      normalized == "" ->
+        :nomatch
+
+      String.length(normalized) > 48 ->
+        :nomatch
+
+      Regex.scan(~r/\S+/u, normalized) |> length() > 6 ->
+        :nomatch
+
+      context_request?(normalized) ->
+        :nomatch
+
+      true ->
+        Enum.find_value(@fast_chat_phrases, :nomatch, fn {kind, phrases} ->
+          if MapSet.member?(phrases, normalized) do
+            {:ok, kind, Map.fetch!(@fast_chat_replies, kind)}
+          end
+        end)
+    end
+  end
+
+  defp normalize_fast_chat_text(text) do
+    text
+    |> String.downcase()
+    |> String.replace(~r/[^\p{L}\p{N}\s'-]/u, " ")
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp context_request?(text) do
+    Enum.any?(@context_keyword_patterns, &Regex.match?(&1, text))
   end
 
   defp todo_attrs(%Conversation{} = conversation, %Run{} = run, %Turn{} = user_turn, title) do

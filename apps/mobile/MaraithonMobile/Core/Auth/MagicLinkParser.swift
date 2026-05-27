@@ -31,3 +31,29 @@ enum MagicLinkParser {
         return nil
     }
 }
+
+enum SignInCodeParser {
+    static func normalizedCode(from value: String) -> String? {
+        let characters = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+            .filter { $0.isLetter || $0.isNumber }
+        let normalized = String(characters)
+
+        guard normalized.count == 8,
+              normalized.range(
+                of: #"^[A-Z0-9]{8}$"#,
+                options: String.CompareOptions.regularExpression
+              ) != nil else {
+            return nil
+        }
+
+        return String(normalized)
+    }
+
+    static func formattedCode(from value: String) -> String? {
+        guard let normalized = normalizedCode(from: value) else { return nil }
+        let splitIndex = normalized.index(normalized.startIndex, offsetBy: 4)
+        return "\(normalized[..<splitIndex])-\(normalized[splitIndex...])"
+    }
+}

@@ -23,6 +23,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwhat\s+should\s+i\s+do\s+(next|today)\b/u,
     ~r/\bwhat\s+should\s+i\s+(do|work\s+on|focus\s+on|review)\b/u,
     ~r/\bwhat\s+needs\s+my\s+attention\b/u,
+    ~r/\b(todos?|to-dos?|tasks?|open\s+loops?)\b.*\bneed(?:s)?\b.*\battention\b/u,
     ~r/\bwhat\s+am\s+i\s+missing\b/u,
     ~r/\bwho\s+am\s+i\s+waiting\s+on\b/u,
     ~r/\bwho\s+is\s+waiting\s+on\s+me\b/u,
@@ -39,7 +40,10 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\b(queue|schedule|create)\b.*\b(job|task|review|brief|prep)\b/u,
     ~r/\b(long[-\s]?running|background)\s+(job|task|work)\b/u,
     ~r/\b(connected\s+apps?|connected\s+sources?|crm|calendar|todos?|memory)\b.*\b(search|look|review|context)\b/u,
-    ~r/\blook\s+across\b.*\b(accounts?|apps?|sources?|crm|calendar|todos?)\b/u
+    ~r/\blook\s+across\b.*\b(accounts?|apps?|sources?|crm|calendar|todos?)\b/u,
+    ~r/\b(which|what|who|show|list|review|look\s+up)\b.*\b(contacts?|people|relationships?|crm)\b.*\b(stale|follow[-\s]?ups?|follow\s+up|attention|waiting|owe|next|notes?|reach\s+out|nudge)\b/u,
+    ~r/\b(who|which\s+contacts?)\b.*\b(follow\s+up|reach\s+out|nudge|stale)\b/u,
+    ~r/\bcontacts?\b.*\b(stale|follow[-\s]?ups?|follow\s+up|attention|waiting|owe|notes?)\b/u
   ]
 
   @quick_chat_patterns [
@@ -56,6 +60,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwhat\s+should\s+i\s+do\s+(next|today)\b/u,
     ~r/\bwhat\s+should\s+i\s+(work\s+on|focus\s+on)\b/u,
     ~r/\bwhat\s+needs\s+my\s+attention\b/u,
+    ~r/\b(todos?|to-dos?|tasks?|open\s+loops?)\b.*\bneed(?:s)?\b.*\battention\b/u,
     ~r/\bnext\s+best\s+action\b/u
   ]
 
@@ -71,6 +76,8 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwho\s+(is|are)\s+(?!this|that|they|them|he|she|it|person)\p{L}/u,
     ~r/\b(tell|remind)\s+me\s+about\s+\p{L}/u,
     ~r/\bwhat\s+should\s+i\s+know\s+about\s+\p{L}/u,
+    ~r/\blook\s+up\b.*\bcontact\s+named\s+\p{L}/u,
+    ~r/\bwhat\s+notes?\b.*\b(contact|person)\b/u,
     ~r/\bwhat\s+do\s+i\s+owe\s+\p{L}/u,
     ~r/\bwhat\s+does\s+\p{L}.*\b(need|want|expect)\b/u,
     ~r/\bwhy\s+(am\s+i\s+meeting|do\s+i\s+know|are\s+we\s+meeting)\b.*\p{L}/u

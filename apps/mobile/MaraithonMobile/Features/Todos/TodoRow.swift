@@ -24,7 +24,7 @@ struct TodoRow: View {
                     Text(todo.notes)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                 }
 
                 HStack(spacing: 8) {

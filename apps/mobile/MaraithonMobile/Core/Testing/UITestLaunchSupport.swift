@@ -7,6 +7,7 @@ enum UITestLaunchSupport {
     private enum EnvironmentKeys {
         static let resetState = "MARAITHON_UI_TEST_RESET_STATE"
         static let magicToken = "MARAITHON_UI_TEST_MAGIC_TOKEN"
+        static let magicCode = "MARAITHON_UI_TEST_MAGIC_CODE"
     }
 
     static func resetStateIfNeeded(modelContext: ModelContext) {
@@ -36,6 +37,14 @@ enum UITestLaunchSupport {
     }
 
     static func consumeMagicLinkIfNeeded(sessionStore: SessionStore) async {
+        let code = ProcessInfo.processInfo.environment[EnvironmentKeys.magicCode]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let code, !code.isEmpty {
+            await sessionStore.consumeMagicLink(code)
+            return
+        }
+
         let token = ProcessInfo.processInfo.environment[EnvironmentKeys.magicToken]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 

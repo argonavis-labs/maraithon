@@ -15,4 +15,17 @@ defmodule Maraithon.Accounts.EmailTemplatesTest do
     assert email.html_body =~ link
     assert email.html_body =~ "If the button does not work"
   end
+
+  test "magic_code returns mobile-friendly code content without a magic URL" do
+    code = "ABCD-2345"
+
+    email = EmailTemplates.magic_code(code)
+
+    assert email.subject == "Your Maraithon sign-in code"
+    assert email.text_body =~ "Sign in to Maraithon"
+    assert email.text_body =~ code
+    refute email.text_body =~ "/auth/magic/"
+    assert email.html_body =~ code
+    refute email.html_body =~ "/auth/magic/"
+  end
 end

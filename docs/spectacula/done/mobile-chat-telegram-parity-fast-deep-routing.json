@@ -1,0 +1,110 @@
+{
+  "spec_id": "mobile-chat-telegram-parity-fast-deep-routing",
+  "slug": "mobile-chat-telegram-parity-fast-deep-routing",
+  "title": "Mobile Chat Telegram-Parity Fast/Deep Routing Specification",
+  "stage": "done",
+  "spec_path": "../specs/mobile-chat-telegram-parity-fast-deep-routing.md",
+  "created_at": "2026-05-27T13:45:05Z",
+  "approved_at": "2026-05-27T13:45:05Z",
+  "started_at": "2026-05-27T13:45:05Z",
+  "completed_at": "2026-05-27T14:16:20Z",
+  "updated_at": "2026-05-27T14:16:20Z",
+  "summary": "Mobile chat now responds instantly for simple conversation and switches to the Telegram-grade reasoning path for todos, contacts, and connected-context work.",
+  "next_action": "Done. Monitor production mobile chat and TestFlight feedback for latency or routing regressions.",
+  "blockers": [],
+  "reference_examples": [
+    "docs/spectacula/specs/fast-context-aware-telegram-answers-spec-7526b4ec.md",
+    "docs/spectacula/specs/unified-telegram-operator-chat.md",
+    "docs/spectacula/specs/mobile-email-code-login.md"
+  ],
+  "review_policy": {
+    "final_vetting": "off"
+  },
+  "implementation": {
+    "status": "complete",
+    "artifacts": [
+      "docs/spectacula/specs/mobile-chat-telegram-parity-fast-deep-routing.md",
+      "lib/maraithon/assistant_chat/direct_intent.ex",
+      "lib/maraithon/telegram_assistant/model_routing.ex",
+      "test/maraithon/assistant_chat/direct_intent_test.exs",
+      "test/maraithon_web/controllers/mobile_chat_controller_test.exs",
+      "test/maraithon/telegram_assistant/model_routing_test.exs",
+      "apps/mobile/MaraithonMobileUITests/ProductionIntegrationUITests.swift",
+      "apps/mobile/scripts/verify-production-simulator.sh"
+    ]
+  },
+  "verification": {
+    "format": "passed",
+    "lint": "passed",
+    "typecheck": "passed",
+    "build": "passed",
+    "tests": "passed",
+    "spec_review": "passed",
+    "production_data": "passed",
+    "notes": "Focused tests and mix precommit passed. Deployed Fly release v540 using image maraithon:deployment-01KSMV6XZBB14HGJFGHAF4RY1G. make verify-production-mobile passed against https://maraithon.com for run 20260527141302: production todo completed, production contact notes updated and recovered by deep chat, fast chat replied in 1s without a queued/running run, and mobile assistant created iOS chat assistant todo 20260527141302."
+  },
+  "production_evidence": {
+    "run_id": "20260527141302",
+    "fly_release": "v540",
+    "image": "maraithon:deployment-01KSMV6XZBB14HGJFGHAF4RY1G",
+    "health_url": "https://maraithon.com/health/",
+    "health_status": 200,
+    "fast_chat": {
+      "prompt": "Hey",
+      "reply": "Hey - I'm here.",
+      "elapsed_seconds": 1,
+      "thread_id": "72d03985-6479-4d18-b887-666ea1567994",
+      "run_id": "f00919b1-9c57-4da6-bda3-8d48cc4430b6",
+      "direct_intent": "fast_chat_reply"
+    },
+    "deep_chat": {
+      "contact_name": "iOS Prod Person 20260527141302",
+      "expected_note_fragment": "Updated from simulator 20260527141302",
+      "thread_id": "b958abd1-c143-46d2-8492-112f73b1973f",
+      "run_id": "d132d8c8-4fee-42f7-9061-5c24e5372f48",
+      "status": "completed"
+    },
+    "direct_todo_chat": {
+      "todo_title": "iOS chat assistant todo 20260527141302",
+      "thread_id": "15c1b819-03ae-44ca-b018-1f9c5ec71943",
+      "run_id": "b903d819-9d78-4910-93e4-f25a231b52a0"
+    }
+  },
+  "resume_context": {
+    "last_completed_step": "Production verification passed with real data and Spectacula was moved to done.",
+    "pending_steps": [],
+    "open_questions": [],
+    "last_reviewed_sections": [
+      "8. Implementation Checklist",
+      "10. Completion Evidence"
+    ],
+    "artifacts": [
+      "docs/spectacula/specs/mobile-chat-telegram-parity-fast-deep-routing.md",
+      "docs/spectacula/done/mobile-chat-telegram-parity-fast-deep-routing.json"
+    ],
+    "notes": "Production run 20260527141302 is the canonical verification evidence for this spec."
+  },
+  "history": [
+    {
+      "at": "2026-05-27T13:45:05Z",
+      "event": "spec_created",
+      "from_stage": null,
+      "to_stage": "specs",
+      "note": "Initial spec saved from user request and screenshot evidence."
+    },
+    {
+      "at": "2026-05-27T13:45:05Z",
+      "event": "implementation_started",
+      "from_stage": "specs",
+      "to_stage": "inprogress",
+      "note": "User requested implementation and real production verification in the same Spectacula run."
+    },
+    {
+      "at": "2026-05-27T14:16:20Z",
+      "event": "completed",
+      "from_stage": "inprogress",
+      "to_stage": "done",
+      "note": "Production mobile verification passed with real production todo, contact, fast chat, deep chat, and direct todo chat evidence."
+    }
+  ]
+}

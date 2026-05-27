@@ -10,6 +10,7 @@ defmodule Maraithon.Accounts.MagicLink do
 
   schema "user_magic_links" do
     field :token_hash, :binary
+    field :code_hash, :binary
     field :expires_at, :utc_datetime_usec
     field :used_at, :utc_datetime_usec
     field :sent_to_email, :string
@@ -22,7 +23,7 @@ defmodule Maraithon.Accounts.MagicLink do
   end
 
   @required_fields [:user_id, :token_hash, :expires_at, :sent_to_email]
-  @optional_fields [:used_at, :ip, :user_agent]
+  @optional_fields [:code_hash, :used_at, :ip, :user_agent]
 
   def changeset(magic_link, attrs) do
     magic_link

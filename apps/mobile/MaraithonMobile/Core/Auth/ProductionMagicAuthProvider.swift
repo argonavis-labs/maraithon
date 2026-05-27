@@ -28,16 +28,22 @@ final class ProductionMagicAuthProvider: AuthProviding {
             email: response.magicLink.email,
             expiresAt: now().addingTimeInterval(response.magicLink.expiresInSeconds),
             developmentLink: nil,
-            developmentToken: nil
+            developmentToken: nil,
+            developmentCode: nil
         )
     }
 
     func consumeMagicLink(_ linkOrToken: String) async throws -> AuthenticatedUser {
-        guard let token = MagicLinkParser.token(from: linkOrToken) else {
+        let response: MobileAPIClient.AuthResponse
+
+        if let code = SignInCodeParser.normalizedCode(from: linkOrToken) {
+            response = try await apiClient.consumeMagicCode(code: code)
+        } else if let token = MagicLinkParser.token(from: linkOrToken) {
+            response = try await apiClient.consumeMagicLink(token: token)
+        } else {
             throw AuthError.invalidOrExpiredLink
         }
 
-        let response = try await apiClient.consumeMagicLink(token: token)
         let user = authenticatedUser(from: response)
         persist(user)
         return user

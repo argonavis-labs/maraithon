@@ -23,17 +23,29 @@ struct MobileAPIClient {
         struct MagicLink: Decodable {
             let email: String
             let expiresInSeconds: TimeInterval
+            let delivery: String?
 
             enum CodingKeys: String, CodingKey {
                 case email
                 case expiresInSeconds = "expires_in_seconds"
+                case delivery
             }
         }
 
         let magicLink: MagicLink
 
         enum CodingKeys: String, CodingKey {
+            case magicCode = "magic_code"
             case magicLink = "magic_link"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let magicCode = try container.decodeIfPresent(MagicLink.self, forKey: .magicCode) {
+                magicLink = magicCode
+            } else {
+                magicLink = try container.decode(MagicLink.self, forKey: .magicLink)
+            }
         }
     }
 
@@ -217,6 +229,15 @@ struct MobileAPIClient {
         try await send(
             path: "/auth/magic/\(token)",
             method: "POST",
+            responseType: AuthResponse.self
+        )
+    }
+
+    func consumeMagicCode(code: String) async throws -> AuthResponse {
+        try await send(
+            path: "/auth/magic-code",
+            method: "POST",
+            body: ["code": code],
             responseType: AuthResponse.self
         )
     }

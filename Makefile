@@ -3,7 +3,7 @@
 	build build-web build-api build-static build-assets build-native build-companion build-mobile \
 	test test-web test-api test-native test-companion test-mobile \
 	verify verify-web verify-api verify-static verify-assets verify-native verify-companion verify-mobile verify-production-mobile \
-	archive-mobile upload-mobile ship-mobile \
+	archive-mobile upload-mobile testflight-mobile ship-mobile \
 	deploy deploy-web
 
 setup:
@@ -93,7 +93,10 @@ archive-mobile:
 upload-mobile:
 	apps/mobile/scripts/upload.sh
 
-ship-mobile: archive-mobile upload-mobile
+testflight-mobile:
+	apps/mobile/scripts/testflight.sh
+
+ship-mobile: testflight-mobile
 
 deploy:
 	scripts/monorepo/deploy

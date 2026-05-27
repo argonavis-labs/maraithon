@@ -245,6 +245,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ ~s({"title":"...","summary":"...","body":"...","todos":[)
     assert prompt =~ "Write like a sharp Chief of Staff"
     assert prompt =~ "This is not a digest"
+    assert prompt =~ "Reference briefing eval"
+    assert prompt =~ "Open Commitments with active/overdue/due-today"
+    assert prompt =~ "draft IDs, action-card IDs, OmniFocus IDs"
+    assert prompt =~ "Not a draft job"
+    assert prompt =~ "work_type"
     assert prompt =~ "## Needs Your Attention"
     assert prompt =~ "## Decisions / Follow-ups"
     assert prompt =~ "never include internal scores, thresholds"
@@ -356,6 +361,142 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
              "chief_of_staff_morning_briefing"
+  end
+
+  test "quality verifier patches packed-day reference briefing gaps" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Generic morning",
+      "summary" => "A few things are happening.",
+      "body" => "A short generic brief that misses the operational stack.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-27",
+      "calendar" => %{
+        "today_events" => [
+          %{
+            "summary" => "Runner Weekly Planning",
+            "start" => "2026-05-27T15:00:00Z",
+            "end" => "2026-05-27T15:45:00Z",
+            "display_start" => "11:00",
+            "display_end" => "11:45",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "Sara Franca",
+            "start" => "2026-05-27T15:30:00Z",
+            "end" => "2026-05-27T16:00:00Z",
+            "display_start" => "11:30",
+            "display_end" => "12:00",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "Runner Weekly Planning exec",
+            "start" => "2026-05-27T18:45:00Z",
+            "end" => "2026-05-27T19:30:00Z",
+            "display_start" => "14:45",
+            "display_end" => "15:30",
+            "calendar_name" => "Runner"
+          },
+          %{
+            "summary" => "1:1 with Dash",
+            "start" => "2026-05-27T19:00:00Z",
+            "end" => "2026-05-27T20:00:00Z",
+            "display_start" => "15:00",
+            "display_end" => "16:00",
+            "calendar_name" => "Agora"
+          }
+        ]
+      },
+      "commitments" => %{
+        "active_count" => 61,
+        "overdue" => [
+          %{
+            "title" => "Reply to Renat about Represent launch-video concept",
+            "owed_to" => "Renat",
+            "project" => "Runner",
+            "due_at" => "2026-05-20T16:00:00Z",
+            "source_id" => "k2_kp3zotvz",
+            "metadata" => %{"action_card_id" => "actc_c198"}
+          }
+        ],
+        "due_today" => [
+          %{
+            "title" => "Resolve duplicate 11:30 Sara Franca invite",
+            "owed_to" => "Sara Franca",
+            "project" => "Runner",
+            "due_at" => "2026-05-27T15:00:00Z",
+            "source_id" => "mTyUJw8V_S1",
+            "metadata" => %{"action_card_id" => "actc_c154"}
+          }
+        ],
+        "coming_up" => [
+          %{
+            "title" => "Pay TensorBoy first invoice",
+            "owed_to" => "Manav Gupta",
+            "project" => "Runner",
+            "due_at" => "2026-05-28T16:00:00Z",
+            "source_id" => "jZVZNqySITx",
+            "metadata" => %{"action_card_id" => "actc_9deb"}
+          }
+        ]
+      },
+      "open_work" => %{
+        "todos" => [
+          %{
+            "title" => "Resolve duplicate Sara Franca invite",
+            "summary" => "Lock Google Meet and decline Teams before 11am.",
+            "metadata" => %{
+              "action_card_id" => "actc_c154",
+              "work_type" => "draftable",
+              "why_it_matters" => "Avoid joining the wrong 11:30 meeting."
+            }
+          },
+          %{
+            "title" => "Pydantic failed payment",
+            "summary" => "$124 payment failed again.",
+            "metadata" => %{
+              "source_item_id" => "a58koyhpMAm",
+              "work_type" => "payment",
+              "why_it_matters" => "Update the card in Stripe."
+            }
+          }
+        ]
+      },
+      "slack" => %{
+        "key_threads" => [
+          %{
+            "channel" => "growthcrew-x-runner",
+            "summary" => "Brent and Benji want event counts validated.",
+            "metadata" => %{"action_card_id" => "actc_c9c8"}
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert verification["score"] == 10
+    assert "missing_needs_attention" in verification["initial_findings"]
+    assert "missing_schedule_conflicts" in verification["initial_findings"]
+    assert "missing_open_commitments" in verification["initial_findings"]
+    assert "missing_action_stack" in verification["initial_findings"]
+    assert "missing_non_draft_jobs" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert "schedule_conflicts_called_out_with_recommendations" in verification["criteria"]
+    assert "action_card_and_draft_handles_stay_attached_to_work" in verification["criteria"]
+
+    assert revised["body"] =~ "## Needs Your Attention"
+    assert revised["body"] =~ "## Schedule Conflicts"
+    assert revised["body"] =~ "Sara Franca"
+    assert revised["body"] =~ "## Open Commitments"
+    assert revised["body"] =~ "Reply to Renat"
+    assert revised["body"] =~ "## Action Card Stack"
+    assert revised["body"] =~ "actc_c154"
+    assert revised["body"] =~ "## Not a draft job"
+    assert revised["body"] =~ "Pydantic failed payment"
   end
 
   test "invalid model output records a compact source-backed fallback briefing",

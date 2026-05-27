@@ -11,6 +11,9 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Proactive.LocalPatterns
+  alias Maraithon.Crm.Person
+  alias Maraithon.Repo
+  alias Maraithon.Todos
 
   defp unique_user! do
     user_id = "lp-#{Ecto.UUID.generate()}@example.com"
@@ -67,11 +70,111 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
       open = emit_and_fetch(:cold_thread, user_id, agent.id, now)
       assert [insight] = open
       assert insight.category == "important_fyi"
-      assert String.contains?(insight.title, "Charlie")
+      assert insight.title == "Check in with Charlie"
+      assert insight.summary =~ "Why this matters:"
+      assert insight.summary =~ "you usually text Charlie regularly"
+      assert insight.summary =~ "Last message from them:"
       assert insight.metadata["detector"] == "cold_thread"
       assert insight.metadata["chat_key"] == chat_key
       assert insight.metadata["message_count_30d"] >= 8
       assert insight.metadata["days_quiet"] >= 14
+      assert insight.metadata["last_meaningful_message"] == "msg 1"
+    end
+
+    test "uses the last incoming message as context when the user has not replied" do
+      user_id = unique_user!()
+      agent = system_agent!(user_id)
+      now = DateTime.utc_now()
+      device_id = Ecto.UUID.generate()
+      chat_key = "+14165550222"
+
+      {:ok, _person} =
+        %Person{user_id: user_id}
+        |> Person.changeset(%{
+          "display_name" => "Alex",
+          "phone" => chat_key,
+          "relationship" => "demo lead"
+        })
+        |> Repo.insert()
+
+      messages = [
+        %{
+          "guid" => "reply-context-0",
+          "sender_handle" => chat_key,
+          "chat_handles" => [chat_key],
+          "chat_display_name" => chat_key,
+          "is_from_me" => true,
+          "text" => "I'll send a few demo times shortly.",
+          "sent_at" => iso(seconds_ago(now, 21 * 86_400))
+        },
+        %{
+          "guid" => "reply-context-1",
+          "sender_handle" => chat_key,
+          "chat_handles" => [chat_key],
+          "chat_display_name" => chat_key,
+          "is_from_me" => false,
+          "text" => "Are you still interested in the demo?",
+          "sent_at" => iso(seconds_ago(now, 3 * 86_400))
+        }
+        | for i <- 2..8 do
+            %{
+              "guid" => "reply-context-#{i}",
+              "sender_handle" => chat_key,
+              "chat_handles" => [chat_key],
+              "chat_display_name" => chat_key,
+              "is_from_me" => false,
+              "text" => "earlier cadence #{i}",
+              "sent_at" => iso(seconds_ago(now, (22 + i) * 86_400))
+            }
+          end
+      ]
+
+      {:ok, _} = LocalMessages.ingest_batch(user_id, device_id, messages)
+
+      open = emit_and_fetch(:cold_thread, user_id, agent.id, now)
+      assert [insight] = open
+      assert insight.title == "Reply to Alex"
+      assert insight.summary =~ "Alex is marked demo lead"
+
+      assert insight.summary =~
+               "Last message from them: \"Are you still interested in the demo?\""
+
+      assert insight.recommended_action == "Reply to Alex in the same thread."
+      assert insight.metadata["chat_display_name"] == "Alex"
+      assert insight.metadata["pending_reply"] == true
+
+      assert insight.metadata["last_meaningful_message"] ==
+               "Are you still interested in the demo?"
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title == "Reply to Alex"
+      assert todo.notes =~ "Last message from them: \"Are you still interested in the demo?\""
+    end
+
+    test "does not emit for raw phone-only threads without a matched person" do
+      user_id = unique_user!()
+      agent = system_agent!(user_id)
+      now = DateTime.utc_now()
+      device_id = Ecto.UUID.generate()
+      chat_key = "+14165550333"
+
+      messages =
+        for i <- 0..9 do
+          %{
+            "guid" => "raw-phone-#{i}",
+            "sender_handle" => chat_key,
+            "chat_handles" => [chat_key],
+            "chat_display_name" => chat_key,
+            "is_from_me" => rem(i, 2) == 0,
+            "text" => "raw phone cadence #{i}",
+            "sent_at" => iso(seconds_ago(now, (16 + i) * 86_400))
+          }
+        end
+
+      {:ok, _} = LocalMessages.ingest_batch(user_id, device_id, messages)
+
+      open = emit_and_fetch(:cold_thread, user_id, agent.id, now)
+      assert open == []
     end
 
     test "does not emit when the thread is still active" do

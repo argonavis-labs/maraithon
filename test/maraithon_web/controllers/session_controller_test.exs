@@ -16,7 +16,7 @@ defmodule MaraithonWeb.SessionControllerTest do
 
     conn = post(conn, "/auth/magic-link", %{"magic_link" => %{"email" => email}})
 
-    assert redirected_to(conn) == "/"
+    assert redirected_to(conn) == "/login"
     assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Check your email"
 
     assert %MagicLink{sent_to_email: ^email} = Repo.get_by(MagicLink, sent_to_email: email)

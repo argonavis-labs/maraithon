@@ -53,8 +53,8 @@ Designed for people who run companies, manage teams, and don't have time for
 another app that demands attention. Calm, scannable, row-oriented. No
 gradient heroes. No cards-within-cards. Just your day.
 
-Requires a Maraithon account. Sign in with your email and we'll send a magic
-link.
+Requires a Maraithon account. Sign in with your email and we'll send a
+one-time code.
 ```
 
 ## Keywords (100 char, comma-separated, no spaces after commas)
@@ -67,7 +67,7 @@ chief of staff,productivity,todo,crm,assistant,agent,operations,inbox,founder,ex
 
 ```
 First release. Today, Todos, People, and Chat — the mobile surface for your
-Maraithon agent. Sign in with email magic link.
+Maraithon agent. Sign in with an email code.
 ```
 
 ## URLs
@@ -104,7 +104,7 @@ Tracking: No third-party tracking SDKs (confirm before submission).
 Sign in flow:
 1. Tap "Sign in" on the welcome screen.
 2. Enter the demo account email: reviewer@maraithon.com
-3. We will provide a one-time magic link or a fixed dev code below.
+3. We will provide a one-time fixed dev code below.
 
 Demo magic code: <ADD BEFORE SUBMISSION>
 
@@ -147,7 +147,7 @@ Skip for v1 unless we're committing to iPad polish.
 - [ ] Listing copy finalized
 - [ ] App privacy answered in App Store Connect
 - [ ] Demo account seeded with reviewer-friendly data
-- [ ] Build uploaded via `make ship-mobile`
+- [ ] Build uploaded via `make testflight-mobile`
 - [ ] Build assigned to TestFlight internal testers
 - [ ] Dogfood internally for 24–48h
 - [ ] Submit for App Store review

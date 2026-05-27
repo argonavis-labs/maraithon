@@ -11,6 +11,8 @@ defmodule Maraithon.Accounts do
 
   @magic_link_ttl_seconds 900
   @session_ttl_seconds 60 * 24 * 60 * 60
+  @magic_code_length 8
+  @magic_code_alphabet "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
   def normalize_email(email) when is_binary(email) do
     email
@@ -98,6 +100,33 @@ defmodule Maraithon.Accounts do
     end
   end
 
+  def request_magic_code(email, opts \\ []) when is_binary(email) do
+    with {:ok, user} <- get_or_create_user_by_email(email) do
+      token = generate_token()
+      code = generate_magic_code()
+      now = DateTime.utc_now()
+      expires_at = DateTime.add(now, @magic_link_ttl_seconds, :second)
+
+      attrs = %{
+        user_id: user.id,
+        token_hash: hash_token(token),
+        code_hash: hash_token(normalize_magic_code(code)),
+        expires_at: expires_at,
+        sent_to_email: user.email,
+        ip: Keyword.get(opts, :ip),
+        user_agent: Keyword.get(opts, :user_agent)
+      }
+
+      case %MagicLink{} |> MagicLink.changeset(attrs) |> Repo.insert() do
+        {:ok, _record} ->
+          {:ok, %{user: user, code: format_magic_code(code), expires_at: expires_at}}
+
+        error ->
+          error
+      end
+    end
+  end
+
   def consume_magic_link(token, opts \\ []) when is_binary(token) do
     now = DateTime.utc_now()
     token_hash = hash_token(token)
@@ -110,26 +139,29 @@ defmodule Maraithon.Accounts do
         preload: [:user]
       )
 
-    case Repo.one(query) do
-      nil ->
-        {:error, :invalid_or_expired_link}
+    consume_magic_record(Repo.one(query), now, opts)
+  end
 
-      link ->
-        Repo.transaction(fn ->
-          case Repo.update(Ecto.Changeset.change(link, used_at: now)) do
-            {:ok, _used_link} ->
-              maybe_confirm_user(link.user)
-              create_session_for_user(link.user, opts)
+  def consume_magic_code(code, opts \\ []) when is_binary(code) do
+    normalized_code = normalize_magic_code(code)
 
-            {:error, changeset} ->
-              Repo.rollback(changeset)
-          end
-        end)
-        |> case do
-          {:ok, {:ok, session}} -> {:ok, session}
-          {:ok, {:error, reason}} -> {:error, reason}
-          {:error, reason} -> {:error, reason}
-        end
+    if valid_magic_code?(normalized_code) do
+      now = DateTime.utc_now()
+      code_hash = hash_token(normalized_code)
+
+      query =
+        from(link in MagicLink,
+          where: link.code_hash == ^code_hash,
+          where: is_nil(link.used_at),
+          where: link.expires_at > ^now,
+          order_by: [desc: link.inserted_at],
+          limit: 1,
+          preload: [:user]
+        )
+
+      consume_magic_record(Repo.one(query), now, opts, :invalid_or_expired_code)
+    else
+      {:error, :invalid_or_expired_code}
     end
   end
 
@@ -248,6 +280,28 @@ defmodule Maraithon.Accounts do
 
   defp maybe_confirm_user(_user), do: :ok
 
+  defp consume_magic_record(record, now, opts, error_reason \\ :invalid_or_expired_link)
+
+  defp consume_magic_record(nil, _now, _opts, error_reason), do: {:error, error_reason}
+
+  defp consume_magic_record(%MagicLink{} = link, now, opts, _error_reason) do
+    Repo.transaction(fn ->
+      case Repo.update(Ecto.Changeset.change(link, used_at: now)) do
+        {:ok, _used_link} ->
+          maybe_confirm_user(link.user)
+          create_session_for_user(link.user, opts)
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> case do
+      {:ok, {:ok, session}} -> {:ok, session}
+      {:ok, {:error, reason}} -> {:error, reason}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp admin_email?(email) do
     case primary_admin_email() do
       nil -> false
@@ -259,6 +313,39 @@ defmodule Maraithon.Accounts do
     :crypto.strong_rand_bytes(32)
     |> Base.url_encode64(padding: false)
   end
+
+  defp generate_magic_code do
+    alphabet = String.graphemes(@magic_code_alphabet)
+    alphabet_size = length(alphabet)
+
+    @magic_code_length
+    |> :crypto.strong_rand_bytes()
+    |> :binary.bin_to_list()
+    |> Enum.map_join(fn byte ->
+      Enum.at(alphabet, rem(byte, alphabet_size))
+    end)
+  end
+
+  defp format_magic_code(code) do
+    normalized = normalize_magic_code(code)
+    {first, second} = String.split_at(normalized, 4)
+    first <> "-" <> second
+  end
+
+  defp normalize_magic_code(code) when is_binary(code) do
+    code
+    |> String.upcase()
+    |> String.replace(~r/[^A-Z0-9]/, "")
+  end
+
+  defp normalize_magic_code(_code), do: ""
+
+  defp valid_magic_code?(code) when is_binary(code) do
+    String.length(code) == @magic_code_length and
+      String.match?(code, ~r/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]+$/)
+  end
+
+  defp valid_magic_code?(_code), do: false
 
   defp hash_token(token) do
     :crypto.hash(:sha256, token)

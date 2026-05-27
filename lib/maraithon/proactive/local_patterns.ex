@@ -37,6 +37,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
   alias Maraithon.Agents
   alias Maraithon.Agents.Agent
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm.Person
   alias Maraithon.Insights
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalCalendar.LocalEvent
@@ -173,17 +174,17 @@ defmodule Maraithon.Proactive.LocalPatterns do
     window_cutoff = DateTime.add(now, -@cold_thread_window_seconds, :second)
 
     LocalMessage
-    |> where([m], m.user_id == ^user_id and not is_nil(m.chat_key))
+    |> where([m], m.user_id == ^user_id and not is_nil(m.chat_key) and not is_nil(m.sent_at))
     |> group_by([m], m.chat_key)
     |> select([m], %{
       chat_key: m.chat_key,
-      latest_sent_at: max(m.sent_at),
+      latest_outgoing_at: filter(max(m.sent_at), m.is_from_me == true),
       count_30d: sum(fragment("CASE WHEN ? >= ? THEN 1 ELSE 0 END", m.sent_at, ^window_cutoff))
     })
     |> Repo.all()
     |> Enum.filter(fn row ->
-      is_struct(row.latest_sent_at, DateTime) and
-        DateTime.compare(row.latest_sent_at, quiet_cutoff) == :lt and
+      is_struct(row.latest_outgoing_at, DateTime) and
+        DateTime.compare(row.latest_outgoing_at, quiet_cutoff) == :lt and
         (row.count_30d || 0) >= @cold_thread_min_messages
     end)
     |> Enum.map(fn row -> cold_thread_insight(user_id, now, row) end)
@@ -192,35 +193,54 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   defp cold_thread_insight(user_id, now, %{
          chat_key: chat_key,
-         latest_sent_at: latest,
+         latest_outgoing_at: latest_outgoing,
          count_30d: count
        }) do
-    days = days_since(now, latest)
-    display = chat_display_for(user_id, chat_key)
+    days = days_since(now, latest_outgoing)
+    identity = chat_identity_for(user_id, chat_key)
 
-    %{
-      "source" => "local_patterns",
-      "category" => "important_fyi",
-      "title" => "It's been #{days} days since you messaged #{display}",
-      "summary" =>
-        "You usually text #{display} regularly (#{count} messages in the last 30 days) " <>
-          "but haven't sent anything in #{days} days.",
-      "recommended_action" => "Send #{display} a quick check-in message.",
-      "priority" => priority_for(:cold_thread, days),
-      "confidence" => 0.78,
-      "attention_mode" => "act_now",
-      "source_id" => chat_key,
-      "source_occurred_at" => latest,
-      "tracking_key" => tracking_key(:cold_thread, chat_key),
-      "dedupe_key" => dedupe_key(:cold_thread, chat_key, now),
-      "metadata" => %{
-        "detector" => "cold_thread",
-        "chat_key" => chat_key,
-        "chat_display_name" => display,
-        "days_quiet" => days,
-        "message_count_30d" => count
+    if raw_phone_only_identity?(identity) do
+      nil
+    else
+      labels = relationship_labels(identity.display)
+      thread = cold_thread_context(user_id, chat_key, latest_outgoing)
+      why = cold_thread_why_sentence(labels, identity, count, days)
+      context_sentence = thread.context_sentence
+      notes = [why, context_sentence] |> Enum.reject(&blank?/1) |> Enum.join(" ")
+
+      %{
+        "source" => "local_patterns",
+        "category" => "important_fyi",
+        "title" => cold_thread_title(labels, thread),
+        "summary" => notes,
+        "recommended_action" => cold_thread_recommended_action(labels, thread),
+        "priority" => priority_for(:cold_thread, days),
+        "confidence" => 0.78,
+        "attention_mode" => "act_now",
+        "source_id" => chat_key,
+        "source_occurred_at" => thread.source_occurred_at || latest_outgoing,
+        "tracking_key" => tracking_key(:cold_thread, chat_key),
+        "dedupe_key" => dedupe_key(:cold_thread, chat_key, now),
+        "metadata" =>
+          %{
+            "detector" => "cold_thread",
+            "chat_key" => chat_key,
+            "chat_display_name" => identity.display,
+            "crm_person_id" => identity.person_id,
+            "crm_relationship" => identity.relationship,
+            "days_quiet" => days,
+            "message_count_30d" => count,
+            "last_outgoing_at" => format_dt(latest_outgoing),
+            "latest_message_at" => format_dt(thread.latest_message_at),
+            "pending_reply" => thread.pending_reply?,
+            "last_meaningful_message" => thread.snippet,
+            "last_meaningful_message_from_me" => thread.from_me?,
+            "why_it_matters" => why,
+            "notes" => notes
+          }
+          |> compact_map()
       }
-    }
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -713,6 +733,273 @@ defmodule Maraithon.Proactive.LocalPatterns do
   defp clamp(value, _min, max) when value > max, do: max
   defp clamp(value, _min, _max), do: value
 
+  defp cold_thread_context(user_id, chat_key, latest_outgoing) do
+    messages = LocalMessages.recent_for_chat(user_id, chat_key, limit: 20)
+
+    pending_reply =
+      Enum.find(messages, fn msg ->
+        pending_reply_message?(msg, latest_outgoing)
+      end)
+
+    context_message =
+      pending_reply ||
+        Enum.find(messages, fn msg ->
+          not msg.is_from_me and meaningful_message?(msg)
+        end) ||
+        Enum.find(messages, &meaningful_message?/1)
+
+    %{
+      pending_reply?: not is_nil(pending_reply),
+      context_sentence: context_sentence(context_message),
+      snippet: message_snippet(context_message),
+      from_me?: context_message && context_message.is_from_me,
+      latest_message_at: latest_message_at(messages),
+      source_occurred_at: context_message && context_message.sent_at
+    }
+  end
+
+  defp pending_reply_message?(%LocalMessage{} = msg, %DateTime{} = latest_outgoing) do
+    not msg.is_from_me and meaningful_message?(msg) and is_struct(msg.sent_at, DateTime) and
+      DateTime.compare(msg.sent_at, latest_outgoing) == :gt
+  end
+
+  defp pending_reply_message?(_msg, _latest_outgoing), do: false
+
+  defp meaningful_message?(%LocalMessage{} = msg) do
+    is_binary(message_snippet(msg))
+  end
+
+  defp meaningful_message?(_msg), do: false
+
+  defp context_sentence(%LocalMessage{} = msg) do
+    case {msg.is_from_me, message_snippet(msg)} do
+      {false, snippet} when is_binary(snippet) ->
+        "Last message from them: \"#{snippet}\""
+
+      {true, snippet} when is_binary(snippet) ->
+        "Last thread: you said \"#{snippet}\""
+
+      _ ->
+        nil
+    end
+  end
+
+  defp context_sentence(_msg), do: nil
+
+  defp message_snippet(%LocalMessage{text: text}) when is_binary(text) do
+    text
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+    |> case do
+      "" -> nil
+      snippet -> truncate(snippet, 160)
+    end
+  end
+
+  defp message_snippet(%LocalMessage{has_attachments: true}), do: "Attachment in the thread"
+  defp message_snippet(_msg), do: nil
+
+  defp latest_message_at([%LocalMessage{sent_at: %DateTime{} = sent_at} | _]), do: sent_at
+  defp latest_message_at(_messages), do: nil
+
+  defp cold_thread_title(labels, %{pending_reply?: true}), do: labels.title_reply
+  defp cold_thread_title(labels, _thread), do: labels.title_check
+
+  defp cold_thread_why_sentence(labels, identity, count, days) do
+    relationship_prefix =
+      case identity.relationship do
+        relationship when is_binary(relationship) ->
+          "#{labels.prose} is marked #{relationship}, and "
+
+        _ ->
+          ""
+      end
+
+    "Why this matters: #{relationship_prefix}you usually text #{labels.prose} regularly " <>
+      "(#{count} messages in 30 days), but you have not sent anything in #{days} days."
+  end
+
+  defp cold_thread_recommended_action(%{kind: :thread} = labels, %{pending_reply?: true}) do
+    "Open #{labels.action_target} and reply to the latest message."
+  end
+
+  defp cold_thread_recommended_action(labels, %{pending_reply?: true}) do
+    "Reply to #{labels.prose} in the same thread."
+  end
+
+  defp cold_thread_recommended_action(%{kind: :thread} = labels, _thread) do
+    "Open #{labels.action_target} and decide whether to send a quick check-in."
+  end
+
+  defp cold_thread_recommended_action(labels, _thread) do
+    "Send #{labels.prose} a quick check-in message."
+  end
+
+  defp chat_identity_for(user_id, chat_key) do
+    person = crm_person_for_chat(user_id, chat_key)
+
+    display =
+      case person do
+        %Person{display_name: name} when is_binary(name) and name != "" ->
+          name
+
+        _ ->
+          chat_display_for(user_id, chat_key)
+      end
+
+    %{
+      display: display,
+      person_id: person && person.id,
+      relationship: normalize_optional_text(person && person.relationship)
+    }
+  end
+
+  defp raw_phone_only_identity?(%{person_id: person_id, display: display}) do
+    blank?(person_id) and phone_identifier?(display)
+  end
+
+  defp raw_phone_only_identity?(_identity), do: false
+
+  defp relationship_labels(display) do
+    cond do
+      phone_identifier?(display) ->
+        suffix = phone_suffix(display)
+
+        %{
+          kind: :thread,
+          title_reply: "Reply in Messages thread ending #{suffix}",
+          title_check: "Review Messages thread ending #{suffix}",
+          prose: "this Messages thread ending #{suffix}",
+          action_target: "the Messages thread ending #{suffix}"
+        }
+
+      is_binary(display) and String.trim(display) != "" ->
+        display = String.trim(display)
+
+        %{
+          kind: :person,
+          title_reply: "Reply to #{display}",
+          title_check: "Check in with #{display}",
+          prose: display,
+          action_target: display
+        }
+
+      true ->
+        %{
+          kind: :person,
+          title_reply: "Reply to this contact",
+          title_check: "Check in with this contact",
+          prose: "this contact",
+          action_target: "this contact"
+        }
+    end
+  end
+
+  defp crm_person_for_chat(user_id, chat_key) do
+    user_id
+    |> chat_identifiers(chat_key)
+    |> Enum.find_value(&crm_person_for_identifier(user_id, &1))
+  end
+
+  defp chat_identifiers(user_id, chat_key) do
+    recent_handles =
+      user_id
+      |> LocalMessages.recent_for_chat(chat_key, limit: 20)
+      |> Enum.map(& &1.sender_handle)
+
+    [chat_key | recent_handles]
+    |> Enum.flat_map(fn
+      value when is_binary(value) -> String.split(value, ",")
+      _ -> []
+    end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp crm_person_for_identifier(user_id, identifier) do
+    with kind when kind in [:email, :phone] <- identifier_kind(identifier) do
+      identifier
+      |> identifier_search_values(kind)
+      |> Enum.find_value(fn search_value ->
+        pattern = "%#{search_value}%"
+        contact_key = crm_contact_key(kind)
+
+        Repo.one(
+          from person in Person,
+            where:
+              person.user_id == ^user_id and person.status == "active" and
+                (fragment(
+                   "(? -> ?)::text ILIKE ?",
+                   person.contact_details,
+                   ^contact_key,
+                   ^pattern
+                 ) or
+                   fragment("?::text ILIKE ?", person.contact_details, ^pattern)),
+            order_by: [
+              desc: person.relationship_strength,
+              desc: person.affinity_score,
+              desc_nulls_last: person.last_interaction_at,
+              desc: person.updated_at
+            ],
+            limit: 1
+        )
+      end)
+    else
+      _ -> nil
+    end
+  end
+
+  defp identifier_kind(identifier) when is_binary(identifier) do
+    cond do
+      String.contains?(identifier, "@") -> :email
+      phone_identifier?(identifier) -> :phone
+      true -> nil
+    end
+  end
+
+  defp identifier_kind(_identifier), do: nil
+
+  defp identifier_search_values(identifier, :email) do
+    identifier
+    |> String.downcase()
+    |> List.wrap()
+  end
+
+  defp identifier_search_values(identifier, :phone) do
+    digits = phone_digits(identifier)
+
+    [identifier, digits, "+" <> digits]
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp crm_contact_key(:email), do: "emails"
+  defp crm_contact_key(:phone), do: "phones"
+
+  defp phone_identifier?(value) when is_binary(value) do
+    String.match?(String.trim(value), ~r/^\+?[\d\s().-]{7,}$/) and
+      String.length(phone_digits(value)) >= 7
+  end
+
+  defp phone_identifier?(_value), do: false
+
+  defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D/u, "")
+  defp phone_digits(_value), do: ""
+
+  defp phone_suffix(value) do
+    value
+    |> phone_digits()
+    |> String.graphemes()
+    |> Enum.take(-4)
+    |> Enum.join()
+    |> case do
+      "" -> "unknown"
+      suffix -> suffix
+    end
+  end
+
   defp chat_display_for(user_id, chat_key) do
     case Repo.one(
            from msg in LocalMessage,
@@ -751,6 +1038,34 @@ defmodule Maraithon.Proactive.LocalPatterns do
   end
 
   defp sender_label(_), do: "them"
+
+  defp normalize_optional_text(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_optional_text(_value), do: nil
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_value), do: false
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or blank?(value) end)
+    |> Map.new()
+  end
+
+  defp truncate(text, max_length) when is_binary(text) and is_integer(max_length) do
+    if String.length(text) <= max_length do
+      text
+    else
+      text
+      |> String.slice(0, max(max_length - 3, 0))
+      |> String.trim()
+      |> Kernel.<>("...")
+    end
+  end
 
   defp age_label(%DateTime{} = now, %DateTime{} = then) do
     seconds = max(DateTime.diff(now, then, :second), 0)

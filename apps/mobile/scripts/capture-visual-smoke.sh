@@ -11,7 +11,7 @@ if [[ ! -f "${CONFIG_FILE}" ]]; then
 fi
 
 if [[ ! -f "${HELPER_FILE}" ]]; then
-  echo "Missing production magic token helper: ${HELPER_FILE}" >&2
+  echo "Missing production magic auth helper: ${HELPER_FILE}" >&2
   exit 1
 fi
 
@@ -49,6 +49,7 @@ require_command() {
 }
 
 require_command flyctl
+require_command jq
 require_command xcodebuild
 require_command xcodegen
 require_command xcrun
@@ -62,16 +63,28 @@ xcrun simctl bootstatus "${SIMULATOR_UDID}" -b >/dev/null
 xcrun simctl ui "${SIMULATOR_UDID}" appearance "${APPEARANCE}"
 mkdir -p "${SNAPSHOT_DIR}"
 
-MAGIC_TOKEN="$(generate_maraithon_magic_token "${FLY_APP}" "${MARAITHON_VERIFY_EMAIL}" "mobile-visual-smoke-${RUN_ID}")"
+MAGIC_CODE="$(generate_maraithon_magic_code "${FLY_APP}" "${MARAITHON_VERIFY_EMAIL}" "mobile-visual-smoke-${RUN_ID}")"
+CONFIG_PATH="/tmp/maraithon-visual-smoke.json"
+trap 'rm -f "${CONFIG_PATH}"' EXIT
 
-xcodebuild \
+jq -n \
+  --arg magicCode "${MAGIC_CODE}" \
+  --arg snapshotDirectory "${SNAPSHOT_DIR}" \
+  '{magicCode: $magicCode, snapshotDirectory: $snapshotDirectory}' \
+  >"${CONFIG_PATH}"
+
+env \
+  MARAITHON_MAGIC_CODE="${MAGIC_CODE}" \
+  MARAITHON_VISUAL_SNAPSHOT_DIR="${SNAPSHOT_DIR}" \
+  xcodebuild \
   -quiet \
   -project MaraithonMobile.xcodeproj \
   -scheme MaraithonMobile \
   -destination "${IOS_DESTINATION}" \
   -only-testing:MaraithonMobileUITests/VisualSmokeUITests/testCapturePrimaryTabs \
-  test \
-  MARAITHON_MAGIC_TOKEN="${MAGIC_TOKEN}" \
-  MARAITHON_VISUAL_SNAPSHOT_DIR="${SNAPSHOT_DIR}"
+  test
+
+rm -f "${CONFIG_PATH}"
+trap - EXIT
 
 echo "Visual smoke screenshots captured in ${SNAPSHOT_DIR}"

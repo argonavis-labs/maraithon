@@ -26,4 +26,21 @@ struct MagicLinkParserTests {
     func rejectsUnrelatedURL() {
         #expect(MagicLinkParser.token(from: "https://maraithon.app/settings/token-123") == nil)
     }
+
+    @Test
+    func normalizesSignInCode() {
+        #expect(SignInCodeParser.normalizedCode(from: " abcd-2345 ") == "ABCD2345")
+        #expect(SignInCodeParser.normalizedCode(from: "ABCD 2345") == "ABCD2345")
+    }
+
+    @Test
+    func formatsSignInCode() {
+        #expect(SignInCodeParser.formattedCode(from: "abcd2345") == "ABCD-2345")
+    }
+
+    @Test
+    func rejectsMalformedSignInCode() {
+        #expect(SignInCodeParser.normalizedCode(from: "abc") == nil)
+        #expect(SignInCodeParser.normalizedCode(from: "abcd-23456") == nil)
+    }
 }

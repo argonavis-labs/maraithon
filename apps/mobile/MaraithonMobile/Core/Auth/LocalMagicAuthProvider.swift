@@ -5,6 +5,7 @@ final class LocalMagicAuthProvider: AuthProviding {
     private struct PendingMagicLink {
         let email: String
         let token: String
+        let code: String
         let expiresAt: Date
     }
 
@@ -14,8 +15,10 @@ final class LocalMagicAuthProvider: AuthProviding {
     }
 
     private var pendingLinks: [String: PendingMagicLink] = [:]
+    private var pendingCodes: [String: PendingMagicLink] = [:]
     private let userDefaults: UserDefaults
     private let tokenGenerator: () -> String
+    private let codeGenerator: () -> String
     private let magicLinkBaseURL: URL
     private let now: () -> Date
 
@@ -24,11 +27,13 @@ final class LocalMagicAuthProvider: AuthProviding {
         tokenGenerator: @escaping () -> String = {
             UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         },
+        codeGenerator: @escaping () -> String = LocalMagicAuthProvider.generateCode,
         magicLinkBaseURL: URL,
         now: @escaping () -> Date = Date.init
     ) {
         self.userDefaults = userDefaults
         self.tokenGenerator = tokenGenerator
+        self.codeGenerator = codeGenerator
         self.magicLinkBaseURL = magicLinkBaseURL
         self.now = now
     }
@@ -40,34 +45,38 @@ final class LocalMagicAuthProvider: AuthProviding {
         }
 
         let token = tokenGenerator()
+        let code = Self.normalizedCode(from: codeGenerator())
         let expiresAt = now().addingTimeInterval(Constants.magicLinkLifetime)
-        pendingLinks[token] = PendingMagicLink(
+        let pendingLink = PendingMagicLink(
             email: normalizedEmail,
             token: token,
+            code: code,
             expiresAt: expiresAt
         )
+        pendingLinks[token] = pendingLink
+        pendingCodes[code] = pendingLink
 
         return MagicLinkRequest(
             id: token,
             email: normalizedEmail,
             expiresAt: expiresAt,
             developmentLink: magicLinkURL(for: token).absoluteString,
-            developmentToken: token
+            developmentToken: token,
+            developmentCode: SignInCodeParser.formattedCode(from: code)
         )
     }
 
     func consumeMagicLink(_ linkOrToken: String) async throws -> AuthenticatedUser {
-        guard let token = MagicLinkParser.token(from: linkOrToken),
-              let link = pendingLinks[token] else {
+        guard let link = pendingLink(for: linkOrToken) else {
             throw AuthError.invalidOrExpiredLink
         }
 
         guard link.expiresAt > now() else {
-            pendingLinks[token] = nil
+            removePendingLink(link)
             throw AuthError.invalidOrExpiredLink
         }
 
-        pendingLinks[token] = nil
+        removePendingLink(link)
 
         let user = AuthenticatedUser(
             id: link.email,
@@ -100,6 +109,7 @@ final class LocalMagicAuthProvider: AuthProviding {
 
     func signOut() async throws {
         pendingLinks.removeAll()
+        pendingCodes.removeAll()
         userDefaults.removeObject(forKey: AuthSessionStorageKeys.authenticatedUser)
     }
 
@@ -110,5 +120,32 @@ final class LocalMagicAuthProvider: AuthProviding {
 
     private func magicLinkURL(for token: String) -> URL {
         magicLinkBaseURL.appendingPathComponent(token)
+    }
+
+    private func pendingLink(for value: String) -> PendingMagicLink? {
+        if let code = SignInCodeParser.normalizedCode(from: value),
+           let link = pendingCodes[code] {
+            return link
+        }
+
+        guard let token = MagicLinkParser.token(from: value) else {
+            return nil
+        }
+
+        return pendingLinks[token]
+    }
+
+    private func removePendingLink(_ link: PendingMagicLink) {
+        pendingLinks[link.token] = nil
+        pendingCodes[link.code] = nil
+    }
+
+    nonisolated private static func normalizedCode(from value: String) -> String {
+        SignInCodeParser.normalizedCode(from: value) ?? generateCode()
+    }
+
+    nonisolated private static func generateCode() -> String {
+        let alphabet = Array("23456789ABCDEFGHJKLMNPQRSTUVWXYZ")
+        return String((0..<8).compactMap { _ in alphabet.randomElement() })
     }
 }

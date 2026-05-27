@@ -221,7 +221,14 @@ private final class MockChatAPI: MobileChatAPI {
 @MainActor
 private final class TestAuthProvider: AuthProviding {
     func requestMagicLink(email: String) async throws -> MagicLinkRequest {
-        MagicLinkRequest(id: email, email: email, expiresAt: Date(), developmentLink: nil, developmentToken: nil)
+        MagicLinkRequest(
+            id: email,
+            email: email,
+            expiresAt: Date(),
+            developmentLink: nil,
+            developmentToken: nil,
+            developmentCode: nil
+        )
     }
 
     func consumeMagicLink(_ linkOrToken: String) async throws -> AuthenticatedUser {

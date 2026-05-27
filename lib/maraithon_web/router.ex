@@ -125,6 +125,7 @@ defmodule MaraithonWeb.Router do
     pipe_through :api
 
     post "/auth/magic-link", MobileAuthController, :create_magic_link
+    post "/auth/magic-code", MobileAuthController, :consume_magic_code
     get "/auth/magic/:token", MobileAuthController, :consume_magic_link
     post "/auth/magic/:token", MobileAuthController, :consume_magic_link
   end

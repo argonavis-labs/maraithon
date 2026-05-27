@@ -10,22 +10,53 @@ defmodule MaraithonWeb.MobileAuthController do
   def create_magic_link(conn, params) do
     email = extract_email(params)
 
-    case Accounts.request_magic_link(email, request_metadata(conn)) do
-      {:ok, %{user: user, token: token}} ->
-        link = url(~p"/auth/magic/#{token}")
-        _ = MagicLinkSender.deliver(user.email, link)
+    case Accounts.request_magic_code(email, request_metadata(conn)) do
+      {:ok, %{user: user, code: code}} ->
+        case MagicLinkSender.deliver_code(user.email, code) do
+          :ok ->
+            delivery = %{
+              email: user.email,
+              expires_in_seconds: @magic_link_ttl_seconds,
+              delivery: "email_code"
+            }
 
-        json(conn, %{
-          magic_link: %{
-            email: user.email,
-            expires_in_seconds: @magic_link_ttl_seconds
-          }
-        })
+            json(conn, %{
+              magic_code: delivery,
+              magic_link: delivery
+            })
+
+          {:error, reason} ->
+            conn
+            |> put_status(:bad_gateway)
+            |> json(MobileJSON.error(reason))
+        end
 
       {:error, :invalid_email} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "invalid_email"})
+
+      {:error, reason} ->
+        conn
+        |> put_status(:bad_gateway)
+        |> json(MobileJSON.error(reason))
+    end
+  end
+
+  def consume_magic_code(conn, params) do
+    code = extract_code(params)
+
+    case Accounts.consume_magic_code(code, request_metadata(conn)) do
+      {:ok, %{user: user, token: session_token, session: session}} ->
+        json(conn, %{
+          session_token: session_token,
+          user: MobileJSON.user(user, session)
+        })
+
+      {:error, :invalid_or_expired_code} ->
+        conn
+        |> put_status(:unauthorized)
+        |> json(%{error: "invalid_or_expired_code"})
 
       {:error, reason} ->
         conn
@@ -66,8 +97,13 @@ defmodule MaraithonWeb.MobileAuthController do
   end
 
   defp extract_email(%{"magic_link" => %{"email" => email}}), do: email
+  defp extract_email(%{"magic_code" => %{"email" => email}}), do: email
   defp extract_email(%{"email" => email}), do: email
   defp extract_email(_params), do: ""
+
+  defp extract_code(%{"magic_code" => %{"code" => code}}), do: code
+  defp extract_code(%{"code" => code}), do: code
+  defp extract_code(_params), do: ""
 
   defp request_metadata(conn) do
     [

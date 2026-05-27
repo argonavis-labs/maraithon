@@ -36,3 +36,20 @@ make verify-production-mobile
 
 This gate signs into production, exercises todos, people, and chat, then
 checks the API for the expected writes.
+
+## TestFlight
+
+From the monorepo root:
+
+```sh
+make testflight-mobile
+```
+
+This is the deterministic dogfood path. It bumps `CURRENT_PROJECT_VERSION` in
+`project.yml` to a UTC timestamp build number, regenerates the Xcode project,
+archives and exports the IPA, verifies the IPA contains that build number, and
+uploads it to App Store Connect/TestFlight. `make ship-mobile` is an alias for
+the same path.
+
+Use `MARAITHON_MOBILE_BUILD_NUMBER=<number> make testflight-mobile` only when an
+exact build number is required.

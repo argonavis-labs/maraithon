@@ -2,7 +2,9 @@ defmodule MaraithonWeb.MobileApiControllerTest do
   use MaraithonWeb.ConnCase, async: true
 
   alias Maraithon.Accounts
+  alias Maraithon.Accounts.MagicLink
   alias Maraithon.Crm
+  alias Maraithon.Repo
   alias Maraithon.Todos
 
   test "magic-link consume returns a mobile session and me verifies it", %{conn: conn} do
@@ -24,6 +26,50 @@ defmodule MaraithonWeb.MobileApiControllerTest do
       |> get(~p"/api/mobile/me")
 
     assert %{"user" => %{"email" => ^email}} = json_response(conn, 200)
+  end
+
+  test "magic-code request stores a code hash and code consume returns a mobile session", %{
+    conn: conn
+  } do
+    email = "mobile-code-request-#{System.unique_integer([:positive])}@example.com"
+
+    conn =
+      post(conn, ~p"/api/mobile/auth/magic-link", %{
+        "email" => email
+      })
+
+    assert %{
+             "magic_code" => %{
+               "email" => ^email,
+               "expires_in_seconds" => 900,
+               "delivery" => "email_code"
+             },
+             "magic_link" => %{"delivery" => "email_code"}
+           } = json_response(conn, 200)
+
+    assert %MagicLink{code_hash: code_hash} = Repo.get_by(MagicLink, sent_to_email: email)
+    assert is_binary(code_hash)
+
+    {:ok, %{code: code, user: user}} =
+      Accounts.request_magic_code(
+        "mobile-code-consume-#{System.unique_integer([:positive])}@example.com"
+      )
+
+    conn = post(build_conn(), ~p"/api/mobile/auth/magic-code", %{"code" => code})
+
+    assert %{
+             "session_token" => session_token,
+             "user" => %{"id" => user_id}
+           } = json_response(conn, 200)
+
+    assert user_id == user.id
+    assert Accounts.get_active_session(session_token)
+  end
+
+  test "magic-code consume returns clean invalid errors", %{conn: conn} do
+    conn = post(conn, ~p"/api/mobile/auth/magic-code", %{"code" => "bad-code"})
+
+    assert %{"error" => "invalid_or_expired_code"} = json_response(conn, 401)
   end
 
   test "magic-link request returns clean validation errors", %{conn: conn} do

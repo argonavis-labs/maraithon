@@ -17,6 +17,7 @@ struct LocalMagicAuthProviderTests {
         let provider = LocalMagicAuthProvider(
             userDefaults: defaults,
             tokenGenerator: { "token-123" },
+            codeGenerator: { "ABCD-2345" },
             magicLinkBaseURL: magicLinkBaseURL,
             now: { fixedDate }
         )
@@ -24,9 +25,10 @@ struct LocalMagicAuthProviderTests {
         let request = try await provider.requestMagicLink(email: " Person@Example.COM ")
         #expect(request.email == "person@example.com")
         #expect(request.developmentToken == "token-123")
+        #expect(request.developmentCode == "ABCD-2345")
         #expect(request.developmentLink == "maraithon://auth/magic/token-123")
 
-        let user = try await provider.consumeMagicLink(request.developmentLink ?? "")
+        let user = try await provider.consumeMagicLink(request.developmentCode ?? "")
 
         #expect(user.id == "person@example.com")
         #expect(user.email == "person@example.com")
@@ -41,6 +43,7 @@ struct LocalMagicAuthProviderTests {
     func invalidEmailIsRejected() async {
         let provider = LocalMagicAuthProvider(
             tokenGenerator: { "token-123" },
+            codeGenerator: { "ABCD-2345" },
             magicLinkBaseURL: magicLinkBaseURL
         )
 
@@ -57,14 +60,15 @@ struct LocalMagicAuthProviderTests {
     func magicLinkIsSingleUse() async throws {
         let provider = LocalMagicAuthProvider(
             tokenGenerator: { "single-use-token" },
+            codeGenerator: { "WXYZ-6789" },
             magicLinkBaseURL: magicLinkBaseURL
         )
         let request = try await provider.requestMagicLink(email: "person@example.com")
 
-        _ = try await provider.consumeMagicLink(request.developmentToken ?? "")
+        _ = try await provider.consumeMagicLink(request.developmentCode ?? "")
 
         do {
-            _ = try await provider.consumeMagicLink(request.developmentToken ?? "")
+            _ = try await provider.consumeMagicLink(request.developmentCode ?? "")
             #expect(Bool(false), "Expected reused link to throw")
         } catch {
             #expect(error as? AuthError == .invalidOrExpiredLink)
@@ -77,6 +81,7 @@ struct LocalMagicAuthProviderTests {
         var currentDate = Date(timeIntervalSince1970: 1_800_000_000)
         let provider = LocalMagicAuthProvider(
             tokenGenerator: { "expired-token" },
+            codeGenerator: { "ABCD-2345" },
             magicLinkBaseURL: magicLinkBaseURL,
             now: { currentDate }
         )
@@ -85,7 +90,7 @@ struct LocalMagicAuthProviderTests {
         currentDate = currentDate.addingTimeInterval(16 * 60)
 
         do {
-            _ = try await provider.consumeMagicLink(request.developmentToken ?? "")
+            _ = try await provider.consumeMagicLink(request.developmentCode ?? "")
             #expect(Bool(false), "Expected expired link to throw")
         } catch {
             #expect(error as? AuthError == .invalidOrExpiredLink)
@@ -103,12 +108,13 @@ struct LocalMagicAuthProviderTests {
         let provider = LocalMagicAuthProvider(
             userDefaults: defaults,
             tokenGenerator: { "session-token" },
+            codeGenerator: { "ABCD-2345" },
             magicLinkBaseURL: magicLinkBaseURL,
             now: { currentDate }
         )
 
         let request = try await provider.requestMagicLink(email: "person@example.com")
-        _ = try await provider.consumeMagicLink(request.developmentToken ?? "")
+        _ = try await provider.consumeMagicLink(request.developmentCode ?? "")
 
         currentDate = currentDate.addingTimeInterval(61 * 24 * 60 * 60)
 

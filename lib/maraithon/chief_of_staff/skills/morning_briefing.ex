@@ -1289,12 +1289,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Before returning JSON, perform a final model review that the body includes every
        required external meeting with time, attendee or organization, why it matters, and
        the prep point, decision, or risk the operator should carry into it.
+
+       Reference briefing eval:
+       Treat this as the acceptance shape for a packed day, not a loose style hint:
+       a specific weekday/date headline; Needs Your Attention with the top 4-6 ranked moves;
+       Today's Schedule with every material meeting, explicit conflicts, and what to move,
+       leave early, decline, or choose; scoped Inbox and Slack triage with account/channel
+       counts only when they change action; Open Commitments with active/overdue/due-today/
+       coming-up buckets; draft IDs, action-card IDs, OmniFocus IDs, Gmail thread IDs, and
+       Slack channel/ts handles kept inline with the item they unlock; a separate Not a draft
+       job line for dashboard, payment, review, signature, investigation, or judgment work;
+       and a Look Ahead that names tomorrow/week risks plus one final Today's move directive.
+       Before returning JSON, privately score the draft against this reference contract and
+       revise until packed-day operational coverage is complete without turning into inventory.
+
        Response budget rule:
        Return compact executive JSON that can finish well under the token budget. The body should
-       be concise, scannable, and usually under 1,800 words. Use at most eight body sections and
-       at most twelve todos. Include every required meeting and required commercial thread, but
-       compress lower-priority context instead of expanding it. Each todo must be one concrete
-       action with source/person/company/why-now context in metadata.
+       be concise and scannable: quiet days can be short, while packed days can run up to roughly
+       2,200 words when conflicts, commitments, and action-card stacks justify it. Include every
+       required meeting and required commercial thread, but compress lower-priority context instead
+       of expanding it. Emit todos only for durable work worth a separate Done/Dismiss decision.
+       Each todo must be one concrete action with source_item_id or dedupe_key when available,
+       person/company/why-now/evidence context in metadata, and work_type when it is draftable,
+       dashboard, payment, review, decision, prep, or personal_logistic work.
 
        Brief input JSON:
        #{input_json}
@@ -1668,6 +1685,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "active_waiting_business_objectives_before_intros_and_meetings",
         "stale_work_framed_as_decision_not_urgent_dump",
         "person_company_relationship_context_for_non-obvious_people",
+        "schedule_conflicts_called_out_with_recommendations",
+        "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
+        "action_card_and_draft_handles_stay_attached_to_work",
+        "non_draft_dashboard_payment_review_and_decision_jobs_separated",
         "structured_todos_available_behind_list_todos_button_and_sent_one_at_a_time"
       ]
     }
@@ -1683,9 +1704,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     body = read_string(brief, "body", "")
     todos = read_list(brief, "todos")
     personal_events = personal_calendar_events(brief_input)
+    calendar_conflicts = calendar_conflicts(brief_input)
+    action_stack_items = action_stack_items(brief_input)
+    non_draft_items = non_draft_job_items(brief_input)
 
     []
     |> maybe_finding(blank?(body), :missing_body)
+    |> maybe_finding(
+      generation_mode == "llm" and not needs_attention_present?(body),
+      :missing_needs_attention
+    )
     |> maybe_finding(
       generation_mode == "llm" and personal_events != [] and
         not body_mentions_any_event?(body, personal_events),
@@ -1697,6 +1725,26 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_week_prep
     )
     |> maybe_finding(
+      generation_mode == "llm" and calendar_conflicts != [] and
+        not schedule_conflict_present?(body),
+      :missing_schedule_conflicts
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and commitments_present?(brief_input) and
+        not open_commitments_present?(body),
+      :missing_open_commitments
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and action_stack_items != [] and
+        not action_stack_present?(body),
+      :missing_action_stack
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and non_draft_items != [] and
+        not non_draft_jobs_present?(body),
+      :missing_non_draft_jobs
+    )
+    |> maybe_finding(
       generation_mode == "llm" and Enum.any?(todos, &sparse_person_todo?/1),
       :sparse_person_todo_context
     )
@@ -1705,8 +1753,49 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp revise_morning_brief(brief, brief_input, findings) do
     brief
+    |> maybe_append_needs_attention(brief_input, findings)
     |> maybe_append_personal_calendar_context(brief_input, findings)
     |> maybe_append_week_prep(brief_input, findings)
+    |> maybe_append_schedule_conflicts(brief_input, findings)
+    |> maybe_append_open_commitments(brief_input, findings)
+    |> maybe_append_action_stack(brief_input, findings)
+    |> maybe_append_non_draft_jobs(brief_input, findings)
+  end
+
+  defp maybe_append_needs_attention(brief, brief_input, findings) do
+    if :missing_needs_attention in findings do
+      lines =
+        [
+          calendar_conflicts(brief_input)
+          |> Enum.take(2)
+          |> Enum.map(fn {left, right} ->
+            "- **Schedule conflict**: #{calendar_event_short_label(left)} overlaps #{calendar_event_short_label(right)}. Pick one, move one, or leave the first early."
+          end),
+          commitment_attention_lines(brief_input, 2),
+          action_stack_items(brief_input)
+          |> Enum.take(2)
+          |> Enum.map(fn item ->
+            "- **Pending action card**: #{action_stack_item_label(item)}. Review or clear it before lower-signal inbox."
+          end)
+        ]
+        |> List.flatten()
+        |> Enum.reject(&blank?/1)
+
+      lines =
+        case lines do
+          [] ->
+            [
+              "- **Brief shape needs attention**: the original model output missed the morning attention header. Review the source-backed sections below before starting lower-signal inbox."
+            ]
+
+          lines ->
+            lines
+        end
+
+      append_body_section(brief, "## Needs Your Attention\n" <> Enum.join(lines, "\n"))
+    else
+      brief
+    end
   end
 
   defp maybe_append_personal_calendar_context(brief, brief_input, findings) do
@@ -1744,6 +1833,67 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp maybe_append_schedule_conflicts(brief, brief_input, findings) do
+    if :missing_schedule_conflicts in findings do
+      conflicts =
+        brief_input
+        |> calendar_conflicts()
+        |> Enum.take(5)
+        |> Enum.map(fn {left, right} ->
+          "- #{calendar_event_short_label(left)} overlaps #{calendar_event_short_label(right)}. Decide which to attend, move, or leave early."
+        end)
+        |> Enum.reject(&blank?/1)
+
+      append_body_section(brief, "## Schedule Conflicts\n" <> Enum.join(conflicts, "\n"))
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_open_commitments(brief, brief_input, findings) do
+    if :missing_open_commitments in findings do
+      lines = commitment_bucket_lines(brief_input)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section(brief, "## Open Commitments\n" <> Enum.join(lines, "\n"))
+      end
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_action_stack(brief, brief_input, findings) do
+    if :missing_action_stack in findings do
+      lines =
+        brief_input
+        |> action_stack_items()
+        |> Enum.take(8)
+        |> Enum.map(fn item -> "- #{action_stack_item_label(item)}" end)
+        |> Enum.reject(&blank?/1)
+
+      append_body_section(brief, "## Action Card Stack\n" <> Enum.join(lines, "\n"))
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_non_draft_jobs(brief, brief_input, findings) do
+    if :missing_non_draft_jobs in findings do
+      lines =
+        brief_input
+        |> non_draft_job_items()
+        |> Enum.take(8)
+        |> Enum.map(fn item -> "- #{non_draft_job_label(item)}" end)
+        |> Enum.reject(&blank?/1)
+
+      append_body_section(brief, "## Not a draft job\n" <> Enum.join(lines, "\n"))
+    else
+      brief
+    end
+  end
+
   defp append_body_section(brief, section) when is_map(brief) and is_binary(section) do
     body = read_string(brief, "body", "")
 
@@ -1762,6 +1912,462 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp maybe_finding(findings, true, finding), do: [finding | findings]
   defp maybe_finding(findings, _condition, _finding), do: findings
+
+  defp needs_attention_present?(body) when is_binary(body) do
+    body
+    |> normalize_match_text()
+    |> String.contains?("needs your attention")
+  end
+
+  defp needs_attention_present?(_body), do: false
+
+  defp schedule_conflict_present?(body) when is_binary(body) do
+    normalized = normalize_match_text(body)
+
+    Enum.any?(
+      [
+        "conflict",
+        "conflicts",
+        "overlap",
+        "overlaps",
+        "double booked",
+        "leave early",
+        "move this",
+        "pick one"
+      ],
+      &String.contains?(normalized, &1)
+    )
+  end
+
+  defp schedule_conflict_present?(_body), do: false
+
+  defp open_commitments_present?(body) when is_binary(body) do
+    normalized = normalize_match_text(body)
+
+    Enum.any?(
+      ["open commitments", "overdue", "due today", "coming up", "omnifocus", "of id"],
+      &String.contains?(normalized, &1)
+    )
+  end
+
+  defp open_commitments_present?(_body), do: false
+
+  defp action_stack_present?(body) when is_binary(body) do
+    normalized = normalize_match_text(body)
+
+    Enum.any?(
+      ["action card", "card stack", "draft", "draft id", "actc", "queued"],
+      &String.contains?(normalized, &1)
+    )
+  end
+
+  defp action_stack_present?(_body), do: false
+
+  defp non_draft_jobs_present?(body) when is_binary(body) do
+    normalized = normalize_match_text(body)
+
+    String.contains?(normalized, "not a draft job") or
+      String.contains?(normalized, "non draft")
+  end
+
+  defp non_draft_jobs_present?(_body), do: false
+
+  defp calendar_conflicts(brief_input) when is_map(brief_input) do
+    events =
+      brief_input
+      |> briefing_calendar_events()
+      |> Enum.map(fn event -> {event, calendar_event_interval(event)} end)
+      |> Enum.filter(fn {_event, interval} -> match?({%DateTime{}, %DateTime{}}, interval) end)
+      |> Enum.sort_by(fn {_event, {start_at, _end_at}} -> DateTime.to_unix(start_at) end)
+
+    for {{left, {left_start, left_end}}, left_index} <- Enum.with_index(events),
+        {{right, {right_start, right_end}}, right_index} <- Enum.with_index(events),
+        left_index < right_index,
+        intervals_overlap?(left_start, left_end, right_start, right_end) do
+      {left, right}
+    end
+  end
+
+  defp calendar_conflicts(_brief_input), do: []
+
+  defp briefing_calendar_events(brief_input) do
+    calendar = read_map(brief_input, "calendar")
+    schedule_coverage = read_map(brief_input, "schedule_coverage")
+    meeting_prep = read_map(brief_input, "meeting_prep")
+
+    [
+      read_list(calendar, "today_events"),
+      read_list(schedule_coverage, "required_meetings"),
+      read_list(meeting_prep, "meetings")
+    ]
+    |> List.flatten()
+    |> Enum.filter(&is_map/1)
+    |> Enum.uniq_by(&calendar_event_identity/1)
+  end
+
+  defp calendar_event_interval(event) when is_map(event) do
+    start_at = event_datetime(event, ["start", "start_at", "starts_at", "start_time"])
+    end_at = event_datetime(event, ["end", "end_at", "ends_at", "end_time", "finish"])
+
+    if match?(%DateTime{}, start_at) and match?(%DateTime{}, end_at) and
+         DateTime.compare(start_at, end_at) == :lt do
+      {start_at, end_at}
+    else
+      nil
+    end
+  end
+
+  defp calendar_event_interval(_event), do: nil
+
+  defp event_datetime(event, keys) when is_map(event) and is_list(keys) do
+    keys
+    |> Enum.map(&read_any(event, &1))
+    |> Enum.find_value(&parse_event_datetime/1)
+  end
+
+  defp event_datetime(_event, _keys), do: nil
+
+  defp parse_event_datetime(%DateTime{} = value), do: value
+
+  defp parse_event_datetime(%NaiveDateTime{} = value) do
+    DateTime.from_naive!(value, "Etc/UTC")
+  end
+
+  defp parse_event_datetime(%{"dateTime" => value}), do: parse_event_datetime(value)
+  defp parse_event_datetime(%{"datetime" => value}), do: parse_event_datetime(value)
+  defp parse_event_datetime(%{"value" => value}), do: parse_event_datetime(value)
+
+  defp parse_event_datetime(value) when is_binary(value) do
+    cond do
+      match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
+        {:ok, datetime, _offset} = DateTime.from_iso8601(value)
+        datetime
+
+      match?({:ok, _}, NaiveDateTime.from_iso8601(value)) ->
+        {:ok, datetime} = NaiveDateTime.from_iso8601(value)
+        DateTime.from_naive!(datetime, "Etc/UTC")
+
+      true ->
+        nil
+    end
+  end
+
+  defp parse_event_datetime(_value), do: nil
+
+  defp intervals_overlap?(left_start, left_end, right_start, right_end) do
+    DateTime.compare(left_start, right_end) == :lt and
+      DateTime.compare(left_end, right_start) == :gt
+  end
+
+  defp calendar_event_short_label(event) when is_map(event) do
+    summary = read_string(event, "summary", nil) || read_string(event, "title", "Calendar event")
+    start = read_string(event, "display_start", nil) || event_datetime_label(event, "start")
+    finish = read_string(event, "display_end", nil) || event_datetime_label(event, "end")
+
+    time =
+      [start, finish]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join("-")
+
+    if blank?(time), do: summary, else: "#{time} #{summary}"
+  end
+
+  defp calendar_event_short_label(_event), do: "Calendar event"
+
+  defp event_datetime_label(event, key) do
+    event
+    |> event_datetime([key])
+    |> case do
+      %DateTime{} = datetime -> DateTime.to_iso8601(datetime)
+      _ -> nil
+    end
+  end
+
+  defp commitments_present?(brief_input) when is_map(brief_input) do
+    commitments = read_map(brief_input, "commitments")
+
+    read_integer(commitments, "active_count", 0) > 0 or
+      ["overdue", "due_today", "coming_up", "this_week", "no_deadline"]
+      |> Enum.any?(&(read_list(commitments, &1) != []))
+  end
+
+  defp commitments_present?(_brief_input), do: false
+
+  defp commitment_attention_lines(brief_input, limit) do
+    commitments = read_map(brief_input, "commitments")
+
+    ["overdue", "due_today"]
+    |> Enum.flat_map(&(read_list(commitments, &1) |> Enum.take(limit)))
+    |> Enum.take(limit)
+    |> Enum.map(fn commitment ->
+      "- **#{commitment_title(commitment)}**: #{commitment_context(commitment)}"
+    end)
+  end
+
+  defp commitment_bucket_lines(brief_input) do
+    commitments = read_map(brief_input, "commitments")
+
+    count_line =
+      case read_integer(commitments, "active_count", 0) do
+        active when active > 0 ->
+          due_today = commitments |> read_list("due_today") |> length()
+          overdue = commitments |> read_list("overdue") |> length()
+          ["#{active} active", "#{due_today} due today", "#{overdue} overdue"] |> Enum.join(" · ")
+
+        _ ->
+          nil
+      end
+
+    bucket_lines =
+      [
+        {"Overdue", "overdue"},
+        {"Due Today", "due_today"},
+        {"Coming Up This Week", "coming_up"},
+        {"Coming Up This Week", "this_week"},
+        {"No Deadline", "no_deadline"}
+      ]
+      |> Enum.flat_map(fn {label, key} ->
+        case read_list(commitments, key) do
+          [] ->
+            []
+
+          items ->
+            ["**#{label}**" | Enum.map(Enum.take(items, 8), &("- " <> commitment_line(&1)))]
+        end
+      end)
+
+    [count_line | bucket_lines]
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp commitment_line(commitment) when is_map(commitment) do
+    title = commitment_title(commitment)
+    context = commitment_context(commitment)
+    id = commitment_id(commitment)
+
+    [title, context, id && "id #{id}"]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp commitment_line(_commitment), do: nil
+
+  defp commitment_title(commitment) when is_map(commitment) do
+    read_string(commitment, "title", nil) ||
+      read_string(commitment, "name", nil) ||
+      "Open commitment"
+  end
+
+  defp commitment_title(_commitment), do: "Open commitment"
+
+  defp commitment_context(commitment) when is_map(commitment) do
+    owed_to = read_string(commitment, "owed_to", nil) || read_string(commitment, "person", nil)
+    project = read_string(commitment, "project", nil)
+    due_at = read_string(commitment, "due_at", nil) || read_string(commitment, "due", nil)
+
+    [owed_to && "for #{owed_to}", project && project, due_at && "due #{due_at}"]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" · ")
+  end
+
+  defp commitment_context(_commitment), do: nil
+
+  defp commitment_id(commitment) when is_map(commitment) do
+    read_string(commitment, "source_id", nil) ||
+      read_string(commitment, "omnifocus_id", nil) ||
+      read_string(commitment, "of_id", nil) ||
+      read_string(commitment, "id", nil)
+  end
+
+  defp commitment_id(_commitment), do: nil
+
+  defp action_stack_items(brief_input) when is_map(brief_input) do
+    brief_input
+    |> candidate_action_sources()
+    |> Enum.filter(&action_stack_item?/1)
+    |> Enum.uniq_by(&action_stack_item_identity/1)
+  end
+
+  defp action_stack_items(_brief_input), do: []
+
+  defp candidate_action_sources(brief_input) do
+    open_work = read_map(brief_input, "open_work")
+    commitments = read_map(brief_input, "commitments")
+    gmail = read_map(brief_input, "gmail")
+    slack = read_map(brief_input, "slack")
+
+    [
+      read_list(open_work, "todos"),
+      read_list(open_work, "insights"),
+      read_list(commitments, "overdue"),
+      read_list(commitments, "due_today"),
+      read_list(commitments, "coming_up"),
+      read_list(gmail, "recent_inbox"),
+      read_list(gmail, "commercial_threads"),
+      read_list(slack, "key_threads"),
+      read_list(slack, "mentions")
+    ]
+    |> List.flatten()
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp action_stack_item?(item) when is_map(item) do
+    text = inspect(item)
+
+    Regex.match?(~r/\bactc_[A-Za-z0-9_-]+\b/i, text) or
+      Regex.match?(~r/\bdraft[_ -]?(id)?\b/i, text) or
+      Regex.match?(~r/\baction[_ -]?card\b/i, text) or
+      has_any_key?(item, ["draft_id", "draftId", "action_card_id", "actionCardId"])
+  end
+
+  defp action_stack_item?(_item), do: false
+
+  defp action_stack_item_identity(item) when is_map(item) do
+    action_handle(item) ||
+      read_string(item, "source_item_id", nil) ||
+      read_string(item, "source_id", nil) ||
+      read_string(item, "id", nil) ||
+      normalize_match_text(action_stack_item_label(item))
+  end
+
+  defp action_stack_item_label(item) when is_map(item) do
+    label =
+      read_string(item, "title", nil) ||
+        read_string(item, "name", nil) ||
+        read_string(item, "subject", nil) ||
+        read_string(item, "summary", nil) ||
+        read_string(item, "text", "Pending action")
+
+    handle = action_handle(item)
+
+    [label, handle && "-> #{handle}"]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+    |> truncate_text(220)
+  end
+
+  defp action_stack_item_label(_item), do: "Pending action"
+
+  defp action_handle(item) when is_map(item) do
+    metadata = read_map(item, "metadata")
+
+    direct =
+      ["action_card_id", "actionCardId", "draft_id", "draftId", "source_item_id"]
+      |> Enum.find_value(fn key ->
+        read_string(item, key, nil) || read_string(metadata, key, nil)
+      end)
+
+    direct || action_handle_from_text(inspect(item))
+  end
+
+  defp action_handle(_item), do: nil
+
+  defp action_handle_from_text(text) when is_binary(text) do
+    with [handle | _] <- Regex.run(~r/\bactc_[A-Za-z0-9_-]+\b/i, text) do
+      handle
+    else
+      _ -> nil
+    end
+  end
+
+  defp action_handle_from_text(_text), do: nil
+
+  defp non_draft_job_items(brief_input) when is_map(brief_input) do
+    brief_input
+    |> candidate_non_draft_sources()
+    |> Enum.filter(&non_draft_job_item?/1)
+    |> Enum.uniq_by(&non_draft_job_identity/1)
+  end
+
+  defp non_draft_job_items(_brief_input), do: []
+
+  defp candidate_non_draft_sources(brief_input) do
+    open_work = read_map(brief_input, "open_work")
+    commitments = read_map(brief_input, "commitments")
+
+    [
+      read_list(open_work, "todos"),
+      read_list(open_work, "insights"),
+      read_list(commitments, "overdue"),
+      read_list(commitments, "due_today"),
+      read_list(commitments, "coming_up")
+    ]
+    |> List.flatten()
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp non_draft_job_item?(item) when is_map(item) do
+    metadata = read_map(item, "metadata")
+    work_type = read_string(item, "work_type", nil) || read_string(metadata, "work_type", nil)
+
+    work_type in ["dashboard", "payment", "review", "decision", "signature", "investigation"] or
+      (not action_stack_item?(item) and non_draft_text?(item))
+  end
+
+  defp non_draft_job_item?(_item), do: false
+
+  defp non_draft_text?(item) do
+    text =
+      item
+      |> inspect()
+      |> normalize_match_text()
+
+    Enum.any?(
+      [
+        "payment",
+        "pay ",
+        "dashboard",
+        "approve",
+        "approval",
+        "signature",
+        "sign ",
+        "review",
+        "debug",
+        "validate",
+        "investigation",
+        "decision",
+        "stripe",
+        "ramp"
+      ],
+      &String.contains?(text, &1)
+    )
+  end
+
+  defp non_draft_job_identity(item) when is_map(item) do
+    read_string(item, "source_item_id", nil) ||
+      read_string(item, "source_id", nil) ||
+      read_string(item, "id", nil) ||
+      normalize_match_text(non_draft_job_label(item))
+  end
+
+  defp non_draft_job_label(item) when is_map(item) do
+    label =
+      read_string(item, "title", nil) ||
+        read_string(item, "name", nil) ||
+        read_string(item, "subject", nil) ||
+        read_string(item, "summary", nil) ||
+        "Non-draft work"
+
+    context =
+      read_string(item, "next_action", nil) ||
+        read_string(item, "notes", nil) ||
+        read_string(read_map(item, "metadata"), "why_it_matters", nil)
+
+    [label, context]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(": ")
+    |> truncate_text(220)
+  end
+
+  defp non_draft_job_label(_item), do: "Non-draft work"
+
+  defp has_any_key?(map, keys) when is_map(map) and is_list(keys) do
+    Enum.any?(keys, fn key ->
+      Map.has_key?(map, key) or Map.has_key?(map, to_existing_atom(key))
+    end)
+  end
+
+  defp has_any_key?(_map, _keys), do: false
 
   defp personal_calendar_events(brief_input) when is_map(brief_input) do
     calendar = read_map(brief_input, "calendar")

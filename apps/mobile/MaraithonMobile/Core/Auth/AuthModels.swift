@@ -14,6 +14,7 @@ struct MagicLinkRequest: Codable, Equatable, Identifiable {
     let expiresAt: Date
     let developmentLink: String?
     let developmentToken: String?
+    let developmentCode: String?
 
     var isExpired: Bool {
         expiresAt <= Date()
@@ -42,7 +43,7 @@ enum AuthEntryMode: String, CaseIterable, Identifiable {
 
     var actionTitle: String {
         switch self {
-        case .signIn, .signUp: "Email Me a Link"
+        case .signIn, .signUp: "Email Me a Code"
         }
     }
 }
@@ -58,9 +59,9 @@ enum AuthError: LocalizedError, Equatable {
         case .invalidEmail:
             "Please enter a valid email address."
         case .magicLinkNotFound:
-            "Request a new sign-in link."
+            "Request a new sign-in code."
         case .invalidOrExpiredLink:
-            "Sign-in link is invalid or expired."
+            "Sign-in code is invalid or expired."
         case .restoreFailed:
             "The saved session could not be restored."
         }

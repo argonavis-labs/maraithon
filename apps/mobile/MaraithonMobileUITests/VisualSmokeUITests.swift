@@ -1,23 +1,32 @@
 import XCTest
 
 final class VisualSmokeUITests: XCTestCase {
+    private struct VisualConfig: Decodable {
+        let magicCode: String
+        let snapshotDirectory: String
+    }
+
+    private static let fallbackConfigURL = URL(fileURLWithPath: "/tmp/maraithon-visual-smoke.json")
+
     @MainActor
     func testCapturePrimaryTabs() throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let snapshotDirectory = environment["MARAITHON_VISUAL_SNAPSHOT_DIR"],
+        let fileConfig = loadFallbackConfig()
+
+        guard let snapshotDirectory = environment["MARAITHON_VISUAL_SNAPSHOT_DIR"] ?? fileConfig?.snapshotDirectory,
               !snapshotDirectory.isEmpty else {
             throw XCTSkip("Set MARAITHON_VISUAL_SNAPSHOT_DIR to capture visual smoke screenshots.")
         }
 
-        guard let magicToken = environment["MARAITHON_MAGIC_TOKEN"],
-              !magicToken.isEmpty,
-              !magicToken.contains("$(") else {
-            throw XCTSkip("Set MARAITHON_MAGIC_TOKEN to capture signed-in visual smoke screenshots.")
+        guard let magicCode = environment["MARAITHON_MAGIC_CODE"] ?? fileConfig?.magicCode,
+              !magicCode.isEmpty,
+              !magicCode.contains("$(") else {
+            throw XCTSkip("Set MARAITHON_MAGIC_CODE to capture signed-in visual smoke screenshots.")
         }
 
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]
-        app.launchEnvironment["MARAITHON_UI_TEST_MAGIC_TOKEN"] = magicToken
+        app.launchEnvironment["MARAITHON_UI_TEST_MAGIC_CODE"] = magicCode
         app.launchEnvironment["MARAITHON_UI_TEST_RESET_STATE"] = "1"
         app.launch()
 
@@ -52,5 +61,17 @@ final class VisualSmokeUITests: XCTestCase {
             withIntermediateDirectories: true
         )
         try XCUIScreen.main.screenshot().pngRepresentation.write(to: url)
+    }
+
+    private func loadFallbackConfig() -> VisualConfig? {
+        guard FileManager.default.fileExists(atPath: Self.fallbackConfigURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: Self.fallbackConfigURL)
+            return try JSONDecoder().decode(VisualConfig.self, from: data)
+        } catch {
+            XCTFail("Unable to read visual smoke config: \(error)")
+            return nil
+        }
     }
 }

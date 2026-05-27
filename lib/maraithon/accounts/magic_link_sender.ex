@@ -12,9 +12,20 @@ defmodule Maraithon.Accounts.MagicLinkSender do
   @postmark_api_url "https://api.postmarkapp.com/email"
 
   def deliver(email, link) when is_binary(email) and is_binary(link) do
+    content = EmailTemplates.magic_link(link)
+
     case postmark_config() do
-      {:ok, config} -> send_via_postmark(config, email, link)
-      :disabled -> log_only(email, link)
+      {:ok, config} -> send_via_postmark(config, email, content)
+      :disabled -> log_only(email, :link, link)
+    end
+  end
+
+  def deliver_code(email, code) when is_binary(email) and is_binary(code) do
+    content = EmailTemplates.magic_code(code)
+
+    case postmark_config() do
+      {:ok, config} -> send_via_postmark(config, email, content)
+      :disabled -> log_only(email, :code, code)
     end
   end
 
@@ -30,10 +41,11 @@ defmodule Maraithon.Accounts.MagicLinkSender do
     end
   end
 
-  defp send_via_postmark(config, email, link) do
-    %{subject: subject, text_body: text_body, html_body: html_body} =
-      EmailTemplates.magic_link(link)
-
+  defp send_via_postmark(config, email, %{
+         subject: subject,
+         text_body: text_body,
+         html_body: html_body
+       }) do
     body = %{
       "From" => config.from,
       "To" => email,
@@ -52,7 +64,7 @@ defmodule Maraithon.Accounts.MagicLinkSender do
         :ok
 
       {:ok, %Req.Response{status: status, body: response_body}} ->
-        Logger.warning("Magic link email failed",
+        Logger.warning("Magic sign-in email failed",
           status: status,
           response: inspect(response_body)
         )
@@ -60,15 +72,16 @@ defmodule Maraithon.Accounts.MagicLinkSender do
         {:error, :email_delivery_failed}
 
       {:error, reason} ->
-        Logger.warning("Magic link email transport error", reason: inspect(reason))
+        Logger.warning("Magic sign-in email transport error", reason: inspect(reason))
         {:error, :email_delivery_failed}
     end
   end
 
-  defp log_only(email, link) do
-    Logger.info("Magic link delivery fallback (log-only)",
+  defp log_only(email, kind, value) do
+    Logger.info("Magic sign-in delivery fallback (log-only)",
       email: email,
-      link: link
+      kind: kind,
+      value: value
     )
 
     :ok

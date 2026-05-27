@@ -2,10 +2,14 @@ import XCTest
 
 final class ProductionIntegrationUITests: XCTestCase {
     private struct VerificationConfig: Decodable {
-        let magicToken: String
+        let magicCode: String
         let runID: String
         let contactEmailDomain: String
     }
+
+    private static let fallbackConfigURL = URL(
+        fileURLWithPath: "/tmp/maraithon-production-verification.json"
+    )
 
     private var verificationConfig: VerificationConfig!
 
@@ -26,14 +30,14 @@ final class ProductionIntegrationUITests: XCTestCase {
     }
 
     private var chatProbeText: String {
-        "Say mobile verification \(runID) in one sentence."
+        "Hey"
     }
 
     @MainActor
     func testProductionMagicSigninTodoAndPeoplePersistence() throws {
         continueAfterFailure = false
         verificationConfig = loadVerificationConfig()
-        guard isUsableToken(verificationConfig.magicToken) else { return }
+        guard isUsableCode(verificationConfig.magicCode) else { return }
         let app = launchApp()
 
         XCTAssertTrue(app.tabBars.buttons["Todos"].waitForExistence(timeout: 60), app.debugDescription)
@@ -45,12 +49,12 @@ final class ProductionIntegrationUITests: XCTestCase {
 
     @MainActor
     private func launchApp() -> XCUIApplication {
-        let magicToken = verificationConfig.magicToken
-        XCTAssertFalse(magicToken.isEmpty, "MARAITHON_MAGIC_TOKEN must contain a fresh production magic-link token.")
+        let magicCode = verificationConfig.magicCode
+        XCTAssertFalse(magicCode.isEmpty, "MARAITHON_MAGIC_CODE must contain a fresh production sign-in code.")
 
         let app = XCUIApplication()
         app.launchArguments = ["-ui-testing"]
-        app.launchEnvironment["MARAITHON_UI_TEST_MAGIC_TOKEN"] = magicToken
+        app.launchEnvironment["MARAITHON_UI_TEST_MAGIC_CODE"] = magicCode
         app.launchEnvironment["MARAITHON_UI_TEST_RESET_STATE"] = "1"
         app.launch()
         return app
@@ -58,11 +62,12 @@ final class ProductionIntegrationUITests: XCTestCase {
 
     private func loadVerificationConfig() -> VerificationConfig {
         let environment = ProcessInfo.processInfo.environment
-        let environmentToken = environment["MARAITHON_MAGIC_TOKEN"] ?? ""
-        let contactEmailDomain = environment["MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN"] ?? ""
+        let fileConfig = loadFallbackConfig()
+        let environmentCode = environment["MARAITHON_MAGIC_CODE"] ?? fileConfig?.magicCode ?? ""
+        let contactEmailDomain = environment["MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN"] ?? fileConfig?.contactEmailDomain ?? ""
         XCTAssertTrue(
-            isUsableToken(environmentToken),
-            "MARAITHON_MAGIC_TOKEN must be passed through the test scheme as a fresh production token."
+            isUsableCode(environmentCode),
+            "MARAITHON_MAGIC_CODE must be passed through the test scheme as a fresh production sign-in code."
         )
         XCTAssertFalse(
             contactEmailDomain.isEmpty,
@@ -70,14 +75,26 @@ final class ProductionIntegrationUITests: XCTestCase {
         )
 
         return VerificationConfig(
-            magicToken: environmentToken,
-            runID: environment["MARAITHON_VERIFY_RUN_ID"] ?? "manual",
+            magicCode: environmentCode,
+            runID: environment["MARAITHON_VERIFY_RUN_ID"] ?? fileConfig?.runID ?? "manual",
             contactEmailDomain: contactEmailDomain
         )
     }
 
-    private func isUsableToken(_ token: String) -> Bool {
-        !token.isEmpty && !token.contains("$(")
+    private func loadFallbackConfig() -> VerificationConfig? {
+        guard FileManager.default.fileExists(atPath: Self.fallbackConfigURL.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: Self.fallbackConfigURL)
+            return try JSONDecoder().decode(VerificationConfig.self, from: data)
+        } catch {
+            XCTFail("Unable to read production verification config: \(error)")
+            return nil
+        }
+    }
+
+    private func isUsableCode(_ code: String) -> Bool {
+        !code.isEmpty && !code.contains("$(")
     }
 
     @MainActor
@@ -145,6 +162,11 @@ final class ProductionIntegrationUITests: XCTestCase {
 
         sendChatMessage(chatProbeText, app: app)
         waitForAssistantTurn(app: app)
+
+        XCTAssertTrue(
+            app.staticTexts["Hey - I'm here."].waitForExistence(timeout: 10),
+            app.debugDescription
+        )
 
         XCTAssertFalse(
             app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Captured. Next best action")).firstMatch.exists,

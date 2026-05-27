@@ -65,6 +65,7 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
   test "routes broad planning and todo-review asks to the reasoning tier" do
     for text <- [
           "What should I do next?",
+          "What todos need my attention?",
           "Give me the full detail of my todos.",
           "Please triage my todos.",
           "Prioritize my open loops."
@@ -85,5 +86,22 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert profile.tier == :reasoning
     assert profile.model == "reasoning-tier"
     assert profile.reasoning_effort == "high"
+  end
+
+  test "routes contact and stale follow-up review asks to reasoning with relationship context" do
+    for text <- [
+          "Which contacts are stale?",
+          "Who should I follow up with?",
+          "Look up the contact named Jane Example and tell me what notes are stored.",
+          "Review my CRM contacts that need a nudge."
+        ] do
+      profile = ModelRouting.profile_for(%{text: text})
+
+      assert profile.tier == :reasoning
+      assert profile.model == "reasoning-tier"
+      assert profile.reasoning_effort == "high"
+      assert profile.request_focus in [:person_context, :waiting_on, nil]
+      assert Keyword.fetch!(profile.llm_opts, :chat_model) == "reasoning-tier"
+    end
   end
 end

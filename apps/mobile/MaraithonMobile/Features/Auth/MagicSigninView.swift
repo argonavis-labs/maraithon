@@ -3,13 +3,13 @@ import SwiftUI
 struct MagicSigninView: View {
     @Environment(SessionStore.self) private var sessionStore
     @State private var email = ""
-    @State private var pastedLink = ""
+    @State private var pastedCode = ""
     @State private var mode: AuthEntryMode = .signIn
     @FocusState private var focusedField: Field?
 
     private enum Field {
         case email
-        case link
+        case code
     }
 
     var body: some View {
@@ -39,10 +39,10 @@ struct MagicSigninView: View {
             .navigationTitle("Maraithon")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                focusedField = sessionStore.pendingMagicLink == nil ? .email : .link
+                focusedField = sessionStore.pendingMagicLink == nil ? .email : .code
             }
             .onChange(of: sessionStore.pendingMagicLink) { _, request in
-                focusedField = request == nil ? .email : .link
+                focusedField = request == nil ? .email : .code
             }
         }
     }
@@ -57,7 +57,7 @@ struct MagicSigninView: View {
             Text("Maraithon")
                 .font(.largeTitle.bold())
 
-            Text("Enter your email and we'll send a one-time link. New accounts are created automatically, matching the web app.")
+            Text("Enter your email and we'll send a one-time code. New accounts are created automatically, matching the web app.")
                 .font(.body)
                 .foregroundStyle(.secondary)
         }
@@ -100,25 +100,24 @@ struct MagicSigninView: View {
             Text("Check your email")
                 .font(.headline)
 
-            Text("We sent a one-time link to \(request.email). Links expire in 15 minutes.")
+            Text("We sent a one-time code to \(request.email). Codes expire in 15 minutes.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            if let developmentLink = request.developmentLink {
+            if let developmentCode = request.developmentCode {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Development magic link", systemImage: "key.fill")
+                    Label("Development sign-in code", systemImage: "key.fill")
                         .font(.subheadline.weight(.semibold))
 
-                    Text(developmentLink)
-                        .font(.footnote.monospaced())
+                    Text(developmentCode)
+                        .font(.title3.monospaced().weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .lineLimit(4)
                         .textSelection(.enabled)
 
                     Button {
-                        consumeMagicLink(developmentLink)
+                        consumeMagicLink(developmentCode)
                     } label: {
-                        Label("Open Development Link", systemImage: "link.circle.fill")
+                        Label("Use Development Code", systemImage: "checkmark.seal.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .appGlassActionStyle()
@@ -126,23 +125,22 @@ struct MagicSigninView: View {
                 }
                 .padding(14)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .accessibilityIdentifier("development-magic-link")
+                .accessibilityIdentifier("development-sign-in-code")
             }
 
-            TextField("Paste magic link or token", text: $pastedLink, axis: .vertical)
+            TextField("Enter sign-in code", text: $pastedCode)
                 .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                .textContentType(.URL)
+                .keyboardType(.asciiCapable)
+                .textContentType(.oneTimeCode)
                 .submitLabel(.continue)
-                .focused($focusedField, equals: .link)
-                .onSubmit { submitLink() }
-                .lineLimit(2...4)
+                .focused($focusedField, equals: .code)
+                .onSubmit { submitCode() }
                 .padding(14)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             HStack {
                 Button("Use another email") {
-                    pastedLink = ""
+                    pastedCode = ""
                     sessionStore.cancelMagicLinkRequest()
                     focusedField = .email
                 }
@@ -151,12 +149,12 @@ struct MagicSigninView: View {
                 Spacer()
 
                 Button {
-                    submitLink()
+                    submitCode()
                 } label: {
                     Label("Continue", systemImage: "checkmark.seal.fill")
                 }
                 .appProminentGlassActionStyle()
-                .disabled(sessionStore.isBusy || pastedLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(sessionStore.isBusy || pastedCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
@@ -164,12 +162,12 @@ struct MagicSigninView: View {
     private func submitEmail() {
         Task {
             await sessionStore.requestMagicLink(email: email)
-            focusedField = .link
+            focusedField = .code
         }
     }
 
-    private func submitLink() {
-        consumeMagicLink(pastedLink)
+    private func submitCode() {
+        consumeMagicLink(pastedCode)
     }
 
     private func consumeMagicLink(_ linkOrToken: String) {
