@@ -494,6 +494,80 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute title =~ "assistant:"
   end
 
+  test "mobile chat assistant message bodies are display-ready", %{conn: conn} do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-assistant-body@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+    thread = TelegramConversations.get_mobile_thread(user_id, thread_id)
+
+    {:ok, _thread, _turn, _result} =
+      Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+        thread,
+        thread.chat_id,
+        "assistant: The customer escalation needs a same-day reply.\n" <>
+          "Maraithon: Draft the reply before 2 PM."
+      )
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads/#{thread_id}")
+      |> json_response(200)
+
+    assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
+    assert body == "The customer escalation needs a same-day reply.\nDraft the reply before 2 PM."
+    refute body =~ "assistant:"
+    refute body =~ "Maraithon:"
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads")
+      |> json_response(200)
+
+    thread_json = Enum.find(response["threads"], &(&1["id"] == thread_id))
+    assert get_in(thread_json, ["latest_message", "body"]) == body
+  end
+
+  test "mobile chat assistant message bodies hide technical failure details", %{conn: conn} do
+    {conn, user_id} =
+      authenticated_mobile_conn(conn, "mobile-chat-assistant-body-error@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate()}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+    thread = TelegramConversations.get_mobile_thread(user_id, thread_id)
+
+    {:ok, _thread, _turn, _result} =
+      Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+        thread,
+        thread.chat_id,
+        "RuntimeError stacktrace http_status: 500 token=secret"
+      )
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads/#{thread_id}")
+      |> json_response(200)
+
+    assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
+
+    assert body ==
+             "I could not finish that response. Try again, or ask for a narrower check."
+
+    visible_response = inspect(response)
+    refute visible_response =~ "RuntimeError"
+    refute visible_response =~ "stacktrace"
+    refute visible_response =~ "http_status"
+    refute visible_response =~ "token=secret"
+  end
+
   test "mobile chat renames a thread and keeps the manual title", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-rename@example.com")
 

@@ -115,7 +115,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       id: turn.id,
       client_message_id: turn.client_message_id || structured_data["client_message_id"],
       role: turn.role,
-      body: turn.text,
+      body: public_message_body(turn),
       turn_kind: turn.turn_kind,
       message_class: structured_data["message_class"],
       sent_at: json_value(turn.inserted_at),
@@ -126,6 +126,35 @@ defmodule MaraithonWeb.MobileChatJSON do
       work_summary: WorkSummary.for_message(turn),
       structured_data: public_structured_data
     }
+  end
+
+  defp public_message_body(%Turn{role: "assistant", text: text}) when is_binary(text) do
+    text
+    |> strip_message_role_prefix()
+    |> reject_technical_message_body()
+  end
+
+  defp public_message_body(%Turn{text: text}), do: text
+
+  defp strip_message_role_prefix(value) do
+    value
+    |> String.replace(~r/(^|\n)\s*(?:assistant|maraithon|system)\s*:\s*/i, "\\1")
+    |> String.trim()
+  end
+
+  defp reject_technical_message_body(value) do
+    if technical_message_body?(value) do
+      ApiErrorCopy.mobile_chat_run_error(value)
+    else
+      value
+    end
+  end
+
+  defp technical_message_body?(value) do
+    Regex.match?(
+      ~r/(?:\b(?:authorization|bearer|access_token|refresh_token|client_secret|api[_-]?key|token|http_status)\b\s*[:=]|\b(?:stacktrace|internal_stacktrace|FunctionClauseError|RuntimeError|DBConnection|Postgrex|clientError|serverError)\b|\b(?:Ecto|Phoenix|Elixir)\.)/i,
+      value
+    )
   end
 
   defp public_linked_todo(nil), do: nil
