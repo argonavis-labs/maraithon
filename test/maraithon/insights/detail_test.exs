@@ -108,7 +108,7 @@ defmodule Maraithon.Insights.DetailTest do
     assert Enum.any?(detail.evidence_checked, &(&1.kind == :deadline))
     assert detail.open_loop_reason.origin == :derived
     assert detail.open_loop_reason.text =~ "unresolved"
-    assert "No delivery attempts recorded." in detail.data_gaps
+    assert "No follow-up delivery has been recorded yet." in detail.data_gaps
   end
 
   test "reports explicit data gaps for sparse insights" do
@@ -126,14 +126,16 @@ defmodule Maraithon.Insights.DetailTest do
     assert detail.requested_by == nil
     assert detail.open_loop_reason.origin == :derived
     assert "Requester not captured for this insight." in detail.data_gaps
-    assert "No persisted evidence bullets were captured for this insight." in detail.data_gaps
-    assert "No delivery attempts recorded." in detail.data_gaps
+    assert "No saved evidence was captured for this item." in detail.data_gaps
+    assert "No follow-up delivery has been recorded yet." in detail.data_gaps
 
     summary = Detail.summary_text(detail, insight)
 
     assert summary =~ "Reason sent:"
     assert summary =~ "Unresolved commitment: Reply owed: Board deck"
     assert summary =~ "No completion evidence was found after the original commitment."
+    refute summary =~ "Persisted"
+    refute summary =~ "open loop"
     refute summary =~ "I surfaced"
     refute summary =~ "looks like"
     refute summary =~ "I didn't find"

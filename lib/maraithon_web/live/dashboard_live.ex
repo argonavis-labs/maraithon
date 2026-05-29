@@ -3431,8 +3431,8 @@ defmodule MaraithonWeb.DashboardLive do
   defp detail_origin_label(%{origin: :derived}), do: "Derived"
   defp detail_origin_label(_value), do: nil
 
-  defp reason_origin_label(%{origin: :stored}), do: "Stored rationale"
-  defp reason_origin_label(%{origin: :derived}), do: "Derived from persisted evidence"
+  defp reason_origin_label(%{origin: :stored}), do: "Saved explanation"
+  defp reason_origin_label(%{origin: :derived}), do: "Built from saved evidence"
   defp reason_origin_label(_value), do: nil
 
   defp evidence_metadata(item) when is_map(item) do
@@ -3839,7 +3839,7 @@ defmodule MaraithonWeb.DashboardLive do
               </.badge>
             </div>
             <p class="mt-1 text-sm/6 text-zinc-600">
-              Decide the next move for each open loop.
+              Decide the next move for each commitment.
             </p>
           </div>
           <div class="text-right">
@@ -4144,7 +4144,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.evidence_checked == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No persisted evidence bullets were captured for this insight.
+                          No saved evidence was captured for this item.
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4167,7 +4167,9 @@ defmodule MaraithonWeb.DashboardLive do
                         </p>
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
-                        <p class="text-sm/6 text-zinc-600">No delivery attempts recorded.</p>
+                        <p class="text-sm/6 text-zinc-600">
+                          No follow-up delivery has been recorded yet.
+                        </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
                           <%= for delivery <- detail.delivery_evidence do %>
@@ -4192,7 +4194,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
                         <p class="text-xs/5 font-medium text-zinc-500">
-                          Why Maraithon still thinks this is open
+                          Why this still needs attention
                         </p>
                         <.badge
                           :if={detail.open_loop_reason}
@@ -4213,13 +4215,13 @@ defmodule MaraithonWeb.DashboardLive do
                         </ul>
                       <% else %>
                         <p class="text-sm/6 text-zinc-600">
-                          Open-loop reason could not be reconstructed from persisted data.
+                          Maraithon does not have enough saved context yet to explain why this is still open.
                         </p>
                       <% end %>
                     </div>
                     <div :if={detail.data_gaps != []} class="space-y-2">
                       <p class="text-xs/5 font-medium text-zinc-500">
-                        Data gaps
+                        Missing context
                       </p>
                       <ul class="space-y-1 text-sm/6 text-zinc-600">
                         <%= for gap <- detail.data_gaps do %>

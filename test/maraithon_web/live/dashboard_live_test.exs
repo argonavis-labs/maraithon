@@ -419,7 +419,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     assert html =~ "Delivery failed. Check the connected channel and try again."
+    assert html =~ "Why this still needs attention"
+    assert html =~ "Built from saved evidence"
+    assert html =~ "Missing context"
+    assert html =~ "No saved evidence was captured for this item."
     refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "persisted")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "123456789")
     refute_html_contains(html, "sarah@example.com")
@@ -693,7 +698,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "#todo-review")
     assert has_element?(view, "h2", "Today's work")
     assert html =~ "One at a time"
-    assert html =~ "Decide the next move for each open loop."
+    assert html =~ "Decide the next move for each commitment."
     refute html =~ "Today's cards"
     refute html =~ "Review queue"
     assert html =~ "1 of 2"

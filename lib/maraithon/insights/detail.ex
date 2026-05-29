@@ -11,9 +11,9 @@ defmodule Maraithon.Insights.Detail do
 
   @exact_promise_gap "Exact promise not captured for this insight."
   @requester_gap "Requester not captured for this insight."
-  @evidence_gap "No persisted evidence bullets were captured for this insight."
-  @delivery_gap "No delivery attempts recorded."
-  @reason_gap "Open-loop reason could not be reconstructed from persisted data."
+  @evidence_gap "No saved evidence was captured for this item."
+  @delivery_gap "No follow-up delivery has been recorded yet."
+  @reason_gap "The reason for follow-up was not saved with this item."
 
   def build(%Insight{} = insight, deliveries \\ []) when is_list(deliveries) do
     metadata = stringify_keys(insight.metadata || %{})
@@ -54,7 +54,7 @@ defmodule Maraithon.Insights.Detail do
           text
 
         _ ->
-          "Persisted evidence has no completion signal for this open loop."
+          "Saved evidence does not show completion for this item."
       end
 
     evidence_text =
@@ -105,10 +105,10 @@ defmodule Maraithon.Insights.Detail do
         "Unresolved commitment: #{truncate(promise_text, 180)}"
 
       is_binary(requested_by) ->
-        "Unresolved open loop involving #{requested_by}."
+        "Unresolved commitment involving #{requested_by}."
 
       true ->
-        "Persisted evidence still shows an unresolved open loop."
+        "Saved evidence still shows an unresolved commitment."
     end
   end
 
@@ -479,12 +479,12 @@ defmodule Maraithon.Insights.Detail do
       unresolved_status?(metadata, record)
     )
     |> maybe_append(
-      "Persisted evidence still does not show completion after the original commitment.",
+      "Saved evidence still does not show completion after the original commitment.",
       missing_completion_evidence?(metadata, record)
     )
     |> maybe_append(deadline_factor(insight, metadata, record))
     |> maybe_append(
-      "There is delivery history for this insight, but no persisted completion signal closes the loop.",
+      "There is delivery history for this item, but nothing saved marks the commitment complete.",
       delivery_evidence != []
     )
     |> maybe_append(source_occurrence_factor(insight))
@@ -543,7 +543,7 @@ defmodule Maraithon.Insights.Detail do
   defp source_occurrence_factor(_insight), do: nil
 
   defp ensure_reason_fallback([], %Insight{}) do
-    ["Persisted evidence has no completion signal for this open loop."]
+    ["Saved evidence does not show completion for this item."]
   end
 
   defp ensure_reason_fallback(factors, _insight), do: factors
