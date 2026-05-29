@@ -3597,26 +3597,7 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp todo_source_health_text(card) do
-    source_health =
-      Map.get(card || %{}, "source_health", %{})
-
-    blocking =
-      source_health
-      |> Map.get("blocking_gaps", [])
-      |> List.wrap()
-      |> Enum.reject(&blank_metadata?/1)
-
-    checked =
-      source_health
-      |> Map.get("checked_sources", [])
-      |> List.wrap()
-      |> Enum.reject(&blank_metadata?/1)
-
-    cond do
-      blocking != [] -> "Source gap: #{Enum.take(blocking, 2) |> Enum.join("; ")}"
-      checked != [] -> "Checked: #{Enum.take(checked, 4) |> Enum.join(", ")}"
-      true -> nil
-    end
+    ActionCards.source_health_note(card || %{})
   end
 
   defp todo_learning_text(card) do

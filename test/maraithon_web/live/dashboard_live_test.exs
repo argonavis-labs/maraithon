@@ -4,6 +4,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Events.Event
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
@@ -14,6 +15,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
   alias Maraithon.Projects
   alias Maraithon.Repo
   alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.SourceFreshness
   alias Maraithon.Todos
   alias Maraithon.UserMemory.Profile, as: UserMemoryProfile
 
@@ -806,6 +808,44 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "LLM_REASONING_SHOULD_NOT_RENDER"
     refute html =~ "thread-private-123"
     refute html =~ "token secret"
+  end
+
+  test "dashboard todo review uses executive-facing source health copy", %{conn: conn} do
+    {:ok, _gmail} =
+      ConnectedAccounts.upsert_manual(@user_email, "gmail", %{
+        external_account_id: "kent@runner.now"
+      })
+
+    assert {:ok, _gmail} =
+             SourceFreshness.mark_error(
+               @user_email,
+               "gmail",
+               "DBConnection.ConnectionError token=secret stacktrace",
+               at: DateTime.utc_now()
+             )
+
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to finance on the receipt thread",
+                 "summary" => "Finance needs a corrected receipt before reimbursement can move.",
+                 "next_action" => "Send the corrected receipt and ask finance to confirm timing.",
+                 "priority" => 91,
+                 "dedupe_key" => "dashboard:todo:source-health-copy"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Could not fully check Gmail"
+    assert html =~ "before sending this."
+    refute html =~ "Source gap"
+    refute html =~ "DBConnection"
+    refute html =~ "token=secret"
+    refute html =~ "stacktrace"
   end
 
   test "dashboard todo action errors hide internal reasons", %{conn: conn} do
