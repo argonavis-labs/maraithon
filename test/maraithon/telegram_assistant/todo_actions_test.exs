@@ -135,6 +135,93 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "exact artifact or update"
   end
 
+  test "draftable email todo cards generate an approval-ready draft from Telegram", %{
+    user_id: user_id
+  } do
+    original_assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+    test_pid = self()
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.put(original_assistant_config, :draft_opts,
+        llm_complete: fn params ->
+          send(test_pid, {:draft_params, params})
+
+          {:ok,
+           %{
+             content:
+               Jason.encode!(%{
+                 "subject" => "Re: Starteryou UGC Campaigns",
+                 "body" =>
+                   "Hi Alex,\n\nI can send the campaign next step today. I will confirm the asset order and timing before I send anything final."
+               })
+           }}
+        end
+      )
+    )
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant_config)
+    end)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "status" => "open",
+          "title" => "Reply to Alex Müller about Starteryou UGC Campaigns",
+          "summary" => "Alex is waiting on the UGC campaign materials decision.",
+          "next_action" =>
+            "Reply to Alex Müller about Starteryou UGC Campaigns with the recommended next step.",
+          "source_item_id" => "thread-alex-starteryou",
+          "dedupe_key" => "todo-actions:draft-email",
+          "metadata" => %{
+            "subject" => "Starteryou UGC Campaigns",
+            "source_evidence" => "You said you would follow up on campaign timing.",
+            "record" => %{
+              "person" => "Alex Müller",
+              "company" => "Starteryou",
+              "relationship_context" => "UGC campaign contact"
+            }
+          }
+        }
+      ])
+
+    payload = TodoActions.telegram_payload(todo)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Draft Email"))
+
+    open_button = Enum.find(buttons, &(&1["text"] == "Open Maraithon"))
+    assert open_button["url"] =~ "/todos?todo_id=#{todo.id}"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          chat_id: 12345,
+          message_id: "todo-draft-email",
+          callback_id: "cb-draft-email",
+          data: "tgtodo:#{todo.id}:draft_email"
+        }
+      })
+
+    assert last_telegram_message(:callback).opts[:text] == "Draft ready"
+    assert_receive {:draft_params, %{"messages" => [%{"content" => prompt}]}}, 500
+    assert prompt =~ "thread-alex-starteryou"
+    assert prompt =~ "Prepare this for approval. Do not send it."
+
+    sent = last_telegram_message(:send)
+    assert sent.opts[:reply_to] == "todo-draft-email"
+    assert sent.text =~ "<b>Email draft ready</b>"
+    assert sent.text =~ "<b>Subject:</b> Re: Starteryou UGC Campaigns"
+    assert sent.text =~ "Hi Alex"
+    assert sent.text =~ "Review before sending."
+    refute sent.text =~ "sent anything"
+  end
+
   test "assistant-sourced cards do not hardcode the operator name" do
     todo = %{
       "id" => Ecto.UUID.generate(),

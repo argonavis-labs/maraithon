@@ -6,12 +6,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.AppUrl
   alias Maraithon.ActionCards
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Drafts
   alias Maraithon.SourceLabels
   alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
-  alias Maraithon.Todos.{Todo, UserFacingCopy}
+  alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
 
   @callback_prefix "tgtodo"
   @feedback_values ~w(important helpful not_helpful see_less)
@@ -39,11 +40,20 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
          chat_id when is_binary(chat_id) <- chat_id,
          %{user_id: user_id} <-
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
-         {:ok, todo} <- dispatch_action(user_id, todo_id, action),
-         :ok <- refresh_message(chat_id, message_id, todo) do
-      maybe_answer_callback(callback_id, callback_notice(action))
-      _ = BriefTodoReview.after_todo_action(user_id, chat_id, todo, action)
-      :ok
+         {:ok, todo} <- Todos.get_for_user(user_id, todo_id) |> fetch_todo(),
+         {:ok, result} <- dispatch_action(user_id, todo, action) do
+      case result do
+        {:todo_updated, updated_todo} ->
+          :ok = refresh_message(chat_id, message_id, updated_todo)
+          maybe_answer_callback(callback_id, callback_notice(action))
+          _ = BriefTodoReview.after_todo_action(user_id, chat_id, updated_todo, action)
+          :ok
+
+        {:draft_ready, draft_text} ->
+          :ok = send_draft(chat_id, message_id, draft_text)
+          maybe_answer_callback(callback_id, callback_notice(action))
+          :ok
+      end
     else
       {:error, :invalid_callback} ->
         :ignored
@@ -68,7 +78,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(value) when is_binary(value) do
     case Regex.run(
-           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|snooze|important|helpful|not_helpful|see_less)$/i,
+           ~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(done|dismiss|snooze|important|helpful|not_helpful|see_less|draft_email|draft_slack)$/i,
            value,
            capture: :all_but_first
          ) do
@@ -79,38 +89,63 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   def parse_callback(_value), do: {:error, :invalid_callback}
 
-  defp dispatch_action(user_id, todo_id, "done") do
-    Todos.mark_done(user_id, todo_id, note: "Completed from Telegram work item message.")
+  defp fetch_todo(%Todo{} = todo), do: {:ok, todo}
+  defp fetch_todo(_todo), do: {:error, :not_found}
+
+  defp dispatch_action(user_id, %Todo{id: todo_id}, "done") do
+    with {:ok, todo} <-
+           Todos.mark_done(user_id, todo_id, note: "Completed from Telegram work item message.") do
+      {:ok, {:todo_updated, todo}}
+    end
   end
 
-  defp dispatch_action(user_id, todo_id, "dismiss") do
-    Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram work item message.")
+  defp dispatch_action(user_id, %Todo{id: todo_id}, "dismiss") do
+    with {:ok, todo} <-
+           Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram work item message.") do
+      {:ok, {:todo_updated, todo}}
+    end
   end
 
-  defp dispatch_action(user_id, todo_id, "snooze") do
+  defp dispatch_action(user_id, %Todo{id: todo_id}, "snooze") do
     snoozed_until =
       DateTime.utc_now()
       |> DateTime.add(24 * 60 * 60, :second)
       |> DateTime.truncate(:second)
 
-    Todos.snooze(user_id, todo_id, snoozed_until,
-      note: "Snoozed from Telegram work item message."
-    )
+    with {:ok, todo} <-
+           Todos.snooze(user_id, todo_id, snoozed_until,
+             note: "Snoozed from Telegram work item message."
+           ) do
+      {:ok, {:todo_updated, todo}}
+    end
   end
 
-  defp dispatch_action(user_id, todo_id, "important") do
-    Todos.mark_important(user_id, todo_id, source: "telegram")
+  defp dispatch_action(user_id, %Todo{id: todo_id}, "important") do
+    with {:ok, todo} <- Todos.mark_important(user_id, todo_id, source: "telegram") do
+      {:ok, {:todo_updated, todo}}
+    end
   end
 
-  defp dispatch_action(user_id, todo_id, "see_less") do
+  defp dispatch_action(user_id, %Todo{id: todo_id}, "see_less") do
     case Todos.see_less_like(user_id, todo_id, source: "telegram") do
-      {:ok, %{todo: todo}} -> {:ok, todo}
+      {:ok, %{todo: todo}} -> {:ok, {:todo_updated, todo}}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp dispatch_action(user_id, todo_id, feedback) when feedback in @record_feedback_values do
-    Todos.record_feedback(user_id, todo_id, feedback, source: "telegram")
+  defp dispatch_action(user_id, %Todo{id: todo_id}, feedback)
+       when feedback in @record_feedback_values do
+    with {:ok, todo} <- Todos.record_feedback(user_id, todo_id, feedback, source: "telegram") do
+      {:ok, {:todo_updated, todo}}
+    end
+  end
+
+  defp dispatch_action(user_id, %Todo{} = todo, "draft_email") do
+    generate_todo_draft(user_id, todo, "gmail")
+  end
+
+  defp dispatch_action(user_id, %Todo{} = todo, "draft_slack") do
+    generate_todo_draft(user_id, todo, "slack")
   end
 
   defp refresh_message(chat_id, message_id, todo)
@@ -128,9 +163,25 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp refresh_message(_chat_id, _message_id, _todo), do: :ok
 
+  defp send_draft(chat_id, message_id, text)
+       when is_binary(chat_id) and is_binary(message_id) and is_binary(text) do
+    case TelegramResponder.reply(chat_id, message_id, text, parse_mode: "HTML") do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp send_draft(chat_id, _message_id, text) when is_binary(chat_id) and is_binary(text) do
+    case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
+      {:ok, _result} -> :ok
+      {:error, _reason} -> :ok
+    end
+  end
+
   defp build_reply_markup(todo) when is_map(todo) do
     rows =
       []
+      |> maybe_add_draft_row(todo)
       |> maybe_add_action_row(todo)
       |> maybe_add_feedback_row(todo)
       |> maybe_add_link_row(todo)
@@ -156,6 +207,18 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp maybe_add_action_row(rows, _todo), do: rows
+
+  defp maybe_add_draft_row(rows, todo) when is_map(todo) do
+    case {todo_id(todo), draft_callback_action(todo)} do
+      {todo_id, {action, label}} when is_binary(todo_id) ->
+        rows ++ [[%{"text" => label, "callback_data" => callback_data(todo_id, action)}]]
+
+      _ ->
+        rows
+    end
+  end
+
+  defp maybe_add_draft_row(rows, _todo), do: rows
 
   defp maybe_add_feedback_row(rows, todo) when is_map(todo) do
     case {todo_id(todo), feedback_value(todo)} do
@@ -189,7 +252,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     buttons =
       [
         source_link_button(todo),
-        %{"text" => "Open Maraithon", "url" => AppUrl.url("/dashboard")}
+        %{"text" => "Open Maraithon", "url" => todo_url(todo)}
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -305,6 +368,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp source_url(_metadata), do: nil
 
+  defp todo_url(todo) do
+    case todo_id(todo) do
+      todo_id when is_binary(todo_id) ->
+        AppUrl.url("/todos?todo_id=#{URI.encode_www_form(todo_id)}")
+
+      _ ->
+        AppUrl.url("/dashboard")
+    end
+  end
+
   defp direct_source_url(metadata) do
     [
       Map.get(metadata, "url"),
@@ -392,6 +465,136 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp learning_line(_card), do: nil
+
+  defp draft_callback_action(todo) do
+    todo
+    |> ActionCards.for_todo(include_disconnected: false)
+    |> Map.get("prepared_actions", [])
+    |> Enum.find_value(fn
+      %{"type" => "draft_email"} -> {"draft_email", "Draft Email"}
+      %{"type" => "draft_slack"} -> {"draft_slack", "Draft Slack"}
+      _ -> nil
+    end)
+  end
+
+  defp generate_todo_draft(user_id, %Todo{} = todo, channel) do
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+
+    attrs =
+      todo
+      |> draft_attrs(channel, card)
+      |> Map.put("channel", channel)
+      |> Map.put("save_to_provider", false)
+
+    case Drafts.create(user_id, attrs, draft_opts()) do
+      {:ok, result} -> {:ok, {:draft_ready, render_draft_result(channel, result)}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp draft_attrs(%Todo{} = todo, channel, card) do
+    metadata = todo.metadata || %{}
+    public_metadata = PublicMetadata.todo(metadata)
+    context = Map.get(card, "context_pack", %{})
+    person = person_for_draft(metadata, context)
+    subject = subject_for_draft(todo, public_metadata, context)
+    thread_id = first_present([read_string(metadata, "thread_id"), todo.source_item_id])
+    account = first_present([metadata_account(metadata), todo.source_account_label])
+
+    %{
+      "purpose" => draft_purpose(card, todo),
+      "recipient" => person,
+      "subject" => subject,
+      "thread_id" => thread_id,
+      "account" => account,
+      "context" =>
+        %{
+          "decision" => Map.get(card, "decision_prompt"),
+          "why_now" => Map.get(card, "why_now"),
+          "next_best_action" => Map.get(card, "next_best_action"),
+          "source_evidence" => ActionCards.evidence_excerpt(card),
+          "thread" => Map.get(context, "project_or_topic"),
+          "summary" => Map.get(context, "summary"),
+          "channel" => channel
+        }
+        |> compact_map(),
+      "instructions" => "Prepare this for approval. Do not send it."
+    }
+    |> compact_map()
+  end
+
+  defp draft_purpose(card, todo) do
+    first_present([
+      Map.get(card, "next_best_action"),
+      todo.next_action,
+      todo.title,
+      "Reply with the next useful update."
+    ])
+  end
+
+  defp person_for_draft(metadata, context) do
+    people =
+      context
+      |> Map.get("people", [])
+      |> List.wrap()
+
+    people_name =
+      Enum.find_value(people, fn
+        %{"display_name" => value} when is_binary(value) -> value
+        %{"name" => value} when is_binary(value) -> value
+        _ -> nil
+      end)
+
+    record = read_map(metadata, "record")
+
+    first_present([
+      people_name,
+      read_string(record, "person"),
+      read_string(metadata, "person"),
+      read_string(metadata, "contact"),
+      read_string(metadata, "requested_by"),
+      read_string(metadata, "sender_name")
+    ])
+  end
+
+  defp subject_for_draft(todo, public_metadata, context) do
+    first_present([
+      read_string(public_metadata, "subject"),
+      read_string(public_metadata, "email_subject"),
+      read_string(public_metadata, "thread_subject"),
+      Map.get(context, "project_or_topic"),
+      todo.title,
+      "Quick follow-up"
+    ])
+  end
+
+  defp draft_opts do
+    Application.get_env(:maraithon, :telegram_assistant, [])
+    |> Keyword.get(:draft_opts, [])
+  end
+
+  defp render_draft_result("gmail", %{draft: %{"subject" => subject, "body" => body}}) do
+    [
+      "<b>Email draft ready</b>",
+      "<b>Subject:</b> #{safe(subject)}",
+      "<pre>#{safe(truncate(body, 1_500))}</pre>",
+      "Review before sending."
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_draft_result("slack", %{draft: %{"text" => text}}) do
+    [
+      "<b>Slack draft ready</b>",
+      "<pre>#{safe(truncate(text, 1_500))}</pre>",
+      "Review before sending."
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp render_draft_result(_channel, _result) do
+    "<b>Draft ready</b>\nReview before sending."
+  end
 
   defp render_account(nil), do: ""
   defp render_account(account), do: " · #{safe(account)}"
@@ -704,6 +907,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp callback_notice("helpful"), do: "Saved helpful feedback"
   defp callback_notice("not_helpful"), do: "Feedback saved"
   defp callback_notice("see_less"), do: "Maraithon will show fewer like this"
+  defp callback_notice("draft_email"), do: "Draft ready"
+  defp callback_notice("draft_slack"), do: "Draft ready"
 
   defp callback_data(todo_id, action), do: "#{@callback_prefix}:#{todo_id}:#{action}"
 
@@ -807,8 +1012,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
 
+  defp compact_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> blank?(value) end)
+    |> Map.new()
+  end
+
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
   defp blank?(nil), do: true
+  defp blank?([]), do: true
+  defp blank?(%{}), do: true
   defp blank?(_value), do: false
 
   defp safe(value) when is_binary(value) do
