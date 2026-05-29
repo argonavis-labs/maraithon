@@ -66,7 +66,6 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     "customer",
     "discount",
     "enterprise",
-    "glossier",
     "intro",
     "introduction",
     "pricing",

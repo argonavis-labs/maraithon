@@ -163,6 +163,16 @@ defmodule Maraithon.AgentMarketplaceTest do
       assert {:ok, [agent]} = AgentMarketplace.ensure_default_installations()
       assert agent.user_id == user_id
       assert agent.status == "running"
+
+      commercial_terms =
+        get_in(agent.config, [
+          "skill_configs",
+          "morning_briefing",
+          "commercial_thread_terms"
+        ])
+
+      assert is_list(commercial_terms)
+      assert "glossier" in commercial_terms
     end
   end
 end

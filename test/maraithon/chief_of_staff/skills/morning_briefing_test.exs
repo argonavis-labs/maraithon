@@ -37,6 +37,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     %{user_id: user_id, agent: agent}
   end
 
+  test "fresh tenant commercial briefing defaults do not include org-specific terms" do
+    state = MorningBriefing.init(%{})
+
+    refute "glossier" in state.commercial_thread_terms
+    assert "enterprise" in state.commercial_thread_terms
+    assert "intro" in state.commercial_thread_terms
+  end
+
+  test "configured commercial briefing terms merge with generic defaults" do
+    state = MorningBriefing.init(%{"commercial_thread_terms" => ["glossier"]})
+
+    assert "glossier" in state.commercial_thread_terms
+    assert "enterprise" in state.commercial_thread_terms
+    assert "intro" in state.commercial_thread_terms
+  end
+
   test "builds a source-backed input and records an LLM synthesized brief", %{
     user_id: user_id,
     agent: agent

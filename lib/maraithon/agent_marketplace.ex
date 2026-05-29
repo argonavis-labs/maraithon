@@ -13,6 +13,9 @@ defmodule Maraithon.AgentMarketplace do
   @primary_admin_chief_of_staff_config %{
     "skill_configs" => %{
       "morning_briefing" => %{
+        "commercial_thread_terms" => [
+          "glossier"
+        ],
         "commercial_gmail_queries" => [
           "newer_than:7d Cogniate",
           "newer_than:7d Glossier",

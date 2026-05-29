@@ -83,6 +83,12 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.delivery_policy == %{"telegram" => "enabled"}
     assert agent.config["source_behavior"] == "ai_chief_of_staff"
 
+    refute "glossier" in (get_in(agent.config, [
+                            "skill_configs",
+                            "morning_briefing",
+                            "commercial_thread_terms"
+                          ]) || [])
+
     due_agents = BriefingSchedules.list_due_morning_agents(~U[2026-05-08 13:05:00Z])
     assert Enum.any?(due_agents, &(&1.agent_id == agent.id))
 
