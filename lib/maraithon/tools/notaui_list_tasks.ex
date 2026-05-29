@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.NotauiListTasks do
   """
 
   alias Maraithon.Connectors.Notaui
+  alias Maraithon.Tools.ToolErrorCopy
 
   @allowed_filters ~w(
     account_id
@@ -47,7 +48,8 @@ defmodule Maraithon.Tools.NotauiListTasks do
         {:error, "notaui_unknown_account_id"}
 
       {:error, reason} ->
-        {:error, "notaui_list_failed: #{inspect(reason)}"}
+        {:error,
+         ToolErrorCopy.safe_message(reason, ToolErrorCopy.action_failed("Notaui", "list tasks"))}
     end
   end
 

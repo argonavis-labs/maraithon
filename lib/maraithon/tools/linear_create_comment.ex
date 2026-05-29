@@ -6,6 +6,7 @@ defmodule Maraithon.Tools.LinearCreateComment do
   alias Maraithon.Connectors.Linear
   alias Maraithon.OAuth
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   def execute(args) when is_map(args) do
     with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id"),
@@ -19,10 +20,18 @@ defmodule Maraithon.Tools.LinearCreateComment do
         {:error, "linear_not_connected"}
 
       {:error, message} when is_binary(message) ->
-        {:error, message}
+        {:error,
+         ToolErrorCopy.safe_message(
+           message,
+           ToolErrorCopy.action_failed("Linear", "add the comment")
+         )}
 
       {:error, reason} ->
-        {:error, "linear_comment_failed: #{inspect(reason)}"}
+        {:error,
+         ToolErrorCopy.safe_message(
+           reason,
+           ToolErrorCopy.action_failed("Linear", "add the comment")
+         )}
     end
   end
 end

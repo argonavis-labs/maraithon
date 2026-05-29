@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   @gmail_api_base "https://gmail.googleapis.com/gmail/v1"
   @people_api_base "https://people.googleapis.com/v1"
@@ -103,15 +104,13 @@ defmodule Maraithon.Tools.GmailApiHelpers do
   def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
   def normalize_error(:reauth_required), do: {:error, "google_account_reauth_required"}
   def normalize_error(:no_refresh_token), do: {:error, "google_account_reconnect_required"}
-  def normalize_error(message) when is_binary(message), do: {:error, message}
 
   def normalize_error({:http_status, status, body}) when status in [401, 403],
-    do: {:error, "google_account_reauth_required: #{body}"}
+    do:
+      {:error, ToolErrorCopy.connected_source({:http_status, status, body}, google_error_opts())}
 
-  def normalize_error({:http_status, status, body}),
-    do: {:error, "google_api_failed: #{status} #{body}"}
-
-  def normalize_error(reason), do: {:error, "google_tool_failed: #{inspect(reason)}"}
+  def normalize_error(reason),
+    do: {:error, ToolErrorCopy.connected_source(reason, google_error_opts())}
 
   def optional_bool(args, key) do
     case ActionHelpers.optional_string(args, key) do
@@ -138,6 +137,15 @@ defmodule Maraithon.Tools.GmailApiHelpers do
       true ->
         "google"
     end
+  end
+
+  defp google_error_opts do
+    [
+      label: "Google",
+      not_connected: "google_account_not_connected",
+      reauth_required: "google_account_reauth_required",
+      reconnect_required: "google_account_reconnect_required"
+    ]
   end
 
   defp gmail_api_base_url do

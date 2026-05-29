@@ -6,6 +6,7 @@ defmodule Maraithon.Tools.LinearListIssues do
   alias Maraithon.Connectors.Linear
   alias Maraithon.OAuth
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   @default_limit 25
   @max_limit 100
@@ -24,10 +25,19 @@ defmodule Maraithon.Tools.LinearListIssues do
          page_info: Map.get(result, :page_info)
        }}
     else
-      {:error, :no_token} -> {:error, "linear_not_connected"}
-      {:error, :reauth_required} -> {:error, "linear_reauth_required"}
-      {:error, message} when is_binary(message) -> {:error, message}
-      {:error, reason} -> {:error, "linear_list_issues_failed: #{inspect(reason)}"}
+      {:error, :no_token} ->
+        {:error, "linear_not_connected"}
+
+      {:error, :reauth_required} ->
+        {:error, "linear_reauth_required"}
+
+      {:error, message} when is_binary(message) ->
+        {:error,
+         ToolErrorCopy.safe_message(message, ToolErrorCopy.action_failed("Linear", "list issues"))}
+
+      {:error, reason} ->
+        {:error,
+         ToolErrorCopy.safe_message(reason, ToolErrorCopy.action_failed("Linear", "list issues"))}
     end
   end
 

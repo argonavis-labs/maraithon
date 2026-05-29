@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Tools.ToolErrorCopy
 
   @default_api_base "https://www.googleapis.com/calendar/v3"
   @future_sort_value 9_999_999_999_999_999
@@ -34,10 +35,8 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
 
   def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
 
-  def normalize_error({:http_status, status, body}),
-    do: {:error, "google_calendar_api_failed: #{status} #{body}"}
-
-  def normalize_error(reason), do: {:error, "google_calendar_tool_failed: #{inspect(reason)}"}
+  def normalize_error(reason),
+    do: {:error, ToolErrorCopy.connected_source(reason, google_error_opts())}
 
   defp fetch_events_from_providers(
          _user_id,
@@ -243,6 +242,15 @@ defmodule Maraithon.Tools.GoogleCalendarHelpers do
   end
 
   defp event_sort_value(_event), do: @future_sort_value
+
+  defp google_error_opts do
+    [
+      label: "Google Calendar",
+      not_connected: "google_account_not_connected",
+      reauth_required: "google_account_reauth_required",
+      reconnect_required: "google_account_reconnect_required"
+    ]
+  end
 
   defp maybe_put(params, _key, nil), do: params
   defp maybe_put(params, _key, ""), do: params

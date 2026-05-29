@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.NotauiCompleteTask do
   """
 
   alias Maraithon.Connectors.Notaui
+  alias Maraithon.Tools.ToolErrorCopy
 
   def execute(args) when is_map(args) do
     user_id = optional_user_id(args)
@@ -12,13 +13,30 @@ defmodule Maraithon.Tools.NotauiCompleteTask do
          {:ok, task} <- complete_task(user_id, task_id, optional_params(args)) do
       {:ok, %{source: "notaui", task: task}}
     else
-      {:error, :not_configured} -> {:error, "notaui_not_configured"}
-      {:error, :no_token} -> {:error, "notaui_not_connected"}
-      {:error, :no_refresh_token} -> {:error, "notaui_reauth_required"}
-      {:error, :reauth_required} -> {:error, "notaui_reauth_required"}
-      {:error, :unknown_account_id} -> {:error, "notaui_unknown_account_id"}
-      {:error, :missing_task_id} -> {:error, "task_id is required"}
-      {:error, reason} -> {:error, "notaui_complete_failed: #{inspect(reason)}"}
+      {:error, :not_configured} ->
+        {:error, "notaui_not_configured"}
+
+      {:error, :no_token} ->
+        {:error, "notaui_not_connected"}
+
+      {:error, :no_refresh_token} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :reauth_required} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :unknown_account_id} ->
+        {:error, "notaui_unknown_account_id"}
+
+      {:error, :missing_task_id} ->
+        {:error, "task_id is required"}
+
+      {:error, reason} ->
+        {:error,
+         ToolErrorCopy.safe_message(
+           reason,
+           ToolErrorCopy.action_failed("Notaui", "complete the task")
+         )}
     end
   end
 

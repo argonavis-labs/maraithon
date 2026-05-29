@@ -49,8 +49,8 @@ defmodule Maraithon.Tools.SearchFiles do
            truncated: length(matches) >= @max_results
          }}
 
-      {:error, reason} ->
-        {:error, "Invalid regex pattern: #{inspect(reason)}"}
+      {:error, _reason} ->
+        {:error, "Invalid regex pattern."}
     end
   rescue
     e -> {:error, Exception.message(e)}

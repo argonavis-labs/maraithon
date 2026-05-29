@@ -5,6 +5,7 @@ defmodule Maraithon.Tools.GmailHelpers do
   alias Maraithon.Connectors.Gmail
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Tools.ToolErrorCopy
 
   @default_api_base "https://gmail.googleapis.com/gmail/v1"
 
@@ -44,15 +45,13 @@ defmodule Maraithon.Tools.GmailHelpers do
   end
 
   def normalize_error(:no_token), do: {:error, "google_account_not_connected"}
-  def normalize_error(:reauth_required), do: {:error, "google_reauth_required"}
+  def normalize_error(:reauth_required), do: {:error, "google_account_reauth_required"}
 
   def normalize_error({:http_status, status, _body}) when status in [401, 403],
-    do: {:error, "google_reauth_required"}
+    do: {:error, "google_account_reauth_required"}
 
-  def normalize_error({:http_status, status, body}),
-    do: {:error, "gmail_api_failed: #{status} #{body}"}
-
-  def normalize_error(reason), do: {:error, "gmail_tool_failed: #{inspect(reason)}"}
+  def normalize_error(reason),
+    do: {:error, ToolErrorCopy.connected_source(reason, google_error_opts("Gmail"))}
 
   defp fetch_messages_from_providers(_user_id, [], _max_results, _query, _label_ids),
     do: {:error, :no_token}
@@ -156,6 +155,15 @@ defmodule Maraithon.Tools.GmailHelpers do
 
   defp provider_account_email("google:" <> account_email), do: account_email
   defp provider_account_email(_provider), do: nil
+
+  defp google_error_opts(label) do
+    [
+      label: label,
+      not_connected: "google_account_not_connected",
+      reauth_required: "google_account_reauth_required",
+      reconnect_required: "google_account_reconnect_required"
+    ]
+  end
 
   defp message_sort_value(%{internal_date: %DateTime{} = internal_date}),
     do: DateTime.to_unix(internal_date, :microsecond)

@@ -2,6 +2,7 @@ defmodule Maraithon.Tools.SlackHelpers do
   @moduledoc false
 
   alias Maraithon.OAuth
+  alias Maraithon.Tools.ToolErrorCopy
 
   def resolve_access_token(user_id, team_id, opts \\ [])
       when is_binary(user_id) and is_binary(team_id) do
@@ -22,10 +23,24 @@ defmodule Maraithon.Tools.SlackHelpers do
   def normalize_error({:missing_bot_scope, scope}),
     do: {:error, "slack_bot_scope_missing: #{scope}"}
 
-  def normalize_error({:slack_error, error}) when is_binary(error),
-    do: {:error, "slack_api_error: #{error}"}
+  def normalize_error({:slack_error, error})
+      when error in ["invalid_auth", "not_authed", "token_revoked", "account_inactive"],
+      do: {:error, "slack_workspace_reauth_required"}
 
-  def normalize_error(reason), do: {:error, "slack_tool_failed: #{inspect(reason)}"}
+  def normalize_error({:slack_error, "missing_scope"}),
+    do: {:error, "Slack is missing the permissions it needs. Reconnect Slack in Maraithon."}
+
+  def normalize_error({:slack_error, "channel_not_found"}),
+    do: {:error, "Slack could not find that channel."}
+
+  def normalize_error({:slack_error, "not_in_channel"}),
+    do: {:error, "Slack cannot read that channel until the app is added to it."}
+
+  def normalize_error({:slack_error, _error}),
+    do: {:error, ToolErrorCopy.connected_source(:temporary_failure, slack_error_opts())}
+
+  def normalize_error(reason),
+    do: {:error, ToolErrorCopy.connected_source(reason, slack_error_opts())}
 
   defp resolve_from_candidates(user_id, candidates, preference, required_scopes) do
     initial_error =
@@ -129,5 +144,14 @@ defmodule Maraithon.Tools.SlackHelpers do
     else
       {:missing_bot_scope, scope}
     end
+  end
+
+  defp slack_error_opts do
+    [
+      label: "Slack",
+      not_connected: "slack_workspace_not_connected",
+      reauth_required: "slack_workspace_reauth_required",
+      reconnect_required: "slack_workspace_reauth_required"
+    ]
   end
 end

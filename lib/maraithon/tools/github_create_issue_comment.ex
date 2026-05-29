@@ -7,6 +7,7 @@ defmodule Maraithon.Tools.GitHubCreateIssueComment do
   alias Maraithon.Connectors.GitHub
   alias Maraithon.OAuth
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   def execute(args) when is_map(args) do
     with {:ok, owner} <- ActionHelpers.required_string(args, "owner"),
@@ -34,10 +35,18 @@ defmodule Maraithon.Tools.GitHubCreateIssueComment do
         {:error, "github_api_token_not_configured"}
 
       {:error, message} when is_binary(message) ->
-        {:error, message}
+        {:error,
+         ToolErrorCopy.safe_message(
+           message,
+           ToolErrorCopy.action_failed("GitHub", "add the comment")
+         )}
 
       {:error, reason} ->
-        {:error, "github_comment_failed: #{inspect(reason)}"}
+        {:error,
+         ToolErrorCopy.safe_message(
+           reason,
+           ToolErrorCopy.action_failed("GitHub", "add the comment")
+         )}
     end
   end
 

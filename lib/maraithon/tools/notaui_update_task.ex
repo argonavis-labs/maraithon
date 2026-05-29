@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.NotauiUpdateTask do
   """
 
   alias Maraithon.Connectors.Notaui
+  alias Maraithon.Tools.ToolErrorCopy
 
   @updatable_fields ~w(
     title
@@ -27,14 +28,33 @@ defmodule Maraithon.Tools.NotauiUpdateTask do
          {:ok, task} <- update_task(user_id, task_id, updates) do
       {:ok, %{source: "notaui", task: task}}
     else
-      {:error, :not_configured} -> {:error, "notaui_not_configured"}
-      {:error, :no_token} -> {:error, "notaui_not_connected"}
-      {:error, :no_refresh_token} -> {:error, "notaui_reauth_required"}
-      {:error, :reauth_required} -> {:error, "notaui_reauth_required"}
-      {:error, :unknown_account_id} -> {:error, "notaui_unknown_account_id"}
-      {:error, :missing_task_id} -> {:error, "task_id is required"}
-      {:error, :no_updates} -> {:error, "at least one update field is required"}
-      {:error, reason} -> {:error, "notaui_update_failed: #{inspect(reason)}"}
+      {:error, :not_configured} ->
+        {:error, "notaui_not_configured"}
+
+      {:error, :no_token} ->
+        {:error, "notaui_not_connected"}
+
+      {:error, :no_refresh_token} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :reauth_required} ->
+        {:error, "notaui_reauth_required"}
+
+      {:error, :unknown_account_id} ->
+        {:error, "notaui_unknown_account_id"}
+
+      {:error, :missing_task_id} ->
+        {:error, "task_id is required"}
+
+      {:error, :no_updates} ->
+        {:error, "at least one update field is required"}
+
+      {:error, reason} ->
+        {:error,
+         ToolErrorCopy.safe_message(
+           reason,
+           ToolErrorCopy.action_failed("Notaui", "update the task")
+         )}
     end
   end
 

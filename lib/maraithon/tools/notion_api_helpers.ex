@@ -4,6 +4,7 @@ defmodule Maraithon.Tools.NotionApiHelpers do
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Notion
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   def request(args, method, path, body \\ nil)
       when is_map(args) and method in [:get, :post, :patch, :delete] and is_binary(path) do
@@ -16,15 +17,13 @@ defmodule Maraithon.Tools.NotionApiHelpers do
   def normalize_error(:no_token), do: {:error, "notion_not_connected"}
   def normalize_error(:reauth_required), do: {:error, "notion_reauth_required"}
   def normalize_error(:no_refresh_token), do: {:error, "notion_reconnect_required"}
-  def normalize_error(message) when is_binary(message), do: {:error, message}
 
   def normalize_error({:http_status, status, body}) when status in [401, 403],
-    do: {:error, "notion_reauth_required: #{body}"}
+    do:
+      {:error, ToolErrorCopy.connected_source({:http_status, status, body}, notion_error_opts())}
 
-  def normalize_error({:http_status, status, body}),
-    do: {:error, "notion_api_failed: #{status} #{body}"}
-
-  def normalize_error(reason), do: {:error, "notion_tool_failed: #{inspect(reason)}"}
+  def normalize_error(reason),
+    do: {:error, ToolErrorCopy.connected_source(reason, notion_error_opts())}
 
   def optional_map(args, key) when is_map(args) and is_binary(key) do
     case Map.get(args, key) do
@@ -52,6 +51,15 @@ defmodule Maraithon.Tools.NotionApiHelpers do
     map
     |> Enum.reject(fn {_key, value} -> blank?(value) end)
     |> Map.new()
+  end
+
+  defp notion_error_opts do
+    [
+      label: "Notion",
+      not_connected: "notion_not_connected",
+      reauth_required: "notion_reauth_required",
+      reconnect_required: "notion_reconnect_required"
+    ]
   end
 
   defp blank?(nil), do: true

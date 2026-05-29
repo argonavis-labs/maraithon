@@ -6,6 +6,7 @@ defmodule Maraithon.Tools.LinearUpdateIssue do
   alias Maraithon.Connectors.Linear
   alias Maraithon.OAuth
   alias Maraithon.Tools.ActionHelpers
+  alias Maraithon.Tools.ToolErrorCopy
 
   def execute(args) when is_map(args) do
     with {:ok, user_id} <- ActionHelpers.required_string(args, "user_id"),
@@ -14,11 +15,28 @@ defmodule Maraithon.Tools.LinearUpdateIssue do
          {:ok, issue} <- Linear.update_issue(access_token, issue_id, build_opts(args)) do
       {:ok, %{source: "linear", issue_id: issue_id, issue: issue}}
     else
-      {:error, :no_token} -> {:error, "linear_not_connected"}
-      {:error, :reauth_required} -> {:error, "linear_reauth_required"}
-      {:error, :empty_update} -> {:error, "linear_update_issue_requires_at_least_one_field"}
-      {:error, message} when is_binary(message) -> {:error, message}
-      {:error, reason} -> {:error, "linear_update_issue_failed: #{inspect(reason)}"}
+      {:error, :no_token} ->
+        {:error, "linear_not_connected"}
+
+      {:error, :reauth_required} ->
+        {:error, "linear_reauth_required"}
+
+      {:error, :empty_update} ->
+        {:error, "linear_update_issue_requires_at_least_one_field"}
+
+      {:error, message} when is_binary(message) ->
+        {:error,
+         ToolErrorCopy.safe_message(
+           message,
+           ToolErrorCopy.action_failed("Linear", "update the issue")
+         )}
+
+      {:error, reason} ->
+        {:error,
+         ToolErrorCopy.safe_message(
+           reason,
+           ToolErrorCopy.action_failed("Linear", "update the issue")
+         )}
     end
   end
 
