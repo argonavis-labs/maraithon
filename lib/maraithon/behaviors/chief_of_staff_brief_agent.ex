@@ -254,7 +254,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       cond do
         debt_items == [] and watching_items == [] ->
           {"End-of-day review: all clear",
-           "Nothing high-confidence still looks open at the end of the day."}
+           "Nothing important still looks open at the end of the day."}
 
         debt_items == [] ->
           {"End-of-day review: action list clear",
@@ -321,6 +321,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     if should_send_check_in?(top_items, state.timezone_offset_hours, plan.scheduled_for) do
       count = length(top_items)
+      movement_verb = if count == 1, do: "needs", else: "need"
 
       check_in_metadata =
         brief_delivery_metadata(card_insights(top_items), state.timezone_offset_hours)
@@ -330,7 +331,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "scheduled_for" => plan.scheduled_for,
         "dedupe_key" => dedupe_key("check_in", plan.period_key),
         "title" =>
-          "Check-in: #{count} item#{if(count == 1, do: "", else: "s")} still need movement",
+          "Check-in: #{count} item#{if(count == 1, do: "", else: "s")} still #{movement_verb} movement",
         "summary" =>
           check_in_summary(
             top_items,
@@ -585,10 +586,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{check_in_guidance(top_items)}
 
     Move now:
-    #{format_items(top_items, offset_hours, reference_at, "1. Nothing high-signal still needs movement.")}
+    #{format_items(top_items, offset_hours, reference_at, "1. Nothing important still needs movement.")}
 
     Pressure:
-    - #{length(act_now_insights)} act-now loops still score as open
+    - #{length(act_now_insights)} items still need a decision or reply
     - #{overdue_count(act_now_insights, offset_hours, reference_at)} are already overdue
     - #{due_today_count(act_now_insights, offset_hours, reference_at)} still land today
 
@@ -599,7 +600,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp weekly_body(top_open, weekly_items, offset_hours, reference_at) do
     """
-    Weekly scorecard:
+    Week in review:
     - #{count_by_source(weekly_items, "gmail")} Gmail items
     - #{count_by_source(weekly_items, "calendar")} Calendar follow-ups
     - #{count_by_source(weekly_items, "slack")} Slack loops
@@ -614,7 +615,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          items,
          offset_hours,
          reference_at,
-         empty_text \\ "1. Nothing high-signal is open."
+         empty_text \\ "1. Nothing important is open."
        )
 
   defp format_items([], _offset_hours, _reference_at, empty_text), do: empty_text
@@ -713,7 +714,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp extra_open_item_summary(items) do
     case length(items) - 1 do
-      count when count > 0 -> "#{count} more high-signal loop#{if(count == 1, do: "", else: "s")}"
+      count when count > 0 -> "#{count} more open item#{if(count == 1, do: "", else: "s")}"
       _ -> nil
     end
   end
@@ -743,13 +744,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp check_in_guidance([]), do: "Nothing high-signal still warrants an interruption."
+  defp check_in_guidance([]), do: "Nothing important still warrants an interruption."
 
   defp check_in_guidance(items) do
     if mostly_reply_loops?(items) do
-      "The highest-signal work is still in human threads. Send the short owner, status, or ETA reset now instead of waiting."
+      "The most important work is still in human threads. Send the short owner, status, or ETA reset now instead of waiting."
     else
-      "The open work still scores high enough to interrupt you. Move the item with a person or deadline attached, then tell me it is handled."
+      "This is important enough to interrupt you. Move the item with a person or deadline attached, then tell me it is handled."
     end
   end
 

@@ -233,7 +233,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "threads are still being watched"
   end
 
-  test "records an adaptive daytime check-in when high-signal work is still open", %{
+  test "records an adaptive daytime check-in when important work is still open", %{
     user_id: user_id,
     agent: agent
   } do
@@ -295,15 +295,84 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "check_in"
-    assert brief.title =~ "Check-in"
+    assert brief.title == "Check-in: 1 item still needs movement"
     assert brief.summary =~ "Most urgent"
     assert brief.body =~ "Why I'm checking in:"
     assert brief.body =~ "Move now:"
+    assert brief.body =~ "items still need a decision or reply"
     assert brief.body =~ "Reply here when one is handled"
     assert brief.body =~ "Send revised pricing to David"
+    refute brief.body =~ "act-now"
+    refute brief.body =~ "score"
+    refute brief.body =~ "signal"
     assert is_list(brief.metadata["linked_todo_ids"])
     assert length(brief.metadata["linked_todo_ids"]) == 1
     assert brief.metadata["timezone_offset_hours"] == -5
+  end
+
+  test "weekly review body uses operator language instead of scorecard language", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-13 21:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send revised pricing to David",
+          "summary" => "David is still waiting on the revised pricing.",
+          "recommended_action" => "Reply with the owner, timing, and next step.",
+          "priority" => 92,
+          "confidence" => 0.93,
+          "dedupe_key" => "brief-test:weekly-pricing",
+          "due_at" => DateTime.add(scheduled_at, -3, :hour),
+          "metadata" => %{
+            "record" => %{
+              "commitment" => "Send revised pricing to David.",
+              "person" => "David",
+              "status" => "unresolved",
+              "next_action" => "Reply with the owner, timing, and next step."
+            }
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-13"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["weekly_review"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.cadence == "weekly_review"
+    assert brief.body =~ "Week in review:"
+    assert brief.body =~ "Most important open items:"
+    refute brief.body =~ "scorecard"
+    refute brief.body =~ "score"
+    refute brief.body =~ "confidence"
   end
 
   test "skips adaptive check-ins when only low-priority work is open", %{
