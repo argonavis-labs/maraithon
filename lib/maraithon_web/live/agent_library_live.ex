@@ -106,7 +106,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
                 <span class="inline-flex items-center rounded-md bg-zinc-100 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700">
                   <%= @spec.category %>
                 </span>
-                <span class="text-xs/5 text-zinc-500"><%= @spec.id %></span>
+                <span class="text-xs/5 text-zinc-500">Built-in template</span>
               </div>
               <h1 class="mt-2 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-2xl/8">
                 <%= @spec.label %>
@@ -197,7 +197,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
           <div>
             <h2 class="text-sm/6 font-semibold text-zinc-950">Ready to install <%= @spec.label %>?</h2>
             <p class="mt-0.5 text-sm/6 text-zinc-500">
-              We'll spin it up with sensible defaults. You can edit the prompt and budgets afterwards.
+              Install it with recommended defaults. You can fine-tune scope, cadence, and delivery after it starts.
             </p>
           </div>
           <div class="flex items-center gap-2">

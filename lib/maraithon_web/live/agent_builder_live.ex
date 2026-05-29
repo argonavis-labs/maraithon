@@ -573,8 +573,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         type="number"
                         min="1"
                         name="launch[max_insights_per_cycle]"
-                        label="Max insights per cycle"
+                        label="Max items per check"
                         value={@launch["max_insights_per_cycle"]}
+                        description="Caps how many follow-up items Maraithon can surface at once."
                       />
                     <% end %>
 
@@ -582,8 +583,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_min_confidence"
                         name="launch[min_confidence]"
-                        label="Minimum confidence"
+                        label="Interruption bar"
                         value={@launch["min_confidence"]}
+                        description="Higher values mean fewer, clearer interruptions."
                       />
                     <% end %>
                   </div>
@@ -663,7 +665,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[write_plan_files]"
                         label="Write plan files"
                         value={@launch["write_plan_files"]}
-                        description="When enabled, generated plans are written to disk in addition to runtime notes."
+                        description="When enabled, generated plans are written to disk in addition to the in-app activity log."
                       >
                           <option value="true" selected={@launch["write_plan_files"] == "true"}>Yes</option>
                           <option value="false" selected={@launch["write_plan_files"] == "false"}>No</option>
@@ -1131,7 +1133,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Insight tuning",
         body:
-          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Up to #{launch["max_insights_per_cycle"]} items per check; interruption bar #{launch["min_confidence"]}."
       }
     ]
   end
@@ -1189,7 +1191,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Escalation tuning",
         body:
-          "Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+          "Up to #{launch["max_insights_per_cycle"]} items per check; interruption bar #{launch["min_confidence"]}."
       }
     ]
   end
@@ -1238,7 +1240,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body:
           if(launch["write_plan_files"] == "true",
             do: "Plans will also be written to #{launch["output_path"]}",
-            else: "Plans will stay in runtime state unless you enable plan files."
+            else: "Plans will stay in the in-app activity log unless you enable plan files."
           )
       }
     ]
@@ -1278,9 +1280,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
           "Computes the send window from the trip start time, then delivers the day-before brief in your local offset (#{blank_fallback(launch["timezone_offset_hours"], "-5")})."
       },
       %{
-        title: "Confidence gate",
+        title: "Interruption bar",
         body:
-          "Requires a minimum itinerary confidence of #{launch["min_confidence"]} before interrupting you."
+          "Only interrupts for clearly recognized itineraries. Current bar: #{launch["min_confidence"]}."
       }
     ]
   end
@@ -1378,8 +1380,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body:
           if(launch["write_plan_files"] == "true",
             do:
-              "Plans are written into #{launch["output_path"]} and also emitted as runtime notes.",
-            else: "Plans remain in runtime notes unless you enable plan file writing."
+              "Plans are written into #{launch["output_path"]} and also shown in the in-app activity log.",
+            else: "Plans remain in the in-app activity log unless you enable plan file writing."
           )
       }
     ]
@@ -1390,7 +1392,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Telegram push behavior",
         body:
-          "High-signal roadmap suggestions for #{blank_fallback(launch["repo_full_name"], "the selected repository")} are stored as insights and sent through the Telegram notification pipeline."
+          "Roadmap suggestions worth interrupting you for are saved for #{blank_fallback(launch["repo_full_name"], "the selected repository")} and sent in Telegram."
       }
     ]
   end
@@ -1445,7 +1447,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
           %{label: "Email scan limit", value: launch["email_scan_limit"]},
           %{label: "Calendar scan limit", value: launch["event_scan_limit"]},
           %{label: "Lookback", value: launch["lookback_hours"] <> " hours"},
-          %{label: "Min confidence", value: launch["min_confidence"]}
+          %{label: "Interruption bar", value: launch["min_confidence"]}
         ]
 
       "slack_followthrough_agent" ->
@@ -1797,7 +1799,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("ai_chief_of_staff", "lean"),
     do:
-      "Smaller follow-through scans, a tighter travel confidence gate, and lower assistant-wide spend."
+      "Smaller follow-through scans, a stricter travel interruption bar, and lower assistant-wide spend."
 
   defp cost_profile_summary("ai_chief_of_staff", "balanced"),
     do:
@@ -1808,16 +1810,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for founders who want one proactive operating layer."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
-    do:
-      "Tighter Gmail, Calendar, and Slack scans with a higher confidence bar so only the clearest open loops interrupt you."
+    do: "Tighter Gmail, Calendar, and Slack scans so only the clearest commitments interrupt you."
 
   defp cost_profile_summary("inbox_calendar_advisor", "balanced"),
     do:
-      "Good default coverage across inbox, meetings, and Slack with moderate spend and a practical interruption threshold."
+      "Good default coverage across inbox, meetings, and Slack with moderate spend and a practical interruption bar."
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
-      "Deeper cross-channel scans, lower confidence threshold, and more budget for founders who want broader followthrough coverage."
+      "Deeper cross-channel scans, a lower interruption bar, and more budget for founders who want broader follow-through coverage."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
     do: "Smaller channel and DM scans with fewer interrupts and the lowest recurring cost."

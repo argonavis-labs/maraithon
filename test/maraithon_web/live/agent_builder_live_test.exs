@@ -224,7 +224,15 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert html =~ "Chief-of-Staff Briefing"
       assert html =~ "Email scan limit"
+      assert html =~ "Max items per check"
+      assert html =~ "Interruption bar"
       assert html =~ "Advanced JSON overrides"
+      refute html =~ "Max insights per cycle"
+      refute html =~ "Minimum confidence"
+      refute html =~ "Confidence gate"
+      refute html =~ "higher confidence"
+      refute html =~ "lower confidence"
+      refute html =~ "clearest open loops"
     end
   end
 
