@@ -379,7 +379,14 @@ defmodule MaraithonWeb.AgentsLiveTest do
       })
 
     assert {:error,
-            {:live_redirect, %{to: "/agents", flash: %{"error" => "Automation not found"}}}} =
+            {:live_redirect,
+             %{
+               to: "/agents",
+               flash: %{
+                 "error" =>
+                   "That automation is no longer available. Refresh automations before continuing."
+               }
+             }}} =
              live(conn, "/agents?id=#{other_agent.id}")
   end
 

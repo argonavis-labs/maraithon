@@ -4,68 +4,76 @@ defmodule MaraithonWeb.AgentActionCopy do
   def success(:create, display_name), do: success_with_name(display_name, "created")
   def success(:update, display_name), do: success_with_name(display_name, "updated")
 
+  def not_found do
+    "That automation is no longer available. Refresh automations before continuing."
+  end
+
   def error(:install, %Ecto.Changeset{} = changeset) do
     with_detail(
       "Could not install that automation.",
       validation_detail(changeset),
-      "Review the setup and try again."
+      "Review the setup before installing."
     )
   end
 
   def error(:install, reason) when is_binary(reason) do
-    with_detail("Could not install that automation.", reason, "Review the setup and try again.")
+    with_detail(
+      "Could not install that automation.",
+      reason,
+      "Review the setup before installing."
+    )
   end
 
   def error(:install, _reason) do
-    "Could not install that automation. Refresh the page and try again."
+    "Could not install that automation. Refresh automations before installing."
   end
 
   def error(:create, %Ecto.Changeset{} = changeset) do
     with_detail(
       "Could not create that automation.",
       validation_detail(changeset),
-      "Review the settings and try again."
+      "Review the settings before saving."
     )
   end
 
   def error(:create, reason) when is_binary(reason) do
-    with_detail("Could not create that automation.", reason, "Review the settings and try again.")
+    with_detail("Could not create that automation.", reason, "Review the settings before saving.")
   end
 
   def error(:create, _reason) do
-    "Could not create that automation. Review the settings and try again."
+    "Could not create that automation. Review the settings before saving."
   end
 
   def error(:update, %Ecto.Changeset{} = changeset) do
     with_detail(
       "Could not update that automation.",
       validation_detail(changeset),
-      "Review the settings and try again."
+      "Review the settings before saving."
     )
   end
 
   def error(:update, reason) when is_binary(reason) do
-    with_detail("Could not update that automation.", reason, "Review the settings and try again.")
+    with_detail("Could not update that automation.", reason, "Review the settings before saving.")
   end
 
   def error(:update, _reason) do
-    "Could not update that automation. Refresh the page and try again."
+    "Could not update that automation. Refresh automations before saving."
   end
 
   def error(:start, _reason) do
-    "Could not start that automation. Refresh the page and try again."
+    "Could not start that automation. Refresh automations before starting it."
   end
 
   def error(:stop, _reason) do
-    "Could not stop that automation. Refresh the page and try again."
+    "Could not pause that automation. Refresh automations before pausing it."
   end
 
   def error(:delete, _reason) do
-    "Could not remove that automation. Refresh the page and try again."
+    "Could not remove that automation. Refresh automations before removing it."
   end
 
   def error(:send_message, _reason) do
-    "Could not send that message. Make sure the automation is running and try again."
+    "Could not send that message. Start the automation before sending a message."
   end
 
   def marketplace_error(_reason) do

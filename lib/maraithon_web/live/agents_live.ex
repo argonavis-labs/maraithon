@@ -119,7 +119,7 @@ defmodule MaraithonWeb.AgentsLive do
        push_patch(socket, to: agents_path(socket.assigns.filters, %{id: id, panel: :inspect}))}
     else
       {:noreply,
-       socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
+       socket |> clear_missing_selection(id) |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -214,7 +214,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Automation not found")}
+           |> put_flash(:error, AgentActionCopy.not_found())}
 
         {:error, reason} ->
           emit_action_telemetry("start", surface, id, :error)
@@ -232,7 +232,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Automation not found")}
+       |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -257,7 +257,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Automation not found")}
+           |> put_flash(:error, AgentActionCopy.not_found())}
 
         {:error, reason} ->
           emit_action_telemetry("stop", surface, id, :error)
@@ -275,7 +275,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Automation not found")}
+       |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -305,7 +305,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Automation not found")}
+           |> put_flash(:error, AgentActionCopy.not_found())}
 
         {:error, reason} ->
           emit_action_telemetry(action, surface, id, :error)
@@ -323,7 +323,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Automation not found")}
+       |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -349,7 +349,7 @@ defmodule MaraithonWeb.AgentsLive do
         emit_action_telemetry("update", :workspace, id || "unknown", :error)
 
         {:noreply,
-         socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
+         socket |> clear_missing_selection(id) |> put_flash(:error, AgentActionCopy.not_found())}
 
       {:error, message} when is_binary(message) ->
         emit_action_telemetry("update", :workspace, id, :error)
@@ -397,7 +397,7 @@ defmodule MaraithonWeb.AgentsLive do
     else
       false ->
         {:noreply,
-         socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
+         socket |> clear_missing_selection(id) |> put_flash(:error, AgentActionCopy.not_found())}
 
       {:error, reason} ->
         {:noreply,
@@ -1354,7 +1354,7 @@ defmodule MaraithonWeb.AgentsLive do
     case Agents.get_agent_for_user(id, current_user_id(socket), preload: agent_display_preloads()) do
       nil ->
         {:sanitize, clear_selection(socket), filters_path(socket),
-         {:error, "Automation not found"}}
+         {:error, AgentActionCopy.not_found()}}
 
       agent ->
         panel = panel || :inspect
@@ -1417,7 +1417,7 @@ defmodule MaraithonWeb.AgentsLive do
 
       {:error, :not_found} ->
         {:sanitize, clear_selection(socket), filters_path(socket),
-         {:error, "Automation not found"}}
+         {:error, AgentActionCopy.not_found()}}
     end
   end
 
@@ -1495,7 +1495,7 @@ defmodule MaraithonWeb.AgentsLive do
              ) do
           nil ->
             {:sanitize, clear_selection(socket), filters_path(socket),
-             {:error, "Automation not found"}}
+             {:error, AgentActionCopy.not_found()}}
 
           agent ->
             load_selected_snapshot(socket, agent, socket.assigns.selected_panel || :inspect)

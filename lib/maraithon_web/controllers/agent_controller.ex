@@ -5,6 +5,7 @@ defmodule MaraithonWeb.AgentController do
   alias Maraithon.Agents
   alias Maraithon.AgentArchitecture
   alias Maraithon.Spend
+  alias MaraithonWeb.AgentActionCopy
 
   require Logger
 
@@ -34,7 +35,7 @@ defmodule MaraithonWeb.AgentController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
 
       agent ->
         {:ok, architecture} = AgentArchitecture.for_agent(agent)
@@ -70,7 +71,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
     end
   end
 
@@ -82,7 +83,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
 
       {:error, changeset} ->
         conn
@@ -104,7 +105,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
 
       {:error, :agent_stopped} ->
         conn
@@ -121,7 +122,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
 
       {:error, :already_running} ->
         conn
@@ -149,7 +150,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
     end
   end
 
@@ -167,7 +168,7 @@ defmodule MaraithonWeb.AgentController do
         {:error, :not_found} ->
           conn
           |> put_status(:not_found)
-          |> json(%{error: "not_found"})
+          |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
       end
     else
       {:error, message} ->
@@ -182,7 +183,7 @@ defmodule MaraithonWeb.AgentController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
 
       _agent ->
         spend = Spend.get_agent_spend(id)
@@ -216,7 +217,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
     end
   end
 

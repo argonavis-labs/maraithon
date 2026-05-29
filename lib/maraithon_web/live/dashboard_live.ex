@@ -735,7 +735,8 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("edit_agent", %{"id" => id}, socket) do
     case Agents.get_agent_for_user(id, current_user_id(socket)) do
       nil ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+        {:noreply,
+         socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
 
       agent ->
         {:noreply,
@@ -788,7 +789,8 @@ defmodule MaraithonWeb.DashboardLive do
            socket |> refresh_dashboard() |> put_flash(:info, "Automation is already active")}
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+          {:noreply,
+           socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
 
         {:error, reason} ->
           {:noreply,
@@ -797,7 +799,7 @@ defmodule MaraithonWeb.DashboardLive do
            |> put_flash(:error, AgentActionCopy.error(:start, reason))}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -812,10 +814,11 @@ defmodule MaraithonWeb.DashboardLive do
            |> put_flash(:info, "Automation paused")}
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+          {:noreply,
+           socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -844,7 +847,8 @@ defmodule MaraithonWeb.DashboardLive do
           end
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+          {:noreply,
+           socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
 
         {:error, reason} ->
           {:noreply,
@@ -853,7 +857,7 @@ defmodule MaraithonWeb.DashboardLive do
            |> put_flash(:error, AgentActionCopy.error(:delete, reason))}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
     end
   end
 
@@ -865,7 +869,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply, put_flash(socket, :error, "Select an automation first")}
 
       not agent_owned_by_current_user?(socket, socket.assigns.selected_agent.id) ->
-        {:noreply, put_flash(socket, :error, "Automation not found")}
+        {:noreply, put_flash(socket, :error, AgentActionCopy.not_found())}
 
       message == "" ->
         {:noreply, put_flash(socket, :error, "Message cannot be empty")}
@@ -2177,7 +2181,8 @@ defmodule MaraithonWeb.DashboardLive do
          |> put_flash(:info, "Message sent to automation")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
+        {:noreply,
+         socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
 
       {:error, :agent_stopped} ->
         {:noreply, put_flash(socket, :error, "Automation is paused")}

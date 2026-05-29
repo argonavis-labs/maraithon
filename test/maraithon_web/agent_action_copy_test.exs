@@ -26,14 +26,30 @@ defmodule MaraithonWeb.AgentActionCopyTest do
   end
 
   test "hides internal automation action reasons" do
+    assert AgentActionCopy.not_found() ==
+             "That automation is no longer available. Refresh automations before continuing."
+
     assert AgentActionCopy.error(:create, "DBConnection.ConnectionError token abc123") ==
-             "Could not create that automation. Review the settings and try again."
+             "Could not create that automation. Review the settings before saving."
 
     assert AgentActionCopy.error(:start, {:supervisor, :timeout}) ==
-             "Could not start that automation. Refresh the page and try again."
+             "Could not start that automation. Refresh automations before starting it."
 
     assert AgentActionCopy.error(:delete, {:repo, :not_found}) ==
-             "Could not remove that automation. Refresh the page and try again."
+             "Could not remove that automation. Refresh automations before removing it."
+
+    assert AgentActionCopy.error(:send_message, {:runtime, :stopped}) ==
+             "Could not send that message. Start the automation before sending a message."
+
+    copies = [
+      AgentActionCopy.not_found(),
+      AgentActionCopy.error(:create, "DBConnection.ConnectionError token abc123"),
+      AgentActionCopy.error(:start, {:supervisor, :timeout}),
+      AgentActionCopy.error(:delete, {:repo, :not_found}),
+      AgentActionCopy.error(:send_message, {:runtime, :stopped})
+    ]
+
+    refute Enum.any?(copies, &String.contains?(String.downcase(&1), "try again"))
   end
 
   test "hides marketplace internals" do

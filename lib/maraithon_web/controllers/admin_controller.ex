@@ -23,6 +23,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Todos.Todo
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
+  alias MaraithonWeb.AgentActionCopy
   alias MaraithonWeb.OperationFailureCopy
 
   def dashboard(conn, params) do
@@ -105,7 +106,7 @@ defmodule MaraithonWeb.AdminController do
         {:error, :not_found} ->
           conn
           |> put_status(:not_found)
-          |> json(%{error: "not_found", message: "Automation not found"})
+          |> json(%{error: "not_found", message: AgentActionCopy.not_found()})
       end
     else
       {:error, message} ->
