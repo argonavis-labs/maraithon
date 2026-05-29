@@ -168,11 +168,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       cond do
         top_items == [] and watching_items == [] ->
           {"Morning brief: no active work surfaced",
-           "No urgent open items surfaced in the current brief window."}
+           "No direct actions or watched threads surfaced in checked sources during this brief window."}
 
         top_items == [] ->
-          {"Morning brief: clear action list",
-           "#{length(watching_items)} important threads are being watched, with no direct actions due right now."}
+          count = length(watching_items)
+
+          {"Morning brief: watching items only",
+           "#{count_phrase(count, "important thread")} #{be_verb(count)} being watched, with no direct action needed from you right now."}
 
         true ->
           count = length(top_items)
@@ -258,8 +260,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
            "No unresolved action items surfaced for tonight's review."}
 
         debt_items == [] ->
-          {"End-of-day review: action list clear",
-           "#{length(watching_items)} important threads are still being watched, with no direct founder actions tonight."}
+          count = length(watching_items)
+
+          {"End-of-day review: watching items only",
+           "#{count_phrase(count, "important thread")} #{be_verb(count)} still being watched, with no direct action needed from you tonight."}
 
         true ->
           count = length(debt_items)
@@ -387,7 +391,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "cadence" => "weekly_review",
       "scheduled_for" => plan.scheduled_for,
       "dedupe_key" => dedupe_key("weekly_review", plan.period_key),
-      "title" => "Weekly review: #{count_phrase(open_count, "item")} still open",
+      "title" => weekly_title(open_count),
       "summary" => weekly_summary(length(weekly_items), closed_count, open_count),
       "body" =>
         weekly_body(top_open, weekly_items, state.timezone_offset_hours, plan.scheduled_for),
@@ -836,7 +840,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> summary_sentence()
   end
 
-  defp summary_sentence([]), do: "No items surfaced this week."
+  defp summary_sentence([]), do: "No source-backed items surfaced this week."
   defp summary_sentence([part]), do: part <> "."
   defp summary_sentence([first, second]), do: "#{first}, and #{second}."
 
@@ -847,6 +851,14 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp count_phrase(1, noun), do: "1 #{noun}"
   defp count_phrase(count, noun) when is_integer(count), do: "#{count} #{noun}s"
+
+  defp be_verb(1), do: "is"
+  defp be_verb(_count), do: "are"
+
+  defp weekly_title(0), do: "Weekly review: no open work surfaced"
+
+  defp weekly_title(open_count),
+    do: "Weekly review: #{count_phrase(open_count, "item")} still open"
 
   defp lead_summary([], _offset_hours, _reference_at), do: nil
 

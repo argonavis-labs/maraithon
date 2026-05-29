@@ -128,17 +128,88 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Morning brief: no active work surfaced"
-    assert brief.summary == "No urgent open items surfaced in the current brief window."
+
+    assert brief.summary ==
+             "No direct actions or watched threads surfaced in checked sources during this brief window."
+
     assert brief.body =~ "Best use of today:"
     assert brief.body =~ "No direct action surfaced in this brief window."
     assert brief.body =~ "Status:"
     assert brief.body =~ "No active work surfaced in connected sources during this brief window."
 
+    refute brief.summary =~ "urgent"
     refute brief.body =~ "Pressure:"
     refute brief.body =~ "0 items"
     refute brief.body =~ "Gmail, Calendar"
     refute brief.body =~ "Nothing needs"
     refute brief.title =~ "clean slate"
+  end
+
+  test "morning briefs with only watched items avoid all-clear language" do
+    user_id = "chief-watching-morning-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
+    scheduled_at = ~U[2026-03-11 13:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "attention_mode" => "monitor",
+          "category" => "important_fyi",
+          "title" => "Watch account recovery thread",
+          "summary" => "The account recovery thread may need action if the owner does not reply.",
+          "recommended_action" => "Watch for the owner's reply before interrupting.",
+          "priority" => 82,
+          "confidence" => 0.88,
+          "dedupe_key" => "brief-test:watching-morning",
+          "metadata" => %{"record" => %{"person" => "Growth team"}}
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["morning"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Morning brief: watching items only"
+
+    assert brief.summary ==
+             "1 important thread is being watched, with no direct action needed from you right now."
+
+    assert brief.body =~ "Watching, not blocking right now:"
+    refute brief.title =~ "clear"
+    refute brief.summary =~ "clear"
+    refute brief.summary =~ "founder"
   end
 
   test "clean end-of-day briefs avoid all-clear claims when no work surfaced" do
@@ -193,6 +264,84 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     refute brief.body =~ "0 items"
     refute brief.body =~ "Nothing important"
     refute brief.title =~ "all clear"
+  end
+
+  test "end-of-day briefs with only watched items avoid clear-list and founder language" do
+    user_id = "chief-watching-evening-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
+    scheduled_at = ~U[2026-03-11 23:05:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "attention_mode" => "monitor",
+          "category" => "important_fyi",
+          "title" => "Watch legal response",
+          "summary" => "Legal has the next move unless the response does not arrive.",
+          "recommended_action" => "Watch for the response before interrupting.",
+          "priority" => 82,
+          "confidence" => 0.88,
+          "dedupe_key" => "brief-test:watching-evening-legal"
+        },
+        %{
+          "source" => "slack",
+          "attention_mode" => "monitor",
+          "category" => "important_fyi",
+          "title" => "Watch launch channel",
+          "summary" => "The launch channel is being monitored for a decision.",
+          "recommended_action" => "Watch for a decision request before interrupting.",
+          "priority" => 79,
+          "confidence" => 0.84,
+          "dedupe_key" => "brief-test:watching-evening-launch"
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-11"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["end_of_day"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "End-of-day review: watching items only"
+
+    assert brief.summary ==
+             "2 important threads are still being watched, with no direct action needed from you tonight."
+
+    assert brief.body =~ "Watching, not blocking right now:"
+    refute brief.title =~ "clear"
+    refute brief.summary =~ "clear"
+    refute brief.summary =~ "founder"
   end
 
   test "renders end-of-day briefs as concrete operator guidance with structured context", %{
@@ -494,6 +643,55 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     refute brief.body =~ "scorecard"
     refute brief.body =~ "score"
     refute brief.body =~ "confidence"
+  end
+
+  test "clean weekly reviews avoid zero-count open-work titles" do
+    user_id = "chief-clean-weekly-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
+    scheduled_at = ~U[2026-03-13 21:05:00Z]
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-13"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["weekly_review"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Weekly review: no open work surfaced"
+    assert brief.summary == "No source-backed items surfaced this week."
+    assert brief.body =~ "Most important open items:"
+
+    refute brief.title =~ "0 items"
+    refute brief.summary =~ "0"
   end
 
   test "skips adaptive check-ins when only low-priority work is open", %{
