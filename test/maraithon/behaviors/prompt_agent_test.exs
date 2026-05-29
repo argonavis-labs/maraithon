@@ -88,6 +88,12 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert prompt =~ "## Recent Connected Activity"
       assert prompt =~ "gmail email.received"
       assert prompt =~ "Starteryou UGC Campaigns"
+      assert prompt =~ "## Confirmed User Memory"
+      assert prompt =~ "No confirmed long-term user profile yet."
+      assert prompt =~ "## Related Long-Term Memory"
+      assert prompt =~ "No relevant long-term memories matched this context."
+      assert prompt =~ "No open work is currently surfaced for this context."
+      refute prompt =~ "durable"
     end
 
     test "does not reprocess same message" do

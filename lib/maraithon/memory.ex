@@ -733,7 +733,7 @@ defmodule Maraithon.Memory do
     "Deep memory recall could not run model-level relevance selection: #{error}"
   end
 
-  defp memory_summary([]), do: "No deep durable memories matched this context."
+  defp memory_summary([]), do: "No relevant long-term memories matched this context."
 
   defp memory_summary(memories) do
     memories
@@ -749,7 +749,7 @@ defmodule Maraithon.Memory do
     do: "Memory recall for #{query}: #{memory_summary(memories)}"
 
   defp empty_prompt_context,
-    do: %{summary: "No deep durable memories yet.", memories: [], count: 0}
+    do: %{summary: "No long-term memories saved yet.", memories: [], count: 0}
 
   defp result_limit(opts, default) do
     opts

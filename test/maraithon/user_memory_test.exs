@@ -70,6 +70,23 @@ defmodule Maraithon.UserMemoryTest do
     assert UserMemory.prompt_context(user_id).profile["current_focus"] =~ "Operator Core"
   end
 
+  test "refresh_profile fallback uses confirmed defaults instead of internal placeholders", %{
+    user_id: user_id
+  } do
+    assert {:ok, profile} =
+             UserMemory.refresh_profile(user_id,
+               llm_complete: fn _prompt -> {:error, :summary_unavailable} end
+             )
+
+    assert profile.summary =~ "No current focus has been confirmed yet."
+    assert profile.profile["working_style"] =~ "source-grounded recommendations"
+    assert profile.profile["important_context"] =~ "connected-source evidence"
+
+    refute profile.summary =~ "Patterns are still emerging"
+    refute profile.summary =~ "No active projects have been captured"
+    refute profile.summary =~ "durable"
+  end
+
   test "telegram assistant context exposes stored user memory", %{user_id: user_id} do
     now = DateTime.utc_now()
 

@@ -1003,7 +1003,7 @@ defmodule MaraithonWeb.DashboardLive do
             description={
               if @memory_profile.summary && @memory_profile.summary != "",
                 do: @memory_profile.summary,
-                else: "No durable preferences yet."
+                else: "No confirmed preferences yet."
             }
             href="#memory-detail"
             cta="View memory"

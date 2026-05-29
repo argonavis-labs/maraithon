@@ -23,7 +23,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
   end
 
   def local_only_text do
-    "Kept as local feedback. No durable preference saved."
+    "Kept as local feedback. No saved preference rule added."
   end
 
   def no_pending_text do
@@ -31,7 +31,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
   end
 
   def failed_text do
-    "Could not turn that into a durable preference yet. Try /prefer with a broader rule."
+    "Could not turn that into a saved preference yet. Try /prefer with a broader rule."
   end
 
   def text(rules, opts \\ []) do

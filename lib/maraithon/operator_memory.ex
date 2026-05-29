@@ -104,7 +104,7 @@ defmodule Maraithon.OperatorMemory do
 
   defp summarize(summary_type, payload, llm_complete) do
     prompt = """
-    Summarize durable operator memory for Maraithon.
+    Summarize confirmed long-term operator memory for Maraithon.
 
     Return ONLY valid JSON:
     {"content":"..."}
@@ -115,7 +115,7 @@ defmodule Maraithon.OperatorMemory do
 
     Rules:
     - Be concise and stable.
-    - Summaries should generalize durable behavior, not one-off cases.
+    - Summaries should generalize confirmed long-term behavior, not one-off cases.
     - Focus on what would help a future LLM call make better choices.
     """
 
@@ -130,20 +130,20 @@ defmodule Maraithon.OperatorMemory do
   defp fallback_summary(summary_type, rules) do
     case summary_type do
       "content_preferences" ->
-        summarize_by_kind(rules, "content_filter", "No durable content-filter preferences yet.")
+        summarize_by_kind(rules, "content_filter", "No confirmed content preferences yet.")
 
       "interrupt_policy" ->
-        summarize_by_kind(rules, "quiet_hours", "No durable interruption policy yet.")
+        summarize_by_kind(rules, "quiet_hours", "No confirmed interruption policy yet.")
 
       "action_style" ->
-        summarize_by_kind(rules, "style_preference", "No durable action-style preferences yet.")
+        summarize_by_kind(rules, "style_preference", "No confirmed action-style preferences yet.")
 
       "telegram_behavior" ->
         rules
         |> Enum.take(3)
         |> Enum.map_join(" ", &Map.get(&1, "instruction"))
         |> case do
-          "" -> "No durable Telegram behavior summary yet."
+          "" -> "No confirmed Telegram behavior summary yet."
           content -> content
         end
     end

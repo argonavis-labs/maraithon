@@ -6,6 +6,16 @@ defmodule Maraithon.MemoryTest do
   alias Maraithon.Memory.Event
   alias Maraithon.Memory.Intelligence
 
+  test "prompt context empty state avoids internal durable-memory language" do
+    context =
+      Memory.prompt_context("memory-empty-#{System.unique_integer([:positive])}@example.com")
+
+    assert context.summary == "No relevant long-term memories matched this context."
+    assert context.memories == []
+    assert context.count == 0
+    refute context.summary =~ "durable"
+  end
+
   test "writes, lists, recalls, and forgets durable memories" do
     user_id = "memory-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

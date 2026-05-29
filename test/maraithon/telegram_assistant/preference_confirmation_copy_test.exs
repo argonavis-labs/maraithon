@@ -34,7 +34,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopyTest do
     refute saved =~ "I'll"
 
     assert PreferenceConfirmationCopy.local_only_text() ==
-             "Kept as local feedback. No durable preference saved."
+             "Kept as local feedback. No saved preference rule added."
   end
 
   test "escapes HTML in assistant approval prompts" do

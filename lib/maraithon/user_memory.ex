@@ -100,7 +100,7 @@ defmodule Maraithon.UserMemory do
 
   defp summarize(bundle, llm_complete) when is_function(llm_complete, 1) do
     prompt = """
-    You are summarizing durable user memory for Maraithon.
+    You are summarizing confirmed long-term user memory for Maraithon.
 
     Return ONLY valid JSON:
     {
@@ -120,11 +120,11 @@ defmodule Maraithon.UserMemory do
 
     Rules:
     - Produce a reusable cross-agent memory profile that future agents should inherit.
-    - Focus on durable patterns, not one-off moments.
+    - Focus on confirmed long-term patterns, not one-off moments.
     - Capture how this user prefers to work, communicate, prioritize, and be interrupted.
     - Use the current projects to ground `current_focus` when they are relevant.
     - Keep every field concise, instruction-friendly, and safe to hand to another LLM.
-    - Do not invent facts. If the signals are thin, say that the pattern is still emerging.
+    - Do not invent facts. If the signals are thin, state which preference has not been confirmed yet and use source-grounded defaults.
     - `summary` should be a compact paragraph that explains how packaged agents should adapt to this user.
     """
 
@@ -274,7 +274,7 @@ defmodule Maraithon.UserMemory do
   defp fallback_profile(bundle) do
     working_style =
       operator_summary(bundle, ["action_style", "interrupt_policy"]) ||
-        "Patterns are still emerging; favor direct, action-oriented help and avoid unnecessary interruption."
+        "Use concise, source-grounded recommendations until stronger preferences are confirmed."
 
     communication_style =
       operator_summary(bundle, ["telegram_behavior", "content_preferences"]) ||
@@ -288,7 +288,7 @@ defmodule Maraithon.UserMemory do
     current_focus =
       case Map.get(bundle, :projects, []) do
         [] ->
-          "No active projects have been captured yet."
+          "No current focus has been confirmed yet."
 
         projects ->
           project_names =
@@ -308,8 +308,11 @@ defmodule Maraithon.UserMemory do
       |> Enum.reject(&blank?/1)
       |> Enum.join(" ")
       |> case do
-        "" -> "No additional durable context has been confirmed yet."
-        value -> value
+        "" ->
+          "Use connected-source evidence and confirmed preferences before assuming additional context."
+
+        value ->
+          value
       end
 
     profile = %{
@@ -522,7 +525,7 @@ defmodule Maraithon.UserMemory do
 
   defp empty_prompt_context do
     %{
-      summary: "No durable user-memory profile yet.",
+      summary: "No confirmed long-term user profile yet.",
       profile: %{},
       confidence: 0.0,
       source_window_start: nil,

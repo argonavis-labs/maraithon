@@ -81,7 +81,7 @@ defmodule Maraithon.PreferenceMemory do
         """
         No saved preference rules yet.
 
-        Send /prefer followed by a durable rule, for example:
+        Send /prefer followed by a standing rule, for example:
         /prefer ignore receipts
         /prefer ignore sales outreach unless I've engaged
         /prefer treat investors as urgent

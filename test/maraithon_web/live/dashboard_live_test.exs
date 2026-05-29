@@ -57,6 +57,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "New agent"
     refute html =~ "All caught up"
     refute html =~ "all clear"
+    refute html =~ "No durable preferences yet."
     refute html =~ "Install agent"
     refute html =~ "Agent activity"
     refute html =~ "Agent Registry"

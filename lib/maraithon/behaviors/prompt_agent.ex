@@ -279,10 +279,10 @@ defmodule Maraithon.Behaviors.PromptAgent do
     ## Recent Connected Activity
     #{recent_events_text}
 
-    ## Durable User Memory
+    ## Confirmed User Memory
     #{user_memory_text}
 
-    ## Deep Memory
+    ## Related Long-Term Memory
     #{deep_memory_text}
 
     ## Open Loops
@@ -330,10 +330,10 @@ defmodule Maraithon.Behaviors.PromptAgent do
     ## Recent Connected Activity
     #{recent_events_text}
 
-    ## Durable User Memory
+    ## Confirmed User Memory
     #{user_memory_text}
 
-    ## Deep Memory
+    ## Related Long-Term Memory
     #{deep_memory_text}
 
     ## Open Loops
@@ -363,10 +363,10 @@ defmodule Maraithon.Behaviors.PromptAgent do
     ## Recent Connected Activity
     #{recent_events_text}
 
-    ## Durable User Memory
+    ## Confirmed User Memory
     #{user_memory_text}
 
-    ## Deep Memory
+    ## Related Long-Term Memory
     #{deep_memory_text}
 
     ## Open Loops
@@ -440,7 +440,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp format_user_memory(%{summary: summary, profile: profile}) when is_map(profile) do
     summary_text =
       case normalize_optional_text(summary) do
-        nil -> "No durable user memory yet."
+        nil -> "No confirmed long-term user profile yet."
         value -> value
       end
 
@@ -462,7 +462,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     end
   end
 
-  defp format_user_memory(_memory), do: "No durable user memory yet."
+  defp format_user_memory(_memory), do: "No confirmed long-term user profile yet."
 
   defp format_deep_memory(%{memories: memories}) when is_list(memories) do
     format_deep_memory(%{"memories" => memories})
@@ -471,7 +471,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp format_deep_memory(%{"memories" => memories}) when is_list(memories) do
     case memories do
       [] ->
-        "No deep durable memories matched this context."
+        "No relevant long-term memories matched this context."
 
       _ ->
         memories
@@ -489,7 +489,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     end
   end
 
-  defp format_deep_memory(_memory), do: "No deep durable memories matched this context."
+  defp format_deep_memory(_memory), do: "No relevant long-term memories matched this context."
 
   defp format_open_loops(%{buckets: buckets} = snapshot) when is_map(buckets) do
     snapshot
@@ -503,7 +503,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     total = Map.get(totals, "open_todos") || Map.get(totals, :open_todos) || 0
 
     if total == 0 do
-      "No durable open loops matched this context."
+      "No open work is currently surfaced for this context."
     else
       rendered =
         [
@@ -516,11 +516,13 @@ defmodule Maraithon.Behaviors.PromptAgent do
         |> Enum.reject(&(&1 == ""))
         |> Enum.join("\n")
 
-      if rendered == "", do: "No durable open loops matched this context.", else: rendered
+      if rendered == "",
+        do: "No open work is currently surfaced for this context.",
+        else: rendered
     end
   end
 
-  defp format_open_loops(_snapshot), do: "No durable open loops matched this context."
+  defp format_open_loops(_snapshot), do: "No open work is currently surfaced for this context."
 
   defp format_open_loop_bucket(_label, []), do: ""
 

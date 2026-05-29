@@ -1066,7 +1066,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{"status" => "rejected"}] = remembered.saved_rules
 
     assert remembered.message ==
-             "Could not turn that into a durable preference yet. Try /prefer with a broader rule."
+             "Could not turn that into a saved preference yet. Try /prefer with a broader rule."
 
     assert PreferenceMemory.active_rules(user_id) == []
     assert PreferenceMemory.pending_rules(user_id) == []
