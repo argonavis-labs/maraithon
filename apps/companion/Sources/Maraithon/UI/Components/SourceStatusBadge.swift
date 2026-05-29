@@ -46,7 +46,7 @@ struct SourceStatusBadge: View {
 
         var label: String {
             switch self {
-            case .connected: return "Connected"
+            case .connected: return "Up to date"
             case .syncing: return "Syncing"
             case .paused: return "Paused"
             case .needsAttention: return "Needs attention"

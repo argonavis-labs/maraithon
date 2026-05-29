@@ -223,7 +223,7 @@ struct SourceRowCopy {
 
     private static func statePhrase(_ state: SourceState) -> String {
         switch state {
-        case .connected: return "connected"
+        case .connected: return "up to date"
         case .syncing: return "syncing"
         case .paused: return "paused"
         case .disconnected: return "disconnected"

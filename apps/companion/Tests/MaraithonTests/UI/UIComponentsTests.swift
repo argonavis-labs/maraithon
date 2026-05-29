@@ -42,6 +42,24 @@ final class UIComponentsTests: XCTestCase {
     }
 
     @MainActor
+    func testHealthySourceCopyUsesOutcomeLanguage() {
+        XCTAssertEqual(SourceStatusBadge.State.connected.label, "Up to date")
+
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let label = SourceRowCopy.accessibilityLabel(
+            sourceName: "iMessage",
+            comingSoon: false,
+            rawState: .connected,
+            displayedState: .connected,
+            lastSyncAt: now.addingTimeInterval(-120),
+            now: now
+        )
+
+        XCTAssertEqual(label, "iMessage, up to date, last sync 2m ago")
+        XCTAssertFalse(label.localizedCaseInsensitiveContains("connected"))
+    }
+
+    @MainActor
     func testSourceRowAssistiveCopyDoesNotLeakRawIssueDetails() {
         let raw = "clientError(status: 400, body: Optional(\"{\\\"error\\\":\\\"invalid_batch\\\",\\\"secret\\\":\\\"abc\\\"}\"))"
 

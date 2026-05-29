@@ -445,7 +445,7 @@ struct SourceDetailScaffold: View {
         let prefix: String
         switch publisher.displayedState() {
         case .syncing: prefix = "Syncing now"
-        case .connected: prefix = "Connected"
+        case .connected: prefix = "Up to date"
         case .paused: prefix = "Paused"
         case .needsAttention(let r): prefix = SourceIssueCopy.status(r)
         case .disconnected: prefix = "Not yet connected"
