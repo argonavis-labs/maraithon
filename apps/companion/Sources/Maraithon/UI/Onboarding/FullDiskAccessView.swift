@@ -61,6 +61,21 @@ struct FullDiskAccessView: View {
 
             statusIndicator
 
+            if let installHint = FullDiskAccessInstallHint.currentMessage() {
+                Label {
+                    Text(installHint)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(StatusTone.attention.color)
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: 420, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+
             VStack(spacing: Tokens.Spacing.small) {
                 Button {
                     openSystemSettings()

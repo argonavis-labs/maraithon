@@ -29,4 +29,37 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("restart"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("relaunch"))
     }
+
+    func testInstallHintFlagsDerivedDataBuilds() {
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = URL(
+            fileURLWithPath: "/Users/operator/Library/Developer/Xcode/DerivedData/Maraithon/Build/Products/Debug/Maraithon.app",
+            isDirectory: true
+        )
+
+        let message = FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home)
+
+        XCTAssertTrue(message?.contains("temporary development build") == true)
+        XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
+        XCTAssertTrue(message?.contains("make run-companion") == true)
+    }
+
+    func testInstallHintFlagsSwiftPMBuilds() {
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = URL(
+            fileURLWithPath: "/Users/operator/bliss/maraithon/apps/companion/.build/debug/Maraithon",
+            isDirectory: false
+        )
+
+        XCTAssertNotNil(FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home))
+    }
+
+    func testInstallHintAllowsStableDevelopmentApp() {
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = home
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+
+        XCTAssertNil(FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home))
+    }
 }

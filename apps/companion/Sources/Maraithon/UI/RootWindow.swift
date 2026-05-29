@@ -135,6 +135,12 @@ struct FullDiskAccessRequiredBanner: View {
                 Text(Self.detailText(blockedSourceNames: blockedSourceNames))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let installHint = FullDiskAccessInstallHint.currentMessage() {
+                    Text(installHint)
+                        .font(.caption)
+                        .foregroundStyle(StatusTone.attention.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             Button("Check again") {
