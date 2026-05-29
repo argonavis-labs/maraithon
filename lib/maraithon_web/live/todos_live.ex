@@ -16,6 +16,7 @@ defmodule MaraithonWeb.TodosLive do
     "sort" => "rank",
     "dir" => "desc"
   }
+  @empty_state_filter_keys ~w(q status attention due source)
   @status_options [
     {"Active", "active"},
     {"Open", "open"},
@@ -993,10 +994,24 @@ defmodule MaraithonWeb.TodosLive do
     end)
   end
 
-  defp empty_message(%{"q" => query}) do
-    if present?(query),
-      do: "No work items match this search.",
-      else: "No work items match these filters."
+  defp empty_message(%{"q" => query} = filters) do
+    cond do
+      present?(query) ->
+        "No work items match this search."
+
+      default_filter_view?(filters) ->
+        "No active work right now."
+
+      true ->
+        "No work items match these filters."
+    end
+  end
+
+  defp default_filter_view?(filters) do
+    Enum.all?(@empty_state_filter_keys, fn key ->
+      Map.get(filters, key, Map.fetch!(@default_filters, key)) ==
+        Map.fetch!(@default_filters, key)
+    end)
   end
 
   defp status_color("open"), do: "emerald"
