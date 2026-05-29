@@ -238,7 +238,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <div>
                     <h2 class="text-base font-semibold text-zinc-950">Setup</h2>
                     <p class="mt-1 text-sm text-zinc-500">
-                      Configure only what this template needs. Advanced keeps the lower-level controls available.
+                      Configure the essentials. Advanced keeps detailed controls available when you need them.
                     </p>
                   </div>
                   <div class="inline-flex rounded-lg border border-zinc-950/10 bg-zinc-50 p-1">
@@ -276,7 +276,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <div class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
                     <p class="font-medium">Focused setup</p>
                     <p class="mt-1 text-sky-900/80">
-                      Set the name, scope, and coverage. <%= @hidden_simple_count %> advanced settings stay on defaults unless you open Advanced.
+                      Set the name, scope, and coverage. Detailed controls stay on sensible defaults unless you open Advanced.
                     </p>
                   </div>
                 <% end %>
@@ -349,9 +349,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "cost_profile") do %>
                   <div class="space-y-4 rounded-lg border border-violet-200 bg-violet-50/60 p-4">
                     <div>
-                      <p class="text-sm font-medium text-violet-950">Coverage and spend</p>
+                      <p class="text-sm font-medium text-violet-950">Coverage level</p>
                       <p class="mt-1 text-xs text-violet-900/80">
-                        Pick how aggressive Maraithon should be. This drives the hidden scan limits, cadence, memory, and budgets for this template.
+                        Choose how closely Maraithon should watch this work. Higher coverage checks more often and reviews more context.
                       </p>
                     </div>
 
@@ -388,10 +388,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   :if={field_visible?(@selected_spec, "prompt")}
                   id="launch_prompt"
                   name="launch[prompt]"
-                  label="Prompt"
+                  label="Instructions"
                   value={@launch["prompt"]}
                   rows={5}
-                  description="Define how the automation should reason, what tone it should use, and which actions it should avoid."
+                  description="Tell Maraithon what this automation is responsible for, how it should communicate, and what it should avoid."
                 />
 
                 <%= if field_visible?(@selected_spec, "subscriptions") or field_visible?(@selected_spec, "tools") do %>
@@ -400,10 +400,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_subscriptions"
                         name="launch[subscriptions]"
-                        label="Input subscriptions"
+                        label="Signals to watch"
                         value={@launch["subscriptions"]}
                         placeholder="github:owner/repo,email:kent"
-                        description="Comma-separated topics. Leave blank if the automation should only react to direct operator messages."
+                        description="Comma-separated source topics. Leave blank if this automation should only react when you message it."
                       />
                     <% end %>
 
@@ -427,9 +427,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[memory_limit]"
-                      label="Memory limit"
+                      label="Recent context window"
                       value={@launch["memory_limit"]}
-                      description="How many recent updates the custom automation keeps in rolling memory."
+                      description="How many recent updates the custom automation keeps in view while it works."
                     />
                   </div>
                 <% end %>
@@ -540,7 +540,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         type="number"
                         min="1"
                         name="launch[email_scan_limit]"
-                        label="Email scan limit"
+                        label="Email review limit"
                         value={@launch["email_scan_limit"]}
                       />
                     <% end %>
@@ -551,7 +551,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         type="number"
                         min="1"
                         name="launch[event_scan_limit]"
-                        label="Event scan limit"
+                        label="Calendar review limit"
                         value={@launch["event_scan_limit"]}
                       />
                     <% end %>
@@ -617,7 +617,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         type="number"
                         min="1"
                         name="launch[channel_scan_limit]"
-                        label="Channel message scan limit"
+                        label="Channel review limit"
                         value={@launch["channel_scan_limit"]}
                       />
                     <% end %>
@@ -628,7 +628,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         type="number"
                         min="1"
                         name="launch[dm_scan_limit]"
-                        label="DM message scan limit"
+                        label="DM review limit"
                         value={@launch["dm_scan_limit"]}
                       />
                     <% end %>
@@ -768,7 +768,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_llm_calls]"
-                      label="Reasoning budget"
+                      label="Reasoning allowance"
                       value={@launch["budget_llm_calls"]}
                     />
 
@@ -777,7 +777,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_tool_calls]"
-                      label="Action budget"
+                      label="Action allowance"
                       value={@launch["budget_tool_calls"]}
                     />
                   </div>
@@ -785,11 +785,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <.launch_textarea
                     id="launch_config_json"
                     name="launch[config_json]"
-                    label="Advanced JSON overrides"
+                    label="Custom configuration"
                     value={@launch["config_json"]}
                     rows={6}
                     textarea_class="font-mono"
-                    description="Optional object merged into the final config after the form values above. Use this for advanced behavior-specific keys."
+                    description="Optional JSON object for advanced template-specific settings."
                   />
                 <% end %>
 
@@ -1203,10 +1203,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
     subscriptions =
       case launch["subscriptions"] do
         "" ->
-          "No subscriptions yet. This automation will only react to direct operator messages until you add topics."
+          "No watched signals yet. This automation will only react when you message it."
 
         value ->
-          "Subscribed topics: #{value}"
+          "Watching: #{value}"
       end
 
     tools =
@@ -1220,8 +1220,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "Operating profile",
         body: cost_profile_summary("prompt_agent", launch["cost_profile"])
       },
-      %{title: "Current subscriptions", body: subscriptions},
-      %{title: "Current action allowlist", body: tools}
+      %{title: "Signals to watch", body: subscriptions},
+      %{title: "Allowed actions", body: tools}
     ]
   end
 
@@ -1322,7 +1322,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Launch result",
         body:
-          "The automation starts immediately with reasoning budget #{launch["budget_llm_calls"]} and action budget #{launch["budget_tool_calls"]}."
+          "The automation starts immediately with #{launch["budget_llm_calls"]} reasoning steps and #{launch["budget_tool_calls"]} allowed actions."
       }
     ]
   end
@@ -1403,7 +1403,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     case spec.id do
       "ai_chief_of_staff" ->
         [
-          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Coverage", value: cost_profile_label(launch["cost_profile"])},
           %{
             label: "Slack workspace",
             value: slack_scope_value(launch, provider_map)
@@ -1418,47 +1418,47 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "prompt_agent" ->
         [
           %{
-            label: "Cost profile",
+            label: "Coverage",
             value:
               launch["cost_profile"]
               |> cost_profile_label()
-              |> Kernel.<>(" automation spend")
+              |> Kernel.<>(" coverage")
           },
-          %{label: "Memory limit", value: launch["memory_limit"] <> " events"},
-          %{label: "Reasoning budget", value: launch["budget_llm_calls"]},
-          %{label: "Action budget", value: launch["budget_tool_calls"]}
+          %{label: "Recent context", value: launch["memory_limit"] <> " updates"},
+          %{label: "Reasoning allowance", value: launch["budget_llm_calls"]},
+          %{label: "Action allowance", value: launch["budget_tool_calls"]}
         ]
 
       "inbox_calendar_advisor" ->
         [
-          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
-          %{label: "Email scan limit", value: launch["email_scan_limit"]},
-          %{label: "Event scan limit", value: launch["event_scan_limit"]},
+          %{label: "Coverage", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Email review limit", value: launch["email_scan_limit"]},
+          %{label: "Calendar review limit", value: launch["event_scan_limit"]},
           %{
             label: "Slack workspace",
             value: slack_scope_value(launch, provider_map)
           },
-          %{label: "Slack DM scan", value: launch["dm_scan_limit"]}
+          %{label: "Slack DM review", value: launch["dm_scan_limit"]}
         ]
 
       "personal_assistant_agent" ->
         [
-          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
-          %{label: "Email scan limit", value: launch["email_scan_limit"]},
-          %{label: "Calendar scan limit", value: launch["event_scan_limit"]},
-          %{label: "Lookback", value: launch["lookback_hours"] <> " hours"},
+          %{label: "Coverage", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Email review limit", value: launch["email_scan_limit"]},
+          %{label: "Calendar review limit", value: launch["event_scan_limit"]},
+          %{label: "Lookback window", value: launch["lookback_hours"] <> " hours"},
           %{label: "Interruption bar", value: launch["min_confidence"]}
         ]
 
       "slack_followthrough_agent" ->
         [
-          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Coverage", value: cost_profile_label(launch["cost_profile"])},
           %{
             label: "Slack workspace",
             value: slack_scope_value(launch, provider_map)
           },
-          %{label: "Channel scan limit", value: launch["channel_scan_limit"]},
-          %{label: "DM scan limit", value: launch["dm_scan_limit"]}
+          %{label: "Channel review limit", value: launch["channel_scan_limit"]},
+          %{label: "DM review limit", value: launch["dm_scan_limit"]}
         ]
 
       "codebase_advisor" ->
@@ -1485,12 +1485,12 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Optional URL",
             value: if(launch["check_url"] == "", do: "None", else: launch["check_url"])
           },
-          %{label: "Action budget", value: launch["budget_tool_calls"]}
+          %{label: "Action allowance", value: launch["budget_tool_calls"]}
         ]
 
       "github_product_planner" ->
         [
-          %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
+          %{label: "Coverage", value: cost_profile_label(launch["cost_profile"])},
           %{
             label: "Repository",
             value: blank_fallback(launch["repo_full_name"], "Set `owner/repo`")
@@ -1504,8 +1504,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
       _ ->
         [
-          %{label: "Reasoning budget", value: launch["budget_llm_calls"]},
-          %{label: "Action budget", value: launch["budget_tool_calls"]}
+          %{label: "Reasoning allowance", value: launch["budget_llm_calls"]},
+          %{label: "Action allowance", value: launch["budget_tool_calls"]}
         ]
     end
   end

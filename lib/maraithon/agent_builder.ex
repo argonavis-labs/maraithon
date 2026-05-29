@@ -365,7 +365,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Use this when you want the Chief of Staff operating layer for follow-through and recurring briefs without the travel skill pack.",
-        "Keep scan limits focused so the automation escalates only the strongest unresolved commitments.",
+        "Use focused review depth so the automation escalates only the strongest unresolved commitments.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per founder workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions.",
@@ -422,7 +422,7 @@ defmodule Maraithon.AgentBuilder do
         }
       ],
       suggestions: [
-        "Keep channel and DM scan limits bounded so only the strongest unresolved commitments are escalated.",
+        "Use focused Slack review depth so only the strongest unresolved commitments are escalated.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
         "Raise `min_confidence` if you want fewer interruptions and only the clearest open loops."
       ]
@@ -951,9 +951,9 @@ defmodule Maraithon.AgentBuilder do
 
       true ->
         with {:ok, llm_calls} <-
-               parse_positive_integer(launch["budget_llm_calls"], "Reasoning budget"),
+               parse_positive_integer(launch["budget_llm_calls"], "Reasoning allowance"),
              {:ok, tool_calls} <-
-               parse_positive_integer(launch["budget_tool_calls"], "Action budget"),
+               parse_positive_integer(launch["budget_tool_calls"], "Action allowance"),
              {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]),
              {:ok, config} <- build_behavior_config(resolved_behavior, launch, user_id) do
           {:ok,
@@ -971,8 +971,9 @@ defmodule Maraithon.AgentBuilder do
   def build_start_params(_launch, _user_id), do: {:error, "User is required"}
 
   defp build_behavior_config("prompt_agent", launch, _user_id) do
-    with {:ok, prompt} <- require_present(launch["prompt"], "Prompt"),
-         {:ok, memory_limit} <- parse_positive_integer(launch["memory_limit"], "Memory limit") do
+    with {:ok, prompt} <- require_present(launch["prompt"], "Instructions"),
+         {:ok, memory_limit} <-
+           parse_positive_integer(launch["memory_limit"], "Recent context window") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1079,12 +1080,12 @@ defmodule Maraithon.AgentBuilder do
          {:ok, follow_email_scan_limit} <-
            parse_positive_integer(
              launch["follow_email_scan_limit"],
-             "Chief of Staff followthrough email scan limit"
+             "Chief of Staff follow-through email review limit"
            ),
          {:ok, follow_event_scan_limit} <-
            parse_positive_integer(
              launch["follow_event_scan_limit"],
-             "Chief of Staff followthrough event scan limit"
+             "Chief of Staff follow-through calendar review limit"
            ),
          {:ok, follow_prep_window_hours} <-
            parse_positive_integer(
@@ -1094,12 +1095,12 @@ defmodule Maraithon.AgentBuilder do
          {:ok, follow_channel_scan_limit} <-
            parse_positive_integer(
              launch["follow_channel_scan_limit"],
-             "Chief of Staff Slack channel scan limit"
+             "Chief of Staff Slack channel review limit"
            ),
          {:ok, follow_dm_scan_limit} <-
            parse_positive_integer(
              launch["follow_dm_scan_limit"],
-             "Chief of Staff Slack DM scan limit"
+             "Chief of Staff Slack DM review limit"
            ),
          {:ok, follow_lookback_hours} <-
            parse_positive_integer(
@@ -1121,12 +1122,12 @@ defmodule Maraithon.AgentBuilder do
          {:ok, travel_email_scan_limit} <-
            parse_positive_integer(
              launch["travel_email_scan_limit"],
-             "Chief of Staff travel email scan limit"
+             "Chief of Staff travel email review limit"
            ),
          {:ok, travel_event_scan_limit} <-
            parse_positive_integer(
              launch["travel_event_scan_limit"],
-             "Chief of Staff travel event scan limit"
+             "Chief of Staff travel calendar review limit"
            ),
          {:ok, travel_lookback_hours} <-
            parse_positive_integer(
@@ -1242,9 +1243,9 @@ defmodule Maraithon.AgentBuilder do
   defp build_behavior_config("personal_assistant_agent", launch, user_id) do
     with :ok <- validate_personal_assistant_prereqs(user_id),
          {:ok, email_scan_limit} <-
-           parse_positive_integer(launch["email_scan_limit"], "Email scan limit"),
+           parse_positive_integer(launch["email_scan_limit"], "Email review limit"),
          {:ok, event_scan_limit} <-
-           parse_positive_integer(launch["event_scan_limit"], "Calendar event scan limit"),
+           parse_positive_integer(launch["event_scan_limit"], "Calendar review limit"),
          {:ok, lookback_hours} <-
            parse_positive_integer(launch["lookback_hours"], "Lookback window"),
          {:ok, min_confidence} <-
@@ -1270,15 +1271,15 @@ defmodule Maraithon.AgentBuilder do
 
   defp build_behavior_config("inbox_calendar_advisor", launch, user_id) do
     with {:ok, email_scan_limit} <-
-           parse_positive_integer(launch["email_scan_limit"], "Email scan limit"),
+           parse_positive_integer(launch["email_scan_limit"], "Email review limit"),
          {:ok, event_scan_limit} <-
-           parse_positive_integer(launch["event_scan_limit"], "Event scan limit"),
+           parse_positive_integer(launch["event_scan_limit"], "Calendar review limit"),
          {:ok, prep_window_hours} <-
            parse_positive_integer(launch["prep_window_hours"], "Prep window hours"),
          {:ok, channel_scan_limit} <-
-           parse_positive_integer(launch["channel_scan_limit"], "Channel scan limit"),
+           parse_positive_integer(launch["channel_scan_limit"], "Channel review limit"),
          {:ok, dm_scan_limit} <-
-           parse_positive_integer(launch["dm_scan_limit"], "DM scan limit"),
+           parse_positive_integer(launch["dm_scan_limit"], "DM review limit"),
          {:ok, lookback_hours} <-
            parse_positive_integer(launch["lookback_hours"], "Lookback window"),
          {:ok, max_insights_per_cycle} <-
@@ -1328,9 +1329,9 @@ defmodule Maraithon.AgentBuilder do
 
   defp build_behavior_config("slack_followthrough_agent", launch, user_id) do
     with {:ok, channel_scan_limit} <-
-           parse_positive_integer(launch["channel_scan_limit"], "Channel scan limit"),
+           parse_positive_integer(launch["channel_scan_limit"], "Channel review limit"),
          {:ok, dm_scan_limit} <-
-           parse_positive_integer(launch["dm_scan_limit"], "DM scan limit"),
+           parse_positive_integer(launch["dm_scan_limit"], "DM review limit"),
          {:ok, lookback_hours} <-
            parse_positive_integer(launch["lookback_hours"], "Lookback window"),
          {:ok, max_insights_per_cycle} <-

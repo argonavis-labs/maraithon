@@ -95,7 +95,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert_patch(view, "/agents?id=#{agent.id}&panel=edit")
 
     html = render(view)
-    assert html =~ "Prompt"
+    assert html =~ "Instructions"
     assert html =~ "Save changes"
   end
 

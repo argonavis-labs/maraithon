@@ -775,13 +775,13 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <section>
                       <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-                        <h3 class="text-base/7 font-semibold text-zinc-950">Prompt</h3>
+                        <h3 class="text-base/7 font-semibold text-zinc-950">Instructions</h3>
                         <span class="text-xs/5 text-zinc-500">
                           Updates take effect on the next wakeup
                         </span>
                       </div>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        How should this automation reason, and what tone should it take?
+                        What is this automation responsible for, how should it communicate, and what should it avoid?
                       </p>
                       <div class="mt-4">
                         <.c_textarea
@@ -798,7 +798,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            sources · actions · budgets · custom setup
+                            signals · permissions · allowances · custom setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -828,7 +828,7 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
 
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <.field label="Subscriptions" for="launch_subscriptions">
+                          <.field label="Signals to watch" for="launch_subscriptions">
                             <.c_input
                               id="launch_subscriptions"
                               type="text"
@@ -838,7 +838,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Actions" for="launch_tools">
+                          <.field label="Allowed actions" for="launch_tools">
                             <.c_input
                               id="launch_tools"
                               type="text"
@@ -850,7 +850,7 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
 
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                          <.field label="Recent context limit" for="launch_memory_limit">
+                          <.field label="Recent context window" for="launch_memory_limit">
                             <.c_input
                               id="launch_memory_limit"
                               type="number"
@@ -860,7 +860,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Reasoning budget" for="launch_budget_llm_calls">
+                          <.field label="Reasoning allowance" for="launch_budget_llm_calls">
                             <.c_input
                               id="launch_budget_llm_calls"
                               type="number"
@@ -870,7 +870,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Action budget" for="launch_budget_tool_calls">
+                          <.field label="Action allowance" for="launch_budget_tool_calls">
                             <.c_input
                               id="launch_budget_tool_calls"
                               type="number"
@@ -881,7 +881,7 @@ defmodule MaraithonWeb.AgentsLive do
                           </.field>
                         </div>
 
-                        <.field label="Advanced setup JSON" for="launch_config_json">
+                        <.field label="Custom configuration" for="launch_config_json">
                           <.c_textarea
                             id="launch_config_json"
                             name="launch[config_json]"
@@ -1088,8 +1088,8 @@ defmodule MaraithonWeb.AgentsLive do
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
-                      <.summary_card title="Subscriptions" value={subscriptions_preview(@selected_agent.config)} />
-                      <.summary_card title="Actions" value={tools_preview(@selected_agent.config)} />
+                      <.summary_card title="Signals to watch" value={subscriptions_preview(@selected_agent.config)} />
+                      <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
                       <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
                       <.summary_card title="Spend" value={"$#{Float.round(@agent_spend.total_cost, 4)}"} value_class="text-amber-700" />
                     </div>

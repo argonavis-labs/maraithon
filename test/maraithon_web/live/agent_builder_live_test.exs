@@ -37,6 +37,9 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Chief of Staff"
       assert html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
+      refute html =~ "scan limits"
+      refute html =~ "Memory limit"
+      refute html =~ "Input subscriptions"
       refute html =~ "Maraithon Agent Service"
       refute html =~ "OTP Agent Runtime"
       refute html =~ "http_get"
@@ -211,11 +214,12 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Focused setup"
-      assert html =~ "Coverage and spend"
+      assert html =~ "Coverage level"
       assert html =~ "Balanced"
       refute has_element?(view, "label[for=launch_email_scan_limit]")
       refute has_element?(view, "#launch_morning_brief_hour_local")
       refute html =~ "Advanced JSON overrides"
+      refute html =~ "scan limits"
 
       html =
         view
@@ -223,10 +227,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
         |> render_click()
 
       assert html =~ "Chief-of-Staff Briefing"
-      assert html =~ "Email scan limit"
+      assert html =~ "Email review limit"
       assert html =~ "Max items per check"
       assert html =~ "Interruption bar"
-      assert html =~ "Advanced JSON overrides"
+      assert html =~ "Custom configuration"
+      refute html =~ "Advanced JSON overrides"
+      refute html =~ "Memory limit"
+      refute html =~ "Input subscriptions"
       refute html =~ "Max insights per cycle"
       refute html =~ "Minimum confidence"
       refute html =~ "Confidence gate"
