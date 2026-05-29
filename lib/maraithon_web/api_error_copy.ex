@@ -294,12 +294,17 @@ defmodule MaraithonWeb.ApiErrorCopy do
     end)
   end
 
-  defp mobile_message(:not_found), do: "That item is no longer available."
+  defp mobile_message(:not_found) do
+    "That item is no longer available. Refresh to see current work."
+  end
+
   defp mobile_message(:invalid_email), do: "Enter a valid email address."
   defp mobile_message(:invalid_or_expired_code), do: "Sign-in code is invalid or expired."
   defp mobile_message(:invalid_or_expired_link), do: "Sign-in link is invalid or expired."
 
-  defp mobile_chat_message(:not_found), do: "That conversation is no longer available."
+  defp mobile_chat_message(:not_found) do
+    "That conversation is no longer available. Refresh conversations to see current threads."
+  end
 
   defp mobile_chat_message(:assistant_run_in_progress) do
     "Maraithon is still working on the last message."
@@ -314,8 +319,12 @@ defmodule MaraithonWeb.ApiErrorCopy do
   defp mobile_chat_message(:empty_message), do: "Enter a message before sending."
   defp mobile_chat_message(:empty_thread_title), do: "Enter a chat name before saving."
   defp mobile_chat_message(:thread_title_too_long), do: "Keep the chat name shorter."
-  defp mobile_chat_message(:message_not_found), do: "That message is no longer available."
-  defp mobile_chat_message(:invalid_decision), do: "Choose confirm or cancel and try again."
+
+  defp mobile_chat_message(:message_not_found) do
+    "That message is no longer available. Refresh the conversation before continuing."
+  end
+
+  defp mobile_chat_message(:invalid_decision), do: "Choose confirm or cancel before continuing."
 
   defp mobile_chat_message(:prepared_action_expired) do
     "That action expired. Ask Maraithon to prepare it again."

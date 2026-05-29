@@ -66,7 +66,7 @@ struct MobileErrorCopyTests {
         )
         #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("message_not_found")) ==
-                "That message is no longer available."
+                "That message is no longer available. Refresh the conversation before continuing."
         )
         #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("prepared_action_expired")) ==

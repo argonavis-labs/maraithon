@@ -459,7 +459,8 @@ defmodule MaraithonWeb.MobileChatControllerTest do
 
     assert %{
              "error" => "not_found",
-             "message" => "That conversation is no longer available."
+             "message" =>
+               "That conversation is no longer available. Refresh conversations to see current threads."
            } = json_response(conn, 404)
   end
 
@@ -710,7 +711,8 @@ defmodule MaraithonWeb.MobileChatControllerTest do
 
     assert %{
              "error" => "message_not_found",
-             "message" => "That message is no longer available."
+             "message" =>
+               "That message is no longer available. Refresh the conversation before continuing."
            } = response
   end
 

@@ -8,7 +8,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
   test "mobile payloads preserve stable public codes" do
     assert ApiErrorCopy.mobile(:not_found) == %{
              error: "not_found",
-             message: "That item is no longer available."
+             message: "That item is no longer available. Refresh to see current work."
            }
 
     assert ApiErrorCopy.mobile_chat(:assistant_run_in_progress) == %{
@@ -42,7 +42,19 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert ApiErrorCopy.mobile_chat(:message_not_found) == %{
              error: "message_not_found",
-             message: "That message is no longer available."
+             message:
+               "That message is no longer available. Refresh the conversation before continuing."
+           }
+
+    assert ApiErrorCopy.mobile_chat(:not_found) == %{
+             error: "not_found",
+             message:
+               "That conversation is no longer available. Refresh conversations to see current threads."
+           }
+
+    assert ApiErrorCopy.mobile_chat(:invalid_decision) == %{
+             error: "invalid_decision",
+             message: "Choose confirm or cancel before continuing."
            }
   end
 

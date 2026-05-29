@@ -59,7 +59,7 @@ enum MobileErrorCopy {
         case "assistant_run_in_progress":
             return "Maraithon is still working on the last message."
         case "message_not_found":
-            return "That message is no longer available."
+            return "That message is no longer available. Refresh the conversation before continuing."
         case "message_too_long":
             return "Message is too long. Send a shorter note."
         case "missing_client_message_id":

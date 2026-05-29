@@ -101,7 +101,7 @@ defmodule MaraithonWeb.MobileApiControllerTest do
 
     assert json_response(conn, 404) == %{
              "error" => "not_found",
-             "message" => "That item is no longer available."
+             "message" => "That item is no longer available. Refresh to see current work."
            }
 
     {:ok, [todo]} =
@@ -657,7 +657,7 @@ defmodule MaraithonWeb.MobileApiControllerTest do
 
     assert json_response(conn, 404) == %{
              "error" => "not_found",
-             "message" => "That item is no longer available."
+             "message" => "That item is no longer available. Refresh to see current work."
            }
 
     {:ok, person} =
