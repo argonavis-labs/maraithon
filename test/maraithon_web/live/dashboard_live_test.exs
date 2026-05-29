@@ -741,7 +741,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     |> render_click()
 
     html = render(view)
-    assert html =~ "No open work items."
+    assert html =~ "No active work right now."
+    refute html =~ "No open work items."
     refute html =~ "No open cards."
     assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
   end
@@ -874,7 +875,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(view, "#todo-review-card-#{complete_todo.id}")
-    assert html =~ "No open work items."
+    assert html =~ "No active work right now."
+    refute html =~ "No open work items."
     refute html =~ ":not_found"
     refute html =~ "not_found"
 
@@ -902,7 +904,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(important_view, "#todo-review-card-#{important_todo.id}")
-    assert html =~ "No open work items."
+    assert html =~ "No active work right now."
+    refute html =~ "No open work items."
     refute html =~ ":not_found"
     refute html =~ "not_found"
   end
