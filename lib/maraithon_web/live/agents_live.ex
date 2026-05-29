@@ -798,7 +798,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            behavior · subscriptions · actions · budgets · advanced setup
+                            sources · actions · budgets · custom setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -806,7 +806,7 @@ defmodule MaraithonWeb.AgentsLive do
                       </summary>
                       <div class="space-y-6 border-t border-zinc-950/10 px-4 py-5 sm:px-6">
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <.field label="Behavior" for="launch_behavior">
+                          <.field label="Template" for="launch_behavior">
                             <.c_select id="launch_behavior" name="launch[behavior]">
                               <%= for behavior <- behaviors() do %>
                                 <option value={behavior} selected={behavior == @launch["behavior"]}>
@@ -850,7 +850,7 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
 
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                          <.field label="Memory Limit" for="launch_memory_limit">
+                          <.field label="Recent context limit" for="launch_memory_limit">
                             <.c_input
                               id="launch_memory_limit"
                               type="number"
@@ -1100,7 +1100,7 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <.panel class="bg-amber-50">
-                        <.heading level={3} class="text-base/7 text-amber-950">Usage Summary</.heading>
+                        <.heading level={3} class="text-base/7 text-amber-950">Usage</.heading>
                         <dl class="mt-3 space-y-2 text-sm">
                           <div class="flex items-center justify-between gap-3">
                             <dt class="text-amber-700/80">Assistant work</dt>
@@ -1115,7 +1115,7 @@ defmodule MaraithonWeb.AgentsLive do
                             <dd class="font-medium text-amber-950"><%= @agent_spend.output_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3 border-t border-amber-200 pt-2">
-                            <dt class="text-amber-700/80">Total Cost</dt>
+                            <dt class="text-amber-700/80">Estimated spend</dt>
                             <dd class="font-semibold text-amber-950">
                               $<%= Float.round(@agent_spend.total_cost, 4) %>
                             </dd>
@@ -1124,7 +1124,7 @@ defmodule MaraithonWeb.AgentsLive do
                       </.panel>
 
                       <.panel class="bg-zinc-50">
-                        <.heading level={3} class="text-base/7">Current Setup</.heading>
+                        <.heading level={3} class="text-base/7">Current settings</.heading>
                         <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs/5 text-zinc-600"><%= pretty_config(@selected_agent.config) %></pre>
                       </.panel>
                     </div>
@@ -1136,15 +1136,15 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <.panel>
                       <:header>
-                        <.heading level={3} class="text-base/7">Run Queue</.heading>
+                        <.heading level={3} class="text-base/7">Work in progress</.heading>
                         <.text class="mt-1">
-                          Review queued and recent work for this automation.
+                          See what is waiting, running, or needs attention.
                         </.text>
                       </:header>
                       <div class="space-y-3">
                         <div class="grid grid-cols-3 gap-2 text-xs">
                           <.queue_metric title="Pending" value={@inspection.effect_counts.pending} />
-                          <.queue_metric title="Claimed" value={@inspection.effect_counts.claimed} />
+                          <.queue_metric title="In progress" value={@inspection.effect_counts.claimed} />
                           <.queue_metric
                             title="Failed"
                             value={@inspection.effect_counts.failed}
@@ -1179,16 +1179,16 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <.panel>
                       <:header>
-                        <.heading level={3} class="text-base/7">Scheduled Work</.heading>
+                        <.heading level={3} class="text-base/7">Upcoming checks</.heading>
                         <.text class="mt-1">
-                          Follow-ups and checkpoints queued for this automation.
+                          Scheduled follow-ups and health checks for this automation.
                         </.text>
                       </:header>
                       <div class="space-y-3">
                         <div class="grid grid-cols-2 gap-2 text-xs">
                           <.queue_metric title="Pending" value={@inspection.job_counts.pending} />
                           <.queue_metric
-                            title="Dispatched"
+                            title="In progress"
                             value={@inspection.job_counts.dispatched}
                             value_class="text-amber-600"
                           />
@@ -1226,14 +1226,13 @@ defmodule MaraithonWeb.AgentsLive do
                   <div :if={!chief_of_staff_agent?(@selected_agent)} class="space-y-6">
                     <.panel body_class="px-4 py-4">
                       <:header>
-                        <.heading level={3} class="text-base/7">Recent Activity</.heading>
+                        <.heading level={3} class="text-base/7">Recent updates</.heading>
                       </:header>
                       <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4">
                         <%= for event <- Enum.reverse(@events) do %>
                           <div class="rounded-lg border border-zinc-950/10 p-3 text-sm">
                             <div class="flex items-center justify-between gap-3">
                               <span class="font-medium text-cyan-700"><%= work_type_label(event.event_type) %></span>
-                              <span class="text-xs/5 text-zinc-400">#<%= event.sequence_num %></span>
                             </div>
                             <div class="mt-1 text-xs/5 text-zinc-500"><%= format_datetime(event.created_at) %></div>
                             <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
@@ -1250,7 +1249,7 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
                       <div class="border-b border-white/10 px-4 py-4">
-                        <h3 class="text-base/7 font-semibold text-white">Operational Notes</h3>
+                        <h3 class="text-base/7 font-semibold text-white">Automation notes</h3>
                         <p class="mt-1 text-sm/6 text-zinc-400">
                           Recent automation notes. Sensitive diagnostic details are hidden from this view.
                         </p>
