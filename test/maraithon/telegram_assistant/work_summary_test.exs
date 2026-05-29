@@ -39,6 +39,30 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute Map.has_key?(summary, "tool_steps")
   end
 
+  test "empty open-work tool summaries avoid all-clear language" do
+    run = %Run{
+      status: "completed",
+      model_name: "gpt-test",
+      result_summary: %{"tool_steps" => 1},
+      steps: [
+        tool_step("list_todos", %{"todos" => []})
+      ]
+    }
+
+    summary = WorkSummary.for_run(run)
+
+    assert [
+             %{
+               "tool" => "open_work",
+               "label" => "Open work",
+               "summary" => "No open work surfaced."
+             }
+           ] = summary["tool_calls"]
+
+    refute inspect(summary) =~ "all clear"
+    refute inspect(summary) =~ "needs attention"
+  end
+
   test "list tool summaries name the returned work instead of only counting it" do
     turn = %Turn{
       structured_data: %{

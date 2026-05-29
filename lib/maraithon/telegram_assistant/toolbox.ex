@@ -3730,11 +3730,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         "Reconnect Gmail before relying on this as a complete inbox review."
 
       true ->
-        "No open work needs action right now."
+        "No immediate action is surfaced by connected sources right now."
     end
   end
 
-  defp open_work_count_line(0, 0), do: "No open work needs attention right now."
+  defp open_work_count_line(0, 0),
+    do: "No open work is surfaced by connected sources right now."
 
   defp open_work_count_line(insight_count, todo_count) do
     parts =

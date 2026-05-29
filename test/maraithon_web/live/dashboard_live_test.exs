@@ -41,6 +41,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "h2", "Automation activity")
     assert has_element?(view, "h2", "Health")
     assert Regex.scan(~r/<dt[^>]*>\s*Uptime\s*<\/dt>/, html) |> length() == 1
+    assert html =~ "No work is surfaced right now."
+    assert html =~ "none failed"
     assert html =~ "Operational activity"
     assert html =~ "Needs attention"
     assert html =~ "System logs"
@@ -53,6 +55,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "a[href='/agents/new']", "New automation")
     refute has_element?(view, "h1", "Todos")
     refute html =~ "New agent"
+    refute html =~ "All caught up"
+    refute html =~ "all clear"
     refute html =~ "Install agent"
     refute html =~ "Agent activity"
     refute html =~ "Agent Registry"

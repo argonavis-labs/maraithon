@@ -403,7 +403,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
     case {singular, count} do
       {"work item", 0} ->
-        "No open work found."
+        "No open work surfaced."
 
       {"work item", count} ->
         "Found #{format_count(count)} open work #{pluralize("item", count)}."

@@ -174,11 +174,13 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "No open work needs attention right now."
-    assert result.next_action == "No open work needs action right now."
+    assert result.summary == "No open work is surfaced by connected sources right now."
+    assert result.next_action == "No immediate action is surfaced by connected sources right now."
 
     refute result.summary =~ "reconnection"
     refute result.summary =~ "complete inbox review"
+    refute result.summary =~ "needs attention"
+    refute result.next_action =~ "needs action"
   end
 
   test "get_open_work_summary returns executive-ready summary when Gmail is missing" do

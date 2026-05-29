@@ -941,7 +941,7 @@ defmodule MaraithonWeb.DashboardLive do
               <%= if @open_todo_count > 0 do %>
                 <%= review_ready_label(@open_todo_count) %>
               <% else %>
-                All caught up. Maraithon will surface new work here when something needs your attention.
+                No work is surfaced right now. Maraithon will add items here when connected sources reveal something that needs attention.
               <% end %>
             </p>
           </div>
@@ -3188,9 +3188,9 @@ defmodule MaraithonWeb.DashboardLive do
     "#{active} active · #{needs_attention} need attention"
   end
 
-  defp queued_action_note(0), do: "all clear"
-  defp queued_action_note(1), do: "1 needs attention"
-  defp queued_action_note(count), do: "#{count} need attention"
+  defp queued_action_note(0), do: "none failed"
+  defp queued_action_note(1), do: "1 failed"
+  defp queued_action_note(count), do: "#{count} failed"
 
   defp automation_status_label("running"), do: "active"
   defp automation_status_label("degraded"), do: "needs attention"
