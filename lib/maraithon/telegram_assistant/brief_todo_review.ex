@@ -20,6 +20,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   @review_key "todo_review"
   @open_statuses ["open", "snoozed"]
   @text_review_limit 12
+  @why_now_keys ~w(why_now why_it_matters due_context)
+  @evidence_keys ~w(
+    source_quote quote source_excerpt body_excerpt excerpt source_evidence checked_evidence
+  )
+  @unsafe_review_metadata_markers ~w(
+    <redacted authorization bearer dbconnection ecto. http_status internal password phoenix.
+    postgrex private_key stacktrace token
+  )
 
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
@@ -728,10 +736,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_review_line(todo, marker) do
     title = todo_title(todo)
 
-    case todo_next_action(todo) do
-      nil -> "#{marker} #{safe(title)}"
-      next_action -> "#{marker} #{safe(title)}\n   Next: #{safe(next_action)}"
-    end
+    [
+      "#{marker} #{safe(title)}",
+      todo_why_now_line(todo),
+      todo_next_action_line(todo, title),
+      todo_evidence_line(todo)
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
   end
 
   defp todo_title(todo) do
@@ -748,6 +760,104 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       true -> next_action
     end
   end
+
+  defp todo_next_action_line(todo, title) do
+    case todo_next_action(todo) do
+      nil -> nil
+      next_action when is_binary(title) and next_action == title -> nil
+      next_action -> "   Next: #{safe(truncate(next_action, 220))}"
+    end
+  end
+
+  defp todo_why_now_line(todo) do
+    case first_metadata_text(todo, @why_now_keys) || todo_summary(todo) do
+      nil -> nil
+      why_now -> "   Why now: #{safe(truncate(why_now, 180))}"
+    end
+  end
+
+  defp todo_evidence_line(todo) do
+    case first_metadata_text(todo, @evidence_keys) ||
+           public_metadata_text(read_string(todo, "notes")) do
+      nil -> nil
+      evidence -> "   Evidence: #{safe(truncate(evidence, 180))}"
+    end
+  end
+
+  defp todo_summary(todo) do
+    summary = public_metadata_text(read_string(todo, "summary"))
+    title = todo_title(todo)
+    next_action = todo_next_action(todo)
+
+    cond do
+      is_nil(summary) -> nil
+      same_text?(summary, title) -> nil
+      same_text?(summary, next_action) -> nil
+      true -> summary
+    end
+  end
+
+  defp first_metadata_text(todo, keys) when is_list(keys) do
+    metadata = todo_metadata(todo)
+
+    Enum.find_value(keys, fn key ->
+      metadata
+      |> metadata_value(key)
+      |> public_metadata_text()
+    end)
+  end
+
+  defp todo_metadata(%Todo{metadata: metadata}) when is_map(metadata), do: metadata
+  defp todo_metadata(%Todo{}), do: %{}
+
+  defp todo_metadata(todo) when is_map(todo) do
+    case Map.get(todo, "metadata") || Map.get(todo, :metadata) do
+      metadata when is_map(metadata) -> metadata
+      _other -> %{}
+    end
+  end
+
+  defp todo_metadata(_todo), do: %{}
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    Map.get(metadata, key) ||
+      case existing_atom_key(key) do
+        nil -> nil
+        atom_key -> Map.get(metadata, atom_key)
+      end
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp public_metadata_text(value) when is_binary(value) do
+    value =
+      value
+      |> Maraithon.Redaction.redact_string()
+      |> String.trim()
+
+    if value != "" and public_review_metadata_text?(value), do: value
+  end
+
+  defp public_metadata_text(values) when is_list(values) do
+    Enum.find_value(values, &public_metadata_text/1)
+  end
+
+  defp public_metadata_text(value) when is_map(value) do
+    Enum.find_value(~w(excerpt text quote summary body), fn key ->
+      value
+      |> metadata_value(key)
+      |> public_metadata_text()
+    end)
+  end
+
+  defp public_metadata_text(_value), do: nil
+
+  defp public_review_metadata_text?(value) when is_binary(value) do
+    lower = String.downcase(value)
+    not Enum.any?(@unsafe_review_metadata_markers, &String.contains?(lower, &1))
+  end
+
+  defp public_review_metadata_text?(_value), do: false
 
   defp same_text?(left, right) when is_binary(left) and is_binary(right) do
     String.downcase(left) == String.downcase(right)
@@ -962,4 +1072,19 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp safe(value), do: to_string(value || "") |> safe()
+
+  defp truncate(value, max_length) when is_binary(value) and is_integer(max_length) do
+    value = String.trim(value)
+
+    if String.length(value) <= max_length do
+      value
+    else
+      value
+      |> String.slice(0, max(max_length - 3, 0))
+      |> String.trim_trailing()
+      |> Kernel.<>("...")
+    end
+  end
+
+  defp truncate(value, _max_length), do: to_string(value || "")
 end

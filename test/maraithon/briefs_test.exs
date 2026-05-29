@@ -426,7 +426,15 @@ defmodule Maraithon.BriefsTest do
         ),
         todo_attrs("briefs-review-open:second", "Confirm the shipment ETA",
           source_occurred_at: "2026-04-02T15:00:00Z",
-          next_action: "Reply with the signed shipment timing before noon."
+          summary: "The receiving window closes before tomorrow's dispatch.",
+          next_action: "Reply with the signed shipment timing before noon.",
+          notes: "Ops asked for the signed shipment timing before noon.",
+          metadata: %{
+            "thread_id" => "briefs-review-open:second",
+            "subject" => "Confirm the shipment ETA",
+            "why_now" => "The receiving window closes before tomorrow's dispatch.",
+            "source_evidence" => "Ops asked for the signed shipment timing before noon."
+          }
         )
       ])
 
@@ -468,7 +476,9 @@ defmodule Maraithon.BriefsTest do
     assert summary.text =~ "Open work review complete"
     assert summary.text =~ "Still open: 1"
     assert summary.text =~ "Confirm the shipment ETA"
+    assert summary.text =~ "Why now: The receiving window closes before tomorrow's dispatch."
     assert summary.text =~ "Next: Reply with the signed shipment timing before noon."
+    assert summary.text =~ "Evidence: Ops asked for the signed shipment timing before noon."
   end
 
   test "telegram text request starts latest open work review and advances after each action", %{
@@ -604,7 +614,15 @@ defmodule Maraithon.BriefsTest do
         todo_attrs("briefs-quick-list:first", "Reply to school about the pickup form",
           priority: 96,
           source_occurred_at: "2026-04-02T14:00:00Z",
-          next_action: "Send the signed pickup form and ask for confirmation."
+          summary: "Pickup-form changes close today.",
+          next_action: "Send the signed pickup form and ask for confirmation.",
+          notes: "School asked for the signed form before the pickup cutoff.",
+          metadata: %{
+            "thread_id" => "briefs-quick-list:first",
+            "subject" => "Reply to school about the pickup form",
+            "why_now" => "Pickup-form changes close today.",
+            "source_evidence" => "School asked for the signed form before the pickup cutoff."
+          }
         )
       ])
 
@@ -618,7 +636,9 @@ defmodule Maraithon.BriefsTest do
     [message] = sent_messages()
     assert message.text =~ "Open work"
     assert message.text =~ "1. #{todo.title}"
+    assert message.text =~ "Why now: Pickup-form changes close today."
     assert message.text =~ "Next: Send the signed pickup form and ask for confirmation."
+    assert message.text =~ "Evidence: School asked for the signed form before the pickup cutoff."
     assert message.text =~ "Best next move: review each item now"
     refute message.text =~ "clear decisions"
   end
