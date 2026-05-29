@@ -84,8 +84,8 @@ defmodule MaraithonWeb.MemoriesLive do
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
         <.page_header
-          title="Memory"
-          subtitle="Durable context Maraithon can recall, update, supersede, and audit."
+          title="Saved Context"
+          subtitle="Preferences, corrections, relationships, and project notes Maraithon uses when it briefs and follows up for you."
         />
 
         <.panel body_class="px-5 py-4">
@@ -101,7 +101,7 @@ defmodule MaraithonWeb.MemoriesLive do
                 id={@filter_form[:q].id}
                 name={@filter_form[:q].name}
                 value={@filter_form[:q].value}
-                placeholder="Search memories"
+                placeholder="Search saved context"
               />
             </.field>
             <.field label="Status" for={@filter_form[:status].id}>
@@ -113,7 +113,7 @@ defmodule MaraithonWeb.MemoriesLive do
                 <option :for={status <- @statuses} value={status}><%= label(status) %></option>
               </.c_select>
             </.field>
-            <.field label="Kind" for={@filter_form[:kind].id}>
+            <.field label="Type" for={@filter_form[:kind].id}>
               <.c_select
                 id={@filter_form[:kind].id}
                 name={@filter_form[:kind].name}
@@ -122,7 +122,7 @@ defmodule MaraithonWeb.MemoriesLive do
                 <option :for={kind <- @kinds} value={kind}><%= label(kind) %></option>
               </.c_select>
             </.field>
-            <.field label="Scope" for={@filter_form[:scope].id}>
+            <.field label="Applies to" for={@filter_form[:scope].id}>
               <.c_select
                 id={@filter_form[:scope].id}
                 name={@filter_form[:scope].name}
@@ -141,17 +141,17 @@ defmodule MaraithonWeb.MemoriesLive do
           <:header>
             <div class="flex items-center justify-between gap-3">
               <div>
-                <h2 class="text-sm/6 font-semibold text-zinc-950">Durable memories</h2>
-                <p class="text-sm/6 text-zinc-500"><%= length(@memories) %> shown</p>
+                <h2 class="text-sm/6 font-semibold text-zinc-950">Saved context</h2>
+                <p class="text-sm/6 text-zinc-500"><%= length(@memories) %> saved items shown</p>
               </div>
             </div>
           </:header>
           <.table>
             <.table_head>
               <.table_row>
-                <.table_header>Kind</.table_header>
-                <.table_header>Memory</.table_header>
-                <.table_header>Source</.table_header>
+                <.table_header>Type</.table_header>
+                <.table_header>Context</.table_header>
+                <.table_header>Learned from</.table_header>
                 <.table_header>Status</.table_header>
                 <.table_header class="text-right">Actions</.table_header>
               </.table_row>
@@ -159,7 +159,7 @@ defmodule MaraithonWeb.MemoriesLive do
             <.table_body>
               <.table_row :if={@memories == []}>
                 <.table_cell colspan="5" class="py-10 text-center text-sm/6 text-zinc-500">
-                  No memories match these filters.
+                  No saved context matches these filters.
                 </.table_cell>
               </.table_row>
               <.table_row
@@ -178,13 +178,13 @@ defmodule MaraithonWeb.MemoriesLive do
                     <%= memory.summary || memory.content %>
                   </div>
                   <div :if={memory.supersedes_id || memory.superseded_by_id} class="mt-2 text-xs/5 text-zinc-500">
-                    Supersession chain
+                    Updated by newer context
                   </div>
                 </.table_cell>
                 <.table_cell>
-                  <div class="text-sm/6 text-zinc-950"><%= memory.source %></div>
-                  <div :if={memory.source_ref_type || memory.source_ref_id} class="text-xs/5 text-zinc-500">
-                    <%= compact_source_ref(memory) %>
+                  <div class="text-sm/6 text-zinc-950"><%= memory_source_label(memory) %></div>
+                  <div :if={memory_source_detail(memory)} class="text-xs/5 text-zinc-500">
+                    <%= memory_source_detail(memory) %>
                   </div>
                 </.table_cell>
                 <.table_cell>
@@ -211,7 +211,7 @@ defmodule MaraithonWeb.MemoriesLive do
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 class="text-sm/6 font-semibold text-zinc-950"><%= @selected_memory.title %></h2>
-                <p class="text-sm/6 text-zinc-500"><%= compact_source_ref(@selected_memory) %></p>
+                <p class="text-sm/6 text-zinc-500"><%= memory_source_summary(@selected_memory) %></p>
               </div>
               <.badge color={status_color(@selected_memory.status)}>
                 <%= label(@selected_memory.status) %>
@@ -222,12 +222,12 @@ defmodule MaraithonWeb.MemoriesLive do
           <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
             <div class="space-y-6">
               <section>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Content</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">What Maraithon remembers</h3>
                 <p class="mt-2 whitespace-pre-wrap text-sm/6 text-zinc-700"><%= @selected_memory.content %></p>
               </section>
 
               <section :if={evidence(@selected_memory) != []}>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Evidence</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Why this was saved</h3>
                 <ul class="mt-2 divide-y divide-zinc-950/5 rounded-lg border border-zinc-950/10">
                   <li :for={entry <- evidence(@selected_memory)} class="px-3 py-2 text-sm/6">
                     <div class="font-medium text-zinc-950"><%= entry["source"] %></div>
@@ -237,7 +237,7 @@ defmodule MaraithonWeb.MemoriesLive do
               </section>
 
               <section>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Supersession chain</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Change history</h3>
                 <ol class="mt-2 divide-y divide-zinc-950/5 rounded-lg border border-zinc-950/10">
                   <li :for={memory <- @supersession_chain} class="px-3 py-2 text-sm/6">
                     <div class="flex items-center justify-between gap-3">
@@ -252,22 +252,20 @@ defmodule MaraithonWeb.MemoriesLive do
 
             <aside class="space-y-6">
               <section>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Provenance</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Review details</h3>
                 <.description_list class="mt-2">
-                  <.description_term>Importance</.description_term>
-                  <.description_details><%= @selected_memory.importance %></.description_details>
+                  <.description_term>Learned from</.description_term>
+                  <.description_details><%= memory_source_label(@selected_memory) %></.description_details>
                   <.description_term>Last used</.description_term>
                   <.description_details><%= format_datetime(@selected_memory.last_used_at) %></.description_details>
-                  <.description_term>Decay</.description_term>
-                  <.description_details><%= format_datetime(@selected_memory.decay_at) %></.description_details>
                 </.description_list>
               </section>
 
               <section>
-                <h3 class="text-sm/6 font-medium text-zinc-950">Events</h3>
+                <h3 class="text-sm/6 font-medium text-zinc-950">Recent changes</h3>
                 <ol class="mt-2 divide-y divide-zinc-950/5 rounded-lg border border-zinc-950/10">
                   <li :for={event <- @selected_events} class="px-3 py-2 text-sm/6">
-                    <div class="font-medium text-zinc-950"><%= label(event.event_type) %></div>
+                    <div class="font-medium text-zinc-950"><%= memory_event_label(event.event_type) %></div>
                     <div class="text-xs/5 text-zinc-500"><%= format_datetime(event.inserted_at) %></div>
                   </li>
                 </ol>
@@ -417,15 +415,60 @@ defmodule MaraithonWeb.MemoriesLive do
 
   defp label(value), do: to_string(value)
 
-  defp compact_source_ref(%Item{} = item) do
-    [item.source_ref_type, item.source_ref_id]
-    |> Enum.reject(&blank?/1)
-    |> Enum.join(":")
-    |> case do
-      "" -> item.source || "manual"
-      value -> value
+  defp memory_source_summary(%Item{} = item) do
+    case memory_source_detail(item) do
+      nil -> "Learned from #{memory_source_label(item)}"
+      detail -> "Learned from #{memory_source_label(item)} · #{detail}"
     end
   end
+
+  defp memory_source_label(%Item{source: source}), do: source_label(source)
+
+  defp source_label("gmail"), do: "Gmail"
+  defp source_label("google"), do: "Google"
+  defp source_label("slack"), do: "Slack"
+  defp source_label("telegram"), do: "Telegram"
+  defp source_label("imessage"), do: "iMessage"
+  defp source_label("messages"), do: "Messages"
+  defp source_label("calendar"), do: "Calendar"
+  defp source_label("calendar_local"), do: "Calendar"
+  defp source_label("reminders"), do: "Reminders"
+  defp source_label("notes"), do: "Notes"
+  defp source_label("voice_memos"), do: "Voice Memos"
+  defp source_label("browser_history"), do: "Browser"
+  defp source_label("operator_ui"), do: "Manual edit"
+  defp source_label("runtime"), do: "Maraithon"
+  defp source_label("system"), do: "Maraithon"
+  defp source_label("mcp"), do: "Connected tool"
+  defp source_label(source) when is_binary(source), do: label(source)
+  defp source_label(_source), do: "Maraithon"
+
+  defp memory_source_detail(%Item{} = item) do
+    cond do
+      !blank?(item.source_ref_type) -> "#{source_reference_label(item.source_ref_type)} available"
+      !blank?(item.source_ref_id) -> "Linked source available"
+      true -> nil
+    end
+  end
+
+  defp source_reference_label("gmail_thread"), do: "Linked thread"
+  defp source_reference_label("slack_thread"), do: "Linked thread"
+  defp source_reference_label("telegram_message"), do: "Linked message"
+  defp source_reference_label("imessage_chat"), do: "Linked conversation"
+  defp source_reference_label("todo"), do: "Linked work item"
+  defp source_reference_label("project"), do: "Linked project"
+  defp source_reference_label("person"), do: "Linked person"
+  defp source_reference_label(_source_ref_type), do: "Linked source"
+
+  defp memory_event_label("written"), do: "Saved"
+  defp memory_event_label("updated"), do: "Updated"
+  defp memory_event_label("recalled"), do: "Used in a response"
+  defp memory_event_label("archived"), do: "Archived"
+  defp memory_event_label("superseded"), do: "Updated by newer context"
+  defp memory_event_label("rejected"), do: "Dismissed"
+  defp memory_event_label("feedback_recorded"), do: "Feedback saved"
+  defp memory_event_label("confidence_updated"), do: "Review status updated"
+  defp memory_event_label(value), do: label(value)
 
   defp format_datetime(nil), do: "Never"
 

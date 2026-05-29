@@ -18,14 +18,26 @@ defmodule MaraithonWeb.MemoriesLiveTest do
         "title" => "School notices matter",
         "content" => "Surface school notices when they affect pickup or forms.",
         "source" => "telegram",
+        "source_ref_type" => "telegram_message",
+        "source_ref_id" => "telegram-secret-message-123",
+        "importance" => 97,
+        "decay_at" => ~U[2026-06-01 12:00:00Z],
         "confidence" => 0.97
       })
 
     {:ok, view, html} = live(conn, "/operator/memories?id=#{memory.id}")
 
-    assert html =~ "Durable memories"
+    assert html =~ "Saved context"
     assert html =~ "School notices matter"
+    assert html =~ "Learned from Telegram"
+    assert html =~ "Linked message available"
+    assert html =~ "What Maraithon remembers"
     assert has_element?(view, "a[href='/operator/memories'][aria-current='page']", "Memory")
+    refute html =~ "Durable memories"
+    refute html =~ "Provenance"
+    refute html =~ "Importance"
+    refute html =~ "Decay"
+    refute html =~ "telegram-secret-message-123"
     refute html =~ "Confidence"
     refute html =~ "97%"
   end
@@ -53,7 +65,9 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     html = render(view)
     assert html =~ "Charlie now prefers email."
     assert html =~ "Charlie prefers Slack."
-    assert html =~ "Supersession chain"
+    assert html =~ "Change history"
+    assert html =~ "Updated by newer context"
+    refute html =~ "Supersession chain"
 
     view
     |> form("#memory-filters", filters: %{"q" => "Charlie", "status" => "active"})
