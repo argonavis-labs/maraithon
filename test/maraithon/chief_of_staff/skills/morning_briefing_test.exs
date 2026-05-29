@@ -624,6 +624,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Charlie Feng"
   end
 
+  test "quality verifier drops person-only todo cards without memory-jogging context" do
+    weak_todo = %{
+      "source" => "gmail",
+      "title" => "Alex Muller",
+      "summary" => "",
+      "next_action" => "Reply.",
+      "dedupe_key" => "gmail:alex-muller"
+    }
+
+    contextual_todo = %{
+      "source" => "gmail",
+      "title" => "Follow up with Jordan Lee about Contoso pricing",
+      "summary" =>
+        "Jordan Lee at Contoso is waiting on the enterprise pricing answer for the renewal.",
+      "next_action" =>
+        "Reply to Jordan Lee with the renewal price, discount boundary, and concrete ETA.",
+      "dedupe_key" => "gmail:jordan-contoso-pricing",
+      "metadata" => %{
+        "company" => "Contoso",
+        "relationship_context" => "enterprise renewal lead",
+        "why_it_matters" => "Renewal decision is due today."
+      }
+    }
+
+    brief = %{
+      "title" => "Monday, May 11 - Follow-up review",
+      "summary" => "Review relationship follow-ups.",
+      "body" => "## Needs Your Attention\n- Clear the relationship follow-ups first.",
+      "todos" => [weak_todo, contextual_todo]
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert "sparse_person_todo_context" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["todos"] == [contextual_todo]
+  end
+
   test "quality verifier uses chief-of-staff copy when adding a generic attention section" do
     brief = %{
       "title" => "Morning briefing",

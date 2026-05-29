@@ -1891,6 +1891,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
     |> maybe_append_non_draft_jobs(brief_input, findings)
+    |> maybe_drop_sparse_person_todos(findings)
   end
 
   defp maybe_append_needs_attention(brief, brief_input, findings) do
@@ -2062,6 +2063,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Enum.reject(&blank?/1)
 
       append_body_section(brief, "## Not a draft job\n" <> Enum.join(lines, "\n"))
+    else
+      brief
+    end
+  end
+
+  defp maybe_drop_sparse_person_todos(brief, findings) do
+    if :sparse_person_todo_context in findings do
+      todos =
+        brief
+        |> read_list("todos")
+        |> Enum.reject(&sparse_person_todo?/1)
+
+      Map.put(brief, "todos", todos)
     else
       brief
     end
