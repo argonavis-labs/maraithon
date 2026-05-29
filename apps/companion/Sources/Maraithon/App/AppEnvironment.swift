@@ -146,16 +146,22 @@ final class AppEnvironment {
         )
         registry.register(browserHistory)
 
-        // Kick off the realtime channel. start() loops with backoff until a
-        // valid token is available, so calling it pre-sign-in is safe.
-        Task { [realtime = realtimeChannel] in
-            await realtime.start()
-        }
+        if Self.shouldAutoStartLiveServices {
+            // Kick off the realtime channel. start() loops with backoff until a
+            // valid token is available, so calling it pre-sign-in is safe.
+            Task { [realtime = realtimeChannel] in
+                await realtime.start()
+            }
 
-        // Auto-start every registered source so polling begins immediately
-        // on launch. Sources that need permissions they don't yet have
-        // surface as `.needsAttention(...)` rather than crashing.
-        registry.startAll()
+            // Auto-start every registered source so polling begins immediately
+            // on launch. Sources that need permissions they don't yet have
+            // surface as `.needsAttention(...)` rather than crashing.
+            registry.startAll()
+        }
+    }
+
+    private static var shouldAutoStartLiveServices: Bool {
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
     }
 
     /// Routes inbound deep-link URLs (e.g. `maraithon://device-token/<t>`).
@@ -195,39 +201,103 @@ final class AppEnvironment {
     /// signal across registered sources so the user can read it at a
     /// glance.
     var menuBarSymbol: String {
-        if isPaused { return "pause.circle" }
-        switch deviceAuth.state {
-        case .signedOut, .error:
-            return "exclamationmark.triangle"
-        default:
-            break
-        }
-        let states = sources.sources.filter { !$0.comingSoon }.map(\.state)
-        if states.contains(where: { if case .error = $0 { return true } else { return false } }) {
-            return "exclamationmark.octagon.fill"
-        }
-        if states.contains(where: { if case .needsAttention = $0 { return true } else { return false } }) {
-            return "exclamationmark.triangle.fill"
-        }
-        if states.contains(.syncing) { return "arrow.triangle.2.circlepath" }
-        if states.contains(.connected) { return "checkmark.circle" }
-        return "arrow.triangle.2.circlepath.circle"
+        CompanionMenuBarCopy.symbol(
+            isPaused: isPaused,
+            deviceAuthState: deviceAuth.state,
+            sourceStates: displayedSourceStates
+        )
     }
 
     /// True when any installed source is mid-sync. Used by the menubar
     /// label to drive the rotating glyph.
     var isAnySourceSyncing: Bool {
-        sources.sources.contains { $0.state == .syncing }
+        sources.sources.contains {
+            (sources.statusPublisher(for: $0.id)?.displayedState() ?? $0.state) == .syncing
+        }
     }
 
     /// Accessibility label paired with the menubar SF Symbol.
     var menuBarAccessibilityLabel: String {
-        if isPaused { return "Maraithon — paused" }
-        switch deviceAuth.state {
-        case .signedOut: return "Maraithon — not connected"
-        case .error: return "Maraithon — needs attention"
-        case .connecting, .awaitingApproval: return "Maraithon — connecting"
-        case .signedIn: return "Maraithon — syncing"
+        CompanionMenuBarCopy.accessibilityLabel(
+            isPaused: isPaused,
+            deviceAuthState: deviceAuth.state,
+            sourceStates: displayedSourceStates
+        )
+    }
+
+    private var displayedSourceStates: [SourceState] {
+        sources.sources.filter { !$0.comingSoon }.map {
+            sources.statusPublisher(for: $0.id)?.displayedState() ?? $0.state
         }
+    }
+}
+
+/// Product-facing menubar copy. Keeps the tiny menu-bar surface honest:
+/// "syncing" only appears while work is actually in flight.
+enum CompanionMenuBarCopy {
+    static func symbol(
+        isPaused: Bool,
+        deviceAuthState: DeviceAuth.State,
+        sourceStates: [SourceState]
+    ) -> String {
+        if isPaused { return "pause.circle" }
+
+        switch deviceAuthState {
+        case .signedOut, .error:
+            return "exclamationmark.triangle"
+        case .connecting, .awaitingApproval:
+            return "arrow.triangle.2.circlepath"
+        case .signedIn:
+            break
+        }
+
+        if sourceStates.contains(where: { if case .error = $0 { return true } else { return false } }) {
+            return "exclamationmark.octagon.fill"
+        }
+        if sourceStates.contains(where: { if case .needsAttention = $0 { return true } else { return false } }) {
+            return "exclamationmark.triangle.fill"
+        }
+        if sourceStates.contains(.syncing) { return "arrow.triangle.2.circlepath" }
+        if sourceStates.contains(.paused) { return "pause.circle" }
+        if sourceStates.contains(.connected) { return "checkmark.circle" }
+        return "arrow.triangle.2.circlepath.circle"
+    }
+
+    static func accessibilityLabel(
+        isPaused: Bool,
+        deviceAuthState: DeviceAuth.State,
+        sourceStates: [SourceState]
+    ) -> String {
+        if isPaused { return "Maraithon — sync paused" }
+
+        switch deviceAuthState {
+        case .signedOut:
+            return "Maraithon — not connected"
+        case .error:
+            return "Maraithon — needs attention"
+        case .connecting, .awaitingApproval:
+            return "Maraithon — connecting"
+        case .signedIn:
+            return signedInAccessibilityLabel(sourceStates: sourceStates)
+        }
+    }
+
+    private static func signedInAccessibilityLabel(sourceStates: [SourceState]) -> String {
+        if sourceStates.contains(where: { if case .error = $0 { return true } else { return false } }) {
+            return "Maraithon — sync needs attention"
+        }
+        if sourceStates.contains(where: { if case .needsAttention = $0 { return true } else { return false } }) {
+            return "Maraithon — needs attention"
+        }
+        if sourceStates.contains(.syncing) {
+            return "Maraithon — syncing"
+        }
+        if sourceStates.contains(.paused) {
+            return "Maraithon — sync paused"
+        }
+        if sourceStates.contains(.connected) {
+            return "Maraithon — up to date"
+        }
+        return "Maraithon — waiting to sync"
     }
 }

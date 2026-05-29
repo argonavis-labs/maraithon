@@ -53,10 +53,10 @@ defmodule Maraithon.OnboardingProofTest do
            "confidence" => 0.84
          },
          %{
-           "title" => "Inbox reply debt preview",
+           "title" => "Inbox unanswered-reply preview",
            "summary" => "The inbox sample contains a direct ask that looks unresolved.",
            "rationale" =>
-             "Reply debt is a reliable proof-of-value wedge because users instantly recognize the missed loop.",
+             "Unanswered replies are a reliable proof-of-value wedge because users instantly recognize the missed loop.",
            "recommended_action" =>
              "Flag the thread and escalate only if no response is sent after the promised window.",
            "source" => "gmail",
@@ -88,6 +88,59 @@ defmodule Maraithon.OnboardingProofTest do
     assert Enum.at(preview.items, 1).source == "slack"
     assert Enum.at(preview.items, 2).suggested_behavior == "inbox_calendar_advisor"
     assert preview.sources == ["Gmail · kent@voteagora.com", "Slack · Agora"]
+  end
+
+  test "keeps onboarding preview copy product-facing while retaining internal confidence" do
+    sources = [
+      %{
+        "source" => "gmail",
+        "label" => "Gmail",
+        "account_label" => "kent@voteagora.com",
+        "items" => %{
+          "inbox" => [
+            %{"subject" => "Deck follow-up", "snippet" => "Can you send the deck today?"}
+          ]
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       Jason.encode!([
+         %{
+           "title" => "Deck follow-up for Sarah",
+           "summary" => "The Sarah thread still needs a promised deck.",
+           "rationale" =>
+             "90% confidence from the model score.\nSarah asked for the deck and the sample does not show delivery.",
+           "recommended_action" =>
+             "Reasoning: this is high signal.\nCheck the thread and send the deck if it is still missing.",
+           "source" => "gmail",
+           "account_label" => "kent@voteagora.com",
+           "suggested_behavior" => "founder_followthrough_agent",
+           "confidence" => 0.97
+         }
+       ])}
+    end
+
+    assert {:ok, preview} =
+             OnboardingProof.preview("user@example.com",
+               sources: sources,
+               llm_complete: llm_complete
+             )
+
+    [item] = preview.items
+    assert item.confidence == 0.97
+    assert item.rationale == "Sarah asked for the deck and the sample does not show delivery."
+    assert item.recommended_action == "Check the thread and send the deck if it is still missing."
+
+    visible_copy =
+      Enum.join([item.title, item.summary, item.rationale, item.recommended_action], " ")
+
+    refute visible_copy =~ "90%"
+    refute String.contains?(String.downcase(visible_copy), "confidence")
+    refute String.contains?(String.downcase(visible_copy), "model")
+    refute String.contains?(String.downcase(visible_copy), "score")
+    refute String.contains?(String.downcase(visible_copy), "reasoning")
   end
 
   test "returns an empty preview when no connected data is available" do

@@ -23,6 +23,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Todos.Todo
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
+  alias MaraithonWeb.OperationFailureCopy
 
   def dashboard(conn, params) do
     with {:ok, activity_limit} <-
@@ -68,7 +69,10 @@ defmodule MaraithonWeb.AdminController do
         {:error, reason} ->
           conn
           |> put_status(:bad_gateway)
-          |> json(%{error: "diagnostics_export_failed", message: inspect(reason)})
+          |> json(%{
+            error: "diagnostics_export_failed",
+            message: admin_error(:diagnostics_export, reason)
+          })
       end
     else
       {:error, message} ->
@@ -101,7 +105,7 @@ defmodule MaraithonWeb.AdminController do
         {:error, :not_found} ->
           conn
           |> put_status(:not_found)
-          |> json(%{error: "not_found", message: "Agent not found"})
+          |> json(%{error: "not_found", message: "Automation not found"})
       end
     else
       {:error, message} ->
@@ -134,7 +138,7 @@ defmodule MaraithonWeb.AdminController do
       {:error, reason} ->
         conn
         |> put_status(:bad_gateway)
-        |> json(%{error: "fly_logs_unavailable", message: inspect(reason)})
+        |> json(%{error: "fly_logs_unavailable", message: admin_error(:fly_logs, reason)})
     end
   end
 
@@ -170,12 +174,12 @@ defmodule MaraithonWeb.AdminController do
         {:error, message} when is_binary(message) ->
           conn
           |> put_status(:bad_gateway)
-          |> json(%{error: "gmail_unavailable", message: message})
+          |> json(%{error: "gmail_unavailable", message: admin_error(:gmail_recent, message)})
 
         {:error, reason} ->
           conn
           |> put_status(:bad_gateway)
-          |> json(%{error: "gmail_unavailable", message: inspect(reason)})
+          |> json(%{error: "gmail_unavailable", message: admin_error(:gmail_recent, reason)})
       end
     else
       {:error, message} ->
@@ -248,8 +252,11 @@ defmodule MaraithonWeb.AdminController do
       {dismissed, failed} =
         Enum.reduce(todos, {[], []}, fn todo, {dismissed, failed} ->
           case Todos.dismiss(user_id, todo.id, note: note) do
-            {:ok, updated} -> {[updated | dismissed], failed}
-            {:error, reason} -> {dismissed, [%{id: todo.id, reason: inspect(reason)} | failed]}
+            {:ok, updated} ->
+              {[updated | dismissed], failed}
+
+            {:error, reason} ->
+              {dismissed, [%{id: todo.id, reason: admin_error(:todo_dismiss, reason)} | failed]}
           end
         end)
 
@@ -322,7 +329,7 @@ defmodule MaraithonWeb.AdminController do
         {:error, reason} ->
           conn
           |> put_status(:bad_gateway)
-          |> json(%{error: "reset_failed", message: inspect(reason)})
+          |> json(%{error: "reset_failed", message: admin_error(:reset_operator_state, reason)})
       end
     else
       conn
@@ -357,7 +364,7 @@ defmodule MaraithonWeb.AdminController do
       {:error, reason} ->
         conn
         |> put_status(:bad_gateway)
-        |> json(%{error: "telegram_push_failed", message: inspect(reason)})
+        |> json(%{error: "telegram_push_failed", message: admin_error(:telegram_push, reason)})
     end
   end
 
@@ -395,7 +402,10 @@ defmodule MaraithonWeb.AdminController do
       {:error, reason} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "chief_of_staff_ensure_failed", message: format_error(reason)})
+        |> json(%{
+          error: "chief_of_staff_ensure_failed",
+          message: admin_error(:chief_of_staff_ensure, reason)
+        })
     end
   end
 
@@ -414,12 +424,15 @@ defmodule MaraithonWeb.AdminController do
       {:error, :unsupported_provider} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "invalid_params", message: "Unsupported provider"})
+        |> json(%{error: "invalid_params", message: "That app connection is not available."})
 
       {:error, reason} ->
         conn
         |> put_status(:bad_gateway)
-        |> json(%{error: "disconnect_failed", message: inspect(reason)})
+        |> json(%{
+          error: "disconnect_failed",
+          message: admin_error(:disconnect_connection, reason)
+        })
     end
   end
 
@@ -679,17 +692,7 @@ defmodule MaraithonWeb.AdminController do
     }
   end
 
-  defp format_error(%Ecto.Changeset{} = changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> inspect()
-  end
-
-  defp format_error(reason), do: inspect(reason)
+  defp admin_error(action, reason), do: OperationFailureCopy.admin(action, reason)
 
   defp normalize_json(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp normalize_json(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)

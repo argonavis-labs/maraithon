@@ -29,7 +29,7 @@ final class SessionStore {
                 phase = .signedOut
             }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
             user = nil
             phase = .signedOut
         }
@@ -44,7 +44,7 @@ final class SessionStore {
             pendingMagicLink = try await authProvider.requestMagicLink(email: email)
             phase = .magicLinkSent
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
     }
 
@@ -58,7 +58,7 @@ final class SessionStore {
             pendingMagicLink = nil
             phase = .signedIn
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
     }
 
@@ -79,7 +79,7 @@ final class SessionStore {
         do {
             try await authProvider.signOut()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
 
         user = nil

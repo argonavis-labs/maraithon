@@ -1,10 +1,19 @@
 import SwiftUI
 
+enum MagicSigninCopy {
+    static let localCodeLabel = "One-time sign-in code"
+    static let useLocalCodeButton = "Use This Code"
+    static let localCodeAccessibilityIdentifier = "one-time-sign-in-code"
+
+    static var localCodeVisibleStrings: [String] {
+        [localCodeLabel, useLocalCodeButton]
+    }
+}
+
 struct MagicSigninView: View {
     @Environment(SessionStore.self) private var sessionStore
     @State private var email = ""
     @State private var pastedCode = ""
-    @State private var mode: AuthEntryMode = .signIn
     @FocusState private var focusedField: Field?
 
     private enum Field {
@@ -57,7 +66,7 @@ struct MagicSigninView: View {
             Text("Maraithon")
                 .font(.largeTitle.bold())
 
-            Text("Enter your email and we'll send a one-time code. New accounts are created automatically, matching the web app.")
+            Text("Enter your email and we'll send a one-time code. If this is your first time here, Maraithon creates your workspace automatically.")
                 .font(.body)
                 .foregroundStyle(.secondary)
         }
@@ -66,14 +75,7 @@ struct MagicSigninView: View {
 
     private var emailForm: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Picker("Mode", selection: $mode) {
-                ForEach(AuthEntryMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            TextField("Email", text: $email)
+            TextField("Work email", text: $email)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.emailAddress)
                 .textContentType(.emailAddress)
@@ -86,7 +88,7 @@ struct MagicSigninView: View {
             Button {
                 submitEmail()
             } label: {
-                Label(mode.actionTitle, systemImage: "paperplane.fill")
+                Label("Email Me a Code", systemImage: "paperplane.fill")
                     .frame(maxWidth: .infinity)
             }
             .appProminentGlassActionStyle()
@@ -104,20 +106,20 @@ struct MagicSigninView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            if let developmentCode = request.developmentCode {
+            if let oneTimeCode = request.developmentCode {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("Development sign-in code", systemImage: "key.fill")
+                    Label(MagicSigninCopy.localCodeLabel, systemImage: "key.fill")
                         .font(.subheadline.weight(.semibold))
 
-                    Text(developmentCode)
+                    Text(oneTimeCode)
                         .font(.title3.monospaced().weight(.semibold))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
 
                     Button {
-                        consumeMagicLink(developmentCode)
+                        consumeMagicLink(oneTimeCode)
                     } label: {
-                        Label("Use Development Code", systemImage: "checkmark.seal.fill")
+                        Label(MagicSigninCopy.useLocalCodeButton, systemImage: "checkmark.seal.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .appGlassActionStyle()
@@ -125,7 +127,7 @@ struct MagicSigninView: View {
                 }
                 .padding(14)
                 .background(.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .accessibilityIdentifier("development-sign-in-code")
+                .accessibilityIdentifier(MagicSigninCopy.localCodeAccessibilityIdentifier)
             }
 
             TextField("Enter sign-in code", text: $pastedCode)

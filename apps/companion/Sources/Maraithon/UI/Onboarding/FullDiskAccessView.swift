@@ -48,11 +48,11 @@ struct FullDiskAccessView: View {
                 .accessibilityHidden(true)
 
             VStack(spacing: Tokens.Spacing.small) {
-                Text("Allow Maraithon to read iMessage")
+                Text(FullDiskAccessCopy.onboardingTitle)
                     .font(.title2.weight(.semibold))
                     .multilineTextAlignment(.center)
 
-                Text("Maraithon needs Full Disk Access to read your local iMessage history. The database is opened read-only and never modified.")
+                Text(FullDiskAccessCopy.onboardingBody)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -65,7 +65,7 @@ struct FullDiskAccessView: View {
                 Button {
                     openSystemSettings()
                 } label: {
-                    Label("Open System Settings", systemImage: "gearshape")
+                    Label(FullDiskAccessCopy.openSettingsButton, systemImage: "gearshape")
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
@@ -74,7 +74,7 @@ struct FullDiskAccessView: View {
                 Button {
                     onContinue()
                 } label: {
-                    Text(hasAccess ? "Continue" : "I've granted access — Continue")
+                    Text(FullDiskAccessCopy.continueButton)
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
@@ -82,7 +82,7 @@ struct FullDiskAccessView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!hasAccess)
 
-                Button("Skip — set up iMessage later") {
+                Button(FullDiskAccessCopy.skipButton) {
                     onSkip()
                 }
                 .controlSize(.large)
@@ -124,9 +124,9 @@ struct FullDiskAccessView: View {
     /// confirmation before we jump to the backfill step.
     private var statusText: String {
         if hasAccess {
-            return didAutoAdvance ? "Granted, continuing…" : "Full Disk Access granted"
+            return didAutoAdvance ? FullDiskAccessCopy.autoAdvanceStatus : FullDiskAccessCopy.grantedStatus
         }
-        return "Waiting for Full Disk Access…"
+        return FullDiskAccessCopy.waitingStatus
     }
 
     private func openSystemSettings() {
@@ -176,9 +176,7 @@ struct FullDiskAccessView: View {
     /// Granting FDA after a previous skip clears the skipped flag so the
     /// main-window banner disappears without a relaunch.
     private func clearSkipFlagIfNeeded() {
-        if env.onboarding.isFullDiskAccessSkipped {
-            env.onboarding.clearFullDiskAccessSkipped()
-        }
+        env.onboarding.recordFullDiskAccessGranted()
     }
 
     /// Auto-advance after `autoAdvanceDelay` so the user gets a beat to

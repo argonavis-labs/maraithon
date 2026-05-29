@@ -17,7 +17,7 @@ defmodule Maraithon.ActionLedgerTest do
                policy_decision: %{
                  status: "allow",
                  reason_code: "policy_allowed",
-                 message: "Tool call allowed."
+                 message: "Action allowed."
                },
                result_object_refs: %{"todo_id" => "todo_123"},
                metadata: %{tool_name: "upsert_todos", argument_keys: ["todos", "user_id"]}

@@ -74,7 +74,11 @@ struct CalendarIngest: Sendable {
                 if let spotlight {
                     await spotlight(events)
                 }
-                return SyncOutcome(accepted: outcome.accepted, duplicate: outcome.duplicate)
+                return SyncOutcome(
+                    accepted: outcome.accepted,
+                    duplicate: outcome.duplicate,
+                    invalid: outcome.invalid
+                )
             } catch is RealtimeChannel.RealtimeChannelError {
                 // Any realtime-channel failure falls back to HTTP. The
                 // channel is best-effort; HTTP is the reliable transport.
@@ -121,7 +125,7 @@ struct CalendarIngest: Sendable {
         if let spotlight {
             await spotlight(events)
         }
-        return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate)
+        return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
     }
 
     /// Shared encoder configured to emit ISO-8601 dates. Centralised so

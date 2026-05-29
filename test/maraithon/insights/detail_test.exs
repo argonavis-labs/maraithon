@@ -50,8 +50,28 @@ defmodule Maraithon.Insights.DetailTest do
     assert detail.open_loop_reason.text == "No sent artifact confirms delivery."
     assert hd(detail.evidence_checked).label == "Promise stated in email thread"
     assert hd(detail.delivery_evidence).destination_label == "Telegram linked chat"
-    assert hd(detail.delivery_evidence).error_message =~ "[redacted]"
+
+    assert hd(detail.delivery_evidence).error_message ==
+             "Delivery failed. Check the connected channel and try again."
+
+    refute hd(detail.delivery_evidence).error_message =~ "123456789"
+    refute hd(detail.delivery_evidence).error_message =~ "sarah@example.com"
     assert detail.data_gaps == []
+
+    summary = Detail.summary_text(detail, insight)
+
+    assert summary =~ "Reason sent:"
+
+    assert summary =~
+             "Sarah Chen is tied to this unresolved commitment: Send the revised pricing doc to Sarah by Friday."
+
+    assert summary =~ "Why now:"
+    assert summary =~ "No sent artifact confirms delivery."
+    assert summary =~ "Evidence checked:"
+    assert summary =~ "Promise stated in email thread: Send the revised pricing doc by Friday."
+    refute summary =~ "I surfaced"
+    refute summary =~ "looks like"
+    refute summary =~ "I didn't find"
   end
 
   test "falls back to record metadata and derives the open loop reason" do
@@ -108,6 +128,15 @@ defmodule Maraithon.Insights.DetailTest do
     assert "Requester not captured for this insight." in detail.data_gaps
     assert "No persisted evidence bullets were captured for this insight." in detail.data_gaps
     assert "No delivery attempts recorded." in detail.data_gaps
+
+    summary = Detail.summary_text(detail, insight)
+
+    assert summary =~ "Reason sent:"
+    assert summary =~ "Unresolved commitment: Reply owed: Board deck"
+    assert summary =~ "No completion evidence was found after the original commitment."
+    refute summary =~ "I surfaced"
+    refute summary =~ "looks like"
+    refute summary =~ "I didn't find"
   end
 
   defp build_insight(attrs) do

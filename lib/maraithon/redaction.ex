@@ -53,6 +53,8 @@ defmodule Maraithon.Redaction do
     {~r/\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b/, "<redacted-jwt>"},
     # Anthropic-style keys (must come before the broader OpenAI scanner)
     {~r/\bsk-ant-[A-Za-z0-9_\-]{20,}\b/, "<redacted-anthropic-key>"},
+    # OpenRouter-style keys (must come before the broader OpenAI scanner)
+    {~r/\bsk-or-v1-[A-Za-z0-9_\-]{20,}\b/, "<redacted-openrouter-key>"},
     # OpenAI-style keys
     {~r/\bsk-(?!ant-)[A-Za-z0-9_\-]{20,}\b/, "<redacted-openai-key>"},
     # Slack tokens

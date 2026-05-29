@@ -16,6 +16,7 @@ struct SourceUnblockView: View {
     let hint: SourcePermissionHint
 
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ContentUnavailableView {
@@ -25,7 +26,7 @@ struct SourceUnblockView: View {
         } description: {
             VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
                 Text(hint.body)
-                if let note = hint.relaunchNote {
+                if let note = hint.followUpNote {
                     Text(note)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -49,7 +50,7 @@ struct SourceUnblockView: View {
                     .keyboardShortcut(.defaultAction)
                 }
                 Button {
-                    env.sources.syncNow(id: sourceID)
+                    checkAgain()
                 } label: {
                     Label("Check again", systemImage: "arrow.clockwise")
                 }
@@ -58,5 +59,17 @@ struct SourceUnblockView: View {
             }
         }
         .navigationTitle(displayName)
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            checkAgain()
+        }
+    }
+
+    private func checkAgain() {
+        if env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
+           FullDiskAccessView.probeChatDBReadability() {
+            env.onboarding.recordFullDiskAccessGranted()
+        }
+        env.sources.syncNow(id: sourceID)
     }
 }

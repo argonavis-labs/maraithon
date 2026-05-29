@@ -99,7 +99,7 @@ defmodule Maraithon.ControlProtocol do
     user_id = read_string(params, "user_id") || read_string(arguments, "user_id")
     metadata = Capabilities.policy_metadata_for(name)
 
-    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil},
+    with true <- is_map(arguments) || {:error, -32602, "Action details must be an object", nil},
          :ok <- require_idempotency_for_side_effect(name, metadata, idempotency_key) do
       ControlCalls.run(
         %{
@@ -134,7 +134,7 @@ defmodule Maraithon.ControlProtocol do
   defp dispatch("agents.inspect", %{"agent_id" => agent_id}, _request)
        when is_binary(agent_id) do
     case Agents.get_agent(agent_id, preload: [:project]) do
-      nil -> {:error, -32044, "Agent not found", nil}
+      nil -> {:error, -32044, "Automation not found", nil}
       agent -> {:ok, %{agent: serialize_agent(agent)}}
     end
   end
@@ -181,7 +181,11 @@ defmodule Maraithon.ControlProtocol do
               {:ok, %{"task" => task |> ScheduledTasks.serialize_task() |> normalize()}}
 
             {:error, reason} ->
-              {:error, %{"code" => "scheduled_task_error", "message" => inspect(reason)}}
+              {:error,
+               %{
+                 "code" => "scheduled_task_error",
+                 "message" => scheduled_task_error_message(reason)
+               }}
           end
         end
       )
@@ -228,7 +232,11 @@ defmodule Maraithon.ControlProtocol do
                }}
 
             {:error, reason} ->
-              {:error, %{"code" => "mobile_pairing_error", "message" => inspect(reason)}}
+              {:error,
+               %{
+                 "code" => "mobile_pairing_error",
+                 "message" => mobile_pairing_error_message(reason)
+               }}
           end
         end
       )
@@ -274,14 +282,14 @@ defmodule Maraithon.ControlProtocol do
         {:error, policy_error("tool_policy_needs_confirmation", decision)}
 
       {:error, reason} ->
-        {:error, %{"code" => "tool_error", "message" => ToolPolicy.error_message(reason)}}
+        {:error, %{"code" => "tool_error", "message" => tool_error_message(reason)}}
     end
   end
 
   defp require_idempotency_for_side_effect(name, metadata, idempotency_key) do
     if ToolPolicy.material_side_effect?(metadata || %{side_effect: "read"}) and
          is_nil(idempotency_key) do
-      {:error, -32072, "idempotency_key is required for side-effecting tools.call",
+      {:error, -32072, "A safety key is required before running an action that changes data.",
        %{"tool" => name}}
     else
       :ok
@@ -295,14 +303,14 @@ defmodule Maraithon.ControlProtocol do
   defp control_call_response(
          {:error, %{"code" => "tool_policy_denied"} = error, replay?: replay?}
        ) do
-    {:error, -32070, error["message"] || "Tool call denied",
+    {:error, -32070, error["message"] || "Action is not allowed.",
      Map.put(error, "idempotency_replay", replay?)}
   end
 
   defp control_call_response(
          {:error, %{"code" => "tool_policy_needs_confirmation"} = error, replay?: replay?}
        ) do
-    {:error, -32071, error["message"] || "Tool call requires confirmation",
+    {:error, -32071, error["message"] || "Action requires confirmation.",
      Map.put(error, "idempotency_replay", replay?)}
   end
 
@@ -322,17 +330,137 @@ defmodule Maraithon.ControlProtocol do
     {:ok,
      %{
        "is_error" => true,
-       "error" => %{"message" => inspect(error), "idempotency_replay" => replay?}
+       "error" => %{
+         "message" => control_error_message(error),
+         "idempotency_replay" => replay?
+       }
      }}
   end
 
   defp policy_error(code, decision) do
+    decision = safe_policy_decision(decision)
+
     %{
       "code" => code,
-      "message" => Map.get(decision, "message", "Tool policy blocked this call."),
+      "message" => Map.get(decision, "message", "Maraithon blocked this action."),
       "policy_decision" => decision
     }
   end
+
+  defp safe_policy_decision(decision) when is_map(decision) do
+    decision = normalize_map_keys(decision)
+
+    case Map.get(decision, "reason_code") do
+      "unknown_tool" ->
+        decision
+        |> Map.put("message", "Action is not available.")
+        |> Map.update("metadata", %{}, fn metadata ->
+          metadata
+          |> normalize_map_keys()
+          |> Map.drop(["tool_name"])
+        end)
+
+      _reason_code ->
+        decision
+    end
+  end
+
+  defp safe_policy_decision(_decision) do
+    %{"message" => "Maraithon blocked this action.", "reason_code" => "policy_denied"}
+  end
+
+  defp scheduled_task_error_message(:missing_title), do: "Scheduled task needs a title."
+
+  defp scheduled_task_error_message(:invalid_schedule),
+    do: "Scheduled task needs a valid schedule."
+
+  defp scheduled_task_error_message(:invalid_time), do: "Scheduled task needs a valid time."
+  defp scheduled_task_error_message(:invalid_day), do: "Scheduled task needs a valid day."
+
+  defp scheduled_task_error_message(:scheduled_time_in_past),
+    do: "Scheduled task time must be in the future."
+
+  defp scheduled_task_error_message(:invalid_command),
+    do: "Scheduled task needs a valid command or prompt."
+
+  defp scheduled_task_error_message(%Ecto.Changeset{}),
+    do: "Scheduled task could not be saved. Review required fields and try again."
+
+  defp scheduled_task_error_message(_reason),
+    do: "Scheduled task could not be created. Review the request and try again."
+
+  defp mobile_pairing_error_message(:forbidden_mobile_command),
+    do: "Pairing can only grant supported mobile commands."
+
+  defp mobile_pairing_error_message(:unknown_mobile_command),
+    do: "Pairing includes an unsupported mobile command."
+
+  defp mobile_pairing_error_message(:empty_mobile_command_grants),
+    do: "Pairing needs at least one supported mobile command."
+
+  defp mobile_pairing_error_message(:invalid_mobile_command_grants),
+    do: "Pairing command grants must be a list of supported commands."
+
+  defp mobile_pairing_error_message(:invalid_pairing_expiry),
+    do: "Pairing expiration must be between 1 second and 24 hours."
+
+  defp mobile_pairing_error_message(%Ecto.Changeset{}),
+    do: "Mobile pairing could not be saved. Review the request and try again."
+
+  defp mobile_pairing_error_message(_reason),
+    do: "Mobile pairing could not be created. Review the request and try again."
+
+  defp tool_error_message({:tool_policy_denied, decision}), do: policy_message(decision)
+
+  defp tool_error_message({:tool_policy_needs_confirmation, decision}),
+    do: policy_message(decision)
+
+  defp tool_error_message(reason) when is_binary(reason) do
+    cond do
+      String.ends_with?(reason, "_not_connected") ->
+        "Connect the missing account, then try again."
+
+      String.ends_with?(reason, "_reauth_required") or
+          String.ends_with?(reason, "_reconnect_required") ->
+        "Reconnect the account, then try again."
+
+      String.starts_with?(reason, "missing_") ->
+        "Required action details are missing."
+
+      String.ends_with?(reason, "_not_found") ->
+        "Requested item was not found."
+
+      String.starts_with?(reason, "unknown_tool:") ->
+        "Action is not available."
+
+      String.contains?(reason, ":") ->
+        "Action could not finish. Try again."
+
+      Regex.match?(~r/^[a-z0-9_]+$/, reason) ->
+        "Action could not finish. Try again."
+
+      true ->
+        "Action could not finish. Try again."
+    end
+  end
+
+  defp tool_error_message(_reason), do: "Action could not finish. Try again."
+
+  defp policy_message(decision) do
+    decision
+    |> safe_policy_decision()
+    |> Map.get("message", "Maraithon blocked this action.")
+  end
+
+  defp control_error_message(:idempotency_key_conflict),
+    do: "idempotency_key was reused with a different payload"
+
+  defp control_error_message(:idempotency_key_in_progress),
+    do: "idempotency_key is already in progress"
+
+  defp control_error_message(%{"message" => message}) when is_binary(message), do: message
+  defp control_error_message(%{message: message}) when is_binary(message), do: message
+  defp control_error_message(_error), do: "Control action could not be completed. Try again."
 
   defp tool_descriptor(%{
          name: name,
@@ -381,6 +509,9 @@ defmodule Maraithon.ControlProtocol do
   end
 
   defp normalize(value), do: Normalization.normalize_json_value(value)
+
+  defp normalize_map_keys(map) when is_map(map), do: Normalization.stringify_keys(map)
+  defp normalize_map_keys(_value), do: %{}
 
   defp read_string(map, key), do: Normalization.read_string(map, key)
 

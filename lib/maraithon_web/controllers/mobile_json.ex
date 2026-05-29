@@ -4,7 +4,9 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.ActionCards
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
-  alias Maraithon.Todos.{Todo, UserFacingCopy}
+  alias Maraithon.Crm.RelationshipPresentation
+  alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
+  alias MaraithonWeb.ApiErrorCopy
 
   def user(%User{} = user, %UserSession{} = session) do
     %{
@@ -40,16 +42,13 @@ defmodule MaraithonWeb.MobileJSON do
       due_at: json_value(todo.due_at),
       notes: todo.notes,
       action_plan: todo.action_plan,
-      owner_user_id: todo.owner_user_id,
       owner_label: todo.owner_label,
       priority: todo.priority,
       status: todo.status,
       snoozed_until: json_value(todo.snoozed_until),
       closed_at: json_value(todo.closed_at),
-      source_item_id: todo.source_item_id,
       source_occurred_at: json_value(todo.source_occurred_at),
-      dedupe_key: todo.dedupe_key,
-      metadata: todo.metadata || %{},
+      metadata: public_todo_metadata(todo.metadata || %{}),
       inserted_at: json_value(todo.inserted_at),
       updated_at: json_value(todo.updated_at)
     }
@@ -72,19 +71,21 @@ defmodule MaraithonWeb.MobileJSON do
       relationship: person.relationship,
       communication_frequency: person.communication_frequency,
       interaction_count: person.interaction_count,
-      relationship_strength: person.relationship_strength,
-      affinity_score: person.affinity_score,
+      relationship_health: RelationshipPresentation.health_level(person.relationship_strength),
+      relationship_warmth: RelationshipPresentation.warmth_level(person.affinity_score),
       last_interaction_at: json_value(person.last_interaction_at),
       status: person.status,
       notes: person.notes,
-      metadata: person.metadata || %{},
+      metadata: public_person_metadata(person.metadata || %{}),
       inserted_at: json_value(person.inserted_at),
       updated_at: json_value(person.updated_at)
     }
   end
 
+  def public_person_metadata(metadata), do: PublicMetadata.person(metadata)
+
   def error(reason) do
-    %{error: format_error(reason)}
+    ApiErrorCopy.mobile(reason)
   end
 
   defp action_card(%Todo{} = todo, opts) do
@@ -102,15 +103,13 @@ defmodule MaraithonWeb.MobileJSON do
       why_now: card["why_now"],
       rank_reason: card["rank_reason"],
       attention_mode: card["attention_mode"],
-      confidence: card["confidence"],
       context_items: ActionCards.context_items(card),
       evidence_excerpt: ActionCards.evidence_excerpt(card),
       next_best_action: card["next_best_action"],
       prepared_actions: card["prepared_actions"] || [],
       available_buttons: format_buttons(card["available_buttons"] || []),
       estimated_effort: card["estimated_effort"],
-      source_health: card["source_health"],
-      product_score: card["product_score"]
+      source_context: source_context(card)
     }
   end
 
@@ -129,22 +128,64 @@ defmodule MaraithonWeb.MobileJSON do
       "done" -> "Done"
       "dismiss" -> "Dismiss"
       "snooze" -> "Snooze"
-      "important" -> "Important"
-      "not_important" -> "Not Important"
-      "not_helpful" -> "Not Important"
+      "important" -> "Keep active"
+      "not_important" -> "Less useful"
+      "not_helpful" -> "Less useful"
       "helpful" -> "Helpful"
-      "keep_active" -> "Keep Active"
-      "see_less" -> "See Less"
-      "more_context" -> "More Context"
-      "open_dashboard" -> "Open Dashboard"
+      "keep_active" -> "Keep active"
+      "see_less" -> "Show less"
+      "more_context" -> "More context"
+      "open_dashboard" -> "Open Maraithon"
       other -> other |> String.replace("_", " ") |> String.capitalize()
     end
   end
 
+  defp source_context(card) when is_map(card) do
+    source_health = Map.get(card, "source_health") || %{}
+
+    blocking =
+      source_health
+      |> Map.get("blocking_gaps")
+      |> List.wrap()
+      |> Enum.reject(&blank?/1)
+
+    checked =
+      source_health
+      |> Map.get("checked_sources")
+      |> List.wrap()
+      |> Enum.reject(&blank?/1)
+
+    cond do
+      blocking != [] ->
+        "Needs source access: #{Enum.join(blocking, "; ")}"
+
+      checked != [] ->
+        "Checked #{checked |> Enum.map(&source_label/1) |> Enum.join(", ")}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp source_context(_card), do: nil
+
+  defp source_label("gmail"), do: "Gmail"
+  defp source_label("slack"), do: "Slack"
+  defp source_label("calendar"), do: "Calendar"
+  defp source_label("github"), do: "GitHub"
+
+  defp source_label(source) when is_binary(source),
+    do: source |> String.replace("_", " ") |> String.capitalize()
+
+  defp source_label(source), do: to_string(source)
+
+  def public_todo_metadata(metadata), do: PublicMetadata.todo(metadata)
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_value), do: false
+
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp json_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
   defp json_value(value), do: value
-
-  defp format_error(reason) when is_atom(reason), do: reason |> Atom.to_string()
-  defp format_error(reason), do: inspect(reason)
 end

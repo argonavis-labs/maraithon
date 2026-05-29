@@ -7,12 +7,13 @@ import AppKit
 /// split view (signed in) or the centered Connect screen (signed out).
 ///
 /// v4: when the user explicitly skipped Full Disk Access during
-/// onboarding the main split view is overlaid with a persistent banner
-/// across the top — clicking the banner short-circuits to System
-/// Settings the same way the onboarding screen does. The banner clears
-/// automatically once the FDA probe sees access has been granted.
+/// onboarding, or a live source reports that Full Disk Access is blocking
+/// sync, the main split view is overlaid with a persistent banner across
+/// the top. Clicking the banner short-circuits to System Settings the
+/// same way the onboarding screen does.
 struct RootWindow: View {
     @Environment(AppEnvironment.self) private var env
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selection: SidebarItem? = .source(id: "imessage")
 
     var body: some View {
@@ -28,8 +29,11 @@ struct RootWindow: View {
                         SidebarView(selection: $selection)
                     } detail: {
                         VStack(spacing: 0) {
-                            if env.onboarding.isFullDiskAccessSkipped {
-                                FullDiskAccessRequiredBanner()
+                            let blockedSourceNames = env.sources
+                                .fullDiskAccessBlockedSources()
+                                .map(\.displayName)
+                            if env.onboarding.isFullDiskAccessSkipped || !blockedSourceNames.isEmpty {
+                                FullDiskAccessRequiredBanner(blockedSourceNames: blockedSourceNames)
                             }
                             detailView(for: selection)
                         }
@@ -41,6 +45,11 @@ struct RootWindow: View {
         .animation(.default, value: env.onboarding.current)
         .onAppear {
             BatterySettings.shared.bind(sources: env.sources, eventLog: env.eventLog)
+            refreshFullDiskAccessIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            refreshFullDiskAccessIfNeeded()
         }
         .onChange(of: env.deviceAuth.state) { _, newState in
             // Re-enter onboarding if the user signs out mid-flow before
@@ -53,6 +62,20 @@ struct RootWindow: View {
                 break
             }
         }
+    }
+
+    private func refreshFullDiskAccessIfNeeded() {
+        let needsRefresh = env.onboarding.isFullDiskAccessSkipped
+            || !env.sources.fullDiskAccessBlockedSources().isEmpty
+
+        guard needsRefresh else {
+            return
+        }
+
+        if FullDiskAccessView.probeChatDBReadability() {
+            env.onboarding.recordFullDiskAccessGranted()
+        }
+        env.sources.syncNow()
     }
 
     @ViewBuilder
@@ -94,11 +117,11 @@ enum SidebarItem: Hashable {
     case diagnostics
 }
 
-/// Persistent inline banner shown above the main detail pane when the
-/// user opted to skip Full Disk Access during onboarding. The banner
-/// stays until the FDA probe in `DiagnosticsView` (or the onboarding
-/// reentry path) clears the persisted flag.
+/// Persistent inline banner shown above the main detail pane when Full
+/// Disk Access is blocking local-source sync.
 struct FullDiskAccessRequiredBanner: View {
+    let blockedSourceNames: [String]
+
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
@@ -109,11 +132,16 @@ struct FullDiskAccessRequiredBanner: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Full Disk Access required")
                     .font(.callout.weight(.medium))
-                Text("Without it, Maraithon can't sync iMessage. Other sources continue to sync.")
+                Text(Self.detailText(blockedSourceNames: blockedSourceNames))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button("Check again") {
+                checkAgain()
+            }
+            .controlSize(.small)
+            .buttonStyle(.bordered)
             Button("Open System Settings") {
                 openFullDiskAccess()
             }
@@ -125,6 +153,29 @@ struct FullDiskAccessRequiredBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .accessibilityElement(children: .combine)
+    }
+
+    static func detailText(blockedSourceNames: [String]) -> String {
+        let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
+        return "\(subject) cannot sync until Maraithon is enabled in Full Disk Access. Other sources continue to sync."
+    }
+
+    private static func readableList(_ values: [String], fallback: String) -> String {
+        let names = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        switch names.count {
+        case 0:
+            return fallback
+        case 1:
+            return names[0]
+        case 2:
+            return "\(names[0]) and \(names[1])"
+        default:
+            let prefix = names.dropLast().joined(separator: ", ")
+            return "\(prefix), and \(names[names.count - 1])"
+        }
     }
 
     private func openFullDiskAccess() {
@@ -141,5 +192,12 @@ struct FullDiskAccessRequiredBanner: View {
         #if canImport(AppKit)
         NSWorkspace.shared.open(url)
         #endif
+    }
+
+    private func checkAgain() {
+        if FullDiskAccessView.probeChatDBReadability() {
+            env.onboarding.recordFullDiskAccessGranted()
+        }
+        env.sources.syncNow()
     }
 }

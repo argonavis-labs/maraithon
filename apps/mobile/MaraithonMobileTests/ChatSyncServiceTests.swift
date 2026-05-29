@@ -14,6 +14,18 @@ struct ChatSyncServiceTests {
         let actionID = UUID()
         let messageID = UUID()
         let sentAt = Date(timeIntervalSince1970: 1_800)
+        let workSummary = ChatWorkSummary(
+            headline: "Checked open work and replied",
+            toolCalls: [
+                .init(
+                    id: "tool-1",
+                    tool: "open_work",
+                    label: "Open work",
+                    status: "completed",
+                    summary: "Returned 2 todos"
+                )
+            ]
+        )
         let api = MockChatAPI()
         api.remoteThreads = [
             .init(
@@ -36,7 +48,8 @@ struct ChatSyncServiceTests {
                                 decision: ChatActionDecision.confirm.rawValue,
                                 style: "primary"
                             )
-                        ]
+                        ],
+                        workSummary: workSummary
                     )
                 ]
             )
@@ -50,6 +63,93 @@ struct ChatSyncServiceTests {
         #expect(threads.first?.remoteID == threadID)
         #expect(threads.first?.messages.first?.remoteID == messageID)
         #expect(threads.first?.messages.first?.actions.first?.actionID == actionID)
+        #expect(threads.first?.messages.first?.workSummary?.toolCalls.first?.tool == "open_work")
+    }
+
+    @Test
+    func refreshThreadsStoresOnlyPublicStructuredData() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let threadID = UUID()
+        let messageID = UUID()
+        let api = MockChatAPI()
+        let calculation: JSONValue = .object([
+            "expression": .string("2+2"),
+            "result": .string("4")
+        ])
+
+        api.remoteThreads = [
+            .init(
+                id: threadID,
+                title: "Math",
+                messages: [
+                    .init(
+                        id: messageID,
+                        role: ChatRole.assistant.rawValue,
+                        body: "2+2 = 4.",
+                        structuredData: [
+                            "calculation": calculation,
+                            "direct_intent": .string("simple_calculation"),
+                            "tool_history": .array([]),
+                            "run_id": .string(UUID().uuidString),
+                            "message_class": .string("assistant_reply")
+                        ]
+                    )
+                ]
+            )
+        ]
+
+        let service = ChatSyncService(api: api)
+        try await service.refreshThreads(modelContext: context, sessionStore: signedInSessionStore())
+
+        let message = try #require(context.fetch(FetchDescriptor<ChatThread>()).first?.messages.first)
+        let metadata = try #require(message.storedMetadata)
+
+        #expect(metadata.structuredData == ["calculation": calculation])
+        #expect(metadata.structuredData["direct_intent"] == nil)
+        #expect(metadata.structuredData["tool_history"] == nil)
+    }
+
+    @Test
+    func refreshThreadsKeepsPendingRunWorkSummary() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let threadID = UUID()
+        let runID = UUID()
+        let workSummary = ChatWorkSummary(
+            headline: "Checking open work",
+            status: ChatRunStatus.running.rawValue,
+            toolCalls: [
+                .init(
+                    id: "tool-1",
+                    tool: "open_work",
+                    label: "Open work",
+                    status: "running",
+                    summary: "Running"
+                )
+            ]
+        )
+        let api = MockChatAPI()
+        api.remoteThreads = [
+            .init(
+                id: threadID,
+                title: "Plan today",
+                pendingRun: .init(
+                    id: runID,
+                    threadID: threadID,
+                    status: ChatRunStatus.running.rawValue,
+                    workSummary: workSummary
+                )
+            )
+        ]
+
+        let service = ChatSyncService(api: api)
+        try await service.refreshThreads(modelContext: context, sessionStore: signedInSessionStore())
+
+        let thread = try #require(context.fetch(FetchDescriptor<ChatThread>()).first)
+        #expect(thread.pendingRunID == runID)
+        #expect(thread.pendingWorkSummary?.headline == "Checking open work")
+        #expect(thread.pendingWorkSummary?.toolCalls.first?.status == "running")
     }
 
     @Test
@@ -89,7 +189,7 @@ struct ChatSyncServiceTests {
     func sendDeduplicatesOptimisticUserMessageByClientMessageID() async throws {
         let container = try PersistenceController.makeModelContainer(inMemory: true)
         let context = container.mainContext
-        let localThread = ChatThread(title: "New conversation")
+        let localThread = ChatThread(title: ChatThreadNaming.defaultTitle)
         context.insert(localThread)
         try context.save()
 
@@ -148,6 +248,104 @@ struct ChatSyncServiceTests {
         #expect(localThread.messages.first { $0.role == .user }?.deliveryState == .sent)
     }
 
+    @Test
+    func renameThreadPersistsRemoteTitleAndSurvivesRefresh() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let remoteID = UUID()
+        let localThread = ChatThread(title: "Old title", remoteID: remoteID, syncStatus: .synced)
+        context.insert(localThread)
+        try context.save()
+
+        let api = MockChatAPI()
+        api.remoteThreads = [
+            .init(id: remoteID, title: "Old title")
+        ]
+
+        let service = ChatSyncService(api: api)
+        try await service.renameThread(
+            localThread,
+            title: "  CEO   briefing follow-up  ",
+            modelContext: context,
+            sessionStore: signedInSessionStore()
+        )
+
+        #expect(api.updatedThreadID == remoteID)
+        #expect(api.updatedThreadTitle == "CEO briefing follow-up")
+        #expect(localThread.title == "CEO briefing follow-up")
+
+        try await service.refreshThread(
+            localThread,
+            modelContext: context,
+            sessionStore: signedInSessionStore()
+        )
+
+        #expect(localThread.title == "CEO briefing follow-up")
+    }
+
+    @Test
+    func deleteRemoteMessagePersistsAcrossRefresh() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let remoteThreadID = UUID()
+        let deletedMessageID = UUID()
+        let keptMessageID = UUID()
+        let localThread = ChatThread(title: "Board prep", remoteID: remoteThreadID, syncStatus: .synced)
+        let keptMessage = ChatMessage(
+            body: "Keep this",
+            sentAt: Date(timeIntervalSince1970: 2_000),
+            role: .user,
+            remoteID: keptMessageID,
+            deliveryState: .sent,
+            thread: localThread
+        )
+        let deletedMessage = ChatMessage(
+            body: "Remove this",
+            sentAt: Date(timeIntervalSince1970: 2_001),
+            role: .assistant,
+            remoteID: deletedMessageID,
+            deliveryState: .delivered,
+            thread: localThread
+        )
+        localThread.messages = [keptMessage, deletedMessage]
+        context.insert(localThread)
+        context.insert(keptMessage)
+        context.insert(deletedMessage)
+        try context.save()
+
+        let api = MockChatAPI()
+        api.remoteThreads = [
+            .init(
+                id: remoteThreadID,
+                title: "Board prep",
+                messages: [
+                    .init(id: keptMessageID, role: ChatRole.user.rawValue, body: "Keep this"),
+                    .init(id: deletedMessageID, role: ChatRole.assistant.rawValue, body: "Remove this")
+                ]
+            )
+        ]
+
+        let service = ChatSyncService(api: api)
+        try await service.deleteMessage(
+            deletedMessage,
+            from: localThread,
+            modelContext: context,
+            sessionStore: signedInSessionStore()
+        )
+
+        #expect(api.deletedThreadID == remoteThreadID)
+        #expect(api.deletedMessageID == deletedMessageID)
+        #expect(localThread.messages.map(\.body) == ["Keep this"])
+
+        try await service.refreshThread(
+            localThread,
+            modelContext: context,
+            sessionStore: signedInSessionStore()
+        )
+
+        #expect(localThread.messages.map(\.body) == ["Keep this"])
+    }
+
     private func signedInSessionStore() -> SessionStore {
         let store = SessionStore(authProvider: TestAuthProvider())
         store.user = AuthenticatedUser(
@@ -166,6 +364,10 @@ struct ChatSyncServiceTests {
 private final class MockChatAPI: MobileChatAPI {
     var remoteThreads: [MobileAPIClient.RemoteChatThread] = []
     var createdThreadID = UUID()
+    var updatedThreadID: UUID?
+    var updatedThreadTitle: String?
+    var deletedThreadID: UUID?
+    var deletedMessageID: UUID?
     var sendHandler: ((UUID, UUID, String) throws -> MobileAPIClient.ChatMessageResponse)?
 
     func listChatThreads(sessionToken: String) async throws -> [MobileAPIClient.RemoteChatThread] {
@@ -182,6 +384,43 @@ private final class MockChatAPI: MobileChatAPI {
 
     func getChatThread(sessionToken: String, id: UUID) async throws -> MobileAPIClient.RemoteChatThread {
         remoteThreads.first { $0.id == id } ?? .init(id: id, title: "Remote thread")
+    }
+
+    func updateChatThread(
+        sessionToken: String,
+        id: UUID,
+        title: String
+    ) async throws -> MobileAPIClient.RemoteChatThread {
+        updatedThreadID = id
+        updatedThreadTitle = title
+        let remoteThread = MobileAPIClient.RemoteChatThread(id: id, title: title, updatedAt: Date())
+        remoteThreads.removeAll { $0.id == id }
+        remoteThreads.append(remoteThread)
+        return remoteThread
+    }
+
+    func deleteChatMessage(
+        sessionToken: String,
+        threadID: UUID,
+        messageID: UUID
+    ) async throws -> MobileAPIClient.RemoteChatThread {
+        deletedThreadID = threadID
+        deletedMessageID = messageID
+        let existing = remoteThreads.first { $0.id == threadID } ?? .init(id: threadID, title: "Remote thread")
+        let remoteThread = MobileAPIClient.RemoteChatThread(
+            id: existing.id,
+            title: existing.title,
+            status: existing.status,
+            lastTurnAt: existing.lastTurnAt,
+            updatedAt: Date(),
+            messageCount: existing.messageCount.map { max($0 - 1, 0) },
+            latestMessage: nil,
+            pendingRun: existing.pendingRun,
+            messages: existing.messages.filter { $0.id != messageID }
+        )
+        remoteThreads.removeAll { $0.id == threadID }
+        remoteThreads.append(remoteThread)
+        return remoteThread
     }
 
     func sendChatMessage(

@@ -3,6 +3,75 @@ defmodule MaraithonWeb.InsightsLive do
 
   alias Maraithon.Crm
   alias Maraithon.Crm.Insights, as: CrmInsights
+  alias MaraithonWeb.OperationFailureCopy
+
+  @family_relationship_suggestion_metadata %{
+    "daughter" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "child",
+      "relationship_preset_label" => "Child",
+      "family_member" => true,
+      "family_role" => "child",
+      "family_proxy" => false,
+      "dependent_context" => true,
+      "sensitivity" => "child_family"
+    },
+    "son" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "child",
+      "relationship_preset_label" => "Child",
+      "family_member" => true,
+      "family_role" => "child",
+      "family_proxy" => false,
+      "dependent_context" => true,
+      "sensitivity" => "child_family"
+    },
+    "wife" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "spouse_partner",
+      "relationship_preset_label" => "Spouse / partner",
+      "family_member" => true,
+      "family_role" => "spouse_partner",
+      "family_proxy" => false,
+      "sensitivity" => "family"
+    },
+    "husband" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "spouse_partner",
+      "relationship_preset_label" => "Spouse / partner",
+      "family_member" => true,
+      "family_role" => "spouse_partner",
+      "family_proxy" => false,
+      "sensitivity" => "family"
+    },
+    "spouse" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "spouse_partner",
+      "relationship_preset_label" => "Spouse / partner",
+      "family_member" => true,
+      "family_role" => "spouse_partner",
+      "family_proxy" => false,
+      "sensitivity" => "family"
+    },
+    "mother-in-law" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "extended_family",
+      "relationship_preset_label" => "Extended family",
+      "family_member" => true,
+      "family_role" => "extended_family",
+      "family_proxy" => false,
+      "sensitivity" => "family"
+    },
+    "father-in-law" => %{
+      "relationship_domain" => "family",
+      "relationship_preset" => "extended_family",
+      "relationship_preset_label" => "Extended family",
+      "family_member" => true,
+      "family_role" => "extended_family",
+      "family_proxy" => false,
+      "sensitivity" => "family"
+    }
+  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -77,7 +146,7 @@ defmodule MaraithonWeb.InsightsLive do
       <div class="space-y-6">
         <.page_header
           title="Insights"
-          subtitle="CRM cleanup and relationship suggestions Maraithon can review before changing your data."
+          subtitle="People cleanup and relationship suggestions Maraithon can review before changing your data."
         >
           <:actions>
             <.button navigate="/operator/people" variant="outline">Open People</.button>
@@ -85,7 +154,7 @@ defmodule MaraithonWeb.InsightsLive do
         </.page_header>
 
         <dl class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <.insight_stat label="Open CRM insights" value={@crm_insights.total_count} />
+          <.insight_stat label="Open people insights" value={@crm_insights.total_count} />
           <.insight_stat label="Duplicate suggestions" value={length(@crm_insights.duplicate_suggestions)} />
           <.insight_stat label="Relationship suggestions" value={length(@crm_insights.relationship_suggestions)} />
         </dl>
@@ -94,7 +163,7 @@ defmodule MaraithonWeb.InsightsLive do
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="text-base/7 font-semibold text-zinc-950">CRM cleanup</h2>
+                <h2 class="text-base/7 font-semibold text-zinc-950">People cleanup</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
                   Possible duplicates and records that may be safe to combine after review.
                 </p>
@@ -112,7 +181,7 @@ defmodule MaraithonWeb.InsightsLive do
               <div>
                 <h2 class="text-base/7 font-semibold text-zinc-950">Relationship suggestions</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
-                  Evidence-backed labels you can apply to CRM people.
+                  Evidence-backed labels you can apply to people.
                 </p>
               </div>
               <.badge color="zinc"><%= length(@crm_insights.relationship_suggestions) %></.badge>
@@ -124,9 +193,9 @@ defmodule MaraithonWeb.InsightsLive do
 
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
-            <h2 class="text-sm/6 font-semibold text-zinc-950">No CRM insights right now.</h2>
+            <h2 class="text-sm/6 font-semibold text-zinc-950">No people insights right now.</h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              The CRM looks clean for this pass. Review People directly if you want to edit relationships or merge contacts.
+              Your people list looks clean for this pass. Review People directly if you want to edit relationships or merge contacts.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People
@@ -156,7 +225,7 @@ defmodule MaraithonWeb.InsightsLive do
     ~H"""
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
-        <p class="text-sm/6 text-zinc-500">No duplicate CRM people found.</p>
+        <p class="text-sm/6 text-zinc-500">No duplicate people found.</p>
       </div>
 
       <div :if={@suggestions != []} class="divide-y divide-zinc-950/5">
@@ -165,9 +234,6 @@ defmodule MaraithonWeb.InsightsLive do
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <.badge color="amber">Duplicate</.badge>
-                <span class="text-xs/5 text-zinc-500">
-                  confidence <%= format_confidence(suggestion.confidence) %>
-                </span>
               </div>
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
@@ -213,9 +279,6 @@ defmodule MaraithonWeb.InsightsLive do
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
                 <.badge color="blue">Relationship</.badge>
-                <span class="text-xs/5 text-zinc-500">
-                  confidence <%= format_confidence(suggestion.confidence) %>
-                </span>
               </div>
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
@@ -297,16 +360,7 @@ defmodule MaraithonWeb.InsightsLive do
   defp apply_relationship_suggestion(socket, suggestion) do
     person = suggestion.person
 
-    metadata =
-      person.metadata
-      |> Kernel.||(%{})
-      |> Map.merge(%{
-        "relationship_context_source" => "crm_insights",
-        "relationship_context_updated_at" =>
-          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
-        "relationship_suggestion_id" => suggestion.id,
-        "relationship_suggestion_confidence" => suggestion.confidence
-      })
+    metadata = relationship_apply_metadata(person, suggestion)
 
     attrs = %{
       "id" => person.id,
@@ -322,7 +376,36 @@ defmodule MaraithonWeb.InsightsLive do
         |> refresh_crm_insights()
 
       {:error, reason} ->
-        put_flash(socket, :error, "Could not apply relationship: #{inspect(reason)}")
+        put_flash(socket, :error, OperationFailureCopy.relationship(:apply, reason))
+    end
+  end
+
+  defp relationship_apply_metadata(person, suggestion) do
+    metadata = person.metadata || %{}
+
+    metadata
+    |> Map.merge(%{
+      "relationship_label" => suggestion.relationship,
+      "relationship_context_source" => "crm_insights",
+      "relationship_context_updated_at" =>
+        DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "relationship_suggestion_id" => suggestion.id,
+      "relationship_suggestion_confidence" => suggestion.confidence
+    })
+    |> maybe_apply_family_relationship_metadata(suggestion.relationship)
+  end
+
+  defp maybe_apply_family_relationship_metadata(metadata, relationship) do
+    case Map.get(@family_relationship_suggestion_metadata, relationship) do
+      nil ->
+        metadata
+
+      family_metadata ->
+        metadata
+        |> Map.drop(~w(proxy_role proxy_for_person_id default_todo_policy))
+        |> Map.merge(family_metadata)
+        |> Map.put_new("todo_policy", "family_logistics_only")
+        |> Map.put_new("push_policy", "time_sensitive_only")
     end
   end
 
@@ -372,7 +455,7 @@ defmodule MaraithonWeb.InsightsLive do
              "performed_by" => "operator_insights",
              "evidence" => evidence_summary,
              "model_rationale" =>
-               "Maraithon suggested this duplicate group from CRM cleanup and the user confirmed Merge contacts from Insights."
+               "Maraithon suggested this duplicate group from People cleanup and the user confirmed Merge contacts from Insights."
            }) do
         {:ok, _result} -> {:cont, {:ok, count + 1}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -395,20 +478,16 @@ defmodule MaraithonWeb.InsightsLive do
     end
   end
 
-  defp format_confidence(value) when is_float(value), do: "#{round(value * 100)}%"
-  defp format_confidence(value) when is_integer(value), do: "#{value}%"
-  defp format_confidence(_value), do: "unknown"
-
   defp duplicate_survivor_name(%{people: people}) when is_list(people) do
     people
     |> duplicate_survivor()
     |> case do
       %{display_name: name} when is_binary(name) -> name
-      _person -> "the strongest CRM record"
+      _person -> "the strongest person record"
     end
   end
 
-  defp duplicate_survivor_name(_suggestion), do: "the strongest CRM record"
+  defp duplicate_survivor_name(_suggestion), do: "the strongest person record"
 
   defp duplicate_survivor([person | _] = people) do
     Enum.max_by(people, &duplicate_survivor_score/1, fn -> person end)

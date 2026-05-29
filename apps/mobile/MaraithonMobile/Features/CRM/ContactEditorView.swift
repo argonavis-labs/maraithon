@@ -33,35 +33,35 @@ struct ContactEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Person") {
-                    TextField("Name", text: $name)
+                Section(ContactEditorCopy.personSectionTitle) {
+                    TextField(ContactEditorCopy.namePlaceholder, text: $name)
                         .accessibilityIdentifier("contact-name-field")
-                    TextField("Context", text: $company)
+                    TextField(ContactEditorCopy.contextPlaceholder, text: $company)
                         .accessibilityIdentifier("contact-company-field")
-                    TextField("Email", text: $email)
+                    TextField(ContactEditorCopy.emailPlaceholder, text: $email)
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("contact-email-field")
-                    TextField("Phone", text: $phone)
+                    TextField(ContactEditorCopy.phonePlaceholder, text: $phone)
                         .keyboardType(.phonePad)
                         .accessibilityIdentifier("contact-phone-field")
                 }
 
-                Section("Relationship") {
-                    Picker("Status", selection: $status) {
+                Section(ContactEditorCopy.relationshipSectionTitle) {
+                    Picker(ContactEditorCopy.statusPickerTitle, selection: $status) {
                         ForEach(ContactStatus.allCases) { status in
                             Text(status.title).tag(status)
                         }
                     }
-                    Picker("Circle", selection: $dealStage) {
+                    Picker(ContactEditorCopy.circlePickerTitle, selection: $dealStage) {
                         ForEach(DealStage.allCases) { stage in
                             Text(stage.title).tag(stage)
                         }
                     }
                 }
 
-                Section("Notes") {
-                    TextField("Relationship notes", text: $notes, axis: .vertical)
+                Section(ContactEditorCopy.notesSectionTitle) {
+                    TextField(ContactEditorCopy.notesPlaceholder, text: $notes, axis: .vertical)
                         .lineLimit(3...8)
                         .accessibilityIdentifier("contact-notes-field")
                 }
@@ -73,7 +73,7 @@ struct ContactEditorView: View {
                     }
                 }
             }
-            .navigationTitle(contact == nil ? "New Person" : "Edit Person")
+            .navigationTitle(contact == nil ? ContactEditorCopy.newNavigationTitle : ContactEditorCopy.editNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -163,7 +163,39 @@ struct ContactEditorView: View {
             try modelContext.save()
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
+    }
+}
+
+enum ContactEditorCopy {
+    static let personSectionTitle = "Person"
+    static let relationshipSectionTitle = "Relationship status"
+    static let notesSectionTitle = "Relationship notes"
+    static let namePlaceholder = "Name"
+    static let contextPlaceholder = "Company, role, or context"
+    static let emailPlaceholder = "Email"
+    static let phonePlaceholder = "Phone"
+    static let statusPickerTitle = "Status"
+    static let circlePickerTitle = "Circle"
+    static let notesPlaceholder = "What matters about this relationship"
+    static let newNavigationTitle = "New person"
+    static let editNavigationTitle = "Edit person"
+
+    static var visibleLabels: [String] {
+        [
+            personSectionTitle,
+            relationshipSectionTitle,
+            notesSectionTitle,
+            namePlaceholder,
+            contextPlaceholder,
+            emailPlaceholder,
+            phonePlaceholder,
+            statusPickerTitle,
+            circlePickerTitle,
+            notesPlaceholder,
+            newNavigationTitle,
+            editNavigationTitle
+        ]
     }
 }

@@ -31,7 +31,7 @@ final class MaraithonClientTests: XCTestCase {
 
     func testIngestGzipsBodyAndDecodesOutcome() async throws {
         let captured = CapturedRequests()
-        let outcome = IngestResponse(accepted: 3, duplicate: 1)
+        let outcome = IngestResponse(accepted: 3, duplicate: 1, invalid: 2)
         let body = try JSONEncoder().encode(outcome)
         let client = MaraithonClient(
             baseURL: URL(string: "https://example.com")!,
@@ -52,6 +52,7 @@ final class MaraithonClientTests: XCTestCase {
         let got = try await client.ingest(batch: batch)
         XCTAssertEqual(got.accepted, 3)
         XCTAssertEqual(got.duplicate, 1)
+        XCTAssertEqual(got.invalid, 2)
         let last = await captured.last
         let req = try XCTUnwrap(last)
         XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Encoding"), "gzip")
@@ -62,6 +63,15 @@ final class MaraithonClientTests: XCTestCase {
         // gzip magic bytes
         XCTAssertEqual(sentBody[0], 0x1f)
         XCTAssertEqual(sentBody[1], 0x8b)
+    }
+
+    func testIngestResponseDefaultsMissingInvalidToZero() throws {
+        let data = Data(#"{"accepted":1,"duplicate":0}"#.utf8)
+        let decoded = try JSONDecoder().decode(IngestResponse.self, from: data)
+
+        XCTAssertEqual(decoded.accepted, 1)
+        XCTAssertEqual(decoded.duplicate, 0)
+        XCTAssertEqual(decoded.invalid, 0)
     }
 
     func testUnauthorizedThrowsTypedError() async {

@@ -4,6 +4,7 @@ defmodule MaraithonWeb.MobileApiControllerTest do
   alias Maraithon.Accounts
   alias Maraithon.Accounts.MagicLink
   alias Maraithon.Crm
+  alias Maraithon.Crm.PersonMerge
   alias Maraithon.Repo
   alias Maraithon.Todos
 
@@ -69,7 +70,10 @@ defmodule MaraithonWeb.MobileApiControllerTest do
   test "magic-code consume returns clean invalid errors", %{conn: conn} do
     conn = post(conn, ~p"/api/mobile/auth/magic-code", %{"code" => "bad-code"})
 
-    assert %{"error" => "invalid_or_expired_code"} = json_response(conn, 401)
+    assert json_response(conn, 401) == %{
+             "error" => "invalid_or_expired_code",
+             "message" => "Sign-in code is invalid or expired."
+           }
   end
 
   test "magic-link request returns clean validation errors", %{conn: conn} do
@@ -78,7 +82,48 @@ defmodule MaraithonWeb.MobileApiControllerTest do
         "email" => "not-an-email"
       })
 
-    assert %{"error" => "invalid_email"} = json_response(conn, 422)
+    assert json_response(conn, 422) == %{
+             "error" => "invalid_email",
+             "message" => "Enter a valid email address."
+           }
+  end
+
+  test "mobile todo errors include stable codes and human copy", %{conn: conn} do
+    email = "mobile-todo-errors-#{System.unique_integer([:positive])}@example.com"
+    {:ok, user} = Accounts.get_or_create_user_by_email(email)
+    {:ok, %{token: session_token}} = Accounts.create_session_for_user(user)
+    missing_id = Ecto.UUID.generate()
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/todos/#{missing_id}")
+
+    assert json_response(conn, 404) == %{
+             "error" => "not_found",
+             "message" => "That item is no longer available."
+           }
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user.id, [
+        %{
+          "source" => "mobile",
+          "title" => "Check mobile unsupported action",
+          "summary" => "Regression coverage for mobile error copy.",
+          "next_action" => "Tap an unsupported action.",
+          "status" => "open"
+        }
+      ])
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> post(~p"/api/mobile/todos/#{todo.id}/actions/not-real")
+
+    assert json_response(conn, 422) == %{
+             "error" => "unsupported_todo_action",
+             "message" => "That work item action is not available from mobile."
+           }
   end
 
   test "mobile todos can be listed, created, and updated", %{conn: conn} do
@@ -143,6 +188,29 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     dismissed = Todos.get_for_user(user.id, todo_id)
     assert dismissed.status == "dismissed"
     assert dismissed.metadata["resolution_note"] == "No longer relevant from mobile."
+
+    {:ok, [default_note_todo]} =
+      Todos.upsert_many(user.id, [
+        %{
+          "source" => "mobile",
+          "title" => "Dismiss without a custom note",
+          "summary" => "Confirm default mobile resolution copy.",
+          "next_action" => "Dismiss this item.",
+          "status" => "open"
+        }
+      ])
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> delete(~p"/api/mobile/todos/#{default_note_todo.id}")
+
+    assert %{"todo" => %{"id" => default_note_todo_id, "status" => "dismissed"}} =
+             json_response(conn, 200)
+
+    assert default_note_todo_id == default_note_todo.id
+    default_dismissed = Todos.get_for_user(user.id, default_note_todo.id)
+    assert default_dismissed.metadata["resolution_note"] == "Dismissed from mobile."
   end
 
   test "mobile todos expose action cards and one-tap actions", %{conn: conn} do
@@ -157,11 +225,20 @@ defmodule MaraithonWeb.MobileApiControllerTest do
           "title" => "Reply to Michael Berlingo on Starteryou UGC Campaigns",
           "summary" => "Michael Berlingo asked about Starteryou UGC Campaigns.",
           "next_action" => "Draft a reply with the campaign owner, ETA, and next artifact.",
+          "source_item_id" => "gmail-thread-mobile-private-123",
+          "dedupe_key" => "gmail:mobile-private-thread-123",
           "metadata" => %{
             "person" => "Michael Berlingo",
             "company" => "Starteryou",
             "thread_state" => "waiting_on_kent",
-            "source_quote" => "Can you send the next Starteryou UGC campaign update?"
+            "source_quote" => "Can you send the next Starteryou UGC campaign update?",
+            "why_it_matters" => "Michael is waiting on the UGC next-step decision.",
+            "confidence" => 0.96,
+            "generation_mode" => "llm",
+            "model_rationale" => "Model score says this is important.",
+            "quality_verification" => %{"score" => 10},
+            "source_health" => %{"checked_sources" => ["gmail"]},
+            "todo_intelligence" => %{"source" => "open_loop_model"}
           }
         }
       ])
@@ -175,22 +252,50 @@ defmodule MaraithonWeb.MobileApiControllerTest do
              "todos" => [
                %{
                  "id" => todo_id,
-                 "action_card" => %{
-                   "headline" => headline,
-                   "context_items" => context_items,
-                   "next_best_action" => next_action,
-                   "available_buttons" => buttons
-                 }
-               }
+                 "metadata" => metadata,
+                 "action_card" =>
+                   %{
+                     "headline" => headline,
+                     "context_items" => context_items,
+                     "next_best_action" => next_action,
+                     "available_buttons" => buttons
+                   } = action_card
+               } = todo_response
              ]
            } = json_response(conn, 200)
 
     assert todo_id == todo.id
+
+    assert metadata == %{
+             "company" => "Starteryou",
+             "person" => "Michael Berlingo",
+             "source_quote" => "Can you send the next Starteryou UGC campaign update?",
+             "thread_state" => "waiting_on_kent",
+             "why_it_matters" => "Michael is waiting on the UGC next-step decision."
+           }
+
+    refute Map.has_key?(metadata, "confidence")
+    refute Map.has_key?(metadata, "generation_mode")
+    refute Map.has_key?(metadata, "model_rationale")
+    refute Map.has_key?(metadata, "quality_verification")
+    refute Map.has_key?(metadata, "source_health")
+    refute Map.has_key?(metadata, "todo_intelligence")
+    refute Map.has_key?(todo_response, "owner_user_id")
+    refute Map.has_key?(todo_response, "source_item_id")
+    refute Map.has_key?(todo_response, "dedupe_key")
+
+    encoded_todo = inspect(todo_response)
+    refute encoded_todo =~ "gmail-thread-mobile-private-123"
+    refute encoded_todo =~ "gmail:mobile-private-thread-123"
     assert headline =~ "Michael Berlingo"
     assert Enum.any?(context_items, &(&1["label"] == "Person"))
+    refute Enum.any?(context_items, &(&1["label"] == "Confidence"))
+    refute Map.has_key?(action_card, "confidence")
+    refute Map.has_key?(action_card, "product_score")
+    refute Map.has_key?(action_card, "source_health")
     assert next_action =~ "Draft"
     assert Enum.any?(buttons, &(&1["action"] == "done"))
-    assert Enum.any?(buttons, &(&1["action"] == "not_helpful" and &1["label"] == "Not Important"))
+    assert Enum.any?(buttons, &(&1["action"] == "not_helpful" and &1["label"] == "Less useful"))
 
     conn =
       build_conn()
@@ -306,20 +411,66 @@ defmodule MaraithonWeb.MobileApiControllerTest do
           "interaction_count" => 99,
           "display_name" => "Production Test Person",
           "relationship" => "Mobile integration",
-          "email" => "production-test-person@example.com"
+          "email" => "production-test-person@example.com",
+          "metadata" => %{
+            "mobile_status" => "active",
+            "deal_stage" => "proposal",
+            "deal_value" => "42000",
+            "confidence" => 0.96,
+            "model_rationale" => "Model score says this relationship is important.",
+            "quality_verification" => %{"score" => 10},
+            "source_health" => %{"checked_sources" => ["gmail"]}
+          }
         }
       })
 
-    assert %{"person" => %{"id" => person_id, "display_name" => "Production Test Person"}} =
+    assert %{
+             "person" => %{
+               "id" => person_id,
+               "display_name" => "Production Test Person",
+               "relationship_health" => "new",
+               "relationship_warmth" => "new",
+               "metadata" => metadata
+             }
+           } =
              json_response(conn, 201)
+
+    assert metadata == %{
+             "deal_stage" => "proposal",
+             "deal_value" => "42000",
+             "mobile_status" => "active"
+           }
+
+    persisted_metadata = Crm.get_person_for_user(user.id, person_id).metadata
+    assert persisted_metadata == metadata
+
+    {:ok, _person} =
+      user.id
+      |> Crm.get_person_for_user(person_id)
+      |> Crm.update_person(%{
+        "relationship_strength" => 72,
+        "affinity_score" => 61
+      })
 
     conn =
       build_conn()
       |> put_req_header("authorization", "Bearer #{session_token}")
       |> get(~p"/api/mobile/people/#{person_id}")
 
-    assert %{"person" => %{"id" => ^person_id, "display_name" => "Production Test Person"}} =
+    assert %{
+             "person" =>
+               %{
+                 "id" => ^person_id,
+                 "display_name" => "Production Test Person",
+                 "relationship_health" => "strong",
+                 "relationship_warmth" => "warm",
+                 "metadata" => ^metadata
+               } = person_response
+           } =
              json_response(conn, 200)
+
+    refute Map.has_key?(person_response, "relationship_strength")
+    refute Map.has_key?(person_response, "affinity_score")
 
     last_contacted_at = "2026-05-26T13:45:00Z"
     last_contacted_at_response = "2026-05-26T13:45:00.000000Z"
@@ -351,6 +502,58 @@ defmodule MaraithonWeb.MobileApiControllerTest do
            ) == :eq
 
     assert Crm.get_person_for_user(user.id, person_id).interaction_count == 0
+  end
+
+  test "mobile people can request every relationship state for full refresh", %{conn: conn} do
+    email = "mobile-people-all-#{System.unique_integer([:positive])}@example.com"
+    {:ok, user} = Accounts.get_or_create_user_by_email(email)
+    {:ok, %{token: session_token}} = Accounts.create_session_for_user(user)
+
+    {:ok, active} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Active Relationship",
+        "email" => "active-relationship@example.com",
+        "metadata" => %{"mobile_status" => "active"}
+      })
+
+    {:ok, archived} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Archived Relationship",
+        "email" => "archived-relationship@example.com",
+        "status" => "archived",
+        "metadata" => %{"mobile_status" => "active"}
+      })
+
+    {:ok, merged} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Merged Relationship",
+        "email" => "merged-relationship@example.com",
+        "status" => "merged",
+        "metadata" => %{"mobile_status" => "active"}
+      })
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/people")
+
+    assert %{"people" => default_people} = json_response(conn, 200)
+    default_ids = MapSet.new(default_people, & &1["id"])
+    assert MapSet.member?(default_ids, active.id)
+    refute MapSet.member?(default_ids, archived.id)
+    refute MapSet.member?(default_ids, merged.id)
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/people?status=all&limit=10")
+
+    assert %{"people" => all_people} = json_response(conn, 200)
+    people_by_id = Map.new(all_people, &{&1["id"], &1})
+
+    assert MapSet.new(Map.keys(people_by_id)) == MapSet.new([active.id, archived.id, merged.id])
+    assert people_by_id[archived.id]["status"] == "archived"
+    assert people_by_id[merged.id]["status"] == "merged"
   end
 
   test "mobile people can be merged and deleted", %{conn: conn} do
@@ -393,6 +596,39 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     assert merged_id == duplicate.id
     assert Crm.get_person_for_user(user.id, duplicate.id).merged_into_id == surviving.id
 
+    {:ok, default_surviving} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Default Merge Primary",
+        "email" => "default-primary@example.com"
+      })
+
+    {:ok, default_duplicate} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Default Merge Primary",
+        "email" => "default-duplicate@example.com"
+      })
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> post(~p"/api/mobile/people/#{default_surviving.id}/merge", %{
+        "merge" => %{"merged_person_id" => default_duplicate.id}
+      })
+
+    assert %{"merge" => %{"merged_person" => %{"status" => "merged"}}} =
+             json_response(conn, 200)
+
+    assert %PersonMerge{} =
+             merge =
+             Repo.get_by(PersonMerge,
+               user_id: user.id,
+               surviving_person_id: default_surviving.id,
+               merged_person_id: default_duplicate.id
+             )
+
+    assert merge.performed_by == "mobile"
+    assert merge.evidence == "Merged from mobile."
+
     {:ok, disposable} =
       Crm.create_person(user.id, %{
         "display_name" => "Disposable CRM Contact",
@@ -407,5 +643,37 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     assert %{"ok" => true, "deleted_person_id" => deleted_id} = json_response(conn, 200)
     assert deleted_id == disposable.id
     refute Crm.get_person_for_user(user.id, disposable.id)
+  end
+
+  test "mobile people errors include stable codes and human copy", %{conn: conn} do
+    email = "mobile-people-errors-#{System.unique_integer([:positive])}@example.com"
+    {:ok, user} = Accounts.get_or_create_user_by_email(email)
+    {:ok, %{token: session_token}} = Accounts.create_session_for_user(user)
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/people/#{Ecto.UUID.generate()}")
+
+    assert json_response(conn, 404) == %{
+             "error" => "not_found",
+             "message" => "That item is no longer available."
+           }
+
+    {:ok, person} =
+      Crm.create_person(user.id, %{
+        "display_name" => "Merge Candidate",
+        "relationship" => "Mobile regression"
+      })
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> post(~p"/api/mobile/people/#{person.id}/merge", %{})
+
+    assert json_response(conn, 422) == %{
+             "error" => "missing_duplicate",
+             "message" => "Choose the duplicate person to merge."
+           }
   end
 end

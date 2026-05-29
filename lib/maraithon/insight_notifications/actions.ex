@@ -15,6 +15,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.Todos
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
@@ -32,7 +33,12 @@ defmodule Maraithon.InsightNotifications.Actions do
     "Fast actions",
     "I would do this next:",
     "Since the last check:",
-    "Tap Draft"
+    "Tap Draft",
+    "appears to be waiting",
+    "still looks open",
+    "thread still looks open",
+    "still looks unclosed",
+    "I found no later reply"
   ]
 
   def telegram_payload(%Delivery{} = delivery) do
@@ -102,7 +108,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     insight = delivery.insight
     metadata = insight.metadata || %{}
     action_state = action_state(delivery)
-    action_state_text = action_state |> render_action_state() |> String.trim()
+    action_state_text = render_action_state(action_state, insight) |> String.trim()
 
     [
       verified_chief_message(insight, metadata),
@@ -514,9 +520,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp render_action_state(nil), do: ""
+  defp render_action_state(nil, _insight), do: ""
 
-  defp render_action_state(%{"status" => "drafted"} = state) do
+  defp render_action_state(%{"status" => "drafted"} = state, _insight) do
     spec = read_map(state, "spec")
 
     case read_string(spec, "kind") do
@@ -535,43 +541,52 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp render_action_state(%{"status" => "executed"} = state) do
-    result = read_map(state, "result")
+  defp render_action_state(%{"status" => "executed"} = state, insight) do
     kind = read_string(state, "kind", read_string(read_map(state, "spec"), "kind"))
-    executed_at = read_string(state, "executed_at")
 
-    details =
+    title_line = completed_item_line(insight)
+
+    {heading, details} =
       case kind do
         "gmail_reply" ->
-          "Sent via Gmail (message #{safe(read_string(result, "message_id", "unknown"))})."
+          {"Sent", "Sent via Gmail."}
 
         "slack_reply" ->
-          "Sent in Slack (ts #{safe(read_string(result, "ts", "unknown"))})."
+          {"Sent", "Sent in Slack."}
 
         "manual_complete" ->
-          "Marked complete from Telegram."
+          {"Marked Done", "Marked complete from Telegram."}
 
         "manual_ack" ->
-          "Acknowledged from Telegram."
+          {"Acknowledged", "Acknowledged from Telegram."}
 
         _ ->
-          "Completed."
+          {"Completed", "Action completed."}
       end
 
-    executed_line =
-      if present?(executed_at), do: "\nAt: #{safe(executed_at)}", else: ""
-
-    "\n\n<b>Completed</b>\n#{details}#{executed_line}"
+    "\n\n<b>#{heading}</b>\n#{details}#{title_line}"
   end
 
-  defp render_action_state(%{"status" => "snoozed"} = state) do
+  defp render_action_state(%{"status" => "snoozed"} = state, _insight) do
     until_text = read_string(state, "until")
     "\n\n<b>Snoozed</b>\nUntil: #{safe(until_text)}"
   end
 
-  defp render_action_state(%{"status" => "dismissed"}), do: "\n\n<b>Dismissed</b>"
-  defp render_action_state(%{"status" => "cancelled"}), do: ""
-  defp render_action_state(_), do: ""
+  defp render_action_state(%{"status" => "dismissed"}, _insight), do: "\n\n<b>Dismissed</b>"
+  defp render_action_state(%{"status" => "cancelled"}, _insight), do: ""
+  defp render_action_state(_, _insight), do: ""
+
+  defp completed_item_line(%Insight{} = insight) do
+    title = insight.title
+
+    if present?(title) do
+      "\nItem: #{safe(truncate(title, @section_text_max_length))}"
+    else
+      ""
+    end
+  end
+
+  defp completed_item_line(_insight), do: ""
 
   defp action_state(%Delivery{} = delivery) do
     case delivery.metadata do
@@ -627,7 +642,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp insight_sections(%Insight{} = insight, metadata) do
-    label = if monitor_insight?(insight), do: "Watching", else: "Todo"
+    label = if monitor_insight?(insight), do: "Watching", else: "Open work"
 
     polished =
       UserFacingCopy.polish_attrs(%{
@@ -652,8 +667,8 @@ defmodule Maraithon.InsightNotifications.Actions do
       []
       |> maybe_append("too_long", String.length(message) > @chief_message_max_length)
       |> maybe_append(
-        "missing_todo_or_watching",
-        not (String.contains?(message, "<b>Todo</b>") or
+        "missing_open_work_or_watching",
+        not (String.contains?(message, "<b>Open work</b>") or
                String.contains?(message, "<b>Watching</b>"))
       )
       |> then(fn issues ->
@@ -772,10 +787,10 @@ defmodule Maraithon.InsightNotifications.Actions do
         read_string(context, "open_loop_reason")
 
       match?(%DateTime{}, insight.due_at) ->
-        "There is a deadline and the loop still looks unclosed."
+        "The deadline is active and no completion signal is recorded."
 
       insight.category in ["reply_urgent", "reply_owed", "commitment_unresolved"] ->
-        "A real person is waiting, and the thread still looks open."
+        "A named person is waiting on the next step, with no recorded closure signal."
 
       true ->
         "This is a high-signal open loop worth closing."
@@ -850,11 +865,11 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp waiting_context_sentence(person) when is_binary(person) do
-    "#{person} appears to be waiting for the next step; I found no later reply that closes the loop."
+    "#{person} is tied to this open thread; no later reply or delivery closes the loop."
   end
 
   defp waiting_context_sentence(_person) do
-    "This still looks open; I found no later reply that closes the loop."
+    "No later reply or delivery closes this open loop."
   end
 
   defp generic_followup_context?(context) when is_binary(context) do
@@ -1074,7 +1089,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
     cond do
       present?(subject) and inferred_next_action_text?(base_text) ->
-        "Then open the #{subject} thread to confirm what #{person} is waiting on; dismiss if stale."
+        "Then open the #{subject} thread to confirm what #{person} is waiting on; close if done."
 
       present?(base_text) ->
         "Next: #{strip_suggested_prefix(base_text)}"
@@ -1355,8 +1370,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp callback_error_text("slack_workspace_reauth_required"), do: "Reconnect Slack in Maraithon"
   defp callback_error_text("google_account_not_connected"), do: "Connect Google first"
   defp callback_error_text("slack_workspace_not_connected"), do: "Connect Slack first"
-  defp callback_error_text(reason) when is_binary(reason), do: truncate(reason, 60)
-  defp callback_error_text(_), do: "Action failed"
+  defp callback_error_text(reason), do: ActionFailureCopy.insight_action(reason)
 
   defp answer_callback(nil, _text), do: :ok
 

@@ -12,6 +12,13 @@ defmodule Maraithon.OAuth do
 
   require Logger
 
+  @metadata_atom_keys %{
+    "team_id" => :team_id,
+    "team_name" => :team_name,
+    "bot_user_id" => :bot_user_id,
+    "app_id" => :app_id
+  }
+
   @doc """
   Stores OAuth tokens for a user and provider.
 
@@ -509,12 +516,17 @@ defmodule Maraithon.OAuth do
   end
 
   defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
-    metadata[key] || metadata[String.to_atom(key)]
-  rescue
-    ArgumentError -> metadata[key]
+    metadata[key] || metadata_atom_value(metadata, key)
   end
 
   defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_value(metadata, key) do
+    case Map.fetch(@metadata_atom_keys, key) do
+      {:ok, atom_key} -> metadata[atom_key]
+      :error -> nil
+    end
+  end
 
   defp put_metadata_if_present(metadata, _key, nil), do: metadata
   defp put_metadata_if_present(metadata, key, value), do: Map.put(metadata, key, value)

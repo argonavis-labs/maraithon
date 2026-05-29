@@ -34,6 +34,31 @@ struct TodoFilteringTests {
     }
 
     @Test
+    func filtersByNextActionText() {
+        let matching = TodoItem(
+            title: "Investor reply",
+            notes: "Short context.",
+            nextAction: "Send the revised financing terms before the board packet closes."
+        )
+        let other = TodoItem(title: "Clean inbox", notes: "", priority: .low)
+
+        let result = TodoFiltering.filter([matching, other], by: .all, searchText: "financing")
+
+        #expect(result.map(\.title) == ["Investor reply"])
+    }
+
+    @Test
+    func filtersByUserFacingUrgencyText() {
+        let critical = TodoItem(title: "Prepare board answer", priority: .critical)
+        let normal = TodoItem(title: "Draft recap", priority: .medium)
+
+        #expect(TodoPriority.medium.title == "Normal")
+        #expect(TodoFiltering.filter([critical, normal], by: .all, searchText: "critical").map(\.title) == ["Prepare board answer"])
+        #expect(TodoFiltering.filter([critical, normal], by: .all, searchText: "normal").map(\.title) == ["Draft recap"])
+        #expect(TodoFiltering.filter([critical, normal], by: .all, searchText: "medium").isEmpty)
+    }
+
+    @Test
     func countsMatchFilterResultsAndSearchText() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -60,5 +85,38 @@ struct TodoFilteringTests {
             now: now,
             calendar: calendar
         ).count)
+    }
+
+    @Test
+    func emptyStateCopyMatchesSelectedFilter() {
+        #expect(TodoFilter.open.navigationTitle == "Open Work")
+        #expect(TodoFilter.overdue.title == "Past due")
+        #expect(TodoFilter.overdue.navigationTitle == "Past-due work")
+        #expect(TodoFilter.completed.navigationTitle == "Completed")
+
+        #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: false) == TodoEmptyState(
+            title: "No work yet",
+            systemImage: "checklist",
+            description: "Add a follow-up or ask Maraithon to capture next actions from Chat."
+        ))
+
+        #expect(TodoFilter.overdue.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
+            title: "No past-due work",
+            systemImage: "clock.badge.checkmark",
+            description: "No past-due commitments need action."
+        ))
+
+        #expect(TodoFilter.today.emptyState(searchText: "", hasAnyWork: true).title == "No work due today")
+        #expect(TodoFilter.upcoming.emptyState(searchText: "", hasAnyWork: true).title == "No upcoming work")
+        #expect(TodoFilter.completed.emptyState(searchText: "", hasAnyWork: true).title == "No completed work")
+    }
+
+    @Test
+    func emptyStateSearchCopyDoesNotMislabelTheActiveFilter() {
+        let state = TodoFilter.completed.emptyState(searchText: " board ", hasAnyWork: true)
+
+        #expect(state.title == "No matching work")
+        #expect(state.systemImage == "magnifyingglass")
+        #expect(state.description == "No completed work matches \"board\". Clear search or switch filters.")
     }
 }

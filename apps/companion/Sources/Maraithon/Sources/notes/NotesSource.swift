@@ -106,11 +106,17 @@ final class NotesSource: SourceProtocol {
 
     func syncNow() async throws {
         eventLog.info("notes.sync_now", source: .system)
-        try await runCycle()
+        do {
+            try await runCycle()
+        } catch {
+            markCycleFailed(error, event: "notes.sync_now_failed")
+            throw error
+        }
     }
 
     func clearLocalState() {
         cursor.reset()
+        statusPublisher.clearIssues()
         statusPublisher.update(state: .disconnected)
         eventLog.info("notes.clear_local_state", source: .system)
     }
@@ -152,14 +158,7 @@ final class NotesSource: SourceProtocol {
         do {
             try await runCycle()
         } catch {
-            statusPublisher.update(
-                state: .error(reason: String(describing: error))
-            )
-            eventLog.error(
-                "notes.cycle_failed",
-                source: .system,
-                payload: ["error": String(describing: error)]
-            )
+            markCycleFailed(error, event: "notes.cycle_failed")
         }
     }
 
@@ -225,7 +224,11 @@ final class NotesSource: SourceProtocol {
         statusPublisher.recordSync(
             at: Date(),
             accepted: outcome.accepted,
-            duplicate: outcome.duplicate
+            duplicate: outcome.duplicate,
+            failed: outcome.invalid,
+            issueSummary: outcome.invalid > 0
+                ? Self.syncIssueSummary(count: outcome.invalid, singular: "note", plural: "notes")
+                : nil
         )
         statusPublisher.update(state: .connected)
         eventLog.info(
@@ -236,10 +239,63 @@ final class NotesSource: SourceProtocol {
                 "count": String(built.count),
                 "accepted": String(outcome.accepted),
                 "duplicate": String(outcome.duplicate),
+                "invalid": String(outcome.invalid),
                 "newest_seen": String(cursor.newestSeen),
                 "backfill_from": String(cursor.backfillFrom)
             ]
         )
+    }
+
+    private static func syncIssueSummary(count: Int, singular: String, plural: String) -> String {
+        count == 1
+            ? "1 \(singular) did not sync."
+            : "\(count.formatted(.number)) \(plural) did not sync."
+    }
+
+    private func markCycleFailed(_ error: Error, event: String) {
+        if let reason = Self.accessIssueReason(for: error) {
+            statusPublisher.clearIssues()
+            statusPublisher.update(state: .needsAttention(reason: reason))
+            eventLog.warning(
+                event,
+                source: .system,
+                payload: ["reason": reason, "error": String(describing: error)]
+            )
+            return
+        }
+        let reason = String(describing: error)
+        statusPublisher.recordCycleFailure(at: Date(), reason: reason)
+        statusPublisher.update(state: .error(reason: reason))
+        eventLog.error(
+            event,
+            source: .system,
+            payload: ["error": reason]
+        )
+    }
+
+    static func accessIssueReason(for error: Error) -> String? {
+        guard let databaseError = error as? NotesDatabase.DatabaseError else {
+            return nil
+        }
+        switch databaseError {
+        case .openFailed(let code, let message):
+            return isAuthorizationDenied(code: code, message: message)
+                ? "notes_full_disk_access_required"
+                : nil
+        case .prepareFailed(let message), .stepFailed(let message):
+            return isAuthorizationDenied(code: nil, message: message)
+                ? "notes_full_disk_access_required"
+                : nil
+        case .entityMissing:
+            return nil
+        }
+    }
+
+    private static func isAuthorizationDenied(code: Int32?, message: String) -> Bool {
+        if code == 23 { return true }
+        let normalized = message.lowercased()
+        return normalized.contains("authorization denied")
+            || normalized.contains("autheloirzation denied")
     }
 
     // MARK: - Record construction

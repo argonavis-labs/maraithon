@@ -41,6 +41,8 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     assert profile.tier == :chat
     assert profile.model == "chat-tier"
     assert profile.reasoning_effort == "low"
+    assert profile.task_class == :source_hint_identity
+    assert profile.route_reason == "bounded_source_hint_identity_chat"
     assert profile.max_tokens == nil
     assert Keyword.fetch!(profile.llm_opts, :chat_model) == "chat-tier"
   end
@@ -55,11 +57,15 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
 
     assert profile.tier == :chat
     assert profile.request_focus == :connector_status
+    assert profile.task_class == :connector_status
+    assert profile.route_reason == "connector_status_focus"
     assert profile.model == "chat-tier"
-    assert profile.reasoning_effort == "medium"
+    assert profile.reasoning_effort == "none"
     assert Keyword.fetch!(profile.llm_opts, :request_focus) == :connector_status
     assert Keyword.fetch!(profile.llm_opts, :context_scope) == :connector_status
     assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :connector_status
+    assert Keyword.fetch!(profile.llm_opts, :max_tokens) == 700
+    assert Keyword.fetch!(profile.llm_opts, :max_wall_clock_ms) == 15_000
   end
 
   test "routes broad planning and todo-review asks to the reasoning tier" do
@@ -75,6 +81,12 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
       assert profile.tier == :reasoning
       assert profile.model == "reasoning-tier"
       assert profile.reasoning_effort == "high"
+
+      assert profile.route_reason in [
+               "today_mode_or_attention_request",
+               "planning_source_or_open_loop_analysis"
+             ]
+
       assert profile.max_tokens == 6_000
       assert Keyword.fetch!(profile.llm_opts, :chat_model) == "reasoning-tier"
     end
@@ -84,8 +96,67 @@ defmodule Maraithon.TelegramAssistant.ModelRoutingTest do
     profile = ModelRouting.profile_for(%{text: "Can you send me a morning briefing?"})
 
     assert profile.tier == :reasoning
+    assert profile.task_class == :planning
     assert profile.model == "reasoning-tier"
     assert profile.reasoning_effort == "high"
+  end
+
+  test "routes meeting prep with focused reasoning budgets" do
+    profile = ModelRouting.profile_for(%{text: "What should I know before my meeting?"})
+
+    assert profile.tier == :reasoning
+    assert profile.request_focus == :meeting_prep
+    assert profile.task_class == :meeting_prep
+    assert profile.route_reason == "meeting_prep_requires_context"
+    assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :meeting_prep
+    assert Keyword.fetch!(profile.llm_opts, :max_tool_steps) == 12
+  end
+
+  test "routes linked todo action replies through linked item context" do
+    profile =
+      ModelRouting.profile_for(%{
+        text: "Dismiss this todo as no longer relevant.",
+        reply_to_message_id: "todo-card-1"
+      })
+
+    assert profile.request_focus == :linked_item_context
+    assert profile.task_class == :linked_item_context
+    assert profile.route_reason == "reply_to_linked_item_context"
+    assert Keyword.fetch!(profile.llm_opts, :context_scope) == :linked_item_context
+    assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :linked_item_context
+  end
+
+  test "routes waiting and owe questions through open-loop analysis" do
+    for text <- ["Who am I waiting on?", "What do I owe other people right now?"] do
+      profile = ModelRouting.profile_for(%{text: text})
+
+      assert profile.tier == :reasoning
+      assert profile.request_focus == :waiting_on
+      assert profile.task_class == :waiting_on
+      assert profile.route_reason == "waiting_on_or_commitment_analysis"
+      assert Keyword.fetch!(profile.llm_opts, :tool_scope) == :waiting_on
+      assert Keyword.fetch!(profile.llm_opts, :max_tool_steps) == 12
+    end
+  end
+
+  test "keeps trivial prompts on chat while exposing route metadata" do
+    profile = ModelRouting.profile_for(%{text: "What is 2+2?"})
+
+    assert profile.tier == :chat
+    assert profile.task_class == :simple_answer
+    assert profile.route_reason == "default_fast_chat_tier"
+    assert profile.reasoning_effort == "low"
+  end
+
+  test "preserves route metadata when escalating a chat profile" do
+    profile = ModelRouting.profile_for(%{text: "What is 2+2?"})
+    escalated = ModelRouting.escalated_profile_for(profile)
+
+    assert escalated.tier == :reasoning
+    assert escalated.task_class == :simple_answer
+    assert escalated.route_reason == "escalated_to_reasoning:default_fast_chat_tier"
+    assert escalated.model == "reasoning-tier"
+    assert Keyword.fetch!(escalated.llm_opts, :max_tool_steps) == 18
   end
 
   test "routes contact and stale follow-up review asks to reasoning with relationship context" do

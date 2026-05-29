@@ -1,4 +1,4 @@
-.PHONY: setup \
+.PHONY: setup setup-companion-signing run-companion \
 	generate generate-native generate-companion generate-mobile \
 	build build-web build-api build-static build-assets build-native build-companion build-mobile \
 	test test-web test-api test-native test-companion test-mobile \
@@ -8,6 +8,12 @@
 
 setup:
 	mix setup
+
+setup-companion-signing:
+	apps/companion/scripts/create_dev_signing_identity.sh
+
+run-companion:
+	scripts/monorepo/run companion
 
 generate:
 	scripts/monorepo/generate

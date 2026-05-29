@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   alias Maraithon.AssistantHarness
   alias Maraithon.ActionLedger
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ContextEngine
   alias Maraithon.Projects
   alias Maraithon.Runtime
@@ -13,6 +14,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.TelegramAssistant.{
     ConnectedContextPreflight,
     ModelRouting,
+    PreferenceConfirmationCopy,
     Run,
     TodoActions,
     Toolbox
@@ -67,6 +69,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
             |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
             |> Map.put(:model_name, Map.get(runtime_context, :model_name))
             |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
+            |> Map.put(:task_class, Map.get(runtime_context, :task_class))
+            |> Map.put(:route_reason, Map.get(runtime_context, :route_reason))
 
           {:ok, _run} =
             TelegramAssistant.complete_run(run, %{status: status, result_summary: summary})
@@ -190,6 +194,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
             |> Map.put(:model_tier, Map.get(runtime_context, :model_tier))
             |> Map.put(:model_name, Map.get(runtime_context, :model_name))
             |> Map.put(:model_reasoning_effort, Map.get(runtime_context, :model_reasoning_effort))
+            |> Map.put(:task_class, Map.get(runtime_context, :task_class))
+            |> Map.put(:route_reason, Map.get(runtime_context, :route_reason))
             |> Map.put(:escalated_from_run_id, original_run.id)
             |> Map.put(:escalated_from_reason, normalize_error(reason))
 
@@ -290,7 +296,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       model_provider: TelegramAssistant.model_provider_name(),
       model_name: Map.get(model_profile, :model) || TelegramAssistant.model_name(),
       prompt_snapshot: ContextEngine.prompt_snapshot(context),
-      result_summary: %{model_tier: Map.get(model_profile, :tier)},
+      result_summary: route_summary(model_profile),
       started_at: Map.get(attrs, :started_at) || DateTime.utc_now()
     }
 
@@ -337,7 +343,9 @@ defmodule Maraithon.TelegramAssistant.Runner do
             iteration: state.iteration,
             llm_turns: state.llm_turns,
             model: Map.get(runtime_context, :model_name),
-            model_tier: Map.get(runtime_context, :model_tier)
+            model_tier: Map.get(runtime_context, :model_tier),
+            task_class: Map.get(runtime_context, :task_class),
+            route_reason: Map.get(runtime_context, :route_reason)
           },
           fn ->
             do_run_loop_step(
@@ -390,7 +398,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp execute_tool_calls(run, runtime_context, tool_calls, state, started_monotonic_ms) do
     cond do
-      state.tool_steps + length(tool_calls) > max_tool_steps() ->
+      state.tool_steps + length(tool_calls) > max_tool_steps(runtime_context) ->
         {:error, run, :tool_step_limit, state}
 
       tool_calls == [] ->
@@ -689,15 +697,25 @@ defmodule Maraithon.TelegramAssistant.Runner do
       model_tier: Map.get(model_profile, :tier),
       model_name: Map.get(model_profile, :model),
       model_reasoning_effort: Map.get(model_profile, :reasoning_effort),
+      task_class: Map.get(model_profile, :task_class),
+      route_reason: Map.get(model_profile, :route_reason),
       llm_opts: Map.get(model_profile, :llm_opts, []),
       default_project_id:
         Map.get(defaults, :default_project_id) || defaults["default_project_id"],
       default_project_slug:
         Map.get(defaults, :default_project_slug) || defaults["default_project_slug"],
-      default_slack_team_id:
-        Map.get(defaults, :default_slack_team_id) || defaults["default_slack_team_id"]
+      default_slack_team_id: default_slack_team_id(Map.fetch!(attrs, :user_id))
     }
   end
+
+  defp default_slack_team_id(user_id) when is_binary(user_id) do
+    user_id
+    |> SourceScope.resolve()
+    |> SourceScope.slack_team_ids()
+    |> List.first()
+  end
+
+  defp default_slack_team_id(_user_id), do: nil
 
   defp maybe_start_liveness_session(run, attrs) do
     if surface(attrs) == "mobile" do
@@ -720,6 +738,21 @@ defmodule Maraithon.TelegramAssistant.Runner do
       end
     end
   end
+
+  defp route_summary(model_profile) do
+    %{
+      model_tier: route_value(Map.get(model_profile, :tier)),
+      model_name: Map.get(model_profile, :model),
+      model_reasoning_effort: Map.get(model_profile, :reasoning_effort),
+      task_class: route_value(Map.get(model_profile, :task_class)),
+      route_reason: route_value(Map.get(model_profile, :route_reason))
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp route_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp route_value(value), do: value
 
   defp note_context_loaded(%Run{surface: "mobile"}), do: :ok
 
@@ -895,7 +928,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
          delivery,
          liveness_summary
        ) do
-    text = final_text(response, prepared_action_id)
+    text = final_text(response, prepared_action_id, state)
 
     case TelegramAssistant.send_turn(
            conversation,
@@ -1021,7 +1054,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
           "run_id" => run.id,
           "surface" => surface(attrs),
           "message_class" => "todo_item",
-          "summary" => "Delivered one actionable todo item.",
+          "summary" => "Delivered one open work item.",
           "linked_todo" => serialize_linked_todo(todo_record),
           "surface_quality" => SurfaceQuality.assess(todo_record)
         },
@@ -1070,7 +1103,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp mobile_todo_text(todo) do
-    title = map_value(todo, "title") || map_value(todo, "todo") || "Todo"
+    title = map_value(todo, "title") || map_value(todo, "todo") || "Work item"
     next_action = map_value(todo, "next_action")
 
     case next_action do
@@ -1137,21 +1170,49 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp todo_digest_intro_text(response, prepared_action_id) do
     case map_value(response, "assistant_message", "") do
       value when is_binary(value) and value != "" ->
-        if todo_bullet_list?(value) do
-          "I found the current open items. I'm sending each with context."
-        else
-          value
-        end
+        polished_todo_digest_intro(value)
 
       _ ->
         case final_text(response, prepared_action_id) do
           "I finished that step." ->
-            "I refreshed the current work list. I'm sending the actionable items one by one."
+            "I refreshed the current work list. Each item is ready for a decision."
 
           value ->
             value
         end
     end
+  end
+
+  defp polished_todo_digest_intro(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      todo_bullet_list?(value) ->
+        "I found the current open items. Each one has the context needed for a decision."
+
+      process_todo_digest_intro?(value) ->
+        value
+        |> String.replace(
+          ~r/\s*(I'm|I am)\s+sending\s+(the\s+)?actionable\s+items\s+one\s+by\s+one\.?/iu,
+          " Each item is ready for a decision."
+        )
+        |> String.replace(
+          ~r/\s*(I'm|I am)\s+sending\s+each\s+with\s+context\.?/iu,
+          " Each item has the context needed for a decision."
+        )
+        |> String.replace(~r/\s+/, " ")
+        |> String.trim()
+
+      true ->
+        value
+    end
+  end
+
+  defp process_todo_digest_intro?(value) when is_binary(value) do
+    String.match?(
+      value,
+      ~r/\b(sending\s+(the\s+)?actionable\s+items\s+one\s+by\s+one|sending\s+each\s+with\s+context)\b/iu
+    )
   end
 
   defp todo_digest_status(
@@ -1192,10 +1253,57 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
+  defp final_text(response, prepared_action_id, state) do
+    case pending_preference_confirmation_rules(state.tool_history) do
+      [] -> final_text(response, prepared_action_id)
+      rules -> PreferenceConfirmationCopy.text(rules)
+    end
+  end
+
   defp turn_kind_for_message_class("approval_prompt"), do: "approval_prompt"
   defp turn_kind_for_message_class("action_result"), do: "action_result"
   defp turn_kind_for_message_class("system_notice"), do: "system_notice"
   defp turn_kind_for_message_class(_message_class), do: "assistant_reply"
+
+  defp pending_preference_confirmation_rules(tool_history) when is_list(tool_history) do
+    tool_history
+    |> Enum.reverse()
+    |> Enum.find_value([], fn entry ->
+      case {map_value(entry, "tool"), map_value(entry, "result")} do
+        {"remember_preferences", result} when is_map(result) ->
+          if preference_confirmation_required?(result) do
+            result
+            |> map_value("saved_rules", [])
+            |> pending_rules_from_list()
+            |> case do
+              [] -> result |> map_value("pending_rules", []) |> pending_rules_from_list()
+              rules -> rules
+            end
+          else
+            false
+          end
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp pending_preference_confirmation_rules(_tool_history), do: []
+
+  defp preference_confirmation_required?(result) do
+    map_value(result, "status") == "awaiting_confirmation" or
+      map_value(result, "requires_confirmation") == true
+  end
+
+  defp pending_rules_from_list(rules) when is_list(rules) do
+    Enum.filter(rules, fn
+      rule when is_map(rule) -> map_value(rule, "status") in ["pending_confirmation", nil]
+      _ -> false
+    end)
+  end
+
+  defp pending_rules_from_list(_rules), do: []
 
   defp trigger_type(attrs) do
     cond do
@@ -1292,8 +1400,8 @@ defmodule Maraithon.TelegramAssistant.Runner do
     end
   end
 
-  defp max_tool_steps do
-    AssistantHarness.max_tool_steps(runner_policy_opts())
+  defp max_tool_steps(runtime_context) do
+    AssistantHarness.max_tool_steps(runner_policy_opts(runtime_context))
   end
 
   defp runner_policy_opts(runtime_context \\ %{}) do

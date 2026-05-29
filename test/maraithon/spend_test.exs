@@ -64,6 +64,16 @@ defmodule Maraithon.SpendTest do
       assert result.total_cost == 3.38163
     end
 
+    test "calculates Qwen OpenRouter pricing" do
+      result = Spend.calculate_cost("qwen/qwen3.7-max", 1_000_000, 1_000_000)
+
+      assert result.input_cost == 2.5
+      assert result.output_cost == 7.5
+      assert result.total_cost == 10.0
+      assert result.input_rate_per_million == 2.5
+      assert result.output_rate_per_million == 7.5
+    end
+
     test "calculates web search cost" do
       result = Spend.web_search_cost(15)
 

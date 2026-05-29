@@ -7,7 +7,8 @@ defmodule Maraithon.Travel.BriefRenderer do
     offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
     reference_now = Keyword.get(opts, :reference_now)
     items = sort_items(Map.get(itinerary, :items) || Map.get(itinerary, "items") || [])
-    active_items = Enum.reject(items, &(&1.status == "superseded"))
+    visible_items = Enum.reject(items, &(&1.status == "superseded"))
+    cancelled_items = Enum.filter(visible_items, &(&1.status == "cancelled"))
     trip_date = local_trip_date(itinerary, offset_hours)
     prep_day_label = prep_day_label(itinerary, offset_hours, reference_now)
 
@@ -17,12 +18,12 @@ defmodule Maraithon.Travel.BriefRenderer do
     destination = itinerary.destination_label || "your trip"
 
     intro =
-      case {mode, cancelled_trip?(active_items)} do
-        {:travel_update, true} ->
-          "I detected a change in your travel details. One or more reservations now look cancelled. Here is the latest state I found:"
+      case {mode, cancelled_items} do
+        {:travel_update, [_ | _]} ->
+          "Travel change: #{cancelled_intro(cancelled_items)} Review before relying on this trip:"
 
-        {:travel_update, false} ->
-          "I detected a change in your travel details. Here is the latest itinerary I found:"
+        {:travel_update, []} ->
+          "Travel details changed. Current itinerary:"
 
         _ ->
           "Here are your travel details for #{prep_day_label} (#{trip_date}):"
@@ -30,8 +31,9 @@ defmodule Maraithon.Travel.BriefRenderer do
 
     sections =
       [
-        render_flight_section(active_items),
-        render_hotel_section(active_items)
+        render_flight_section(visible_items),
+        render_hotel_section(visible_items),
+        render_cancelled_section(cancelled_items)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -40,11 +42,11 @@ defmodule Maraithon.Travel.BriefRenderer do
       |> Enum.join("\n\n")
       |> String.trim()
 
-    snapshot = digest_snapshot(itinerary, active_items, trip_date, destination)
+    snapshot = digest_snapshot(itinerary, visible_items, trip_date, destination)
 
     %{
       title: "#{title_prefix}: #{destination}",
-      summary: summary_line(active_items, destination, mode),
+      summary: summary_line(visible_items, destination, mode),
       body: body,
       digest_hash: digest_hash(snapshot),
       local_trip_date: trip_date
@@ -119,6 +121,37 @@ defmodule Maraithon.Travel.BriefRenderer do
     end
   end
 
+  defp render_cancelled_section([]), do: nil
+
+  defp render_cancelled_section(items) do
+    heading =
+      if length(items) == 1 do
+        "CANCELLED RESERVATION"
+      else
+        "CANCELLED RESERVATIONS"
+      end
+
+    lines =
+      items
+      |> Enum.flat_map(&cancelled_item_lines/1)
+
+    Enum.join([heading | lines], "\n")
+  end
+
+  defp cancelled_item_lines(item) do
+    metadata = item.metadata || %{}
+
+    [
+      "#{reservation_type_label(item.item_type)}: #{item.title || item.vendor_name || "Reservation"}",
+      item.location_label,
+      get_in(metadata, ["display_date"]),
+      prefixed_line("Check-in", metadata["display_check_in"]),
+      prefixed_line("Check-out", metadata["display_check_out"]),
+      confirmation_line(item.confirmation_code, confirmation_label(item.item_type))
+    ]
+    |> Enum.reject(&blank?/1)
+  end
+
   defp local_trip_date(itinerary, offset_hours) do
     itinerary.starts_at
     |> Kernel.||(DateTime.utc_now())
@@ -139,6 +172,7 @@ defmodule Maraithon.Travel.BriefRenderer do
   defp summary_line(items, destination, mode) do
     has_flight? = Enum.any?(items, &(&1.item_type == "flight" and &1.status != "cancelled"))
     has_hotel? = Enum.any?(items, &(&1.item_type == "hotel" and &1.status != "cancelled"))
+    cancelled_count = Enum.count(items, &(&1.status == "cancelled"))
 
     prefix =
       case mode do
@@ -147,6 +181,15 @@ defmodule Maraithon.Travel.BriefRenderer do
       end
 
     cond do
+      mode == :travel_update and cancelled_count > 0 and not has_flight? and not has_hotel? ->
+        "Travel reservations for #{destination} now appear cancelled."
+
+      mode == :travel_update and cancelled_count == 1 ->
+        "Updated itinerary for #{destination} with one cancelled reservation."
+
+      mode == :travel_update and cancelled_count > 1 ->
+        "Updated itinerary for #{destination} with #{cancelled_count} cancelled reservations."
+
       has_flight? and has_hotel? ->
         "#{prefix} flight and hotel details for #{destination}."
 
@@ -204,9 +247,15 @@ defmodule Maraithon.Travel.BriefRenderer do
     end)
   end
 
-  defp cancelled_trip?(items) do
-    items != [] and Enum.all?(items, &(&1.status == "cancelled"))
-  end
+  defp cancelled_intro([_item]), do: "one reservation now appears cancelled."
+  defp cancelled_intro(items), do: "#{length(items)} reservations now appear cancelled."
+
+  defp reservation_type_label("flight"), do: "Flight"
+  defp reservation_type_label("hotel"), do: "Hotel"
+  defp reservation_type_label(_type), do: "Reservation"
+
+  defp confirmation_label("hotel"), do: "Itinerary #"
+  defp confirmation_label(_type), do: "Booking Ref"
 
   defp trip_local_date(itinerary, offset_hours) do
     itinerary.starts_at

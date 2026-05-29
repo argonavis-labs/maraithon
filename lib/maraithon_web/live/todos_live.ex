@@ -2,7 +2,8 @@ defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
   alias Maraithon.Todos
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{PublicMetadata, Todo}
+  alias MaraithonWeb.TodoActionCopy
 
   @page_limit 200
   @default_filters %{
@@ -23,13 +24,13 @@ defmodule MaraithonWeb.TodosLive do
     {"All", "all"}
   ]
   @attention_options [
-    {"All modes", "all"},
+    {"Any attention", "all"},
     {"Needs action", "act_now"},
     {"Watching", "monitor"}
   ]
   @due_options [
     {"Any due date", "all"},
-    {"Overdue", "overdue"},
+    {"Past due", "overdue"},
     {"Due today", "today"},
     {"Next 7 days", "week"},
     {"No due date", "no_due"}
@@ -41,14 +42,14 @@ defmodule MaraithonWeb.TodosLive do
     {"Slack", "slack"},
     {"Telegram", "telegram"},
     {"GitHub", "github"},
-    {"Manual", "manual"}
+    {"Added by you", "manual"}
   ]
 
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Todos",
+       page_title: "Open Work",
        current_path: "/todos",
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
@@ -130,28 +131,34 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
-    case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from Todos page.") do
+    case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from Work page.") do
       {:ok, _todo} ->
         {:noreply,
          socket
          |> refresh_todos()
-         |> put_flash(:info, "Marked todo done.")}
+         |> put_flash(:info, "Work item done.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to complete todo: #{inspect(reason)}")}
+        {:noreply,
+         socket
+         |> refresh_todos()
+         |> put_flash(:error, TodoActionCopy.error(:complete, reason))}
     end
   end
 
   def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
-    case Todos.dismiss(current_user_id(socket), todo_id, note: "Dismissed from Todos page.") do
+    case Todos.dismiss(current_user_id(socket), todo_id, note: "Dismissed from Work page.") do
       {:ok, _todo} ->
         {:noreply,
          socket
          |> refresh_todos()
-         |> put_flash(:info, "Dismissed todo.")}
+         |> put_flash(:info, "Work item dismissed.")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to dismiss todo: #{inspect(reason)}")}
+        {:noreply,
+         socket
+         |> refresh_todos()
+         |> put_flash(:error, TodoActionCopy.error(:dismiss, reason))}
     end
   end
 
@@ -163,7 +170,7 @@ defmodule MaraithonWeb.TodosLive do
         socket =
           socket
           |> refresh_todos()
-          |> put_flash(:info, "Maraithon will show fewer todos like that.")
+          |> put_flash(:info, "Maraithon will show fewer like that.")
 
         socket =
           if selected? do
@@ -175,7 +182,10 @@ defmodule MaraithonWeb.TodosLive do
         {:noreply, socket}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to save todo feedback: #{inspect(reason)}")}
+        {:noreply,
+         socket
+         |> refresh_todos()
+         |> put_flash(:error, TodoActionCopy.error(:see_less, reason))}
     end
   end
 
@@ -188,14 +198,47 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
+  def handle_event("save_todo_next_action", %{"id" => todo_id, "todo" => params}, socket) do
+    next_action = normalize_text(Map.get(params, "next_action"))
+
+    cond do
+      is_nil(next_action) ->
+        {:noreply, put_flash(socket, :error, "Enter a next action before saving.")}
+
+      String.length(next_action) < 4 ->
+        {:noreply, put_flash(socket, :error, "Enter a next action with at least 4 characters.")}
+
+      true ->
+        case Todos.update_for_user(current_user_id(socket), todo_id, %{
+               "next_action" => next_action
+             }) do
+          {:ok, _todo} ->
+            {:noreply,
+             socket
+             |> refresh_todos()
+             |> put_flash(:info, "Updated next action.")}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> refresh_todos()
+             |> put_flash(:error, TodoActionCopy.error(:update_next_action, reason))}
+        end
+    end
+  end
+
+  def handle_event("save_todo_next_action", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Enter a next action before saving.")}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
       <div class="space-y-6">
         <.page_header
-          title="Todos"
-          subtitle="A fast command surface for triaging open obligations, stale follow-ups, personal tasks, and completed work."
+          title="Open Work"
+          subtitle="A fast command surface for triaging open obligations, follow-ups that need confirmation, personal commitments, and completed work."
         >
           <:actions>
             <.button navigate="/dashboard" variant="outline">Dashboard</.button>
@@ -228,7 +271,7 @@ defmodule MaraithonWeb.TodosLive do
               </.c_select>
             </.field>
 
-            <.field label="Mode" for={@filter_form[:attention].id}>
+            <.field label="Attention" for={@filter_form[:attention].id}>
               <.c_select id={@filter_form[:attention].id} name={@filter_form[:attention].name}>
                 <option :for={{label, value} <- @attention_options} value={value} selected={@filters["attention"] == value}>
                   <%= label %>
@@ -262,7 +305,7 @@ defmodule MaraithonWeb.TodosLive do
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="text-sm/6 font-semibold text-zinc-950">Todo list</h2>
+                <h2 class="text-sm/6 font-semibold text-zinc-950">Work list</h2>
                 <p class="text-sm/6 text-zinc-500">
                   <%= result_count_label(@todos, @total_count) %>
                 </p>
@@ -285,19 +328,19 @@ defmodule MaraithonWeb.TodosLive do
                     <.table_header class="w-10">
                       <input
                         type="checkbox"
-                        aria-label="Select all todos"
+                        aria-label="Select all work items"
                         checked={all_visible_todos_selected?(@todos, @selected_todo_ids)}
                         phx-click="toggle_all_todos"
                         class="size-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
                       />
                     </.table_header>
                     <.sortable_table_header filters={@filters} field="title" class="min-w-[22rem]">
-                      Todo
+                      Work item
                     </.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="source">Source</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="status">Status</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="attention">Mode</.sortable_table_header>
-                    <.sortable_table_header filters={@filters} field="priority">Priority</.sortable_table_header>
+                    <.sortable_table_header filters={@filters} field="attention">Attention</.sortable_table_header>
+                    <.sortable_table_header filters={@filters} field="priority">Urgency</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="due">Due</.sortable_table_header>
                     <.sortable_table_header filters={@filters} field="updated">Updated</.sortable_table_header>
                     <.table_header class="w-48 text-right">Actions</.table_header>
@@ -351,7 +394,11 @@ defmodule MaraithonWeb.TodosLive do
                         <%= attention_mode_label(todo.attention_mode) %>
                       </.badge>
                     </.table_cell>
-                    <.table_cell class="align-top text-sm/6 text-zinc-700"><%= todo.priority %></.table_cell>
+                    <.table_cell class="align-top">
+                      <.badge color={priority_color(todo.priority)}>
+                        <%= priority_label(todo.priority) %>
+                      </.badge>
+                    </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
                       <%= format_datetime(todo.due_at, "No due date") %>
                     </.table_cell>
@@ -388,7 +435,7 @@ defmodule MaraithonWeb.TodosLive do
                           variant="plain"
                           class="text-xs text-zinc-500 hover:text-zinc-950"
                         >
-                          See less
+                          Show less
                         </.button>
                       </div>
                     </.table_cell>
@@ -453,7 +500,7 @@ defmodule MaraithonWeb.TodosLive do
           variant="plain"
           class="text-xs text-zinc-200 hover:bg-white/10 hover:text-white"
         >
-          Mark done
+          Done
         </.button>
         <.button
           type="button"
@@ -469,7 +516,7 @@ defmodule MaraithonWeb.TodosLive do
           variant="plain"
           class="text-xs text-zinc-200 hover:bg-white/10 hover:text-white"
         >
-          See less
+          Show less
         </.button>
       </div>
     </div>
@@ -504,6 +551,16 @@ defmodule MaraithonWeb.TodosLive do
   attr :filters, :map, required: true
 
   defp todo_detail_panel(assigns) do
+    can_edit_next_action = todo_next_action_editable?(assigns.todo)
+
+    assigns =
+      assigns
+      |> assign(:can_edit_next_action, can_edit_next_action)
+      |> assign(
+        :next_action_form,
+        to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
+      )
+
     ~H"""
     <aside id="todo-detail" class="rounded-lg border border-zinc-950/10 bg-white px-4 py-4 shadow-sm">
       <div class="flex items-start justify-between gap-3">
@@ -513,7 +570,9 @@ defmodule MaraithonWeb.TodosLive do
             <.badge color={attention_color(@todo.attention_mode)}>
               <%= attention_mode_label(@todo.attention_mode) %>
             </.badge>
-            <span class="text-xs/5 text-zinc-500">priority <%= @todo.priority %></span>
+            <.badge color={priority_color(@todo.priority)}>
+              <%= priority_label(@todo.priority) %>
+            </.badge>
           </div>
           <h3 class="mt-2 text-base/7 font-semibold text-zinc-950"><%= @todo.title %></h3>
         </div>
@@ -525,14 +584,40 @@ defmodule MaraithonWeb.TodosLive do
         </.link>
       </div>
 
+      <.form
+        :if={@can_edit_next_action}
+        for={@next_action_form}
+        id={"todo-next-action-form-#{@todo.id}"}
+        phx-submit="save_todo_next_action"
+        phx-value-id={@todo.id}
+        class="mt-4 border-t border-zinc-950/10 pt-4"
+      >
+        <.field label="Next action" for={"todo-next-action-#{@todo.id}"}>
+          <.c_textarea
+            id={"todo-next-action-#{@todo.id}"}
+            name={@next_action_form[:next_action].name}
+            value={@next_action_form[:next_action].value}
+            rows={3}
+            maxlength="1000"
+            required
+          />
+        </.field>
+
+        <div class="mt-3 flex justify-end">
+          <.button type="submit" variant="outline" class="text-xs" phx-disable-with="Saving...">
+            Save action
+          </.button>
+        </div>
+      </.form>
+
       <dl class="mt-4 divide-y divide-zinc-950/5">
-        <div :for={field <- todo_detail_fields(@todo)} class="grid grid-cols-1 gap-1 py-3">
+        <div :for={field <- todo_detail_fields(@todo, @can_edit_next_action)} class="grid grid-cols-1 gap-1 py-3">
           <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
           <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
         </div>
       </dl>
 
-      <div :if={@todo.status in ["open", "snoozed"]} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
+      <div :if={@can_edit_next_action} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
         <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
           Done
         </.button>
@@ -540,12 +625,12 @@ defmodule MaraithonWeb.TodosLive do
           Dismiss
         </.button>
         <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
-          See less
+          Show less
         </.button>
       </div>
 
       <div :if={todo_metadata_pairs(@todo) != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-        <p class="text-xs/5 font-medium text-zinc-500">Source metadata</p>
+        <p class="text-xs/5 font-medium text-zinc-500">Context</p>
         <dl class="mt-2 space-y-2">
           <div :for={field <- todo_metadata_pairs(@todo)} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
             <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
@@ -557,11 +642,13 @@ defmodule MaraithonWeb.TodosLive do
     """
   end
 
+  defp todo_next_action_editable?(%Todo{status: status}), do: status in ~w(open snoozed)
+
   defp apply_bulk_todo_action(socket, action) do
     todo_ids = selected_visible_todo_ids(socket)
 
     if todo_ids == [] do
-      put_flash(socket, :error, "Select at least one todo first.")
+      put_flash(socket, :error, "Select at least one work item first.")
     else
       {updated_count, errors} =
         Enum.reduce(todo_ids, {0, []}, fn todo_id, {count, errors} ->
@@ -597,9 +684,9 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
-  defp bulk_todo_note(:complete), do: "Completed from Todos bulk action."
-  defp bulk_todo_note(:dismiss), do: "Dismissed from Todos bulk action."
-  defp bulk_todo_note(:see_less), do: "Dismissed from Todos bulk see less action."
+  defp bulk_todo_note(:complete), do: "Completed from Work bulk action."
+  defp bulk_todo_note(:dismiss), do: "Dismissed from Work bulk action."
+  defp bulk_todo_note(:see_less), do: "Dismissed from Work bulk see less action."
 
   defp bulk_todo_flash_kind(0, [_ | _]), do: :error
   defp bulk_todo_flash_kind(_updated_count, _errors), do: :info
@@ -607,9 +694,9 @@ defmodule MaraithonWeb.TodosLive do
   defp bulk_todo_flash(action, updated_count, errors) do
     base =
       case action do
-        :complete -> "Marked #{pluralize_todo(updated_count)} done"
-        :dismiss -> "Dismissed #{pluralize_todo(updated_count)}"
-        :see_less -> "Saved see-less feedback for #{pluralize_todo(updated_count)}"
+        :complete -> "Marked #{pluralize_work_item(updated_count)} done"
+        :dismiss -> "Dismissed #{pluralize_work_item(updated_count)}"
+        :see_less -> "Maraithon will show fewer like those"
       end
 
     case length(errors) do
@@ -618,8 +705,8 @@ defmodule MaraithonWeb.TodosLive do
     end
   end
 
-  defp pluralize_todo(1), do: "1 todo"
-  defp pluralize_todo(count), do: "#{count} todos"
+  defp pluralize_work_item(1), do: "1 work item"
+  defp pluralize_work_item(count), do: "#{count} work items"
 
   defp selected_visible_todo_ids(socket) do
     socket.assigns.selected_todo_ids
@@ -807,12 +894,12 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.join(" ")
   end
 
-  defp todo_detail_fields(%Todo{} = todo) do
+  defp todo_detail_fields(%Todo{} = todo, next_action_editable?) do
     [
       %{label: "Source", value: todo_source_label(todo.source)},
       %{label: "Account", value: todo_source_account_value(todo)},
       %{label: "Summary", value: todo.summary},
-      %{label: "Next action", value: todo.next_action},
+      %{label: "Next action", value: if(next_action_editable?, do: nil, else: todo.next_action)},
       %{label: "Due", value: format_datetime(todo.due_at, nil)},
       %{label: "Snoozed until", value: format_datetime(todo.snoozed_until, nil)},
       %{label: "Updated", value: format_datetime(todo.updated_at, nil)},
@@ -824,6 +911,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_metadata_pairs(%Todo{} = todo) do
     (todo.metadata || %{})
+    |> PublicMetadata.todo()
     |> Enum.map(fn {key, value} ->
       %{
         label: label(key),
@@ -831,6 +919,7 @@ defmodule MaraithonWeb.TodosLive do
       }
     end)
     |> Enum.reject(fn field -> blank?(field.value) end)
+    |> Enum.sort_by(& &1.label)
     |> Enum.take(10)
   end
 
@@ -876,9 +965,9 @@ defmodule MaraithonWeb.TodosLive do
     shown = length(todos)
 
     cond do
-      total_count > shown -> "Showing #{shown} of #{total_count} matching todos."
-      total_count == 1 -> "1 todo shown."
-      true -> "#{total_count} todos shown."
+      total_count > shown -> "Showing #{shown} of #{total_count} matching work items."
+      total_count == 1 -> "1 work item shown."
+      true -> "#{total_count} work items shown."
     end
   end
 
@@ -889,7 +978,7 @@ defmodule MaraithonWeb.TodosLive do
       option_label(@due_options, filters["due"]),
       option_label(@source_options, filters["source"])
     ]
-    |> Enum.reject(&(&1 in [nil, "All modes", "Any due date", "All sources"]))
+    |> Enum.reject(&(&1 in [nil, "Any attention", "Any due date", "All sources"]))
     |> case do
       [] -> "Default view"
       labels -> Enum.join(labels, " / ")
@@ -904,7 +993,9 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp empty_message(%{"q" => query}) do
-    if present?(query), do: "No todos match this search.", else: "No todos match these filters."
+    if present?(query),
+      do: "No work items match this search.",
+      else: "No work items match these filters."
   end
 
   defp status_color("open"), do: "emerald"
@@ -915,6 +1006,16 @@ defmodule MaraithonWeb.TodosLive do
 
   defp attention_color("monitor"), do: "cyan"
   defp attention_color(_attention), do: "emerald"
+
+  defp priority_color(priority) when is_integer(priority) and priority >= 90, do: "red"
+  defp priority_color(priority) when is_integer(priority) and priority >= 75, do: "amber"
+  defp priority_color(priority) when is_integer(priority) and priority >= 50, do: "blue"
+  defp priority_color(_priority), do: "zinc"
+
+  defp priority_label(priority) when is_integer(priority) and priority >= 90, do: "Critical"
+  defp priority_label(priority) when is_integer(priority) and priority >= 75, do: "High"
+  defp priority_label(priority) when is_integer(priority) and priority >= 50, do: "Normal"
+  defp priority_label(_priority), do: "Low"
 
   defp todo_status_label("open"), do: "Open"
   defp todo_status_label("snoozed"), do: "Snoozed"
@@ -931,8 +1032,10 @@ defmodule MaraithonWeb.TodosLive do
   defp todo_source_label("slack"), do: "Slack"
   defp todo_source_label("github"), do: "GitHub"
   defp todo_source_label("telegram"), do: "Telegram"
+  defp todo_source_label("manual"), do: "Added by you"
+  defp todo_source_label("system"), do: "Maraithon"
   defp todo_source_label(source) when is_binary(source) and source != "", do: label(source)
-  defp todo_source_label(_source), do: "System"
+  defp todo_source_label(_source), do: "Maraithon"
 
   defp format_datetime(nil, fallback), do: fallback
 
@@ -953,7 +1056,7 @@ defmodule MaraithonWeb.TodosLive do
     |> String.replace("_", " ")
     |> String.trim()
     |> case do
-      "" -> "Unknown"
+      "" -> "Not set"
       text -> String.capitalize(text)
     end
   end

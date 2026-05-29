@@ -61,7 +61,7 @@ struct MaraithonClient: Sendable {
         let (data, response) = try await transport(request)
         try Self.validate(response: response, data: data)
         let decoded = try JSONDecoder().decode(IngestResponse.self, from: data)
-        return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate)
+        return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
     }
 
     func purgeDeviceMessages(deviceId: UUID) async throws {
@@ -216,6 +216,26 @@ struct IngestBatch: Codable, Sendable {
 struct IngestResponse: Codable, Sendable {
     let accepted: Int
     let duplicate: Int
+    let invalid: Int
+
+    init(accepted: Int, duplicate: Int, invalid: Int = 0) {
+        self.accepted = accepted
+        self.duplicate = duplicate
+        self.invalid = invalid
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case accepted
+        case duplicate
+        case invalid
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accepted = try container.decode(Int.self, forKey: .accepted)
+        duplicate = try container.decode(Int.self, forKey: .duplicate)
+        invalid = try container.decodeIfPresent(Int.self, forKey: .invalid) ?? 0
+    }
 }
 
 /// Body for `POST /api/v1/companion/recall`. Mirrors the server tool

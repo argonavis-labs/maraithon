@@ -4,44 +4,48 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
   alias Maraithon.Runtime.Effects.LLMRateLimiter
 
   setup do
-    ensure_rate_limiter_started()
-    LLMRateLimiter.reset()
+    limiter_name = :"#{__MODULE__}.#{System.unique_integer([:positive])}"
 
-    on_exit(fn -> LLMRateLimiter.reset() end)
+    limiter =
+      start_supervised!(%{
+        id: limiter_name,
+        start: {LLMRateLimiter, :start_link, [[name: limiter_name]]}
+      })
 
-    :ok
+    %{limiter: limiter}
   end
 
-  test "bounds concurrent LLM work" do
-    assert :ok = LLMRateLimiter.checkout()
+  test "bounds concurrent LLM work", %{limiter: limiter} do
+    assert :ok = LLMRateLimiter.checkout(limiter, :default)
 
     test_pid = self()
 
     start_supervised!(
-      {Task, fn -> send(test_pid, {:checkout_result, LLMRateLimiter.checkout()}) end}
+      {Task,
+       fn -> send(test_pid, {:checkout_result, LLMRateLimiter.checkout(limiter, :default)}) end}
     )
 
     assert_receive {:checkout_result, {:error, {:llm_busy, retry_after_ms}}}
     assert retry_after_ms > 0
 
-    LLMRateLimiter.checkin()
-    assert :ok = LLMRateLimiter.checkout()
-    LLMRateLimiter.checkin()
+    LLMRateLimiter.checkin(limiter, :default)
+    assert :ok = LLMRateLimiter.checkout(limiter, :default)
+    LLMRateLimiter.checkin(limiter, :default)
   end
 
-  test "keeps chat and reasoning lanes independent" do
-    assert :ok = LLMRateLimiter.checkout(:reasoning)
+  test "keeps chat and reasoning lanes independent", %{limiter: limiter} do
+    assert :ok = LLMRateLimiter.checkout(limiter, :reasoning)
 
     test_pid = self()
 
     start_supervised!(
       {Task,
        fn ->
-         result = LLMRateLimiter.checkout(:chat)
+         result = LLMRateLimiter.checkout(limiter, :chat)
          send(test_pid, {:chat_checkout_result, result})
 
          if result == :ok do
-           LLMRateLimiter.checkin(:chat)
+           LLMRateLimiter.checkin(limiter, :chat)
          end
        end}
     )
@@ -50,27 +54,27 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
 
     start_supervised!(
       {Task,
-       fn -> send(test_pid, {:reasoning_checkout_result, LLMRateLimiter.checkout(:reasoning)}) end}
+       fn ->
+         send(
+           test_pid,
+           {:reasoning_checkout_result, LLMRateLimiter.checkout(limiter, :reasoning)}
+         )
+       end}
     )
 
     assert_receive {:reasoning_checkout_result, {:error, {:llm_busy, retry_after_ms}}}
     assert retry_after_ms > 0
 
-    LLMRateLimiter.checkin(:reasoning)
+    LLMRateLimiter.checkin(limiter, :reasoning)
   end
 
-  test "shares provider rate-limit cooldowns" do
-    LLMRateLimiter.record_rate_limit(60_000)
+  test "shares provider rate-limit cooldowns", %{limiter: limiter} do
+    LLMRateLimiter.record_rate_limit(limiter, 60_000)
 
-    assert {:error, {:rate_limited, retry_after_ms}} = LLMRateLimiter.checkout()
+    assert {:error, {:rate_limited, retry_after_ms}} =
+             LLMRateLimiter.checkout(limiter, :default)
+
     assert retry_after_ms > 0
     assert retry_after_ms <= 60_000
-  end
-
-  defp ensure_rate_limiter_started do
-    case Process.whereis(LLMRateLimiter) do
-      nil -> start_supervised!(LLMRateLimiter)
-      _pid -> :ok
-    end
   end
 end

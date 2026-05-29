@@ -10,6 +10,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
   alias Maraithon.Repo
+  alias Maraithon.Redaction
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.Todos
@@ -19,6 +20,65 @@ defmodule Maraithon.Briefs do
   require Logger
 
   @terminal_delivery_errors [":missing_chat_id", "missing_chat_id", ":telegram_not_connected"]
+  @brief_title_fallback "Chief of staff brief"
+  @brief_summary_fallback "A brief is ready for review."
+  @brief_body_fallback "Open Maraithon to review the latest follow-through summary."
+  @internal_brief_markers [
+    "<redacted",
+    "=>",
+    "{",
+    "}",
+    "llm_",
+    "model_name",
+    "model_provider",
+    "model_response",
+    "reasoning_effort",
+    "finish_reason",
+    "max_output_tokens",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "prompt_snapshot",
+    "system_prompt",
+    "raw_prompt",
+    "tool_call",
+    "tool call",
+    "tool_name",
+    "http_status",
+    "db_timeout",
+    "stacktrace",
+    "postgrex",
+    "ecto.",
+    "phoenix.",
+    "dbconnection",
+    "source_health",
+    "quality_verification",
+    "generation_mode",
+    "assistant_behavior",
+    "agent_behavior",
+    "source_backed",
+    "metadata",
+    "internal_",
+    "token=",
+    "token:",
+    "authorization",
+    "bearer",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "private_key",
+    "api_key",
+    "apikey",
+    "secret=",
+    "secret:"
+  ]
+  @internal_brief_patterns [
+    ~r/\b(?:confidence|quality|priority|urgency|relevance|interrupt)_score\s*[:=]/,
+    ~r/\bscore\s*[:=]\s*\d/,
+    ~r/\bthreshold\s*[:=]\s*\d/,
+    ~r/\b(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]/,
+    ~r/\b(?:authorization|bearer)\b/
+  ]
 
   def record_many(user_id, agent_id, briefs)
       when is_binary(user_id) and is_binary(agent_id) and is_list(briefs) do
@@ -184,6 +244,15 @@ defmodule Maraithon.Briefs do
     }
   end
 
+  def todo_digest_telegram_payload(%Brief{} = brief, todos \\ nil) do
+    todos = todos || todo_digest_todos(brief)
+
+    %{
+      text: render_todo_digest_telegram_text(brief, todos),
+      reply_markup: brief_reply_markup(brief)
+    }
+  end
+
   def mark_sent(%Brief{} = brief, message_id \\ nil) do
     mark_fallback_sent(brief, normalize_message_id(message_id))
   end
@@ -230,14 +299,14 @@ defmodule Maraithon.Briefs do
           "#{still_open_count} still open from earlier."
 
         true ->
-          "Nothing newly urgent surfaced."
+          "Nothing new needs action right now."
       end
 
     """
     #{greeting}
 
     #{detail_line}
-    Tap List Todos on the brief and I'll send them one by one so you can mark each done, important, not important, or dismiss it.
+    Best next move: review each item now, close what is done, keep what still matters, and move anything that can wait.
     """
     |> String.trim()
   end
@@ -270,20 +339,38 @@ defmodule Maraithon.Briefs do
 
   defp render_telegram_text(%Brief{} = brief) do
     if travel_brief?(brief) do
-      Maraithon.TelegramMarkdown.to_html(brief.body)
+      brief.body
+      |> public_brief_body()
+      |> Maraithon.TelegramMarkdown.to_html()
     else
       cadence_label = cadence_label(brief.cadence)
+      title = public_brief_title(brief.title)
+      summary = public_brief_summary(brief.summary)
+      body = public_brief_body(brief.body)
 
       """
       <b>#{safe(cadence_label)}</b>
-      <b>#{safe(brief.title)}</b>
+      <b>#{safe(title)}</b>
 
-      #{Maraithon.TelegramMarkdown.to_html(brief.summary)}
+      #{Maraithon.TelegramMarkdown.to_html(summary)}
 
-      #{Maraithon.TelegramMarkdown.to_html(brief.body)}
+      #{Maraithon.TelegramMarkdown.to_html(body)}
       """
       |> String.trim()
     end
+  end
+
+  defp render_todo_digest_telegram_text(%Brief{} = brief, todos) do
+    cadence_label = cadence_label(brief.cadence)
+    intro = todo_digest_intro_text(brief, todos)
+
+    """
+    <b>#{safe(cadence_label)}</b>
+    <b>#{safe(public_brief_title(brief.title))}</b>
+
+    #{Maraithon.TelegramMarkdown.to_html(intro)}
+    """
+    |> String.trim()
   end
 
   defp send_fallback_brief(%Brief{} = brief, destination) do
@@ -321,7 +408,7 @@ defmodule Maraithon.Briefs do
         |> maybe_add_list_todos_button(brief)
         |> Kernel.++([
           [
-            %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
+            %{"text" => "Open Maraithon", "url" => AppUrl.url("/dashboard")}
           ]
         ])
 
@@ -333,7 +420,7 @@ defmodule Maraithon.Briefs do
                 [
                   [
                     %{
-                      "text" => "Tune Agent",
+                      "text" => "Adjust Briefing",
                       "url" => AppUrl.url("/agents/new?behavior=#{URI.encode_www_form(behavior)}")
                     }
                   ]
@@ -355,7 +442,7 @@ defmodule Maraithon.Briefs do
 
   defp cadence_label("morning"), do: "Morning brief"
   defp cadence_label("check_in"), do: "Chief of staff check-in"
-  defp cadence_label("end_of_day"), do: "End-of-day debt"
+  defp cadence_label("end_of_day"), do: "End-of-day review"
   defp cadence_label("weekly_review"), do: "Weekly review"
   defp cadence_label("weekend_scope"), do: "Weekend project check"
   defp cadence_label("holiday_radar"), do: "Holiday radar"
@@ -364,11 +451,15 @@ defmodule Maraithon.Briefs do
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other
 
-  # A failed-generation brief is a plain error notice — no dashboard/tune-agent
-  # action buttons, which are noise on a failure message.
-  defp failed_brief?(%Brief{error_message: msg}) when is_binary(msg) and msg != "", do: true
-  defp failed_brief?(%Brief{metadata: %{"generation_mode" => "error"}}), do: true
-  defp failed_brief?(%Brief{}), do: false
+  # A source-backed fallback is still a usable brief. It can carry diagnostic
+  # context for operators without losing the executive's follow-up actions.
+  defp failed_brief?(%Brief{} = brief) do
+    case read_string(brief.metadata || %{}, "generation_mode", nil) do
+      "source_fallback" -> false
+      "error" -> true
+      _ -> present?(brief.error_message)
+    end
+  end
 
   defp travel_brief?(%Brief{metadata: %{"brief_type" => type}})
        when type in ["travel_prep", "travel_update"],
@@ -378,6 +469,90 @@ defmodule Maraithon.Briefs do
     do: true
 
   defp travel_brief?(_brief), do: false
+
+  defp public_brief_title(value), do: public_brief_fragment(value, @brief_title_fallback)
+
+  defp public_brief_summary(value), do: public_brief_fragment(value, @brief_summary_fallback)
+
+  defp public_brief_body(value) do
+    value
+    |> brief_text_value()
+    |> String.split("\n", trim: false)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&unsafe_brief_line?/1)
+    |> Enum.map(&public_brief_line/1)
+    |> Enum.join("\n")
+    |> String.trim()
+    |> case do
+      "" -> @brief_body_fallback
+      text -> text
+    end
+  end
+
+  defp public_brief_fragment(value, fallback) do
+    text = brief_text_value(value)
+
+    cond do
+      text == "" ->
+        fallback
+
+      unsafe_public_text?(text) ->
+        fallback
+
+      true ->
+        redacted = Redaction.redact_string(text)
+
+        if unsafe_public_text?(redacted) do
+          fallback
+        else
+          product_brief_text(redacted)
+        end
+    end
+  end
+
+  defp unsafe_brief_line?(line) do
+    trimmed = String.trim(line)
+
+    cond do
+      trimmed == "" ->
+        false
+
+      unsafe_public_text?(trimmed) ->
+        true
+
+      true ->
+        trimmed
+        |> Redaction.redact_string()
+        |> unsafe_public_text?()
+    end
+  end
+
+  defp unsafe_public_text?(value) when is_binary(value) do
+    lower = String.downcase(value)
+
+    Enum.any?(@internal_brief_markers, &String.contains?(lower, &1)) or
+      Enum.any?(@internal_brief_patterns, &Regex.match?(&1, lower))
+  end
+
+  defp unsafe_public_text?(_value), do: true
+
+  defp public_brief_line(line) when is_binary(line) do
+    line
+    |> Redaction.redact_string()
+    |> product_brief_text()
+  end
+
+  defp brief_text_value(value) when is_binary(value), do: String.trim(value)
+  defp brief_text_value(nil), do: ""
+  defp brief_text_value(value), do: value |> inspect(limit: 10) |> String.trim()
+
+  defp product_brief_text(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\btodo list\b/i, "open work")
+    |> String.replace(~r/\btodos\b/i, "work items")
+    |> String.replace(~r/\btodo\b/i, "work item")
+    |> String.replace(~r/\bCRM context\b/i, "relationship context")
+  end
 
   defp maybe_mark_travel_delivered(%Brief{} = brief) do
     _ = Travel.note_brief_delivered(brief)

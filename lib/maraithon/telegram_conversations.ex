@@ -223,6 +223,35 @@ defmodule Maraithon.TelegramConversations do
 
   def find_turn_by_client_message_id(_conversation_id, _client_message_id), do: nil
 
+  def delete_turn(%Conversation{} = conversation, turn_id) when is_binary(turn_id) do
+    with %Turn{} = turn <- Repo.get_by(Turn, id: turn_id, conversation_id: conversation.id) do
+      Repo.transaction(fn ->
+        Repo.delete!(turn)
+
+        last_turn_at =
+          Turn
+          |> where([t], t.conversation_id == ^conversation.id)
+          |> select([t], max(t.inserted_at))
+          |> Repo.one()
+
+        conversation
+        |> Conversation.changeset(%{
+          last_turn_at: last_turn_at || DateTime.utc_now(),
+          summary: summarize_recent_turns(conversation.id)
+        })
+        |> Repo.update!()
+      end)
+      |> case do
+        {:ok, updated_conversation} -> {:ok, updated_conversation}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      nil -> {:error, :not_found}
+    end
+  end
+
+  def delete_turn(_conversation, _turn_id), do: {:error, :not_found}
+
   def find_by_reply(chat_id, reply_to_message_id)
       when is_binary(chat_id) and is_binary(reply_to_message_id) do
     chat_id

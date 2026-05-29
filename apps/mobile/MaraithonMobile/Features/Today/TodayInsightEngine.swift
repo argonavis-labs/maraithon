@@ -52,7 +52,7 @@ enum TodayInsightEngine {
             dueTodayTodos: TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).count,
             overdueTodos: TodoFiltering.overdueCount(in: todos, now: now, calendar: calendar),
             peopleCount: contacts.count,
-            atRiskContacts: contacts.filter { isAtRisk($0, now: now, calendar: calendar) }.count
+            atRiskContacts: CRMFiltering.filter(contacts, statusFilter: .atRisk, now: now, calendar: calendar).count
         )
     }
 
@@ -66,9 +66,9 @@ enum TodayInsightEngine {
 
         if metrics.overdueTodos > 0 {
             return TodayBrief(
-                title: "Triage late work first",
-                subtitle: "\(metrics.overdueTodos) overdue \(plural("item", metrics.overdueTodos)) need a decision before new work gets added.",
-                actionTitle: "Review Late",
+                title: "Resolve past-due work",
+                subtitle: "\(metrics.overdueTodos) past-due \(plural("work item", metrics.overdueTodos)) \(isVerb(metrics.overdueTodos)) still open. Handle, move, or dismiss \(objectPronoun(metrics.overdueTodos)).",
+                actionTitle: "Review past-due work",
                 systemImage: "clock.badge.exclamationmark",
                 destination: .todos(.overdue)
             )
@@ -76,9 +76,9 @@ enum TodayInsightEngine {
 
         if metrics.atRiskContacts > 0 {
             return TodayBrief(
-                title: "Protect relationships today",
-                subtitle: "\(metrics.atRiskContacts) \(plural("person", metrics.atRiskContacts, plural: "people")) need follow-up or a status update.",
-                actionTitle: "Review People",
+                title: "Relationship follow-ups",
+                subtitle: "\(metrics.atRiskContacts) \(plural("person", metrics.atRiskContacts, plural: "people")) \(needsVerb(metrics.atRiskContacts)) a follow-up or status update.",
+                actionTitle: "Review people",
                 systemImage: "person.crop.circle.badge.exclamationmark",
                 destination: .people(.atRisk)
             )
@@ -86,9 +86,9 @@ enum TodayInsightEngine {
 
         if metrics.dueTodayTodos > 0 {
             return TodayBrief(
-                title: "Clear today's commitments",
-                subtitle: "\(metrics.dueTodayTodos) \(plural("todo", metrics.dueTodayTodos)) are due today.",
-                actionTitle: "Review Today",
+                title: "Handle today's commitments",
+                subtitle: "\(metrics.dueTodayTodos) \(plural("work item", metrics.dueTodayTodos)) \(isVerb(metrics.dueTodayTodos)) due today.",
+                actionTitle: "Review today's work",
                 systemImage: "calendar.badge.clock",
                 destination: .todos(.today)
             )
@@ -96,8 +96,8 @@ enum TodayInsightEngine {
 
         return TodayBrief(
             title: "Plan the next move",
-            subtitle: "No urgent work is blocking the day. Ask for a summary, draft, or prioritization pass.",
-            actionTitle: "Ask Chief of Staff",
+            subtitle: "No dated work needs action right now. Ask Maraithon for a summary, draft, or prioritization pass.",
+            actionTitle: "Ask Maraithon",
             systemImage: "sparkles",
             destination: .chat
         )
@@ -119,7 +119,11 @@ enum TodayInsightEngine {
                     kind: .todo,
                     referenceID: todo.id,
                     title: todo.title,
-                    subtitle: dueSubtitle(for: dueDate, now: now),
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallback: dueSubtitle(for: dueDate, now: now),
+                        prefix: dueSubtitle(for: dueDate, now: now)
+                    ),
                     systemImage: "clock.badge.exclamationmark",
                     priority: 100 + priorityWeight(for: todo.priority)
                 )
@@ -131,20 +135,24 @@ enum TodayInsightEngine {
                     kind: .todo,
                     referenceID: todo.id,
                     title: todo.title,
-                    subtitle: "Due today",
+                    subtitle: todoFocusSubtitle(for: todo, fallback: "Due today", prefix: "Today"),
                     systemImage: todo.priority.symbolName,
                     priority: 80 + priorityWeight(for: todo.priority)
                 )
             }
 
-            if todo.priority == .high {
+            if todo.priority == .critical || todo.priority == .high {
                 return TodayFocusItem(
                     kind: .todo,
                     referenceID: todo.id,
                     title: todo.title,
-                    subtitle: "High priority",
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallback: "\(todo.priority.title) urgency",
+                        prefix: todo.priority.title
+                    ),
                     systemImage: todo.priority.symbolName,
-                    priority: 65
+                    priority: todo.priority == .critical ? 85 : 65
                 )
             }
 
@@ -152,14 +160,14 @@ enum TodayInsightEngine {
         }
 
         let contactItems = contacts.compactMap { contact -> TodayFocusItem? in
-            guard contact.status != .closed, contact.dealStage != .lost else { return nil }
+            guard !CRMFiltering.isArchived(contact) else { return nil }
 
             if isAtRisk(contact, now: now, calendar: calendar) {
                 return TodayFocusItem(
                     kind: .contact,
                     referenceID: contact.id,
                     title: contact.name,
-                    subtitle: "\(contact.company) needs follow-up",
+                    subtitle: "\(relationshipContext(for: contact)) needs follow-up",
                     systemImage: "person.crop.circle.badge.exclamationmark",
                     priority: 75
                 )
@@ -171,7 +179,7 @@ enum TodayInsightEngine {
                     kind: .contact,
                     referenceID: contact.id,
                     title: contact.name,
-                    subtitle: "Follow up with \(contact.company)",
+                    subtitle: "Follow up with \(relationshipContext(for: contact))",
                     systemImage: "person.wave.2",
                     priority: 60
                 )
@@ -197,7 +205,7 @@ enum TodayInsightEngine {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> Bool {
-        contact.status == .atRisk || (contact.status == .active && isStale(contact, now: now, calendar: calendar))
+        CRMFiltering.needsCare(contact, now: now, calendar: calendar)
     }
 
     static func isStale(
@@ -214,17 +222,52 @@ enum TodayInsightEngine {
 
     private static func priorityWeight(for priority: TodoPriority) -> Int {
         switch priority {
+        case .critical: 25
         case .high: 15
         case .medium: 8
         case .low: 0
         }
     }
 
+    private static func todoFocusSubtitle(
+        for todo: TodoItem,
+        fallback: String,
+        prefix: String
+    ) -> String {
+        guard let nextAction = todo.displayNextAction else {
+            return fallback
+        }
+
+        return "\(prefix): \(nextAction)"
+    }
+
     private static func dueSubtitle(for dueDate: Date, now: Date) -> String {
         "Due \(AppFormatters.relativeString(for: dueDate, relativeTo: now))"
     }
 
+    private static func relationshipContext(for contact: CRMContact) -> String {
+        let context = contact.company.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !context.isEmpty {
+            return context
+        }
+
+        let name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "this person" : name
+    }
+
     private static func plural(_ singular: String, _ count: Int, plural: String? = nil) -> String {
         count == 1 ? singular : (plural ?? "\(singular)s")
+    }
+
+    private static func needsVerb(_ count: Int) -> String {
+        count == 1 ? "needs" : "need"
+    }
+
+    private static func isVerb(_ count: Int) -> String {
+        count == 1 ? "is" : "are"
+    }
+
+    private static func objectPronoun(_ count: Int) -> String {
+        count == 1 ? "it" : "them"
     }
 }

@@ -105,6 +105,89 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     assert brief.body =~ "noon meeting"
   end
 
+  test "accepts markdown-fenced model JSON as a real check-in", %{state: state} = ctx do
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context(ctx, events))
+
+    check_in_json =
+      Jason.encode!(%{
+        "decision" => "send",
+        "title" => "Open afternoon",
+        "summary" => "You have a clean work block this afternoon.",
+        "body" => "You have a clean 12-6 window. Use it to reply to Alex about pricing.",
+        "reason" => "Large opening plus a specific owed reply."
+      })
+
+    response = %{
+      content: """
+      This is the check-in I would send.
+
+      ```json
+      #{check_in_json}
+      ```
+      """
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, final_state} =
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
+
+    assert payload.generation_mode == "llm"
+    assert final_state.last_check_in_at != nil
+
+    brief = Repo.get!(Brief, payload.brief_id)
+    assert brief.title == "Open afternoon"
+    assert brief.summary == "You have a clean work block this afternoon"
+    assert brief.body == "You have a clean 12-6 window. Use it to reply to Alex about pricing"
+    assert brief.metadata["generation_mode"] == "llm"
+    refute brief.body =~ "model_response_invalid"
+  end
+
+  test "cleans internal process language before recording a check-in brief",
+       %{state: state} = ctx do
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context(ctx, events))
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "decision" => "send",
+          "title" => "90% confidence: interrupt now",
+          "summary" => "Model score says this calendar gap is worth a Telegram check-in.",
+          "body" =>
+            "90% confidence this should send.\n\nAction: Use 12-6 to reply to Alex about pricing.\n\nReasoning: model saw an owed reply.",
+          "reason" => "Model confidence was high."
+        })
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _final_state} =
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
+
+    brief = Repo.get(Brief, payload.brief_id)
+
+    assert brief.title =~ "Open time:"
+    assert brief.summary == "Use the opening for the most important reply or meeting prep."
+    assert brief.body == "Use 12-6 to reply to Alex about pricing"
+    assert brief.metadata["reason"] == "Model confidence was high."
+
+    refute brief.title =~ "confidence"
+    refute brief.summary =~ "Model"
+    refute brief.body =~ "confidence"
+    refute brief.body =~ "Reasoning"
+    refute brief.body =~ "model"
+  end
+
   test "holds without recording when the model decides not to interrupt", %{state: state} = ctx do
     events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
 

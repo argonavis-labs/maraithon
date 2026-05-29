@@ -14,40 +14,40 @@ defmodule MaraithonWeb.HowItWorksController do
   defp stages do
     [
       %{
-        title: "Ingress",
+        title: "Connect the source",
         description:
-          "External systems push events via webhook endpoints or API ingress. Each event is normalized and persisted."
+          "Connect Gmail, Calendar, Slack, GitHub, or the Mac companion. Maraithon keeps the right context close without asking you to copy it in."
       },
       %{
-        title: "Runtime scheduling",
+        title: "Detect what matters",
         description:
-          "The runtime scheduler claims queued work, dispatches agent jobs, and tracks retries, staleness, and delivery state."
+          "It looks for open loops, owed replies, calendar pressure, family logistics, and relationship context that could affect your day."
       },
       %{
-        title: "Agent reasoning",
+        title: "Prepare the brief",
         description:
-          "Agents run their configured behavior using the active LLM provider and persist every effect for durability and auditability."
+          "Each item is rewritten into a direct summary, why it matters now, and the recommended next move."
       },
       %{
-        title: "Tool execution",
+        title: "Offer safe actions",
         description:
-          "Tool effects are executed through allow-listed adapters (filesystem, HTTP, connectors), with limits and timeout controls."
+          "Where a reply, reminder, or follow-up is possible, Maraithon drafts the move and asks before anything is sent."
       },
       %{
-        title: "Monitoring",
+        title: "Learn from your calls",
         description:
-          "Admin APIs and dashboard telemetry expose health checks, queue depth, recent failures, and raw logs for operators."
+          "Dismissals, completions, and saved preferences teach Maraithon what to surface next."
       }
     ]
   end
 
   defp principles do
     [
-      "Durable state in Postgres so agents can resume after restarts",
-      "Context modules isolate domain logic from controllers and templates",
-      "Explicit auth boundaries for browser admin routes and API token routes",
-      "Small composable modules over monolithic controller logic",
-      "Operational visibility first: health, queues, failures, and activity trails"
+      "Lead with what requires action, not a long preamble.",
+      "Show why now, the relevant source context, and the recommended next move.",
+      "Ask before sending external messages or changing connected work.",
+      "Keep family logistics distinct from work follow-ups.",
+      "Make every item easy to dismiss, snooze, complete, or correct."
     ]
   end
 end

@@ -36,14 +36,14 @@ struct RecallView: View {
             }
 
             if isSearching {
-                ProgressView("Recalling…")
+                ProgressView(RecallCopy.searchingLabel)
                     .progressViewStyle(.linear)
                     .frame(maxWidth: 240)
             } else if !lastQuery.isEmpty && results.isEmpty {
                 ContentUnavailableView(
                     "No matches",
                     systemImage: "magnifyingglass",
-                    description: Text("Nothing in any mirrored source matched “\(lastQuery)”.")
+                    description: Text("Nothing in your synced sources matched “\(lastQuery)”.")
                 )
             } else if results.isEmpty {
                 placeholder
@@ -64,7 +64,7 @@ struct RecallView: View {
             TextField("Ask anything across your Mac…", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { submit() }
-            Button("Recall") { submit() }
+            Button(RecallCopy.searchButtonTitle) { submit() }
                 .keyboardShortcut(.return, modifiers: [])
                 .buttonStyle(.borderedProminent)
                 .disabled(query.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -121,7 +121,7 @@ struct RecallView: View {
             }
         } catch {
             await MainActor.run {
-                lastError = "Recall failed: \(error.localizedDescription)"
+                lastError = RecallCopy.searchError(error)
                 results = []
                 isSearching = false
             }
@@ -165,7 +165,7 @@ private struct RecallResultRow: View {
                 .frame(width: Tokens.IconSize.regular)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Tokens.Spacing.small) {
-                    Text(hit.title ?? "Untitled")
+                    Text(RecallCopy.resultTitle(for: hit))
                         .font(.callout)
                         .lineLimit(1)
                     Spacer()
@@ -179,7 +179,7 @@ private struct RecallResultRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                Text(sourceLabel(for: hit.source))
+                Text(RecallCopy.sourceLabel(for: hit.source))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -210,7 +210,37 @@ private struct RecallResultRow: View {
         }
     }
 
-    private func sourceLabel(for source: String) -> String {
+}
+
+enum RecallCopy {
+    static let searchingLabel = "Searching…"
+    static let searchButtonTitle = "Search"
+
+    static func searchError(_ error: Error) -> String {
+        "Search could not finish. \(CompanionErrorCopy.message(for: error))"
+    }
+
+    static func resultTitle(for hit: RecallResult) -> String {
+        if let title = hit.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
+
+        switch hit.source {
+        case "local_messages": return "Message"
+        case "local_notes": return "Note"
+        case "local_voice_memos": return "Voice memo"
+        case "local_calendar": return "Calendar event"
+        case "local_reminders": return "Reminder"
+        case "local_files": return "File"
+        case "local_browser_history": return "Browser visit"
+        case "maraithon_memory": return "Memory"
+        case "crm_people": return "Contact"
+        default: return "Search result"
+        }
+    }
+
+    static func sourceLabel(for source: String) -> String {
         switch source {
         case "local_messages": return "Messages"
         case "local_notes": return "Notes"
@@ -221,8 +251,26 @@ private struct RecallResultRow: View {
         case "local_browser_history": return "Browser History"
         case "maraithon_memory": return "Memory"
         case "crm_people": return "Contacts"
-        default: return source
+        default: return humanizedSourceLabel(source)
         }
+    }
+
+    private static func humanizedSourceLabel(_ source: String) -> String {
+        let cleaned = source
+            .replacingOccurrences(of: "local_", with: "")
+            .replacingOccurrences(of: "maraithon_", with: "")
+            .replacingOccurrences(of: "crm_", with: "")
+            .replacingOccurrences(of: "_", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !cleaned.isEmpty else { return "Synced source" }
+
+        return cleaned
+            .split(separator: " ")
+            .map { word in
+                word.prefix(1).uppercased() + String(word.dropFirst())
+            }
+            .joined(separator: " ")
     }
 }
 

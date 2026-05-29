@@ -13,10 +13,12 @@ struct AccountMenuButton: View {
                 Label(email, systemImage: "person.crop.circle")
             }
 
-            Button(role: .destructive) {
-                isConfirmingReset = true
-            } label: {
-                Label("Reset Demo Data", systemImage: "arrow.clockwise")
+            if showsStarterDataReset {
+                Button(role: .destructive) {
+                    isConfirmingReset = true
+                } label: {
+                    Label(AccountMenuCopy.resetLocalWorkspaceLabel, systemImage: "arrow.clockwise")
+                }
             }
 
             Button(role: .destructive) {
@@ -29,19 +31,19 @@ struct AccountMenuButton: View {
         }
         .accessibilityLabel("Account")
         .confirmationDialog(
-            "Reset all demo data?",
+            AccountMenuCopy.resetLocalWorkspaceTitle,
             isPresented: $isConfirmingReset,
             titleVisibility: .visible
         ) {
-            Button("Reset Demo Data", role: .destructive) {
-                resetDemoData()
+            Button(AccountMenuCopy.resetLocalWorkspaceLabel, role: .destructive) {
+                resetStarterData()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Todos, contacts, and chats will be replaced with the starter dataset.")
+            Text(AccountMenuCopy.resetLocalWorkspaceMessage)
         }
         .alert(
-            "Reset Failed",
+            AccountMenuCopy.resetFailedTitle,
             isPresented: Binding(
                 get: { resetError != nil },
                 set: { if !$0 { resetError = nil } }
@@ -53,11 +55,34 @@ struct AccountMenuButton: View {
         }
     }
 
-    private func resetDemoData() {
+    private var showsStarterDataReset: Bool {
+        #if DEBUG
+        sessionStore.user?.sessionToken == nil
+        #else
+        false
+        #endif
+    }
+
+    private func resetStarterData() {
         do {
             try DataSeeder.resetDemoData(in: modelContext)
         } catch {
-            resetError = error.localizedDescription
+            resetError = MobileErrorCopy.message(for: error)
         }
     }
+}
+
+enum AccountMenuCopy {
+    static let resetLocalWorkspaceLabel = "Reset Local Workspace"
+    static let resetLocalWorkspaceTitle = "Reset local workspace?"
+    static let resetLocalWorkspaceMessage =
+        "This replaces the local preview work, people, and chats on this device. Your Maraithon account is not affected."
+    static let resetFailedTitle = "Could Not Reset Workspace"
+
+    static let resetVisibleStrings = [
+        resetLocalWorkspaceLabel,
+        resetLocalWorkspaceTitle,
+        resetLocalWorkspaceMessage,
+        resetFailedTitle
+    ]
 }

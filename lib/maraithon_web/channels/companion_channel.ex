@@ -39,6 +39,20 @@ defmodule MaraithonWeb.CompanionChannel do
   alias Maraithon.LocalNotes
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
+  alias MaraithonWeb.ApiErrorCopy
+
+  @max_batch_size 500
+  @max_files_batch_size 200
+
+  @atom_batch_keys %{
+    "messages" => :messages,
+    "notes" => :notes,
+    "voice_memos" => :voice_memos,
+    "calendar_events" => :calendar_events,
+    "reminders" => :reminders,
+    "files" => :files,
+    "visits" => :visits
+  }
 
   @impl true
   def join("companion:device:" <> requested_device_id, _params, socket) do
@@ -53,7 +67,7 @@ defmodule MaraithonWeb.CompanionChannel do
 
       {:ok, %{device_id: device.device_id}, socket}
     else
-      {:error, %{reason: "device_mismatch"}}
+      {:error, ApiErrorCopy.companion_channel_error(:device_mismatch, nil)}
     end
   end
 
@@ -117,7 +131,9 @@ defmodule MaraithonWeb.CompanionChannel do
 
   @impl true
   def handle_in("ingest:files", payload, socket) do
-    handle_collection(socket, payload, "files", "files", &LocalFiles.ingest_batch/3)
+    handle_collection(socket, payload, "files", "files", &LocalFiles.ingest_batch/3,
+      max_batch: @max_files_batch_size
+    )
   end
 
   @impl true
@@ -125,11 +141,13 @@ defmodule MaraithonWeb.CompanionChannel do
     device = socket.assigns.current_device
     user_id = socket.assigns.current_user_id
 
-    case extract_collection(payload, "visits", "browser_history") do
+    case extract_collection(payload, "visits", "browser_history", @max_batch_size) do
       {:ok, items, source} ->
         items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
-        case LocalBrowserHistory.ingest_batch(user_id, device.device_id, items) do
+        case safe_ingest("browser_history", items, fn ->
+               LocalBrowserHistory.ingest_batch(user_id, device.device_id, items)
+             end) do
           {:ok, %{accepted: a, duplicate: d, invalid: i, filtered: f} = result} ->
             emit_ingested(device, "browser_history", result)
             {:reply, {:ok, %{accepted: a, duplicate: d, invalid: i, filtered: f}}, socket}
@@ -139,25 +157,31 @@ defmodule MaraithonWeb.CompanionChannel do
               reason: inspect(reason)
             )
 
-            {:reply, {:error, %{reason: "invalid_batch"}}, socket}
+            {:reply, {:error, ApiErrorCopy.companion_channel_error(reason, "browser_history")},
+             socket}
         end
 
       {:error, :missing_items} ->
-        {:reply, {:error, %{reason: "visits_required"}}, socket}
+        {:reply, {:error, ApiErrorCopy.companion_channel_error(:missing_items, "visits")}, socket}
+
+      {:error, :too_many_items} ->
+        {:reply, {:error, ApiErrorCopy.companion_channel_error(:too_many_items, @max_batch_size)},
+         socket}
     end
   end
 
   @impl true
   def handle_in(event, _payload, socket) do
     Logger.debug("companion channel ignoring unknown event", event: event)
-    {:reply, {:error, %{reason: "unknown_event"}}, socket}
+    {:reply, {:error, ApiErrorCopy.companion_channel_error(:unknown_event, nil)}, socket}
   end
 
-  defp handle_collection(socket, payload, batch_key, default_source, ingest_fun) do
+  defp handle_collection(socket, payload, batch_key, default_source, ingest_fun, opts \\ []) do
     device = socket.assigns.current_device
     user_id = socket.assigns.current_user_id
+    max_batch = Keyword.get(opts, :max_batch, @max_batch_size)
 
-    case extract_collection(payload, batch_key, default_source) do
+    case extract_collection(payload, batch_key, default_source, max_batch) do
       {:ok, items, source} ->
         items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
@@ -170,18 +194,9 @@ defmodule MaraithonWeb.CompanionChannel do
         # Now the offending batch returns `invalid_batch`; the channel
         # stays alive and the other sources keep flowing.
         result =
-          try do
+          safe_ingest(batch_key, items, fn ->
             ingest_fun.(user_id, device.device_id, items)
-          rescue
-            exception ->
-              Logger.error(
-                "companion channel #{batch_key} ingest crashed",
-                error: Exception.format(:error, exception, __STACKTRACE__),
-                batch_size: length(items)
-              )
-
-              {:error, :ingest_exception}
-          end
+          end)
 
         case result do
           {:ok, %{accepted: a, duplicate: d, invalid: i} = ok} ->
@@ -193,21 +208,49 @@ defmodule MaraithonWeb.CompanionChannel do
               reason: inspect(reason)
             )
 
-            {:reply, {:error, %{reason: "invalid_batch"}}, socket}
+            {:reply, {:error, ApiErrorCopy.companion_channel_error(reason, batch_key)}, socket}
         end
 
       {:error, :missing_items} ->
-        {:reply, {:error, %{reason: "#{batch_key}_required"}}, socket}
+        {:reply, {:error, ApiErrorCopy.companion_channel_error(:missing_items, batch_key)},
+         socket}
+
+      {:error, :too_many_items} ->
+        {:reply, {:error, ApiErrorCopy.companion_channel_error(:too_many_items, max_batch)},
+         socket}
     end
   end
 
-  defp extract_collection(payload, batch_key, default_source) do
-    items = payload[batch_key] || payload[String.to_atom(batch_key)]
+  defp extract_collection(payload, batch_key, default_source, max_batch) do
+    items = payload[batch_key] || atom_key_value(payload, batch_key)
     source = payload["source"] || payload[:source] || default_source
 
     cond do
-      is_list(items) -> {:ok, items, source}
+      is_list(items) and length(items) <= max_batch -> {:ok, items, source}
+      is_list(items) -> {:error, :too_many_items}
       true -> {:error, :missing_items}
+    end
+  end
+
+  defp safe_ingest(batch_key, items, fun) do
+    try do
+      fun.()
+    rescue
+      exception ->
+        Logger.error(
+          "companion channel #{batch_key} ingest crashed",
+          error: Exception.format(:error, exception, __STACKTRACE__),
+          batch_size: length(items)
+        )
+
+        {:error, :ingest_exception}
+    end
+  end
+
+  defp atom_key_value(payload, batch_key) do
+    case Map.fetch(@atom_batch_keys, batch_key) do
+      {:ok, atom_key} -> payload[atom_key]
+      :error -> nil
     end
   end
 

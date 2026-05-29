@@ -66,19 +66,54 @@ defmodule Maraithon.LocalCalendarTest do
       assert Enum.all?(stored, &(&1.title in ["event 1", "event 2", "event 3"]))
     end
 
-    test "dedupes via the unique constraint on re-send" do
-      user_id = "cal-dedupe-#{System.unique_integer([:positive])}@example.com"
+    test "upserts existing events on re-send so reschedules stay current" do
+      user_id = "cal-upsert-#{System.unique_integer([:positive])}@example.com"
       device_id = Ecto.UUID.generate()
 
-      events = [sample_event("g-a"), sample_event("g-b")]
+      original = sample_event("g-a", %{"title" => "Original slot"})
 
-      {:ok, %{accepted: 2, duplicate: 0}} =
-        LocalCalendar.ingest_batch(user_id, device_id, events)
+      {:ok, %{accepted: 1, duplicate: 0}} =
+        LocalCalendar.ingest_batch(user_id, device_id, [original])
 
-      {:ok, %{accepted: 0, duplicate: 2}} =
-        LocalCalendar.ingest_batch(user_id, device_id, events)
+      updated =
+        sample_event("g-a", %{
+          "title" => "Rescheduled slot",
+          "location" => "Boardroom",
+          "start_at" => "2026-05-12T18:00:00Z",
+          "end_at" => "2026-05-12T18:45:00Z",
+          "modified_at" => "2026-05-10T16:14:22Z"
+        })
 
-      assert event_count(user_id, device_id) == 2
+      {:ok, %{accepted: 1, duplicate: 0}} =
+        LocalCalendar.ingest_batch(user_id, device_id, [updated])
+
+      assert event_count(user_id, device_id) == 1
+      [stored] = events_for(user_id, device_id)
+      assert stored.title == "Rescheduled slot"
+      assert stored.location == "Boardroom"
+      assert stored.start_at == ~U[2026-05-12 18:00:00.000000Z]
+      assert stored.end_at == ~U[2026-05-12 18:45:00.000000Z]
+      assert stored.modified_at == ~U[2026-05-10 16:14:22.000000Z]
+    end
+
+    test "accepts long EventKit identifiers and long locations" do
+      user_id = "cal-long-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+      guid = String.duplicate("eventkit-identifier-", 18)
+      location = String.duplicate("Long conference bridge location ", 20)
+
+      {:ok, %{accepted: 1, duplicate: 0, invalid: 0}} =
+        LocalCalendar.ingest_batch(user_id, device_id, [
+          sample_event(guid, %{
+            "local_id" => "cal:#{guid}",
+            "location" => location
+          })
+        ])
+
+      [stored] = events_for(user_id, device_id)
+      assert stored.guid == guid
+      assert stored.local_id == "cal:#{guid}"
+      assert stored.location == location
     end
 
     test "applies the default source when omitted" do

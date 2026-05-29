@@ -12,6 +12,7 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
   alias Maraithon.Memory
   alias Maraithon.OAuth
   alias Maraithon.OpenLoops
+  alias Maraithon.SourceErrorCopy
   alias Maraithon.SourceFreshness
 
   alias Maraithon.Tools.{
@@ -87,7 +88,7 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
 
         nil ->
           {Map.put(results, source, empty_source(source)),
-           [%{source: source, reason: "timeout_after_#{timeout_ms}ms"} | errors]}
+           [%{source: source, reason: normalize_error(:timeout)} | errors]}
       end
     end)
     |> then(fn {results, errors} -> {results, Enum.reverse(errors)} end)
@@ -156,22 +157,27 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
     else
       {matches, errors} =
         user_id
-        |> slack_team_ids()
-        |> Enum.map(fn team_id ->
+        |> slack_workspaces()
+        |> Enum.map(fn %{team_id: team_id, workspace: workspace} ->
           case SlackSearchMessages.execute(%{
                  "user_id" => user_id,
                  "team_id" => team_id,
                  "query" => query,
                  "count" => limit
                }) do
-            {:ok, result} -> {:ok, result}
-            {:error, reason} -> {:error, %{team_id: team_id, reason: normalize_error(reason)}}
+            {:ok, result} -> {:ok, result, workspace}
+            {:error, reason} -> {:error, %{workspace: workspace, reason: normalize_error(reason)}}
           end
         end)
         |> Enum.reduce({[], []}, fn
-          {:ok, result}, {matches, errors} ->
-            {Enum.map(result.matches || [], &Map.put(&1, :team_id, result.team_id)) ++ matches,
-             errors}
+          {:ok, result, workspace}, {matches, errors} ->
+            sanitized_matches =
+              result.matches
+              |> List.wrap()
+              |> Enum.filter(&is_map/1)
+              |> Enum.map(&sanitize_slack_match(&1, workspace))
+
+            {sanitized_matches ++ matches, errors}
 
           {:error, error}, {matches, errors} ->
             {matches, [error | errors]}
@@ -218,7 +224,7 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
   defp review_source("memory", user_id, query, limit, _args) do
     {:ok, Memory.prompt_context(user_id, query: query, limit: limit)}
   rescue
-    error -> {:error, Exception.message(error)}
+    _error -> {:error, :temporary_failure}
   end
 
   defp review_source(source, _user_id, _query, _limit, _args),
@@ -543,15 +549,12 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
     %{
       source: "slack",
       resource_type: "slack_message",
-      resource_id: read_value(match, :permalink) || read_value(match, :ts),
-      title: read_value(match, :channel_name) || read_value(match, :channel_id),
+      title: read_value(match, :channel_name) || "Slack message",
       summary: read_value(match, :text),
       from: read_value(match, :user),
       metadata: %{
-        team_id: read_value(match, :team_id),
-        channel_id: read_value(match, :channel_id),
-        ts: read_value(match, :ts),
-        permalink: read_value(match, :permalink)
+        workspace: read_value(match, :workspace),
+        channel: read_value(match, :channel_name)
       }
     }
     |> compact_map()
@@ -750,23 +753,56 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
 
   defp empty_source(source), do: %{count: 0, source: source}
 
-  defp slack_team_ids(user_id) do
+  defp sanitize_slack_match(match, workspace) do
+    %{
+      workspace: workspace,
+      channel_name: read_value(match, :channel_name),
+      text: read_value(match, :text)
+    }
+    |> compact_map()
+  end
+
+  defp slack_workspaces(user_id) do
     user_id
     |> OAuth.list_user_tokens()
-    |> Enum.map(& &1.provider)
-    |> Enum.filter(&is_binary/1)
-    |> Enum.flat_map(fn
-      "slack:" <> rest ->
-        case String.split(rest, ":") do
-          [team_id | _] when team_id != "" -> [team_id]
-          _ -> []
-        end
+    |> Enum.flat_map(fn token ->
+      case token.provider do
+        "slack:" <> rest ->
+          case String.split(rest, ":") do
+            [team_id | _] when team_id != "" ->
+              [%{team_id: team_id, workspace: slack_workspace_name(token)}]
 
-      _ ->
-        []
+            _ ->
+              []
+          end
+
+        _ ->
+          []
+      end
     end)
-    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn %{team_id: team_id, workspace: workspace}, acc ->
+      Map.update(acc, team_id, workspace, fn existing -> existing || workspace end)
+    end)
+    |> Enum.map(fn {team_id, workspace} ->
+      %{team_id: team_id, workspace: workspace || "Slack workspace"}
+    end)
   end
+
+  defp slack_workspace_name(%{metadata: metadata}) when is_map(metadata) do
+    metadata_value(metadata, "team_name")
+    |> empty_to_nil()
+  end
+
+  defp slack_workspace_name(_token), do: nil
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    Map.get(metadata, key) || metadata_atom_value(metadata, key)
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_value(metadata, "team_name"), do: Map.get(metadata, :team_name)
+  defp metadata_atom_value(_metadata, _key), do: nil
 
   defp normalize_limit(value) when is_integer(value), do: value |> max(1) |> min(@max_limit)
   defp normalize_limit(_value), do: @default_limit
@@ -821,7 +857,5 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
     |> Map.new()
   end
 
-  defp normalize_error({:error, reason}), do: normalize_error(reason)
-  defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: SourceErrorCopy.reason(reason)
 end

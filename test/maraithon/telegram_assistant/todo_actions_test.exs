@@ -54,7 +54,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     payload = TodoActions.telegram_payload(todo)
     buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
-    assert Enum.any?(buttons, &(&1["text"] == "Important"))
+    assert Enum.any?(buttons, &(&1["text"] == "Keep active"))
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -72,7 +72,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert updated.attention_mode == "act_now"
     assert get_in(updated.metadata, ["assistant_feedback", "value"]) == "important"
     assert get_in(updated.metadata, ["importance_override", "value"]) == "important"
-    assert last_telegram_message(:callback).opts[:text] == "Marked important"
+    assert last_telegram_message(:callback).opts[:text] == "Kept active"
   end
 
   test "commitment cards include company and relationship context" do
@@ -98,6 +98,8 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert payload.text =~ "Dan Bourke (A-Team; video project contact)"
     assert payload.text =~ "Claude Cowork killer artifact"
+    assert payload.text =~ "Decision: Choose the next move with Dan Bourke."
+    refute payload.text =~ "Decision: Decide whether"
   end
 
   test "legacy generic commitment cards are rewritten with person, topic, and next step" do
@@ -150,7 +152,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     payload = TodoActions.telegram_payload(todo)
     buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
-    assert Enum.any?(buttons, &(&1["text"] == "See Less"))
+    assert Enum.any?(buttons, &(&1["text"] == "Show less"))
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -176,7 +178,14 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     assert memory.polarity == "negative"
     assert memory.source_ref_id == todo.id
-    assert last_telegram_message(:callback).opts[:text] == "I'll show fewer todos like this"
+
+    assert last_telegram_message(:callback).opts[:text] ==
+             "Maraithon will show fewer like this"
+
+    edit = last_telegram_message(:edit)
+    assert edit.text =~ "Feedback: Show less"
+    refute edit.text =~ "Feedback noted:"
+    refute edit.text =~ "I'll show fewer"
   end
 
   defp last_telegram_message(type) do

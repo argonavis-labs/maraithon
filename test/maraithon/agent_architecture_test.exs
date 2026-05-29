@@ -42,6 +42,21 @@ defmodule Maraithon.AgentArchitectureTest do
 
       assert Enum.any?(
                manifest.components,
+               &(&1.kind == :runtime and &1.label == "Maraithon Automation Service")
+             )
+
+      metrics = AgentArchitecture.metrics(manifest)
+      assert %{label: "Actions", value: "3"} in metrics
+      refute Enum.any?(metrics, &(&1.label == "Tools"))
+
+      read_file = Enum.find(manifest.components, &(&1.kind == :tool and &1.id == "read_file"))
+      assert read_file.label == "Read File"
+
+      assert AgentArchitecture.component_detail(read_file) ==
+               "Configured action available in Maraithon."
+
+      assert Enum.any?(
+               manifest.components,
                &(&1.kind == :tool and &1.id == "missing_tool" and not &1.available?)
              )
     end

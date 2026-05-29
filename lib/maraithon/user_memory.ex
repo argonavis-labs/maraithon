@@ -188,20 +188,17 @@ defmodule Maraithon.UserMemory do
     ConnectedAccounts.list_for_user(user_id)
     |> Enum.map(fn account ->
       %{
-        provider: account.provider,
-        status: account.status,
-        scopes: account.scopes,
-        metadata:
-          Map.take(account.metadata || %{}, [
-            "username",
-            "email",
-            "account_email",
-            "workspace_name",
-            "name"
-          ])
+        provider: public_provider(account.provider),
+        status: account.status
       }
     end)
   end
+
+  defp public_provider("google:" <> _), do: "google"
+  defp public_provider("slack:" <> _), do: "slack"
+  defp public_provider(provider) when is_binary(provider), do: provider
+  defp public_provider(nil), do: nil
+  defp public_provider(provider), do: to_string(provider)
 
   defp active_agents(user_id) do
     Agents.list_agents(user_id: user_id)

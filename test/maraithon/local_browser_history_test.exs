@@ -100,6 +100,23 @@ defmodule Maraithon.LocalBrowserHistoryTest do
         ])
     end
 
+    test "counts overlong browser fields as invalid rows instead of failing the batch" do
+      user_id = "bh-long-field-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+      long_host = String.duplicate("a", 260)
+
+      assert {:ok, %{accepted: 1, invalid: 1, filtered: 0}} =
+               LocalBrowserHistory.ingest_batch(user_id, device_id, [
+                 sample_visit("g-good"),
+                 sample_visit("g-long-host", %{
+                   "host" => long_host,
+                   "url" => "https://#{long_host}/post"
+                 })
+               ])
+
+      assert visit_count(user_id, device_id) == 1
+    end
+
     test "derives host from url when host is missing" do
       user_id = "bh-derive-#{System.unique_integer([:positive])}@example.com"
       device_id = Ecto.UUID.generate()

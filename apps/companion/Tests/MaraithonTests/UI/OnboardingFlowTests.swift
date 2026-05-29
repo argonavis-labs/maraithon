@@ -204,6 +204,16 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertFalse(flow.isFullDiskAccessSkipped)
     }
 
+    func testRecordFullDiskAccessGrantedClearsSkippedFlag() {
+        let flow = makeFlow()
+        flow.markFullDiskAccessSkipped()
+        XCTAssertTrue(flow.isFullDiskAccessSkipped)
+
+        flow.recordFullDiskAccessGranted()
+
+        XCTAssertFalse(flow.isFullDiskAccessSkipped)
+    }
+
     func testFreshFlowReadsPersistedFDASkipFlag() {
         defaults.set(true, forKey: OnboardingFlow.fullDiskAccessSkippedDefaultsKey)
         let flow = makeFlow()

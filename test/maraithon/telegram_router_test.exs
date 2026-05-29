@@ -183,10 +183,17 @@ defmodule Maraithon.TelegramRouterTest do
 
     assert Enum.map(turns, & &1.role) == ["user", "assistant"]
     assert Enum.any?(turns, &String.contains?(&1.text, "receipts are noise"))
-    assert Enum.any?(turns, &String.contains?(&1.text, "receipt-style emails"))
+
+    assert Enum.any?(
+             turns,
+             &String.contains?(&1.text, "Preference saved: Ignore routine receipts.")
+           )
 
     reply = last_telegram_message(:send)
-    assert reply.text =~ "receipt-style emails"
+    assert reply.text =~ "Preference saved: Ignore routine receipts."
+    assert reply.text =~ "Future triage will apply it automatically."
+    refute reply.text =~ "Understood"
+    refute reply.text =~ "I'll"
     refute button_labels(reply.opts) |> Enum.member?("Remember This")
   end
 
@@ -240,7 +247,11 @@ defmodule Maraithon.TelegramRouterTest do
              PreferenceMemory.pending_rules(user_id)
 
     confirmation_prompt = last_telegram_message(:send)
-    assert confirmation_prompt.text =~ "Should I save that rule?"
+    assert confirmation_prompt.text =~ "Save this preference?"
+    assert confirmation_prompt.text =~ "Treat investors as urgent"
+    assert confirmation_prompt.text =~ "Reply <code>yes</code> to save"
+    refute confirmation_prompt.text =~ "I think"
+    refute confirmation_prompt.text =~ "Should I save that rule?"
     assert button_labels(confirmation_prompt.opts) |> Enum.member?("Remember This")
 
     conversation =
@@ -270,7 +281,10 @@ defmodule Maraithon.TelegramRouterTest do
     assert Repo.get!(Conversation, conversation.id).status == "closed"
 
     reply = last_telegram_message(:send)
-    assert reply.text =~ "saved that as a durable rule"
+    assert reply.text =~ "Preference saved: Treat investors as urgent."
+    assert reply.text =~ "Future triage will apply it automatically."
+    refute reply.text =~ "Understood"
+    refute reply.text =~ "durable rule"
   end
 
   test "general Telegram DM can answer from open insights without a linked reply", %{
@@ -441,11 +455,16 @@ defmodule Maraithon.TelegramRouterTest do
       })
 
     reply = last_telegram_message(:send)
+    assert reply.text =~ "Reason sent:"
+    assert reply.text =~ "Sarah is tied to this unresolved commitment: Send the deck to Sarah"
     assert reply.text =~ "Why now:"
     assert reply.text =~ "Evidence checked:"
     assert reply.text =~ "Recommended action:"
     assert reply.text =~ "Stored detail rationale says the promised deck was never sent."
     assert reply.text =~ "Promise stated in email thread"
+    refute reply.text =~ "I surfaced"
+    refute reply.text =~ "looks like"
+    refute reply.text =~ "I didn't find"
   end
 
   test "clarification questions are tracked and cleared when the user answers", %{
@@ -535,6 +554,11 @@ defmodule Maraithon.TelegramRouterTest do
     updated = Repo.get!(Conversation, conversation.id)
     refute updated.metadata["pending_clarification"]
     assert [%{"id" => "downrank_generic_noise"}] = PreferenceMemory.active_rules(user_id)
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "Preference saved: Downrank generic noise."
+    refute reply.text =~ "Understood"
+    refute reply.text =~ "saved noise preference"
   end
 
   test "freeform action requests can execute a drafted Gmail send from Telegram", %{
@@ -636,8 +660,12 @@ defmodule Maraithon.TelegramRouterTest do
     assert updated_insight.status == "acknowledged"
 
     reply = last_telegram_message(:send)
-    assert reply.text =~ "Completed"
-    assert reply.text =~ "Sent via Gmail"
+    assert reply.text =~ "Sent via Gmail."
+    assert reply.text =~ "Item: You said you'd send the deck to Sarah today."
+    refute reply.text =~ "Completed"
+    refute reply.text =~ "message gmail-sent-1"
+    refute reply.text =~ "At:"
+    refute reply.text =~ ~r/\d{4}-\d{2}-\d{2}T/
   end
 
   test "draft generation prompt includes long-term memory summaries and style rules", %{
@@ -747,8 +775,11 @@ defmodule Maraithon.TelegramRouterTest do
       })
 
     reply = last_telegram_message(:send)
-    assert reply.text =~ "I saved that message in this thread"
-    assert reply.text =~ "did not guess from local rules"
+    assert reply.text =~ "I saved your message"
+    assert reply.text =~ "cannot verify a reliable answer"
+    assert reply.text =~ "I did not send a guess."
+    refute String.contains?(String.downcase(reply.text), "model")
+    refute String.contains?(String.downcase(reply.text), "local rules")
     refute String.contains?(String.downcase(reply.text), "try again")
     refute String.contains?(String.downcase(reply.text), "internal issue")
   end

@@ -58,7 +58,7 @@ defmodule MaraithonWeb.MobileTodoController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
 
       todo ->
         json(conn, %{todo: MobileJSON.todo(todo, json_opts)})
@@ -76,7 +76,7 @@ defmodule MaraithonWeb.MobileTodoController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
 
       {:error, reason} ->
         conn
@@ -87,7 +87,7 @@ defmodule MaraithonWeb.MobileTodoController do
 
   def delete(conn, %{"id" => todo_id} = params) do
     user_id = conn.assigns.current_user.id
-    note = text_param(params, "note") || "Dismissed from the mobile API."
+    note = text_param(params, "note") || "Dismissed from mobile."
     json_opts = json_opts(params, user_id)
 
     case Todos.dismiss(user_id, todo_id, note: note) do
@@ -102,7 +102,7 @@ defmodule MaraithonWeb.MobileTodoController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
 
       {:error, reason} ->
         conn
@@ -121,7 +121,7 @@ defmodule MaraithonWeb.MobileTodoController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
 
       {:error, reason} ->
         conn

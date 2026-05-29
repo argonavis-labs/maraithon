@@ -67,10 +67,13 @@ final class VoiceMemosSource: SourceProtocol {
     /// during transcription. Once any memo trips this we flip the
     /// source to `needsAttention("voice_memos_speech_disabled")` after
     /// the current cycle's batch ships, so the user sees the focused
-    /// unblock view with a deep link to Speech Recognition settings.
+    /// unblock view with Siri/Dictation guidance.
     /// Reset on every `runCycle()` so a re-enable after the user fixes
     /// it is detected promptly.
     private var speechDisabledDetected: Bool = false
+    private var speechPermissionIssueDetected: Bool = false
+    private var audioIssueCount: Int = 0
+    private var transcriptionIssueCount: Int = 0
 
     init(
         databaseURL: URL = VoiceMemosDatabase.defaultDatabaseURL,
@@ -161,11 +164,17 @@ final class VoiceMemosSource: SourceProtocol {
 
     func syncNow() async throws {
         eventLog.info("voice_memos.sync_now", source: .voiceMemos)
-        try await runCycle()
+        do {
+            try await runCycle()
+        } catch {
+            markCycleFailed(error, event: "voice_memos.sync_now_failed")
+            throw error
+        }
     }
 
     func clearLocalState() {
         cursor.reset()
+        statusPublisher.clearIssues()
         statusPublisher.update(state: .disconnected)
         eventLog.info("voice_memos.clear_local_state", source: .voiceMemos)
     }
@@ -207,14 +216,7 @@ final class VoiceMemosSource: SourceProtocol {
         do {
             try await runCycle()
         } catch {
-            statusPublisher.update(
-                state: .error(reason: String(describing: error))
-            )
-            eventLog.error(
-                "voice_memos.cycle_failed",
-                source: .voiceMemos,
-                payload: ["error": String(describing: error)]
-            )
+            markCycleFailed(error, event: "voice_memos.cycle_failed")
         }
     }
 
@@ -226,6 +228,9 @@ final class VoiceMemosSource: SourceProtocol {
         // a re-enable on the user's machine flips us back to connected
         // on the next cycle without a relaunch.
         speechDisabledDetected = false
+        speechPermissionIssueDetected = false
+        audioIssueCount = 0
+        transcriptionIssueCount = 0
         let newestSeenBefore = cursor.newestSeen
         let backfillFromBefore = cursor.backfillFrom
 
@@ -271,14 +276,21 @@ final class VoiceMemosSource: SourceProtocol {
         let rowIDs = raws.map(\.rowID)
         if let maxRow = rowIDs.max() { cursor.advanceNewest(to: maxRow) }
         if let minRow = rowIDs.min() { cursor.advanceBackfill(to: minRow) }
+        let failed = outcome.invalid + audioIssueCount + transcriptionIssueCount
         statusPublisher.recordSync(
             at: Date(),
             accepted: outcome.accepted,
-            duplicate: outcome.duplicate
+            duplicate: outcome.duplicate,
+            failed: failed,
+            issueSummary: voiceIssueSummary(serverInvalid: outcome.invalid)
         )
         if speechDisabledDetected {
             statusPublisher.update(
                 state: .needsAttention(reason: "voice_memos_speech_disabled")
+            )
+        } else if speechPermissionIssueDetected {
+            statusPublisher.update(
+                state: .needsAttention(reason: "voice_memos_speech_not_authorized")
             )
         } else {
             statusPublisher.update(state: .connected)
@@ -291,13 +303,60 @@ final class VoiceMemosSource: SourceProtocol {
                 "count": String(payloads.count),
                 "accepted": String(outcome.accepted),
                 "duplicate": String(outcome.duplicate),
+                "invalid": String(outcome.invalid),
                 "newest_seen": String(cursor.newestSeen),
                 "backfill_from": String(cursor.backfillFrom),
                 "first_guid_prefix": payloads.first.map { Self.guidPrefix($0.guid) } ?? "",
                 "audio_truncated": String(audioTruncated),
-                "transcribed": String(transcribed)
+                "audio_errors": String(audioIssueCount),
+                "transcribed": String(transcribed),
+                "transcription_errors": String(transcriptionIssueCount)
             ]
         )
+    }
+
+    private func markCycleFailed(_ error: Error, event: String) {
+        if let reason = Self.accessIssueReason(for: error) {
+            statusPublisher.clearIssues()
+            statusPublisher.update(state: .needsAttention(reason: reason))
+            eventLog.warning(
+                event,
+                source: .voiceMemos,
+                payload: ["reason": reason, "error": String(describing: error)]
+            )
+            return
+        }
+        let reason = String(describing: error)
+        statusPublisher.recordCycleFailure(at: Date(), reason: reason)
+        statusPublisher.update(state: .error(reason: reason))
+        eventLog.error(
+            event,
+            source: .voiceMemos,
+            payload: ["error": reason]
+        )
+    }
+
+    static func accessIssueReason(for error: Error) -> String? {
+        guard let databaseError = error as? VoiceMemosDatabase.DatabaseError else {
+            return nil
+        }
+        switch databaseError {
+        case .openFailed(let code, let message):
+            return isAuthorizationDenied(code: code, message: message)
+                ? "voice_memos_full_disk_access_required"
+                : nil
+        case .prepareFailed(let message):
+            return isAuthorizationDenied(code: nil, message: message)
+                ? "voice_memos_full_disk_access_required"
+                : nil
+        }
+    }
+
+    private static func isAuthorizationDenied(code: Int32?, message: String) -> Bool {
+        if code == 23 { return true }
+        let normalized = message.lowercased()
+        return normalized.contains("authorization denied")
+            || normalized.contains("autheloirzation denied")
     }
 
     // MARK: - Payload shaping
@@ -369,6 +428,7 @@ final class VoiceMemosSource: SourceProtocol {
     private func readAudio(raw: RawVoiceMemo) -> (String?, String?) {
         guard let url = raw.audioURL else { return (nil, nil) }
         if raw.fileSizeBytes > maxAudioBytes {
+            audioIssueCount += 1
             eventLog.info(
                 "voice_memos.audio_oversize",
                 source: .voiceMemos,
@@ -387,10 +447,12 @@ final class VoiceMemosSource: SourceProtocol {
             // Guard once more against the on-disk size racing past the
             // cap between the database read and the file read.
             if Int64(data.count) > cap {
+                audioIssueCount += 1
                 return (nil, "audio/m4a")
             }
             return (data.base64EncodedString(), "audio/m4a")
         } catch {
+            audioIssueCount += 1
             eventLog.error(
                 "voice_memos.audio_read_failed",
                 source: .voiceMemos,
@@ -420,6 +482,11 @@ final class VoiceMemosSource: SourceProtocol {
             // apart from "we never tried".
             return (nil, engine, locale)
         case .unavailable(let reason):
+            if reason.hasPrefix("speech_recognition_") {
+                speechPermissionIssueDetected = true
+            } else {
+                transcriptionIssueCount += 1
+            }
             eventLog.info(
                 "voice_memos.transcribe_unavailable",
                 source: .voiceMemos,
@@ -439,17 +506,38 @@ final class VoiceMemosSource: SourceProtocol {
                 ]
             )
             // macOS surfaces "Siri and Dictation are disabled" as
-            // `kLSRErrorDomain Code=201` when the OS-level Speech
-            // Recognition feature is off. Flip the source's status to
-            // `needsAttention` so the detail pane shows the focused
-            // unblock view (deep-link to Privacy → Speech Recognition).
+            // `kLSRErrorDomain Code=201`. This is not a per-app Speech
+            // Recognition TCC denial; it means the OS-level Siri or
+            // Dictation service needed for local transcription is off.
             // Audio bytes still upload; only the transcript is gated.
             if reason.contains("Siri and Dictation are disabled")
                 || reason.contains("kLSRErrorDomain Code=201") {
                 speechDisabledDetected = true
+            } else {
+                transcriptionIssueCount += 1
             }
             return (nil, nil, nil)
         }
+    }
+
+    private func voiceIssueSummary(serverInvalid: Int) -> String? {
+        var parts: [String] = []
+        if serverInvalid > 0 {
+            parts.append(serverInvalid == 1
+                ? "1 voice memo did not sync."
+                : "\(serverInvalid.formatted(.number)) voice memos did not sync.")
+        }
+        if audioIssueCount > 0 {
+            parts.append(audioIssueCount == 1
+                ? "1 memo could not include audio."
+                : "\(audioIssueCount.formatted(.number)) memos could not include audio.")
+        }
+        if transcriptionIssueCount > 0 {
+            parts.append(transcriptionIssueCount == 1
+                ? "1 memo could not be transcribed."
+                : "\(transcriptionIssueCount.formatted(.number)) memos could not be transcribed.")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     /// `ZCUSTOMLABEL` is nil for any recording the user never renamed (the

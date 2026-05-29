@@ -233,8 +233,8 @@ defmodule MaraithonWeb.McpControllerTest do
 
     {:ok, _account} =
       ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "12345",
-        metadata: %{"chat_id" => "12345", "bot_token" => "secret"}
+        external_account_id: "6114124042",
+        metadata: %{"chat_id" => "6114124042", "bot_token" => "secret"}
       })
 
     conn =
@@ -255,17 +255,20 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "structuredContent", "source"]) ==
              "maraithon_connected_accounts"
 
-    assert get_in(response, ["result", "structuredContent", "connected_accounts"])
-           |> Enum.any?(&(&1["provider"] == "telegram"))
+    connected_accounts = get_in(response, ["result", "structuredContent", "connected_accounts"])
+    assert Enum.any?(connected_accounts, &(&1["provider"] == "telegram"))
 
-    assert get_in(response, [
-             "result",
-             "structuredContent",
-             "connected_accounts",
-             Access.at(0),
-             "metadata",
-             "bot_token"
-           ]) == "[redacted]"
+    telegram = Enum.find(connected_accounts, &(&1["provider"] == "telegram"))
+    assert telegram["account_label"] == "Telegram"
+    refute Map.has_key?(telegram, "external_account_id")
+    refute get_in(telegram, ["metadata", "chat_id"])
+    refute get_in(telegram, ["metadata", "bot_token"])
+
+    response_text = inspect(response)
+    refute response_text =~ "external_account_id"
+    refute response_text =~ "6114124042"
+    refute response_text =~ "bot_token"
+    refute response_text =~ "oauth_scopes"
 
     todo_coverage =
       response
@@ -464,6 +467,59 @@ defmodule MaraithonWeb.McpControllerTest do
     assert [entry] = Maraithon.ActionLedger.list_recent(user_id, limit: 1)
     assert entry.event_type == "tool.needs_confirmation"
     assert entry.metadata["tool_name"] == "gmail_send_message"
+  end
+
+  test "returns display-ready policy errors for unknown MCP tools", %{conn: conn} do
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "unknown-tool",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "internal_secret_tool",
+          "arguments" => %{}
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["error", "code"]) == -32070
+    assert get_in(response, ["error", "message"]) == "Action is not available."
+    assert get_in(response, ["error", "data", "policy_decision", "reason_code"]) == "unknown_tool"
+    refute get_in(response, ["error", "data", "policy_decision", "metadata", "tool_name"])
+    refute Jason.encode!(response) =~ "internal_secret_tool"
+    refute Jason.encode!(response) =~ "Unknown tool:"
+    refute Jason.encode!(response) =~ "Tool call"
+  end
+
+  test "handles malformed MCP batch requests without exposing internals", %{conn: conn} do
+    conn =
+      conn
+      |> put_req_header("content-type", "application/json")
+      |> post(
+        "/mcp",
+        Jason.encode!([
+          %{
+            "jsonrpc" => "2.0",
+            "id" => "bad-method",
+            "method" => %{"internal" => "secret"}
+          }
+        ])
+      )
+
+    response = json_response(conn, 200)
+
+    assert [
+             %{
+               "id" => nil,
+               "error" => %{"code" => -32600, "message" => "Invalid JSON-RPC request"}
+             }
+           ] = response
+
+    encoded = Jason.encode!(response)
+    refute encoded =~ "Protocol.UndefinedError"
+    refute encoded =~ "internal"
+    refute encoded =~ "secret"
   end
 
   test "handles JSON-RPC batch calls concurrently", %{conn: conn} do

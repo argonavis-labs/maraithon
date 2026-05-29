@@ -9,6 +9,7 @@ defmodule Maraithon.ScheduledTasks do
   alias Maraithon.ActionLedger
   alias Maraithon.Normalization
   alias Maraithon.Repo
+  alias Maraithon.RunErrorCopy
   alias Maraithon.ScheduledTasks.{Run, Task}
 
   @default_limit 50
@@ -178,7 +179,7 @@ defmodule Maraithon.ScheduledTasks do
       started_at: run.started_at,
       finished_at: run.finished_at,
       result: run.result || %{},
-      error: run.error,
+      error: RunErrorCopy.scheduled_task(run.error),
       metadata: run.metadata || %{},
       inserted_at: run.inserted_at,
       updated_at: run.updated_at

@@ -22,25 +22,26 @@ defmodule Maraithon.AgentArchitecture do
   @runtime_component %{
     kind: :runtime,
     id: "otp_gen_state_machine",
-    label: "OTP Agent Runtime",
+    label: "Maraithon Automation Service",
     module: "Maraithon.Runtime.Agent",
-    responsibility: "Owns the long-lived process, trigger routing, effect dispatch, and wakeups."
+    responsibility: "Keeps the automation running, routes new work, and schedules follow-up."
   }
 
   @memory_components [
     %{
       kind: :memory,
       id: "agent_events",
-      label: "Agent Event Log",
+      label: "Run History",
       module: "Maraithon.Events",
-      responsibility: "Persists runtime events for replay, inspection, and status answers."
+      responsibility:
+        "Keeps a durable history of agent activity for review, status, and recovery."
     },
     %{
       kind: :memory,
       id: "user_memory",
-      label: "User Memory",
+      label: "Operator Memory",
       module: "Maraithon.UserMemory",
-      responsibility: "Injects durable cross-agent operator context into every run."
+      responsibility: "Carries stable preferences and context into each run."
     }
   ]
 
@@ -118,7 +119,7 @@ defmodule Maraithon.AgentArchitecture do
   def metrics(architecture) when is_map(architecture) do
     [
       %{label: "Skills", value: component_count(architecture, :skill)},
-      %{label: "Tools", value: component_count(architecture, :tool)},
+      %{label: "Actions", value: component_count(architecture, :tool)},
       %{label: "Topics", value: component_count(architecture, :subscription)},
       %{label: "Memory", value: component_count(architecture, :memory)}
     ]
@@ -349,11 +350,11 @@ defmodule Maraithon.AgentArchitecture do
       %{
         kind: :tool,
         id: descriptor.name,
-        label: descriptor.name,
+        label: action_label(descriptor),
         connector: descriptor.connector,
         action: descriptor.action,
         available?: ToolCatalog.known_tool?(descriptor.name),
-        description: "Allowed by the package manifest."
+        description: "Approved for this agent package."
       }
     end)
   end
@@ -367,7 +368,7 @@ defmodule Maraithon.AgentArchitecture do
         id: provider,
         label: humanize_id(provider),
         requirements: requirements,
-        responsibility: "Required connector declared by the package manifest."
+        responsibility: "Required connection for this agent."
       }
     end)
   end
@@ -422,7 +423,7 @@ defmodule Maraithon.AgentArchitecture do
       %{
         kind: :tool,
         id: tool_id,
-        label: tool_id,
+        label: humanize_id(tool_id),
         available?: Tools.exists?(tool_id),
         description: descriptor.description
       }
@@ -452,7 +453,7 @@ defmodule Maraithon.AgentArchitecture do
         kind: :subscription,
         id: topic,
         label: topic,
-        responsibility: "Routes matching PubSub events into this agent."
+        responsibility: "Watches matching updates for this agent."
       }
     end)
   end
@@ -492,7 +493,7 @@ defmodule Maraithon.AgentArchitecture do
         kind: :scope,
         id: "project:#{project_id}",
         label: "Project Scope",
-        responsibility: "Binds agent output and delivery runs to a Maraithon project."
+        responsibility: "Keeps this agent's work attached to the selected project."
       }
     ]
   end
@@ -551,7 +552,7 @@ defmodule Maraithon.AgentArchitecture do
       |> Map.get(:requirements, [])
       |> length()
 
-    "Skill module with #{requirements} connector requirements."
+    "Capability area with #{requirements} connected-account requirements."
   end
 
   defp component_detail_from_metadata(_component), do: nil
@@ -560,11 +561,16 @@ defmodule Maraithon.AgentArchitecture do
     %{
       description:
         if(Tools.exists?(tool_id),
-          do: "Configured tool available through Maraithon.Tools.",
-          else: "Unknown tool."
+          do: "Configured action available in Maraithon.",
+          else: "Action is not currently available."
         )
     }
   end
+
+  defp action_label(%{action: action}) when is_binary(action) and action != "",
+    do: humanize_id(action)
+
+  defp action_label(%{name: name}), do: humanize_id(name)
 
   defp default_launch_csv(behavior_id, key) do
     behavior_id
@@ -600,6 +606,7 @@ defmodule Maraithon.AgentArchitecture do
     id
     |> to_string()
     |> String.replace("_", " ")
+    |> String.replace(".", " ")
     |> String.split(" ")
     |> Enum.map_join(" ", &String.capitalize/1)
   end
@@ -612,8 +619,14 @@ defmodule Maraithon.AgentArchitecture do
 
   defp package_name(_package, version), do: humanize_id(version.behavior)
 
-  defp package_category(%AgentPackage{category: category}), do: category
-  defp package_category(_package), do: "Agent"
+  defp package_category(%AgentPackage{category: category}) when is_binary(category) do
+    case String.trim(category) do
+      "" -> "Automation"
+      value -> value
+    end
+  end
+
+  defp package_category(_package), do: "Automation"
 
   defp package_summary(%AgentPackage{summary: summary}, _version)
        when is_binary(summary) and summary != "",

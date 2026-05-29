@@ -6,9 +6,7 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
   import Maraithon.Tools.ActionHelpers
 
   alias Maraithon.Accounts.ConnectedAccount
-  alias Maraithon.{Capabilities, ConnectedAccounts, Connections, SourceFreshness}
-
-  @sensitive_key_fragments ~w(access_token refresh_token token secret authorization bearer password)
+  alias Maraithon.{Capabilities, ConnectedAccounts, Connections, Redaction, SourceFreshness}
 
   def execute(args) when is_map(args) do
     with {:ok, user_id} <- required_string(args, "user_id") do
@@ -73,14 +71,14 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
       tools = if include_tools?, do: provider_tools(provider, connector_id), else: []
 
       %{
-        provider: Map.get(provider, :provider),
+        provider: provider |> Map.get(:provider) |> public_provider(),
         label: Map.get(provider, :label),
         status: status,
-        status_note: Map.get(provider, :status_note),
+        status_note: safe_status_note(Map.get(provider, :status_note)),
         connected?: status in ["connected", "partial"],
         updated_at: timestamp(Map.get(provider, :updated_at)),
         account_count: length(Map.get(provider, :accounts, [])),
-        accounts: Enum.map(Map.get(provider, :accounts, []), &redact_map/1),
+        accounts: Enum.map(Map.get(provider, :accounts, []), &serialize_provider_account/1),
         services:
           Enum.map(Map.get(provider, :services, []), &serialize_service(&1, include_tools?)),
         connector_id: connector_id,
@@ -93,7 +91,9 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
   defp serialize_provider(_provider, _include_tools?, _include_disconnected?), do: nil
 
   defp provider_connector_id(%{provider: "google"}), do: "google"
+  defp provider_connector_id(%{provider: "google:" <> _}), do: "google"
   defp provider_connector_id(%{provider: "calendar"}), do: "google_calendar"
+  defp provider_connector_id(%{provider: "slack" <> _}), do: "slack"
   defp provider_connector_id(%{provider: provider}) when is_binary(provider), do: provider
   defp provider_connector_id(_provider), do: nil
 
@@ -139,24 +139,32 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
 
     tools = if include_tools?, do: connector_tools(connector_id), else: []
 
-    service
-    |> redact_map()
-    |> Map.merge(%{
+    %{
+      id: read_key(service, :id),
+      label: read_key(service, :label),
+      description: read_key(service, :description),
+      status: read_key(service, :status),
+      count: read_key(service, :count),
       connector_id: connector_id,
       tools: tools,
       operations: Capabilities.operations_for_tools(tools)
-    })
+    }
+    |> compact_map()
   end
 
-  defp serialize_service(service, _include_tools?), do: redact_map(service)
+  defp serialize_service(service, _include_tools?) when is_map(service) do
+    service
+    |> Map.take([:id, :label, :description, :status, :count])
+    |> compact_map()
+  end
+
+  defp serialize_service(_service, _include_tools?), do: %{}
 
   defp serialize_account(%ConnectedAccount{} = account) do
     %{
-      provider: account.provider,
-      external_account_id: account.external_account_id,
+      provider: public_provider(account.provider),
+      account_label: account_label(account),
       status: account.status,
-      scopes: account.scopes || [],
-      metadata: redact_map(account.metadata || %{}),
       connected_at: timestamp(account.connected_at),
       last_refreshed_at: timestamp(account.last_refreshed_at),
       updated_at: timestamp(account.updated_at)
@@ -169,8 +177,7 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
       %{
         connector_id: connector.id,
         display_name: connector.display_name,
-        provider: connector.provider,
-        oauth_scopes: connector.oauth_scopes,
+        provider: public_provider(connector.provider),
         tools: connector.tool_names,
         operations: Capabilities.operations_for_tools(connector.tool_names)
       }
@@ -194,31 +201,218 @@ defmodule Maraithon.Tools.ListConnectedAccounts do
   defp maybe_put(map, _key, false, _value), do: map
   defp maybe_put(map, key, true, value), do: Map.put(map, key, value)
 
-  defp redact_map(map) when is_map(map) do
-    Map.new(map, fn {key, value} ->
-      key_string = to_string(key)
+  defp serialize_provider_account(account) when is_map(account) do
+    provider = read_key(account, :provider)
 
-      if sensitive_key?(key_string) do
-        {key, "[redacted]"}
-      else
-        {key, redact_value(value)}
-      end
-    end)
+    %{
+      provider: public_provider(provider),
+      account_label: provider_account_label(account, provider),
+      status: read_key(account, :status),
+      status_note: safe_status_note(read_key(account, :status_note)),
+      updated_at: timestamp(read_key(account, :updated_at)),
+      details: safe_details(read_key(account, :details)),
+      needs_reconnect?: read_key(account, :needs_reconnect?),
+      disconnectable?: read_key(account, :disconnectable?)
+    }
+    |> compact_map()
   end
 
-  defp redact_map(other), do: other
+  defp serialize_provider_account(_account), do: %{}
 
-  defp redact_value(value) when is_map(value), do: redact_map(value)
-  defp redact_value(value) when is_list(value), do: Enum.map(value, &redact_value/1)
-  defp redact_value(value), do: value
+  defp provider_account_label(account, provider) when is_map(account) do
+    account
+    |> read_key(:account)
+    |> safe_label(provider)
+  end
+
+  defp safe_label(value, provider) when is_binary(value) do
+    trimmed = String.trim(value)
+    public_provider = public_provider(provider)
+
+    cond do
+      trimmed == "" -> default_account_label(public_provider)
+      raw_provider_identifier?(trimmed, provider) -> default_account_label(public_provider)
+      true -> Redaction.redact_string(trimmed)
+    end
+  end
+
+  defp safe_label(_value, provider), do: provider |> public_provider() |> default_account_label()
+
+  defp raw_provider_identifier?(value, provider) do
+    normalized_provider = public_provider(provider)
+
+    cond do
+      normalized_provider == "telegram" ->
+        Regex.match?(~r/^\d{5,}$/, value)
+
+      normalized_provider == "slack" ->
+        Regex.match?(~r/^[TUW][A-Z0-9]{5,}$/, value)
+
+      normalized_provider == "google" ->
+        not String.contains?(value, "@") and Regex.match?(~r/^[A-Za-z0-9._:-]{8,}$/, value)
+
+      true ->
+        false
+    end
+  end
+
+  defp default_account_label("google"), do: "Google account"
+  defp default_account_label("slack"), do: "Slack workspace"
+  defp default_account_label("telegram"), do: "Telegram"
+  defp default_account_label("github"), do: "GitHub account"
+  defp default_account_label("linear"), do: "Linear workspace"
+  defp default_account_label("notion"), do: "Notion workspace"
+  defp default_account_label("notaui"), do: "Notaui workspace"
+  defp default_account_label("desktop"), do: "Paired Mac"
+  defp default_account_label(_provider), do: "Connected account"
+
+  defp safe_status_note(nil), do: nil
+
+  defp safe_status_note(note) when is_binary(note) do
+    note = Redaction.redact_string(note)
+    normalized = String.downcase(note)
+
+    cond do
+      String.contains?(normalized, "chat:write") ->
+        "Reconnect Slack to restore message sending."
+
+      String.contains?(normalized, "oauth") or String.contains?(normalized, "token") or
+          String.contains?(normalized, "re-auth") ->
+        "Reconnect this account to refresh access."
+
+      true ->
+        note
+    end
+  end
+
+  defp safe_status_note(note), do: note |> inspect() |> safe_status_note()
+
+  defp safe_details(details) when is_list(details) do
+    details
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&Redaction.redact_string/1)
+    |> Enum.reject(&internal_detail?/1)
+  end
+
+  defp safe_details(_details), do: []
+
+  defp internal_detail?(detail) when is_binary(detail) do
+    normalized = String.downcase(detail)
+
+    Enum.any?(
+      [" id:", "mcp:", "oauth", "scopes:", "token", "webhook", "callback url", "environment"],
+      &String.contains?(normalized, &1)
+    )
+  end
+
+  defp account_label(%ConnectedAccount{provider: provider, metadata: metadata} = account) do
+    metadata = metadata || %{}
+
+    cond do
+      String.starts_with?(provider, "slack:") ->
+        metadata_value(metadata, "team_name") || "Slack workspace"
+
+      String.starts_with?(provider, "google:") or provider == "google" ->
+        metadata_value(metadata, "account_email") || metadata_value(metadata, "email") ||
+          google_provider_suffix(provider) || email_account_id(account.external_account_id) ||
+          "Google account"
+
+      provider == "telegram" ->
+        "Telegram"
+
+      provider == "notion" ->
+        metadata_value(metadata, "workspace_name") || "Notion workspace"
+
+      provider == "notaui" ->
+        metadata_value(metadata, "default_account_label") || "Notaui workspace"
+
+      provider == "github" ->
+        case metadata_value(metadata, "login") do
+          login when is_binary(login) -> "@#{login}"
+          _ -> "GitHub account"
+        end
+
+      provider == "linear" ->
+        linear_account_label(metadata)
+
+      true ->
+        default_account_label(public_provider(provider))
+    end
+  end
+
+  defp linear_account_label(metadata) do
+    metadata
+    |> Map.get("teams")
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %{"name" => name} when is_binary(name) and name != "" -> name
+      %{name: name} when is_binary(name) and name != "" -> name
+      _other -> nil
+    end) || "Linear workspace"
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    value = Map.get(metadata, key) || Map.get(metadata, metadata_atom_key(key))
+
+    case value do
+      value when is_binary(value) ->
+        value
+        |> String.trim()
+        |> Redaction.redact_string()
+        |> case do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_key("account_email"), do: :account_email
+  defp metadata_atom_key("default_account_label"), do: :default_account_label
+  defp metadata_atom_key("email"), do: :email
+  defp metadata_atom_key("login"), do: :login
+  defp metadata_atom_key("team_name"), do: :team_name
+  defp metadata_atom_key("username"), do: :username
+  defp metadata_atom_key("workspace_name"), do: :workspace_name
+  defp metadata_atom_key(key), do: key
+
+  defp google_provider_suffix("google:" <> account), do: email_account_id(account)
+  defp google_provider_suffix(_provider), do: nil
+
+  defp email_account_id(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.contains?(value, "@"), do: value
+  end
+
+  defp email_account_id(_value), do: nil
+
+  defp public_provider("google:" <> _), do: "google"
+  defp public_provider("slack:" <> _), do: "slack"
+  defp public_provider(provider) when is_binary(provider), do: provider
+  defp public_provider(nil), do: nil
+  defp public_provider(provider), do: to_string(provider)
+
+  defp read_key(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp compact_map(map) when is_map(map) do
+    Map.reject(map, fn
+      {_key, nil} -> true
+      {_key, []} -> true
+      {_key, %{}} -> true
+      {_key, ""} -> true
+      _other -> false
+    end)
+  end
 
   defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp timestamp(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
   defp timestamp(%Date{} = value), do: Date.to_iso8601(value)
   defp timestamp(value), do: value
-
-  defp sensitive_key?(key) do
-    normalized = String.downcase(key)
-    Enum.any?(@sensitive_key_fragments, &String.contains?(normalized, &1))
-  end
 end

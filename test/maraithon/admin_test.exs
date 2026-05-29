@@ -42,7 +42,7 @@ defmodule Maraithon.AdminTest do
         })
         |> Repo.insert()
 
-      stale_claimed_at = DateTime.add(DateTime.utc_now(), -600, :second)
+      stale_claimed_at = DateTime.add(DateTime.utc_now(), -360, :second)
 
       {:ok, stale_job} =
         %ScheduledJob{}
@@ -92,8 +92,11 @@ defmodule Maraithon.AdminTest do
       assert snapshot.degraded
       assert snapshot.health == health
       assert is_list(snapshot.recent_logs)
-      assert snapshot.errors != []
+      assert [_ | _] = snapshot.errors
       assert hd(snapshot.errors).scope == "control_center"
+      assert hd(snapshot.errors).details =~ "Maraithon will refresh this section"
+      refute hd(snapshot.errors).details =~ "queue timeout"
+      refute hd(snapshot.errors).details =~ "DBConnection"
     end
   end
 
@@ -236,7 +239,10 @@ defmodule Maraithon.AdminTest do
       assert snapshot.degraded
       assert snapshot.agent == nil
       assert snapshot.events == []
-      assert snapshot.errors != []
+      assert [_ | _] = snapshot.errors
+      assert hd(snapshot.errors).details == "Refresh this agent view in a moment."
+      refute hd(snapshot.errors).details =~ "queue timeout"
+      refute hd(snapshot.errors).details =~ "DBConnection"
       assert Enum.any?(snapshot.inspection.recent_logs, &(&1.message == "agent query failed"))
     end
   end

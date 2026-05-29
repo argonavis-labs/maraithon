@@ -12,8 +12,8 @@ defmodule MaraithonWeb.TodosLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
-  test "renders todos on their own page and highlights the Todos nav", %{conn: conn} do
-    assert {:ok, _todos} =
+  test "renders work items on their own page and highlights the Work nav", %{conn: conn} do
+    assert {:ok, [todo]} =
              Todos.upsert_many(@user_email, [
                %{
                  "source" => "gmail",
@@ -27,15 +27,85 @@ defmodule MaraithonWeb.TodosLiveTest do
                }
              ])
 
-    {:ok, view, html} = live(conn, "/todos")
+    {:ok, view, _html} = live(conn, "/todos")
+    html = render(view)
 
-    assert html =~ "Todo list"
+    assert html =~ "Work list"
     assert html =~ "Reply to Michael Berlingo"
     assert html =~ "Starteryou UGC Campaigns"
+    assert html =~ "follow-ups that need confirmation"
+    assert html =~ "personal commitments"
+    assert html =~ "1 work item shown."
     assert html =~ "Search"
     assert html =~ "Status"
+    assert html =~ "Attention"
     assert html =~ "Due"
-    assert has_element?(view, "a[href='/todos'][aria-current='page']", "Todos")
+    assert html =~ "Past due"
+    refute html =~ "Overdue"
+    assert html =~ "Added by you"
+    refute html =~ "Late"
+    refute html =~ "stale follow-ups"
+    refute html =~ "personal tasks"
+    refute html =~ "todo shown"
+    refute html =~ ">Manual<"
+    assert has_element?(view, "a[href='/todos'][aria-current='page']", "Work")
+
+    row_html =
+      view
+      |> element("#todo-#{todo.id}")
+      |> render()
+
+    assert row_html =~ "Critical"
+    refute row_html =~ ">91<"
+
+    detail_html =
+      view
+      |> element("#todo-#{todo.id}")
+      |> render_click()
+
+    assert detail_html =~ "Critical"
+    refute detail_html =~ "priority 91"
+    refute detail_html =~ ">91<"
+  end
+
+  test "empty work list copy stays user-facing", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/todos")
+
+    assert html =~ "No work items match these filters."
+    refute html =~ "No todos"
+
+    view
+    |> form("#todo-filters",
+      filters: %{
+        "q" => "nothing here",
+        "status" => "active",
+        "attention" => "all",
+        "due" => "all",
+        "source" => "all"
+      }
+    )
+    |> render_change()
+
+    assert render(view) =~ "No work items match this search."
+  end
+
+  test "generated work source is labeled as Maraithon", %{conn: conn} do
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "title" => "Review generated work item",
+                 "summary" => "This item was created from Maraithon operating context.",
+                 "next_action" => "Review the context and decide whether to keep it open.",
+                 "dedupe_key" => "todos-live:system-source"
+               }
+             ])
+
+    {:ok, _view, html} = live(conn, "/todos")
+
+    assert html =~ "Review generated work item"
+    assert html =~ "Maraithon"
+    refute html =~ "&gt;System&lt;"
+    refute html =~ "Unknown"
   end
 
   test "searches and filters todos through query-backed controls", %{conn: conn} do
@@ -216,7 +286,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     html = render(view)
     refute html =~ "Read vendor newsletter one"
     refute html =~ "Read vendor newsletter two"
-    assert html =~ "Saved see-less feedback for 2 todos"
+    assert html =~ "Maraithon will show fewer like those"
     assert Todos.get_for_user(@user_email, first.id).status == "dismissed"
     assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
   end
@@ -236,19 +306,40 @@ defmodule MaraithonWeb.TodosLiveTest do
                  "dedupe_key" => "todos-live:detail",
                  "metadata" => %{
                    "account" => @user_email,
-                   "thread_id" => "thread-123"
+                   "subject" => "Starteryou campaign reply",
+                   "why_it_matters" => "Michael is waiting on the campaign decision.",
+                   "thread_id" => "thread-123",
+                   "source_insight_id" => "insight-secret",
+                   "confidence" => 0.96,
+                   "model_rationale" => "Model score says this matters.",
+                   "token" => "secret-token"
                  }
                }
              ])
 
-    {:ok, view, html} = live(conn, "/todos?todo_id=#{todo.id}")
+    {:ok, view, _html} = live(conn, "/todos?todo_id=#{todo.id}")
+    _html = render(view)
+
+    detail_html =
+      view
+      |> element("#todo-detail")
+      |> render()
 
     assert has_element?(view, "#todo-detail")
-    assert html =~ "Review detail todo"
-    assert html =~ "This todo should show a fuller detail view."
-    assert html =~ "Open the thread and reply."
-    assert html =~ "Keep the answer short."
-    assert html =~ "Source metadata"
+    assert detail_html =~ "Review detail todo"
+    assert detail_html =~ "This todo should show a fuller detail view."
+    assert detail_html =~ "Open the thread and reply."
+    assert detail_html =~ "Keep the answer short."
+    assert detail_html =~ "Context"
+    assert detail_html =~ @user_email
+    assert detail_html =~ "Starteryou campaign reply"
+    assert detail_html =~ "Michael is waiting on the campaign decision."
+    refute detail_html =~ "Source metadata"
+    refute detail_html =~ "thread-123"
+    refute detail_html =~ "insight-secret"
+    refute detail_html =~ "confidence"
+    refute detail_html =~ "Model score"
+    refute detail_html =~ "secret-token"
 
     {:ok, click_view, _html} = live(conn, "/todos")
 
@@ -258,6 +349,43 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     assert_patch(click_view, "/todos?todo_id=#{todo.id}")
     assert render(click_view) =~ "Review detail todo"
+  end
+
+  test "detail panel edits the next action without losing context", %{conn: conn} do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Reply to board packet",
+                 "summary" => "A board member is waiting on the financing packet.",
+                 "next_action" => "Send the old packet.",
+                 "notes" => "Keep the response concise.",
+                 "priority" => 92,
+                 "dedupe_key" => "todos-live:edit-next-action"
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/todos?todo_id=#{todo.id}")
+
+    view
+    |> form("#todo-next-action-form-#{todo.id}",
+      todo: %{
+        "next_action" => "Send the financing packet and confirm the next review window."
+      }
+    )
+    |> render_submit()
+
+    html = render(view)
+    assert html =~ "Updated next action."
+    assert html =~ "Send the financing packet and confirm the next review window."
+    refute html =~ "Send the old packet."
+
+    updated = Todos.get_for_user(@user_email, todo.id)
+    assert updated.title == "Reply to board packet"
+    assert updated.summary == "A board member is waiting on the financing packet."
+    assert updated.notes == "Keep the response concise."
+    assert updated.next_action == "Send the financing packet and confirm the next review window."
   end
 
   test "see less action records feedback memory and removes todo from active list", %{conn: conn} do
@@ -285,7 +413,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     html = render(view)
     refute html =~ "Read vendor newsletter"
-    assert html =~ "Maraithon will show fewer todos like that."
+    assert html =~ "Maraithon will show fewer like that."
 
     [memory] =
       Memory.list_items(@user_email,
@@ -302,6 +430,42 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert get_in(dismissed.metadata, ["assistant_feedback", "value"]) == "see_less"
   end
 
+  test "todo action errors hide internal reasons", %{conn: conn} do
+    actions = [
+      {"Complete stale todo", "complete_todo", "todos-live:stale-complete"},
+      {"Dismiss stale todo", "dismiss_todo", "todos-live:stale-dismiss"},
+      {"Show less unavailable work item", "see_less_todo", "todos-live:stale-show-less"}
+    ]
+
+    for {title, click, dedupe_key} <- actions do
+      assert {:ok, [todo]} =
+               Todos.upsert_many(@user_email, [
+                 %{
+                   "source" => "gmail",
+                   "kind" => "gmail_triage",
+                   "title" => title,
+                   "summary" => "This row will be stale before the action.",
+                   "next_action" => "Use the stale action.",
+                   "priority" => 90,
+                   "dedupe_key" => dedupe_key
+                 }
+               ])
+
+      {:ok, view, _html} = live(conn, "/todos")
+
+      Maraithon.Repo.delete!(todo)
+
+      html =
+        view
+        |> element("#todo-#{todo.id} button[phx-click='#{click}']")
+        |> render_click()
+
+      refute html =~ title
+      refute html =~ ":not_found"
+      refute html =~ "not_found"
+    end
+  end
+
   defp install_see_less_model do
     original = Application.get_env(:maraithon, :todos, [])
 
@@ -313,7 +477,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
         {:ok,
          Jason.encode!(%{
-           "title" => "See less: generic newsletters",
+           "title" => "Show less: generic newsletters",
            "summary" => "Generic newsletters without direct asks should not become todos.",
            "content" =>
              "When a newsletter has no direct ask, decision, deadline, or personal impact, skip it instead of creating a todo.",

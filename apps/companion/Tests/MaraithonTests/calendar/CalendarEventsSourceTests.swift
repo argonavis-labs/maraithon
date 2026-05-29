@@ -128,6 +128,34 @@ final class CalendarEventsSourceTests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidBatchIsolatesBadEventAndAdvancesCursor() async throws {
+        let t = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let badGuid = "bad-calendar-guid"
+        let rejector = CalendarSelectiveRejector(rejectedGuid: badGuid)
+        let snapshots = [
+            stub("good-older", modifiedAt: t.addingTimeInterval(10)),
+            stub(badGuid, modifiedAt: t.addingTimeInterval(20)),
+            stub("good-newer", modifiedAt: t.addingTimeInterval(30))
+        ]
+        let env = makeEnvironment(
+            snapshots: snapshots,
+            outbox: { _, payloads in
+                try await rejector.push(payloads)
+            },
+            batchLimit: 3
+        )
+
+        try await env.source.runCycle()
+
+        let posted = await rejector.snapshot()
+        let postedGuids = Set(posted.flatMap { batch in batch.map(\.guid) })
+        XCTAssertEqual(postedGuids, ["good-older", "good-newer"])
+        XCTAssertFalse(postedGuids.contains(badGuid))
+        XCTAssertEqual(CalendarCursor(defaults: defaults).trackedCount, 3)
+        XCTAssertEqual(env.source.statusPublisher.lastBatchAccepted, 2)
+    }
+
+    @MainActor
     func testClearLocalStateResetsCursor() async throws {
         let t = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let env = makeEnvironment(snapshots: [stub("a", modifiedAt: t)])
@@ -171,6 +199,24 @@ final class CalendarEventsSourceTests: XCTestCase {
     }
 
     @MainActor
+    func testCycleLogRedactsCalendarNames() async throws {
+        let t = Date(timeIntervalSinceReferenceDate: 1_000_000)
+        let calendarName = "kent@example.com"
+        let env = makeEnvironment(
+            snapshots: [stub("a", modifiedAt: t, calendarName: calendarName)]
+        )
+
+        try await env.source.runCycle()
+
+        let entry = try XCTUnwrap(
+            env.log.entries.first { $0.message == "calendar.cycle_pushed" }
+        )
+        let summary = try XCTUnwrap(entry.payload["calendars"])
+        XCTAssertFalse(summary.contains(calendarName))
+        XCTAssertTrue(summary.contains("[len=\(calendarName.count)]"))
+    }
+
+    @MainActor
     func testWindowMathPassesLookbackAndLookaheadToReader() async throws {
         let fixedNow = Date(timeIntervalSinceReferenceDate: 800_000_000)
         let stubReader = CalendarStubReader(initial: [])
@@ -193,12 +239,13 @@ final class CalendarEventsSourceTests: XCTestCase {
     private func stub(
         _ guid: String,
         modifiedAt: Date?,
-        title: String = "Coffee"
+        title: String = "Coffee",
+        calendarName: String = "Home"
     ) -> CalendarEventReader.Snapshot {
         CalendarEventReader.Snapshot(
             guid: guid,
             masterIdentifier: guid,
-            calendarName: "Home",
+            calendarName: calendarName,
             calendarColor: nil,
             title: title,
             notes: nil,
@@ -219,6 +266,7 @@ final class CalendarEventsSourceTests: XCTestCase {
     private struct Environment {
         let source: CalendarEventsSource
         let collector: CalendarBatchCollector
+        let log: EventLog
     }
 
     @MainActor
@@ -226,6 +274,7 @@ final class CalendarEventsSourceTests: XCTestCase {
         snapshots: [CalendarEventReader.Snapshot] = [],
         stub: CalendarStubReader? = nil,
         outboxFailure: Error? = nil,
+        outbox outboxOverride: CalendarEventsSource.Outbox? = nil,
         batchLimit: Int = 200,
         authState: CalendarEventReader.AuthorizationOutcome = .authorized,
         lookbackDays: TimeInterval = 90,
@@ -245,6 +294,7 @@ final class CalendarEventsSourceTests: XCTestCase {
             await collector.append(payloads)
             return SyncOutcome(accepted: payloads.count, duplicate: 0)
         }
+        let effectiveOutbox = outboxOverride ?? outbox
 
         let mappedAuth: EKAuthorizationStatusBridge = .from(authState)
         let liveReader = CalendarEventReader(
@@ -263,9 +313,9 @@ final class CalendarEventsSourceTests: XCTestCase {
             lookbackDays: lookbackDays,
             lookaheadDays: lookaheadDays,
             clock: clock,
-            outbox: outbox
+            outbox: effectiveOutbox
         )
-        return Environment(source: source, collector: collector)
+        return Environment(source: source, collector: collector, log: log)
     }
 }
 
@@ -312,4 +362,28 @@ actor CalendarBatchCollector {
     private var batches: [[CalendarEventPayload]] = []
     func append(_ batch: [CalendarEventPayload]) { batches.append(batch) }
     func snapshot() -> [[CalendarEventPayload]] { batches }
+}
+
+actor CalendarSelectiveRejector {
+    private let rejectedGuid: String
+    private var acceptedBatches: [[CalendarEventPayload]] = []
+
+    init(rejectedGuid: String) {
+        self.rejectedGuid = rejectedGuid
+    }
+
+    func push(_ payloads: [CalendarEventPayload]) throws -> SyncOutcome {
+        if payloads.contains(where: { $0.guid == rejectedGuid }) {
+            throw MaraithonClientError.clientError(
+                status: 400,
+                body: "{\"error\":\"invalid_batch\"}"
+            )
+        }
+        acceptedBatches.append(payloads)
+        return SyncOutcome(accepted: payloads.count, duplicate: 0)
+    }
+
+    func snapshot() -> [[CalendarEventPayload]] {
+        acceptedBatches
+    }
 }

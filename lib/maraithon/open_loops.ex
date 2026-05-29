@@ -549,7 +549,7 @@ defmodule Maraithon.OpenLoops do
     else
       """
       ## Open Loops
-      These are durable todos and relationship-linked commitments. Use the open-loop tools when work may need to be created, refreshed, resolved, linked to a person, or recalled.
+      These are durable open work items and relationship-linked commitments. Use the open-loop tools when work may need to be created, refreshed, resolved, linked to a person, or recalled.
 
       #{format_buckets(Map.get(snapshot, :buckets, %{}))}
 
@@ -1016,7 +1016,7 @@ defmodule Maraithon.OpenLoops do
     ]
     |> Enum.reject(&(&1 == ""))
     |> case do
-      [] -> "No open todos."
+      [] -> "No open work."
       sections -> Enum.join(sections, "\n")
     end
   end
@@ -1035,7 +1035,7 @@ defmodule Maraithon.OpenLoops do
     "#{label}:\n#{rendered}"
   end
 
-  defp format_people([]), do: "No relationship-linked open todos."
+  defp format_people([]), do: "No relationship-linked open work."
 
   defp format_people(people) do
     rendered =
@@ -1044,7 +1044,9 @@ defmodule Maraithon.OpenLoops do
       |> Enum.map_join("\n", fn person_context ->
         person = person_context.person
         name = person.display_name || person.first_name || person.id
-        "- #{name}: #{person_context.open_todo_count} open linked todo(s)"
+        count = person_context.open_todo_count
+        noun = if count == 1, do: "linked open work item", else: "linked open work items"
+        "- #{name}: #{count} #{noun}"
       end)
 
     "People:\n#{rendered}"

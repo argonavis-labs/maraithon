@@ -12,8 +12,10 @@ struct CalendarDetailView: View {
             displayName: "Calendar",
             stats: stats,
             activity: SourceActivityRow.recent(from: publisher),
-            emptyDescription: "Once your first Calendar batch finishes, this view will show event rollups and recent sync runs.",
-            clearDataDescription: "This deletes every event Maraithon has synced from this Mac out of the cloud. The Calendar app on your device is not affected."
+            syncedItemSingular: "event",
+            syncedItemPlural: "events",
+            emptyDescription: "After the first Calendar sync, this view shows recent event activity and sync history.",
+            clearDataDescription: "This deletes every event synced from this Mac from Maraithon's synced copy. The Calendar app on your device is not affected."
         )
     }
 
@@ -25,9 +27,9 @@ struct CalendarDetailView: View {
         let pub = publisher
         return [
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "events synced"),
-            SourceStat(id: "last", title: "Last batch", value: SourceStat.format(pub?.lastBatchAccepted), caption: "accepted"),
-            SourceStat(id: "dupes", title: "Duplicates", value: SourceStat.format(pub?.lastBatchDuplicate), caption: "skipped this batch"),
-            SourceStat(id: "total", title: "Total synced", value: SourceStat.format(pub?.totalAccepted), caption: "since app launch")
+            SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
+            SourceStat(id: "already_synced", title: SourceDetailCopy.alreadySyncedTitle, value: SourceStat.format(pub?.lastBatchDuplicate), caption: SourceDetailCopy.alreadySyncedCaption),
+            SourceStat(id: "total", title: "Synced", value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption)
         ]
     }
 }

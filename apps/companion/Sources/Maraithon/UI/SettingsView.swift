@@ -26,13 +26,10 @@ struct SettingsView: View {
     }
 }
 
-/// Centralized data-deletion controls. Per-source rows expose the two
-/// actions that used to live on each source's detail pane — "Reset
-/// cursor & re-sync" (non-destructive; cloud keeps everything) and
-/// "Clear cloud data" (destructive; wipes the cloud copy). A nuclear
-/// "Clear all cloud data" sits at the bottom for the wipe-everything
-/// case. Per the team convention, the detail panes no longer show
-/// these buttons — data deletion lives in Settings only.
+/// Centralized data-deletion controls. Per-source rows expose a
+/// non-destructive local re-sync and a destructive synced-data delete.
+/// Per the team convention, the detail panes no longer show these
+/// buttons — data deletion lives in Settings only.
 private struct DataSettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var pendingClear: PendingClear? = nil
@@ -40,7 +37,7 @@ private struct DataSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("Erase or re-sync the data Maraithon has synced from this Mac. Reset is safe; Clear deletes the cloud copy and cannot be undone.")
+                Text(DataSettingsCopy.intro)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -58,11 +55,11 @@ private struct DataSettingsView: View {
                 Button(role: .destructive) {
                     pendingClear = .all
                 } label: {
-                    Label("Clear all cloud data…", systemImage: "trash")
+                    Label(DataSettingsCopy.deleteAllTitle, systemImage: "trash")
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
-                Text("Wipes every source from the cloud in one action. Local data on this Mac is not affected — it will re-sync on the next polling cycle.")
+                Text(DataSettingsCopy.deleteAllDescription)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -108,9 +105,9 @@ private struct DataSettingsView: View {
         var description: String {
             switch self {
             case .source(_, let name):
-                return "This deletes every \(name) record Maraithon has synced from this Mac out of the cloud. Local data on your device is not affected."
+                return DataSettingsCopy.sourceDeleteConfirmation(sourceName: name)
             case .all:
-                return "This deletes every record Maraithon has synced from this Mac across all sources. Local data on your device is not affected — sources will re-populate on the next cycle."
+                return DataSettingsCopy.deleteAllConfirmation
             }
         }
     }
@@ -128,17 +125,30 @@ private struct DataSettingsView: View {
                     .frame(width: Tokens.IconSize.inline)
                 Text(title)
                 Spacer()
-                Button("Reset", action: onReset)
+                Button(DataSettingsCopy.resyncTitle, action: onReset)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 Button(role: .destructive) { onClear() } label: {
-                    Text("Clear…")
+                    Text(DataSettingsCopy.deleteTitle)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(.red)
             }
         }
+    }
+}
+
+enum DataSettingsCopy {
+    static let intro = "Manage data Maraithon has synced from this Mac. Re-sync starts a source over locally; Delete removes Maraithon's synced copy and cannot be undone."
+    static let resyncTitle = "Re-sync"
+    static let deleteTitle = "Delete…"
+    static let deleteAllTitle = "Delete all synced data…"
+    static let deleteAllDescription = "Deletes Maraithon's synced copy for every source from this Mac. Local data is not affected; sources can sync again afterward."
+    static let deleteAllConfirmation = "This deletes every record Maraithon has synced from this Mac across all sources. Local data on your device is not affected; sources can sync again afterward."
+
+    static func sourceDeleteConfirmation(sourceName: String) -> String {
+        "This deletes every \(sourceName) record Maraithon has synced from this Mac. Local data on your device is not affected."
     }
 }
 
@@ -154,7 +164,7 @@ private struct DiagnosticsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text("Per-source publisher metrics. Tap a source to expand its batch history and cursor state.")
+                Text(DiagnosticsSettingsCopy.intro)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -178,11 +188,12 @@ private struct DiagnosticsSourceRow: View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
             HStack {
                 MetricCell(title: "Today", value: format(pub?.acceptedToday))
-                MetricCell(title: "Last batch", value: format(pub?.lastBatchAccepted))
-                MetricCell(title: "Duplicates", value: format(pub?.lastBatchDuplicate))
-                MetricCell(title: "Total", value: format(pub?.totalAccepted))
+                MetricCell(title: "Last check", value: format(pub?.lastBatchAccepted))
+                MetricCell(title: "Already synced", value: format(pub?.lastBatchDuplicate))
+                MetricCell(title: "Not synced", value: format(pub?.lastBatchFailed))
+                MetricCell(title: "Synced", value: format(pub?.totalAccepted))
             }
-            Text(stateLine(publisher: pub))
+            Text(DiagnosticsSettingsCopy.stateLine(publisher: pub))
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
 
@@ -208,7 +219,7 @@ private struct DiagnosticsSourceRow: View {
                             Text(event.timestamp, format: .dateTime.hour().minute().second())
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
-                            Text("accepted=\(event.accepted) dup=\(event.duplicate) lat=\(event.latencyMS)ms")
+                            Text(DiagnosticsSettingsCopy.batchLine(event))
                                 .monospacedDigit()
                         }
                         .font(.caption.monospaced())
@@ -224,24 +235,36 @@ private struct DiagnosticsSourceRow: View {
         guard let n else { return "—" }
         return n.formatted(.number)
     }
+}
 
-    private func stateLine(publisher: SourceStatusPublisher?) -> String {
-        guard let publisher else { return "state=unregistered" }
+enum DiagnosticsSettingsCopy {
+    static let intro = "Review sync health for each source. Expand a source to see recent batches and the last successful sync."
+    static let developerModeDescription = "Shows Logs and Diagnostics for sync health, recent batches, and support troubleshooting. Off by default."
+
+    @MainActor
+    static func stateLine(publisher: SourceStatusPublisher?) -> String {
+        guard let publisher else { return "Status: Not registered. Last sync: Never" }
         let stateString: String
-        switch publisher.state {
-        case .connected: stateString = "connected"
-        case .syncing: stateString = "syncing"
-        case .paused: stateString = "paused"
-        case .disconnected: stateString = "disconnected"
-        case .needsAttention(let r): stateString = "needsAttention(\(r))"
-        case .error(let r): stateString = "error(\(r))"
+        switch publisher.displayedState() {
+        case .connected: stateString = "Connected"
+        case .syncing: stateString = "Syncing"
+        case .paused: stateString = "Paused"
+        case .disconnected: stateString = "Disconnected"
+        case .needsAttention(let reason):
+            stateString = "Needs attention - \(SourceIssueCopy.status(reason))"
+        case .error(let reason):
+            stateString = "Error - \(SourceIssueCopy.status(reason))"
         }
         let last = publisher.lastSyncAt.map { date in
             let f = ISO8601DateFormatter()
             f.formatOptions = [.withInternetDateTime]
             return f.string(from: date)
-        } ?? "never"
-        return "state=\(stateString)  lastSync=\(last)"
+        } ?? "Never"
+        return "Status: \(stateString). Last sync: \(last)"
+    }
+
+    static func batchLine(_ event: SourceStatusPublisher.BatchEvent) -> String {
+        "Synced \(event.accepted) | Already synced \(event.duplicate) | Not synced \(event.failed) | \(event.latencyMS) ms"
     }
 }
 
@@ -315,7 +338,7 @@ private struct GeneralSettingsView: View {
             }
             Section("Developer") {
                 Toggle("Developer mode", isOn: $developerMode)
-                Text("Surfaces the Logs sidebar pane and a Diagnostics tab with per-source publisher metrics, cursor state, and the recent-batch ring buffer. Off by default.")
+                Text(DiagnosticsSettingsCopy.developerModeDescription)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -384,6 +407,16 @@ private struct PrivacySettingsView: View {
     }
 }
 
+enum PrivacySettingsCopy {
+    static let encryptionIntro =
+        "When enabled, content is encrypted on this Mac with a key only this device holds. " +
+        "Maraithon can still use details like time, sender, and source name, but not the message, " +
+        "note, or transcript text. Search quality may drop for sources you encrypt."
+    static let browserHistoryEncryptionFooter =
+        "Browser History is handled separately because search ranking needs site and visit details. " +
+        "You can control whether browser results appear in Spotlight above."
+}
+
 /// "End-to-end encryption (per source)" section. One checkbox per
 /// source listed in `EncryptableSource`. State is persisted to
 /// `UserDefaults` via `@AppStorage` so the ingest helpers see the
@@ -395,12 +428,7 @@ private struct PrivacySettingsView: View {
 private struct EndToEndEncryptionSection: View {
     var body: some View {
         Section {
-            Text(
-                "When enabled, content is encrypted on this Mac with a key only this device " +
-                "holds. The server stores ciphertext only — assistants can see metadata " +
-                "(timestamps, sender) but not the words you wrote. Search quality drops for " +
-                "any source you turn on."
-            )
+            Text(PrivacySettingsCopy.encryptionIntro)
             .font(.footnote)
             .foregroundStyle(.secondary)
 
@@ -410,10 +438,7 @@ private struct EndToEndEncryptionSection: View {
         } header: {
             Text("End-to-end encryption (per source)")
         } footer: {
-            Text(
-                "Browser history is not on this list — the server-side ranking relies on host " +
-                "metadata and the sensitivity is comparatively low."
-            )
+            Text(PrivacySettingsCopy.browserHistoryEncryptionFooter)
             .font(.footnote)
             .foregroundStyle(.secondary)
         }

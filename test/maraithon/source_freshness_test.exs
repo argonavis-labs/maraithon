@@ -47,6 +47,57 @@ defmodule Maraithon.SourceFreshnessTest do
 
     context = Context.build(%{user_id: user_id, chat_id: "12345"})
 
-    assert [%{provider: "telegram", status: "fresh"}] = context.source_freshness
+    assert [%{provider: "telegram", account_label: "Telegram", status: "fresh"}] =
+             context.source_freshness
+
+    refute inspect(context.source_freshness) =~ "12345"
+    refute Enum.any?(context.source_freshness, &Map.has_key?(&1, :account_id))
+  end
+
+  test "compact freshness hides provider and account internals from prompt context" do
+    user_id = "source-freshness-prompt-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    now = ~U[2026-05-10 12:00:00Z]
+
+    {:ok, _slack} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:TSECRET:user:USECRET", %{
+        external_account_id: "TSECRET",
+        metadata: %{"team_name" => "Agora"}
+      })
+
+    {:ok, _slack_error} =
+      SourceFreshness.mark_error(
+        user_id,
+        "slack:TSECRET:user:USECRET",
+        "invalid_grant token=TSECRET user=USECRET",
+        at: now
+      )
+
+    {:ok, _google} =
+      ConnectedAccounts.upsert_manual(user_id, "google:founder@example.com", %{
+        external_account_id: "google-account-raw",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    snapshots = SourceFreshness.compact_for_prompt(user_id, now: now)
+
+    assert %{
+             provider: "slack",
+             account_label: "Agora",
+             status: "reauth_required",
+             stale_reason: "needs reconnect",
+             last_error: %{"reason" => "needs reconnect"}
+           } = Enum.find(snapshots, &(&1.provider == "slack"))
+
+    assert %{provider: "google", account_label: "founder@example.com", status: "fresh"} =
+             Enum.find(snapshots, &(&1.provider == "google"))
+
+    encoded = inspect(snapshots)
+    refute encoded =~ "TSECRET"
+    refute encoded =~ "USECRET"
+    refute encoded =~ "google-account-raw"
+    refute encoded =~ "invalid_grant"
+    refute Enum.any?(snapshots, &Map.has_key?(&1, :account_id))
   end
 end

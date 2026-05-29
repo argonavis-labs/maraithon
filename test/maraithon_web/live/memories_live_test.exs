@@ -12,19 +12,22 @@ defmodule MaraithonWeb.MemoriesLiveTest do
   end
 
   test "renders memory rows and highlights the Memory nav", %{conn: conn} do
-    {:ok, _memory} =
+    {:ok, memory} =
       Memory.write(@user_email, %{
         "kind" => "preference",
         "title" => "School notices matter",
         "content" => "Surface school notices when they affect pickup or forms.",
-        "source" => "telegram"
+        "source" => "telegram",
+        "confidence" => 0.97
       })
 
-    {:ok, view, html} = live(conn, "/operator/memories")
+    {:ok, view, html} = live(conn, "/operator/memories?id=#{memory.id}")
 
     assert html =~ "Durable memories"
     assert html =~ "School notices matter"
     assert has_element?(view, "a[href='/operator/memories'][aria-current='page']", "Memory")
+    refute html =~ "Confidence"
+    refute html =~ "97%"
   end
 
   test "filters, displays supersession chain, and archives an active memory", %{conn: conn} do

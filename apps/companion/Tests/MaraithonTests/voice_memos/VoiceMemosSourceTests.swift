@@ -160,6 +160,36 @@ final class VoiceMemosSourceTests: XCTestCase {
             0,
             "Cursor must not advance on failed push"
         )
+        if case .error = env.source.statusPublisher.displayedState() {
+            // expected
+        } else {
+            XCTFail("failed sync should render red, got \(env.source.statusPublisher.displayedState())")
+        }
+    }
+
+    @MainActor
+    func testAuthorizationDeniedDatabaseOpenMapsToFullDiskAccessReason() {
+        let error = VoiceMemosDatabase.DatabaseError.openFailed(
+            code: 23,
+            message: "authorization denied"
+        )
+
+        XCTAssertEqual(
+            VoiceMemosSource.accessIssueReason(for: error),
+            "voice_memos_full_disk_access_required"
+        )
+    }
+
+    @MainActor
+    func testMisspelledAuthorizationDeniedMessageStillMapsToAccessReason() {
+        let error = VoiceMemosDatabase.DatabaseError.prepareFailed(
+            message: "autheloirzation denied"
+        )
+
+        XCTAssertEqual(
+            VoiceMemosSource.accessIssueReason(for: error),
+            "voice_memos_full_disk_access_required"
+        )
     }
 
     // MARK: - Helpers

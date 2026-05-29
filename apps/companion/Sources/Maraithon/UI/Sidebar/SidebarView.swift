@@ -76,10 +76,8 @@ struct SourceRow: View {
     var body: some View {
         let publisher = env.sources.statusPublisher(for: source.id)
         let liveState = publisher?.state ?? source.state
-        let displayedState = liveState.displayed(
-            lastSyncAt: publisher?.lastSyncAt,
-            shippedBatch: !(publisher?.recentBatches.isEmpty ?? true)
-        )
+        let displayedState = publisher?.displayedState()
+            ?? liveState.displayed(lastSyncAt: nil, shippedBatch: false)
         HStack(spacing: Tokens.Spacing.small) {
             Image(systemName: source.symbol)
                 .foregroundStyle(.secondary)
@@ -87,7 +85,7 @@ struct SourceRow: View {
             Text(source.displayName)
             Spacer()
             if source.comingSoon {
-                Text("Soon")
+                Text(SourceAvailabilityCopy.unavailableBadge)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, Tokens.Spacing.small)
@@ -103,8 +101,23 @@ struct SourceRow: View {
         }
         .foregroundStyle(source.comingSoon ? .secondary : .primary)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel(rawState: liveState, displayedState: displayedState, publisher: publisher))
-        .help(tooltip(state: liveState, publisher: publisher))
+        .accessibilityLabel(
+            SourceRowCopy.accessibilityLabel(
+                sourceName: source.displayName,
+                comingSoon: source.comingSoon,
+                rawState: liveState,
+                displayedState: displayedState,
+                lastSyncAt: publisher?.lastSyncAt
+            )
+        )
+        .help(
+            SourceRowCopy.tooltip(
+                comingSoon: source.comingSoon,
+                state: liveState,
+                activeIssueReason: publisher?.activeIssue?.reason,
+                lastSyncAt: publisher?.lastSyncAt
+            )
+        )
     }
 
     private func badgeState(for state: SourceState) -> SourceStatusBadge.State {
@@ -125,42 +138,78 @@ struct SourceRow: View {
         }
     }
 
-    private func accessibilityLabel(rawState: SourceState, displayedState: SourceState, publisher: SourceStatusPublisher?) -> String {
+}
+
+struct SourceRowCopy {
+    static func accessibilityLabel(
+        sourceName: String,
+        comingSoon: Bool,
+        rawState: SourceState,
+        displayedState: SourceState,
+        lastSyncAt: Date?,
+        now: Date = Date()
+    ) -> String {
+        if comingSoon {
+            return "\(sourceName), \(SourceAvailabilityCopy.unavailableAccessibilityState)"
+        }
+
         // A source that's connected at the source layer but has no
         // successful sync yet reads as "waiting for first sync" so
         // VoiceOver doesn't say "disconnected" when the user just hasn't
         // had a first batch land yet.
-        if case .connected = rawState, publisher?.lastSyncAt == nil {
-            return "\(source.displayName), waiting for first sync"
+        if case .connected = rawState, lastSyncAt == nil {
+            return "\(sourceName), waiting for first sync"
         }
-        let stateWord: String
-        switch displayedState {
-        case .connected: stateWord = "connected"
-        case .syncing: stateWord = "syncing"
-        case .paused: stateWord = "paused"
-        case .disconnected: stateWord = "disconnected"
-        case .needsAttention(let r): stateWord = "needs attention, \(r)"
-        case .error(let r): stateWord = "error, \(r)"
-        }
+
+        let stateWord = statePhrase(displayedState)
         switch displayedState {
         case .needsAttention, .error:
-            return "\(source.displayName), \(stateWord)"
+            return "\(sourceName), \(stateWord)"
         default:
-            if let last = publisher?.lastSyncAt {
-                let abbrev = SourceRecencyChip.format(interval: Date().timeIntervalSince(last))
-                return "\(source.displayName), \(stateWord), last sync \(abbrev) ago"
+            if let last = lastSyncAt {
+                let abbrev = SourceRecencyChip.format(interval: now.timeIntervalSince(last))
+                return "\(sourceName), \(stateWord), last sync \(abbrev) ago"
             }
-            return "\(source.displayName), \(stateWord), not yet synced"
+            return "\(sourceName), \(stateWord), not yet synced"
         }
     }
 
-    private func tooltip(state: SourceState, publisher: SourceStatusPublisher?) -> String {
-        if case .needsAttention(let reason) = state { return reason }
-        if case .error(let reason) = state { return reason }
-        guard let last = publisher?.lastSyncAt else { return "Not yet synced" }
+    static func tooltip(
+        comingSoon: Bool,
+        state: SourceState,
+        activeIssueReason: String?,
+        lastSyncAt: Date?,
+        now: Date = Date()
+    ) -> String {
+        if comingSoon {
+            return SourceAvailabilityCopy.unavailableTitle
+        }
+        if let reason = activeIssueReason {
+            return SourceIssueCopy.status(reason)
+        }
+        if case .needsAttention(let reason) = state {
+            return SourceIssueCopy.status(reason)
+        }
+        if case .error(let reason) = state {
+            return SourceIssueCopy.status(reason)
+        }
+        guard let last = lastSyncAt else { return "Not yet synced" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return "Last sync \(formatter.localizedString(for: last, relativeTo: Date()))"
+        return "Last sync \(formatter.localizedString(for: last, relativeTo: now))"
+    }
+
+    private static func statePhrase(_ state: SourceState) -> String {
+        switch state {
+        case .connected: return "connected"
+        case .syncing: return "syncing"
+        case .paused: return "paused"
+        case .disconnected: return "disconnected"
+        case .needsAttention(let reason):
+            return "needs attention, \(SourceIssueCopy.status(reason))"
+        case .error(let reason):
+            return "error, \(SourceIssueCopy.status(reason))"
+        }
     }
 }
 
@@ -195,7 +244,7 @@ struct SourceRecencyChip: View {
     /// Pure formatter exposed for tests and for the accessibility label.
     /// Returns `now` under one minute, then bucketed abbreviations:
     /// `Nm` / `Nhr` / `Nd` / `Nw`.
-    static func format(interval seconds: TimeInterval) -> String {
+    nonisolated static func format(interval seconds: TimeInterval) -> String {
         let s = max(0, seconds)
         if s < 60 { return "now" }
         let minutes = Int(s / 60)

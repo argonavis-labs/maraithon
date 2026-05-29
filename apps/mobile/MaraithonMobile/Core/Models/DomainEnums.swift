@@ -5,14 +5,20 @@ enum TodoPriority: String, Codable, CaseIterable, Identifiable {
     case low
     case medium
     case high
+    case critical
 
     var id: String { rawValue }
+
+    static var allCases: [TodoPriority] {
+        [.critical, .high, .medium, .low]
+    }
 
     var title: String {
         switch self {
         case .low: "Low"
-        case .medium: "Medium"
+        case .medium: "Normal"
         case .high: "High"
+        case .critical: "Critical"
         }
     }
 
@@ -21,6 +27,7 @@ enum TodoPriority: String, Codable, CaseIterable, Identifiable {
         case .low: "arrow.down.circle"
         case .medium: "equal.circle"
         case .high: "exclamationmark.circle"
+        case .critical: "exclamationmark.triangle.fill"
         }
     }
 
@@ -28,7 +35,8 @@ enum TodoPriority: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .low: .secondary
         case .medium: .blue
-        case .high: .red
+        case .high: .orange
+        case .critical: .red
         }
     }
 }

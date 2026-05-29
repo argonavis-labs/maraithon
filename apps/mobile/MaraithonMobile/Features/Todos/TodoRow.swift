@@ -27,6 +27,13 @@ struct TodoRow: View {
                         .lineLimit(3)
                 }
 
+                if let nextAction = todo.displayNextAction {
+                    Label(nextAction, systemImage: "arrow.turn.down.right")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
                 HStack(spacing: 8) {
                     StatusPill(title: todo.priority.title, tint: todo.priority.tint)
 
@@ -50,20 +57,7 @@ struct TodoRow: View {
     }
 
     private func dueText(for dueDate: Date) -> String {
-        guard !todo.isCompleted else {
-            return dueDate.formatted(AppFormatters.shortDate)
-        }
-
-        let calendar = Calendar.current
-        if dueDate < Date(), !calendar.isDateInToday(dueDate) {
-            return "Late \(AppFormatters.relativeString(for: dueDate))"
-        }
-
-        if calendar.isDateInToday(dueDate) {
-            return "Today"
-        }
-
-        return dueDate.formatted(AppFormatters.shortDate)
+        TodoRowCopy.dueText(for: todo, dueDate: dueDate)
     }
 
     private func dueSystemImage(for dueDate: Date) -> String {
@@ -88,5 +82,28 @@ struct TodoRow: View {
             return .blue
         }
         return .secondary
+    }
+}
+
+enum TodoRowCopy {
+    static func dueText(
+        for todo: TodoItem,
+        dueDate: Date,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> String {
+        guard !todo.isCompleted else {
+            return dueDate.formatted(AppFormatters.shortDate)
+        }
+
+        if dueDate < now, !calendar.isDate(dueDate, inSameDayAs: now) {
+            return "Past due \(AppFormatters.relativeString(for: dueDate, relativeTo: now))"
+        }
+
+        if calendar.isDate(dueDate, inSameDayAs: now) {
+            return "Today"
+        }
+
+        return dueDate.formatted(AppFormatters.shortDate)
     }
 }

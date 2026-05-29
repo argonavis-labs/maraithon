@@ -112,9 +112,9 @@ defmodule Maraithon.Crm.Insights do
         confidence: 0.78,
         evidence: [
           evidence(
-            "CRM",
+            "People",
             "Exact name match",
-            "#{length(group)} active CRM people are named #{display_name}."
+            "#{length(group)} active People entries are named #{display_name}."
           )
         ]
       }
@@ -146,7 +146,7 @@ defmodule Maraithon.Crm.Insights do
         confidence: 0.9,
         evidence: [
           evidence(
-            "CRM",
+            "People",
             "Shared #{first_entry.label}",
             "#{first_entry.value} appears on #{people_label(people)}."
           )
@@ -181,7 +181,7 @@ defmodule Maraithon.Crm.Insights do
       type: :duplicate,
       title: "Possible duplicate: #{search_query}",
       summary:
-        "Maraithon found #{length(people)} active CRM records that may represent the same person: #{people_label(people)}.",
+        "Maraithon found #{length(people)} active People entries that may represent the same person: #{people_label(people)}.",
       confidence: group.confidence,
       evidence: group.evidence,
       people: people,
@@ -254,7 +254,7 @@ defmodule Maraithon.Crm.Insights do
 
       texts
       |> Enum.filter(&present?/1)
-      |> Enum.map(fn text -> %{source: "CRM observation", text: text} end)
+      |> Enum.map(fn text -> %{source: "Relationship observation", text: text} end)
     end)
   end
 
@@ -273,8 +273,8 @@ defmodule Maraithon.Crm.Insights do
         person: person,
         person_id: person.id,
         relationship: relationship,
-        title: "I think #{person.display_name} is your #{relationship}",
-        summary: "Maraithon found relationship language tied to #{person.display_name}.",
+        title: relationship_suggestion_title(person, relationship),
+        summary: relationship_suggestion_summary(person),
         confidence: best.confidence,
         evidence: evidence,
         action: %{label: "Apply relationship", person_id: person.id, relationship: relationship},
@@ -313,6 +313,14 @@ defmodule Maraithon.Crm.Insights do
   end
 
   defp relationship_matches(_person, _source), do: []
+
+  defp relationship_suggestion_title(%Person{} = person, relationship) do
+    "Review relationship: #{person.display_name} as your #{relationship}"
+  end
+
+  defp relationship_suggestion_summary(%Person{} = person) do
+    "Maraithon found source evidence for this relationship label. Confirm before updating #{person.display_name}'s People profile."
+  end
 
   defp relationship_phrase?(text, name, relationship_pattern) do
     name = Regex.escape(normalize_phrase(name))

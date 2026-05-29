@@ -45,6 +45,115 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertNotEqual(a.id, b.id)
     }
 
+    func testSourceDetailHeadlineUsesItemNounInsteadOfSourceName() {
+        XCTAssertEqual(
+            SourceDetailCopy.syncedHeadline(total: 1, singular: "message", plural: "messages"),
+            "1 message synced"
+        )
+        XCTAssertEqual(
+            SourceDetailCopy.syncedHeadline(total: 12, singular: "message", plural: "messages"),
+            "12 messages synced"
+        )
+    }
+
+    func testConnectedSummaryExplainsLastCheckOutcome() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 12,
+            lastCheckSynced: 4,
+            lastCheckAlreadySynced: 0,
+            lastCheckNotSynced: 0,
+            lastSyncAt: now,
+            singular: "message",
+            plural: "messages",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Maraithon synced 4 messages in the last check. Automatic checks are on. Last sync just now."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
+    }
+
+    func testConnectedSummaryExplainsNoNewItems() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 4,
+            lastCheckSynced: 0,
+            lastCheckAlreadySynced: 4,
+            lastCheckNotSynced: 0,
+            lastSyncAt: now,
+            singular: "message",
+            plural: "messages",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Maraithon checked iMessage and found no new messages. Automatic checks are on. Last sync just now."
+        )
+    }
+
+    func testConnectedSummaryUsesAttentionCopyForPartialFailures() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "Notes",
+            totalSynced: 8,
+            lastCheckSynced: 3,
+            lastCheckAlreadySynced: 0,
+            lastCheckNotSynced: 1,
+            lastSyncAt: now,
+            singular: "note",
+            plural: "notes",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Maraithon synced 3 notes in the last check. 1 note needs attention from the last check. Last sync just now."
+        )
+    }
+
+    func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
+        XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
+        XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "synced")
+        XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already synced")
+        XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
+        XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Not synced")
+        XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
+        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "recently")
+        XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
+    }
+
+    func testFirstSyncCopyDoesNotClaimDisconnectedSourcesAreConnected() {
+        XCTAssertTrue(SourceDetailCopy.isWaitingForFirstSync(state: .connected, lastSyncAt: nil))
+        XCTAssertFalse(SourceDetailCopy.isWaitingForFirstSync(state: .disconnected, lastSyncAt: nil))
+        XCTAssertFalse(SourceDetailCopy.isWaitingForFirstSync(state: .syncing, lastSyncAt: nil))
+        XCTAssertFalse(SourceDetailCopy.isWaitingForFirstSync(state: .connected, lastSyncAt: Date()))
+
+        let copy = SourceDetailCopy.firstSyncDescription(displayName: "Notes")
+        XCTAssertTrue(copy.contains("ready to sync Notes"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("Notes is connected"))
+    }
+
+    func testSourceDetailRelativeSyncTimeDoesNotSayInZeroSeconds() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+
+        XCTAssertEqual(
+            SourceDetailCopy.relativeSyncTime(now, relativeTo: now),
+            "just now"
+        )
+        XCTAssertEqual(
+            SourceDetailCopy.relativeSyncTime(now.addingTimeInterval(20), relativeTo: now),
+            "just now"
+        )
+    }
+
     func testScaffoldBuildsWithEmptyActivity() {
         _ = SourceDetailScaffold(
             sourceID: "notes",

@@ -24,13 +24,13 @@
     </li>
     <li>
       <strong>Content you create.</strong>
-      Todos, contacts, chat messages, and notes you add to Maraithon. These are owned by you and stored
+      Work items, contacts, chat messages, and notes you add to Maraithon. These are owned by you and stored
       so the app can show them back to you on any device.
     </li>
     <li>
       <strong>Connected data.</strong>
-      When you connect an integration (Gmail, Google Calendar, Slack, Linear, Notion, GitHub, etc.),
-      Maraithon reads the data needed to power your agents. We store OAuth tokens encrypted at rest,
+      When you connect an app (Gmail, Google Calendar, Slack, Linear, Notion, GitHub, etc.),
+      Maraithon reads the data needed to power your agents. We store connection access encrypted at rest,
       and we cache only the data required to surface what needs your attention.
     </li>
   </ol>
@@ -67,14 +67,14 @@
   </ul>
   <p class="mt-3">
     Each sub-processor has contractual obligations to protect your data and is bound by their own
-    privacy policies. Connected integrations (Google, Slack, Linear, etc.) operate under their own
-    terms; Maraithon only requests the OAuth scopes needed for the agents you set up.
+    privacy policies. Connected apps (Google, Slack, Linear, etc.) operate under their own
+    terms; Maraithon only requests the permissions needed for the agents you set up.
   </p>
 
   <h2 class="mt-10 font-display text-3xl text-olive-950">How long we keep it</h2>
   <p class="mt-3">
     We retain your account and content for as long as your account is active. If you delete your
-    account, we delete account data, content, and connected-integration tokens within 30 days.
+    account, we delete account data, content, and connected-app access within 30 days.
     Anonymous aggregate logs may be retained longer for service reliability.
   </p>
 
@@ -84,7 +84,7 @@
     <li>Request a copy of the personal data we hold about you.</li>
     <li>Correct any data that is inaccurate or out of date.</li>
     <li>Delete your account and all associated data.</li>
-    <li>Disconnect any integration at any time, which revokes the related OAuth token.</li>
+    <li>Disconnect any connected app at any time, which revokes Maraithon&rsquo;s access.</li>
     <li>Withdraw consent to processing at any time.</li>
   </ul>
   <p class="mt-3">
@@ -96,8 +96,8 @@
   <p class="mt-3">
     You can delete your account in either the iOS app (Settings &rarr; Account &rarr; Delete account)
     or by emailing <a href="mailto:support@maraithon.com" class="underline">support@maraithon.com</a>
-    from the address on file. Deletion is permanent and removes your todos, contacts, chat history,
-    OAuth tokens, and account record from our production database. Backups roll forward and are
+    from the address on file. Deletion is permanent and removes your work items, contacts, chat history,
+    connected-app access, and account record from our production database. Backups roll forward and are
     purged within 30 days.
   </p>
 
@@ -110,7 +110,7 @@
 
   <h2 class="mt-10 font-display text-3xl text-olive-950">Security</h2>
   <p class="mt-3">
-    Data is encrypted in transit (TLS) and at rest. OAuth tokens are encrypted at the application
+    Data is encrypted in transit (TLS) and at rest. Connected-app access is encrypted at the application
     layer with rotating keys. We follow standard secure-development practices and run automated
     dependency audits. Security incidents that affect you will be disclosed without undue delay.
   </p>

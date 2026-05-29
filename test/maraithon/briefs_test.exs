@@ -10,6 +10,7 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramAssistant.TodoActions
+  alias Maraithon.TelegramConversations
   alias Maraithon.Todos
 
   setup do
@@ -95,6 +96,102 @@ defmodule Maraithon.BriefsTest do
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 
+  test "source-backed fallback briefs keep executive action buttons", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning briefing - 2026-05-29",
+               "summary" => "Start with 2 open follow-ups; anything absent here is unknown.",
+               "body" => "## Active Follow-Ups\n- **Reply to board deck thread**",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:source-fallback-buttons",
+               "error_message" => "llm_call_failed: {:incomplete_response, :max_output_tokens}",
+               "metadata" => %{"generation_mode" => "source_fallback"}
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Open Maraithon"))
+    refute payload.text =~ "llm_call_failed"
+    refute payload.text =~ "max_output_tokens"
+  end
+
+  test "telegram payload strips diagnostics and credentials from delivered brief copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief confidence_score=0.91",
+               "summary" => "source_health: %{gmail: connected} Authorization: Bearer abc123",
+               "body" => """
+               Lead with the CFO ask.
+               confidence_score: 0.91
+               source_health: {"gmail": "connected"}
+               model_name: gpt-5.4
+               Authorization: Bearer abc123
+               Next action: Send the revised answer today.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:public-copy-boundary"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+
+    assert payload.text =~ "Chief of staff brief"
+    assert payload.text =~ "A brief is ready for review."
+    assert payload.text =~ "Lead with the CFO ask."
+    assert payload.text =~ "Next action: Send the revised answer today."
+
+    refute lower_text =~ "confidence"
+    refute lower_text =~ "score"
+    refute lower_text =~ "source_health"
+    refute lower_text =~ "model_name"
+    refute lower_text =~ "authorization"
+    refute lower_text =~ "bearer"
+    refute lower_text =~ "token"
+    refute payload.text =~ "abc123"
+  end
+
+  test "telegram payload externalizes task-app terms in delivered brief copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief: 2 todos",
+               "summary" => "Two todos need a decision.",
+               "body" => """
+               Review the todo list before checking CRM context.
+               Next action: Decide which todo stays open.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:product-terms",
+               "metadata" => %{"agent_behavior" => "founder_followthrough_agent"}
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert payload.text =~ "Morning brief: 2 work items"
+    assert payload.text =~ "Two work items need a decision."
+    assert payload.text =~ "Review the open work before checking relationship context."
+    assert payload.text =~ "Decide which work item stays open."
+    refute lower_text =~ ~r/\btodos?\b/
+    refute lower_text =~ "todo list"
+    refute lower_text =~ "crm context"
+    assert Enum.any?(buttons, &(&1["text"] == "Adjust Briefing"))
+    refute Enum.any?(buttons, &(&1["text"] == "Tune Agent"))
+  end
+
   test "terminal missing-chat failures are not retried", %{user_id: user_id, agent: agent} do
     scheduled_for = DateTime.utc_now()
 
@@ -152,12 +249,17 @@ defmodule Maraithon.BriefsTest do
     assert intro =~ "checking on these today"
     assert intro =~ "1 new today"
     assert intro =~ "1 still open from earlier"
-    assert intro =~ "Tap List Todos"
+    assert intro =~ "Best next move: review each item now"
+    assert intro =~ "keep what still matters"
+    assert intro =~ "move anything that can wait"
+    refute intro =~ "stale"
+    refute intro =~ "not important"
+    refute intro =~ "Tap "
     assert is_nil(Briefs.todo_digest_prefix_text(brief, first_todo))
     assert is_nil(Briefs.todo_digest_prefix_text(brief, second_todo))
   end
 
-  test "brief todo review lists one todo at a time and summarizes decisions", %{
+  test "brief todo review sends open work one item at a time and summarizes decisions", %{
     user_id: user_id,
     agent: agent
   } do
@@ -188,7 +290,7 @@ defmodule Maraithon.BriefsTest do
       |> Briefs.telegram_payload()
       |> get_in([:reply_markup, "inline_keyboard"])
       |> List.flatten()
-      |> Enum.find(&(&1["text"] == "List Todos"))
+      |> Enum.find(&(&1["text"] == "Review Open Work"))
 
     assert button["callback_data"] =~ "brftd:"
 
@@ -201,7 +303,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 1
-    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ "Open work 1 of 2"
     assert hd(sends).text =~ first_todo.next_action
 
     :ok =
@@ -214,7 +316,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ "Open work 2 of 2"
     assert List.last(sends).text =~ second_todo.next_action
     assert Todos.get_for_user(user_id, first_todo.id).status == "done"
 
@@ -227,26 +329,86 @@ defmodule Maraithon.BriefsTest do
       })
 
     summary = sent_messages() |> List.last()
-    assert summary.text =~ "Todo review complete"
+    assert summary.text =~ "Open work review complete"
     assert summary.text =~ "Done: 1"
     assert summary.text =~ "Dismissed: 1"
     assert summary.text =~ "Still open: 0"
-    assert summary.text =~ "Tomorrow's briefing will build on this"
+    assert summary.text =~ "Next brief will stay cleaner"
 
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
     assert get_in(updated_brief.metadata, ["todo_review", "summary", "done_count"]) == 1
   end
 
-  test "telegram text request starts latest todo review and advances after each action", %{
+  test "brief todo review recap keeps next actions on still-open work", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-review-open:first", "Reply to finance about the receipt",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z",
+          next_action: "Send finance the corrected receipt and confirm reimbursement timing."
+        ),
+        todo_attrs("briefs-review-open:second", "Confirm the shipment ETA",
+          source_occurred_at: "2026-04-02T15:00:00Z",
+          next_action: "Reply with the signed shipment timing before noon."
+        )
+      ])
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: open todo recap",
+        "summary" => "Two todos need review.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:review-open-recap",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    :ok =
+      BriefTodoReview.handle_callback(%{
+        chat_id: 777_123,
+        callback_id: "cb-open-recap",
+        data: "brftd:#{brief.id}:start"
+      })
+
+    :ok =
+      TodoActions.handle_callback(%{
+        chat_id: 777_123,
+        message_id: "todo-open-recap-1",
+        callback_id: "cb-open-recap-done",
+        data: "tgtodo:#{first_todo.id}:done"
+      })
+
+    :ok =
+      TodoActions.handle_callback(%{
+        chat_id: 777_123,
+        message_id: "todo-open-recap-2",
+        callback_id: "cb-open-recap-snooze",
+        data: "tgtodo:#{second_todo.id}:snooze"
+      })
+
+    summary = sent_messages() |> List.last()
+    assert summary.text =~ "Open work review complete"
+    assert summary.text =~ "Still open: 1"
+    assert summary.text =~ "Confirm the shipment ETA"
+    assert summary.text =~ "Next: Reply with the signed shipment timing before noon."
+  end
+
+  test "telegram text request starts latest open work review and advances after each action", %{
     user_id: user_id,
     agent: agent
   } do
     assert BriefTodoReview.text_review_request?("Let's go through my todos one at a time")
+    assert BriefTodoReview.text_review_request?("Let's review open work one at a time")
     refute BriefTodoReview.text_review_request?("List Todos")
     refute BriefTodoReview.text_review_request?("Add buy milk to my todo list")
     refute BriefTodoReview.text_review_request?("What's on my todo list?")
     assert BriefTodoReview.text_review_intent("List Todos").intent == :show_list
+    assert BriefTodoReview.text_review_intent("Show open work").intent == :show_list
 
     assert BriefTodoReview.text_review_intent("Can you review my todos?").intent ==
              :clarify_review
@@ -283,7 +445,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 1
-    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ "Open work 1 of 2"
     assert hd(sends).text =~ first_todo.next_action
 
     updated_brief = Repo.get!(Brief, brief.id)
@@ -300,8 +462,33 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ "Open work 2 of 2"
     assert List.last(sends).text =~ second_todo.next_action
+  end
+
+  test "quick todo list includes the next action for each item", %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-quick-list:first", "Reply to school about the pickup form",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z",
+          next_action: "Send the signed pickup form and ask for confirmation."
+        )
+      ])
+
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: "777123",
+               callback_id: "cb-quick-list",
+               data: "brftd:latest:list"
+             })
+
+    [message] = sent_messages()
+    assert message.text =~ "Open work"
+    assert message.text =~ "1. #{todo.title}"
+    assert message.text =~ "Next: Send the signed pickup form and ask for confirmation."
+    assert message.text =~ "Best next move: review each item now"
+    refute message.text =~ "clear decisions"
   end
 
   test "ambiguous typed todo review requests ask before starting the action queue", %{
@@ -325,37 +512,48 @@ defmodule Maraithon.BriefsTest do
         "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
       })
 
+    {:ok, conversation} =
+      TelegramConversations.start_or_continue(user_id, "777123", %{
+        "root_message_id" => "text-review-ambiguous"
+      })
+
     assert :ok =
              TelegramAssistant.handle_inbound(%{
                user_id: user_id,
                chat_id: "777123",
                text: "Can you review my todos?",
-               source_message_id: "text-review-ambiguous"
+               source_message_id: "text-review-ambiguous",
+               conversation: conversation
              })
 
     [question] = sent_messages()
-    assert question.text =~ "one at a time"
-    assert question.text =~ "just see the list"
+    assert question.text =~ "review each item now"
+    assert question.text =~ "scan the list first"
+    refute question.text =~ "clear open work"
+    conversation = Repo.get!(TelegramConversations.Conversation, conversation.id)
+    assert conversation.metadata["pending_todo_review_clarification"]
 
     start_button =
       question.opts
       |> Keyword.fetch!(:reply_markup)
       |> Map.fetch!("inline_keyboard")
       |> List.flatten()
-      |> Enum.find(&(&1["text"] == "One by One"))
+      |> Enum.find(&(&1["text"] == "Review one by one"))
 
     assert start_button["callback_data"] == "brftd:latest:start"
 
     assert :ok =
-             BriefTodoReview.handle_callback(%{
+             TelegramAssistant.handle_inbound(%{
+               user_id: user_id,
                chat_id: "777123",
-               callback_id: "cb-clarified-start",
-               data: start_button["callback_data"]
+               text: "review each item now",
+               source_message_id: "text-review-clarified",
+               conversation: conversation
              })
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Todo 1 of 2"
+    assert List.last(sends).text =~ "Open work 1 of 2"
     assert List.last(sends).text =~ first_todo.next_action
   end
 

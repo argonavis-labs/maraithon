@@ -1,6 +1,6 @@
 defmodule Maraithon.AgentBuilder do
   @moduledoc """
-  Shared launch defaults, guidance, and validation for agent builder surfaces.
+  Shared launch defaults, guidance, and validation for automation builder surfaces.
   """
 
   alias Maraithon.Agents.Agent
@@ -11,7 +11,7 @@ defmodule Maraithon.AgentBuilder do
   alias Maraithon.OAuth.Google
 
   @default_prompt "You are a helpful assistant that watches for events and responds thoughtfully."
-  @default_tools "read_file,search_files,http_get"
+  @default_tools "read_file,search_files"
 
   @launch_defaults %{
     "behavior" => "prompt_agent",
@@ -61,13 +61,13 @@ defmodule Maraithon.AgentBuilder do
       summary:
         "One assistant that combines follow-through, commitment tracking, travel logistics, and recurring chief-of-staff briefing as built-in skills.",
       inputs: [
-        "Gmail, Calendar, and Slack activity relevant to commitments, reply debt, and travel logistics",
+        "Gmail, Calendar, and Slack activity relevant to commitments, unanswered replies, and travel logistics",
         "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
         "Shared operator preferences that shape interruption policy across all built-in skills"
       ],
       outputs: [
         "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
-        "Daily model-deduped commitment todos from sent mail, inbox asks, calendar context, CRM, and memory",
+        "Daily deduped commitment todos from sent mail, inbox asks, calendar context, CRM, and memory",
         "Travel logistics briefs and updates for upcoming trips",
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
       ],
@@ -118,7 +118,8 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "dms",
           label: "Slack Personal DMs",
-          description: "Needed to detect private reply debt and direct follow-through loops.",
+          description:
+            "Needed to detect private unanswered replies and direct follow-through loops.",
           required?: false
         },
         %{
@@ -131,25 +132,25 @@ defmodule Maraithon.AgentBuilder do
         }
       ],
       suggestions: [
-        "Use this when you want one assistant persona instead of separate travel and follow-through agents.",
+        "Use this when you want one assistant persona instead of separate travel and follow-through automations.",
         "Keep the timezone aligned to your working day so briefs and travel logistics land when you can still react.",
         "Start on the balanced profile. It gives follow-through enough coverage and keeps travel logistics active without turning every cycle into a deep crawl."
       ]
     },
     %{
       id: "prompt_agent",
-      label: "Prompt Agent",
+      label: "Custom Automation",
       category: "Flexible",
       summary:
-        "General-purpose agent that watches topics, reasons with the LLM, and uses only the tools you allow.",
+        "General-purpose automation that watches topics, reasons over connected context, and uses only the actions you allow.",
       inputs: [
         "Direct operator messages from the dashboard",
         "Events published to the topics you subscribe to",
-        "Tool results returned from the allowlist below"
+        "Results from the approved action list below"
       ],
       outputs: [
-        "Agent response events",
-        "Structured tool calls using the selected allowlist",
+        "Assistant responses",
+        "Structured actions using the selected allowlist",
         "Long-running context shaped by the memory limit"
       ],
       fields: ~w(prompt subscriptions tools memory_limit),
@@ -157,14 +158,14 @@ defmodule Maraithon.AgentBuilder do
       defaults: %{},
       requirements: [],
       suggestions: [
-        "Start with a narrow prompt and only 2-3 subscriptions so the agent does not drown in noise.",
-        "Keep the tool list short. Every extra tool expands the agent's action surface.",
-        "Use the memory limit to control how much recent context the prompt agent can revisit."
+        "Start with a narrow prompt and only 2-3 subscriptions so the automation does not drown in noise.",
+        "Keep the action list short. Every extra action expands what the automation can affect.",
+        "Use the memory limit to control how much recent context the automation can revisit."
       ]
     },
     %{
       id: "github_product_planner",
-      label: "PM Agent",
+      label: "Project Manager",
       category: "Product",
       summary:
         "Reviews one project like a PM, proposes the next 2-3 backlog tickets from goals, repo state, and open work, then writes them into Maraithon's task surface.",
@@ -217,7 +218,7 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "personal_assistant_agent",
-      label: "Personal Assistant Agent",
+      label: "Personal Assistant",
       category: "Workflow",
       summary:
         "Watches Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a Telegram prep brief the day before the trip.",
@@ -279,10 +280,10 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "inbox_calendar_advisor",
-      label: "Chief of Staff Agent",
+      label: "Chief of Staff",
       category: "Workflow",
       summary:
-        "Runs the focused Chief of Staff stack for Gmail, Calendar, and Slack follow-through, then sends recurring chief-of-staff briefs from the same agent.",
+        "Runs the focused Chief of Staff stack for Gmail, Calendar, and Slack follow-through, then sends recurring chief-of-staff briefs from the same automation.",
       inputs: [
         "Gmail threads where you promised something, agreed on deadlines, or owe a reply",
         "Calendar meetings likely to create follow-up work, especially customer, investor, hiring, and planning meetings",
@@ -293,7 +294,7 @@ defmodule Maraithon.AgentBuilder do
         "Telegram-ready nudges for unresolved commitments",
         "Post-meeting and post-thread reminders when owners and next steps are still missing",
         "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Morning brief, end-of-day debt rollup, and weekly review summaries sent to Telegram"
+        "Morning brief, end-of-day review, and weekly review summaries sent to Telegram"
       ],
       fields:
         ~w(email_scan_limit event_scan_limit prep_window_hours team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence timezone_offset_hours morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
@@ -350,7 +351,7 @@ defmodule Maraithon.AgentBuilder do
           service: "dms",
           label: "Slack Personal DMs",
           description:
-            "Needed to detect private reply debt and unresolved commitments in direct messages.",
+            "Needed to detect private unanswered replies and unresolved commitments in direct messages.",
           required?: true
         },
         %{
@@ -364,8 +365,8 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Use this when you want the Chief of Staff operating layer for follow-through and recurring briefs without the travel skill pack.",
-        "Keep scan limits focused so the agent escalates only the strongest unresolved commitments.",
-        "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per founder agent.",
+        "Keep scan limits focused so the automation escalates only the strongest unresolved commitments.",
+        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per founder workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions.",
         "Set `timezone_offset_hours` to match the operator’s working day so morning and end-of-day briefs land at the right time."
@@ -373,7 +374,7 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "slack_followthrough_agent",
-      label: "Slack Followthrough Agent",
+      label: "Slack Follow-through",
       category: "Workflow",
       summary:
         "Tracks open loops from Slack channels and DMs, then escalates only high-confidence unresolved commitments.",
@@ -422,13 +423,13 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Keep channel and DM scan limits bounded so only the strongest unresolved commitments are escalated.",
-        "Set `team_id` when multiple Slack workspaces are connected and you want one workspace per agent.",
+        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
         "Raise `min_confidence` if you want fewer interruptions and only the clearest open loops."
       ]
     },
     %{
       id: "codebase_advisor",
-      label: "Coding Agent",
+      label: "Delivery Automation",
       category: "Engineering",
       summary:
         "Walks a repository file by file and writes concrete review recommendations to a markdown report.",
@@ -440,7 +441,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "A `RECOMMENDATIONS.md` report that accumulates review findings",
         "Progress notes as each file review completes",
-        "Structured architecture, reliability, and testing feedback"
+        "Structured code health, reliability, and testing feedback"
       ],
       fields: ~w(codebase_path output_path file_patterns ignore_patterns wakeup_interval_ms),
       defaults: %{
@@ -483,7 +484,7 @@ defmodule Maraithon.AgentBuilder do
         "Indexes repository entry points, then turns operator tasks into implementation plans and optional plan files.",
       inputs: [
         "Repository entry points and source files under the chosen codebase path",
-        "Direct planning requests sent to the running agent",
+        "Direct planning requests sent to the running automation",
         "File patterns, ignore patterns, and plan-writing preferences"
       ],
       outputs: [
@@ -763,9 +764,9 @@ defmodule Maraithon.AgentBuilder do
 
   # Behavior ids that have been superseded or pulled from the public
   # library. They are still recognised by the runtime so existing
-  # agents keep working, they just don't show up as new templates.
-  # The library currently surfaces three flagship agents: the Chief of
-  # Staff, the PM agent, and the Coding agent.
+  # Existing automations keep working, they just don't show up as new templates.
+  # The library currently surfaces three flagship automations: the Chief of
+  # Staff, the Project Manager, and the Delivery Automation.
   @hidden_library_ids ~w(
     inbox_calendar_advisor
     prompt_agent
@@ -778,7 +779,7 @@ defmodule Maraithon.AgentBuilder do
   def behavior_specs, do: @behavior_specs
 
   @doc """
-  Specs to surface in the in-app library and new-agent builder. Hides
+  Specs to surface in the in-app library and automation builder. Hides
   any behavior whose id is in `@hidden_library_ids`.
   """
   def library_specs do
@@ -943,16 +944,16 @@ defmodule Maraithon.AgentBuilder do
 
     cond do
       behavior == "" ->
-        {:error, "Choose a template before creating the agent."}
+        {:error, "Choose a template before creating the automation."}
 
       is_nil(Map.get(@behavior_spec_by_id, resolved_behavior)) ->
         {:error, "Unknown behavior: #{behavior}"}
 
       true ->
         with {:ok, llm_calls} <-
-               parse_positive_integer(launch["budget_llm_calls"], "LLM call budget"),
+               parse_positive_integer(launch["budget_llm_calls"], "Reasoning budget"),
              {:ok, tool_calls} <-
-               parse_positive_integer(launch["budget_tool_calls"], "Tool call budget"),
+               parse_positive_integer(launch["budget_tool_calls"], "Action budget"),
              {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]),
              {:ok, config} <- build_behavior_config(resolved_behavior, launch, user_id) do
           {:ok,
@@ -988,7 +989,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, output_path} <-
            validate_output_parent(launch["output_path"], "Recommendations output path"),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1005,7 +1006,7 @@ defmodule Maraithon.AgentBuilder do
     with {:ok, codebase_path} <- validate_directory(launch["codebase_path"], "Codebase path"),
          {:ok, output_path} <- validate_output_parent(launch["output_path"], "Plan output path"),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval"),
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence"),
          {:ok, write_plan_files} <-
            parse_boolean(launch["write_plan_files"], "Write plan files") do
       {:ok,
@@ -1023,7 +1024,7 @@ defmodule Maraithon.AgentBuilder do
 
   defp build_behavior_config("watchdog_summarizer", launch, _user_id) do
     with {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1039,7 +1040,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, feature_limit} <-
            parse_integer_in_range(launch["feature_limit"], "Feature limit", 2, 3),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1074,7 +1075,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, brief_max_items} <-
            parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Chief of Staff wakeup interval"),
+           parse_duration_ms(launch["wakeup_interval_ms"], "Chief of Staff cadence"),
          {:ok, follow_email_scan_limit} <-
            parse_positive_integer(
              launch["follow_email_scan_limit"],
@@ -1140,9 +1141,9 @@ defmodule Maraithon.AgentBuilder do
              1.0
            ),
          {:ok, travel_wakeup_interval_ms} <-
-           parse_positive_integer(
+           parse_duration_ms(
              launch["travel_wakeup_interval_ms"],
-             "Chief of Staff travel wakeup interval"
+             "Chief of Staff travel cadence"
            ) do
       team_id = empty_to_nil(launch["team_id"])
       source_scope = SourceScope.resolve(user_id)
@@ -1251,7 +1252,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, timezone_offset_hours} <-
            parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1337,7 +1338,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, min_confidence} <-
            parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
          {:ok, wakeup_interval_ms} <-
-           parse_positive_integer(launch["wakeup_interval_ms"], "Wakeup interval") do
+           parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
        %{
          "name" => launch_name(launch),
@@ -1377,6 +1378,42 @@ defmodule Maraithon.AgentBuilder do
       _ -> {:error, "#{field_name} must be a positive integer"}
     end
   end
+
+  defp parse_duration_ms(value, field_name) do
+    value = value |> to_string() |> String.trim() |> String.downcase()
+
+    cond do
+      value == "" ->
+        {:error, "#{field_name} must be a positive duration such as 30m, 1h, or 1d"}
+
+      match =
+          Regex.run(
+            ~r/^(\d+)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$/,
+            value
+          ) ->
+        [_full, amount, unit] = match
+        {:ok, String.to_integer(amount) * duration_multiplier(unit)}
+
+      true ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 ->
+            {:ok, parsed}
+
+          _ ->
+            {:error, "#{field_name} must be a positive duration such as 30m, 1h, or 1d"}
+        end
+    end
+  end
+
+  defp duration_multiplier(unit) when unit in ["ms"], do: 1
+  defp duration_multiplier(unit) when unit in ["s", "sec", "secs", "second", "seconds"], do: 1_000
+
+  defp duration_multiplier(unit) when unit in ["m", "min", "mins", "minute", "minutes"],
+    do: 60_000
+
+  defp duration_multiplier(unit) when unit in ["h", "hr", "hrs", "hour", "hours"], do: 3_600_000
+  defp duration_multiplier(unit) when unit in ["d", "day", "days"], do: 86_400_000
+  defp duration_multiplier(unit) when unit in ["w", "week", "weeks"], do: 604_800_000
 
   defp parse_float_in_range(value, field_name, min, max) do
     case Float.parse(value || "") do
@@ -1634,10 +1671,10 @@ defmodule Maraithon.AgentBuilder do
     cond do
       not google_ready? ->
         {:error,
-         "Connect one Google account with both Gmail and Calendar before launching this agent"}
+         "Connect one Google account with both Gmail and Calendar before launching this automation"}
 
       not telegram_ready? ->
-        {:error, "Connect Telegram before launching this agent"}
+        {:error, "Connect Telegram before launching this automation"}
 
       true ->
         :ok

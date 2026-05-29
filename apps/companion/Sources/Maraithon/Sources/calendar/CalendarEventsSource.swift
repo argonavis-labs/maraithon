@@ -294,11 +294,13 @@ final class CalendarEventsSource: SourceProtocol {
             return
         }
 
-        let payloads = pushable.map(Self.payload(from:))
         let deviceId = deviceIdProvider()
-        let outcome = try await outbox(deviceId, payloads)
+        let pushResult = try await pushWithInvalidBatchIsolation(
+            deviceId: deviceId,
+            snapshots: pushable
+        )
 
-        let cursorEntries: [(guid: String, modifiedAt: Date)] = pushable.compactMap { snap in
+        let cursorEntries: [(guid: String, modifiedAt: Date)] = pushResult.processedSnapshots.compactMap { snap in
             guard let modified = snap.modifiedAt else { return nil }
             return (guid: snap.guid, modifiedAt: modified)
         }
@@ -306,8 +308,8 @@ final class CalendarEventsSource: SourceProtocol {
 
         statusPublisher.recordSync(
             at: Date(),
-            accepted: outcome.accepted,
-            duplicate: outcome.duplicate
+            accepted: pushResult.outcome.accepted,
+            duplicate: pushResult.outcome.duplicate
         )
         statusPublisher.update(state: .connected)
 
@@ -323,14 +325,93 @@ final class CalendarEventsSource: SourceProtocol {
             payload: [
                 "scanned": String(snapshots.count),
                 "pushed": String(pushable.count),
-                "accepted": String(outcome.accepted),
-                "duplicate": String(outcome.duplicate),
+                "accepted": String(pushResult.outcome.accepted),
+                "duplicate": String(pushResult.outcome.duplicate),
+                "invalid": String(pushResult.outcome.invalid),
                 "tracked": String(cursor.trackedCount),
                 "window_start": Self.isoString(from: start),
                 "window_end": Self.isoString(from: end),
                 "calendars": Self.calendarSummary(calendarCounts)
             ]
         )
+    }
+
+    private struct PushResult {
+        var outcome: SyncOutcome
+        var processedSnapshots: [CalendarEventReader.Snapshot]
+
+        static var empty: PushResult {
+            PushResult(
+                outcome: SyncOutcome(accepted: 0, duplicate: 0),
+                processedSnapshots: []
+            )
+        }
+
+        mutating func merge(_ other: PushResult) {
+            outcome = SyncOutcome(
+                accepted: outcome.accepted + other.outcome.accepted,
+                duplicate: outcome.duplicate + other.outcome.duplicate,
+                invalid: outcome.invalid + other.outcome.invalid
+            )
+            processedSnapshots.append(contentsOf: other.processedSnapshots)
+        }
+    }
+
+    private func pushWithInvalidBatchIsolation(
+        deviceId: UUID,
+        snapshots: [CalendarEventReader.Snapshot]
+    ) async throws -> PushResult {
+        guard !snapshots.isEmpty else { return .empty }
+
+        do {
+            let payloads = snapshots.map(Self.payload(from:))
+            let outcome = try await outbox(deviceId, payloads)
+            return PushResult(outcome: outcome, processedSnapshots: snapshots)
+        } catch {
+            guard Self.isInvalidBatchError(error) else { throw error }
+
+            if snapshots.count == 1 {
+                let snapshot = snapshots[0]
+                eventLog.warning(
+                    "calendar.event_skipped_invalid",
+                    source: .calendar,
+                    payload: [
+                        "guid_prefix": Self.guidPrefix(snapshot.guid),
+                        "modified_at": snapshot.modifiedAt.map(Self.isoString(from:)) ?? "<nil>",
+                        "calendar": Self.redactedLogToken(snapshot.calendarName),
+                        "reason": "invalid_batch"
+                    ]
+                )
+                return PushResult(
+                    outcome: SyncOutcome(accepted: 0, duplicate: 0, invalid: 1),
+                    processedSnapshots: [snapshot]
+                )
+            }
+
+            let midpoint = snapshots.count / 2
+            var left = try await pushWithInvalidBatchIsolation(
+                deviceId: deviceId,
+                snapshots: Array(snapshots[..<midpoint])
+            )
+            let right = try await pushWithInvalidBatchIsolation(
+                deviceId: deviceId,
+                snapshots: Array(snapshots[midpoint...])
+            )
+            left.merge(right)
+            return left
+        }
+    }
+
+    private nonisolated static func isInvalidBatchError(_ error: Error) -> Bool {
+        guard let clientError = error as? MaraithonClientError else {
+            return false
+        }
+        switch clientError {
+        case let .clientError(status, body):
+            return status == 400 && (body?.contains("invalid_batch") ?? false)
+        default:
+            return false
+        }
     }
 
     // MARK: - Mapping
@@ -364,12 +445,13 @@ final class CalendarEventsSource: SourceProtocol {
     }
 
     /// Compact "calendar_name: count" summary for log lines, sorted by
-    /// count descending so the most active calendars surface first.
+    /// count descending with redacted names so account emails don't leak
+    /// into local diagnostics.
     private nonisolated static func calendarSummary(_ counts: [String: Int]) -> String {
         counts
             .sorted { $0.value > $1.value }
             .prefix(5)
-            .map { "\($0.key)=\($0.value)" }
+            .map { "\(Self.redactedLogToken($0.key))=\($0.value)" }
             .joined(separator: ",")
     }
 
@@ -377,6 +459,14 @@ final class CalendarEventsSource: SourceProtocol {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: date)
+    }
+
+    private nonisolated static func guidPrefix(_ guid: String) -> String {
+        String(guid.prefix(16))
+    }
+
+    private nonisolated static func redactedLogToken(_ text: String?) -> String {
+        CalendarRedactor.redact(text).replacingOccurrences(of: " ", with: "_")
     }
 }
 

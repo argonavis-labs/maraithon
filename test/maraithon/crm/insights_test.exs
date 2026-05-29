@@ -65,12 +65,15 @@ defmodule Maraithon.Crm.InsightsTest do
     result = Insights.list_for_user(user_id)
 
     assert [suggestion] = result.relationship_suggestions
-    assert suggestion.title == "I think Christina Giannone is your wife"
+    assert suggestion.title == "Review relationship: Christina Giannone as your wife"
+    assert suggestion.summary =~ "Confirm before updating Christina Giannone's People profile."
+    refute suggestion.summary =~ "CRM"
+    refute suggestion.title =~ "I think"
     assert suggestion.relationship == "wife"
     assert Enum.any?(suggestion.evidence, &(&1.source == "Person notes"))
   end
 
-  test "returns relationship suggestions from CRM observations", %{user_id: user_id} do
+  test "returns relationship suggestions from relationship observations", %{user_id: user_id} do
     {:ok, emma} =
       Crm.upsert_person(user_id, %{
         "display_name" => "Emma Fenwick",
@@ -94,9 +97,11 @@ defmodule Maraithon.Crm.InsightsTest do
     result = Insights.list_for_user(user_id)
 
     assert [suggestion] = result.relationship_suggestions
-    assert suggestion.title == "I think Emma Fenwick is your daughter"
+    assert suggestion.title == "Review relationship: Emma Fenwick as your daughter"
+    assert suggestion.summary =~ "source evidence"
+    refute suggestion.title =~ "I think"
     assert suggestion.relationship == "daughter"
-    assert Enum.any?(suggestion.evidence, &(&1.source == "CRM observation"))
+    assert Enum.any?(suggestion.evidence, &(&1.source == "Relationship observation"))
   end
 
   test "does not suggest relationships when the person already has one", %{user_id: user_id} do

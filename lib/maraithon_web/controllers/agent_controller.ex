@@ -34,7 +34,7 @@ defmodule MaraithonWeb.AgentController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent not found"})
+        |> json(%{error: "not_found", message: "Automation not found"})
 
       agent ->
         {:ok, architecture} = AgentArchitecture.for_agent(agent)
@@ -50,7 +50,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :unknown_behavior} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent architecture not found"})
+        |> json(%{error: "not_found", message: "Automation details not found"})
     end
   end
 
@@ -70,7 +70,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent not found"})
+        |> json(%{error: "not_found", message: "Automation not found"})
     end
   end
 
@@ -82,7 +82,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent not found"})
+        |> json(%{error: "not_found", message: "Automation not found"})
 
       {:error, changeset} ->
         conn
@@ -109,7 +109,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :agent_stopped} ->
         conn
         |> put_status(:conflict)
-        |> json(%{error: "agent_stopped", message: "Agent is not running"})
+        |> json(%{error: "agent_stopped", message: "Automation is not running"})
     end
   end
 
@@ -121,12 +121,12 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent not found"})
+        |> json(%{error: "not_found", message: "Automation not found"})
 
       {:error, :already_running} ->
         conn
         |> put_status(:conflict)
-        |> json(%{error: "already_running", message: "Agent is already running"})
+        |> json(%{error: "already_running", message: "Automation is already running"})
 
       {:error, changeset} ->
         conn
@@ -216,7 +216,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Agent not found"})
+        |> json(%{error: "not_found", message: "Automation not found"})
     end
   end
 

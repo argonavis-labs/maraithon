@@ -55,6 +55,9 @@ defmodule Maraithon.LocalBrowserHistory.LocalVisit do
     |> validate_inclusion(:browser, @browsers)
     |> validate_length(:source, max: 64)
     |> validate_length(:browser, max: 32)
+    |> validate_length(:guid, max: 255)
+    |> validate_length(:local_id, max: 255)
+    |> validate_length(:host, max: 255)
     |> unique_constraint([:user_id, :device_id, :source, :guid],
       name: :local_browser_visits_user_device_source_guid_index
     )

@@ -57,6 +57,11 @@ defmodule Maraithon.RedactionTest do
                "<redacted-anthropic-key>"
     end
 
+    test "scrubs OpenRouter keys" do
+      assert Redaction.redact_string("sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA") =~
+               "<redacted-openrouter-key>"
+    end
+
     test "scrubs Slack tokens" do
       assert Redaction.redact_string("xoxb-1234567890-ABCDEFGHIJ") =~ "<redacted-slack-token>"
     end

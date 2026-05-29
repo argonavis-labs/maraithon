@@ -107,6 +107,18 @@ defmodule Maraithon.OpenLoopsTest do
     assert [%{title: "Reply to Sam about launch"}] = snapshot.buckets.today
     assert [%{person: %{display_name: "Sam Rivers"}, open_todo_count: 1}] = snapshot.people
     assert snapshot.memory.count >= 1
+
+    prompt_section =
+      OpenLoops.render_prompt_section(user_id,
+        query: "Sam launch",
+        now: ~U[2026-05-09 12:00:00Z],
+        limit: 10
+      )
+
+    assert prompt_section =~ "durable open work items"
+    assert prompt_section =~ "Sam Rivers: 1 linked open work item"
+    refute prompt_section =~ "durable todos"
+    refute prompt_section =~ "todo(s)"
   end
 
   test "ingest_todos normalizes model-suggested memory kind aliases during enrichment" do

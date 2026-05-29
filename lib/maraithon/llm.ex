@@ -67,6 +67,7 @@ defmodule Maraithon.LLM do
   def intelligence do
     case provider_name() do
       "openai" -> openai_reasoning_effort()
+      "openrouter" -> openrouter_reasoning_effort()
       _ -> runtime_config() |> Keyword.get(:llm_intelligence, openai_reasoning_effort())
     end
   end
@@ -104,6 +105,31 @@ defmodule Maraithon.LLM do
     |> Keyword.get(:openai_reasoning_effort, "high")
   end
 
+  def openrouter_model do
+    runtime_config()
+    |> Keyword.get(:openrouter_model, "qwen/qwen3.7-max")
+  end
+
+  def openrouter_api_key do
+    runtime_config()
+    |> Keyword.get(:openrouter_api_key)
+  end
+
+  def openrouter_reasoning_effort do
+    runtime_config()
+    |> Keyword.get(:openrouter_reasoning_effort, "medium")
+  end
+
+  def openrouter_http_referer do
+    runtime_config()
+    |> Keyword.get(:openrouter_http_referer, "https://maraithon.app")
+  end
+
+  def openrouter_app_title do
+    runtime_config()
+    |> Keyword.get(:openrouter_app_title, "Maraithon")
+  end
+
   @doc """
   Complete a model request with the configured provider.
   """
@@ -112,7 +138,7 @@ defmodule Maraithon.LLM do
       nil ->
         {:error,
          {:llm_provider_not_configured,
-          "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
+          "No LLM provider is configured. Set LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY."}}
 
       module ->
         run_provider_request(module, params, fn -> module.complete(params) end)
@@ -204,9 +230,10 @@ defmodule Maraithon.LLM do
 
   defp provider_backpressure_enabled?(Maraithon.LLM.OpenAIProvider), do: true
   defp provider_backpressure_enabled?(Maraithon.LLM.AnthropicProvider), do: true
+  defp provider_backpressure_enabled?(Maraithon.LLM.OpenRouterProvider), do: true
 
   defp provider_backpressure_enabled?(_module) do
-    provider_name() in ["openai", "anthropic"]
+    provider_name() in ["openai", "anthropic", "openrouter"]
   end
 
   defp with_provider_slot(bucket, fun) when is_function(fun, 0) do

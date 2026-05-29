@@ -4,15 +4,29 @@ enum MobileAPIError: LocalizedError, Equatable {
     case invalidResponse
     case unauthorized
     case server(String)
+    case serverResponse(code: String, message: String)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "The production server returned an unexpected response."
+            return "Maraithon returned an unexpected response."
         case .unauthorized:
-            return "The production session is no longer valid."
+            return "Sign-in expired. Sign in again."
         case .server(let message):
             return message
+        case .serverResponse(_, let message):
+            return message
+        }
+    }
+
+    var isNotFound: Bool {
+        switch self {
+        case .server("not_found"):
+            return true
+        case .serverResponse(let code, _):
+            return code == "not_found"
+        default:
+            return false
         }
     }
 }
@@ -286,9 +300,19 @@ struct MobileAPIClient {
         return response.todo
     }
 
+    func deleteTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {
+        let response: TodoResponse = try await send(
+            path: "/todos/\(id.uuidString.lowercased())",
+            method: "DELETE",
+            sessionToken: sessionToken,
+            responseType: TodoResponse.self
+        )
+        return response.todo
+    }
+
     func listPeople(sessionToken: String) async throws -> [RemotePerson] {
         let response: PeopleResponse = try await send(
-            path: "/people?limit=200&status=active",
+            path: "/people?limit=200&status=all",
             sessionToken: sessionToken,
             responseType: PeopleResponse.self
         )
@@ -357,8 +381,22 @@ struct MobileAPIClient {
         case 401:
             throw MobileAPIError.unauthorized
         default:
-            let error = (try? decoder.decode(ServerError.self, from: data))?.error
-            throw MobileAPIError.server(error ?? "Production request failed with status \(httpResponse.statusCode).")
+            if let error = try? decoder.decode(ServerError.self, from: data) {
+                if let message = error.message?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !message.isEmpty
+                {
+                    throw MobileAPIError.serverResponse(
+                        code: error.error ?? "request_failed",
+                        message: message
+                    )
+                }
+
+                if let code = error.error {
+                    throw MobileAPIError.server(code)
+                }
+            }
+
+            throw MobileAPIError.server("Maraithon could not complete that request. Try again.")
         }
     }
 
@@ -376,7 +414,8 @@ struct MobileAPIClient {
     }
 
     private struct ServerError: Decodable {
-        let error: String
+        let error: String?
+        let message: String?
     }
 
     private struct EmptyResponse: Decodable {

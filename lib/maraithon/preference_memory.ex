@@ -15,6 +15,7 @@ defmodule Maraithon.PreferenceMemory do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory.{Profile, Rule, RuleEvent}
   alias Maraithon.Repo
+  alias Maraithon.TelegramAssistant.PreferenceConfirmationCopy
   alias Maraithon.UserMemory
 
   require Logger
@@ -691,17 +692,14 @@ defmodule Maraithon.PreferenceMemory do
     parsed_reply = non_empty_string(parsed["reply"])
 
     cond do
-      learned != [] and parsed_reply != nil ->
-        parsed_reply
-
       learned != [] ->
-        "Saved preference: #{learned |> Enum.map(&rule_summary/1) |> Enum.join("; ")}"
+        PreferenceConfirmationCopy.saved_text(learned)
 
       parsed_reply != nil ->
         parsed_reply
 
       true ->
-        "I couldn't turn that into a durable rule yet. Try /prefer with a broader preference."
+        PreferenceConfirmationCopy.failed_text()
     end
   end
 
@@ -709,8 +707,8 @@ defmodule Maraithon.PreferenceMemory do
     parsed_reply = non_empty_string(parsed["reply"])
 
     cond do
-      learned != [] and parsed_reply != nil -> parsed_reply
-      learned != [] -> "Learned: #{learned |> Enum.map(&rule_summary/1) |> Enum.join("; ")}"
+      learned != [] -> PreferenceConfirmationCopy.saved_text(learned)
+      parsed_reply != nil -> parsed_reply
       true -> nil
     end
   end

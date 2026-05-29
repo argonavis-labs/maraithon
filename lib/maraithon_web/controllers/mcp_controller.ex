@@ -2,6 +2,7 @@ defmodule MaraithonWeb.McpController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Tools
+  alias MaraithonWeb.ApiErrorCopy
 
   @protocol_version "2025-03-26"
   @batch_timeout_ms 30_000
@@ -20,14 +21,17 @@ defmodule MaraithonWeb.McpController do
         on_timeout: :kill_task
       )
       |> Enum.map(fn
-        {:ok, response} -> response
-        {:exit, reason} -> error_response(nil, -32603, "Batch request failed", inspect(reason))
+        {:ok, response} ->
+          response
+
+        {:exit, reason} ->
+          error_response(nil, -32603, "Batch request failed", ApiErrorCopy.mcp_batch(reason))
       end)
 
     json(conn, responses)
   end
 
-  def handle(conn, %{"jsonrpc" => "2.0", "method" => _method} = request) do
+  def handle(conn, %{"jsonrpc" => "2.0", "method" => method} = request) when is_binary(method) do
     json(conn, response_for(request))
   end
 
@@ -60,7 +64,7 @@ defmodule MaraithonWeb.McpController do
   defp dispatch("tools/call", %{"name" => name} = params) when is_binary(name) do
     arguments = Map.get(params, "arguments", %{})
 
-    with true <- is_map(arguments) || {:error, -32602, "Tool arguments must be an object", nil} do
+    with true <- is_map(arguments) || {:error, -32602, "Action details must be an object", nil} do
       case execute_tool(name, arguments, params) do
         {:ok, result} ->
           normalized = normalize(result)
@@ -75,11 +79,15 @@ defmodule MaraithonWeb.McpController do
            }}
 
         {:error, {:tool_policy_denied, decision}} ->
-          {:error, -32070, Map.get(decision, "message", "Tool call denied"),
+          decision = ApiErrorCopy.mcp_policy_decision(decision)
+
+          {:error, -32070, Map.get(decision, "message", "Action is not allowed."),
            %{"policy_decision" => decision}}
 
         {:error, {:tool_policy_needs_confirmation, decision}} ->
-          {:error, -32071, Map.get(decision, "message", "Tool call requires confirmation"),
+          decision = ApiErrorCopy.mcp_policy_decision(decision)
+
+          {:error, -32071, Map.get(decision, "message", "Action requires confirmation."),
            %{"policy_decision" => decision}}
 
         {:error, reason} ->
@@ -94,7 +102,7 @@ defmodule MaraithonWeb.McpController do
     end
   end
 
-  defp dispatch("tools/call", _params), do: {:error, -32602, "Tool name is required", nil}
+  defp dispatch("tools/call", _params), do: {:error, -32602, "Action name is required", nil}
   defp dispatch(method, _params), do: {:error, -32601, "Method not found: #{method}", nil}
 
   defp execute_tool(name, arguments, params) do
@@ -105,8 +113,8 @@ defmodule MaraithonWeb.McpController do
 
     case Task.yield(task, @tool_call_timeout_ms) || Task.shutdown(task, :brutal_kill) do
       {:ok, result} -> result
-      {:exit, reason} -> {:error, "tool_crashed: #{inspect(reason)}"}
-      nil -> {:error, "tool_timeout: #{name} exceeded #{@tool_call_timeout_ms}ms"}
+      {:exit, _reason} -> {:error, :tool_crashed}
+      nil -> {:error, :tool_timeout}
     end
   end
 
@@ -136,7 +144,7 @@ defmodule MaraithonWeb.McpController do
   defp truthy?(value) when value in [true, "true", "1", 1], do: true
   defp truthy?(_value), do: false
 
-  defp response_for(%{"jsonrpc" => "2.0", "method" => method} = request) do
+  defp response_for(%{"jsonrpc" => "2.0", "method" => method} = request) when is_binary(method) do
     id = Map.get(request, "id")
 
     case dispatch(method, Map.get(request, "params", %{})) do
@@ -187,13 +195,7 @@ defmodule MaraithonWeb.McpController do
 
   defp normalize(value), do: value
 
-  defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text({:tool_policy_denied, decision}), do: Map.get(decision, "message", "Denied")
-
-  defp error_text({:tool_policy_needs_confirmation, decision}),
-    do: Map.get(decision, "message", "Confirmation required")
-
-  defp error_text(reason), do: inspect(reason)
+  defp error_text(reason), do: ApiErrorCopy.mcp_tool(reason)
 
   defp encode_tool_text(result, params) do
     if pretty_response?(params) do

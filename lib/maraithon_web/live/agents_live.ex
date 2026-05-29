@@ -11,7 +11,10 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.BriefingSchedules
   alias Maraithon.ChiefOfStaff.Skills, as: ChiefOfStaffSkills
   alias Maraithon.Connections
+  alias Maraithon.RunErrorCopy
   alias Maraithon.Runtime
+  alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.OperationFailureCopy
 
   @refresh_interval 5_000
   @event_limit 50
@@ -21,7 +24,7 @@ defmodule MaraithonWeb.AgentsLive do
   def mount(_params, _session, socket) do
     socket =
       assign(socket,
-        page_title: "Agents",
+        page_title: "Automations",
         current_path: "/agents",
         status_options: @status_options,
         filters: default_filters(),
@@ -115,7 +118,8 @@ defmodule MaraithonWeb.AgentsLive do
       {:noreply,
        push_patch(socket, to: agents_path(socket.assigns.filters, %{id: id, panel: :inspect}))}
     else
-      {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+      {:noreply,
+       socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -137,14 +141,13 @@ defmodule MaraithonWeb.AgentsLive do
              )}
 
           {:error, message} when is_binary(message) ->
-            {:noreply, put_flash(socket, :error, "Could not install: #{message}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, message))}
 
           {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply,
-             put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, changeset))}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, reason))}
         end
 
       _ ->
@@ -163,21 +166,20 @@ defmodule MaraithonWeb.AgentsLive do
                  )}
 
               {:error, message} when is_binary(message) ->
-                {:noreply, put_flash(socket, :error, "Could not install: #{message}")}
+                {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, message))}
 
               {:error, %Ecto.Changeset{} = changeset} ->
-                {:noreply,
-                 put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+                {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, changeset))}
 
               {:error, reason} ->
-                {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+                {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, reason))}
             end
 
           {:error, message} when is_binary(message) ->
             {:noreply, put_flash(socket, :error, message)}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, reason))}
         end
     end
   end
@@ -194,7 +196,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:info, "Agent started")}
+           |> put_flash(:info, "Automation started")}
 
         {:error, :already_running} ->
           emit_action_telemetry("start", surface, id, :ok)
@@ -203,7 +205,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:info, "Agent is already running")}
+           |> put_flash(:info, "Automation is already active")}
 
         {:error, :not_found} ->
           emit_action_telemetry("start", surface, id, :error)
@@ -212,7 +214,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Agent not found")}
+           |> put_flash(:error, "Automation not found")}
 
         {:error, reason} ->
           emit_action_telemetry("start", surface, id, :error)
@@ -221,7 +223,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:error, "Failed to start agent: #{inspect(reason)}")}
+           |> put_flash(:error, AgentActionCopy.error(:start, reason))}
       end
     else
       emit_action_telemetry("start", surface, id, :error)
@@ -230,7 +232,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Agent not found")}
+       |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -246,7 +248,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:info, "Agent stopped")}
+           |> put_flash(:info, "Automation paused")}
 
         {:error, :not_found} ->
           emit_action_telemetry("stop", surface, id, :error)
@@ -255,7 +257,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Agent not found")}
+           |> put_flash(:error, "Automation not found")}
 
         {:error, reason} ->
           emit_action_telemetry("stop", surface, id, :error)
@@ -264,7 +266,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:error, "Failed to stop agent: #{inspect(reason)}")}
+           |> put_flash(:error, AgentActionCopy.error(:stop, reason))}
       end
     else
       emit_action_telemetry("stop", surface, id, :error)
@@ -273,7 +275,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Agent not found")}
+       |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -303,7 +305,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> clear_missing_selection(id)
-           |> put_flash(:error, "Agent not found")}
+           |> put_flash(:error, "Automation not found")}
 
         {:error, reason} ->
           emit_action_telemetry(action, surface, id, :error)
@@ -312,7 +314,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:error, "Failed to delete agent: #{inspect(reason)}")}
+           |> put_flash(:error, AgentActionCopy.error(:delete, reason))}
       end
     else
       emit_action_telemetry("delete", surface, id, :error)
@@ -321,7 +323,7 @@ defmodule MaraithonWeb.AgentsLive do
        socket
        |> refresh_registry()
        |> clear_missing_selection(id)
-       |> put_flash(:error, "Agent not found")}
+       |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -340,12 +342,14 @@ defmodule MaraithonWeb.AgentsLive do
        |> assign(launch: default_launch_params(), launch_error: nil)
        |> refresh_registry()
        |> refresh_selected_workspace_or_clear()
-       |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} updated")
+       |> put_flash(:info, "Automation updated")
        |> push_patch(to: agents_path(socket.assigns.filters, %{id: agent.id, panel: :inspect}))}
     else
       false ->
         emit_action_telemetry("update", :workspace, id || "unknown", :error)
-        {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+
+        {:noreply,
+         socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
 
       {:error, message} when is_binary(message) ->
         emit_action_telemetry("update", :workspace, id, :error)
@@ -358,7 +362,7 @@ defmodule MaraithonWeb.AgentsLive do
          assign(
            socket,
            launch: launch,
-           launch_error: "Failed to update agent: #{changeset_errors(changeset)}"
+           launch_error: AgentActionCopy.error(:update, changeset)
          )}
 
       {:error, reason} ->
@@ -367,7 +371,7 @@ defmodule MaraithonWeb.AgentsLive do
         {:noreply,
          assign(socket,
            launch: launch,
-           launch_error: "Failed to update agent: #{inspect(reason)}"
+           launch_error: AgentActionCopy.error(:update, reason)
          )}
     end
   end
@@ -392,17 +396,15 @@ defmodule MaraithonWeb.AgentsLive do
        )}
     else
       false ->
-        {:noreply, socket |> clear_missing_selection(id) |> put_flash(:error, "Agent not found")}
+        {:noreply,
+         socket |> clear_missing_selection(id) |> put_flash(:error, "Automation not found")}
 
       {:error, reason} ->
         {:noreply,
          socket
          |> refresh_registry()
          |> refresh_selected_workspace_or_clear()
-         |> put_flash(
-           :error,
-           "Failed to update morning briefing: #{schedule_error_message(reason)}"
-         )}
+         |> put_flash(:error, OperationFailureCopy.briefing_schedule(:morning, reason))}
     end
   end
 
@@ -413,12 +415,12 @@ defmodule MaraithonWeb.AgentsLive do
       <div class="space-y-6">
         <header class="flex flex-wrap items-end justify-between gap-3">
           <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-            Agents
+            Automations
           </h1>
           <div class="flex items-center gap-2">
             <span class="text-xs/5 text-zinc-500"><%= length(@all_agents) %> total</span>
             <.button href={~p"/agents/new"}>
-              New agent
+              New automation
             </.button>
           </div>
         </header>
@@ -428,14 +430,14 @@ defmodule MaraithonWeb.AgentsLive do
           phx-change="update_filters"
           class="flex flex-wrap items-center gap-2"
         >
-          <label class="sr-only" for="agent-search">Search agents</label>
+          <label class="sr-only" for="agent-search">Search automations</label>
           <div class="w-72">
             <.c_input
               id="agent-search"
               type="search"
               name="filters[q]"
               value={@filters.q}
-              placeholder="Search agents"
+              placeholder="Search automations"
             />
           </div>
           <label class="sr-only" for="agent-status">Filter by status</label>
@@ -464,7 +466,7 @@ defmodule MaraithonWeb.AgentsLive do
           <.table>
               <.table_head>
                 <.table_row>
-                  <.table_header>Agent</.table_header>
+                  <.table_header>Automation</.table_header>
                   <.table_header>Status</.table_header>
                   <.table_header>Last updated</.table_header>
                   <.table_header class="text-right">Actions</.table_header>
@@ -532,7 +534,7 @@ defmodule MaraithonWeb.AgentsLive do
                 <%= if @all_agents == [] do %>
                   <.table_row>
                     <.table_cell colspan="4" class="py-12 text-center">
-                      <p class="text-sm/6 text-zinc-700">No agents yet.</p>
+                      <p class="text-sm/6 text-zinc-700">No automations yet.</p>
                       <p class="mt-1 text-sm/6 text-zinc-500">
                         Build one from a template — connect the apps it needs and launch it from there.
                       </p>
@@ -549,7 +551,7 @@ defmodule MaraithonWeb.AgentsLive do
                 <%= if @all_agents != [] and @agents == [] do %>
                   <.table_row>
                     <.table_cell colspan="4" class="py-10 text-center text-sm/6 text-zinc-500">
-                      No agents match the current filters.
+                      No automations match the current filters.
                       <button
                         type="button"
                         phx-click="clear_filters"
@@ -568,7 +570,7 @@ defmodule MaraithonWeb.AgentsLive do
           :if={@marketplace_error}
           class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900"
         >
-          <p class="font-medium">Agent marketplace needs model configuration.</p>
+          <p class="font-medium">Automation library needs setup attention.</p>
           <p class="mt-1"><%= @marketplace_error %></p>
         </section>
 
@@ -577,7 +579,7 @@ defmodule MaraithonWeb.AgentsLive do
             <div>
               <h2 class="text-base/7 font-semibold text-zinc-950">Library</h2>
               <p class="mt-0.5 text-sm/6 text-zinc-500">
-                Pre-built agents you can install. Each one ships with the right prompts, subscriptions, and tool allowlists.
+                Pre-built automations you can install. Each one ships with the right instructions, source access, and action limits.
               </p>
             </div>
             <span class="text-xs/5 text-zinc-500">
@@ -706,7 +708,7 @@ defmodule MaraithonWeb.AgentsLive do
               <%= for error <- @inspection_errors do %>
                 <div class="text-sm text-amber-900">
                   <p class="font-medium"><%= error.message %></p>
-                  <p class="mt-1 text-xs text-amber-800"><%= error.details %></p>
+                  <p class="mt-1 text-xs text-amber-800"><%= inspection_error_detail(error) %></p>
                 </div>
               <% end %>
             </div>
@@ -748,7 +750,7 @@ defmodule MaraithonWeb.AgentsLive do
                     phx-value-id={@selected_agent.id}
                     phx-value-surface="workspace"
                     phx-disable-with="Deleting..."
-                    data-confirm="Delete this agent and all dependent records?"
+                    data-confirm="Delete this automation and all dependent records?"
                     class="rounded-md px-2 py-1 text-xs/5 font-medium text-rose-700 hover:bg-rose-50"
                   >
                     Delete
@@ -779,7 +781,7 @@ defmodule MaraithonWeb.AgentsLive do
                         </span>
                       </div>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        How should this agent reason, and what tone should it take?
+                        How should this automation reason, and what tone should it take?
                       </p>
                       <div class="mt-4">
                         <.c_textarea
@@ -796,7 +798,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            behavior · subscriptions · tools · budgets · raw config
+                            behavior · subscriptions · actions · budgets · advanced setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -836,13 +838,13 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Tools" for="launch_tools">
+                          <.field label="Actions" for="launch_tools">
                             <.c_input
                               id="launch_tools"
                               type="text"
                               name="launch[tools]"
                               value={@launch["tools"]}
-                              placeholder="read_file,search_files,http_get"
+                              placeholder="read_file,search_files"
                             />
                           </.field>
                         </div>
@@ -858,7 +860,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="LLM Call Budget" for="launch_budget_llm_calls">
+                          <.field label="Reasoning budget" for="launch_budget_llm_calls">
                             <.c_input
                               id="launch_budget_llm_calls"
                               type="number"
@@ -868,7 +870,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Tool Call Budget" for="launch_budget_tool_calls">
+                          <.field label="Action budget" for="launch_budget_tool_calls">
                             <.c_input
                               id="launch_budget_tool_calls"
                               type="number"
@@ -879,7 +881,7 @@ defmodule MaraithonWeb.AgentsLive do
                           </.field>
                         </div>
 
-                        <.field label="Additional config JSON" for="launch_config_json">
+                        <.field label="Advanced setup JSON" for="launch_config_json">
                           <.c_textarea
                             id="launch_config_json"
                             name="launch[config_json]"
@@ -1003,7 +1005,7 @@ defmodule MaraithonWeb.AgentsLive do
                             :if={connected_rows == []}
                             class="px-4 py-8 text-center text-sm/6 text-zinc-500 sm:px-6"
                           >
-                            No connected accounts found for this agent yet.
+                            No connected accounts found for this automation yet.
                           </li>
                         </ul>
                       <% end %>
@@ -1087,9 +1089,9 @@ defmodule MaraithonWeb.AgentsLive do
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
                       <.summary_card title="Subscriptions" value={subscriptions_preview(@selected_agent.config)} />
-                      <.summary_card title="Tools" value={tools_preview(@selected_agent.config)} />
-                      <.summary_card title="Event Count" value={to_string(@inspection.event_count)} />
-                      <.summary_card title="Agent Spend" value={"$#{Float.round(@agent_spend.total_cost, 4)}"} value_class="text-amber-700" />
+                      <.summary_card title="Actions" value={tools_preview(@selected_agent.config)} />
+                      <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
+                      <.summary_card title="Spend" value={"$#{Float.round(@agent_spend.total_cost, 4)}"} value_class="text-amber-700" />
                     </div>
 
                     <%= if @selected_architecture do %>
@@ -1098,18 +1100,18 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <.panel class="bg-amber-50">
-                        <.heading level={3} class="text-base/7 text-amber-950">Spend Summary</.heading>
+                        <.heading level={3} class="text-base/7 text-amber-950">Usage Summary</.heading>
                         <dl class="mt-3 space-y-2 text-sm">
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">LLM Calls</dt>
+                            <dt class="text-amber-700/80">Assistant work</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.llm_calls %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">Input Tokens</dt>
+                            <dt class="text-amber-700/80">Context processed</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.input_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">Output Tokens</dt>
+                            <dt class="text-amber-700/80">Response output</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.output_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3 border-t border-amber-200 pt-2">
@@ -1122,21 +1124,21 @@ defmodule MaraithonWeb.AgentsLive do
                       </.panel>
 
                       <.panel class="bg-zinc-50">
-                        <.heading level={3} class="text-base/7">Config Snapshot</.heading>
+                        <.heading level={3} class="text-base/7">Current Setup</.heading>
                         <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs/5 text-zinc-600"><%= pretty_config(@selected_agent.config) %></pre>
                       </.panel>
                     </div>
 
                     <.panel class="bg-zinc-50">
-                      <.heading level={3} class="text-base/7">Prompt</.heading>
+                      <.heading level={3} class="text-base/7">Instructions</.heading>
                       <p class="mt-3 whitespace-pre-wrap text-sm/6 text-zinc-700"><%= agent_prompt(@selected_agent.config) %></p>
                     </.panel>
 
                     <.panel>
                       <:header>
-                        <.heading level={3} class="text-base/7">Effect Queue</.heading>
+                        <.heading level={3} class="text-base/7">Run Queue</.heading>
                         <.text class="mt-1">
-                          Inspect pending and historical effects for this agent.
+                          Review queued and recent work for this automation.
                         </.text>
                       </:header>
                       <div class="space-y-3">
@@ -1154,22 +1156,22 @@ defmodule MaraithonWeb.AgentsLive do
                           <%= for effect <- @inspection.recent_effects do %>
                             <div class="rounded-lg border border-zinc-950/10 p-3">
                               <div class="flex items-center justify-between gap-3">
-                                <div class="text-sm/6 font-medium text-zinc-950"><%= effect.effect_type %></div>
-                                <span class={effect_status_class(effect.status)}><%= effect.status %></span>
+                                <div class="text-sm/6 font-medium text-zinc-950"><%= work_type_label(effect.effect_type) %></div>
+                                <span class={effect_status_class(effect.status)}><%= humanize_status(effect.status) %></span>
                               </div>
                               <div class="mt-1 text-xs/5 text-zinc-500">
                                 attempts <%= effect.attempts %>
                                 <span class="mx-1">•</span>
                                 updated <%= format_time(effect.updated_at) %>
                               </div>
-                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
+                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
                                 <%= effect_preview(effect) %>
                               </div>
                             </div>
                           <% end %>
 
                           <%= if @inspection.recent_effects == [] do %>
-                            <p class="text-sm/6 text-zinc-500">No effects recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No queued work recorded yet.</p>
                           <% end %>
                         </div>
                       </div>
@@ -1177,9 +1179,9 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <.panel>
                       <:header>
-                        <.heading level={3} class="text-base/7">Scheduled Jobs</.heading>
+                        <.heading level={3} class="text-base/7">Scheduled Work</.heading>
                         <.text class="mt-1">
-                          Wakeups, heartbeats, and checkpoints queued for this agent.
+                          Follow-ups and checkpoints queued for this automation.
                         </.text>
                       </:header>
                       <div class="space-y-3">
@@ -1198,22 +1200,22 @@ defmodule MaraithonWeb.AgentsLive do
                           <%= for job <- @inspection.recent_jobs do %>
                             <div class="rounded-lg border border-zinc-950/10 p-3">
                               <div class="flex items-center justify-between gap-3">
-                                <div class="text-sm/6 font-medium text-zinc-950"><%= job.job_type %></div>
-                                <span class={job_status_class(job.status)}><%= job.status %></span>
+                                <div class="text-sm/6 font-medium text-zinc-950"><%= work_type_label(job.job_type) %></div>
+                                <span class={job_status_class(job.status)}><%= humanize_status(job.status) %></span>
                               </div>
                               <div class="mt-1 text-xs/5 text-zinc-500">
-                                fire at <%= format_datetime(job.fire_at) %>
+                                scheduled <%= format_datetime(job.fire_at) %>
                                 <span class="mx-1">•</span>
                                 attempts <%= job.attempts %>
                               </div>
-                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
-                                <%= payload_preview(job.payload) %>
+                              <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
+                                <%= job_preview(job) %>
                               </div>
                             </div>
                           <% end %>
 
                           <%= if @inspection.recent_jobs == [] do %>
-                            <p class="text-sm/6 text-zinc-500">No scheduled jobs recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No scheduled work recorded yet.</p>
                           <% end %>
                         </div>
                       </div>
@@ -1224,33 +1226,33 @@ defmodule MaraithonWeb.AgentsLive do
                   <div :if={!chief_of_staff_agent?(@selected_agent)} class="space-y-6">
                     <.panel body_class="px-4 py-4">
                       <:header>
-                        <.heading level={3} class="text-base/7">Recent Events</.heading>
+                        <.heading level={3} class="text-base/7">Recent Activity</.heading>
                       </:header>
                       <div class="max-h-96 space-y-2 overflow-y-auto px-4 py-4">
                         <%= for event <- Enum.reverse(@events) do %>
                           <div class="rounded-lg border border-zinc-950/10 p-3 text-sm">
                             <div class="flex items-center justify-between gap-3">
-                              <span class="font-medium text-cyan-700"><%= event.event_type %></span>
+                              <span class="font-medium text-cyan-700"><%= work_type_label(event.event_type) %></span>
                               <span class="text-xs/5 text-zinc-400">#<%= event.sequence_num %></span>
                             </div>
                             <div class="mt-1 text-xs/5 text-zinc-500"><%= format_datetime(event.created_at) %></div>
-                            <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
-                              <%= payload_preview(event.payload) %>
+                            <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
+                              <%= event_preview(event) %>
                             </div>
                           </div>
                         <% end %>
 
                         <%= if @events == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No events yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No updates yet.</p>
                         <% end %>
                       </div>
                     </.panel>
 
                     <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
                       <div class="border-b border-white/10 px-4 py-4">
-                        <h3 class="text-base/7 font-semibold text-white">Agent Logs</h3>
+                        <h3 class="text-base/7 font-semibold text-white">Operational Notes</h3>
                         <p class="mt-1 text-sm/6 text-zinc-400">
-                          Raw log lines scoped to this agent's runtime metadata.
+                          Recent automation notes. Sensitive diagnostic details are hidden from this view.
                         </p>
                       </div>
                       <div class="max-h-[32rem] overflow-y-auto px-4 py-4 font-mono text-[11px] leading-5">
@@ -1261,16 +1263,13 @@ defmodule MaraithonWeb.AgentsLive do
                               <%= log.level %>
                             </span>
                             <div class="min-w-0">
-                              <%= if metadata = log_metadata_preview(log.metadata) do %>
-                                <span class="mr-2 text-zinc-500"><%= metadata %></span>
-                              <% end %>
-                              <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log.message %></span>
+                              <span class="break-words whitespace-pre-wrap text-zinc-100"><%= log_message_preview(log.message) %></span>
                             </div>
                           </div>
                         <% end %>
 
                         <%= if @inspection.recent_logs == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No agent-scoped logs captured yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No automation notes captured yet.</p>
                         <% end %>
                       </div>
                     </section>
@@ -1284,7 +1283,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <div class="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <h3 class="text-base/7 font-semibold text-zinc-950">Advanced diagnostics</h3>
-                          <p class="mt-1 text-sm/6 text-zinc-500">Runtime details for debugging, billing, and support.</p>
+                          <p class="mt-1 text-sm/6 text-zinc-500">Technical details for troubleshooting, billing, and support.</p>
                         </div>
                         <span class="text-sm/6 font-medium text-zinc-500">Show</span>
                       </div>
@@ -1293,7 +1292,7 @@ defmodule MaraithonWeb.AgentsLive do
                     <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
                       <.summary_card title="Last Updated" value={format_datetime(agent_updated_at(@selected_agent))} />
-                      <.summary_card title="Events" value={to_string(@inspection.event_count)} />
+                      <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
                       <.summary_card
                         title="Spend"
                         value={"$#{Float.round(@agent_spend.total_cost, 4)}"}
@@ -1303,7 +1302,7 @@ defmodule MaraithonWeb.AgentsLive do
 
                     <div class="mt-4 rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
                       <div class="text-xs/5 font-medium text-zinc-500">
-                        Agent id
+                        Automation id
                       </div>
                       <p class="mt-2 break-all font-mono text-xs/5 text-zinc-600"><%= @selected_agent.id %></p>
                     </div>
@@ -1355,7 +1354,8 @@ defmodule MaraithonWeb.AgentsLive do
   defp apply_selection(socket, id, panel, _raw_panel) do
     case Agents.get_agent_for_user(id, current_user_id(socket), preload: agent_display_preloads()) do
       nil ->
-        {:sanitize, clear_selection(socket), filters_path(socket), {:error, "Agent not found"}}
+        {:sanitize, clear_selection(socket), filters_path(socket),
+         {:error, "Automation not found"}}
 
       agent ->
         panel = panel || :inspect
@@ -1417,7 +1417,8 @@ defmodule MaraithonWeb.AgentsLive do
          )}
 
       {:error, :not_found} ->
-        {:sanitize, clear_selection(socket), filters_path(socket), {:error, "Agent not found"}}
+        {:sanitize, clear_selection(socket), filters_path(socket),
+         {:error, "Automation not found"}}
     end
   end
 
@@ -1495,7 +1496,7 @@ defmodule MaraithonWeb.AgentsLive do
              ) do
           nil ->
             {:sanitize, clear_selection(socket), filters_path(socket),
-             {:error, "Agent not found"}}
+             {:error, "Automation not found"}}
 
           agent ->
             load_selected_snapshot(socket, agent, socket.assigns.selected_panel || :inspect)
@@ -1697,7 +1698,24 @@ defmodule MaraithonWeb.AgentsLive do
   defp action_surface(_surface), do: :row
 
   defp humanize_status("all"), do: "All statuses"
+  defp humanize_status("running"), do: "Active"
+  defp humanize_status("degraded"), do: "Needs attention"
+  defp humanize_status("stopped"), do: "Paused"
   defp humanize_status(status), do: status |> String.replace("_", " ") |> String.capitalize()
+
+  defp work_type_label("tool_call"), do: "Action"
+  defp work_type_label("llm_call"), do: "Reasoning"
+  defp work_type_label("heartbeat"), do: "Heartbeat"
+  defp work_type_label("inspection_ready"), do: "Inspection ready"
+
+  defp work_type_label(type) when is_binary(type) do
+    type
+    |> String.replace("_", " ")
+    |> String.split()
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
+
+  defp work_type_label(_type), do: "Work"
 
   defp row_class(selected_agent_id, agent_id) when selected_agent_id == agent_id,
     do:
@@ -1740,8 +1758,7 @@ defmodule MaraithonWeb.AgentsLive do
         {library, nil}
 
       {:error, reason} ->
-        {[],
-         "Configured agents require an explicit model and intelligence setting. #{inspect(reason)}"}
+        {[], AgentActionCopy.marketplace_error(reason)}
     end
   end
 
@@ -1770,7 +1787,7 @@ defmodule MaraithonWeb.AgentsLive do
       category: package.category || "Marketplace",
       summary:
         package.summary ||
-          "A package-defined agent assembled from a manifest and markdown skills.",
+          "A package-defined automation assembled from a manifest and markdown skills.",
       requirements: package_requirements(package),
       fields: [],
       simple_fields: [],
@@ -1823,11 +1840,11 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp remove_or_delete_agent(%{agent_package_id: package_id}, id)
        when is_binary(package_id) do
-    {:remove, "Agent removed", Runtime.remove_agent_installation(id)}
+    {:remove, "Automation removed", Runtime.remove_agent_installation(id)}
   end
 
   defp remove_or_delete_agent(_agent, id) do
-    {:delete, "Agent deleted", Runtime.delete_agent(id)}
+    {:delete, "Automation deleted", Runtime.delete_agent(id)}
   end
 
   defp agent_display_preloads do
@@ -1856,17 +1873,6 @@ defmodule MaraithonWeb.AgentsLive do
   end
 
   defp agent_owned_by_current_user?(_socket, _agent_id), do: false
-
-  defp changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, errors} -> "#{field} #{Enum.join(errors, ", ")}" end)
-    |> Enum.join("; ")
-  end
 
   defp empty_spend do
     %{
@@ -2007,9 +2013,6 @@ defmodule MaraithonWeb.AgentsLive do
     end)
   end
 
-  defp schedule_error_message(reason) when is_binary(reason), do: reason
-  defp schedule_error_message(reason), do: reason |> inspect() |> String.replace("_", " ")
-
   defp parse_integer(value, _default) when is_integer(value), do: value
 
   defp parse_integer(value, default) when is_binary(value) do
@@ -2052,12 +2055,37 @@ defmodule MaraithonWeb.AgentsLive do
     do: config["prompt"] || AgentBuilder.default_launch_params()["prompt"]
 
   defp pretty_config(config) when is_map(config) do
-    Jason.encode!(config, pretty: true)
+    config
+    |> display_config()
+    |> Jason.encode!(pretty: true)
   rescue
     _ -> inspect(config, pretty: true, limit: :infinity)
   end
 
   defp pretty_config(config), do: inspect(config, pretty: true, limit: :infinity)
+
+  defp display_config(config) when is_map(config) do
+    config
+    |> Enum.map(fn {key, value} -> {display_config_key(key), display_config(value)} end)
+    |> Map.new()
+  end
+
+  defp display_config(value) when is_list(value), do: Enum.map(value, &display_config/1)
+  defp display_config(value), do: value
+
+  defp display_config_key("tools"), do: "actions"
+  defp display_config_key("tool_calls"), do: "action_runs"
+  defp display_config_key("budget_tool_calls"), do: "action_budget"
+  defp display_config_key("tool_allowlist"), do: "action_allowlist"
+  defp display_config_key("llm_calls"), do: "reasoning_runs"
+  defp display_config_key("budget_llm_calls"), do: "reasoning_budget"
+  defp display_config_key(:tools), do: "actions"
+  defp display_config_key(:tool_calls), do: "action_runs"
+  defp display_config_key(:budget_tool_calls), do: "action_budget"
+  defp display_config_key(:tool_allowlist), do: "action_allowlist"
+  defp display_config_key(:llm_calls), do: "reasoning_runs"
+  defp display_config_key(:budget_llm_calls), do: "reasoning_budget"
+  defp display_config_key(key), do: key
 
   defp subscriptions_preview(config) do
     case config["subscribe"] || [] do
@@ -2068,7 +2096,7 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp tools_preview(config) do
     case config["tools"] || [] do
-      [] -> "No tools"
+      [] -> "No actions"
       values -> values |> Enum.join(", ") |> truncate(70)
     end
   end
@@ -2083,7 +2111,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp agent_job_summary(agent) do
     agent
     |> behavior_spec()
-    |> Map.get(:summary, "Runs the saved agent behavior for this operator.")
+    |> Map.get(:summary, "Runs the saved automation behavior for this operator.")
   end
 
   defp agent_connector_requirements(agent) do
@@ -2172,7 +2200,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp behavior_spec_base("manifest_agent") do
     %{
       id: "manifest_agent",
-      label: "Manifest agent",
+      label: "Manifest automation",
       category: "Marketplace",
       summary: "Runs from an installed package manifest and markdown skills.",
       requirements: [],
@@ -2295,13 +2323,12 @@ defmodule MaraithonWeb.AgentsLive do
   defp telegram_account_row(provider, account) do
     metadata = account.metadata || %{}
     username = presence(metadata["username"] || metadata[:username])
-    chat_id = presence(account.external_account_id || metadata["chat_id"] || metadata[:chat_id])
 
     %{
       logo_provider: "telegram",
       app: Map.get(provider, :label) || "Telegram",
-      account: if(username, do: "@#{username}", else: chat_id || "Telegram chat"),
-      note: chat_id && "Chat ID #{chat_id}",
+      account: if(username, do: "@#{username}", else: "Telegram chat"),
+      note: "Telegram delivery linked",
       access: "Delivery to Telegram",
       status: account.status,
       updated_at: account.updated_at
@@ -2470,17 +2497,74 @@ defmodule MaraithonWeb.AgentsLive do
   defp connector_logo_src("telegram"), do: "/images/connector-logos/telegram.png"
   defp connector_logo_src(_provider), do: "/favicon.ico"
 
+  defp inspection_error_detail(%{details: details}) do
+    safe_product_detail(details, "Refresh this view in a moment.")
+  end
+
+  defp inspection_error_detail(_error), do: "Refresh this view in a moment."
+
   defp effect_preview(effect) do
     cond do
       is_binary(effect.error) and effect.error != "" ->
-        effect.error
+        run_error_label(effect.error)
 
-      is_map(effect.result) and effect.result != %{} ->
-        payload_preview(effect.result)
+      effect.status == "completed" ->
+        completed_effect_preview(effect)
+
+      effect.status == "claimed" ->
+        "In progress."
+
+      effect.status == "pending" ->
+        pending_effect_preview(effect)
 
       true ->
-        payload_preview(effect.params)
+        "Status will update shortly."
     end
+  end
+
+  defp completed_effect_preview(%{effect_type: "tool_call", params: params}) do
+    "Completed #{action_name(params)}."
+  end
+
+  defp completed_effect_preview(%{effect_type: "llm_call"}), do: "Reasoning step completed."
+  defp completed_effect_preview(_effect), do: "Finished successfully."
+
+  defp pending_effect_preview(%{effect_type: "tool_call", params: params}) do
+    "Waiting to run #{action_name(params)}."
+  end
+
+  defp pending_effect_preview(%{effect_type: "llm_call"}),
+    do: "Waiting for the next reasoning step."
+
+  defp pending_effect_preview(_effect), do: "Waiting to run."
+
+  defp action_name(params) when is_map(params) do
+    case params["tool"] || params[:tool] do
+      tool when is_binary(tool) and tool != "" -> work_type_label(tool)
+      _ -> "an action"
+    end
+  end
+
+  defp action_name(_params), do: "an action"
+
+  defp job_preview(%{job_type: "heartbeat"}), do: "Keeps the automation available."
+  defp job_preview(%{job_type: "checkpoint"}), do: "Saves the automation's latest progress."
+  defp job_preview(%{job_type: "wakeup"}), do: "Next scheduled check-in."
+  defp job_preview(_job), do: "Scheduled follow-up."
+
+  defp event_preview(%{payload: payload}) when is_map(payload) do
+    payload
+    |> Map.get(:message, Map.get(payload, "message"))
+    |> safe_product_detail("Recorded automation activity.")
+  end
+
+  defp event_preview(_event), do: "Recorded automation activity."
+
+  defp run_error_label(error) do
+    error
+    |> then(&RunErrorCopy.runtime_failure(%{source: "effect", details: &1}))
+    |> String.replace("Effect", "Action")
+    |> String.replace("Operation", "Action")
   end
 
   defp effect_status_class("failed"),
@@ -2511,15 +2595,40 @@ defmodule MaraithonWeb.AgentsLive do
   defp job_status_class(_status),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  defp payload_preview(payload) when is_map(payload) do
-    payload
-    |> Jason.encode!()
-    |> truncate(220)
-  rescue
-    _ -> inspect(payload, limit: 8)
+  defp log_message_preview(message) when is_binary(message) do
+    safe_product_detail(message, "Diagnostic details are hidden from this view.")
   end
 
-  defp payload_preview(payload), do: payload |> inspect(limit: 8) |> truncate(220)
+  defp log_message_preview(_message), do: "Diagnostic details are hidden from this view."
+
+  defp safe_product_detail(value, fallback) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" -> fallback
+      technical_detail?(trimmed) -> fallback
+      true -> truncate(trimmed, 180)
+    end
+  end
+
+  defp safe_product_detail(_value, fallback), do: fallback
+
+  defp technical_detail?(value) do
+    lower = String.downcase(value)
+
+    String.contains?(lower, [
+      "dbconnection",
+      "ecto.",
+      "http_status",
+      "internal",
+      "nsurlerrordomain",
+      "oauth",
+      "postgrex",
+      "stacktrace",
+      "token=",
+      "traceback"
+    ]) or String.contains?(value, ["{", "}", "=>", "#PID<"])
+  end
 
   defp truncate(value, max) when is_binary(value) do
     if String.length(value) > max do
@@ -2564,19 +2673,7 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp log_level_class(_level), do: "text-zinc-300"
 
-  defp log_metadata_preview(metadata) when metadata in [%{}, nil], do: nil
-
-  defp log_metadata_preview(metadata) when is_map(metadata) do
-    metadata
-    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
-    |> Enum.sort_by(fn {key, _value} -> key end)
-    |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
-    |> truncate(120)
-  end
-
-  defp log_metadata_preview(_metadata), do: nil
-
-  defp format_time(nil), do: "N/A"
+  defp format_time(nil), do: "No timestamp"
 
   defp format_time(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
@@ -2588,7 +2685,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp format_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_time(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
 
-  defp format_datetime(nil), do: "N/A"
+  defp format_datetime(nil), do: "No timestamp"
 
   defp format_datetime(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do

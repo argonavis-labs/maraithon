@@ -159,6 +159,51 @@ defmodule Maraithon.LLM.OpenAIProviderTest do
                })
     end
 
+    test "supports minimal reasoning effort per request" do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        openai_api_key: "test_api_key",
+        openai_model: "gpt-5.4",
+        openai_reasoning_effort: "high"
+      )
+
+      Application.put_env(:maraithon, :openai,
+        base_url: "http://localhost:#{bypass.port}/v1/responses"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/v1/responses", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        params = Jason.decode!(body)
+
+        assert params["reasoning"] == %{"effort" => "minimal"}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "status" => "completed",
+            "model" => "gpt-5.4-2026-03-05",
+            "output" => [
+              %{
+                "type" => "message",
+                "role" => "assistant",
+                "content" => [%{"type" => "output_text", "text" => "ok"}]
+              }
+            ],
+            "usage" => %{"input_tokens" => 1, "output_tokens" => 1, "total_tokens" => 2}
+          })
+        )
+      end)
+
+      assert {:ok, _result} =
+               OpenAIProvider.complete(%{
+                 "messages" => [%{"role" => "user", "content" => "Hello"}],
+                 "reasoning_effort" => "minimal"
+               })
+    end
+
     test "stream_complete invokes the callback per delta and returns full response" do
       bypass = Bypass.open()
 

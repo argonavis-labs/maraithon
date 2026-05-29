@@ -6,6 +6,7 @@ defmodule MaraithonWeb.MemoriesLive do
   alias Maraithon.Memory
   alias Maraithon.Memory.{Event, Item}
   alias Maraithon.Repo
+  alias MaraithonWeb.OperationFailureCopy
 
   @statuses ~w(active superseded archived rejected all)
   @kinds ~w(all fact preference relevance_feedback instruction relationship project workflow correction system_note)
@@ -73,7 +74,7 @@ defmodule MaraithonWeb.MemoriesLive do
          |> refresh_memories(nil)}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to archive memory: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.memory(:archive, reason))}
     end
   end
 
@@ -188,9 +189,6 @@ defmodule MaraithonWeb.MemoriesLive do
                 </.table_cell>
                 <.table_cell>
                   <.badge color={status_color(memory.status)}><%= label(memory.status) %></.badge>
-                  <div class="mt-1 text-xs/5 text-zinc-500">
-                    <%= confidence_label(memory.confidence) %>
-                  </div>
                 </.table_cell>
                 <.table_cell class="text-right">
                   <.button
@@ -258,8 +256,6 @@ defmodule MaraithonWeb.MemoriesLive do
                 <.description_list class="mt-2">
                   <.description_term>Importance</.description_term>
                   <.description_details><%= @selected_memory.importance %></.description_details>
-                  <.description_term>Confidence</.description_term>
-                  <.description_details><%= confidence_label(@selected_memory.confidence) %></.description_details>
                   <.description_term>Last used</.description_term>
                   <.description_details><%= format_datetime(@selected_memory.last_used_at) %></.description_details>
                   <.description_term>Decay</.description_term>
@@ -429,12 +425,6 @@ defmodule MaraithonWeb.MemoriesLive do
       "" -> item.source || "manual"
       value -> value
     end
-  end
-
-  defp confidence_label(nil), do: "0%"
-
-  defp confidence_label(value) when is_float(value) or is_integer(value) do
-    "#{round(value * 100)}%"
   end
 
   defp format_datetime(nil), do: "Never"

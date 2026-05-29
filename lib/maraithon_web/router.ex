@@ -150,7 +150,9 @@ defmodule MaraithonWeb.Router do
     get "/chat/threads", MobileChatController, :index
     post "/chat/threads", MobileChatController, :create
     get "/chat/threads/:id", MobileChatController, :show
+    patch "/chat/threads/:id", MobileChatController, :update
     post "/chat/threads/:thread_id/messages", MobileChatController, :create_message
+    delete "/chat/threads/:thread_id/messages/:message_id", MobileChatController, :delete_message
     get "/chat/runs/:id", MobileChatController, :show_run
     post "/chat/prepared-actions/:id/decision", MobileChatController, :decide_prepared_action
   end

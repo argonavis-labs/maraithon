@@ -5,6 +5,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Crm
+  alias Maraithon.Memory
 
   @user_email "people-live@example.com"
 
@@ -12,7 +13,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
-  test "renders CRM people for the signed-in user and highlights the People nav", %{conn: conn} do
+  test "renders people for the signed-in user and highlights the People nav", %{conn: conn} do
     {:ok, _person} =
       Crm.upsert_person(@user_email, %{
         "display_name" => "Charlie Smith",
@@ -34,7 +35,13 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Charlie Smith"
     assert html =~ "Runner teammate"
     assert html =~ "Email: charlie@example.com"
-    assert html =~ "Strength 72"
+    assert html =~ "Relationship health"
+    assert html =~ "Strong relationship"
+    assert html =~ "Warm rapport"
+    assert html =~ "No activity yet"
+    refute html =~ "Never"
+    refute html =~ "Strength 72"
+    refute html =~ "Affinity 61"
     assert html =~ "Select duplicates to merge"
     refute has_element?(view, "#person-detail")
     refute has_element?(view, "#people-bulk-actions")
@@ -62,6 +69,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
     html = render(view)
     assert html =~ "Dana Lee"
     refute html =~ "Charlie Smith"
+    assert html =~ "Relationship not set"
+    refute html =~ "Unknown"
 
     view
     |> element("button[phx-click=clear_filters]", "Reset")
@@ -111,6 +120,133 @@ defmodule MaraithonWeb.PeopleLiveTest do
     html = render(view)
     assert html =~ "Family event organizer"
     assert html =~ "Frequent"
+  end
+
+  test "onboards a family member with handling preferences", %{conn: conn} do
+    {:ok, view, html} = live(conn, "/operator/people")
+
+    assert html =~ "Family context"
+    assert html =~ "Needs setup"
+
+    view
+    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")
+    |> render_click()
+
+    assert has_element?(view, "#family-member-onboarding-form")
+
+    view
+    |> form("#family-member-onboarding-form",
+      family_member: %{
+        "display_name" => "Jack Fenwick",
+        "preset" => "child",
+        "communication_frequency" => "weekly",
+        "preferred_communication_method" => "telegram",
+        "todo_policy" => "family_logistics_only",
+        "push_policy" => "time_sensitive_only",
+        "contact_hint" => "jack@example.com",
+        "notes" => "Jack is Kent's son."
+      }
+    )
+    |> render_submit()
+
+    [jack] = Crm.list_people(@user_email, query: "Jack", limit: 5)
+
+    assert jack.relationship == "Child"
+    assert jack.communication_frequency == "weekly"
+    assert jack.preferred_communication_method == "telegram"
+    assert jack.contact_details["emails"] == ["jack@example.com"]
+    assert jack.notes == "Jack is Kent's son."
+    assert jack.metadata["relationship_domain"] == "family"
+    assert jack.metadata["relationship_preset"] == "child"
+    assert jack.metadata["family_member"] == true
+    assert jack.metadata["family_role"] == "child"
+    assert jack.metadata["dependent_context"] == true
+    assert jack.metadata["sensitivity"] == "child_family"
+    assert jack.metadata["relationship_context_source"] == "people_onboarding"
+    assert jack.metadata["todo_policy"] == "family_logistics_only"
+    assert jack.metadata["push_policy"] == "time_sensitive_only"
+
+    assert [%{id: jack_id}] = Crm.list_family_context(@user_email, limit: 5)
+    assert jack_id == jack.id
+
+    assert Enum.any?(Memory.list_items(@user_email, tag: "people_onboarding"), fn memory ->
+             memory.source_ref_id == jack.id and memory.source == "people_onboarding"
+           end)
+
+    html = render(view)
+    assert html =~ "Added Jack Fenwick to family context."
+    assert html =~ "1 family member"
+    assert html =~ "Family member"
+    assert html =~ "Child"
+    assert html =~ "Logistics only"
+    assert html =~ "Time-sensitive only"
+  end
+
+  test "onboards a family proxy linked to a family member", %{conn: conn} do
+    {:ok, jack} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Jack Fenwick",
+        "relationship" => "Child",
+        "metadata" => %{
+          "relationship_domain" => "family",
+          "relationship_preset" => "child",
+          "family_member" => true,
+          "family_role" => "child"
+        }
+      })
+
+    {:ok, view, _html} = live(conn, "/operator/people")
+
+    view
+    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='proxy']")
+    |> render_click()
+
+    assert has_element?(view, "#family-proxy-onboarding-form")
+
+    view
+    |> form("#family-proxy-onboarding-form",
+      family_proxy: %{
+        "display_name" => "Northview School Office",
+        "preset" => "school_contact",
+        "proxy_for_person_id" => jack.id,
+        "preferred_communication_method" => "email",
+        "todo_policy" => "family_logistics_only",
+        "push_policy" => "digest_only",
+        "contact_hint" => "office@northview.example",
+        "notes" => "School logistics for Jack."
+      }
+    )
+    |> render_submit()
+
+    [school] = Crm.list_people(@user_email, query: "Northview", limit: 5)
+
+    assert school.relationship == "School or child-care contact"
+    assert school.preferred_communication_method == "email"
+    assert school.metadata["relationship_domain"] == "family"
+    assert school.metadata["relationship_preset"] == "school_contact"
+    assert school.metadata["family_proxy"] == true
+    assert school.metadata["proxy_role"] == "school_contact"
+    assert school.metadata["proxy_for_person_id"] == jack.id
+    assert school.metadata["default_todo_policy"] == "family_logistics"
+    assert school.metadata["todo_policy"] == "family_logistics_only"
+    assert school.metadata["push_policy"] == "digest_only"
+
+    family_context_ids =
+      @user_email
+      |> Crm.list_family_context(limit: 10)
+      |> Enum.map(& &1.id)
+
+    assert jack.id in family_context_ids
+    assert school.id in family_context_ids
+
+    html = render(view)
+    assert html =~ "Added Northview School Office as family-related context."
+    assert html =~ "1 family member"
+    assert html =~ "1 family contact"
+    assert html =~ "Family contact"
+    assert html =~ "School / child-care"
+    assert html =~ "For Jack Fenwick"
+    assert html =~ "Digest only"
   end
 
   test "opens detail panel from row click", %{conn: conn} do

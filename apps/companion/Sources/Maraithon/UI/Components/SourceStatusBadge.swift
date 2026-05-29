@@ -28,7 +28,7 @@ struct SourceStatusBadge: View {
             case .syncing: return "arrow.triangle.2.circlepath"
             case .paused: return "pause.circle"
             case .needsAttention: return "exclamationmark.triangle.fill"
-            case .disconnected: return "circle"
+            case .disconnected: return "xmark.circle.fill"
             case .error: return "xmark.octagon.fill"
             }
         }
@@ -36,10 +36,10 @@ struct SourceStatusBadge: View {
         var tone: StatusTone {
             switch self {
             case .connected: return .good
-            case .syncing: return .neutral
+            case .syncing: return .good
             case .paused: return .muted
             case .needsAttention: return .attention
-            case .disconnected: return .muted
+            case .disconnected: return .error
             case .error: return .error
             }
         }
@@ -50,15 +50,15 @@ struct SourceStatusBadge: View {
             case .syncing: return "Syncing"
             case .paused: return "Paused"
             case .needsAttention: return "Needs attention"
-            case .disconnected: return "Disconnected"
+            case .disconnected: return "Not syncing"
             case .error: return "Error"
             }
         }
 
         var subtitle: String? {
             switch self {
-            case .needsAttention(let reason): return reason
-            case .error(let reason): return reason
+            case .needsAttention(let reason): return SourceIssueCopy.status(reason)
+            case .error(let reason): return SourceIssueCopy.status(reason)
             default: return nil
             }
         }
@@ -135,7 +135,7 @@ struct SourceStatusBadge: View {
         SourceStatusBadge(state: .paused)
         SourceStatusBadge(state: .needsAttention("Full Disk Access required"))
         SourceStatusBadge(state: .disconnected)
-        SourceStatusBadge(state: .error("401 from server"))
+        SourceStatusBadge(state: .error("clientError(status: 401, body: nil)"))
     }
     .padding(Tokens.Spacing.large)
 }
@@ -145,7 +145,7 @@ struct SourceStatusBadge: View {
         SourceStatusBadge(state: .connected, variant: .prominent)
         SourceStatusBadge(state: .syncing, variant: .prominent)
         SourceStatusBadge(state: .needsAttention("Full Disk Access required"), variant: .prominent)
-        SourceStatusBadge(state: .error("Unable to reach maraithon.fly.dev"), variant: .prominent)
+        SourceStatusBadge(state: .error("NSURLErrorDomain Code=-1009"), variant: .prominent)
     }
     .padding(Tokens.Spacing.large)
     .frame(width: 420)

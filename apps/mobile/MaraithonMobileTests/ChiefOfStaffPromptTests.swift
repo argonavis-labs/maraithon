@@ -11,7 +11,12 @@ struct ChiefOfStaffPromptTests {
         #expect(ids.count == prompts.count)
         #expect(prompts.count >= ChiefOfStaffPrompt.today.count)
         #expect(prompts.allSatisfy { !$0.title.isEmpty && !$0.message.isEmpty })
-        #expect(prompts.contains { $0.message.localizedCaseInsensitiveContains("todo") })
+        #expect(prompts.contains { $0.message.localizedCaseInsensitiveContains("work item") })
+        #expect(prompts.allSatisfy { !$0.title.localizedCaseInsensitiveContains("todo") })
+        #expect(prompts.allSatisfy { !$0.subtitle.localizedCaseInsensitiveContains("todo") })
+        #expect(prompts.allSatisfy { !$0.message.localizedCaseInsensitiveContains("todo") })
+        #expect(prompts.allSatisfy { !$0.subtitle.localizedCaseInsensitiveContains("overdue") })
+        #expect(prompts.allSatisfy { !$0.message.localizedCaseInsensitiveContains("overdue") })
         #expect(prompts.contains { $0.message.localizedCaseInsensitiveContains("people") })
     }
 }

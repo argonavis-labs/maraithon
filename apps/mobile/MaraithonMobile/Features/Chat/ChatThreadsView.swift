@@ -21,9 +21,17 @@ struct ChatThreadsView: View {
         NavigationStack(path: $path) {
             List {
                 if let errorMessage {
-                    Text(errorMessage)
-                        .font(.footnote.weight(.medium))
-                        .foregroundStyle(.red)
+                    Section {
+                        SyncIssueBanner(
+                            title: ChatThreadsCopy.refreshWarningTitle,
+                            message: errorMessage,
+                            buttonTitle: ChatThreadsCopy.refreshButtonTitle,
+                            retry: { Task { await refreshThreads() } },
+                            dismiss: { self.errorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
                 }
 
                 if filteredThreads.isEmpty {
@@ -31,9 +39,9 @@ struct ChatThreadsView: View {
                         emptyChatState
                     } else {
                         ContentUnavailableView(
-                            "No Matching Chats",
+                            ChatThreadsCopy.noMatchingChatsTitle,
                             systemImage: "bubble.left.and.bubble.right",
-                            description: Text("Try a different search.")
+                            description: Text(ChatThreadsCopy.noMatchingChatsDescription)
                         )
                     }
                 } else {
@@ -70,9 +78,9 @@ struct ChatThreadsView: View {
                     }
                 } else {
                     ContentUnavailableView(
-                        "Chat Deleted",
+                        ChatThreadsCopy.deletedChatTitle,
                         systemImage: "bubble.left.and.exclamationmark.bubble.right",
-                        description: Text("This conversation is no longer available.")
+                        description: Text(ChatThreadsCopy.deletedChatDescription)
                     )
                 }
             }
@@ -86,7 +94,7 @@ struct ChatThreadsView: View {
                     } label: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .accessibilityLabel("New Chat")
+                    .accessibilityLabel(ChatThreadsCopy.newChatButtonTitle)
                 }
             }
         }
@@ -101,22 +109,22 @@ struct ChatThreadsView: View {
             errorMessage = nil
         } catch ChatSyncError.missingSession {
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
     }
 
     private var emptyChatState: some View {
         VStack(spacing: 18) {
             ContentUnavailableView {
-                Label("No Chats", systemImage: "bubble.left.and.bubble.right")
+                Label(ChatThreadsCopy.emptyChatsTitle, systemImage: "bubble.left.and.bubble.right")
             } description: {
-                Text("Ask Maraithon to plan the day, draft a follow-up, or capture a next action.")
+                Text(ChatThreadsCopy.emptyChatsDescription)
             }
 
             Button {
                 createThread()
             } label: {
-                Label("New Chat", systemImage: "square.and.pencil")
+                Label(ChatThreadsCopy.newChatButtonTitle, systemImage: "square.and.pencil")
                     .font(.headline)
             }
             .appProminentGlassActionStyle()
@@ -135,7 +143,7 @@ struct ChatThreadsView: View {
     }
 
     private func createThread(initialPrompt: String? = nil, shouldAutoSend: Bool = false) {
-        let thread = ChatThread(title: "New conversation")
+        let thread = ChatThread(title: ChatThreadNaming.defaultTitle)
         modelContext.insert(thread)
         try? modelContext.save()
         if let initialPrompt {
@@ -152,6 +160,30 @@ struct ChatThreadsView: View {
             modelContext.delete(filteredThreads[offset])
         }
         try? modelContext.save()
+    }
+}
+
+enum ChatThreadsCopy {
+    static let refreshWarningTitle = "Chat list may be out of date"
+    static let refreshButtonTitle = "Refresh"
+    static let emptyChatsTitle = "No chats yet"
+    static let emptyChatsDescription = "Start a chat to plan the day, draft a follow-up, or turn loose notes into next actions."
+    static let noMatchingChatsTitle = "No chats match"
+    static let noMatchingChatsDescription = "Try another name or message."
+    static let deletedChatTitle = "Chat unavailable"
+    static let deletedChatDescription = "This conversation was deleted or is no longer on this device."
+    static let newChatButtonTitle = "New chat"
+
+    static var emptyStateLabels: [String] {
+        [
+            emptyChatsTitle,
+            emptyChatsDescription,
+            noMatchingChatsTitle,
+            noMatchingChatsDescription,
+            deletedChatTitle,
+            deletedChatDescription,
+            newChatButtonTitle
+        ]
     }
 }
 

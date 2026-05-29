@@ -26,6 +26,7 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
+  alias Maraithon.Todos.PublicPayload
 
   require Logger
 
@@ -298,7 +299,7 @@ defmodule Maraithon.TelegramAssistant do
           "turn_kind" => Keyword.get(opts, :turn_kind, "assistant_reply"),
           "origin_type" => Keyword.get(opts, :origin_type, "chat"),
           "origin_id" => Keyword.get(opts, :origin_id),
-          "structured_data" => Keyword.get(opts, :structured_data, %{})
+          "structured_data" => sanitize_structured_data(Keyword.get(opts, :structured_data, %{}))
         }
 
         case TelegramConversations.append_turn(conversation, turn_attrs) do
@@ -337,6 +338,21 @@ defmodule Maraithon.TelegramAssistant do
 
   def deliver_proactive_check_in(user_id, opts \\ []),
     do: Proactive.deliver_check_in(user_id, opts)
+
+  defp sanitize_structured_data(structured_data) when is_map(structured_data) do
+    structured_data
+    |> sanitize_linked_todo("linked_todo")
+    |> sanitize_linked_todo(:linked_todo)
+  end
+
+  defp sanitize_structured_data(_structured_data), do: %{}
+
+  defp sanitize_linked_todo(structured_data, key) do
+    case Map.fetch(structured_data, key) do
+      {:ok, linked_todo} -> Map.put(structured_data, key, PublicPayload.todo(linked_todo))
+      :error -> structured_data
+    end
+  end
 
   def confirmation_window_seconds do
     Keyword.get(config(), :confirmation_window_seconds, @default_confirmation_window_seconds)
@@ -508,7 +524,7 @@ defmodule Maraithon.TelegramAssistant do
               send_turn(
                 conversation,
                 chat_id,
-                "I couldn't complete that yet: #{normalize_error(reason)}",
+                prepared_action_failure_text(updated_action, reason),
                 reply_to_message_id: reply_to_message_id,
                 turn_kind: "action_result",
                 origin_type: "prepared_action",
@@ -627,7 +643,94 @@ defmodule Maraithon.TelegramAssistant do
         value
 
       _ ->
-        "Completed #{prepared_action.action_type}."
+        "Completed #{prepared_action_label(prepared_action.action_type)}."
+    end
+  end
+
+  defp prepared_action_failure_text(%PreparedAction{} = prepared_action, reason) do
+    "I could not complete #{prepared_action_label(prepared_action.action_type)} yet. " <>
+      prepared_action_failure_detail(reason)
+  end
+
+  defp prepared_action_label("gmail_send"), do: "the Gmail message"
+  defp prepared_action_label("slack_post"), do: "the Slack message"
+  defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
+  defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
+  defp prepared_action_label("linear_update_issue_state"), do: "the Linear issue status update"
+  defp prepared_action_label("notaui_complete_task"), do: "the Notaui task"
+  defp prepared_action_label("notaui_update_task"), do: "the Notaui task update"
+  defp prepared_action_label("agent_create"), do: "the agent creation"
+  defp prepared_action_label("agent_update"), do: "the agent update"
+  defp prepared_action_label("agent_delete"), do: "the agent removal"
+  defp prepared_action_label("project_create"), do: "the project creation"
+  defp prepared_action_label("project_update"), do: "the project update"
+  defp prepared_action_label(_action_type), do: "that action"
+
+  defp prepared_action_failure_detail(:confirmation_expired),
+    do: "The confirmation expired before it could run."
+
+  defp prepared_action_failure_detail(:project_not_found),
+    do: "The project it referenced is no longer available."
+
+  defp prepared_action_failure_detail(:agent_not_found),
+    do: "The agent it referenced is no longer available."
+
+  defp prepared_action_failure_detail(:gmail_not_connected),
+    do: "Gmail is not connected."
+
+  defp prepared_action_failure_detail(:slack_not_connected),
+    do: "Slack is not connected."
+
+  defp prepared_action_failure_detail(:linear_not_connected),
+    do: "Linear is not connected."
+
+  defp prepared_action_failure_detail(:linear_reauth_required),
+    do: "Linear needs to be reconnected before Maraithon can use it."
+
+  defp prepared_action_failure_detail(reason) when is_binary(reason) do
+    reason
+    |> String.downcase()
+    |> prepared_action_failure_detail_from_text()
+  end
+
+  defp prepared_action_failure_detail(reason) do
+    reason
+    |> normalize_error()
+    |> String.downcase()
+    |> prepared_action_failure_detail_from_text()
+  end
+
+  defp prepared_action_failure_detail_from_text(reason) do
+    cond do
+      String.contains?(reason, "confirmation_expired") ->
+        "The confirmation expired before it could run."
+
+      String.contains?(reason, "project_not_found") ->
+        "The project it referenced is no longer available."
+
+      String.contains?(reason, "agent_not_found") ->
+        "The agent it referenced is no longer available."
+
+      String.contains?(reason, "invalid_user_context") ->
+        "Sign in again so Maraithon can confirm the account."
+
+      String.contains?(reason, "reauth") ->
+        "The required account needs to be reconnected before Maraithon can use it."
+
+      String.contains?(reason, "gmail") or String.contains?(reason, "google_account") ->
+        "Gmail is not connected."
+
+      String.contains?(reason, "slack") ->
+        "Slack is not connected."
+
+      String.contains?(reason, "linear") ->
+        "Linear is not connected."
+
+      String.contains?(reason, "not_connected") ->
+        "The required account is not connected."
+
+      true ->
+        "Review the action before running it again."
     end
   end
 

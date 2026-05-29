@@ -10,6 +10,6 @@ defmodule MaraithonWeb.SettingsHTML do
   def setting_badge_class(false),
     do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
-  def setting_badge_label(true), do: "present"
-  def setting_badge_label(false), do: "missing"
+  def setting_badge_label(true), do: "ready"
+  def setting_badge_label(false), do: "needs setup"
 end

@@ -14,10 +14,10 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @primary_nav [
     %{label: "Dashboard", path: "/dashboard", icon: :home},
-    %{label: "Todos", path: "/todos", icon: :todos},
+    %{label: "Work", path: "/todos", icon: :todos},
     %{label: "Insights", path: "/insights", icon: :insights},
-    %{label: "Agents", path: "/agents", icon: :agents},
-    %{label: "Connectors", path: "/connectors", icon: :connectors},
+    %{label: "Automations", path: "/agents", icon: :agents},
+    %{label: "Apps", path: "/connectors", icon: :connectors},
     %{label: "People", path: "/operator/people", icon: :people},
     %{label: "Memory", path: "/operator/memories", icon: :memory},
     %{label: "How it works", path: "/how-it-works", icon: :book}
@@ -25,9 +25,9 @@ defmodule MaraithonWeb.AdminNavigation do
 
   @mobile_nav [
     %{label: "Home", path: "/dashboard", icon: :home},
-    %{label: "Todos", path: "/todos", icon: :todos},
+    %{label: "Work", path: "/todos", icon: :todos},
     %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Agents", path: "/agents", icon: :agents}
+    %{label: "Automations", path: "/agents", icon: :agents}
   ]
 
   @admin_nav [
@@ -173,7 +173,7 @@ defmodule MaraithonWeb.AdminNavigation do
     ~H"""
     <.sidebar class="border-r border-zinc-950/5">
       <.sidebar_header>
-        <.sidebar_brand title="Maraithon" subtitle="Agent runtime" navigate="/dashboard" />
+        <.sidebar_brand title="Maraithon" subtitle="Executive workspace" navigate="/dashboard" />
         <button
           type="button"
           data-command-palette-trigger="true"

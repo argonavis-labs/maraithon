@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   import Ecto.Query
 
   alias Maraithon.Agents
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
   alias Maraithon.ContextCache
@@ -20,6 +21,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
+  alias Maraithon.Redaction
   alias Maraithon.Repo
   alias Maraithon.SourceFreshness
   alias Maraithon.TelegramConversations
@@ -366,12 +368,17 @@ defmodule Maraithon.TelegramAssistant.Context do
     try do
       {:ok, key, fun.(), System.monotonic_time(:millisecond) - started}
     rescue
-      exception ->
-        {:error, key, Exception.message(exception), System.monotonic_time(:millisecond) - started}
+      _exception ->
+        {:error, key, :temporary_failure, System.monotonic_time(:millisecond) - started}
     catch
-      kind, reason ->
-        {:error, key, "#{kind}: #{inspect(reason)}",
-         System.monotonic_time(:millisecond) - started}
+      :exit, :timeout ->
+        {:error, key, :timeout, System.monotonic_time(:millisecond) - started}
+
+      :exit, _reason ->
+        {:error, key, :interrupted, System.monotonic_time(:millisecond) - started}
+
+      _kind, _reason ->
+        {:error, key, :temporary_failure, System.monotonic_time(:millisecond) - started}
     end
   end
 
@@ -385,7 +392,7 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp maybe_note_slow_fetch(failures, key, elapsed_ms, timeout_ms) do
     if timeout_ms > 0 and elapsed_ms > div(timeout_ms * 3, 4) do
-      [context_fetch_failure(key, "slow_fetch", elapsed_ms) | failures]
+      [context_fetch_failure(key, :slow_fetch, elapsed_ms) | failures]
     else
       failures
     end
@@ -417,9 +424,19 @@ defmodule Maraithon.TelegramAssistant.Context do
     )
   end
 
-  defp normalize_fetch_reason(:timeout), do: "timeout"
-  defp normalize_fetch_reason(reason) when is_binary(reason), do: reason
-  defp normalize_fetch_reason(reason), do: inspect(reason)
+  defp normalize_fetch_reason(:timeout), do: "timed out"
+  defp normalize_fetch_reason(:slow_fetch), do: "slow response"
+  defp normalize_fetch_reason(:interrupted), do: "interrupted"
+  defp normalize_fetch_reason(:temporary_failure), do: "temporarily unavailable"
+  defp normalize_fetch_reason("timeout"), do: "timed out"
+  defp normalize_fetch_reason("slow_fetch"), do: "slow response"
+  defp normalize_fetch_reason("interrupted"), do: "interrupted"
+  defp normalize_fetch_reason("timed out"), do: "timed out"
+  defp normalize_fetch_reason("slow response"), do: "slow response"
+  defp normalize_fetch_reason("temporarily unavailable"), do: "temporarily unavailable"
+  defp normalize_fetch_reason("temporary_failure"), do: "temporarily unavailable"
+  defp normalize_fetch_reason(reason) when is_binary(reason), do: "temporarily unavailable"
+  defp normalize_fetch_reason(_reason), do: "temporarily unavailable"
 
   defp context_fetch_timeout_ms do
     :maraithon
@@ -542,14 +559,19 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_connected_accounts(user_id) do
     ConnectedAccounts.list_for_user(user_id)
-    |> Enum.map(fn account ->
-      %{
-        provider: account.provider,
-        status: account.status,
-        scopes: account.scopes,
-        metadata: redact_account_metadata(account.metadata || %{})
-      }
-    end)
+    |> Enum.map(&serialize_connected_account/1)
+  end
+
+  defp serialize_connected_account(%ConnectedAccount{} = account) do
+    %{
+      provider: public_provider(account.provider),
+      account_label: account_label(account),
+      status: account.status,
+      connected_at: timestamp(account.connected_at),
+      last_refreshed_at: timestamp(account.last_refreshed_at),
+      updated_at: timestamp(account.updated_at)
+    }
+    |> compact_map()
   end
 
   defp serialize_todos(user_id) do
@@ -620,8 +642,8 @@ defmodule Maraithon.TelegramAssistant.Context do
     status = if events == [], do: "empty", else: "ready"
     {events, status}
   rescue
-    exception ->
-      {[], "error: #{Exception.message(exception)}"}
+    _exception ->
+      {[], "unavailable"}
   end
 
   defp fetch_google_calendar_events(user_id, since, until) do
@@ -636,12 +658,54 @@ defmodule Maraithon.TelegramAssistant.Context do
         {events, status}
 
       {:error, reason} ->
-        {[], "error: #{inspect(reason)}"}
+        {[], google_calendar_status(reason)}
     end
   rescue
-    exception ->
-      {[], "error: #{Exception.message(exception)}"}
+    _exception ->
+      {[], "unavailable"}
   end
+
+  defp google_calendar_status(:no_token), do: "not connected"
+  defp google_calendar_status(:reauth_required), do: "needs reconnect"
+  defp google_calendar_status(:no_refresh_token), do: "needs reconnect"
+  defp google_calendar_status({:token_refresh_failed, reason}), do: google_calendar_status(reason)
+  defp google_calendar_status({:error, reason}), do: google_calendar_status(reason)
+  defp google_calendar_status({:http_error, _reason}), do: "temporarily unavailable"
+  defp google_calendar_status(:unauthorized), do: "needs reconnect"
+  defp google_calendar_status({:rate_limited, _body}), do: "temporarily unavailable"
+
+  defp google_calendar_status({:http_status, status, _body})
+       when is_integer(status) and status in [401, 403],
+       do: "needs reconnect"
+
+  defp google_calendar_status({:http_status, status, _body})
+       when is_integer(status) and (status in [408, 409, 425, 429] or status >= 500),
+       do: "temporarily unavailable"
+
+  defp google_calendar_status({:http_status, _status, _body}), do: "unavailable"
+
+  defp google_calendar_status(reason) when is_binary(reason) do
+    normalized = String.downcase(reason)
+
+    cond do
+      String.contains?(normalized, "oauth_reauth_required") ->
+        "needs reconnect"
+
+      String.contains?(normalized, "oauth_missing_refresh_token") ->
+        "needs reconnect"
+
+      String.contains?(normalized, "invalid_grant") ->
+        "needs reconnect"
+
+      String.contains?(normalized, "not_connected") ->
+        "not connected"
+
+      true ->
+        "unavailable"
+    end
+  end
+
+  defp google_calendar_status(_reason), do: "unavailable"
 
   defp local_calendar_event_for_prompt(event) do
     %{
@@ -820,16 +884,21 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp tool_defaults(user_id) do
     oauth_providers = OAuth.list_user_tokens(user_id) |> Enum.map(& &1.provider)
-    slack_team_ids = extract_slack_team_ids(oauth_providers)
+
+    public_providers =
+      oauth_providers
+      |> Enum.map(&public_provider/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.sort()
+
     default_project = Projects.default_project_for_user(user_id)
 
     %{
-      default_slack_team_id: List.first(slack_team_ids),
-      slack_team_ids: slack_team_ids,
       default_project_id: default_project && default_project.id,
       default_project_slug: default_project && default_project.slug,
-      linear_connected: Enum.member?(oauth_providers, "linear"),
-      provider_ids: oauth_providers
+      linear_connected: Enum.member?(public_providers, "linear"),
+      providers: public_providers
     }
   end
 
@@ -956,25 +1025,120 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp normalize_id(value) when is_integer(value), do: Integer.to_string(value)
   defp normalize_id(_value), do: nil
 
-  defp redact_account_metadata(metadata) when is_map(metadata) do
-    metadata
-    |> Map.drop(["access_token", "refresh_token", "token", "bot_token"])
-    |> Map.take([
-      "chat_id",
-      "username",
-      "email",
-      "account_email",
-      "workspace_id",
-      "workspace_name",
-      "team_id",
-      "default_team_id",
-      "login",
-      "name",
-      "connected_via"
-    ])
+  defp account_label(%ConnectedAccount{provider: provider, metadata: metadata} = account) do
+    metadata = metadata || %{}
+
+    cond do
+      String.starts_with?(provider, "slack:") ->
+        metadata_value(metadata, "team_name") || "Slack workspace"
+
+      String.starts_with?(provider, "google:") or provider == "google" ->
+        metadata_value(metadata, "account_email") || metadata_value(metadata, "email") ||
+          google_provider_suffix(provider) || email_account_id(account.external_account_id) ||
+          "Google account"
+
+      provider == "telegram" ->
+        "Telegram"
+
+      provider == "notion" ->
+        metadata_value(metadata, "workspace_name") || "Notion workspace"
+
+      provider == "notaui" ->
+        metadata_value(metadata, "default_account_label") || "Notaui workspace"
+
+      provider == "github" ->
+        case metadata_value(metadata, "login") do
+          login when is_binary(login) -> "@#{login}"
+          _ -> "GitHub account"
+        end
+
+      provider == "linear" ->
+        linear_account_label(metadata)
+
+      true ->
+        default_account_label(public_provider(provider))
+    end
   end
 
-  defp redact_account_metadata(_metadata), do: %{}
+  defp linear_account_label(metadata) do
+    metadata
+    |> Map.get("teams", Map.get(metadata, :teams))
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %{"name" => name} when is_binary(name) and name != "" -> Redaction.redact_string(name)
+      %{name: name} when is_binary(name) and name != "" -> Redaction.redact_string(name)
+      _other -> nil
+    end) || "Linear workspace"
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    value = Map.get(metadata, key) || Map.get(metadata, metadata_atom_key(key))
+
+    case value do
+      value when is_binary(value) ->
+        value
+        |> String.trim()
+        |> Redaction.redact_string()
+        |> case do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_key("account_email"), do: :account_email
+  defp metadata_atom_key("default_account_label"), do: :default_account_label
+  defp metadata_atom_key("email"), do: :email
+  defp metadata_atom_key("login"), do: :login
+  defp metadata_atom_key("team_name"), do: :team_name
+  defp metadata_atom_key("workspace_name"), do: :workspace_name
+  defp metadata_atom_key(key), do: key
+
+  defp google_provider_suffix("google:" <> account), do: email_account_id(account)
+  defp google_provider_suffix(_provider), do: nil
+
+  defp email_account_id(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.contains?(value, "@"), do: value
+  end
+
+  defp email_account_id(_value), do: nil
+
+  defp public_provider("google:" <> _), do: "google"
+  defp public_provider("slack:" <> _), do: "slack"
+  defp public_provider(provider) when is_binary(provider), do: provider
+  defp public_provider(nil), do: nil
+  defp public_provider(provider), do: to_string(provider)
+
+  defp default_account_label("google"), do: "Google account"
+  defp default_account_label("slack"), do: "Slack workspace"
+  defp default_account_label("telegram"), do: "Telegram"
+  defp default_account_label("github"), do: "GitHub account"
+  defp default_account_label("linear"), do: "Linear workspace"
+  defp default_account_label("notion"), do: "Notion workspace"
+  defp default_account_label("notaui"), do: "Notaui workspace"
+  defp default_account_label(_provider), do: "Connected account"
+
+  defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
+  defp timestamp(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
+  defp timestamp(%Date{} = value), do: Date.to_iso8601(value)
+  defp timestamp(value), do: value
+
+  defp compact_map(map) when is_map(map) do
+    Map.reject(map, fn
+      {_key, nil} -> true
+      {_key, []} -> true
+      {_key, %{}} -> true
+      {_key, ""} -> true
+      _other -> false
+    end)
+  end
 
   defp redact_insight_metadata(metadata) when is_map(metadata) do
     Map.take(metadata, [
@@ -991,21 +1155,6 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp redact_insight_metadata(_metadata), do: %{}
-
-  defp extract_slack_team_ids(providers) when is_list(providers) do
-    providers
-    |> Enum.flat_map(fn
-      "slack:" <> rest ->
-        case String.split(rest, ":") do
-          [team_id | _] when team_id != "" -> [team_id]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end)
-    |> Enum.uniq()
-  end
 
   defp linked_travel_itinerary(%Conversation{} = conversation, user_id) do
     case get_in(conversation.metadata || %{}, ["travel_itinerary_id"]) do

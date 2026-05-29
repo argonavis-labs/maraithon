@@ -56,7 +56,11 @@ struct FilesIngest: Sendable {
                 if let spotlight {
                     await spotlight(batch.files)
                 }
-                return SyncOutcome(accepted: outcome.accepted, duplicate: outcome.duplicate)
+                return SyncOutcome(
+                    accepted: outcome.accepted,
+                    duplicate: outcome.duplicate,
+                    invalid: outcome.invalid
+                )
             } catch is RealtimeChannel.RealtimeChannelError {
                 // Any realtime-channel failure falls back to HTTP. The
                 // channel is best-effort; HTTP is the reliable transport.
@@ -91,7 +95,7 @@ struct FilesIngest: Sendable {
             if let spotlight {
                 await spotlight(batch.files)
             }
-            return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate)
+            return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
         case 401:
             throw MaraithonClientError.unauthorized
         case 400..<500:

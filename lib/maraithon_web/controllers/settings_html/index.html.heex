@@ -1,33 +1,26 @@
 <Layouts.app flash={@flash} current_path={@current_path} current_user={@current_user}>
   <div class="space-y-10">
-    <header>
-      <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-        Settings
-      </h1>
-      <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
-        Configuration visibility for runtime, security, and connector readiness.
-      </p>
-    </header>
+    <.page_header
+      title="Settings"
+      subtitle="Check whether Maraithon has the access, delivery, and assistant setup it needs to stay useful."
+    />
 
     <section>
       <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-        <h2 class="text-base/7 font-semibold text-zinc-950">Runtime</h2>
+        <h2 class="text-base/7 font-semibold text-zinc-950">Assistant readiness</h2>
       </div>
-      <dl class="mt-2 divide-y divide-zinc-950/5">
-        <div
-          :for={item <- @runtime_items}
-          class="grid grid-cols-1 gap-1 py-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] sm:items-baseline sm:gap-6"
-        >
-          <dt class="text-sm/6 text-zinc-500"><%= item.name %></dt>
-          <dd class="break-all font-mono text-sm/6 text-zinc-950"><%= item.value %></dd>
-        </div>
-      </dl>
+      <.description_list class="mt-2">
+        <%= for item <- @runtime_items do %>
+          <.description_term><%= item.name %></.description_term>
+          <.description_details class="break-words font-medium"><%= item.value %></.description_details>
+        <% end %>
+      </.description_list>
     </section>
 
     <section>
       <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-        <h2 class="text-base/7 font-semibold text-zinc-950">Security secrets</h2>
-        <span class="text-xs/5 text-zinc-500">presence only</span>
+        <h2 class="text-base/7 font-semibold text-zinc-950">Access readiness</h2>
+        <span class="text-xs/5 text-zinc-500">setup status</span>
       </div>
       <dl class="mt-2 divide-y divide-zinc-950/5">
         <div
@@ -35,9 +28,10 @@
           class="flex items-center justify-between gap-3 py-3"
         >
           <div class="min-w-0">
-            <dt class="font-mono text-sm/6 text-zinc-950"><%= item.name %></dt>
+            <dt class="text-sm/6 font-medium text-zinc-950"><%= item.name %></dt>
             <dd class="text-xs/5 text-zinc-500">
-              <%= if item.required?, do: "Required", else: "Optional" %>
+              <%= if item.required?, do: "Required", else: "Optional" %> ·
+              <span class="font-mono"><%= item.key %></span>
             </dd>
           </div>
           <span class={[setting_badge_class(item.present?), "whitespace-nowrap"]}>
@@ -49,16 +43,16 @@
 
     <section>
       <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-        <h2 class="text-base/7 font-semibold text-zinc-950">OAuth provider readiness</h2>
+        <h2 class="text-base/7 font-semibold text-zinc-950">Connected app readiness</h2>
       </div>
       <div class="mt-2">
         <.table>
           <.table_head>
             <tr>
-              <.table_header>Provider</.table_header>
-              <.table_header>Client ID</.table_header>
-              <.table_header>Client secret</.table_header>
-              <.table_header>Redirect URI</.table_header>
+              <.table_header>Connected app</.table_header>
+              <.table_header>App ID</.table_header>
+              <.table_header>App secret</.table_header>
+              <.table_header>Return URL</.table_header>
             </tr>
           </.table_head>
           <.table_body>

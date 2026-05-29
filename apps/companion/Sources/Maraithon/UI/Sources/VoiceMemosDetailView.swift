@@ -12,8 +12,10 @@ struct VoiceMemosDetailView: View {
             displayName: "Voice Memos",
             stats: stats,
             activity: SourceActivityRow.recent(from: publisher),
-            emptyDescription: "Once your first Voice Memos batch finishes, this view will show today's memo rollups and recent sync runs.",
-            clearDataDescription: "This deletes every Voice Memo Maraithon has synced from this Mac out of the cloud. The Voice Memos app on your device is not affected."
+            syncedItemSingular: "memo",
+            syncedItemPlural: "memos",
+            emptyDescription: "After the first Voice Memos sync, this view shows recent memo activity and sync history.",
+            clearDataDescription: "This deletes every voice memo synced from this Mac from Maraithon's synced copy. The Voice Memos app on your device is not affected."
         )
     }
 
@@ -25,9 +27,9 @@ struct VoiceMemosDetailView: View {
         let pub = publisher
         return [
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "memos synced"),
-            SourceStat(id: "last", title: "Last batch", value: SourceStat.format(pub?.lastBatchAccepted), caption: "accepted"),
-            SourceStat(id: "dupes", title: "Duplicates", value: SourceStat.format(pub?.lastBatchDuplicate), caption: "skipped this batch"),
-            SourceStat(id: "total", title: "Total synced", value: SourceStat.format(pub?.totalAccepted), caption: "since app launch")
+            SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
+            SourceStat(id: "not_synced", title: SourceDetailCopy.notSyncedTitle, value: SourceStat.format(pub?.lastBatchFailed), caption: SourceDetailCopy.notSyncedCaption),
+            SourceStat(id: "total", title: "Synced", value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption)
         ]
     }
 }

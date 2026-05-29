@@ -63,6 +63,31 @@ struct RelationshipCareInsightTests {
         let summary = RelationshipCareInsight.summary(for: stale, now: now, calendar: calendar)
 
         #expect(summary.level == .needsCare)
-        #expect(summary.actionTitle == "Follow Up")
+        #expect(summary.actionTitle == "Follow up")
+    }
+
+    @Test
+    func relationshipCareCopyUsesSentenceCaseActions() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let new = CRMContact(name: "New", company: "", email: "new@example.com")
+        let due = CRMContact(
+            name: "Due",
+            company: "",
+            email: "due@example.com",
+            status: .active,
+            lastContactedAt: calendar.date(byAdding: .day, value: -8, to: now)
+        )
+
+        let newSummary = RelationshipCareInsight.summary(for: new, now: now, calendar: calendar)
+        let dueSummary = RelationshipCareInsight.summary(for: due, now: now, calendar: calendar)
+
+        #expect(newSummary.actionTitle == "Log contact")
+        #expect(dueSummary.title == "Check-in due")
+        #expect(dueSummary.actionTitle == "Check in")
+        #expect(newSummary.actionTitle != "Log Contact")
+        #expect(dueSummary.actionTitle != "Check In")
     }
 }

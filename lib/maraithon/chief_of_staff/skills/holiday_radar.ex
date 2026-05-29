@@ -304,6 +304,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       confidence = normalize_confidence(Map.get(attrs, "confidence"))
       reasoning = normalize_string(Map.get(attrs, "reasoning"))
       attention_mode = normalize_attention_mode(Map.get(attrs, "attention_mode")) || "act_now"
+      next_action = holiday_next_action(attrs, body)
 
       metadata =
         %{
@@ -325,7 +326,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
         "dedupe_key" => "brief:holiday_radar:#{holiday_id}:#{phase_key}",
         "title" => title,
         "summary" => summary,
-        "body" => body,
+        "body" => holiday_brief_body(holiday_name, summary, body, next_action),
         "metadata" => metadata
       }
 
@@ -341,6 +342,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
             attention_mode,
             confidence,
             reasoning,
+            next_action,
             reviewed_at
           )
         end
@@ -361,6 +363,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
          fallback_attention_mode,
          confidence,
          reasoning,
+         fallback_next_action,
          reviewed_at
        ) do
     todo_map = if is_map(todo_attrs), do: todo_attrs, else: %{}
@@ -372,9 +375,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
         normalize_attention_mode(Map.get(todo_map, "attention_mode")) || fallback_attention_mode,
       "title" => normalize_string(Map.get(todo_map, "title")) || fallback_title,
       "summary" => normalize_string(Map.get(todo_map, "summary")) || fallback_summary,
-      "next_action" =>
-        normalize_string(Map.get(todo_map, "next_action")) ||
-          "Review the holiday plan and lock the next concrete step.",
+      "next_action" => normalize_string(Map.get(todo_map, "next_action")) || fallback_next_action,
       "priority" => normalize_priority(Map.get(todo_map, "priority"), fallback_priority),
       "source_occurred_at" => reviewed_at,
       "dedupe_key" => "holiday:#{holiday["id"]}:#{phase_key}",
@@ -474,6 +475,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
     - If a holiday probably does not matter for this user this year, skip it.
     - If something already appears handled, do not duplicate it.
     - When you do notify, make it concrete and useful. Dinner reservations, travel coordination, gifts, hosting, and family planning are all fair suggestions when they fit the holiday.
+    - User-visible title, summary, body, and todo copy must lead with the concrete next action. Do not mention confidence, scores, thresholds, model reasoning, JSON, or this radar pass in user-visible fields.
     - Use intelligence rather than rigid rules. Make a judgment from the evidence and timing.
     - Prefer a small number of high-signal nudges instead of a long list.
     - Never invent holidays, projects, calendar events, briefs, or todos.
@@ -570,6 +572,129 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   defp holiday_brief?(%Brief{metadata: %{"brief_type" => "holiday_radar"}}), do: true
   defp holiday_brief?(%Brief{cadence: "holiday_radar"}), do: true
   defp holiday_brief?(_brief), do: false
+
+  defp holiday_next_action(attrs, body) do
+    todo_map = Map.get(attrs, "todo")
+    todo_map = if is_map(todo_map), do: todo_map, else: %{}
+
+    normalize_string(Map.get(todo_map, "next_action")) ||
+      extracted_action_line(body) ||
+      "Review the holiday plan and lock the next concrete step."
+  end
+
+  defp holiday_brief_body(holiday_name, summary, body, next_action) do
+    why_now = safe_user_sentence(summary) || first_context_line(body)
+
+    context_line =
+      body
+      |> user_body_lines()
+      |> Enum.find(fn line ->
+        not same_sentence?(line, why_now) and not same_sentence?(line, next_action)
+      end)
+
+    [
+      "Action needed#{holiday_label(holiday_name)}: #{sentence(next_action)}",
+      why_now && "Why now: #{sentence(why_now)}",
+      context_line && "Context: #{sentence(context_line)}"
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp holiday_label(name) when is_binary(name), do: " for #{name}"
+  defp holiday_label(_name), do: ""
+
+  defp extracted_action_line(body) do
+    body
+    |> raw_body_lines()
+    |> Enum.find_value(fn line ->
+      case Regex.run(~r/^\s*(?:do|action|next|suggested next step)\s*:\s*(.+)$/iu, line) do
+        [_, action] -> safe_user_sentence(action)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp first_context_line(body) do
+    body
+    |> user_body_lines()
+    |> List.first()
+  end
+
+  defp user_body_lines(body) do
+    body
+    |> raw_body_lines()
+    |> Enum.map(&strip_user_label/1)
+    |> Enum.map(&safe_user_sentence/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp raw_body_lines(body) do
+    body
+    |> normalize_string()
+    |> case do
+      nil -> []
+      text -> String.split(text, ~r/\n+/u, trim: true)
+    end
+  end
+
+  defp strip_user_label(line) do
+    String.replace(
+      line,
+      ~r/^\s*(?:why now|do|action|next|context|suggested next step)\s*:\s*/iu,
+      ""
+    )
+  end
+
+  defp safe_user_sentence(value) do
+    value
+    |> normalize_string()
+    |> case do
+      nil ->
+        nil
+
+      text ->
+        text = String.trim_trailing(text, ".")
+
+        if internal_process_line?(text) do
+          nil
+        else
+          text
+        end
+    end
+  end
+
+  defp internal_process_line?(line) do
+    normalized = String.downcase(line)
+
+    Enum.any?(
+      ["confidence", "score", "threshold", "model", "json", "heuristic", "classified"],
+      &String.contains?(normalized, &1)
+    )
+  end
+
+  defp same_sentence?(_left, nil), do: false
+  defp same_sentence?(nil, _right), do: false
+
+  defp same_sentence?(left, right) when is_binary(left) and is_binary(right) do
+    comparable_sentence(left) == comparable_sentence(right)
+  end
+
+  defp comparable_sentence(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> String.trim_trailing(".")
+  end
+
+  defp sentence(value) do
+    value
+    |> normalize_string()
+    |> case do
+      nil -> ""
+      text -> String.trim_trailing(text, ".") <> "."
+    end
+  end
 
   defp upcoming_calendar_events(events, reference_at, lookahead_days) when is_list(events) do
     latest_at = DateTime.add(reference_at, lookahead_days, :day)
@@ -774,17 +899,90 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   defp clamp_hour(value), do: clamp_integer(value, 0, 23)
 
   defp decode_json_payload(content) when is_binary(content) do
-    case Jason.decode(content) do
-      {:ok, value} ->
-        {:ok, value}
-
-      {:error, _reason} ->
-        case Regex.run(~r/```json\s*(\{.*\})\s*```/s, content, capture: :all_but_first) do
-          [json] -> Jason.decode(json)
-          _ -> {:error, :invalid_json}
-        end
-    end
+    content
+    |> json_decode_candidates()
+    |> Enum.reduce_while({:error, :invalid_json}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, decoded} -> {:halt, {:ok, decoded}}
+        {:error, reason} -> {:cont, {:error, reason}}
+      end
+    end)
   end
 
   defp decode_json_payload(_content), do: {:error, :invalid_json}
+
+  defp json_decode_candidates(content) do
+    trimmed = String.trim(content)
+
+    ([trimmed, strip_markdown_json_fence(trimmed)] ++
+       fenced_json_candidates(trimmed) ++ [first_balanced_json_object(trimmed)])
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp strip_markdown_json_fence(content) when is_binary(content) do
+    case Regex.run(~r/\A```(?:json)?\s*(.*?)\s*```\z/s, content, capture: :all_but_first) do
+      [json] -> String.trim(json)
+      _ -> content
+    end
+  end
+
+  defp fenced_json_candidates(content) when is_binary(content) do
+    ~r/```(?:json)?\s*(.*?)\s*```/s
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp first_balanced_json_object(content) when is_binary(content) do
+    content
+    |> String.graphemes()
+    |> Enum.reduce_while({:searching, []}, &collect_first_json_object/2)
+    |> case do
+      {:done, chars} -> chars |> Enum.reverse() |> Enum.join() |> String.trim()
+      _ -> nil
+    end
+  end
+
+  defp collect_first_json_object("{", {:searching, _chars}),
+    do: {:cont, {:collecting, 1, false, false, ["{"]}}
+
+  defp collect_first_json_object(_char, {:searching, _chars}), do: {:cont, {:searching, []}}
+
+  defp collect_first_json_object(char, {:collecting, depth, in_string?, escaped?, chars}) do
+    chars = [char | chars]
+
+    cond do
+      in_string? and escaped? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      in_string? and char == "\\" ->
+        {:cont, {:collecting, depth, true, true, chars}}
+
+      in_string? and char == "\"" ->
+        {:cont, {:collecting, depth, false, false, chars}}
+
+      in_string? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "\"" ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "{" ->
+        {:cont, {:collecting, depth + 1, false, false, chars}}
+
+      char == "}" ->
+        depth = depth - 1
+
+        if depth == 0 do
+          {:halt, {:done, chars}}
+        else
+          {:cont, {:collecting, depth, false, false, chars}}
+        end
+
+      true ->
+        {:cont, {:collecting, depth, false, false, chars}}
+    end
+  end
 end

@@ -184,7 +184,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       fn ->
         tracker_input = state.pending_tracker_input || %{}
         parsed_report = parse_llm_report(response)
-        {report, generation_mode, error_message} = report_or_error_notice(parsed_report, response)
+
+        {report, generation_mode, error_message} =
+          report_or_error_notice(parsed_report, response, tracker_input)
 
         if generation_mode == "error" do
           Tracing.record_error(
@@ -404,7 +406,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        Skill: #{skill.name}
        Skill path: #{@skill_path}
 
-       Runtime contract:
+       Response contract:
        Return only valid JSON with this shape:
        {
          "title": "...",
@@ -514,9 +516,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     end
   end
 
-  defp report_or_error_notice({:ok, report}, _response), do: {report, "llm", nil}
+  defp report_or_error_notice({:ok, report}, _response, _tracker_input), do: {report, "llm", nil}
 
-  defp report_or_error_notice({:error, reason}, response) do
+  defp report_or_error_notice({:error, reason}, response, tracker_input) do
     error_message =
       [
         "Commitment tracker model synthesis failed",
@@ -526,14 +528,163 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> Enum.reject(&is_nil/1)
       |> Enum.join(": ")
 
-    {%{
-       "title" => "Commitment tracker generation failed",
-       "summary" => "Maraithon could not scan commitments with the configured model.",
-       "body" =>
-         "Commitment tracker generation failed because the configured model did not return valid structured JSON. No heuristic or keyword-based fallback was used.\n\nError: #{error_message}",
-       "todos" => []
-     }, "error", error_message}
+    {fallback_commitment_report(tracker_input), "error", error_message}
   end
+
+  defp fallback_commitment_report(tracker_input) when is_map(tracker_input) do
+    open_todos = tracker_input |> read_map("open_work") |> read_list("todos")
+    gmail = read_map(tracker_input, "gmail")
+    calendar = read_map(tracker_input, "calendar")
+    inbox_count = gmail |> read_list("recent_inbox") |> length()
+    sent_count = gmail |> read_list("recent_sent") |> length()
+    calendar_count = calendar |> read_list("upcoming_events") |> length()
+
+    body =
+      [
+        fallback_section("Needs Your Attention", fallback_open_work_lines(open_todos)),
+        fallback_section(
+          "Checked",
+          fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count)
+        ),
+        fallback_section(
+          "Unknowns",
+          fallback_unknown_lines(inbox_count, sent_count, calendar_count)
+        ),
+        fallback_commitment_move(open_todos, inbox_count, sent_count, calendar_count)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join("\n\n")
+
+    %{
+      "title" => fallback_commitment_title(open_todos),
+      "summary" =>
+        fallback_commitment_summary(open_todos, inbox_count, sent_count, calendar_count),
+      "body" => body,
+      "todos" => []
+    }
+  end
+
+  defp fallback_commitment_report(_tracker_input) do
+    fallback_commitment_report(%{})
+  end
+
+  defp fallback_commitment_title(open_todos) do
+    if length(open_todos) > 0 do
+      "Commitment check: review existing open work"
+    else
+      "Commitment check needs source review"
+    end
+  end
+
+  defp fallback_commitment_summary(open_todos, inbox_count, sent_count, calendar_count) do
+    open_count = length(open_todos)
+    checked_count = inbox_count + sent_count + calendar_count
+
+    cond do
+      open_count > 0 ->
+        "Start with #{count_phrase(open_count, "existing open item", "existing open items")}; no new commitments were saved from this pass."
+
+      checked_count > 0 ->
+        "No new commitments were saved from this pass; review the checked source threads before assuming the list is clear."
+
+      true ->
+        "No reliable commitment review was available; refresh Gmail and Calendar, then check the most urgent thread."
+    end
+  end
+
+  defp fallback_open_work_lines(open_todos) do
+    case Enum.take(open_todos, 5) do
+      [] ->
+        [
+          "- No existing open commitment was already on your list. Do not treat that as clear; check the specific thread before assuming nothing is owed."
+        ]
+
+      todos ->
+        Enum.map(todos, &fallback_todo_line/1)
+    end
+  end
+
+  defp fallback_todo_line(todo) when is_map(todo) do
+    title = read_string(todo, "title", "Open commitment")
+
+    next_action =
+      read_string(
+        todo,
+        "next_action",
+        read_string(todo, "summary", "Open the source thread and decide the next action.")
+      )
+
+    due = read_string(todo, "due_at", nil)
+    source = read_string(todo, "source_account_label", read_string(todo, "source", nil))
+
+    [
+      "- ",
+      title,
+      fallback_due_phrase(due),
+      " - Next: ",
+      next_action,
+      fallback_source_phrase(source)
+    ]
+    |> Enum.join("")
+  end
+
+  defp fallback_todo_line(_todo) do
+    "- Open commitment - Next: open the source thread and decide the next action."
+  end
+
+  defp fallback_due_phrase(nil), do: ""
+  defp fallback_due_phrase(""), do: ""
+  defp fallback_due_phrase(due), do: " (due #{due})"
+
+  defp fallback_source_phrase(nil), do: "."
+  defp fallback_source_phrase(""), do: "."
+  defp fallback_source_phrase(source), do: " Source: #{source}."
+
+  defp fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count) do
+    [
+      "- Gmail checked: #{count_phrase(inbox_count, "recent inbox message", "recent inbox messages")} and #{count_phrase(sent_count, "recent sent message", "recent sent messages")}.",
+      "- Calendar checked: #{count_phrase(calendar_count, "upcoming event", "upcoming events")}.",
+      "- Existing open work checked: #{count_phrase(length(open_todos), "open item", "open items")}."
+    ]
+  end
+
+  defp fallback_unknown_lines(inbox_count, sent_count, calendar_count) do
+    checked_count = inbox_count + sent_count + calendar_count
+
+    [
+      "- No new commitments were saved because the checked source evidence did not clearly show a new promise.",
+      if(checked_count > 0,
+        do: "- Anything outside the checked Gmail, Calendar, and existing open work is unknown.",
+        else:
+          "- Gmail, Calendar, and source threads still need a fresh pass before you rely on the list."
+      )
+    ]
+  end
+
+  defp fallback_commitment_move(open_todos, inbox_count, sent_count, calendar_count) do
+    cond do
+      length(open_todos) > 0 ->
+        "Today's move: clear or explicitly keep the first open item before opening lower-signal inbox."
+
+      inbox_count + sent_count > 0 ->
+        "Today's move: inspect the highest-stakes recent thread and decide whether you owe a reply."
+
+      calendar_count > 0 ->
+        "Today's move: review the next meeting for promises you owe before the day gets busy."
+
+      true ->
+        "Today's move: refresh Gmail and Calendar, then check the one thread most likely to contain a promise."
+    end
+  end
+
+  defp fallback_section(_heading, []), do: nil
+
+  defp fallback_section(heading, lines) when is_list(lines) do
+    "## #{heading}\n" <> Enum.join(lines, "\n")
+  end
+
+  defp count_phrase(1, singular, _plural), do: "1 #{singular}"
+  defp count_phrase(count, _singular, plural), do: "#{count} #{plural}"
 
   defp persist_model_todos(_user_id, %{"todos" => []}, _tracker_input), do: {:ok, :no_todos}
   defp persist_model_todos(nil, _report, _tracker_input), do: {:ok, :no_todos}
@@ -606,8 +757,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     end
   end
 
-  defp append_todo_write_summary(report, {:error, reason}) do
-    append_report_body(report, "\nTodo write error: #{inspect(reason)}")
+  defp append_todo_write_summary(report, {:error, _reason}) do
+    append_report_body(
+      report,
+      "\nMaraithon found possible commitments, but could not save them as todos. Review the source-backed summary above before acting."
+    )
   end
 
   defp append_report_body(report, addition) do
@@ -896,12 +1050,87 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp decode_json(content) when is_binary(content) do
     content
-    |> String.trim()
-    |> String.trim_leading("```json")
-    |> String.trim_leading("```")
-    |> String.trim_trailing("```")
-    |> String.trim()
-    |> Jason.decode()
+    |> json_decode_candidates()
+    |> Enum.reduce_while({:error, :no_json_candidate}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, decoded} -> {:halt, {:ok, decoded}}
+        {:error, reason} -> {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  defp json_decode_candidates(content) do
+    trimmed = String.trim(content)
+
+    ([trimmed, strip_markdown_json_fence(trimmed)] ++
+       fenced_json_candidates(trimmed) ++ [first_balanced_json_object(trimmed)])
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp strip_markdown_json_fence(content) when is_binary(content) do
+    case Regex.run(~r/\A```(?:json)?\s*(.*?)\s*```\z/s, content, capture: :all_but_first) do
+      [json] -> String.trim(json)
+      _ -> content
+    end
+  end
+
+  defp fenced_json_candidates(content) when is_binary(content) do
+    ~r/```(?:json)?\s*(.*?)\s*```/s
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp first_balanced_json_object(content) when is_binary(content) do
+    content
+    |> String.graphemes()
+    |> Enum.reduce_while({:searching, []}, &collect_first_json_object/2)
+    |> case do
+      {:done, chars} -> chars |> Enum.reverse() |> Enum.join() |> String.trim()
+      _ -> nil
+    end
+  end
+
+  defp collect_first_json_object("{", {:searching, _chars}),
+    do: {:cont, {:collecting, 1, false, false, ["{"]}}
+
+  defp collect_first_json_object(_char, {:searching, _chars}), do: {:cont, {:searching, []}}
+
+  defp collect_first_json_object(char, {:collecting, depth, in_string?, escaped?, chars}) do
+    chars = [char | chars]
+
+    cond do
+      in_string? and escaped? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      in_string? and char == "\\" ->
+        {:cont, {:collecting, depth, true, true, chars}}
+
+      in_string? and char == "\"" ->
+        {:cont, {:collecting, depth, false, false, chars}}
+
+      in_string? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "\"" ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "{" ->
+        {:cont, {:collecting, depth + 1, false, false, chars}}
+
+      char == "}" ->
+        depth = depth - 1
+
+        if depth == 0 do
+          {:halt, {:done, chars}}
+        else
+          {:cont, {:collecting, depth, false, false, chars}}
+        end
+
+      true ->
+        {:cont, {:collecting, depth, false, false, chars}}
+    end
   end
 
   defp prompt_time(%DateTime{} = value), do: DateTime.to_iso8601(value)

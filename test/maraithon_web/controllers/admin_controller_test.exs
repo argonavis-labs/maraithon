@@ -340,6 +340,62 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert response["apps"] == ["maraithon"]
       assert Enum.any?(response["logs"], &(&1["message"] == "app machine booted"))
     end
+
+    test "summarizes Fly failures without leaking provider response bodies", %{conn: conn} do
+      previous = Application.get_env(:maraithon, Maraithon.FlyLogs, [])
+      bypass = Bypass.open()
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, Maraithon.FlyLogs, previous)
+      end)
+
+      Application.put_env(:maraithon, Maraithon.FlyLogs,
+        api_token: "FlyV1 test-token",
+        api_base_url: "http://localhost:#{bypass.port}/api/v1",
+        apps: ["maraithon"],
+        region: "yyz",
+        receive_timeout_ms: 1_000
+      )
+
+      Bypass.expect_once(bypass, "GET", "/api/v1/apps/maraithon/logs", fn conn ->
+        body = %{"error" => "internal failure", "secret" => "fly-secret-body"}
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(500, Jason.encode!(body))
+      end)
+
+      conn = get(conn, "/api/v1/admin/fly/logs?app=maraithon&limit=5")
+      response = json_response(conn, 200)
+
+      assert response["errors"] == [
+               %{"app" => "maraithon", "message" => "Platform log provider returned HTTP 500."}
+             ]
+
+      encoded = Jason.encode!(response)
+      refute encoded =~ "fly-secret-body"
+      refute encoded =~ "internal failure"
+      refute encoded =~ "FLY_API_TOKEN"
+    end
+  end
+
+  describe "GET /api/v1/admin/gmail/recent" do
+    test "returns recovery copy when Gmail is not connected", %{conn: conn} do
+      user_id = "admin-gmail-#{System.unique_integer([:positive])}@example.com"
+
+      conn = get(conn, "/api/v1/admin/gmail/recent?user_id=#{URI.encode_www_form(user_id)}")
+
+      response = json_response(conn, 502)
+
+      assert response["error"] == "gmail_unavailable"
+
+      assert response["message"] ==
+               "Could not fetch recent Gmail messages. Check the Google connection and try again."
+
+      encoded = Jason.encode!(response)
+      refute encoded =~ "google_account_not_connected"
+      refute encoded =~ "gmail_tool_failed"
+    end
   end
 
   describe "GET /api/v1/admin/connections" do
@@ -430,7 +486,15 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert desktop["setup_status"] == "configured"
       assert desktop["requires_telegram?"] == false
       assert Enum.any?(desktop["services"], &(&1["label"] == "iMessage"))
+      assert "Pair a Mac securely with Maraithon" in desktop["permissions"]
       assert Enum.any?(desktop["permissions"], &(&1 =~ "Apple Notes"))
+
+      assert "Only the sources you enable are synced, and they stay scoped to your Maraithon account." in desktop[
+               "setup_notes"
+             ]
+
+      refute Enum.any?(desktop["permissions"], &String.contains?(&1, "one-time token"))
+      refute Enum.any?(desktop["setup_notes"], &String.contains?(&1, "device token"))
 
       github =
         Enum.find(response["providers"], fn provider ->
@@ -440,7 +504,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert github["status"] == "connected"
       assert github["logo"] == "github"
       assert github["setup_status"] == "configured"
-      assert Enum.any?(github["callback_urls"], &(&1["label"] == "OAuth callback"))
+      assert Enum.any?(github["callback_urls"], &(&1["label"] == "App return URL"))
 
       assert Enum.any?(github["env_requirements"], fn env ->
                env["name"] == "GITHUB_CLIENT_ID" and env["present?"] == true
@@ -493,6 +557,15 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert response["status"] == "disconnected"
       assert response["provider"] == "github"
       assert OAuth.get_token("kent", "github") == nil
+    end
+
+    test "hides unsupported provider internals", %{conn: conn} do
+      conn = delete(conn, "/api/v1/admin/connections/%7Btoken%3Dsecret%7D?user_id=kent")
+
+      response = json_response(conn, 400)
+      assert response["error"] == "invalid_params"
+      assert response["message"] == "That app connection is not available."
+      refute response["message"] =~ "token=secret"
     end
   end
 

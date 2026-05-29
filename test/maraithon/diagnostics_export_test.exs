@@ -3,9 +3,14 @@ defmodule Maraithon.DiagnosticsExportTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
+  alias Maraithon.Agents
+  alias Maraithon.Agents.AgentRun
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Diagnostics.Export
   alias Maraithon.LogBuffer
+  alias Maraithon.Repo
+  alias Maraithon.Runtime.BackgroundJob
+  alias Maraithon.TelegramAssistant.Run, as: AssistantRun
 
   test "exports a redacted diagnostics bundle without raw secrets or prompts" do
     user_id = "diagnostics-#{System.unique_integer([:positive])}@example.com"
@@ -28,6 +33,54 @@ defmodule Maraithon.DiagnosticsExportTest do
         metadata: %{"prompt_snapshot" => "raw hidden prompt", "safe" => "visible"}
       })
 
+    raw_error = "http_status: 500 internal_stacktrace db_timeout token=secret"
+    now = DateTime.utc_now()
+
+    Repo.insert!(%AssistantRun{
+      user_id: user_id,
+      chat_id: "123456789",
+      surface: "mobile",
+      trigger_type: "inbound_message",
+      status: "failed",
+      model_provider: "openai",
+      model_name: "gpt-5",
+      prompt_snapshot: %{"system_prompt" => "raw hidden prompt"},
+      started_at: now,
+      finished_at: now,
+      error: raw_error
+    })
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: now
+      })
+
+    Repo.insert!(%AgentRun{
+      user_id: user_id,
+      agent_id: agent.id,
+      behavior: agent.behavior,
+      status: "failed",
+      trigger_type: "manual",
+      started_at: now,
+      completed_at: now,
+      error: raw_error
+    })
+
+    Repo.insert!(%BackgroundJob{
+      user_id: user_id,
+      queue: "default",
+      job_type: "source_ingest",
+      status: "failed",
+      scheduled_at: now,
+      failed_at: now,
+      attempts: 1,
+      last_error: raw_error
+    })
+
     LogBuffer.clear()
     LogBuffer.record(%{level: :info, message: "Bearer sk-abcdefghijklmnopqrstuvwxyz123456"})
     _ = :sys.get_state(LogBuffer)
@@ -47,6 +100,12 @@ defmodule Maraithon.DiagnosticsExportTest do
     refute encoded =~ "abcdefghijklmnopqrstuvwxyz123456"
     refute encoded =~ "xoxb-1234567890-secret"
     refute encoded =~ "raw hidden prompt"
+    refute encoded =~ "internal_stacktrace"
+    refute encoded =~ "db_timeout"
+    refute encoded =~ "token=secret"
+    assert encoded =~ "I could not finish that response. Try again, or ask for a narrower check."
+    assert encoded =~ "That run could not finish. Review the last action and try again."
+    assert encoded =~ "Background job failed. Retry when ready."
     assert encoded =~ "<redacted>"
   end
 end

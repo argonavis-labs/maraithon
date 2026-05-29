@@ -127,6 +127,44 @@ final class VoiceMemosSourceV15Tests: XCTestCase {
         XCTAssertNil(payload.transcript)
         XCTAssertNil(payload.transcriptEngine)
         XCTAssertNil(payload.transcriptLang)
+        XCTAssertEqual(
+            env.source.statusPublisher.displayedState(),
+            .needsAttention(reason: "voice_memos_speech_not_authorized")
+        )
+    }
+
+    @MainActor
+    func testSiriAndDictationDisabledKeepsAudioSyncingButShowsGuidance() async throws {
+        try VoiceMemosFixture.build(at: dbURL, rows: [
+            VoiceMemosFixture.Row(
+                pk: 1,
+                uniqueID: "VM-SIRI-OFF",
+                customLabel: "local transcript gated",
+                dateSeconds: 779_500_000,
+                durationSeconds: 12,
+                relativePath: "siri-off.m4a",
+                fileBytes: 128
+            )
+        ])
+
+        let env = makeEnvironment(
+            transcriber: makeTranscriber(
+                outcome: .failed(
+                    reason: "Error Domain=kLSRErrorDomain Code=201 \"Siri and Dictation are disabled\""
+                )
+            )
+        )
+        try await env.source.syncNow()
+
+        let batches = await env.collector.snapshot()
+        let payload = try XCTUnwrap(batches.first?.payloads.first)
+        XCTAssertNotNil(payload.audioBytesBase64)
+        XCTAssertNil(payload.transcript)
+        XCTAssertNil(env.source.statusPublisher.activeIssue)
+        XCTAssertEqual(
+            env.source.statusPublisher.state,
+            .needsAttention(reason: "voice_memos_speech_disabled")
+        )
     }
 
     @MainActor
@@ -181,6 +219,7 @@ final class VoiceMemosSourceV15Tests: XCTestCase {
         let payload = try XCTUnwrap(batches.first?.payloads.first)
         XCTAssertNil(payload.audioBytesBase64, "read failure → no audio bytes on the wire")
         XCTAssertEqual(payload.audioMime, "audio/m4a")
+        XCTAssertEqual(env.source.statusPublisher.activeIssue?.severity, .error)
     }
 
     // MARK: - Helpers

@@ -12,7 +12,7 @@ defmodule Maraithon.LLM.OpenAIProvider do
 
   @default_base_url "https://api.openai.com/v1/responses"
   @default_retry_after_ms 60_000
-  @reasoning_efforts ~w(low medium high xhigh)
+  @reasoning_efforts ~w(minimal low medium high xhigh)
 
   @impl true
   def complete(params) do

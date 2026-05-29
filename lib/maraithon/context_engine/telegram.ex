@@ -188,14 +188,21 @@ defmodule Maraithon.ContextEngine.Telegram do
     |> Enum.map(fn source ->
       %{
         "provider" => read(source, :provider),
-        "account_id" => read(source, :account_id),
+        "account_label" => read(source, :account_label),
         "status" => read(source, :status),
         "stale_reason" => read(source, :stale_reason)
       }
     end)
+    |> Enum.map(&compact_map/1)
   end
 
   defp stale_or_broken_sources(_freshness), do: []
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", [], %{}] end)
+    |> Map.new()
+  end
 
   defp deep_merge_budget(base, override) when is_map(base) and is_map(override) do
     Map.merge(base, normalize_budget_override(override), fn _key, left, right ->

@@ -2,13 +2,12 @@ import SwiftUI
 
 /// Settings tab that lists every Mac currently paired to this user's
 /// account. The page is read-mostly: a clean row-per-device table with a
-/// "This Mac" badge on the current device and a small trash button per
-/// row that revokes the bearer token on the server.
+/// "This Mac" badge on the current device and a small trash button per row.
 ///
 /// We fetch from `MaraithonClient.listDevices()` on appear (and after
-/// every revoke) so the table stays in sync with the server. State is
-/// kept in a `@MainActor` observable view-model so the `await` calls
-/// don't fight SwiftUI's view-update isolation.
+/// every revoke) so the table stays in sync. State is kept in a
+/// `@MainActor` observable view-model so the `await` calls don't fight
+/// SwiftUI's view-update isolation.
 struct DevicesSettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var viewModel = DevicesSettingsViewModel()
@@ -21,9 +20,7 @@ struct DevicesSettingsView: View {
             } header: {
                 Text("Paired Macs")
             } footer: {
-                Text(
-                    "Each Mac you sign in shows up here. Revoking signs that Mac out — the server stops accepting its data and the row is marked revoked. Re-pair to start syncing again."
-                )
+                Text(DevicesSettingsCopy.footer)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             }
@@ -47,9 +44,7 @@ struct DevicesSettingsView: View {
             }
             Button("Cancel", role: .cancel) { revokeTarget = nil }
         } message: {
-            Text(
-                "This signs the Mac out and stops new data from syncing. Existing rows on the server are kept."
-            )
+            Text(DevicesSettingsCopy.revokeConfirmation)
         }
     }
 
@@ -89,6 +84,11 @@ struct DevicesSettingsView: View {
         }
         return "Revoke \(name)?"
     }
+}
+
+enum DevicesSettingsCopy {
+    static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start syncing again."
+    static let revokeConfirmation = "This signs the Mac out and stops new data from syncing. Data already synced to Maraithon is kept."
 }
 
 private struct DeviceRow: View {
@@ -254,16 +254,7 @@ final class DevicesSettingsViewModel {
     }
 
     private func humanError(_ error: Error) -> String {
-        switch error {
-        case MaraithonClientError.clientError(_, let body) where body?.isEmpty == false:
-            return body ?? "client error"
-        case MaraithonClientError.serverError(let status):
-            return "server returned \(status)"
-        case MaraithonClientError.transport(let message):
-            return message
-        default:
-            return String(describing: error)
-        }
+        CompanionErrorCopy.message(for: error)
     }
 }
 

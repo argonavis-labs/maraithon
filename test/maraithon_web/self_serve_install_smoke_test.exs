@@ -64,7 +64,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     conn = log_in_test_user(conn, user_id)
 
     {:ok, view, _html} = live(conn, "/dashboard")
-    assert has_element?(view, "#chief-of-staff-install", "Install agent")
+    assert has_element?(view, "#chief-of-staff-install", "Ready to install")
     assert has_element?(view, "#chief-of-staff-install button", "Install Chief of Staff")
 
     result =

@@ -11,7 +11,8 @@ struct ChatResponderTests {
             contactCount: 7
         )
 
-        #expect(response.contains("4 open todos"))
+        #expect(response.contains("4 open work items"))
+        #expect(!response.localizedCaseInsensitiveContains("todo"))
     }
 
     @Test

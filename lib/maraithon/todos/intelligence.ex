@@ -1,9 +1,9 @@
 defmodule Maraithon.Todos.Intelligence do
   @moduledoc """
-  Model-backed ingestion for durable todo candidates.
+  Model-backed ingestion for durable work item candidates.
 
-  This module is the write boundary for assistant-created todos. It gives the
-  model both candidate work and existing todos, then applies only explicit
+  This module is the write boundary for assistant-created work items. It gives the
+  model both candidate work and existing saved work, then applies only explicit
   create/update/skip decisions returned by the model.
   """
 
@@ -77,25 +77,26 @@ defmodule Maraithon.Todos.Intelligence do
        """
        #{@sentinel}
 
-       You are Maraithon's built-in todo intelligence layer.
+       You are Maraithon's built-in work-item intelligence layer.
 
-       The caller is proposing durable todo candidates for one user. Use model-level
-       judgment to decide whether each candidate should create a new todo, update an
-       existing todo, or be skipped because it is already captured or not real work.
+       The caller is proposing durable work item candidates for one user. Use model-level
+       judgment to decide whether each candidate should create a new work item, update an
+       existing saved work item, or be skipped because it is already captured or not real work.
        Do not use exact-string matching or rigid source/id rules as the basis for
        deduplication. Compare meaning, source evidence, owner, account, timing, and
        next action.
 
        Requirements:
-       - Return one decision for every candidate_todos item.
+       - Return one decision for every candidate_todos item. `candidate_todos`,
+         `existing_todo_id`, and the `todo` response object are internal JSON contract names.
        - Use action "update" with existing_todo_id when the candidate is the same
-         underlying work as an existing todo and should refresh it.
+         underlying work as an existing saved work item and should refresh it.
        - Use action "skip" only when no write should happen.
-       - For create/update, provide a complete todo object with source, title,
-         summary, next_action, and dedupe_key.
+       - For create/update, provide a complete work item object in the `todo` field
+         with source, title, summary, next_action, and dedupe_key.
        - Preserve useful source metadata such as Slack channel/thread, Gmail
          message/thread/account, calendar account/event, or Chief-of-Staff skill.
-       - Include CRM enrichment whenever source evidence identifies people:
+       - Include People enrichment whenever source evidence identifies people:
          put `crm_people` in todo.metadata as an array of people to upsert, with
          contact details, relationship, preferred communication method,
          communication frequency, notes, confidence, and relationship_note.
@@ -105,25 +106,28 @@ defmodule Maraithon.Todos.Intelligence do
          confidence, and dedupe_key.
        - Learn from recurring human contacts and relationship proxies. If a
          person's parent, spouse, teacher, assistant, teammate, investor, or
-         customer contact repeatedly sends source items, use CRM/memory context
+         customer contact repeatedly sends source items, use People/memory context
          and the current source body to decide whether to enrich the relationship.
        - Default ownership is the main user unless the candidate clearly names
          another owner.
        - Use source bodies and metadata when available. Do not infer finance, tax,
          urgency, or relationship context from an ambiguous subject token alone.
        - For school, classroom, child, camp, or family logistics, identify the
-         child/person from CRM or memory when possible and write the next_action
+         child/person from People or memory when possible and write the next_action
          as the concrete thing the user needs to do.
-       - Todo title, summary, next_action, notes, and action_plan are user-facing
+       - Work item title, summary, next_action, notes, and action_plan are user-facing
          in Telegram and should read like Kent's human chief of staff wrote them.
          Use `you` or `Kent`, never `the user`. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
+       - Use product language for user-facing fields: say `work item`, `open work`,
+         `People`, or `relationship context`; do not write `todo` or `CRM` in
+         title, summary, next_action, notes, or action_plan unless quoting source text.
        - Never write generic copy such as "User committed to follow-up" or
-         "confirm artifact status" without the subject. Every person-linked todo
+         "confirm artifact status" without the subject. Every person-linked work item
          must say follow up about what, why the person is involved, and what
          concrete reply/draft/action Maraithon can help prepare.
-       - Every person-linked todo needs enough context for Kent to remember why it
+       - Every person-linked work item needs enough context for Kent to remember why it
          matters: company/organization when known, relationship, why the person is
          in the thread, what they want, and what they are waiting on. Put structured
          values in metadata (`company`, `organization`, `relationship_context`,
@@ -135,20 +139,20 @@ defmodule Maraithon.Todos.Intelligence do
        - If an old open item appears repeatedly and the operator has not acted, do not
          inflate it as urgent unless the evidence shows personal/family impact,
          a close relationship, or an active project/customer wait.
-       - Apply `todo_relevance_memories` as durable relevance steering. These
+       - Apply `todo_relevance_memories` as durable work-relevance steering. These
          memories are negative "see less like this" examples written from
          explicit human feedback.
-       - Decide semantically whether a candidate matches a negative todo memory.
+       - Decide semantically whether a candidate matches a negative work-relevance memory.
          Do not rely on exact keywords, sender, thread id, account, or source
          type alone. Compare the source evidence, ask/no-ask, owner, urgency,
          relationship, life domain, and whether someone is actually waiting.
-       - If a candidate matches negative todo-relevance memory and no exception
+       - If a candidate matches negative work-relevance memory and no exception
          signal applies, return action "skip" and explain the matching memory in
          reasoning.
        - If a candidate partly matches negative feedback but may be worth keeping
          for later, create/update it as `attention_mode: "monitor"` with lower
          priority instead of putting it in act-now.
-       - Negative todo memories are not global blocks. Stronger fresh evidence,
+       - Negative work-relevance memories are not global blocks. Stronger fresh evidence,
          personal/family impact, a direct deadline, close relationship, customer
          wait, or user/customer impact can override them.
        - Write next_action as a sentence the operator can act on directly. Avoid
@@ -174,7 +178,7 @@ defmodule Maraithon.Todos.Intelligence do
                "kind": "general | gmail_triage",
                "attention_mode": "act_now | monitor",
                "title": "short title",
-               "summary": "actual todo",
+               "summary": "actual work item",
                "next_action": "suggested next action",
                "due_at": "ISO-8601 datetime or omitted",
                "notes": "notes and metadata context",

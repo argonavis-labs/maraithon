@@ -14,8 +14,12 @@ struct ChatDetailView: View {
     @State private var errorMessage: String?
     @State private var lastFailedMessage: String?
     @State private var isSending = false
+    @State private var isRenamingThread = false
+    @State private var draftThreadTitle = ""
     @State private var didConsumeInitialPrompt = false
     @State private var sendTask: Task<Void, Never>?
+    @State private var renameTask: Task<Void, Never>?
+    @State private var deleteTask: Task<Void, Never>?
     @FocusState private var isComposerFocused: Bool
 
     private let chatSyncService = ChatSyncService()
@@ -63,7 +67,7 @@ struct ChatDetailView: View {
                                     Button(role: .destructive) {
                                         delete(row.message)
                                     } label: {
-                                        Label("Delete Message", systemImage: "trash")
+                                        Label(ChatDetailCopy.deleteMessageTitle, systemImage: "trash")
                                     }
                                 }
                             }
@@ -101,6 +105,8 @@ struct ChatDetailView: View {
         }
         .onDisappear {
             sendTask?.cancel()
+            renameTask?.cancel()
+            deleteTask?.cancel()
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
@@ -108,7 +114,7 @@ struct ChatDetailView: View {
                     quickPromptBar
                 }
                 if let errorMessage {
-                    errorBanner(errorMessage)
+                    errorBanner(errorMessage, actionTitle: errorActionTitle)
                 }
                 composer
             }
@@ -120,16 +126,24 @@ struct ChatDetailView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button {
-                        thread.title = "Follow-up planning"
-                        save()
+                        beginRenameThread()
                     } label: {
-                        Label("Rename", systemImage: "pencil")
+                        Label(ChatDetailCopy.renameMenuTitle, systemImage: "pencil")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("Thread Options")
+                .accessibilityLabel(ChatDetailCopy.threadOptionsAccessibilityLabel)
             }
+        }
+        .alert(ChatDetailCopy.renameAlertTitle, isPresented: $isRenamingThread) {
+            TextField(ChatDetailCopy.renameFieldPlaceholder, text: $draftThreadTitle)
+            Button("Save") {
+                renameThread()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(ChatDetailCopy.renameAlertMessage)
         }
     }
 
@@ -151,9 +165,9 @@ struct ChatDetailView: View {
                     .frame(width: 36, height: 36)
                     .appInteractiveGlassCircle()
             }
-            .accessibilityLabel("Message Options")
+            .accessibilityLabel(ChatDetailCopy.messageOptionsAccessibilityLabel)
 
-            TextField("Message", text: $draft, axis: .vertical)
+            TextField(ChatDetailCopy.messageFieldPlaceholder, text: $draft, axis: .vertical)
                 .focused($isComposerFocused)
                 .lineLimit(1...6)
                 .textFieldStyle(.plain)
@@ -172,7 +186,7 @@ struct ChatDetailView: View {
             }
             .appProminentGlassCircleActionStyle()
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isComposerDisabled)
-            .accessibilityLabel("Send Message")
+            .accessibilityLabel(ChatDetailCopy.sendMessageAccessibilityLabel)
             .accessibilityIdentifier("chat-send-button")
         }
         .padding(.horizontal, 12)
@@ -186,6 +200,10 @@ struct ChatDetailView: View {
 
     private var isComposerDisabled: Bool {
         isSending || thread.pendingRunID != nil || sessionStore.user?.sessionToken == nil
+    }
+
+    private var errorActionTitle: String {
+        ChatDetailErrorCopy.recoveryActionTitle(canRetrySend: lastFailedMessage != nil)
     }
 
     private var quickPromptBar: some View {
@@ -211,9 +229,9 @@ struct ChatDetailView: View {
 
     private var emptyConversation: some View {
         ContentUnavailableView(
-            "Ask Maraithon",
+            ChatDetailCopy.emptyTitle,
             systemImage: "bubble.left.and.bubble.right",
-            description: Text("Plan the day, draft a follow-up, update a relationship, or capture a todo.")
+            description: Text(ChatDetailCopy.emptyDescription)
         )
     }
 
@@ -221,13 +239,7 @@ struct ChatDetailView: View {
         HStack(alignment: .bottom, spacing: 7) {
             ChatAvatar(title: "Maraithon", systemImage: "sparkles", size: 28, tint: .accentColor)
 
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Maraithon is thinking")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-            }
+            ChatPendingWorkSummary(summary: thread.pendingWorkSummary)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -237,7 +249,7 @@ struct ChatDetailView: View {
         }
     }
 
-    private func errorBanner(_ message: String) -> some View {
+    private func errorBanner(_ message: String, actionTitle: String) -> some View {
         HStack(spacing: 10) {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote.weight(.medium))
@@ -246,8 +258,8 @@ struct ChatDetailView: View {
 
             Spacer(minLength: 8)
 
-            Button("Retry") {
-                retryAfterError()
+            Button(actionTitle) {
+                recoverAfterError()
             }
             .font(.footnote.weight(.semibold))
             .buttonStyle(.bordered)
@@ -295,7 +307,7 @@ struct ChatDetailView: View {
             } catch is CancellationError {
             } catch {
                 lastFailedMessage = body
-                errorMessage = error.localizedDescription
+                errorMessage = MobileErrorCopy.message(for: error)
             }
         }
     }
@@ -316,7 +328,31 @@ struct ChatDetailView: View {
                 )
             } catch is CancellationError {
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = MobileErrorCopy.message(for: error)
+            }
+        }
+    }
+
+    private func beginRenameThread() {
+        draftThreadTitle = thread.title
+        isRenamingThread = true
+    }
+
+    private func renameThread() {
+        let title = draftThreadTitle
+        errorMessage = nil
+        renameTask?.cancel()
+        renameTask = Task {
+            do {
+                try await chatSyncService.renameThread(
+                    thread,
+                    title: title,
+                    modelContext: modelContext,
+                    sessionStore: sessionStore
+                )
+            } catch is CancellationError {
+            } catch {
+                errorMessage = MobileErrorCopy.message(for: error)
             }
         }
     }
@@ -338,19 +374,26 @@ struct ChatDetailView: View {
         } catch is CancellationError {
         } catch ChatSyncError.missingSession {
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
     }
 
     private func delete(_ message: ChatMessage) {
-        thread.messages.removeAll { $0.id == message.id }
-        modelContext.delete(message)
-        thread.updatedAt = Date()
-        save()
-    }
-
-    private func save() {
-        try? modelContext.save()
+        errorMessage = nil
+        deleteTask?.cancel()
+        deleteTask = Task {
+            do {
+                try await chatSyncService.deleteMessage(
+                    message,
+                    from: thread,
+                    modelContext: modelContext,
+                    sessionStore: sessionStore
+                )
+            } catch is CancellationError {
+            } catch {
+                errorMessage = MobileErrorCopy.message(for: error)
+            }
+        }
     }
 
     private func copy(_ message: ChatMessage) {
@@ -375,7 +418,7 @@ struct ChatDetailView: View {
         }
     }
 
-    private func retryAfterError() {
+    private func recoverAfterError() {
         if let lastFailedMessage {
             send(lastFailedMessage)
         } else {
@@ -397,6 +440,42 @@ struct ChatDetailView: View {
         } else {
             action()
         }
+    }
+}
+
+enum ChatDetailErrorCopy {
+    static func recoveryActionTitle(canRetrySend: Bool) -> String {
+        canRetrySend ? "Retry" : "Refresh"
+    }
+}
+
+enum ChatDetailCopy {
+    static let deleteMessageTitle = "Delete message"
+    static let renameMenuTitle = "Rename"
+    static let threadOptionsAccessibilityLabel = "Thread options"
+    static let renameAlertTitle = "Rename chat"
+    static let renameFieldPlaceholder = "Chat name"
+    static let renameAlertMessage = "Use a short name that makes this conversation easy to find later."
+    static let messageOptionsAccessibilityLabel = "Message options"
+    static let messageFieldPlaceholder = "Message"
+    static let sendMessageAccessibilityLabel = "Send message"
+    static let emptyTitle = "Ask Maraithon"
+    static let emptyDescription = "Plan the day, draft a follow-up, update a relationship, or capture a work item."
+
+    static var visibleLabels: [String] {
+        [
+            deleteMessageTitle,
+            renameMenuTitle,
+            threadOptionsAccessibilityLabel,
+            renameAlertTitle,
+            renameFieldPlaceholder,
+            renameAlertMessage,
+            messageOptionsAccessibilityLabel,
+            messageFieldPlaceholder,
+            sendMessageAccessibilityLabel,
+            emptyTitle,
+            emptyDescription
+        ]
     }
 }
 

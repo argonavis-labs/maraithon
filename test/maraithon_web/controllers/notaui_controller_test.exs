@@ -75,5 +75,29 @@ defmodule MaraithonWeb.NotauiControllerTest do
 
       assert json_response(conn, 400)["error"] == "notaui integration is not configured"
     end
+
+    test "hides upstream Notaui failure internals", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :notaui,
+        base_url: "http://localhost:#{bypass.port}",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        scope: "tasks:read"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(503, Jason.encode!(%{"error" => "upstream_db_timeout"}))
+      end)
+
+      conn = post(conn, "/api/v1/integrations/notaui/sync", %{topic: "notaui:test-sync"})
+
+      assert json_response(conn, 400) == %{
+               "error" =>
+                 "Could not sync Notaui tasks. Check the Notaui connection and try again."
+             }
+    end
   end
 end

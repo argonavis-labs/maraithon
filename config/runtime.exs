@@ -61,33 +61,173 @@ config :maraithon, MaraithonWeb.Endpoint, http: [ip: {0, 0, 0, 0}, port: port]
 # =============================================================================
 
 # LLM Provider Configuration
+default_openai_model = "gpt-5.4"
+default_openrouter_model = "qwen/qwen3.7-max"
+
+llm_model_selector =
+  System.get_env("LLM_MODEL", "")
+  |> String.trim()
+
+selected_llm_provider =
+  case String.downcase(llm_model_selector) do
+    "" ->
+      nil
+
+    "openai" ->
+      "openai"
+
+    "gpt" ->
+      "openai"
+
+    "qwen" ->
+      "openrouter"
+
+    "qwen-max" ->
+      "openrouter"
+
+    "openrouter" ->
+      "openrouter"
+
+    "openrouter:" <> _model ->
+      "openrouter"
+
+    "openai:" <> _model ->
+      "openai"
+
+    "anthropic:" <> _model ->
+      "anthropic"
+
+    "claude-" <> _rest ->
+      "anthropic"
+
+    "gpt-" <> _rest ->
+      "openai"
+
+    "o1" <> _rest ->
+      "openai"
+
+    "o3" <> _rest ->
+      "openai"
+
+    "o4" <> _rest ->
+      "openai"
+
+    value ->
+      cond do
+        String.starts_with?(value, "qwen/") -> "openrouter"
+        String.starts_with?(value, "~") -> "openrouter"
+        String.contains?(value, "/") -> "openrouter"
+        true -> nil
+      end
+  end
+
+selected_llm_model =
+  case String.downcase(llm_model_selector) do
+    "" -> nil
+    "openai" -> default_openai_model
+    "gpt" -> default_openai_model
+    "qwen" -> default_openrouter_model
+    "qwen-max" -> default_openrouter_model
+    "openrouter" -> default_openrouter_model
+    "openrouter:" <> model -> String.trim(model)
+    "openai:" <> model -> String.trim(model)
+    "anthropic:" <> model -> String.trim(model)
+    _other -> llm_model_selector
+  end
+
 anthropic_api_key = System.get_env("ANTHROPIC_API_KEY")
-anthropic_model = System.get_env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+
+anthropic_model =
+  if selected_llm_provider == "anthropic" and selected_llm_model not in [nil, ""] do
+    selected_llm_model
+  else
+    System.get_env("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+  end
+
 openai_api_key = System.get_env("OPENAI_API_KEY")
-openai_model = System.get_env("OPENAI_MODEL", "gpt-5.4")
+
+openai_model =
+  if selected_llm_provider == "openai" and selected_llm_model not in [nil, ""] do
+    selected_llm_model
+  else
+    System.get_env("OPENAI_MODEL", default_openai_model)
+  end
+
 openai_reasoning_effort = System.get_env("OPENAI_REASONING_EFFORT", "high")
+openrouter_api_key = System.get_env("OPENROUTER_API_KEY")
+
+openrouter_model =
+  if selected_llm_provider == "openrouter" and selected_llm_model not in [nil, ""] do
+    selected_llm_model
+  else
+    System.get_env("OPENROUTER_MODEL", default_openrouter_model)
+  end
+
+openrouter_reasoning_effort = System.get_env("OPENROUTER_REASONING_EFFORT", "medium")
+openrouter_http_referer = System.get_env("OPENROUTER_HTTP_REFERER", "https://maraithon.app")
+openrouter_app_title = System.get_env("OPENROUTER_APP_TITLE", "Maraithon")
 
 anthropic_routing_model =
   case System.get_env("ANTHROPIC_ROUTING_MODEL", "") |> String.trim() do
-    "" -> "claude-haiku-4-5-20251001"
-    value -> value
+    "" ->
+      if selected_llm_provider == "anthropic" and selected_llm_model not in [nil, ""] do
+        selected_llm_model
+      else
+        "claude-haiku-4-5-20251001"
+      end
+
+    value ->
+      value
   end
 
 openai_routing_model =
   case System.get_env("OPENAI_ROUTING_MODEL", "") |> String.trim() do
-    "" -> "gpt-4o-mini"
+    "" ->
+      if selected_llm_provider == "openai" and selected_llm_model not in [nil, ""] do
+        selected_llm_model
+      else
+        "gpt-4o-mini"
+      end
+
+    value ->
+      value
+  end
+
+openrouter_routing_model =
+  case System.get_env("OPENROUTER_ROUTING_MODEL", "") |> String.trim() do
+    "" -> openrouter_model
     value -> value
   end
 
 anthropic_chat_model =
   case System.get_env("ANTHROPIC_CHAT_MODEL", "") |> String.trim() do
-    "" -> "claude-sonnet-4-20250514"
-    value -> value
+    "" ->
+      if selected_llm_provider == "anthropic" and selected_llm_model not in [nil, ""] do
+        selected_llm_model
+      else
+        "claude-sonnet-4-20250514"
+      end
+
+    value ->
+      value
   end
 
 openai_chat_model =
   case System.get_env("OPENAI_CHAT_MODEL", "") |> String.trim() do
-    "" -> "gpt-4.1"
+    "" ->
+      if selected_llm_provider == "openai" and selected_llm_model not in [nil, ""] do
+        selected_llm_model
+      else
+        "gpt-4.1"
+      end
+
+    value ->
+      value
+  end
+
+openrouter_chat_model =
+  case System.get_env("OPENROUTER_CHAT_MODEL", "") |> String.trim() do
+    "" -> openrouter_model
     value -> value
   end
 
@@ -119,20 +259,26 @@ end
 
 llm_provider_name =
   cond do
-    configured_llm_provider in ["anthropic", "openai"] ->
-      configured_llm_provider
-
     configured_llm_provider == "mock" and config_env() == :test ->
       "mock"
 
     configured_llm_provider == "mock" ->
       raise """
       LLM_PROVIDER=mock is only allowed in test.
-      Configure LLM_PROVIDER=openai with OPENAI_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY.
+      Configure LLM_PROVIDER=openai with OPENAI_API_KEY, LLM_PROVIDER=openrouter with OPENROUTER_API_KEY, or LLM_PROVIDER=anthropic with ANTHROPIC_API_KEY.
       """
+
+    selected_llm_provider in ["anthropic", "openai", "openrouter"] ->
+      selected_llm_provider
+
+    configured_llm_provider in ["anthropic", "openai", "openrouter"] ->
+      configured_llm_provider
 
     openai_api_key not in [nil, ""] ->
       "openai"
+
+    openrouter_api_key not in [nil, ""] ->
+      "openrouter"
 
     anthropic_api_key not in [nil, ""] ->
       "anthropic"
@@ -145,6 +291,7 @@ llm_provider =
   case llm_provider_name do
     "anthropic" -> Maraithon.LLM.AnthropicProvider
     "openai" -> Maraithon.LLM.OpenAIProvider
+    "openrouter" -> Maraithon.LLM.OpenRouterProvider
     "mock" -> Maraithon.LLM.MockProvider
     _ -> nil
   end
@@ -153,6 +300,7 @@ llm_model =
   case llm_provider_name do
     "anthropic" -> anthropic_model
     "openai" -> openai_model
+    "openrouter" -> openrouter_model
     "mock" -> "mock-v1"
     _ -> openai_model
   end
@@ -161,6 +309,7 @@ llm_routing_model =
   case llm_provider_name do
     "anthropic" -> anthropic_routing_model
     "openai" -> openai_routing_model
+    "openrouter" -> openrouter_routing_model
     "mock" -> "mock-v1"
     _ -> nil
   end
@@ -169,6 +318,7 @@ llm_chat_model =
   case llm_provider_name do
     "anthropic" -> anthropic_chat_model
     "openai" -> openai_chat_model
+    "openrouter" -> openrouter_chat_model
     "mock" -> "mock-v1"
     _ -> nil
   end
@@ -177,8 +327,18 @@ llm_api_key =
   case llm_provider_name do
     "anthropic" -> anthropic_api_key
     "openai" -> openai_api_key
+    "openrouter" -> openrouter_api_key
     _ -> nil
   end
+
+config :maraithon, :openrouter,
+  base_url:
+    System.get_env(
+      "OPENROUTER_BASE_URL",
+      "https://openrouter.ai/api/v1/chat/completions"
+    ),
+  http_referer: openrouter_http_referer,
+  app_title: openrouter_app_title
 
 # Timing configuration (can be overridden via env vars)
 heartbeat_interval_ms =
@@ -198,6 +358,7 @@ config :maraithon, Maraithon.Runtime,
   llm_provider_name: llm_provider_name,
   llm_provider: llm_provider,
   llm_model: llm_model,
+  llm_model_selector: selected_llm_model,
   llm_routing_model: llm_routing_model,
   llm_chat_model: llm_chat_model,
   llm_api_key: llm_api_key,
@@ -209,6 +370,13 @@ config :maraithon, Maraithon.Runtime,
   openai_model: openai_model,
   openai_routing_model: openai_routing_model,
   openai_chat_model: openai_chat_model,
+  openrouter_api_key: openrouter_api_key,
+  openrouter_model: openrouter_model,
+  openrouter_routing_model: openrouter_routing_model,
+  openrouter_chat_model: openrouter_chat_model,
+  openrouter_reasoning_effort: openrouter_reasoning_effort,
+  openrouter_http_referer: openrouter_http_referer,
+  openrouter_app_title: openrouter_app_title,
   llm_model_fallbacks: llm_model_fallbacks,
   openai_reasoning_effort: openai_reasoning_effort,
   openai_stream_replies: System.get_env("OPENAI_STREAM_REPLIES", "true") == "true",
@@ -272,7 +440,7 @@ config :maraithon, Maraithon.Runtime,
   max_effect_attempts: String.to_integer(System.get_env("MAX_EFFECT_ATTEMPTS", "3"))
 
 config :maraithon, :telegram_assistant,
-  chat_reasoning_effort: System.get_env("TELEGRAM_CHAT_REASONING_EFFORT", "medium"),
+  chat_reasoning_effort: System.get_env("TELEGRAM_CHAT_REASONING_EFFORT", "none"),
   telegram_full_chat_enabled: optional_boolean_env.("TELEGRAM_FULL_CHAT_ENABLED"),
   telegram_unified_push_enabled: optional_boolean_env.("TELEGRAM_UNIFIED_PUSH_ENABLED"),
   telegram_proactive_checkins_enabled: boolean_env.("TELEGRAM_PROACTIVE_CHECKINS_ENABLED", false),

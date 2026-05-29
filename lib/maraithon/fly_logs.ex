@@ -35,10 +35,14 @@ defmodule Maraithon.FlyLogs do
 
     cond do
       config.api_token == "" ->
-        {:ok, unavailable_snapshot(requested_apps, "FLY_API_TOKEN is not configured")}
+        {:ok,
+         unavailable_snapshot(
+           requested_apps,
+           "Platform log access is not configured for this environment."
+         )}
 
       requested_apps == [] ->
-        {:ok, unavailable_snapshot([], "FLY_LOG_APPS is not configured")}
+        {:ok, unavailable_snapshot([], "No platform apps are configured for log access.")}
 
       true ->
         with :ok <- ensure_req_started(),
@@ -114,7 +118,10 @@ defmodule Maraithon.FlyLogs do
       [
         url: "#{String.trim_trailing(config.api_base_url, "/")}/apps/#{app}/logs",
         headers: [{"authorization", config.api_token}],
-        receive_timeout: config.receive_timeout_ms
+        receive_timeout: config.receive_timeout_ms,
+        retry: false,
+        max_retries: 0,
+        retry_log_level: false
       ]
       |> maybe_put_params(build_params(region, next_token))
 
@@ -304,26 +311,23 @@ defmodule Maraithon.FlyLogs do
 
   defp log_sort_key(_), do: DateTime.from_unix!(0)
 
-  defp format_fetch_error({:http_status, status, body}) do
-    "Fly API returned #{status}: #{format_body(body)}"
+  defp format_fetch_error({:http_status, status, _body}) do
+    "Platform log provider returned HTTP #{status}."
   end
 
-  defp format_fetch_error({:request_failed, exception}) do
-    "Fly API request failed: #{Exception.message(exception)}"
+  defp format_fetch_error({:request_failed, _exception}) do
+    "Could not reach the platform log provider. Check log access and network connectivity, then try again."
   end
 
-  defp format_fetch_error({:task_exit, reason}) do
-    "Fly log fetch task exited: #{inspect(reason)}"
+  defp format_fetch_error({:task_exit, _reason}) do
+    "Platform log fetch failed before it could finish."
   end
 
-  defp format_fetch_error({:startup_failed, reason}) do
-    "Req failed to start: #{inspect(reason)}"
+  defp format_fetch_error({:startup_failed, _reason}) do
+    "Platform log client could not start."
   end
 
-  defp format_fetch_error(reason), do: inspect(reason)
-
-  defp format_body(body) when is_binary(body), do: body
-  defp format_body(body), do: inspect(body, limit: 10, printable_limit: 300)
+  defp format_fetch_error(_reason), do: "Platform logs could not be fetched."
 
   defp unavailable_snapshot(apps, message) do
     %{

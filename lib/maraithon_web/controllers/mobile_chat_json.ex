@@ -2,8 +2,33 @@ defmodule MaraithonWeb.MobileChatJSON do
   @moduledoc false
 
   alias Maraithon.TelegramAssistant.{PreparedAction, Run}
+  alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Todos.Todo
   alias Maraithon.Repo
+  alias MaraithonWeb.{ApiErrorCopy, MobileJSON}
+
+  @public_structured_data_keys ~w(calculation)
+  @public_linked_todo_fields [
+    {"id", :id},
+    {"source", :source},
+    {"kind", :kind},
+    {"attention_mode", :attention_mode},
+    {"title", :title},
+    {"summary", :summary},
+    {"next_action", :next_action},
+    {"due_at", :due_at},
+    {"notes", :notes},
+    {"action_plan", :action_plan},
+    {"owner_label", :owner_label},
+    {"priority", :priority},
+    {"status", :status},
+    {"snoozed_until", :snoozed_until},
+    {"closed_at", :closed_at},
+    {"source_occurred_at", :source_occurred_at},
+    {"inserted_at", :inserted_at},
+    {"updated_at", :updated_at}
+  ]
 
   def thread_index(threads) when is_list(threads) do
     %{threads: Enum.map(threads, &thread_summary/1), next_cursor: nil}
@@ -26,8 +51,9 @@ defmodule MaraithonWeb.MobileChatJSON do
       status: normalize_run_status(run),
       started_at: json_value(run.started_at),
       finished_at: json_value(run.finished_at),
-      error: run.error,
-      message_class: summary_value(run.result_summary, :message_class)
+      error: public_run_error(run),
+      message_class: summary_value(run.result_summary, :message_class),
+      work_summary: WorkSummary.for_run(run)
     }
   end
 
@@ -42,7 +68,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     }
   end
 
-  def error(reason), do: %{error: format_error(reason)}
+  def error(reason), do: ApiErrorCopy.mobile_chat(reason)
 
   def action_result(%PreparedAction{} = prepared_action, %Conversation{} = conversation) do
     %{
@@ -82,6 +108,7 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp message(%Turn{} = turn) do
     structured_data = turn.structured_data || %{}
+    public_structured_data = public_structured_data(structured_data)
     prepared_action_id = structured_data["prepared_action_id"]
 
     %{
@@ -95,10 +122,60 @@ defmodule MaraithonWeb.MobileChatJSON do
       delivery_state: turn.delivery_state || "delivered",
       run_id: structured_data["run_id"],
       actions: actions_for(turn, prepared_action_id),
-      linked_todo: structured_data["linked_todo"],
-      structured_data: structured_data
+      linked_todo: public_linked_todo(structured_data["linked_todo"]),
+      work_summary: WorkSummary.for_message(turn),
+      structured_data: public_structured_data
     }
   end
+
+  defp public_linked_todo(nil), do: nil
+
+  defp public_linked_todo(%Todo{} = todo), do: MobileJSON.todo(todo)
+
+  defp public_linked_todo(%{} = todo) do
+    @public_linked_todo_fields
+    |> Enum.reduce(%{}, fn {key, atom_key}, acc ->
+      todo
+      |> known_map_value(key, atom_key)
+      |> put_linked_todo_value(acc, key)
+    end)
+    |> Map.put(
+      "metadata",
+      MobileJSON.public_todo_metadata(known_map_value(todo, "metadata", :metadata))
+    )
+  end
+
+  defp public_linked_todo(_linked_todo), do: nil
+
+  defp put_linked_todo_value(nil, acc, _key), do: acc
+
+  defp put_linked_todo_value(value, acc, key) when is_binary(value) do
+    if String.trim(value) == "" do
+      acc
+    else
+      Map.put(acc, key, value)
+    end
+  end
+
+  defp put_linked_todo_value(value, acc, key), do: Map.put(acc, key, json_value(value))
+
+  defp known_map_value(map, string_key, atom_key) when is_map(map) do
+    Map.get(map, string_key) || Map.get(map, atom_key)
+  end
+
+  defp public_structured_data(structured_data) when is_map(structured_data) do
+    Enum.reduce(structured_data, %{}, fn {key, value}, acc ->
+      key = to_string(key)
+
+      if key in @public_structured_data_keys do
+        Map.put(acc, key, value)
+      else
+        acc
+      end
+    end)
+  end
+
+  defp public_structured_data(_structured_data), do: %{}
 
   defp actions_for(%Turn{turn_kind: "approval_prompt"}, prepared_action_id)
        when is_binary(prepared_action_id) do
@@ -150,6 +227,10 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp normalize_run_status(%Run{status: status}), do: status
 
+  defp public_run_error(%Run{error: error}) do
+    ApiErrorCopy.mobile_chat_run_error(error)
+  end
+
   defp latest_turn(%Conversation{} = conversation) do
     conversation
     |> sorted_turns()
@@ -163,10 +244,71 @@ defmodule MaraithonWeb.MobileChatJSON do
   defp sorted_turns(_conversation), do: []
 
   defp thread_title(%Conversation{} = conversation) do
-    get_in(conversation.metadata || %{}, ["title"]) ||
-      first_user_turn_title(conversation) ||
-      conversation.summary ||
-      "New conversation"
+    [
+      get_in(conversation.metadata || %{}, ["title"]),
+      first_user_turn_title(conversation),
+      conversation.summary
+    ]
+    |> Enum.find_value(&public_thread_title/1)
+    |> Kernel.||("New conversation")
+  end
+
+  defp public_thread_title(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> strip_title_role_prefix()
+    |> reject_placeholder_title()
+    |> reject_technical_title()
+    |> truncate_title()
+  end
+
+  defp public_thread_title(_value), do: nil
+
+  defp strip_title_role_prefix(value) do
+    value
+    |> String.replace(~r/(^|\s)(?:assistant|maraithon|user|operator|system)\s*:\s*/i, "\\1")
+    |> String.trim()
+  end
+
+  defp reject_placeholder_title(""), do: nil
+
+  defp reject_placeholder_title(value) do
+    if String.downcase(value) == "new conversation", do: nil, else: value
+  end
+
+  defp reject_technical_title(nil), do: nil
+
+  defp reject_technical_title(value) do
+    cond do
+      String.contains?(value, ["{", "}", "=>"]) ->
+        nil
+
+      Regex.match?(~r/\b(?:assistant_reply|approval_prompt|tool_call)\b/i, value) ->
+        nil
+
+      Regex.match?(
+        ~r/\b(?:run_id|client_message_id|structured_data|authorization|token)\b\s*[:=]/i,
+        value
+      ) ->
+        nil
+
+      true ->
+        value
+    end
+  end
+
+  defp truncate_title(nil), do: nil
+
+  defp truncate_title(value) do
+    if String.length(value) > 90 do
+      value
+      |> String.slice(0, 89)
+      |> String.trim()
+      |> Kernel.<>("...")
+    else
+      value
+    end
   end
 
   defp first_user_turn_title(%Conversation{} = conversation) do
@@ -191,7 +333,4 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp summary_value(_summary, _key), do: nil
-
-  defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_error(reason), do: inspect(reason)
 end

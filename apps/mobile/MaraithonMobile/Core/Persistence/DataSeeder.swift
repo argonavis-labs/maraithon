@@ -96,7 +96,7 @@ enum DataSeeder {
         let welcomeThread = ChatThread(title: "Planning assistant")
         modelContext.insert(welcomeThread)
         let intro = ChatMessage(
-            body: "Ask me to turn a follow-up into a todo, summarize relationship context, or draft a next step.",
+            body: "Ask me to turn a follow-up into a work item, summarize relationship context, or draft a next step.",
             sentAt: now,
             role: .assistant,
             thread: welcomeThread

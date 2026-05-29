@@ -9,7 +9,7 @@ defmodule Maraithon.ActionCards do
 
   alias Maraithon.SourceFreshness
   alias Maraithon.Todos
-  alias Maraithon.Todos.{AttentionRanker, SurfaceQuality, Todo, UserFacingCopy}
+  alias Maraithon.Todos.{AttentionRanker, PublicMetadata, SurfaceQuality, Todo, UserFacingCopy}
 
   @open_statuses ~w(open snoozed)
   @assistant_sources ~w(
@@ -22,6 +22,22 @@ defmodule Maraithon.ActionCards do
   @source_evidence_keys ~w(
     source_quote quote source_excerpt body_excerpt excerpt evidence source_body source_evidence
     checked_evidence body ask commitment summary
+  )
+
+  @unsafe_source_gap_markers ~w(
+    <redacted
+    authorization
+    bearer
+    dbconnection
+    ecto.
+    http_status
+    internal
+    password
+    phoenix.
+    postgrex
+    private_key
+    stacktrace
+    token
   )
 
   @doc """
@@ -123,17 +139,45 @@ defmodule Maraithon.ActionCards do
       html_line(prefix_text),
       "<b>#{safe(card["headline"])}</b>",
       telegram_context_line(card),
+      telegram_decision_line(card),
       telegram_why_line(card),
       telegram_thread_line(card),
       telegram_next_line(card),
       telegram_prepared_line(card),
       telegram_evidence_line(card),
-      telegram_source_health_line(card),
+      source_health_note(card),
       telegram_learning_line(card)
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
   end
+
+  @doc """
+  Renders source freshness as executive-facing copy.
+
+  Source freshness metadata can contain connector identifiers or transport
+  errors. Product surfaces only need the user-level confidence boundary.
+  """
+  def source_health_note(card) when is_map(card) do
+    source_health = read_map(card, "source_health")
+    blocking = read_field(source_health, "blocking_gaps") |> List.wrap() |> Enum.reject(&blank?/1)
+
+    checked =
+      read_field(source_health, "checked_sources") |> List.wrap() |> Enum.reject(&blank?/1)
+
+    cond do
+      blocking != [] ->
+        "Could not fully check #{source_gap_labels(blocking)} before sending this."
+
+      checked != [] ->
+        "Checked #{source_list(checked)}."
+
+      true ->
+        nil
+    end
+  end
+
+  def source_health_note(_card), do: nil
 
   def context_items(card_or_todo) do
     card = ensure_card(card_or_todo)
@@ -144,8 +188,7 @@ defmodule Maraithon.ActionCards do
       %{label: "Project", value: read_field(context, "project_or_topic")},
       %{label: "Relationship", value: read_field(context, "relationship_context")},
       %{label: "Thread state", value: humanize(read_field(context, "thread_state"))},
-      %{label: "Owed", value: humanize(read_field(context, "owed_direction"))},
-      %{label: "Confidence", value: get_in(card, ["confidence", "level"])}
+      %{label: "Owed", value: humanize(read_field(context, "owed_direction"))}
     ]
     |> Enum.reject(fn item -> blank?(item.value) end)
   end
@@ -286,8 +329,8 @@ defmodule Maraithon.ActionCards do
     person = primary_person_name(context)
 
     cond do
-      present?(person) -> "Keep or dismiss this stale follow-up with #{person}?"
-      true -> "Keep or dismiss this stale todo?"
+      present?(person) -> "Should this older follow-up with #{person} stay active?"
+      true -> "Should this older work item stay active?"
     end
   end
 
@@ -308,40 +351,38 @@ defmodule Maraithon.ActionCards do
   end
 
   defp decision_prompt(_todo, _context, "stale_check") do
-    "This has been sitting long enough that I would not treat it as urgent. Decide whether to keep it active or dismiss it."
+    "Keep it active if it still matters, or dismiss it so it stops resurfacing."
   end
 
-  defp decision_prompt(todo, context, _attention_mode) do
+  defp decision_prompt(_todo, context, _attention_mode) do
     person = primary_person_name(context)
 
-    cond do
-      present?(person) ->
-        "Decide the next step with #{person}."
-
-      true ->
-        "Decide whether this needs action now."
+    if present?(person) do
+      "Choose the next move with #{person}."
+    else
+      "Handle this now, snooze it, or dismiss it."
     end
-    |> append_sentence(todo.next_action)
   end
 
   defp why_now(_todo, _metadata, profile, "stale_check") do
     age_days = read_field(profile, "age_days")
 
     if is_integer(age_days) do
-      "This item is #{age_days} days old and has not been handled, so it should be confirmed rather than treated as urgent."
+      "This item is #{age_days} days old with no handled evidence. It is not urgent, but it needs a keep-or-close decision."
     else
-      "This has been sitting long enough that it should be confirmed rather than treated as urgent."
+      "This has been open long enough to need a keep-or-close decision."
     end
   end
 
   defp why_now(todo, metadata, profile, _attention_mode) do
+    public_metadata = PublicMetadata.todo(metadata)
+
     first_present([
-      read_string(metadata, "why_now"),
-      read_string(metadata, "why_it_matters"),
-      read_string(metadata, "urgency_reason"),
+      read_string(public_metadata, "why_now"),
+      read_string(public_metadata, "why_it_matters"),
       due_sentence(todo),
       profile_why_now(profile),
-      "This is an open #{source_label(todo.source)} item."
+      "This is still open and needs a clear next decision."
     ])
   end
 
@@ -446,7 +487,8 @@ defmodule Maraithon.ActionCards do
     %{
       "level" => level,
       "reason" =>
-        confidence_reason(metadata) || "Based on todo context, evidence, and source freshness."
+        confidence_reason(metadata) ||
+          "Based on saved-work context, evidence, and source freshness."
     }
   end
 
@@ -514,6 +556,7 @@ defmodule Maraithon.ActionCards do
       |> Kernel.++([todo.summary, todo.notes])
       |> Enum.reject(&blank?/1)
       |> Enum.map(&externalize_copy/1)
+      |> Enum.filter(&public_card_text?/1)
       |> Enum.uniq()
       |> Enum.take(3)
 
@@ -645,12 +688,16 @@ defmodule Maraithon.ActionCards do
   end
 
   defp confidence_reason(metadata) do
+    public_metadata = PublicMetadata.todo(metadata)
+
     first_present([
-      read_string(metadata, "confidence_reason"),
-      read_string(metadata, "reasoning"),
-      read_string(metadata, "why_it_matters")
+      read_string(public_metadata, "why_it_matters"),
+      read_string(public_metadata, "why_now")
     ])
   end
+
+  defp public_card_text?(value) when is_binary(value), do: PublicMetadata.public_text?(value)
+  defp public_card_text?(_value), do: false
 
   defp missing_context(todo, metadata, person) do
     cond do
@@ -734,6 +781,12 @@ defmodule Maraithon.ActionCards do
     if present?(summary), do: "Context: #{safe(summary)}"
   end
 
+  defp telegram_decision_line(card) do
+    decision = read_field(card, "decision_prompt")
+
+    if present?(decision), do: "Decision: #{safe(decision)}"
+  end
+
   defp telegram_why_line(card) do
     why_now = read_field(card, "why_now")
 
@@ -764,7 +817,7 @@ defmodule Maraithon.ActionCards do
 
   defp telegram_prepared_line(card) do
     case read_field(card, "prepared_actions") do
-      [%{"label" => label} | _] when is_binary(label) -> "Can handle: #{safe(label)}"
+      [%{"label" => label} | _] when is_binary(label) -> "Prepared: #{safe(label)}"
       _other -> nil
     end
   end
@@ -773,25 +826,6 @@ defmodule Maraithon.ActionCards do
     case evidence_excerpt(card) do
       value when is_binary(value) -> "Evidence: #{safe(truncate(value, 180))}"
       _ -> nil
-    end
-  end
-
-  defp telegram_source_health_line(card) do
-    source_health = read_map(card, "source_health")
-    blocking = read_field(source_health, "blocking_gaps") |> List.wrap() |> Enum.reject(&blank?/1)
-
-    checked =
-      read_field(source_health, "checked_sources") |> List.wrap() |> Enum.reject(&blank?/1)
-
-    cond do
-      blocking != [] ->
-        "Source gap: #{safe(Enum.join(blocking, "; "))}"
-
-      checked != [] ->
-        "Checked: #{safe(Enum.take(checked, 4) |> Enum.join(", "))}"
-
-      true ->
-        nil
     end
   end
 
@@ -871,7 +905,9 @@ defmodule Maraithon.ActionCards do
         "owner and eta",
         "exact artifact or update",
         "confirm artifact status",
-        "review and decide the next step"
+        "review and decide the next step",
+        "decide whether this needs action now",
+        "this appears to be waiting on you"
       ],
       &String.contains?(text, &1)
     )
@@ -912,7 +948,7 @@ defmodule Maraithon.ActionCards do
         "Personal or family logistics are ranked first."
 
       read_field(profile, "actively_waiting") == true ->
-        "This appears to be waiting on you."
+        "Someone appears to be waiting on a reply or commitment from you."
 
       read_field(profile, "business_project") == true ->
         "This is tied to an active business objective."
@@ -988,7 +1024,64 @@ defmodule Maraithon.ActionCards do
   defp normalize_source(source) when is_binary(source), do: source
   defp normalize_source(_source), do: nil
 
+  defp source_gap_labels(gaps) do
+    gaps
+    |> Enum.take(2)
+    |> Enum.map(&source_gap_label/1)
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> "the source"
+      labels -> source_list(labels)
+    end
+  end
+
+  defp source_gap_label(value) when is_binary(value) do
+    [source | _reason] = String.split(value, ":", parts: 2)
+
+    case safe_source_name(source) do
+      nil -> nil
+      safe_source -> source_label(safe_source)
+    end
+  end
+
+  defp source_gap_label(_value), do: nil
+
+  defp source_list(sources) do
+    sources
+    |> Enum.take(4)
+    |> Enum.map(&source_list_label/1)
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> "the source"
+      labels -> safe(Enum.join(labels, ", "))
+    end
+  end
+
+  defp source_list_label(source) when is_binary(source) do
+    case safe_source_name(source) do
+      nil -> nil
+      safe_source -> source_label(safe_source)
+    end
+  end
+
+  defp source_list_label(_source), do: nil
+
+  defp safe_source_name(value) when is_binary(value) do
+    trimmed = String.trim(value)
+    lower = String.downcase(trimmed)
+
+    if trimmed == "" or Enum.any?(@unsafe_source_gap_markers, &String.contains?(lower, &1)) do
+      nil
+    else
+      normalize_source(trimmed)
+    end
+  end
+
+  defp safe_source_name(_value), do: nil
+
   defp source_label(source) when source in @assistant_sources, do: "Maraithon"
+  defp source_label("system"), do: "Maraithon"
+  defp source_label("desktop"), do: "Desktop App"
   defp source_label("gmail"), do: "Gmail"
   defp source_label("slack"), do: "Slack"
   defp source_label("calendar"), do: "Calendar"
@@ -1006,19 +1099,6 @@ defmodule Maraithon.ActionCards do
   end
 
   defp humanize(value), do: to_string(value)
-
-  defp append_sentence(first, nil), do: first
-  defp append_sentence(first, ""), do: first
-
-  defp append_sentence(first, second) when is_binary(first) and is_binary(second) do
-    second = naturalize_action_copy(second)
-
-    if String.contains?(String.downcase(first), String.downcase(second)) do
-      first
-    else
-      "#{String.trim_trailing(first, ".")}. #{String.trim(second)}"
-    end
-  end
 
   defp naturalize_action_copy(value) when is_binary(value) do
     value

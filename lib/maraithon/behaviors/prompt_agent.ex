@@ -270,7 +270,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     """
     #{state.prompt}
 
-    ## Your Tools
+    ## Approved Actions
     #{tools_list}
 
     ## Recent Events You've Seen
@@ -385,7 +385,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     Based on this result, what do you want to do?
 
     - RESPOND: Share findings or answer
-    - ACTION: Call another tool
+    - ACTION: Run another approved action
     - OBSERVE: Done processing, nothing to communicate
     """
   end
@@ -413,7 +413,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     |> Enum.join("\n")
   end
 
-  defp format_tools([]), do: "(No tools available)"
+  defp format_tools([]), do: "(No actions available)"
   defp format_tools(tools), do: Enum.join(tools, ", ")
 
   defp format_recent_events([]), do: "No recent connected activity."

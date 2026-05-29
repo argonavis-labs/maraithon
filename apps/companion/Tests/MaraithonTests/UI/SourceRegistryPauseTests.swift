@@ -68,6 +68,39 @@ final class SourceRegistryPauseTests: XCTestCase {
         XCTAssertEqual(a.clearCount, 1)
         XCTAssertEqual(b.clearCount, 0)
     }
+
+    func testFullDiskAccessBlockedSourcesTrackLivePublisherState() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let voiceMemos = FakeSource(id: "voice_memos", displayName: "Voice Memos", symbol: "waveform")
+        registry.register(voiceMemos)
+        registry.register(calendar)
+        registry.register(notes)
+        registry.register(imessage)
+
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        notes.statusPublisher.update(state: .error(reason: "notes_full_disk_access_required"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+
+        XCTAssertEqual(
+            registry.fullDiskAccessBlockedSources().map(\.displayName),
+            ["iMessage", "Notes"]
+        )
+    }
+
+    func testFullDiskAccessBlockedSourcesIgnoresNonPermissionFailures() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let files = FakeSource(id: "files", displayName: "Files", symbol: "folder")
+        registry.register(files)
+
+        files.statusPublisher.update(state: .error(reason: "serverError(status: 503)"))
+
+        XCTAssertTrue(registry.fullDiskAccessBlockedSources().isEmpty)
+    }
 }
 
 @MainActor

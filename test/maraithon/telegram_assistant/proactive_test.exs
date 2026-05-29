@@ -213,12 +213,20 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     assert result["todo_items_sent"] == 1
 
     [intro, todo_card] = telegram_messages()
-    assert intro.text =~ "older follow-up"
+    assert intro.text =~ "Older follow-up, not urgent"
     assert intro.text =~ "Dan Bourke"
-    assert intro.text =~ "Mark it important"
+    assert intro.text =~ "Keep it active"
+    refute intro.text =~ ".."
     refute intro.text =~ "several overdue follow-ups"
+    refute intro.text =~ "I found"
+    refute intro.text =~ "not treating it as urgent"
+    refute intro.text =~ "look stale"
     refute intro.text =~ "Emma's Soccer Practice"
     assert todo_card.text =~ "Dan Bourke (A-Team; video project contact)"
+    assert todo_card.text =~ "Decision: Keep it active if it still matters"
+    assert todo_card.text =~ "Keep it active only if it still matters"
+    refute todo_card.text =~ "not treat it as urgent"
+    refute todo_card.text =~ "stale follow-up"
   end
 
   defp telegram_messages do

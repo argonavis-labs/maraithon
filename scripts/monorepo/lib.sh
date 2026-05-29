@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPANION_DIR="${ROOT_DIR}/apps/companion"
 MOBILE_DIR="${ROOT_DIR}/apps/mobile"
+COMPANION_BUNDLE_ID="com.maraithon.companion"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 
 validate_component() {
   local component="${1:-all}"
@@ -64,6 +66,195 @@ generate_xcode_project() {
 
   require_command xcodegen
   run_in "${dir}" xcodegen generate
+}
+
+companion_xcode_signing_args() {
+  local config="${COMPANION_DIR}/Config.local.xcconfig"
+
+  if [[ ! -f "${config}" ]] ||
+    ! grep -Eq '^[[:space:]]*(CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM)[[:space:]]*=' "${config}"; then
+    printf '%s\n' "CODE_SIGNING_ALLOWED=NO"
+    return
+  fi
+
+  local style identity team
+  style="$(xcconfig_value "${config}" CODE_SIGN_STYLE)"
+  identity="$(xcconfig_value "${config}" CODE_SIGN_IDENTITY)"
+  team="$(xcconfig_value "${config}" DEVELOPMENT_TEAM)"
+
+  if [[ -n "${style}" ]]; then
+    printf '%s\n' "CODE_SIGN_STYLE=${style}"
+  fi
+  if [[ -n "${identity}" ]]; then
+    printf '%s\n' "CODE_SIGN_IDENTITY=${identity}"
+  fi
+  if [[ -n "${team}" ]]; then
+    printf '%s\n' "DEVELOPMENT_TEAM=${team}"
+  fi
+}
+
+xcconfig_value() {
+  local config="$1"
+  local key="$2"
+
+  awk -F= -v key="${key}" '
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      value = $0
+      sub(/^[^=]*=/, "", value)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      print value
+      exit
+    }
+  ' "${config}"
+}
+
+companion_debug_app_path() {
+  local build_dir
+  build_dir="$(
+    cd "${COMPANION_DIR}" &&
+      xcodebuild \
+        -project Maraithon.xcodeproj \
+        -scheme Maraithon \
+        -configuration Debug \
+        -showBuildSettings 2>/dev/null |
+      awk -F= '
+        $1 ~ /BUILT_PRODUCTS_DIR[[:space:]]*$/ {
+          value = $2
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+          print value
+          exit
+        }
+      '
+  )"
+
+  if [[ -z "${build_dir}" ]]; then
+    echo "Unable to locate companion Debug build products." >&2
+    exit 1
+  fi
+
+  printf '%s\n' "${build_dir}/Maraithon.app"
+}
+
+quit_running_companion_app() {
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'tell application id "com.maraithon.companion" to quit' >/dev/null 2>&1 || true
+  fi
+
+  for _ in {1..40}; do
+    if ! pgrep -x Maraithon >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.25
+  done
+
+  pkill -x Maraithon >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    if ! pgrep -x Maraithon >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.25
+  done
+}
+
+companion_designated_requirement() {
+  local app_path="$1"
+
+  codesign -dr - "${app_path}" 2>&1 | sed -n 's/^designated => //p'
+}
+
+reset_stale_companion_tcc_if_needed() {
+  local app_path="$1"
+  local marker_dir="${HOME}/Library/Application Support/Maraithon"
+  local marker_path="${marker_dir}/companion-dev-designated-requirement.txt"
+  local requirement previous
+
+  requirement="$(companion_designated_requirement "${app_path}")"
+  if [[ -z "${requirement}" ]]; then
+    echo "Unable to read companion code-signing requirement; Full Disk Access may not persist." >&2
+    return
+  fi
+
+  if [[ "${requirement}" == cdhash\ * ]]; then
+    echo "Companion app is ad-hoc signed; run make setup-companion-signing for persistent Full Disk Access." >&2
+    return
+  fi
+
+  previous="$(cat "${marker_path}" 2>/dev/null || true)"
+  if [[ "${previous}" == "${requirement}" ]]; then
+    return
+  fi
+
+  if command -v tccutil >/dev/null 2>&1; then
+    tccutil reset SystemPolicyAllFiles "${COMPANION_BUNDLE_ID}" >/dev/null 2>&1 || true
+    echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+  fi
+
+  mkdir -p "${marker_dir}"
+  printf '%s\n' "${requirement}" > "${marker_path}"
+}
+
+companion_app_bundle_id() {
+  local app_path="$1"
+  local plist="${app_path}/Contents/Info.plist"
+
+  [[ -f "${plist}" ]] || return 1
+  /usr/bin/plutil -extract CFBundleIdentifier raw -o - "${plist}" 2>/dev/null
+}
+
+is_companion_app_bundle() {
+  local app_path="$1"
+  local bundle_id
+
+  bundle_id="$(companion_app_bundle_id "${app_path}" || true)"
+  [[ "${bundle_id}" == "${COMPANION_BUNDLE_ID}" ]]
+}
+
+unregister_stale_companion_apps() {
+  local keep_app="${1:-}"
+
+  [[ -x "${LSREGISTER}" ]] || return 0
+
+  {
+    if command -v mdfind >/dev/null 2>&1; then
+      mdfind "kMDItemCFBundleIdentifier == '${COMPANION_BUNDLE_ID}'" 2>/dev/null || true
+    fi
+    find "${HOME}/Library/Developer/Xcode/DerivedData" \
+      -name "Maraithon.app" \
+      -type d \
+      -print 2>/dev/null || true
+  } | sort -u | while IFS= read -r app_path; do
+    [[ -n "${app_path}" ]] || continue
+    if [[ -n "${keep_app}" && "${app_path%/}" == "${keep_app%/}" ]]; then
+      continue
+    fi
+    is_companion_app_bundle "${app_path}" || continue
+    "${LSREGISTER}" -u "${app_path}" >/dev/null 2>&1 || true
+  done
+}
+
+remove_derived_companion_apps() {
+  local keep_app="${1:-}"
+  local derived_data="${HOME}/Library/Developer/Xcode/DerivedData"
+
+  [[ -d "${derived_data}" ]] || return 0
+
+  find "${derived_data}" \
+    -path "*/Build/Products/*/Maraithon.app" \
+    -type d \
+    -prune \
+    -print 2>/dev/null |
+    sort -u |
+    while IFS= read -r app_path; do
+      [[ -n "${app_path}" ]] || continue
+      if [[ -n "${keep_app}" && "${app_path%/}" == "${keep_app%/}" ]]; then
+        continue
+      fi
+      is_companion_app_bundle "${app_path}" || continue
+      if [[ -x "${LSREGISTER}" ]]; then
+        "${LSREGISTER}" -u "${app_path}" >/dev/null 2>&1 || true
+      fi
+      rm -rf "${app_path}"
+    done
 }
 
 ios_destination() {

@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.AppUrl
   alias Maraithon.ActionCards
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
@@ -47,15 +48,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         :ignored
 
       {:error, :not_found} ->
-        maybe_answer_callback(callback_id, "I couldn't find that todo anymore.")
+        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(:not_found))
         :ok
 
       {:error, reason} ->
-        maybe_answer_callback(callback_id, callback_error_text(reason))
+        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(reason))
         :ok
 
       _ ->
-        maybe_answer_callback(callback_id, "I couldn't match that todo to this chat.")
+        maybe_answer_callback(callback_id, ActionFailureCopy.todo_callback(:chat_mismatch))
         :ok
     end
   end
@@ -78,11 +79,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   def parse_callback(_value), do: {:error, :invalid_callback}
 
   defp dispatch_action(user_id, todo_id, "done") do
-    Todos.mark_done(user_id, todo_id, note: "Completed from Telegram todo message.")
+    Todos.mark_done(user_id, todo_id, note: "Completed from Telegram work item message.")
   end
 
   defp dispatch_action(user_id, todo_id, "dismiss") do
-    Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram todo message.")
+    Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram work item message.")
   end
 
   defp dispatch_action(user_id, todo_id, "snooze") do
@@ -91,7 +92,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       |> DateTime.add(24 * 60 * 60, :second)
       |> DateTime.truncate(:second)
 
-    Todos.snooze(user_id, todo_id, snoozed_until, note: "Snoozed from Telegram todo message.")
+    Todos.snooze(user_id, todo_id, snoozed_until,
+      note: "Snoozed from Telegram work item message."
+    )
   end
 
   defp dispatch_action(user_id, todo_id, "important") do
@@ -162,13 +165,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
         rows ++
           [
             [
-              %{"text" => "Important", "callback_data" => callback_data(todo_id, "important")},
+              %{"text" => "Keep active", "callback_data" => callback_data(todo_id, "important")},
               %{
-                "text" => "Not Important",
+                "text" => "Less useful",
                 "callback_data" => callback_data(todo_id, "not_helpful")
               },
               %{
-                "text" => "See Less",
+                "text" => "Show less",
                 "callback_data" => callback_data(todo_id, "see_less")
               }
             ]
@@ -185,7 +188,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     buttons =
       [
         source_link_button(todo),
-        %{"text" => "Open Dashboard", "url" => AppUrl.url("/dashboard")}
+        %{"text" => "Open Maraithon", "url" => AppUrl.url("/dashboard")}
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -213,9 +216,9 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       prepared_action_line(card),
       evidence_line(card, context),
       source_sentence(source, account, assistant_source?),
-      source_health_line(card),
+      ActionCards.source_health_note(card),
       learning_line(card),
-      feedback && "Feedback noted: #{safe(feedback)}"
+      feedback && "Feedback: #{safe(feedback)}"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
@@ -334,7 +337,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp source_sentence("Operator", _account, _assistant_source?), do: nil
 
   defp source_sentence(source, account, _assistant_source?),
-    do: "I found this in #{safe(source)}#{render_account(account)}."
+    do: "From #{safe(source)}#{render_account(account)}."
 
   defp decision_line(card) when is_map(card) do
     decision = Map.get(card, "decision_prompt")
@@ -358,7 +361,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp prepared_action_line(card) when is_map(card) do
     case ActionCards.prepared_action_hint(card) do
-      hint when is_binary(hint) -> "Can handle: #{safe(hint)}"
+      hint when is_binary(hint) -> "Prepared: #{safe(hint)}"
       _ -> nil
     end
   end
@@ -382,31 +385,14 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp evidence_line(_card, _already_rendered_context), do: nil
 
-  defp source_health_line(card) when is_map(card) do
-    source_health = Map.get(card, "source_health") || %{}
+  defp learning_line(%{"attention_mode" => "stale_check"} = card) do
+    case Map.get(card, "next_best_action") do
+      action when is_binary(action) ->
+        safe(truncate(action, 220))
 
-    blocking =
-      source_health |> Map.get("blocking_gaps", []) |> List.wrap() |> Enum.reject(&blank?/1)
-
-    checked =
-      source_health |> Map.get("checked_sources", []) |> List.wrap() |> Enum.reject(&blank?/1)
-
-    cond do
-      blocking != [] ->
-        "Source gap: #{safe(Enum.take(blocking, 2) |> Enum.join("; "))}"
-
-      checked != [] ->
-        "Checked: #{safe(Enum.take(checked, 4) |> Enum.join(", "))}"
-
-      true ->
-        nil
+      _other ->
+        "Keep it active only if it still matters; otherwise dismiss it so future briefings stay focused."
     end
-  end
-
-  defp source_health_line(_card), do: nil
-
-  defp learning_line(%{"attention_mode" => "stale_check"}) do
-    "Mark Important to keep it active, or dismiss it to teach Maraithon to stop resurfacing it."
   end
 
   defp learning_line(_card), do: nil
@@ -710,23 +696,18 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp feedback_label("helpful"), do: "Helpful"
-  defp feedback_label("important"), do: "Important"
-  defp feedback_label("not_helpful"), do: "Not Important"
-  defp feedback_label("see_less"), do: "See Less"
+  defp feedback_label("important"), do: "Keep active"
+  defp feedback_label("not_helpful"), do: "Less useful"
+  defp feedback_label("see_less"), do: "Show less"
   defp feedback_label(_value), do: nil
 
   defp callback_notice("done"), do: "Marked done"
   defp callback_notice("dismiss"), do: "Dismissed"
   defp callback_notice("snooze"), do: "Snoozed until tomorrow"
-  defp callback_notice("important"), do: "Marked important"
+  defp callback_notice("important"), do: "Kept active"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
-  defp callback_notice("not_helpful"), do: "Marked not important"
-  defp callback_notice("see_less"), do: "I'll show fewer todos like this"
-
-  defp callback_error_text(reason) when is_binary(reason),
-    do: "I couldn't update that todo yet: #{reason}"
-
-  defp callback_error_text(reason), do: "I couldn't update that todo yet: #{inspect(reason)}"
+  defp callback_notice("not_helpful"), do: "Feedback saved"
+  defp callback_notice("see_less"), do: "Maraithon will show fewer like this"
 
   defp callback_data(todo_id, action), do: "#{@callback_prefix}:#{todo_id}:#{action}"
 

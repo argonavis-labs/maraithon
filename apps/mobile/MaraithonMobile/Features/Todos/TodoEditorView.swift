@@ -10,6 +10,7 @@ struct TodoEditorView: View {
     private let todo: TodoItem?
     @State private var title = ""
     @State private var notes = ""
+    @State private var nextAction = ""
     @State private var priority: TodoPriority = .medium
     @State private var hasDueDate = false
     @State private var dueDate = Date()
@@ -27,6 +28,7 @@ struct TodoEditorView: View {
         self.todo = todo
         _title = State(initialValue: todo?.title ?? suggestedTitle ?? "")
         _notes = State(initialValue: todo?.notes ?? suggestedNotes)
+        _nextAction = State(initialValue: Self.initialNextAction(for: todo))
         _priority = State(initialValue: todo?.priority ?? .medium)
         _hasDueDate = State(initialValue: todo?.dueDate != nil || suggestedDueDate != nil)
         _dueDate = State(initialValue: todo?.dueDate ?? suggestedDueDate ?? Date())
@@ -36,14 +38,17 @@ struct TodoEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Details") {
-                    TextField("Title", text: $title)
+                Section(TodoEditorCopy.commitmentSectionTitle) {
+                    TextField(TodoEditorCopy.titlePlaceholder, text: $title)
                         .accessibilityIdentifier("todo-title-field")
-                    TextField("Notes", text: $notes, axis: .vertical)
+                    TextField(TodoEditorCopy.notesPlaceholder, text: $notes, axis: .vertical)
                         .lineLimit(3...6)
                         .accessibilityIdentifier("todo-notes-field")
+                    TextField(TodoEditorCopy.nextActionPlaceholder, text: $nextAction, axis: .vertical)
+                        .lineLimit(2...4)
+                        .accessibilityIdentifier("todo-next-action-field")
 
-                    Picker("Priority", selection: $priority) {
+                    Picker(TodoEditorCopy.urgencyPickerTitle, selection: $priority) {
                         ForEach(TodoPriority.allCases) { priority in
                             Label(priority.title, systemImage: priority.symbolName)
                                 .tag(priority)
@@ -51,16 +56,16 @@ struct TodoEditorView: View {
                     }
                 }
 
-                Section("Schedule") {
-                    Toggle("Due Date", isOn: $hasDueDate)
+                Section(TodoEditorCopy.timingSectionTitle) {
+                    Toggle(TodoEditorCopy.dueDateToggleTitle, isOn: $hasDueDate)
                     if hasDueDate {
-                        DatePicker("Due", selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
+                        DatePicker(TodoEditorCopy.dueDatePickerTitle, selection: $dueDate, displayedComponents: [.date, .hourAndMinute])
                     }
                 }
 
-                Section("People Link") {
-                    Picker("Person", selection: $selectedContactID) {
-                        Text("None").tag(Optional<UUID>.none)
+                Section(TodoEditorCopy.relatedPersonSectionTitle) {
+                    Picker(TodoEditorCopy.personPickerTitle, selection: $selectedContactID) {
+                        Text(TodoEditorCopy.noPersonLabel).tag(Optional<UUID>.none)
                         ForEach(contacts) { contact in
                             Text(contact.name).tag(Optional(contact.id))
                         }
@@ -74,7 +79,7 @@ struct TodoEditorView: View {
                     }
                 }
             }
-            .navigationTitle(todo == nil ? "New Todo" : "Edit Todo")
+            .navigationTitle(todo == nil ? TodoEditorCopy.newNavigationTitle : TodoEditorCopy.editNavigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -99,12 +104,22 @@ struct TodoEditorView: View {
         let contact = contacts.first { $0.id == selectedContactID }
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedNotes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNextAction = nextAction.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextAction = ProductionDataSync.nextActionForTodoPayload(
+            title: trimmedTitle,
+            notes: trimmedNotes,
+            requestedNextAction: trimmedNextAction,
+            existingTitle: todo?.title,
+            existingNotes: todo?.notes,
+            existingNextAction: todo?.nextAction
+        )
         let payload = ProductionDataSync.todoPayload(
             title: trimmedTitle,
             notes: trimmedNotes,
             priority: priority,
             dueDate: hasDueDate ? dueDate : nil,
-            isCompleted: todo?.isCompleted ?? false
+            isCompleted: todo?.isCompleted ?? false,
+            nextAction: nextAction
         )
 
         do {
@@ -132,6 +147,7 @@ struct TodoEditorView: View {
             } else if let todo {
                 todo.title = trimmedTitle
                 todo.notes = trimmedNotes
+                todo.nextAction = nextAction
                 todo.priority = priority
                 todo.dueDate = hasDueDate ? dueDate : nil
                 todo.contact = contact
@@ -139,6 +155,7 @@ struct TodoEditorView: View {
                 let todo = TodoItem(
                     title: trimmedTitle,
                     notes: trimmedNotes,
+                    nextAction: nextAction,
                     priority: priority,
                     dueDate: hasDueDate ? dueDate : nil,
                     contact: contact
@@ -149,7 +166,45 @@ struct TodoEditorView: View {
             try modelContext.save()
             dismiss()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = MobileErrorCopy.message(for: error)
         }
+    }
+
+    private static func initialNextAction(for todo: TodoItem?) -> String {
+        todo?.displayNextAction ?? ""
+    }
+}
+
+enum TodoEditorCopy {
+    static let commitmentSectionTitle = "Commitment"
+    static let titlePlaceholder = "What needs to happen"
+    static let notesPlaceholder = "Context"
+    static let nextActionPlaceholder = "Next move"
+    static let urgencyPickerTitle = "Urgency"
+    static let timingSectionTitle = "Timing"
+    static let dueDateToggleTitle = "Add due date"
+    static let dueDatePickerTitle = "Due"
+    static let relatedPersonSectionTitle = "Related person"
+    static let personPickerTitle = "Person"
+    static let noPersonLabel = "No one linked"
+    static let newNavigationTitle = "New work item"
+    static let editNavigationTitle = "Edit work item"
+
+    static var visibleLabels: [String] {
+        [
+            commitmentSectionTitle,
+            titlePlaceholder,
+            notesPlaceholder,
+            nextActionPlaceholder,
+            urgencyPickerTitle,
+            timingSectionTitle,
+            dueDateToggleTitle,
+            dueDatePickerTitle,
+            relatedPersonSectionTitle,
+            personPickerTitle,
+            noPersonLabel,
+            newNavigationTitle,
+            editNavigationTitle
+        ]
     }
 }

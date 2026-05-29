@@ -2,6 +2,20 @@ defmodule MaraithonWeb.ConnectorsController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Connections
+  alias MaraithonWeb.OperationFailureCopy
+
+  @safe_oauth_statuses ~w(connected error)
+  @technical_message_markers [
+    "dbconnection",
+    "ecto.",
+    "http_status",
+    "internal",
+    "oauth_tokens",
+    "postgrex",
+    "stacktrace",
+    "token=",
+    "traceback"
+  ]
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
@@ -19,7 +33,7 @@ defmodule MaraithonWeb.ConnectorsController do
       |> maybe_put_degraded_flash(degraded?)
 
     render(conn, :index,
-      page_title: "Connectors",
+      page_title: "Connected Apps",
       current_path: ~p"/connectors",
       current_user: conn.assigns.current_user,
       connection_user_id: user_id,
@@ -43,7 +57,7 @@ defmodule MaraithonWeb.ConnectorsController do
     case Enum.find(snapshot.providers, &(&1.provider == provider)) do
       nil ->
         conn
-        |> put_flash(:error, "Unknown connector: #{provider}")
+        |> put_flash(:error, "That app connection is not available.")
         |> redirect(to: ~p"/connectors")
 
       provider_card ->
@@ -53,7 +67,7 @@ defmodule MaraithonWeb.ConnectorsController do
           |> maybe_put_degraded_flash(degraded?)
 
         render(conn, :show,
-          page_title: "#{provider_card.label} Connector",
+          page_title: "#{provider_card.label} Connection",
           current_path: ~p"/connectors",
           current_user: conn.assigns.current_user,
           provider: provider_card,
@@ -79,13 +93,13 @@ defmodule MaraithonWeb.ConnectorsController do
           put_flash(conn, :error, "#{provider_label(provider_key)} is not connected")
 
         {:error, :unsupported_provider} ->
-          put_flash(conn, :error, "Unsupported provider")
+          put_flash(conn, :error, "That app connection is not available.")
 
         {:error, reason} ->
           put_flash(
             conn,
             :error,
-            "Failed to disconnect #{provider_label(provider_key)}: #{inspect(reason)}"
+            OperationFailureCopy.disconnect(provider_label(provider_key), reason)
           )
       end
 
@@ -96,20 +110,16 @@ defmodule MaraithonWeb.ConnectorsController do
     redirect(conn, to: ~p"/connectors")
   end
 
-  defp maybe_put_oauth_flash(conn, %{"oauth_status" => "connected", "oauth_message" => message})
-       when is_binary(message) do
-    put_flash(conn, :info, message)
-  end
-
-  defp maybe_put_oauth_flash(conn, %{"oauth_status" => "error", "oauth_message" => message})
-       when is_binary(message) do
-    put_flash(conn, :error, message)
+  defp maybe_put_oauth_flash(conn, %{"oauth_status" => status, "oauth_message" => message})
+       when status in @safe_oauth_statuses and is_binary(message) do
+    kind = if status == "connected", do: :info, else: :error
+    put_flash(conn, kind, oauth_flash_message(status, message))
   end
 
   defp maybe_put_oauth_flash(conn, _params), do: conn
 
   defp maybe_put_degraded_flash(conn, true) do
-    put_flash(conn, :error, "Connection inventory is temporarily degraded.")
+    put_flash(conn, :error, "Connected apps are temporarily unavailable. Refresh in a moment.")
   end
 
   defp maybe_put_degraded_flash(conn, false), do: conn
@@ -119,6 +129,30 @@ defmodule MaraithonWeb.ConnectorsController do
   end
 
   defp parse_return_to(_params), do: ~p"/connectors"
+
+  defp oauth_flash_message("connected", message),
+    do: safe_flash_message(message, "App connected.")
+
+  defp oauth_flash_message("error", message) do
+    safe_flash_message(message, "App connection failed. Try again.")
+  end
+
+  defp safe_flash_message(message, fallback) do
+    trimmed = String.trim(message)
+
+    cond do
+      trimmed == "" -> fallback
+      technical_message?(trimmed) -> fallback
+      true -> trimmed
+    end
+  end
+
+  defp technical_message?(message) do
+    lower = String.downcase(message)
+
+    Enum.any?(@technical_message_markers, &String.contains?(lower, &1)) or
+      String.contains?(message, ["{", "}", "=>"])
+  end
 
   defp provider_label("github"), do: "GitHub"
   defp provider_label("google"), do: "Google"

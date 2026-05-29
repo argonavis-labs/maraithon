@@ -66,15 +66,18 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       |> Keyword.get(:max_web_queries, @max_web_queries)
       |> clamp_integer(0, @max_web_queries)
 
-    {meetings, _remaining_queries} =
+    {indexed_meetings, _remaining_queries} =
       events
       |> prioritize_meeting_events()
-      |> Enum.reduce({[], max_web_queries}, fn event, {meeting_acc, remaining_queries} ->
+      |> Enum.reduce({[], max_web_queries}, fn {event, index}, {meeting_acc, remaining_queries} ->
         {meeting, next_remaining} = enrich_event(user_id, event, opts, remaining_queries)
-        {[meeting | meeting_acc], next_remaining}
+        {[{index, meeting} | meeting_acc], next_remaining}
       end)
 
-    meetings = Enum.reverse(meetings)
+    meetings =
+      indexed_meetings
+      |> Enum.sort_by(fn {index, _meeting} -> index end)
+      |> Enum.map(fn {_index, meeting} -> meeting end)
 
     %{
       "policy" =>
@@ -242,7 +245,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
                 {"ok", response |> Map.get("results", []) |> compact_web_results(), nil}
 
               {:error, reason} ->
-                {"error", [], normalize_error(reason)}
+                {"error", [], public_context_error(reason)}
             end
 
           page_contexts =
@@ -269,7 +272,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
           context
 
         {:exit, reason} ->
-          %{"status" => "error", "error" => normalize_error(reason)}
+          %{"status" => "error", "error" => public_context_error(reason)}
       end)
 
     {contexts, length(search_candidates)}
@@ -286,19 +289,19 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
       cond do
         is_nil(context) ->
-          "No CRM match for #{label}; web fallback was not attempted."
+          "No saved relationship context found for #{label}. Keep the meeting prep cautious and avoid inventing background."
 
         read_list(context, "page_contexts") != [] ->
-          "No CRM match for #{label}; public web search fallback returned source page context."
+          "No saved relationship context found for #{label}. Use the public source context cautiously."
 
         read_list(context, "results") != [] ->
-          "No CRM match for #{label}; public web search fallback returned context."
+          "No saved relationship context found for #{label}. Public search returned lightweight context; treat it as unverified."
 
         Map.get(context, "status") == "error" ->
-          "No CRM match for #{label}; public web search fallback failed: #{Map.get(context, "error")}."
+          "No saved relationship context found for #{label}. Public sources were unavailable, so keep the meeting prep cautious."
 
         true ->
-          "No CRM match for #{label}; public web search fallback returned no useful result."
+          "No saved relationship context found for #{label}. Keep the meeting prep cautious and avoid inventing background."
       end
     end)
   end
@@ -545,8 +548,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> Enum.sort_by(fn {event, index} ->
       {meeting_priority(event), event_start_sort_key(event), index}
     end)
-    |> Enum.sort_by(fn {_event, index} -> index end)
-    |> Enum.map(fn {event, _index} -> event end)
   end
 
   defp meeting_priority(event) do
@@ -1062,8 +1063,23 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> Map.new()
   end
 
-  defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp public_context_error(reason) do
+    text =
+      reason
+      |> inspect()
+      |> String.downcase()
+
+    cond do
+      text =~ "timeout" or text =~ "timed out" ->
+        "Public sources timed out."
+
+      text =~ "rate" and text =~ "limit" ->
+        "Public sources were rate-limited."
+
+      true ->
+        "Public sources were unavailable."
+    end
+  end
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do

@@ -40,6 +40,59 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(publisher.acceptedToday, 3)
     }
 
+    func testRecordSyncWithSomeFailuresCreatesWarningIssue() {
+        let publisher = SourceStatusPublisher(state: .connected)
+
+        publisher.recordSync(
+            at: Date(),
+            accepted: 10,
+            duplicate: 0,
+            failed: 2,
+            issueSummary: "2 messages did not sync."
+        )
+
+        XCTAssertEqual(publisher.lastBatchFailed, 2)
+        XCTAssertEqual(publisher.totalFailed, 2)
+        XCTAssertEqual(publisher.activeIssue?.severity, .warning)
+        XCTAssertEqual(
+            publisher.displayedState(),
+            .needsAttention(reason: "2 messages did not sync.")
+        )
+    }
+
+    func testRecordSyncWithTooManyFailuresCreatesErrorIssue() {
+        let publisher = SourceStatusPublisher(state: .connected)
+
+        publisher.recordSync(
+            at: Date(),
+            accepted: 1,
+            duplicate: 0,
+            failed: 1,
+            issueSummary: "1 item did not sync."
+        )
+
+        XCTAssertEqual(publisher.activeIssue?.severity, .error)
+        XCTAssertEqual(
+            publisher.displayedState(),
+            .error(reason: "1 item did not sync.")
+        )
+    }
+
+    func testDefaultFailureSummaryAvoidsServerRejectionLanguage() {
+        let publisher = SourceStatusPublisher(state: .connected)
+
+        publisher.recordSync(
+            at: Date(),
+            accepted: 0,
+            duplicate: 0,
+            failed: 2
+        )
+
+        XCTAssertEqual(publisher.activeIssue?.reason, "2 items did not sync.")
+        XCTAssertFalse(publisher.activeIssue?.reason.lowercased().contains("server") ?? true)
+        XCTAssertFalse(publisher.activeIssue?.reason.lowercased().contains("rejected") ?? true)
+    }
+
     // MARK: recordHealthyCycle
 
     func testRecordHealthyCycleSetsLastSyncAtOnly() {
@@ -53,7 +106,56 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(publisher.totalAccepted, 0)
         XCTAssertEqual(publisher.lastBatchAccepted, 0)
         XCTAssertEqual(publisher.lastBatchDuplicate, 0)
+        XCTAssertEqual(publisher.lastBatchFailed, 0)
         XCTAssertTrue(publisher.recentBatches.isEmpty)
+    }
+
+    func testRecordHealthyCycleClearsTransportFailureButNotPartialIssue() {
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.recordCycleFailure(at: Date(), reason: "network down")
+        XCTAssertEqual(publisher.activeIssue?.severity, .error)
+
+        publisher.recordHealthyCycle(at: Date())
+        XCTAssertNil(publisher.activeIssue)
+
+        publisher.recordSync(
+            at: Date(),
+            accepted: 5,
+            duplicate: 0,
+            failed: 1,
+            issueSummary: "1 note did not sync."
+        )
+        publisher.recordHealthyCycle(at: Date())
+
+        XCTAssertEqual(publisher.activeIssue?.severity, .warning)
+    }
+
+    func testDisplayedStateKeepsBlockingPermissionIssuesRedEvenAfterPriorSync() {
+        for reason in [
+            "imessage_full_disk_access_required",
+            "notes_full_disk_access_required",
+            "voice_memos_full_disk_access_required"
+        ] {
+            let publisher = SourceStatusPublisher(state: .connected)
+            publisher.recordHealthyCycle(at: Date())
+            publisher.update(state: .needsAttention(reason: reason))
+
+            XCTAssertEqual(
+                publisher.displayedState(),
+                .error(reason: reason)
+            )
+        }
+    }
+
+    func testDisplayedStateKeepsPartialVoiceMemoTranscriptIssueYellowAfterSync() {
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.recordSync(at: Date(), accepted: 1, duplicate: 0)
+        publisher.update(state: .needsAttention(reason: "voice_memos_speech_not_authorized"))
+
+        XCTAssertEqual(
+            publisher.displayedState(),
+            .needsAttention(reason: "voice_memos_speech_not_authorized")
+        )
     }
 
     // MARK: SourceState.displayed(lastSyncAt:shippedBatch:)

@@ -10,6 +10,9 @@ struct TodosView: View {
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
+    @State private var actionErrorMessage: String?
+    @State private var refreshErrorMessage: String?
+    @State private var isRefreshing = false
 
     private var filteredTodos: [TodoItem] {
         TodoFiltering.filter(todos, by: filter, searchText: searchText)
@@ -19,17 +22,61 @@ struct TodosView: View {
         TodoFiltering.counts(in: todos, searchText: searchText)
     }
 
+    private var emptyState: TodoEmptyState {
+        filter.emptyState(searchText: searchText, hasAnyWork: !todos.isEmpty)
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 TodoFilterStrip(selection: $filter, counts: filterCounts)
 
+                if let refreshErrorMessage {
+                    SyncIssueBanner(
+                        message: refreshErrorMessage,
+                        retry: { Task { await refreshLatestWork() } },
+                        dismiss: { self.refreshErrorMessage = nil }
+                    )
+                }
+
+                if let actionErrorMessage {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .padding(.top, 3)
+
+                        Text(actionErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Spacer(minLength: 8)
+
+                        Button {
+                            self.actionErrorMessage = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Dismiss work item error")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground))
+                    .overlay(alignment: .bottom) {
+                        Divider()
+                    }
+                }
+
                 List {
                     if filteredTodos.isEmpty {
                         ContentUnavailableView(
-                            "No Todos",
-                            systemImage: "checklist",
-                            description: Text("Add a follow-up or switch filters.")
+                            emptyState.title,
+                            systemImage: emptyState.systemImage,
+                            description: Text(emptyState.description)
                         )
                     } else {
                         ForEach(filteredTodos) { todo in
@@ -71,8 +118,8 @@ struct TodosView: View {
                 }
                 .listStyle(.plain)
             }
-            .navigationTitle("Todos")
-            .searchable(text: $searchText, prompt: "Search todos")
+            .navigationTitle(filter.navigationTitle)
+            .searchable(text: $searchText, prompt: "Search open work")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     AccountMenuButton()
@@ -83,7 +130,7 @@ struct TodosView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add Todo")
+                    .accessibilityLabel("Add work item")
                 }
             }
             .sheet(isPresented: $isAddingTodo) {
@@ -93,10 +140,7 @@ struct TodosView: View {
                 TodoEditorView(todo: todo)
             }
             .task {
-                try? await ProductionDataSync.refreshTodos(
-                    sessionStore: sessionStore,
-                    modelContext: modelContext
-                )
+                await refreshLatestWork()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedTodoFilter) { _, _ in
@@ -105,36 +149,71 @@ struct TodosView: View {
         }
     }
 
+    private func refreshLatestWork() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            try await ProductionDataSync.refreshTodos(
+                sessionStore: sessionStore,
+                modelContext: modelContext
+            )
+            refreshErrorMessage = nil
+        } catch {
+            refreshErrorMessage = "Could not refresh work. \(MobileErrorCopy.message(for: error))"
+        }
+    }
+
     private func toggle(_ todo: TodoItem) {
         let completed = !todo.isCompleted
+        actionErrorMessage = nil
         todo.setCompleted(completed)
         try? modelContext.save()
 
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
         Task {
-            let remote = try? await MobileAPIClient().updateTodo(
-                sessionToken: sessionToken,
-                id: todo.id,
-                payload: ["status": completed ? "done" : "open"]
-            )
-            if let remote {
+            do {
+                let remote = try await MobileAPIClient().updateTodo(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    payload: ["status": completed ? "done" : "open"]
+                )
                 ProductionDataSync.apply(remote, to: todo)
                 try? modelContext.save()
+            } catch {
+                todo.setCompleted(!completed)
+                try? modelContext.save()
+                actionErrorMessage = todoActionMessage("Could not update work item.", error: error)
             }
         }
     }
 
     private func deleteTodos(at offsets: IndexSet) {
-        for offset in offsets {
-            delete(filteredTodos[offset], shouldSave: false)
-        }
-        try? modelContext.save()
+        let todosToDelete = offsets.map { filteredTodos[$0] }
+        todosToDelete.forEach(delete)
     }
 
-    private func delete(_ todo: TodoItem, shouldSave: Bool = true) {
-        modelContext.delete(todo)
-        if shouldSave {
+    private func delete(_ todo: TodoItem) {
+        actionErrorMessage = nil
+
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            modelContext.delete(todo)
             try? modelContext.save()
+            return
+        }
+
+        Task {
+            do {
+                _ = try await MobileAPIClient().deleteTodo(sessionToken: sessionToken, id: todo.id)
+                modelContext.delete(todo)
+                try? modelContext.save()
+            } catch let error as MobileAPIError where error.isNotFound {
+                modelContext.delete(todo)
+                try? modelContext.save()
+            } catch {
+                actionErrorMessage = todoActionMessage("Could not delete work item.", error: error)
+            }
         }
     }
 
@@ -142,5 +221,9 @@ struct TodosView: View {
         guard let requestedFilter = appNavigation.requestedTodoFilter else { return }
         filter = requestedFilter
         appNavigation.requestedTodoFilter = nil
+    }
+
+    private func todoActionMessage(_ prefix: String, error: Error) -> String {
+        "\(prefix) \(MobileErrorCopy.message(for: error))"
     }
 }

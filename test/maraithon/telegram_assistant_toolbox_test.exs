@@ -9,16 +9,20 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
-  alias Maraithon.TelegramAssistant.Toolbox
+  alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.{PreparedAction, Toolbox}
+  alias Maraithon.TelegramConversations
   alias Maraithon.Todos
 
   setup do
     original_gmail = Application.get_env(:maraithon, :gmail, [])
     original_projects = Application.get_env(:maraithon, Maraithon.Projects, [])
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
 
     on_exit(fn ->
       Application.put_env(:maraithon, :gmail, original_gmail)
       Application.put_env(:maraithon, Maraithon.Projects, original_projects)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
     end)
 
     :ok
@@ -114,7 +118,54 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "2026-03-01T12:00:00.000000Z"
 
     assert get_in(result, [:source_health, :gmail, :recommended_next_step]) =~
-             "Use gmail_search_messages"
+             "search Gmail"
+
+    assert result.summary =~ "Open work: 1 insight"
+    assert result.summary =~ "Gmail has newer mail than this summary"
+
+    assert result.next_action ==
+             "Search Gmail before answering questions about the latest inbox or today's priorities."
+
+    refute result.summary =~ "open insights"
+    refute result.next_action =~ "latest-inbox"
+    refute result.summary =~ "Start with Old Gmail insight"
+    refute result.summary =~ "Reply in the old thread"
+    refute result.summary =~ "gmail_search_messages"
+    refute result.summary =~ "Tell the user"
+  end
+
+  test "get_open_work_summary returns executive-ready summary when Gmail is missing" do
+    user_id = "toolbox-open-work-copy-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "Send investor update",
+          "summary" => "Investors need the short weekly update.",
+          "next_action" => "Send the concise investor update.",
+          "priority" => 91,
+          "dedupe_key" => "toolbox-open-work-copy:investor-update"
+        }
+      ])
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.summary =~ "Open work: 1 work item."
+    assert result.summary =~ "Start with Send the concise investor update."
+    assert result.summary =~ "Gmail is not connected, so email follow-up may be missing."
+    assert result.next_action == "Start with Send the concise investor update."
+
+    refute result.summary =~ "Tell the user"
+    refute result.summary =~ "Maraithon cannot currently inspect"
+    refute result.summary =~ "gmail_search_messages"
   end
 
   test "list_connected_accounts returns connector status without CRM or todo writes" do
@@ -123,14 +174,24 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     {:ok, _telegram} =
       ConnectedAccounts.upsert_manual(user_id, "telegram", %{
-        external_account_id: "12345",
-        metadata: %{"username" => "kentfenwick", "token" => "redacted"}
+        external_account_id: "6114124042",
+        metadata: %{
+          "chat_id" => "6114124042",
+          "username" => "kentfenwick",
+          "token" => "secret-token"
+        }
       })
 
     {:ok, _google} =
       ConnectedAccounts.upsert_manual(user_id, "google", %{
         external_account_id: "kent@example.com",
         scopes: ["gmail.readonly"]
+      })
+
+    {:ok, _slack} =
+      ConnectedAccounts.upsert_manual(user_id, "slack:TSECRET123", %{
+        external_account_id: "TSECRET123",
+        metadata: %{"team_id" => "TSECRET123", "team_name" => "Executive Ops"}
       })
 
     assert {:ok, result} =
@@ -140,16 +201,31 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
                %{user_id: user_id, context: %{}}
              )
 
-    assert result.connected_count == 2
-    assert result.status_counts == %{"connected" => 2}
+    assert result.connected_count == 3
+    assert result.status_counts == %{"connected" => 3}
 
     providers = Enum.map(result.connected_accounts, & &1.provider)
     assert "google" in providers
+    assert "slack" in providers
     assert "telegram" in providers
 
     telegram = Enum.find(result.connected_accounts, &(&1.provider == "telegram"))
-    assert telegram.metadata["username"] == "kentfenwick"
-    assert telegram.metadata["token"] == "[redacted]"
+    assert telegram.account_label == "Telegram"
+    refute Map.has_key?(telegram, :metadata)
+
+    google = Enum.find(result.connected_accounts, &(&1.provider == "google"))
+    assert google.account_label == "kent@example.com"
+    refute Map.has_key?(google, :scopes)
+
+    slack = Enum.find(result.connected_accounts, &(&1.provider == "slack"))
+    assert slack.account_label == "Executive Ops"
+
+    result_text = inspect(result)
+    refute result_text =~ "external_account_id"
+    refute result_text =~ "6114124042"
+    refute result_text =~ "TSECRET123"
+    refute result_text =~ "gmail.readonly"
+    refute result_text =~ "oauth_scopes"
 
     assert Enum.any?(result.source_freshness, &(&1.provider == "telegram"))
     assert Enum.any?(result.built_in_resources, &(&1.resource == "todos"))
@@ -184,8 +260,279 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.explanation.id == action.id
     assert result.explanation.model_summary == "The todo was due today."
     assert result.message =~ "The todo was due today."
+    assert result.message =~ "No source health issues were found for this check."
     assert [%{provider: "telegram", status: "fresh"}] = result.source_freshness
     assert result.explanation.source_evidence["authorization"] == "<redacted>"
+    refute result.message =~ "freshness snapshot"
+    refute result.message =~ "marked stale"
+  end
+
+  test "explain_action_ledger describes source health in user language" do
+    user_id = "toolbox-explain-source-copy-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "google", %{
+        external_account_id: "work@example.com",
+        metadata: %{"last_successful_sync_at" => "2026-01-01T12:00:00Z"}
+      })
+
+    {:ok, action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "proactive.sent",
+        status: "sent",
+        model_summary: "The assistant found one item that needed attention."
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "explain_action_ledger",
+               %{"action_id" => action.id},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert [%{provider: "google", status: "stale"}] = result.source_freshness
+    assert result.message =~ "Source health issues: work@example.com is out of date."
+    refute result.message =~ "freshness snapshot"
+    refute result.message =~ "stale"
+  end
+
+  test "prepare_external_action confirmation previews hide provider ids" do
+    user_id = "toolbox-prepared-copy-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    runtime_context = toolbox_run_context(user_id)
+
+    assert {:ok, slack} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "slack_post",
+                 "payload" => %{
+                   "channel" => "C012ABCD9",
+                   "team_id" => "T012SECRET",
+                   "text" => "Shipping the update."
+                 }
+               },
+               runtime_context
+             )
+
+    assert slack.preview_text == "Post a Slack message to the selected Slack channel."
+    assert slack.message =~ "Post a Slack message to the selected Slack channel."
+    refute_prepared_preview_leaks(slack, ["C012ABCD9", "T012SECRET", "workspace T"])
+
+    assert {:ok, linear} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "linear_update_issue_state",
+                 "payload" => %{
+                   "issue_id" => "lin-internal-issue-id",
+                   "state_id" => "lin-internal-state-id"
+                 }
+               },
+               runtime_context
+             )
+
+    assert linear.preview_text == "Move the selected Linear issue to the selected state."
+    refute_prepared_preview_leaks(linear, ["lin-internal-issue-id", "lin-internal-state-id"])
+
+    assert {:ok, notaui} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "notaui_complete_task",
+                 "payload" => %{
+                   "task_id" => "notaui-internal-task-id",
+                   "task_title" => "Renew contractor NDA"
+                 }
+               },
+               runtime_context
+             )
+
+    assert notaui.preview_text == "Complete Notaui task \"Renew contractor NDA\"."
+    refute_prepared_preview_leaks(notaui, ["notaui-internal-task-id"])
+  end
+
+  test "prepare_external_action previews trim noisy labels and ignore id-like display values" do
+    user_id = "toolbox-prepared-labels-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_assistant_write_tools_enabled: true
+      )
+    )
+
+    runtime_context = toolbox_run_context(user_id)
+
+    long_subject =
+      "Board packet revisions, investor-side questions, and operating review notes for next week"
+
+    assert {:ok, gmail} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "gmail_send",
+                 "payload" => %{
+                   "to" => "ceo@example.com",
+                   "subject" => long_subject
+                 }
+               },
+               runtime_context
+             )
+
+    assert gmail.preview_text =~ "Send Gmail message to ceo@example.com with subject"
+    assert gmail.preview_text =~ "..."
+    refute gmail.preview_text =~ "for next week"
+    assert String.length(gmail.preview_text) < 140
+
+    assert {:ok, slack} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "slack_post",
+                 "payload" => %{
+                   "channel_name" => "C012ABCD9",
+                   "workspace_name" => "T012SECRET",
+                   "text" => "Shipping the update."
+                 }
+               },
+               runtime_context
+             )
+
+    assert slack.preview_text == "Post a Slack message to the selected Slack channel."
+    refute_prepared_preview_leaks(slack, ["C012ABCD9", "T012SECRET"])
+
+    assert {:ok, linear} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "linear_update_issue_state",
+                 "payload" => %{
+                   "identifier" => "OPS-123",
+                   "state_name" => "lin-internal-state-id"
+                 }
+               },
+               runtime_context
+             )
+
+    assert linear.preview_text == "Move Linear issue OPS-123 to the selected state."
+    refute_prepared_preview_leaks(linear, ["lin-internal-state-id"])
+  end
+
+  test "tool failures return product-safe copy instead of raw error codes" do
+    user_id = "toolbox-safe-errors-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:error, linear_copy} =
+             Toolbox.execute(
+               "linear_list_or_lookup",
+               %{"identifier" => "OPS-123"},
+               %{user_id: user_id, context: %{}}
+             )
+
+    assert linear_copy =~ "Connect Linear before looking up issues"
+    refute linear_copy =~ "linear_not_connected"
+
+    assert {:error, agent_copy} =
+             Toolbox.execute(
+               "inspect_agent",
+               %{"agent_id" => Ecto.UUID.generate()},
+               %{user_id: user_id, context: %{}}
+             )
+
+    assert agent_copy == "That automation is no longer available."
+    refute agent_copy =~ "agent_not_found"
+
+    assert {:error, action_copy} =
+             Toolbox.execute(
+               "prepare_external_action",
+               %{
+                 "action_type" => "slack_post",
+                 "payload" => %{"channel" => "C012ABCD9", "text" => "Ship it."}
+               },
+               toolbox_run_context(user_id)
+             )
+
+    assert action_copy == "Action drafting is not enabled."
+    refute action_copy =~ "write_tools_disabled"
+  end
+
+  test "prepare_agent_action uses automation copy in confirmations" do
+    user_id = "toolbox-automation-copy-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(config,
+        telegram_full_chat_enabled: true,
+        telegram_agent_control_enabled: true
+      )
+    )
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "prompt_agent",
+        config: %{"name" => "Kent's Gmail agent", "prompt" => "Track replies."}
+      })
+
+    runtime_context = toolbox_run_context(user_id)
+
+    assert {:ok, delete} =
+             Toolbox.execute(
+               "prepare_agent_action",
+               %{"action" => "delete", "agent_id" => agent.id},
+               runtime_context
+             )
+
+    assert delete.preview_text ==
+             "Delete the \"Kent's Gmail agent\" automation. " <>
+               "This removes its saved setup and history."
+
+    assert delete.message =~ "Reply `yes` or use the buttons to delete it"
+    refute delete.preview_text =~ "runtime"
+    refute delete.preview_text =~ "behavior"
+
+    assert {:ok, create} =
+             Toolbox.execute(
+               "prepare_agent_action",
+               %{
+                 "action" => "create",
+                 "launch" => %{
+                   "behavior" => "prompt_agent",
+                   "name" => "Inbox Follow-Through",
+                   "prompt" => "Track replies."
+                 }
+               },
+               runtime_context
+             )
+
+    assert create.preview_text == "Create the \"Inbox Follow-Through\" automation."
+    refute create.preview_text =~ "agent"
+    refute create.preview_text =~ "prompt_agent"
   end
 
   test "todo tools can persist, search, and resolve durable work" do
@@ -534,7 +881,14 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert remembered.status == "saved"
     assert remembered.saved_count == 1
+    assert remembered.durable_saved_count == 1
+    assert remembered.active_saved_count == 1
+    assert remembered.pending_saved_count == 0
     assert remembered.requires_confirmation == false
+
+    assert remembered.message ==
+             "Preference saved: Ignore routine receipts. Future triage will apply it automatically."
+
     assert remembered.active_count == 1
     assert Enum.any?(remembered.active_rules, &(&1["id"] == "ignore_receipts"))
     assert Enum.any?(PreferenceMemory.active_rules(user_id), &(&1["id"] == "ignore_receipts"))
@@ -558,6 +912,47 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert forgotten.pending_count == 0
     assert forgotten.message =~ "Removed preference"
     assert PreferenceMemory.active_rules(user_id) == []
+  end
+
+  test "remember_preferences does not claim low confidence rules were saved" do
+    user_id = "toolbox-preference-rejected-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, remembered} =
+             Toolbox.execute(
+               "remember_preferences",
+               %{
+                 "rules" => [
+                   %{
+                     "id" => "maybe_ignore_updates",
+                     "kind" => "content_filter",
+                     "label" => "Maybe ignore updates",
+                     "instruction" => "Maybe downrank vague project updates.",
+                     "applies_to" => ["gmail", "telegram"],
+                     "confidence" => 0.42,
+                     "filters" => %{"topics" => ["updates"]},
+                     "evidence" => ["The signal was ambiguous."]
+                   }
+                 ]
+               },
+               runtime_context
+             )
+
+    assert remembered.status == "not_saved"
+    assert remembered.saved_count == 1
+    assert remembered.durable_saved_count == 0
+    assert remembered.active_saved_count == 0
+    assert remembered.pending_saved_count == 0
+    assert remembered.requires_confirmation == false
+    assert [%{"status" => "rejected"}] = remembered.saved_rules
+
+    assert remembered.message ==
+             "Could not turn that into a durable preference yet. Try /prefer with a broader rule."
+
+    assert PreferenceMemory.active_rules(user_id) == []
+    assert PreferenceMemory.pending_rules(user_id) == []
   end
 
   test "deep memory tools write, recall, record feedback, list, and forget memories" do
@@ -766,5 +1161,45 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
         "google_account_email" => "kent@voteagora.com"
       }
     }
+  end
+
+  defp toolbox_run_context(user_id) do
+    {:ok, conversation} =
+      TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "toolbox-prepared-copy-root"
+      })
+
+    {:ok, run} =
+      TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "running",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{},
+        started_at: DateTime.utc_now()
+      })
+
+    %{
+      user_id: user_id,
+      chat_id: conversation.chat_id,
+      conversation_id: conversation.id,
+      run_id: run.id,
+      surface: "telegram",
+      context: %{}
+    }
+  end
+
+  defp refute_prepared_preview_leaks(result, forbidden_fragments) do
+    prepared_action = Repo.get!(PreparedAction, result.prepared_action_id)
+
+    for text <- [result.preview_text, result.message, prepared_action.preview_text],
+        fragment <- forbidden_fragments do
+      refute text =~ fragment
+    end
   end
 end

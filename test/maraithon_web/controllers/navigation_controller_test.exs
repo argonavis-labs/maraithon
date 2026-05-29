@@ -9,12 +9,12 @@ defmodule MaraithonWeb.NavigationControllerTest do
   alias Maraithon.OAuth
 
   describe "tab pages" do
-    test "GET /connectors renders the connectors page", %{conn: conn} do
+    test "GET /connectors renders the connected apps page", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors")
       html = html_response(conn, 200)
 
-      assert html =~ "Connectors"
-      assert html =~ "Maraithon needs a Telegram chat"
+      assert html =~ "Connected Apps"
+      assert html =~ "Connect Telegram first so Maraithon can send proactive updates."
       assert html =~ "Maraithon Desktop App"
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
@@ -74,7 +74,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "Apple Notes"
       assert detail_html =~ "Secure local sync"
       refute detail_html =~ "Telegram required"
-      refute detail_html =~ "OAuth setup"
+      refute detail_html =~ "Connection Setup"
       refute detail_html =~ "Disconnect"
     end
 
@@ -161,11 +161,11 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "ops@example.com"
       assert detail_html =~ "Enabled: Gmail, Google Calendar"
       assert detail_html =~ "Enabled: Google Contacts"
-      assert detail_html =~ "Granted 2 Google OAuth scopes"
-      assert detail_html =~ "Granted 1 Google OAuth scope"
+      assert detail_html =~ "2 Google permissions granted"
+      assert detail_html =~ "1 Google permission granted"
       assert detail_html =~ "Disconnect"
       refute detail_html =~ "Stored Grant"
-      refute detail_html =~ "Connection Details"
+      refute detail_html =~ "Access Details"
     end
 
     test "GET /connectors shows refresh-required summary and detail-level Google account action",
@@ -202,7 +202,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "Connected Accounts"
       assert detail_html =~ "founder@example.com"
       assert detail_html =~ "Token refresh failed and the account must be re-authenticated."
-      assert detail_html =~ "refresh inactive"
+      assert detail_html =~ "background access off"
       assert detail_html =~ "Reconnect"
       assert detail_html =~ "Disconnect"
       refute detail_html =~ "Stored Grant"
@@ -212,9 +212,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user() |> get("/connectors/github")
       html = html_response(conn, 200)
 
-      assert html =~ "Connectors"
+      assert html =~ "Connected Apps"
       assert html =~ "GitHub"
-      assert html =~ "OAuth setup"
+      assert html =~ "Connection Setup"
     end
 
     test "GET /connectors/slack renders slack setup details", %{conn: conn} do
@@ -222,7 +222,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      assert html =~ "OAuth setup"
+      assert html =~ "Connection Setup"
       assert html =~ "SLACK_SIGNING_SECRET"
       assert html =~ "/webhooks/slack"
     end
@@ -348,8 +348,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user(user_id) |> get("/connectors/telegram")
       html = html_response(conn, 200)
 
-      assert html =~ "Chat ID 6114124042"
-      assert html =~ "@kentfenwick"
+      assert html =~ "Delivery linked to @kentfenwick"
+      refute html =~ "Chat ID 6114124042"
+      refute html =~ "6114124042"
       refute html =~ "Linked chat"
     end
 
@@ -358,8 +359,16 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "How it works"
-      assert html =~ "Execution flow"
-      assert html =~ "Engineering principles"
+      assert html =~ "Operating loop"
+      assert html =~ "Product standards"
+      assert html =~ "Prepare the brief"
+      assert html =~ "recommended next move"
+      refute html =~ "webhook endpoints"
+      refute html =~ "API ingress"
+      refute html =~ "LLM provider"
+      refute html =~ "queue depth"
+      refute html =~ "raw logs"
+      refute html =~ "Engineering principles"
     end
 
     test "GET /settings renders settings page", %{conn: conn} do
@@ -367,8 +376,25 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Settings"
-      assert html =~ "Security secrets"
-      assert html =~ "OAuth provider readiness"
+      assert html =~ "Assistant readiness"
+      assert html =~ "Access readiness"
+      assert html =~ "Connected app readiness"
+      assert html =~ "Assistant provider"
+      assert html =~ "Response quality"
+      assert html =~ "Analysis depth"
+      assert html =~ "Action window"
+      assert html =~ "Check-in cadence"
+      assert html =~ "Account owner email"
+      assert html =~ "setup status"
+      refute html =~ "Primary model"
+      refute html =~ "Connector readiness"
+      refute html =~ "Assistant engine"
+      refute html =~ "Response configuration"
+      refute html =~ "Reasoning profile"
+      refute html =~ "LLM provider"
+      refute html =~ "LLM provider module"
+      refute html =~ "Tool timeout (ms)"
+      refute html =~ "Heartbeat interval (ms)"
     end
 
     test "GET /conenctors redirects to /connectors", %{conn: conn} do
@@ -392,7 +418,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert redirected_to(conn) == "/connectors"
 
       assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
-               "Connect Telegram before linking other connectors."
+               "Connect Telegram before linking other apps."
     end
   end
 
@@ -401,14 +427,18 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user() |> post("/connectors/invalid/disconnect", %{})
 
       assert redirected_to(conn) == "/connectors"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unsupported provider"
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
+               "That app connection is not available."
     end
 
     test "GET /connectors/:provider redirects unknown provider", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors/unknown")
 
       assert redirected_to(conn) == "/connectors"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) == "Unknown connector: unknown"
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) ==
+               "That app connection is not available."
     end
 
     test "POST /connectors/google/disconnect can remove a specific Google account", %{conn: conn} do

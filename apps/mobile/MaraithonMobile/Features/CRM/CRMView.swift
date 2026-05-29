@@ -10,6 +10,9 @@ struct CRMView: View {
     @State private var editingContact: CRMContact?
     @State private var searchText = ""
     @State private var statusFilter: CRMStatusFilter = .all
+    @State private var refreshErrorMessage: String?
+    @State private var actionErrorMessage: String?
+    @State private var isRefreshing = false
 
     private var filteredContacts: [CRMContact] {
         CRMFiltering.filter(contacts, statusFilter: statusFilter, searchText: searchText)
@@ -19,9 +22,39 @@ struct CRMView: View {
         CRMFiltering.counts(contacts, searchText: searchText)
     }
 
+    private var emptyState: PeopleEmptyState {
+        statusFilter.emptyState(searchText: searchText, hasAnyPeople: !contacts.isEmpty)
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                if let refreshErrorMessage {
+                    Section {
+                        SyncIssueBanner(
+                            message: refreshErrorMessage,
+                            retry: { Task { await refreshLatestPeople() } },
+                            dismiss: { self.refreshErrorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+
+                if let actionErrorMessage {
+                    Section {
+                        SyncIssueBanner(
+                            title: "Relationship update was not saved",
+                            message: actionErrorMessage,
+                            buttonTitle: nil,
+                            retry: nil,
+                            dismiss: { self.actionErrorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+
                 Section {
                     FilterCountStrip(
                         selection: $statusFilter,
@@ -43,9 +76,9 @@ struct CRMView: View {
                 Section("People") {
                     if filteredContacts.isEmpty {
                         ContentUnavailableView(
-                            contacts.isEmpty ? "No People" : "No Matching People",
-                            systemImage: "person.crop.circle.badge.plus",
-                            description: Text(contacts.isEmpty ? "Add someone to start tracking the relationship." : "Adjust search or filters.")
+                            emptyState.title,
+                            systemImage: emptyState.systemImage,
+                            description: Text(emptyState.description)
                         )
                     } else {
                         ForEach(filteredContacts) { contact in
@@ -56,26 +89,22 @@ struct CRMView: View {
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
-                                    contact.status = .active
-                                    save()
+                                    apply(.markActive, to: contact)
                                 } label: {
                                     Label("Active", systemImage: "person.crop.circle.fill.badge.checkmark")
                                 }
                                 .tint(.green)
 
                                 Button {
-                                    contact.lastContactedAt = Date()
-                                    save()
+                                    apply(.logContact(Date()), to: contact)
                                 } label: {
-                                    Label("Contacted", systemImage: "phone.arrow.up.right")
+                                    Label(CRMViewCopy.reachedOutActionTitle, systemImage: "phone.arrow.up.right")
                                 }
                                 .tint(.blue)
                             }
                             .swipeActions(edge: .trailing) {
                                 Button {
-                                    contact.status = .closed
-                                    contact.dealStage = .lost
-                                    save()
+                                    apply(.archive, to: contact)
                                 } label: {
                                     Label("Archive", systemImage: "archivebox")
                                 }
@@ -104,7 +133,7 @@ struct CRMView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("Add Person")
+                    .accessibilityLabel(CRMViewCopy.addPersonAccessibilityLabel)
                 }
             }
             .sheet(isPresented: $isAddingContact) {
@@ -114,10 +143,7 @@ struct CRMView: View {
                 ContactEditorView(contact: contact)
             }
             .task {
-                try? await ProductionDataSync.refreshPeople(
-                    sessionStore: sessionStore,
-                    modelContext: modelContext
-                )
+                await refreshLatestPeople()
             }
             .onAppear(perform: applyRequestedFilterIfNeeded)
             .onChange(of: appNavigation.requestedPeopleFilter) { _, _ in
@@ -126,8 +152,45 @@ struct CRMView: View {
         }
     }
 
-    private func save() {
+    private func apply(_ action: CRMQuickAction, to contact: CRMContact) {
+        let snapshot = CRMContactSnapshot(contact: contact)
+        actionErrorMessage = nil
+        action.apply(to: contact)
         try? modelContext.save()
+
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+
+        Task {
+            do {
+                let remote = try await MobileAPIClient().updatePerson(
+                    sessionToken: sessionToken,
+                    id: contact.id,
+                    payload: ProductionDataSync.personPayload(from: contact)
+                )
+                ProductionDataSync.apply(remote, to: contact)
+                try? modelContext.save()
+            } catch {
+                snapshot.restore(to: contact)
+                try? modelContext.save()
+                actionErrorMessage = "\(action.failurePrefix) \(MobileErrorCopy.message(for: error))"
+            }
+        }
+    }
+
+    private func refreshLatestPeople() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            try await ProductionDataSync.refreshPeople(
+                sessionStore: sessionStore,
+                modelContext: modelContext
+            )
+            refreshErrorMessage = nil
+        } catch {
+            refreshErrorMessage = "Could not refresh people. \(MobileErrorCopy.message(for: error))"
+        }
     }
 
     private func tint(for filter: CRMStatusFilter) -> Color {
@@ -145,4 +208,9 @@ struct CRMView: View {
         statusFilter = requestedFilter
         appNavigation.requestedPeopleFilter = nil
     }
+}
+
+enum CRMViewCopy {
+    static let reachedOutActionTitle = "Reached out"
+    static let addPersonAccessibilityLabel = "Add person"
 }

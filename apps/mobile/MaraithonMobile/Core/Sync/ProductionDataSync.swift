@@ -16,6 +16,13 @@ enum ProductionDataSync {
 
         for remoteTodo in remoteTodos {
             guard let id = UUID(uuidString: remoteTodo.id) else { continue }
+            guard shouldKeepRemoteTodo(remoteTodo) else {
+                if let todo = localByID[id] {
+                    modelContext.delete(todo)
+                }
+                continue
+            }
+
             if let todo = localByID[id] {
                 apply(remoteTodo, to: todo)
             } else {
@@ -47,6 +54,7 @@ enum ProductionDataSync {
     static func apply(_ remoteTodo: MobileAPIClient.RemoteTodo, to todo: TodoItem) {
         todo.title = remoteTodo.title
         todo.notes = remoteTodo.notes ?? remoteTodo.summary ?? ""
+        todo.nextAction = remoteTodo.nextAction
         todo.priority = priority(from: remoteTodo.priority)
         todo.dueDate = remoteTodo.dueAt
         todo.isCompleted = remoteTodo.status == "done"
@@ -70,14 +78,17 @@ enum ProductionDataSync {
         notes: String,
         priority: TodoPriority,
         dueDate: Date?,
-        isCompleted: Bool
+        isCompleted: Bool,
+        nextAction: String? = nil
     ) -> [String: Any] {
+        let nextAction = cleanedText(nextAction) ?? cleanedText(title) ?? cleanedText(notes) ?? "Review this item."
+
         var payload: [String: Any] = [
             "source": "mobile",
             "kind": "general",
             "title": title,
             "summary": notes.isEmpty ? title : notes,
-            "next_action": title,
+            "next_action": nextAction,
             "notes": notes,
             "priority": priorityValue(from: priority),
             "status": isCompleted ? "done" : "open"
@@ -88,6 +99,27 @@ enum ProductionDataSync {
         }
 
         return payload
+    }
+
+    static func nextActionForTodoPayload(
+        title: String,
+        notes: String,
+        requestedNextAction: String? = nil,
+        existingTitle: String? = nil,
+        existingNotes: String? = nil,
+        existingNextAction: String? = nil
+    ) -> String {
+        if let requestedNextAction = cleanedText(requestedNextAction) {
+            return requestedNextAction
+        }
+
+        if let existingNextAction = cleanedText(existingNextAction),
+           !sameText(existingNextAction, existingTitle),
+           !sameText(existingNextAction, existingNotes) {
+            return existingNextAction
+        }
+
+        return cleanedText(title) ?? cleanedText(notes) ?? "Review this item."
     }
 
     static func personPayload(
@@ -125,11 +157,30 @@ enum ProductionDataSync {
         return payload
     }
 
+    static func personPayload(from contact: CRMContact) -> [String: Any] {
+        personPayload(
+            name: contact.name,
+            company: contact.company,
+            email: contact.email,
+            phone: contact.phone,
+            status: contact.status,
+            dealStage: contact.dealStage,
+            dealValue: contact.dealValue,
+            notes: contact.notes,
+            lastContactedAt: contact.lastContactedAt
+        )
+    }
+
+    static func shouldKeepRemoteTodo(_ remoteTodo: MobileAPIClient.RemoteTodo) -> Bool {
+        remoteTodo.status != "dismissed"
+    }
+
     static func todo(from remoteTodo: MobileAPIClient.RemoteTodo, id: UUID) -> TodoItem {
         TodoItem(
             id: id,
             title: remoteTodo.title,
             notes: remoteTodo.notes ?? remoteTodo.summary ?? "",
+            nextAction: remoteTodo.nextAction,
             priority: priority(from: remoteTodo.priority),
             dueDate: remoteTodo.dueAt,
             isCompleted: remoteTodo.status == "done",
@@ -154,32 +205,36 @@ enum ProductionDataSync {
 
     private static func priority(from value: Int?) -> TodoPriority {
         switch value ?? 50 {
-        case 75...100: .high
-        case 35..<75: .medium
+        case 90...: .critical
+        case 75..<90: .high
+        case 50..<75: .medium
         default: .low
         }
     }
 
     private static func priorityValue(from priority: TodoPriority) -> Int {
         switch priority {
-        case .high: 90
+        case .critical: 95
+        case .high: 80
         case .medium: 55
         case .low: 20
         }
     }
 
     private static func status(from remotePerson: MobileAPIClient.RemotePerson) -> ContactStatus {
+        switch remotePerson.status {
+        case "archived", "merged":
+            return .closed
+        default:
+            break
+        }
+
         if let mobileStatus = remotePerson.metadata["mobile_status"]?.string,
            let status = ContactStatus(rawValue: mobileStatus) {
             return status
         }
 
-        switch remotePerson.status {
-        case "archived", "merged":
-            return .closed
-        default:
-            return .active
-        }
+        return .active
     }
 
     private static func dealStage(from remotePerson: MobileAPIClient.RemotePerson) -> DealStage {
@@ -192,7 +247,7 @@ enum ProductionDataSync {
 
     private static func company(from remotePerson: MobileAPIClient.RemotePerson) -> String {
         let relationship = remotePerson.relationship?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return relationship?.isEmpty == false ? relationship! : "Maraithon"
+        return relationship?.isEmpty == false ? relationship! : ""
     }
 
     private static func firstContactValue(_ values: [String: [String]], key: String) -> String? {
@@ -201,5 +256,18 @@ enum ProductionDataSync {
 
     private static func isoString(for date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func cleanedText(_ value: String?) -> String? {
+        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+
+        return text
+    }
+
+    private static func sameText(_ lhs: String, _ rhs: String?) -> Bool {
+        guard let rhs = cleanedText(rhs) else { return false }
+        return lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
     }
 }

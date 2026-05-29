@@ -31,7 +31,7 @@ enum Tokens {
 
 /// Status semantics — always paired with an SF Symbol; the color
 /// vocabulary is small on purpose.
-enum StatusTone {
+enum StatusTone: Equatable {
     case neutral
     case good
     case attention

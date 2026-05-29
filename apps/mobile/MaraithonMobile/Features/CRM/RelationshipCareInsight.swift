@@ -41,7 +41,7 @@ enum RelationshipCareInsight {
                 level: .needsCare,
                 title: "Needs care",
                 subtitle: contact.lastContactedAt.map { "Last contact \(relativeDays(from: $0, to: now, calendar: calendar))" } ?? "No recent contact",
-                actionTitle: "Follow Up",
+                actionTitle: "Follow up",
                 systemImage: "person.crop.circle.badge.exclamationmark"
             )
         }
@@ -51,7 +51,7 @@ enum RelationshipCareInsight {
                 level: .new,
                 title: "First touch",
                 subtitle: "No contact logged yet",
-                actionTitle: "Log Contact",
+                actionTitle: "Log contact",
                 systemImage: "person.crop.circle.badge.plus"
             )
         }
@@ -63,15 +63,15 @@ enum RelationshipCareInsight {
                 level: .needsCare,
                 title: "Needs care",
                 subtitle: "Last contact \(relativeDays(days))",
-                actionTitle: "Follow Up",
+                actionTitle: "Follow up",
                 systemImage: "person.crop.circle.badge.exclamationmark"
             )
         case 7..<14:
             return RelationshipCareSummary(
                 level: .due,
-                title: "Due",
+                title: "Check-in due",
                 subtitle: "Last contact \(relativeDays(days))",
-                actionTitle: "Check In",
+                actionTitle: "Check in",
                 systemImage: "person.wave.2"
             )
         default:
@@ -79,7 +79,7 @@ enum RelationshipCareInsight {
                 level: .warm,
                 title: "Warm",
                 subtitle: "Contacted \(relativeDays(days))",
-                actionTitle: "Log Contact",
+                actionTitle: "Log contact",
                 systemImage: "checkmark.circle"
             )
         }

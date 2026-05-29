@@ -70,7 +70,11 @@ struct NotesIngest: Sendable {
                     event: "ingest:notes",
                     payload: try Self.realtimePayload(from: batch)
                 )
-                outcome = SyncOutcome(accepted: rt.accepted, duplicate: rt.duplicate)
+                outcome = SyncOutcome(
+                    accepted: rt.accepted,
+                    duplicate: rt.duplicate,
+                    invalid: rt.invalid
+                )
                 if let spotlight {
                     await spotlight(batch.notes)
                 }
@@ -116,7 +120,7 @@ struct NotesIngest: Sendable {
             // The server agent confirmed the response shape mirrors the
             // messages endpoint — `{ "accepted": N, "duplicate": M }`.
             let decoded = try JSONDecoder().decode(IngestResponse.self, from: data)
-            return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate)
+            return SyncOutcome(accepted: decoded.accepted, duplicate: decoded.duplicate, invalid: decoded.invalid)
         case 401:
             throw MaraithonClientError.unauthorized
         case 400..<500:

@@ -218,8 +218,7 @@ defmodule Maraithon.Tools.PeopleToolsTest do
     assert review.reviewed_sources == ["gmail"]
     assert review.source_freshness == []
     assert review.results["gmail"].source == "gmail"
-    assert [%{source: "gmail", reason: reason}] = review.errors
-    assert reason in ["no_token", "google_account_not_connected"] or reason =~ "no_token"
+    assert [%{source: "gmail", reason: "not connected"}] = review.errors
   end
 
   test "merge_people tool collapses duplicate CRM people" do

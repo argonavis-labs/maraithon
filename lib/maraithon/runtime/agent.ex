@@ -26,6 +26,8 @@ defmodule Maraithon.Runtime.Agent do
   @default_effect_timeout_ms 120_000
   @default_llm_effect_timeout_ms 900_000
   @effect_timeout_buffer_ms 10_000
+  @global_register_retry_ms 25
+  @global_register_retries 80
 
   defstruct [
     :agent_id,
@@ -1201,13 +1203,31 @@ defmodule Maraithon.Runtime.Agent do
 
   defp register_global_name(agent_id) do
     name = {:maraithon_agent, agent_id}
+    register_global_name(name, @global_register_retries)
+  end
 
+  defp register_global_name(name, retries_left) do
     case :global.register_name(name, self()) do
       :yes ->
         :ok
 
       :no ->
-        {:error, {:already_started, :global.whereis_name(name)}}
+        owner = :global.whereis_name(name)
+
+        if retries_left > 0 and retry_global_register?(owner) do
+          Process.sleep(@global_register_retry_ms)
+          register_global_name(name, retries_left - 1)
+        else
+          {:error, {:already_started, owner}}
+        end
     end
   end
+
+  defp retry_global_register?(:undefined), do: true
+
+  defp retry_global_register?(pid) when is_pid(pid) do
+    node(pid) == node() and not Process.alive?(pid)
+  end
+
+  defp retry_global_register?(_owner), do: false
 end

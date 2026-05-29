@@ -12,7 +12,8 @@ enum ChatResponder {
         }
 
         if normalized.contains("todo") || normalized.contains("task") || normalized.contains("follow") {
-            return "You have \(openTodoCount) open todos. I would capture the next concrete follow-up with a due date and link it to the right person."
+            let noun = openTodoCount == 1 ? "work item" : "work items"
+            return "You have \(openTodoCount) open \(noun). I would capture the next concrete follow-up with a due date and link it to the right person."
         }
 
         if normalized.contains("crm") || normalized.contains("people") || normalized.contains("person") || normalized.contains("contact") || normalized.contains("relationship") || normalized.contains("deal") {
@@ -20,9 +21,9 @@ enum ChatResponder {
         }
 
         if normalized.contains("summarize") || normalized.contains("summary") {
-            return "Summary: keep the thread focused on one person, one next action, and one follow-up so it can become either a todo or a relationship note."
+            return "Summary: keep the thread focused on one person, one next action, and one follow-up so it can become either a work item or a relationship note."
         }
 
-        return "Captured. Next best action: convert this into a todo, update a relationship note, or keep exploring the conversation here."
+        return "Captured. Next best action: convert this into a work item, update a relationship note, or keep exploring the conversation here."
     }
 }

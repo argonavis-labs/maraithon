@@ -18,11 +18,11 @@ struct ConnectView: View {
             appGlyph
 
             VStack(spacing: Tokens.Spacing.small) {
-                Text("Connect to Maraithon")
+                Text(ConnectCopy.title)
                     .font(.largeTitle.weight(.semibold))
                     .multilineTextAlignment(.center)
 
-                Text("Sync iMessage and other local context to your assistant. Everything stays encrypted; you can revoke this device any time.")
+                Text(ConnectCopy.body)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -33,13 +33,13 @@ struct ConnectView: View {
                 Button {
                     env.deviceAuth.beginPairing()
                 } label: {
-                    Text("Connect")
+                    Text(ConnectCopy.connectButton)
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .accessibilityLabel("Connect to Maraithon")
+                .accessibilityLabel(ConnectCopy.title)
 
                 if case .error(let message) = env.deviceAuth.state {
                     Label(message, systemImage: "exclamationmark.triangle.fill")

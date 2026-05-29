@@ -316,7 +316,8 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       response = json_response(conn, 400)
       assert response["error"] == "OAuth authorization failed"
-      assert response["details"]["error"] == "access_denied"
+      assert response["details"] == %{"provider" => "google", "reason" => "access_denied"}
+      refute inspect(response) =~ "User denied access"
     end
 
     @doc """
@@ -330,8 +331,11 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       conn = get(conn, "/auth/google/callback", %{code: "invalid_code", state: state})
 
-      # Token exchange will fail, but state is valid
-      assert json_response(conn, 400) == %{"error" => "Failed to exchange authorization code"}
+      # Token exchange will fail, but state is valid.
+      assert json_response(conn, 400) == %{
+               "error" =>
+                 "Google Workspace connection could not be completed. Start the connection again."
+             }
     end
   end
 
@@ -406,7 +410,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       response = json_response(conn, 400)
       assert response["error"] == "OAuth authorization failed"
-      assert response["details"] == "access_denied"
+      assert response["details"] == %{"provider" => "slack", "reason" => "access_denied"}
     end
 
     @doc """
@@ -418,8 +422,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       conn = get(conn, "/auth/slack/callback", %{code: "invalid_code", state: state})
 
-      # Token exchange will fail, but state is valid
-      assert json_response(conn, 400) == %{"error" => "Failed to exchange authorization code"}
+      # Token exchange will fail, but state is valid.
+      assert json_response(conn, 400) == %{
+               "error" => "Slack connection could not be completed. Start the connection again."
+             }
     end
   end
 
@@ -494,7 +500,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       response = json_response(conn, 400)
       assert response["error"] == "OAuth authorization failed"
-      assert response["details"] == "access_denied"
+      assert response["details"] == %{"provider" => "linear", "reason" => "access_denied"}
     end
 
     @doc """
@@ -506,8 +512,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       conn = get(conn, "/auth/linear/callback", %{code: "invalid_code", state: state})
 
-      # Token exchange will fail, but state is valid
-      assert json_response(conn, 400) == %{"error" => "Failed to exchange authorization code"}
+      # Token exchange will fail, but state is valid.
+      assert json_response(conn, 400) == %{
+               "error" => "Linear connection could not be completed. Start the connection again."
+             }
     end
   end
 
@@ -531,6 +539,29 @@ defmodule MaraithonWeb.OAuthControllerTest do
   end
 
   describe "GET /auth/github/callback" do
+    test "redirected provider errors do not echo provider descriptions", %{conn: conn} do
+      state =
+        signed_provider_state("github", "user_123", %{
+          "return_to" => "/connectors?user_id=user_123"
+        })
+
+      conn =
+        get(conn, "/auth/github/callback", %{
+          error: "server_error",
+          error_description: "client_secret=github-secret",
+          state: state
+        })
+
+      redirect_url = redirected_to(conn)
+
+      assert redirect_url =~ "/connectors?"
+      assert redirect_url =~ "oauth_provider=github"
+      assert redirect_url =~ "oauth_status=error"
+      assert redirect_url =~ "oauth_message=GitHub+authorization+failed.+Try+again."
+      refute redirect_url =~ "github-secret"
+      refute redirect_url =~ "server_error"
+    end
+
     test "redirects back to the admin UI when return_to is provided", %{conn: conn} do
       bypass = Bypass.open()
 
@@ -730,6 +761,13 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert response["status"] == "connected"
       assert response["user_id"] == "user_456"
       assert response["services"] == ["calendar"]
+
+      assert response["watches"]["calendar"] == %{
+               "status" => "failed",
+               "reason" => "Calendar watch is not configured yet."
+             }
+
+      refute inspect(response) =~ "webhook_url_not_configured"
     end
 
     test "stores Google tokens under account-specific provider when identity is available", %{
@@ -969,7 +1007,11 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       # Token storage will fail because access_token is nil
       response = json_response(conn, 500)
-      assert response["error"] == "Failed to store tokens"
+
+      assert response["error"] ==
+               "Linear connected, but Maraithon could not save the connection. Try again."
+
+      refute response["error"] =~ "tokens"
     end
   end
 

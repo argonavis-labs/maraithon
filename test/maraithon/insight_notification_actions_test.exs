@@ -121,7 +121,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "<b>Todo</b>"
+    assert sent.text =~ "<b>Open work</b>"
     assert sent.text =~ "Send the deck to Sarah"
     assert sent.text =~ "<b>Context</b>"
     assert sent.text =~ "Explicit promise made to Sarah."
@@ -129,6 +129,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Sarah"
     assert sent.text =~ "Gmail"
     assert sent.text =~ "<b>Why important</b>"
+    assert sent.text =~ "A named person is waiting on the next step"
     assert sent.text =~ "<b>Next</b>"
     assert sent.text =~ "tap Draft Email"
     assert sent.text =~ "approval before sending"
@@ -138,6 +139,9 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     assert String.length(sent.text) <= 700
     refute sent.text =~ "I think this needs your attention."
+    refute sent.text =~ "thread still looks open"
+    refute sent.text =~ "still looks unclosed"
+    refute sent.text =~ "I found no later reply"
     refute sent.text =~ "<b>What I'd send</b>"
     refute sent.text =~ "<b>Fast actions</b>"
     refute sent.text =~ "Tap Draft Email"
@@ -226,8 +230,121 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     assert updated_insight.status == "acknowledged"
     assert get_in(updated_delivery.metadata, ["telegram_action", "status"]) == "executed"
-    assert completed.text =~ "Completed"
+    assert completed.text =~ "<b>Sent</b>"
     assert completed.text =~ "Sent via Gmail"
+    assert completed.text =~ "Item: You said you'd send the deck to Sarah today."
+    refute completed.text =~ "<b>Completed</b>"
+    refute completed.text =~ "message gmail-sent-1"
+    refute completed.text =~ "message unknown"
+    refute completed.text =~ "At:"
+    refute completed.text =~ ~r/\d{4}-\d{2}-\d{2}T/
+  end
+
+  test "action callback failures do not expose raw provider errors", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google", %{
+        access_token: "google-access",
+        refresh_token: "google-refresh",
+        expires_in: 3600
+      })
+
+    {:ok, [insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Reply owed: Vendor update",
+          "summary" => "The vendor asked for a status update.",
+          "recommended_action" => "Reply with the current status.",
+          "priority" => 91,
+          "confidence" => 0.9,
+          "source_id" => "msg-in-error",
+          "dedupe_key" => "telegram-actions:gmail:raw-error",
+          "metadata" => %{
+            "thread_id" => "thread-error",
+            "to" => "Vendor <vendor@example.com>",
+            "subject" => "Vendor update",
+            "record" => %{"person" => "Vendor"}
+          }
+        }
+      ])
+
+    delivery =
+      %Delivery{}
+      |> Delivery.changeset(%{
+        insight_id: insight.id,
+        user_id: user_id,
+        channel: "telegram",
+        destination: "12345",
+        score: 0.91,
+        threshold: 0.78,
+        status: "sent",
+        provider_message_id: "321",
+        sent_at: DateTime.utc_now(),
+        metadata: %{
+          "telegram_action" => %{
+            "status" => "drafted",
+            "spec" => %{
+              "kind" => "gmail_reply",
+              "to" => "Vendor <vendor@example.com>",
+              "subject" => "Re: Vendor update",
+              "body" => "Sharing the latest status now.",
+              "thread_id" => "thread-error",
+              "reply_to_message_id" => "msg-in-error"
+            }
+          }
+        }
+      })
+      |> Repo.insert!()
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages/msg-in-error", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(
+        200,
+        Jason.encode!(%{
+          "id" => "msg-in-error",
+          "threadId" => "thread-error",
+          "payload" => %{"headers" => []}
+        })
+      )
+    end)
+
+    Bypass.expect_once(bypass, "POST", "/gmail/v1/users/me/messages/send", fn conn ->
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(500, ~s({"error":"Req.TransportError token abc123"}))
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          callback_id: "cb-gmail-send-error",
+          chat_id: 12345,
+          message_id: 321,
+          data: "insact:#{delivery.id}:send"
+        }
+      })
+
+    callback = last_telegram_message(:callback)
+
+    assert callback.opts[:text] ==
+             "Could not complete that yet. Try again from the latest message or open Maraithon to review it."
+
+    refute callback.opts[:text] =~ "Req.TransportError"
+    refute callback.opts[:text] =~ "token"
+    refute callback.opts[:text] =~ "abc123"
+    refute callback.opts[:text] =~ "gmail_send_failed"
   end
 
   test "verifies proactive Telegram copy stays concise and chief-of-staff shaped", %{
@@ -276,7 +393,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     sent = last_telegram_message(:send)
 
     assert in_order?(sent.text, [
-             "<b>Todo</b>",
+             "<b>Open work</b>",
              "<b>Context</b>",
              "<b>Person</b>",
              "<b>Why important</b>",
@@ -335,9 +452,11 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "<b>Todo</b>"
+    assert sent.text =~ "<b>Open work</b>"
     assert sent.text =~ "Michael Berlingo"
     assert sent.text =~ "Thread: Starteryou UGC Campaigns"
+    assert sent.text =~ "Michael Berlingo is tied to this open thread"
+    assert sent.text =~ "no later reply or delivery closes the loop"
     assert sent.text =~ "contact on Starteryou UGC Campaigns thread"
     assert sent.text =~ "Gmail · kent@runner.now"
     assert sent.text =~ "Suggested:"
@@ -345,10 +464,14 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "approval before sending"
     assert sent.text =~ "open the Starteryou UGC Campaigns thread"
     assert sent.text =~ "confirm what Michael Berlingo is waiting on"
-    assert sent.text =~ "dismiss if stale"
+    assert sent.text =~ "close if done"
     assert String.length(sent.text) <= 700
+    refute sent.text =~ "dismiss if stale"
     refute sent.text =~ "exact artifact or update"
     refute sent.text =~ "Reply now with owner, ETA"
+    refute sent.text =~ "appears to be waiting"
+    refute sent.text =~ "still looks open"
+    refute sent.text =~ "I found no later reply"
     assert button_labels(sent.opts) |> Enum.member?("Draft Email")
   end
 
@@ -458,7 +581,14 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     assert updated_insight.status == "acknowledged"
     assert get_in(updated_delivery.metadata, ["telegram_action", "status"]) == "executed"
+    assert completed.text =~ "<b>Sent</b>"
     assert completed.text =~ "Sent in Slack"
+    assert completed.text =~ "Item: Slack reply owed to Sarah"
+    refute completed.text =~ "<b>Completed</b>"
+    refute completed.text =~ "ts 171235.000200"
+    refute completed.text =~ "ts unknown"
+    refute completed.text =~ "At:"
+    refute completed.text =~ ~r/\d{4}-\d{2}-\d{2}T/
   end
 
   test "marks an insight complete directly from Telegram", %{agent: agent, user_id: user_id} do
@@ -501,7 +631,10 @@ defmodule Maraithon.InsightNotificationActionsTest do
     completed = last_telegram_message(:edit)
 
     assert updated_insight.status == "acknowledged"
+    assert completed.text =~ "<b>Marked Done</b>"
     assert completed.text =~ "Marked complete from Telegram"
+    assert completed.text =~ "Item: Post-meeting follow-up owed: Monday planning"
+    refute completed.text =~ "<b>Completed</b>"
   end
 
   test "acknowledges important FYI insights directly from Telegram", %{
@@ -553,7 +686,10 @@ defmodule Maraithon.InsightNotificationActionsTest do
     completed = last_telegram_message(:edit)
 
     assert updated_insight.status == "acknowledged"
+    assert completed.text =~ "<b>Acknowledged</b>"
     assert completed.text =~ "Acknowledged from Telegram"
+    assert completed.text =~ "Item: Platform status: App Store Connect In Review"
+    refute completed.text =~ "<b>Completed</b>"
   end
 
   test "renders conversation-progress language for heads_up insights in Telegram", %{

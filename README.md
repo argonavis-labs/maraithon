@@ -701,7 +701,8 @@ flyctl secrets set -a maraithon \
   ADMIN_PASSWORD="replace-with-long-random-password" \
   API_BEARER_TOKEN="replace-with-long-random-token" \
   OPENAI_API_KEY="sk-proj-..." \
-  OPENAI_MODEL="gpt-5.4" \
+  OPENROUTER_API_KEY="sk-or-v1-..." \
+  LLM_MODEL="qwen/qwen3.7-max" \
   FLY_API_TOKEN="replace-with-fly-token" \
   FLY_LOG_APPS="maraithon" \
   FLY_LOG_REGION="yyz" \
@@ -802,10 +803,10 @@ Never commit deployment secrets.
 ## Configuration
 
 ```bash
-# Required for LLM (OpenAI)
+# Required for LLM. Set both keys once, then switch models with LLM_MODEL.
 export OPENAI_API_KEY="sk-proj-..."
-export OPENAI_MODEL="gpt-5.4"
-export LLM_PROVIDER="openai"
+export OPENROUTER_API_KEY="sk-or-v1-..."
+export LLM_MODEL="qwen/qwen3.7-max" # or "gpt-5.4" for direct OpenAI
 
 # Required for production security
 export ADMIN_USERNAME="admin"
@@ -823,6 +824,8 @@ export DB_QUEUE_INTERVAL_MS="2000"
 
 # Optional
 export OPENAI_REASONING_EFFORT="high"
+export OPENROUTER_REASONING_EFFORT="medium"
+export LLM_PROVIDER="openai" # optional legacy override; LLM_MODEL wins when set
 export ANTHROPIC_API_KEY="sk-ant-..." # optional alternate provider
 export ANTHROPIC_MODEL="claude-sonnet-4-20250514"
 export GITHUB_WEBHOOK_SECRET="your_secret"

@@ -48,12 +48,16 @@ defmodule MaraithonWeb.InsightsLiveTest do
 
     {:ok, view, html} = live(conn, "/insights")
 
-    assert html =~ "CRM cleanup"
+    assert html =~ "People cleanup"
+    refute html =~ "CRM cleanup"
     assert html =~ "Relationship suggestions"
     assert html =~ "Possible duplicate: Christina Giannone"
     assert html =~ "Merge contacts"
     assert html =~ "Suggested action:"
-    assert html =~ "I think Emma Fenwick is your daughter"
+    assert html =~ "Review relationship: Emma Fenwick as your daughter"
+    assert html =~ "Confirm before updating Emma Fenwick"
+    refute html =~ "I think Emma Fenwick is your daughter"
+    refute html =~ "confidence"
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/insights'][aria-current='page']", "Insights")
   end
@@ -120,7 +124,8 @@ defmodule MaraithonWeb.InsightsLiveTest do
       |> List.first()
 
     {:ok, view, html} = live(conn, "/insights")
-    assert html =~ "I think Emma Fenwick is your daughter"
+    assert html =~ "Review relationship: Emma Fenwick as your daughter"
+    refute html =~ "I think Emma Fenwick is your daughter"
 
     html =
       view
@@ -135,6 +140,16 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert updated.relationship == "daughter"
     assert updated.metadata["relationship_context_source"] == "crm_insights"
     assert updated.metadata["relationship_suggestion_id"] == suggestion.id
-    refute html =~ "I think Emma Fenwick is your daughter"
+    assert updated.metadata["relationship_domain"] == "family"
+    assert updated.metadata["relationship_preset"] == "child"
+    assert updated.metadata["family_member"] == true
+    assert updated.metadata["family_role"] == "child"
+    assert updated.metadata["dependent_context"] == true
+    assert updated.metadata["sensitivity"] == "child_family"
+    assert updated.metadata["todo_policy"] == "family_logistics_only"
+    assert updated.metadata["push_policy"] == "time_sensitive_only"
+    assert [%{id: updated_id}] = Crm.list_family_context(@user_email, limit: 5)
+    assert updated_id == emma.id
+    refute html =~ "Review relationship: Emma Fenwick as your daughter"
   end
 end

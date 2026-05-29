@@ -25,7 +25,13 @@ defmodule Maraithon.FlyLogsTest do
     assert {:ok, snapshot} = FlyLogs.recent_logs()
     refute snapshot.available
     assert snapshot.logs == []
-    assert [%{message: "FLY_API_TOKEN is not configured"}] = snapshot.errors
+
+    assert [%{message: "Platform log access is not configured for this environment."}] =
+             snapshot.errors
+
+    encoded = inspect(snapshot)
+    refute encoded =~ "FLY_API_TOKEN"
+    refute encoded =~ "FLY_LOG_APPS"
   end
 
   test "fetches and normalizes Fly logs" do
@@ -99,6 +105,36 @@ defmodule Maraithon.FlyLogsTest do
     assert platform.level == "warn"
     assert platform.message == "WARN Trial machine stopping"
     assert platform.metadata["provider"] == "runner"
+  end
+
+  test "summarizes Fly fetch failures without leaking response bodies" do
+    bypass = Bypass.open()
+
+    Bypass.expect_once(bypass, "GET", "/api/v1/apps/maraithon/logs", fn conn ->
+      body = %{"error" => "denied", "secret" => "fly-internal-token"}
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(500, Jason.encode!(body))
+    end)
+
+    Application.put_env(:maraithon, Maraithon.FlyLogs,
+      api_token: "FlyV1 test-token",
+      api_base_url: "http://localhost:#{bypass.port}/api/v1",
+      apps: ["maraithon"],
+      region: "yyz",
+      receive_timeout_ms: 1_000
+    )
+
+    assert {:ok, snapshot} = FlyLogs.recent_logs(limit: 10)
+    assert snapshot.available
+
+    assert [%{app: "maraithon", message: "Platform log provider returned HTTP 500."}] =
+             snapshot.errors
+
+    encoded = inspect(snapshot)
+    refute encoded =~ "fly-internal-token"
+    refute encoded =~ "denied"
   end
 
   test "requires a single selected app when paginating with next_token" do

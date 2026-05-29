@@ -1,6 +1,6 @@
 defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   @moduledoc """
-  Slack accountability behavior focused on unresolved commitments and reply debt.
+  Slack accountability behavior focused on unresolved commitments and unanswered replies.
 
   Detects high-signal open loops from channel and DM history, then stores
   structured unresolved commitment records for Telegram escalation.

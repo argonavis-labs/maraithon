@@ -173,4 +173,12 @@ final class OnboardingFlow {
         defaults.set(false, forKey: Self.fullDiskAccessSkippedDefaultsKey)
         eventLog?.info("onboarding.full_disk_access.skip_cleared", source: .ui)
     }
+
+    /// Record that the running app can read the protected Messages
+    /// database. This is used outside first-run onboarding so a user who
+    /// grants Full Disk Access later does not keep seeing the skipped-FDA
+    /// banner after a relaunch.
+    func recordFullDiskAccessGranted() {
+        clearFullDiskAccessSkipped()
+    }
 }

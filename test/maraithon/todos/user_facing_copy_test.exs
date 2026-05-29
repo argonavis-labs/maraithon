@@ -32,7 +32,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert attrs["title"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
 
     assert attrs["summary"] ==
-             "You committed to follow up with Alex Müller (Starteryou) about Starteryou UGC Campaigns. Context: Alex is waiting on the UGC campaign materials decision. I found no later reply or delivery that clearly closes the loop."
+             "You committed to follow up with Alex Müller (Starteryou) about Starteryou UGC Campaigns. Context: Alex is waiting on the UGC campaign materials decision. No later reply or delivery clearly closes the loop."
 
     assert attrs["next_action"] ==
              "Reply to Alex Müller about Starteryou UGC Campaigns with the promised update, current status, and the next timing you can safely commit to."
@@ -41,6 +41,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "Draft as Kent: reply to Alex Müller about Starteryou UGC Campaigns with the actual promise, current status, and timing you can safely stand behind."
 
     refute attrs["summary"] =~ "User"
+    refute attrs["summary"] =~ "I found"
   end
 
   test "falls back to source-thread confirmation when exact ask is missing" do
@@ -108,13 +109,49 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert attrs["title"] == "Reply to Michael Berlingo on \"Starteryou UGC Campaigns\"."
 
     assert attrs["summary"] ==
-             "You committed to follow up with Michael Berlingo (Starteryou; UGC campaign contact) about Starteryou UGC Campaigns. Context: Michael is waiting on the UGC campaign next-step decision. I found no later reply or delivery that clearly closes the loop."
+             "You committed to follow up with Michael Berlingo (Starteryou; UGC campaign contact) about Starteryou UGC Campaigns. Context: Michael is waiting on the UGC campaign next-step decision. No later reply or delivery clearly closes the loop."
 
     assert attrs["next_action"] ==
              "Reply to Michael Berlingo about Starteryou UGC Campaigns with the promised update, current status, and the next timing you can safely commit to."
 
-    refute attrs["summary"] =~ "No later reply"
+    refute attrs["summary"] =~ "No later reply or follow-through was found"
+    refute attrs["summary"] =~ "I found"
     refute attrs["next_action"] =~ "owner, ETA"
+  end
+
+  test "strips internal source labels from todo-facing copy" do
+    attrs =
+      UserFacingCopy.polish_attrs(%{
+        "source" => "chief_of_staff_morning_briefing",
+        "title" => "Agora getdelegates API errors were flagged",
+        "summary" =>
+          "Datadog and Sentry surfaced elevated getdelegates API errors for Agora.\nFrom: Chief_of_staff_morning_briefing",
+        "notes" =>
+          "Source: chief_of_staff_morning_briefing\nPriority: high\nQuote: Elevated getdelegates API errors need owner confirmation.",
+        "next_action" =>
+          "Ask the engineering owner whether the issue is resolved and whether customers were affected."
+      })
+
+    assert attrs["summary"] ==
+             "Datadog and Sentry surfaced elevated getdelegates API errors for Agora."
+
+    assert attrs["notes"] == "Quote: Elevated getdelegates API errors need owner confirmation."
+    refute attrs["summary"] =~ "From:"
+    refute attrs["notes"] =~ "Source:"
+    refute attrs["notes"] =~ "Priority:"
+    refute attrs["summary"] =~ "chief_of_staff"
+    refute attrs["notes"] =~ "chief_of_staff"
+  end
+
+  test "naturalizes inline assistant source labels that cannot be dropped" do
+    attrs =
+      UserFacingCopy.polish_attrs(%{
+        "summary" =>
+          "This came from chief_of_staff_commitment_tracker after checking the follow-up thread."
+      })
+
+    assert attrs["summary"] ==
+             "This came from my commitment review after checking the follow-up thread."
   end
 
   test "todo upsert applies copy polish before persistence" do

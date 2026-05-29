@@ -145,7 +145,8 @@ final class SyncEngine {
             try await queue.acknowledge(count: next.count)
             aggregate = SyncOutcome(
                 accepted: aggregate.accepted + outcome.accepted,
-                duplicate: aggregate.duplicate + outcome.duplicate
+                duplicate: aggregate.duplicate + outcome.duplicate,
+                invalid: aggregate.invalid + outcome.invalid
             )
         }
         return aggregate
@@ -241,6 +242,13 @@ struct SyncEnvelope: Codable, Sendable, Equatable {
 struct SyncOutcome: Codable, Sendable, Equatable {
     let accepted: Int
     let duplicate: Int
+    let invalid: Int
+
+    init(accepted: Int, duplicate: Int, invalid: Int = 0) {
+        self.accepted = accepted
+        self.duplicate = duplicate
+        self.invalid = invalid
+    }
 }
 
 /// Minimal type-erasing codable for the envelope's `payload` dictionary.

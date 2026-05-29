@@ -24,6 +24,7 @@ defmodule Maraithon.Diagnostics.Export do
   alias Maraithon.Redaction
   alias Maraithon.Repo
   alias Maraithon.Runtime.{BackgroundJob, ScheduledJob}
+  alias Maraithon.RunErrorCopy
   alias Maraithon.ScheduledTasks
   alias Maraithon.ScheduledTasks.Run, as: ScheduledTaskRun
   alias Maraithon.ScheduledTasks.Task
@@ -38,9 +39,11 @@ defmodule Maraithon.Diagnostics.Export do
   @runtime_config_keys ~w(
     llm_provider_name
     llm_model
+    llm_model_selector
     llm_routing_model
     llm_chat_model
     openai_model
+    openrouter_model
     anthropic_model
     heartbeat_interval_ms
     checkpoint_interval_ms
@@ -60,7 +63,7 @@ defmodule Maraithon.Diagnostics.Export do
     llm_timeout_ms
     tool_timeout_ms
     max_effect_attempts
-  )
+  )a
 
   def run(opts \\ []) when is_list(opts) do
     try do
@@ -222,7 +225,7 @@ defmodule Maraithon.Diagnostics.Export do
         result_summary: run.result_summary || %{},
         started_at: run.started_at,
         finished_at: run.finished_at,
-        error: run.error,
+        error: RunErrorCopy.assistant_response(run.error),
         inserted_at: run.inserted_at,
         updated_at: run.updated_at
       }
@@ -253,7 +256,7 @@ defmodule Maraithon.Diagnostics.Export do
         active_skills: run.active_skills || [],
         tool_allowlist: run.tool_allowlist || [],
         budget_snapshot: run.budget_snapshot || %{},
-        error: run.error,
+        error: RunErrorCopy.agent_run(run.error),
         metadata: run.metadata || %{},
         started_at: run.started_at,
         completed_at: run.completed_at,
@@ -370,7 +373,7 @@ defmodule Maraithon.Diagnostics.Export do
         cancelled_at: job.cancelled_at,
         payload_keys: map_keys(job.payload),
         result_keys: map_keys(job.result),
-        last_error: job.last_error,
+        last_error: background_job_error(job.last_error),
         inserted_at: job.inserted_at,
         updated_at: job.updated_at
       }
@@ -415,6 +418,13 @@ defmodule Maraithon.Diagnostics.Export do
     }
   end
 
+  defp background_job_error(nil), do: nil
+  defp background_job_error(""), do: nil
+
+  defp background_job_error(error) do
+    RunErrorCopy.runtime_failure(%{source: "background_job", details: error})
+  end
+
   defp push_receipts(user_id, limit) do
     PushReceipt
     |> maybe_filter_user(user_id)
@@ -441,7 +451,7 @@ defmodule Maraithon.Diagnostics.Export do
 
     runtime =
       runtime_config
-      |> Keyword.take(Enum.map(@runtime_config_keys, &String.to_atom/1))
+      |> Keyword.take(@runtime_config_keys)
       |> Map.new(fn {key, value} -> {Atom.to_string(key), safe_runtime_value(value)} end)
 
     assistant =

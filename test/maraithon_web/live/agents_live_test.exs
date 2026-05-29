@@ -23,21 +23,23 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
-  test "highlights the Agents tab on /agents", %{conn: conn} do
+  test "highlights the Automations tab on /agents", %{conn: conn} do
     {:ok, view, html} = live(conn, "/agents")
 
-    assert html =~ "Agents"
-    assert has_element?(view, "a[href='/agents'][aria-current='page']", "Agents")
+    assert html =~ "Automations"
+    assert has_element?(view, "a[href='/agents'][aria-current='page']", "Automations")
   end
 
   test "renders empty registry and empty workspace states", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "No agents yet."
+    assert html =~ "No automations yet."
     assert html =~ "Start with a template"
   end
 
-  test "registry rows describe what agents do and which connectors they inspect", %{conn: conn} do
+  test "registry rows describe what automations do and which connectors they inspect", %{
+    conn: conn
+  } do
     {:ok, _agent} =
       create_agent(%{
         behavior: "inbox_calendar_advisor",
@@ -47,7 +49,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "Agents"
+    assert html =~ "Automations"
     assert html =~ "Watches inbox and calendar context"
     assert html =~ "Google Gmail"
     assert html =~ "Slack Channels"
@@ -121,7 +123,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
              "Stop"
            )
 
-    assert render(view) =~ "Agent started"
+    assert render(view) =~ "Automation started"
 
     stop_agent_process(agent.id)
   end
@@ -151,7 +153,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
              "Start"
            )
 
-    assert render(view) =~ "Agent stopped"
+    assert render(view) =~ "Automation paused"
   end
 
   test "delete removes the row and clears selection", %{conn: conn} do
@@ -175,7 +177,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     html = render(view)
     refute html =~ agent.id
-    assert html =~ "No agents yet."
+    assert html =~ "No automations yet."
   end
 
   test "selected inspection shows logs, events, queue, spend, and config", %{conn: conn} do
@@ -190,7 +192,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
-    {:ok, _event} = Maraithon.Events.append(agent.id, "inspection_ready", %{message: "ok"})
+    {:ok, _event} =
+      Maraithon.Events.append(agent.id, "inspection_ready", %{
+        message: "DBConnection.ConnectionError token=secret stacktrace"
+      })
 
     {:ok, _effect} =
       %Effect{}
@@ -201,7 +206,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
         effect_type: "tool_call",
         status: "failed",
         attempts: 2,
-        error: "Tool timeout"
+        error: "Tool failed: DBConnection.ConnectionError token=secret stacktrace"
       })
       |> Maraithon.Repo.insert()
 
@@ -222,22 +227,43 @@ defmodule MaraithonWeb.AgentsLiveTest do
       metadata: %{agent_id: agent.id}
     })
 
+    Maraithon.LogBuffer.record(%{
+      level: :error,
+      message: "DBConnection.ConnectionError token=secret stacktrace",
+      metadata: %{agent_id: agent.id, token: "secret"}
+    })
+
     _ = :sys.get_state(Maraithon.LogBuffer)
 
-    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
+    html = render(view)
 
-    assert html =~ "Effect Queue"
-    assert html =~ "tool_call"
-    assert html =~ "Scheduled Jobs"
-    assert html =~ "heartbeat"
-    assert html =~ "Recent Events"
-    assert html =~ "inspection_ready"
-    assert html =~ "Spend Summary"
-    assert html =~ "Config Snapshot"
+    assert html =~ "Run Queue"
+    assert html =~ "Action"
+    assert html =~ "Scheduled Work"
+    assert html =~ "Heartbeat"
+    assert html =~ "Recent Activity"
+    assert html =~ "Inspection ready"
+    assert html =~ "Recorded automation activity."
+    assert html =~ "Usage Summary"
+    assert html =~ "Current Setup"
     assert html =~ "agent inspection log"
-    assert html =~ "Architecture"
-    assert html =~ "Runtime contract"
-    assert html =~ "OTP Agent Runtime"
+    assert html =~ "Operational Notes"
+    assert html =~ "Diagnostic details are hidden from this view."
+    assert html =~ "Action failed. Check the connection and try again."
+    assert html =~ "Operating model"
+    assert html =~ "Run controls"
+    assert html =~ "Maraithon Automation Service"
+    assert html =~ "Automation"
+    refute html =~ "Tool failed"
+    refute html =~ "DBConnection"
+    refute html =~ "token=secret"
+    refute html =~ "stacktrace"
+    refute html =~ "Raw log lines"
+    refute html =~ "Agent Runtime"
+    refute html =~ "Maraithon Agent Service"
+    refute html =~ "Runtime contract"
+    refute html =~ "OTP Agent Runtime"
   end
 
   test "chief of staff inspection shows attached skills and edits morning briefing time", %{
@@ -295,6 +321,8 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "founder@example.com"
     assert html =~ "Agora"
     assert html =~ "@kentfenwick"
+    refute html =~ "Chat ID"
+    refute html =~ "6114124042"
 
     {:ok, view, html} = live(conn, "/agents?id=#{agent.id}&panel=skills")
 
@@ -312,6 +340,31 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert render(view) =~ "9:00 AM"
   end
 
+  test "morning briefing schedule errors use product copy", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "enabled_skills" => ["morning_briefing"],
+          "morning_brief_hour_local" => 8,
+          "timezone_offset_hours" => -5
+        },
+        status: "stopped"
+      })
+
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}&panel=skills")
+
+    html =
+      render_submit(view, "update_morning_brief_time", %{
+        "schedule" => %{"local_hour" => "99"}
+      })
+
+    assert html =~ "Choose a valid morning briefing time."
+    refute html =~ "invalid_local_hour"
+    refute html =~ ":invalid"
+  end
+
   test "unauthorized ids clear the selection safely", %{conn: conn} do
     {:ok, other_agent} =
       Agents.create_agent(%{
@@ -321,7 +374,8 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
-    assert {:error, {:live_redirect, %{to: "/agents", flash: %{"error" => "Agent not found"}}}} =
+    assert {:error,
+            {:live_redirect, %{to: "/agents", flash: %{"error" => "Automation not found"}}}} =
              live(conn, "/agents?id=#{other_agent.id}")
   end
 
@@ -336,7 +390,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _view, html} = live(conn, "/agents?status=stopped")
 
-    assert html =~ "No agents match the current filters."
+    assert html =~ "No automations match the current filters."
     assert html =~ "Reset filters"
   end
 

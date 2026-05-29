@@ -11,8 +11,8 @@ struct ChiefOfStaffPrompt: Identifiable {
     static let planDay = ChiefOfStaffPrompt(
         id: "plan-day",
         title: "Plan my day",
-        subtitle: "Prioritize overdue work, people, and next actions.",
-        message: "Plan my day like my chief of staff. Start with the single next move, then list the overdue work, relationship follow-ups, and anything I can safely ignore.",
+        subtitle: "Prioritize past-due work, people, and next actions.",
+        message: "Plan my day like my chief of staff. Start with the single next move, then list the past-due work, relationship follow-ups, and anything I can safely ignore.",
         systemImage: "calendar.badge.clock",
         tint: .indigo
     )
@@ -28,9 +28,9 @@ struct ChiefOfStaffPrompt: Identifiable {
 
     static let captureTodo = ChiefOfStaffPrompt(
         id: "capture-todo",
-        title: "Capture a todo",
-        subtitle: "Turn loose context into an actionable task.",
-        message: "Help me capture a todo. Ask only for the missing details needed to make it concrete: owner, due date, person, and next action.",
+        title: "Capture work",
+        subtitle: "Turn loose context into a concrete next action.",
+        message: "Help me capture a work item. Ask only for the missing details needed to make it concrete: owner, due date, person, and next action.",
         systemImage: "checklist",
         tint: .orange
     )
@@ -39,7 +39,7 @@ struct ChiefOfStaffPrompt: Identifiable {
         id: "draft-follow-up",
         title: "Draft follow-up",
         subtitle: "Write a concise reply with relationship context.",
-        message: "Help me draft a follow-up. Use my relationship context and open loops, then give me a ready-to-send message plus the next todo if one is needed.",
+        message: "Help me draft a follow-up. Use my relationship context and open loops, then give me a ready-to-send message plus the next work item if one is needed.",
         systemImage: "square.and.pencil",
         tint: .blue
     )

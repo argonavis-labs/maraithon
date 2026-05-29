@@ -262,7 +262,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
     end
   end
 
-  defp question_brief_attrs(attrs, state, summary, reviewed_at) do
+  defp question_brief_attrs(attrs, state, _summary, reviewed_at) do
     project_id = normalize_string(Map.get(attrs, "project_id"))
     question = normalize_string(Map.get(attrs, "question"))
     project = project_id && Map.get(state.pending_projects, project_id)
@@ -278,16 +278,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
           "scheduled_for" => reviewed_at,
           "dedupe_key" =>
             "brief:weekend_scope:#{project.id}:#{DateTime.to_unix(reviewed_at, :second)}",
-          "title" => "Weekend project check: #{project.name}",
-          "summary" =>
-            summary ||
-              "I sorted weekend projects and todos, but I want to confirm this one before I keep grouping related work.",
+          "title" => "Confirm project scope: #{project.name}",
+          "summary" => scope_confirmation_summary(project.name, life_domain),
           "body" =>
             [
-              "Weekend home/work pass:",
-              guess_sentence(project.name, life_domain, reasoning, confidence),
-              question,
-              "Reply in-thread with `work` or `home` and I'll update the project and related todos."
+              "Needs your call: #{scope_question(project.name, life_domain)}",
+              scope_guess_sentence(project.name, life_domain, reasoning),
+              "Reply with `home` or `work` and I'll update the project and related work."
             ]
             |> Enum.reject(&is_nil/1)
             |> Enum.join("\n\n"),
@@ -311,28 +308,42 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
     end
   end
 
-  defp guess_sentence(_project_name, nil, nil, _confidence), do: nil
+  defp scope_confirmation_summary(project_name, nil) do
+    "Confirm whether #{project_name} is home or work so related work stays grouped correctly."
+  end
 
-  defp guess_sentence(project_name, life_domain, reasoning, confidence) do
-    base =
-      "I currently think #{project_name} is #{life_domain}"
-      |> Kernel.<>(
-        if(is_number(confidence), do: " (#{confidence_percent(confidence)} confidence)", else: "")
-      )
+  defp scope_confirmation_summary(project_name, life_domain) do
+    "Confirm whether #{project_name} is a #{life_domain} project so related work stays grouped correctly."
+  end
 
+  defp scope_question(project_name, nil), do: "is #{project_name} home or work?"
+
+  defp scope_question(project_name, life_domain),
+    do: "is #{project_name} a #{life_domain} project?"
+
+  defp scope_guess_sentence(_project_name, nil, nil), do: nil
+
+  defp scope_guess_sentence(_project_name, nil, reasoning) do
+    "Why I am asking: #{clean_sentence(reasoning) || "this affects how related work is grouped"}."
+  end
+
+  defp scope_guess_sentence(project_name, life_domain, reasoning) do
     case normalize_string(reasoning) do
-      nil -> base <> "."
-      text -> base <> " because " <> String.trim_trailing(text, ".") <> "."
+      nil ->
+        "Current read: #{project_name} looks like #{life_domain}, but I want your call before I group related work."
+
+      text ->
+        "Current read: #{project_name} looks like #{life_domain} because #{clean_sentence(text)}."
     end
   end
 
-  defp confidence_percent(value) when is_number(value) do
+  defp clean_sentence(value) do
     value
-    |> normalize_confidence()
-    |> Kernel.*(100)
-    |> round()
-    |> Integer.to_string()
-    |> Kernel.<>("%")
+    |> normalize_string()
+    |> case do
+      nil -> nil
+      text -> String.trim_trailing(text, ".")
+    end
   end
 
   defp llm_params(projects, todos, local_now, context) do
@@ -532,17 +543,90 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   defp normalize_string(_value), do: nil
 
   defp decode_json_payload(content) when is_binary(content) do
-    case Jason.decode(content) do
-      {:ok, value} ->
-        {:ok, value}
-
-      {:error, _reason} ->
-        case Regex.run(~r/```json\s*(\{.*\})\s*```/s, content, capture: :all_but_first) do
-          [json] -> Jason.decode(json)
-          _ -> {:error, :invalid_json}
-        end
-    end
+    content
+    |> json_decode_candidates()
+    |> Enum.reduce_while({:error, :invalid_json}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, decoded} -> {:halt, {:ok, decoded}}
+        {:error, reason} -> {:cont, {:error, reason}}
+      end
+    end)
   end
 
   defp decode_json_payload(_content), do: {:error, :invalid_json}
+
+  defp json_decode_candidates(content) do
+    trimmed = String.trim(content)
+
+    ([trimmed, strip_markdown_json_fence(trimmed)] ++
+       fenced_json_candidates(trimmed) ++ [first_balanced_json_object(trimmed)])
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp strip_markdown_json_fence(content) when is_binary(content) do
+    case Regex.run(~r/\A```(?:json)?\s*(.*?)\s*```\z/s, content, capture: :all_but_first) do
+      [json] -> String.trim(json)
+      _ -> content
+    end
+  end
+
+  defp fenced_json_candidates(content) when is_binary(content) do
+    ~r/```(?:json)?\s*(.*?)\s*```/s
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp first_balanced_json_object(content) when is_binary(content) do
+    content
+    |> String.graphemes()
+    |> Enum.reduce_while({:searching, []}, &collect_first_json_object/2)
+    |> case do
+      {:done, chars} -> chars |> Enum.reverse() |> Enum.join() |> String.trim()
+      _ -> nil
+    end
+  end
+
+  defp collect_first_json_object("{", {:searching, _chars}),
+    do: {:cont, {:collecting, 1, false, false, ["{"]}}
+
+  defp collect_first_json_object(_char, {:searching, _chars}), do: {:cont, {:searching, []}}
+
+  defp collect_first_json_object(char, {:collecting, depth, in_string?, escaped?, chars}) do
+    chars = [char | chars]
+
+    cond do
+      in_string? and escaped? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      in_string? and char == "\\" ->
+        {:cont, {:collecting, depth, true, true, chars}}
+
+      in_string? and char == "\"" ->
+        {:cont, {:collecting, depth, false, false, chars}}
+
+      in_string? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "\"" ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "{" ->
+        {:cont, {:collecting, depth + 1, false, false, chars}}
+
+      char == "}" ->
+        depth = depth - 1
+
+        if depth == 0 do
+          {:halt, {:done, chars}}
+        else
+          {:cont, {:collecting, depth, false, false, chars}}
+        end
+
+      true ->
+        {:cont, {:collecting, depth, false, false, chars}}
+    end
+  end
 end

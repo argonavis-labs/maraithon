@@ -196,6 +196,66 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert Enum.any?(relationship.todos, &(&1.id == todo.id))
   end
 
+  test "accepts markdown-fenced model JSON as a real commitment report", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-fenced-json"
+    }
+
+    {:effect, {:llm_call, _params}, state} = CommitmentTracker.handle_wakeup(state, context)
+
+    report_json =
+      Jason.encode!(%{
+        "title" => "Commitment tracker - 2026-05-09",
+        "summary" => "No new commitments were found in checked sources.",
+        "body" =>
+          "## Checked\n- Gmail and calendar were checked.\n\n## Unknowns\n- Anything outside checked sources remains unknown.",
+        "todos" => []
+      })
+
+    response = %{
+      content: """
+      Here is the source-backed commitment report.
+
+      ```json
+      #{report_json}
+      ```
+      """
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      CommitmentTracker.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.generation_mode == "llm"
+    assert payload.todo_count == 0
+    refute payload.error_message
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Commitment tracker - 2026-05-09"
+    assert brief.summary == "No new commitments were found in checked sources."
+    assert brief.body =~ "## Checked"
+    assert brief.body =~ "## Unknowns"
+    assert brief.metadata["generation_mode"] == "llm"
+    refute brief.error_message
+    refute brief.body =~ "Commitment check needs source review"
+  end
+
   test "invalid model output records an explicit error without heuristic todo creation", %{
     user_id: user_id,
     agent: agent
@@ -228,10 +288,124 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert payload.error_message =~ "model_response_invalid"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Commitment tracker generation failed"
+    assert brief.title == "Commitment check needs source review"
     assert brief.cadence == "commitment_tracker"
     assert brief.error_message =~ "model_response_invalid"
-    assert brief.body =~ "No heuristic or keyword-based fallback was used."
+    assert brief.summary =~ "No reliable commitment review was available"
+    assert brief.body =~ "## Needs Your Attention"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "No existing open commitment was already on your list"
+    assert brief.body =~ "Today's move:"
+
+    assert brief.body =~
+             "No new commitments were saved because the checked source evidence did not clearly show a new promise"
+
+    refute brief.body =~ "classified safely"
+    refute brief.body =~ "could not produce"
+    refute brief.body =~ "model_response_invalid"
+    refute brief.body =~ "configured model"
+    refute brief.body =~ "structured JSON"
+    refute brief.body =~ "heuristic"
+    refute brief.body =~ "keyword"
+    refute brief.body =~ "finish_reason"
     assert Todos.list_for_user(user_id, limit: 5) == []
+  end
+
+  test "invalid model output still briefs existing open work without creating new todos", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    {:ok, [existing_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Send Jordan the investor update",
+          "todo" => "Jordan is waiting for the latest investor metrics before Monday.",
+          "summary" => "You owe Jordan the latest investor metrics before Monday.",
+          "next_action" => "Reply with the current metrics and flag any missing numbers.",
+          "dedupe_key" => "commitment:jordan:investor-update",
+          "priority" => 94
+        }
+      ])
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_gmail(%{
+        "inbox_messages" => [
+          %{
+            "message_id" => "msg-jordan",
+            "thread_id" => "thread-jordan",
+            "from" => "Jordan <jordan@example.com>",
+            "to" => "Kent <kent@runner.now>",
+            "subject" => "Investor update",
+            "snippet" => "Can you send the current metrics?",
+            "text_body" => "Can you send the current metrics before Monday?",
+            "internal_date" => now,
+            "account" => "kent@runner.now"
+          }
+        ],
+        "sent_messages" => [],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+      |> SourceBundle.put_calendar(%{
+        "events" => [
+          %{
+            "event_id" => "evt-board",
+            "summary" => "Board prep",
+            "start" => ~U[2026-05-10 13:00:00Z],
+            "end" => ~U[2026-05-10 13:30:00Z],
+            "account" => "kent@runner.now"
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: source_bundle,
+      assistant_cycle_id: "cycle-existing-open-work"
+    }
+
+    {:effect, {:llm_call, _params}, state} = CommitmentTracker.handle_wakeup(state, context)
+
+    {:emit, {:brief_generation_failed, payload}, _state} =
+      CommitmentTracker.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
+
+    assert payload.generation_mode == "error"
+    assert payload.todo_count == 0
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Commitment check: review existing open work"
+    assert brief.summary =~ "Start with 1 existing open item"
+    assert brief.body =~ "Send Jordan the investor update"
+    assert brief.body =~ "Next: Reply with the current metrics"
+    assert brief.body =~ "Gmail checked: 1 recent inbox message and 0 recent sent messages"
+    assert brief.body =~ "Calendar checked: 1 upcoming event"
+    assert brief.body =~ "Existing open work checked: 1 open item"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Today's move: clear or explicitly keep the first open item"
+    refute brief.body =~ "classified safely"
+    refute brief.body =~ "model_response_invalid"
+    refute brief.body =~ "structured JSON"
+    refute brief.body =~ "finish_reason"
+
+    [todo] = Todos.list_for_user(user_id, limit: 5)
+    assert todo.id == existing_todo.id
   end
 end

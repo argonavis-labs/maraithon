@@ -18,28 +18,39 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
   end
 
   describe "rendering" do
-    test "highlights the Agents tab and links back to the agents workspace", %{conn: conn} do
+    test "highlights the Automations tab and links back to the workspace", %{conn: conn} do
       {:ok, view, html} = live(conn, "/agents/new")
 
-      assert has_element?(view, "a[href='/agents'][aria-current='page']", "Agents")
-      assert html =~ "Agents"
+      assert has_element?(view, "a[href='/agents'][aria-current='page']", "Automations")
+      assert html =~ "Automations"
     end
 
     test "shows clear inputs, outputs, and readiness guidance", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new")
 
-      assert html =~ "New agent"
+      assert html =~ "New automation"
       assert html =~ "What goes in"
       assert html =~ "What comes out"
-      assert html =~ "Architecture"
-      assert html =~ "OTP Agent Runtime"
+      assert html =~ "Operating model"
+      assert html =~ "Maraithon Automation Service"
       assert html =~ "Permission readiness"
       assert html =~ "Chief of Staff"
       assert html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
+      refute html =~ "Maraithon Agent Service"
+      refute html =~ "OTP Agent Runtime"
+      refute html =~ "http_get"
     end
 
-    test "updates the architecture preview for modular chief of staff agents", %{conn: conn} do
+    test "renders cadences as product copy instead of raw milliseconds", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=github_product_planner")
+
+      assert html =~ "Wakeup cadence"
+      assert html =~ "1 week"
+      refute html =~ "604800000 ms"
+    end
+
+    test "updates the operating model preview for modular chief of staff agents", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
 
       _html =
@@ -49,12 +60,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "Architecture"
+      assert html =~ "Operating model"
       assert html =~ "Chief of Staff"
       assert html =~ "Followthrough"
       assert html =~ "Commitment Tracker"
       assert html =~ "Travel Logistics"
       assert html =~ "Morning Briefing"
+      refute html =~ "OTP Agent Runtime"
     end
 
     test "shows a project attachment field when projects exist", %{conn: conn} do
@@ -69,7 +81,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "shows blockers when inbox advisor permissions are missing", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
-      assert html =~ "Chief of Staff Agent"
+      assert html =~ "Chief of Staff"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
@@ -109,7 +121,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "PM Agent"
+      assert html =~ "Project Manager"
       assert html =~ "GitHub"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
@@ -119,16 +131,74 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "shows blockers when slack followthrough permissions are missing", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=slack_followthrough_agent")
 
-      assert html =~ "Slack Followthrough Agent"
+      assert html =~ "Slack Follow-through"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
     end
 
+    test "uses connected Slack workspace names instead of raw team ids in launch copy", %{
+      conn: conn
+    } do
+      slack_config = Application.get_env(:maraithon, :slack, [])
+
+      Application.put_env(
+        :maraithon,
+        :slack,
+        Keyword.merge(slack_config,
+          client_id: "slack-client",
+          client_secret: "slack-secret",
+          redirect_uri: "http://localhost/auth/slack/callback"
+        )
+      )
+
+      on_exit(fn ->
+        Application.put_env(:maraithon, :slack, slack_config)
+      end)
+
+      {:ok, _slack_bot} =
+        OAuth.store_tokens(@user_email, "slack:T12345", %{
+          access_token: "xoxb-builder-token",
+          scopes: ["channels:read", "im:read"],
+          metadata: %{"team_id" => "T12345", "team_name" => "Agora"}
+        })
+
+      {:ok, view, _html} = live(conn, "/agents/new")
+
+      _html =
+        view
+        |> element("button[phx-click=choose_behavior][phx-value-behavior=\"ai_chief_of_staff\"]")
+        |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Slack workspace"
+      assert html =~ "All connected workspaces"
+      assert html =~ "Agora"
+      refute has_element?(view, "label[for=launch_team_id]", "Slack team ID")
+
+      html =
+        view
+        |> form("#agent-builder-form",
+          launch: %{
+            behavior: "ai_chief_of_staff",
+            team_id: "T12345",
+            cost_profile: "balanced",
+            timezone_offset_hours: "-5"
+          }
+        )
+        |> render_change()
+
+      assert html =~ "Scoped to Agora for follow-through."
+      assert html =~ "Slack workspace"
+      refute html =~ "Scoped to Slack team T12345"
+      refute html =~ "All connected teams"
+    end
+
     test "shows blockers when personal assistant permissions are missing", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
 
-      assert html =~ "Personal Assistant Agent"
+      assert html =~ "Personal Assistant"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Telegram"

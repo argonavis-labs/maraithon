@@ -199,17 +199,21 @@ defmodule Maraithon.TravelTest do
     assert recorded_update.cadence == "travel_update"
     assert recorded_update.metadata["brief_type"] == "travel_update"
     assert recorded_update.metadata["travel_itinerary_id"] == itinerary.id
-    assert recorded_update.body =~ "I detected a change in your travel details."
+    assert recorded_update.body =~ "Travel details changed. Current itinerary:"
     assert recorded_update.body =~ "Check-out: Mar 18, 2026"
     assert recorded_update.body =~ "Room: Suite 1108"
+    refute recorded_update.body =~ "I detected"
+    refute recorded_update.body =~ "I found"
 
     result = Briefs.dispatch_telegram_batch(batch_size: 10)
     assert result.sent == 1
 
     [latest_message | _rest] = telegram_events(:send)
-    assert latest_message.text =~ "I detected a change in your travel details."
+    assert latest_message.text =~ "Travel details changed. Current itinerary:"
     assert latest_message.text =~ "Check-out: Mar 18, 2026"
     assert latest_message.text =~ "Room: Suite 1108"
+    refute latest_message.text =~ "I detected"
+    refute latest_message.text =~ "I found"
 
     itinerary = Travel.list_recent_for_user(user_id) |> List.first()
     assert itinerary.status == "brief_sent"

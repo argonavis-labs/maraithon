@@ -436,28 +436,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp record_and_emit(check_in, cleared_state, state, user_id, context, now) do
+    check_in_input = state.pending_check_in_input || %{}
+    check_in = user_facing_check_in(check_in, check_in_input)
+
     attrs = %{
       "cadence" => "check_in",
       "scheduled_for" => DateTime.to_iso8601(now),
       "dedupe_key" => state.pending_dedupe_key || "calendar_check_in:#{DateTime.to_iso8601(now)}",
       "status" => "pending",
-      "title" => read_string(check_in, "title", "Chief of staff check-in"),
-      "summary" =>
-        read_string(
-          check_in,
-          "summary",
-          "You have an opening coming up — anything you want me to tee up?"
-        ),
-      "body" =>
-        read_string(
-          check_in,
-          "body",
-          "You have an opening coming up. Reply if you want me to tee anything up."
-        ),
+      "title" => check_in["title"],
+      "summary" => check_in["summary"],
+      "body" => check_in["body"],
       "metadata" => %{
         "origin_skill_id" => id(),
         "generation_mode" => "llm",
-        "openings" => Map.get(state.pending_check_in_input || %{}, "openings", []),
+        "openings" => Map.get(check_in_input, "openings", []),
         "reason" => read_string(check_in, "reason", nil)
       }
     }
@@ -479,6 +472,181 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         {:idle, cleared_state}
     end
   end
+
+  defp user_facing_check_in(check_in, check_in_input) when is_map(check_in) do
+    %{
+      "title" => safe_check_in_title(read_string(check_in, "title", nil), check_in_input),
+      "summary" => safe_check_in_summary(read_string(check_in, "summary", nil), check_in_input),
+      "body" => safe_check_in_body(read_string(check_in, "body", nil), check_in_input),
+      "reason" => read_string(check_in, "reason", nil)
+    }
+  end
+
+  defp user_facing_check_in(_check_in, check_in_input) do
+    %{
+      "title" => fallback_check_in_title(check_in_input),
+      "summary" => fallback_check_in_summary(check_in_input),
+      "body" => fallback_check_in_body(check_in_input),
+      "reason" => nil
+    }
+  end
+
+  defp safe_check_in_title(value, check_in_input) do
+    first_safe_user_line(value) || fallback_check_in_title(check_in_input)
+  end
+
+  defp safe_check_in_summary(value, check_in_input) do
+    first_safe_user_line(value) || fallback_check_in_summary(check_in_input)
+  end
+
+  defp safe_check_in_body(value, check_in_input) do
+    lines =
+      value
+      |> raw_user_lines()
+      |> Enum.map(&strip_check_in_label/1)
+      |> Enum.map(&safe_user_line/1)
+      |> Enum.reject(&is_nil/1)
+
+    case lines do
+      [] -> fallback_check_in_body(check_in_input)
+      lines -> Enum.join(lines, "\n\n")
+    end
+  end
+
+  defp first_safe_user_line(value) do
+    value
+    |> raw_user_lines()
+    |> Enum.map(&strip_check_in_label/1)
+    |> Enum.find_value(&safe_user_line/1)
+  end
+
+  defp raw_user_lines(value) do
+    value
+    |> normalize_string()
+    |> case do
+      nil -> []
+      text -> String.split(text, ~r/\n+/u, trim: true)
+    end
+  end
+
+  defp strip_check_in_label(line) do
+    String.replace(
+      line,
+      ~r/^\s*(?:action|next|suggested next step|body|message|summary)\s*:\s*/iu,
+      ""
+    )
+  end
+
+  defp safe_user_line(value) do
+    value
+    |> normalize_string()
+    |> case do
+      nil ->
+        nil
+
+      text ->
+        text = String.trim_trailing(text, ".")
+
+        if internal_process_line?(text) do
+          nil
+        else
+          text
+        end
+    end
+  end
+
+  defp internal_process_line?(line) do
+    normalized = String.downcase(line)
+
+    Regex.match?(~r/\b\d{1,3}%/u, normalized) or
+      Enum.any?(
+        [
+          "confidence",
+          "score",
+          "threshold",
+          "model",
+          "json",
+          "heuristic",
+          "classified",
+          "llm",
+          "reasoning"
+        ],
+        &String.contains?(normalized, &1)
+      )
+  end
+
+  defp fallback_check_in_title(check_in_input) do
+    case opening_range_label(check_in_input) do
+      nil -> "Calendar opening"
+      range -> "Open time: #{range}"
+    end
+  end
+
+  defp fallback_check_in_summary(check_in_input) do
+    case primary_todo_title(check_in_input) do
+      nil -> "Use the opening for the most important reply or meeting prep."
+      title -> "Use the opening to handle #{title}."
+    end
+  end
+
+  defp fallback_check_in_body(check_in_input) do
+    opening =
+      case opening_range_label(check_in_input) do
+        nil -> "You have usable open time on the calendar."
+        range -> "You have #{range} open."
+      end
+
+    next_move =
+      case primary_todo_title(check_in_input) do
+        nil -> "Use it to clear the most important reply or prep the next meeting."
+        title -> "Use it to handle #{title}."
+      end
+
+    "#{opening} #{next_move}"
+  end
+
+  defp opening_range_label(check_in_input) do
+    check_in_input
+    |> read_list("openings")
+    |> List.first()
+    |> case do
+      opening when is_map(opening) ->
+        start_at = opening |> read_string("local_start", nil) |> clock_label()
+        end_at = opening |> read_string("local_end", nil) |> clock_label()
+
+        if start_at && end_at do
+          "#{start_at}-#{end_at}"
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp primary_todo_title(check_in_input) do
+    check_in_input
+    |> read_map("open_work")
+    |> read_list("todos")
+    |> List.first()
+    |> case do
+      todo when is_map(todo) -> read_string(todo, "title", nil)
+      _ -> nil
+    end
+  end
+
+  defp clock_label(nil), do: nil
+
+  defp clock_label(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.split(":")
+    |> case do
+      [hour, minute | _] -> "#{hour}:#{minute}"
+      _ -> nil
+    end
+  end
+
+  defp clock_label(_value), do: nil
 
   defp parse_response(response) do
     error =
@@ -557,12 +725,88 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   defp decode_json(content) when is_binary(content) do
     content
-    |> String.trim()
-    |> String.trim_leading("```json")
-    |> String.trim_leading("```")
-    |> String.trim_trailing("```")
-    |> String.trim()
-    |> Jason.decode()
+    |> json_decode_candidates()
+    |> Enum.reduce_while({:error, :no_json_candidate}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, decoded} -> {:halt, {:ok, decoded}}
+        {:error, reason} -> {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  defp json_decode_candidates(content) do
+    trimmed = String.trim(content)
+
+    ([trimmed, strip_markdown_json_fence(trimmed)] ++
+       fenced_json_candidates(trimmed) ++ [first_balanced_json_object(trimmed)])
+    |> Enum.map(&normalize_string/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp strip_markdown_json_fence(content) when is_binary(content) do
+    case Regex.run(~r/\A```(?:json)?\s*(.*?)\s*```\z/s, content, capture: :all_but_first) do
+      [json] -> String.trim(json)
+      _ -> content
+    end
+  end
+
+  defp fenced_json_candidates(content) when is_binary(content) do
+    ~r/```(?:json)?\s*(.*?)\s*```/s
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp first_balanced_json_object(content) when is_binary(content) do
+    content
+    |> String.graphemes()
+    |> Enum.reduce_while({:searching, []}, &collect_first_json_object/2)
+    |> case do
+      {:done, chars} -> chars |> Enum.reverse() |> Enum.join() |> String.trim()
+      _ -> nil
+    end
+  end
+
+  defp collect_first_json_object("{", {:searching, _chars}),
+    do: {:cont, {:collecting, 1, false, false, ["{"]}}
+
+  defp collect_first_json_object(_char, {:searching, _chars}), do: {:cont, {:searching, []}}
+
+  defp collect_first_json_object(char, {:collecting, depth, in_string?, escaped?, chars}) do
+    chars = [char | chars]
+
+    cond do
+      in_string? and escaped? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      in_string? and char == "\\" ->
+        {:cont, {:collecting, depth, true, true, chars}}
+
+      in_string? and char == "\"" ->
+        {:cont, {:collecting, depth, false, false, chars}}
+
+      in_string? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "\"" ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "{" ->
+        {:cont, {:collecting, depth + 1, false, false, chars}}
+
+      char == "}" ->
+        depth = depth - 1
+
+        if depth == 0 do
+          {:halt, {:done, chars}}
+        else
+          {:cont, {:collecting, depth, false, false, chars}}
+        end
+
+      true ->
+        {:cont, {:collecting, depth, false, false, chars}}
+    end
   end
 
   defp read_any(map, key) when is_map(map) do
@@ -588,6 +832,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp read_string(_map, _key, default), do: default
+
+  defp read_map(map, key) when is_map(map) do
+    case read_any(map, key) do
+      value when is_map(value) -> value
+      _ -> %{}
+    end
+  end
+
+  defp read_map(_map, _key), do: %{}
+
+  defp read_list(map, key) when is_map(map) do
+    case read_any(map, key) do
+      value when is_list(value) -> value
+      _ -> []
+    end
+  end
+
+  defp read_list(_map, _key), do: []
 
   defp safe_existing_atom(key) when is_binary(key) do
     String.to_existing_atom(key)

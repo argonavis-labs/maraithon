@@ -224,7 +224,28 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/messages", %{})
 
-      assert json_response(conn, 400)["error"] =~ "messages"
+      assert json_response(conn, 400) == %{
+               "error" => "messages_required",
+               "message" => "Required sync data was missing. Try again."
+             }
+    end
+
+    test "400 when device_id does not match the paired token", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/messages", %{
+          "device_id" => Ecto.UUID.generate(),
+          "messages" => [sample_message("g-mismatch")]
+        })
+
+      assert json_response(conn, 400) == %{
+               "error" => "device_mismatch",
+               "message" =>
+                 "This Mac is paired as a different device. Sign out and pair it again."
+             }
     end
 
     test "accepts uppercase device_id (Swift UUID encoding)", %{conn: conn} do
@@ -286,6 +307,23 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert body["deleted"] == 2
       assert message_count(user.id, device.device_id) == 0
     end
+
+    test "404 uses product copy when the requested device is not current", %{conn: conn} do
+      %{user: user, token: token} = pair_device()
+
+      {:ok, %{device: other_device}} =
+        Devices.register(user.id, Ecto.UUID.generate(), device_name: "Old Mac")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{other_device.id}/messages")
+
+      assert json_response(conn, 404) == %{
+               "error" => "device_not_found",
+               "message" => "That Mac is no longer paired. Refresh the device list and try again."
+             }
+    end
   end
 
   describe "POST /api/v1/companion/notes" do
@@ -341,7 +379,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/notes", %{})
 
-      assert json_response(conn, 400)["error"] =~ "notes"
+      assert json_response(conn, 400) == %{
+               "error" => "notes_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
 
     test "persists body and body_format end-to-end", %{conn: conn} do
@@ -425,7 +466,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/voice-memos", %{})
 
-      assert json_response(conn, 400)["error"] =~ "voice_memos"
+      assert json_response(conn, 400) == %{
+               "error" => "voice_memos_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
 
     test "ingests base64 audio + transcript fields end-to-end", %{conn: conn} do
@@ -554,7 +598,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/reminders", %{})
 
-      assert json_response(conn, 400)["error"] =~ "reminders"
+      assert json_response(conn, 400) == %{
+               "error" => "reminders_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
   end
 
@@ -619,25 +666,44 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert calendar_event_count(user.id, device.device_id) == 2
     end
 
-    test "dedupes on the second send", %{conn: conn} do
-      %{token: token} = pair_device()
-      events = [sample_calendar_event("c1"), sample_calendar_event("c2")]
+    test "upserts on the second send", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+      events = [sample_calendar_event("c1")]
 
       conn1 =
         conn
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/calendar-events", %{"calendar_events" => events})
 
-      assert json_response(conn1, 200)["accepted"] == 2
+      assert json_response(conn1, 200)["accepted"] == 1
+
+      updated_events = [
+        sample_calendar_event("c1", %{
+          "title" => "Moved meeting",
+          "start_at" => "2026-05-12T18:00:00Z",
+          "end_at" => "2026-05-12T18:30:00Z",
+          "modified_at" => "2026-05-10T16:14:22Z"
+        })
+      ]
 
       conn2 =
         build_conn()
         |> put_req_header("authorization", "Bearer #{token}")
-        |> post("/api/v1/companion/calendar-events", %{"calendar_events" => events})
+        |> post("/api/v1/companion/calendar-events", %{"calendar_events" => updated_events})
 
       body = json_response(conn2, 200)
-      assert body["accepted"] == 0
-      assert body["duplicate"] == 2
+      assert body["accepted"] == 1
+      assert body["duplicate"] == 0
+
+      [stored] =
+        Repo.all(
+          from(event in LocalEvent,
+            where: event.user_id == ^user.id and event.device_id == ^device.device_id
+          )
+        )
+
+      assert stored.title == "Moved meeting"
+      assert stored.start_at == ~U[2026-05-12 18:00:00.000000Z]
     end
 
     test "400 when calendar_events array is missing", %{conn: conn} do
@@ -648,7 +714,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/calendar-events", %{})
 
-      assert json_response(conn, 400)["error"] =~ "calendar_events"
+      assert json_response(conn, 400) == %{
+               "error" => "calendar_events_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
   end
 
@@ -705,7 +774,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/files", %{})
 
-      assert json_response(conn, 400)["error"] =~ "files"
+      assert json_response(conn, 400) == %{
+               "error" => "files_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
 
     test "ingests base64 text_content end-to-end", %{conn: conn} do
@@ -754,7 +826,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/files", %{"files" => files})
 
-      assert json_response(conn, 400)["error"] =~ "200"
+      assert json_response(conn, 400) == %{
+               "error" => "batch_too_large",
+               "message" => "Sync fewer than 200 items at a time and try again."
+             }
     end
   end
 
@@ -882,7 +957,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/devices/#{other_device.id}/revoke")
 
-      assert json_response(conn, 404)["error"] =~ "device not found"
+      assert json_response(conn, 404) == %{
+               "error" => "device_not_found",
+               "message" => "That Mac is no longer paired. Refresh the device list and try again."
+             }
     end
   end
 
@@ -931,7 +1009,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> delete("/api/v1/companion/devices/#{other_device.id}")
 
-      assert json_response(conn, 404)["error"] =~ "device not found"
+      assert json_response(conn, 404) == %{
+               "error" => "device_not_found",
+               "message" => "That Mac is no longer paired. Refresh the device list and try again."
+             }
     end
   end
 
@@ -1003,6 +1084,30 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert visit_count(user.id, device.device_id) == 1
     end
 
+    test "counts overlong browser fields as invalid instead of failing sync", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+      long_host = String.duplicate("a", 260)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/browser-history", %{
+          "visits" => [
+            sample_visit("ok", %{"host" => "example.com"}),
+            sample_visit("too-long", %{
+              "host" => long_host,
+              "url" => "https://#{long_host}/post"
+            })
+          ]
+        })
+
+      body = json_response(conn, 200)
+      assert body["accepted"] == 1
+      assert body["invalid"] == 1
+      assert body["filtered"] == 0
+      assert visit_count(user.id, device.device_id) == 1
+    end
+
     test "400 when visits array is missing", %{conn: conn} do
       %{token: token} = pair_device()
 
@@ -1011,7 +1116,10 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/browser-history", %{})
 
-      assert json_response(conn, 400)["error"] =~ "visits"
+      assert json_response(conn, 400) == %{
+               "error" => "visits_required",
+               "message" => "Required sync data was missing. Try again."
+             }
     end
   end
 
@@ -1046,7 +1154,11 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/device-keys", %{"public_key" => "p"})
 
-      assert json_response(conn, 400)["error"] =~ "key_id"
+      assert json_response(conn, 400) == %{
+               "error" => "missing_key_id",
+               "message" =>
+                 "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+             }
     end
 
     test "400 when public_key is missing", %{conn: conn} do
@@ -1057,7 +1169,11 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> put_req_header("authorization", "Bearer #{token}")
         |> post("/api/v1/companion/device-keys", %{"key_id" => "k1"})
 
-      assert json_response(conn, 400)["error"] =~ "public_key"
+      assert json_response(conn, 400) == %{
+               "error" => "missing_public_key",
+               "message" =>
+                 "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+             }
     end
 
     test "refreshing the same key_id returns the same payload (idempotent)", %{conn: conn} do
@@ -1081,6 +1197,29 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
       body = json_response(conn2, 200)
       assert body["public_key"] == "second"
+    end
+
+    test "400 when device key validation fails hides changeset internals", %{conn: conn} do
+      %{token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> post("/api/v1/companion/device-keys", %{
+          "key_id" => "k1",
+          "public_key" => String.duplicate("x", 1_025)
+        })
+
+      body = json_response(conn, 400)
+
+      assert body == %{
+               "error" => "invalid_device_key",
+               "message" =>
+                 "Maraithon could not save this Mac's encryption key. Reconnect this Mac and try again."
+             }
+
+      refute inspect(body) =~ "should be at most"
+      refute inspect(body) =~ "Ecto.Changeset"
     end
   end
 
@@ -1197,7 +1336,11 @@ defmodule MaraithonWeb.CompanionControllerTest do
         |> post("/api/v1/companion/recall", %{})
 
       body = json_response(conn, 400)
-      assert body["error"] =~ "query is required"
+
+      assert body == %{
+               "error" => "missing_query",
+               "message" => "Enter what you want Maraithon to recall."
+             }
     end
 
     test "200 returns ranked recall results scoped to the calling user", %{conn: conn} do

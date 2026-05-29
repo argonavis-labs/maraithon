@@ -337,7 +337,7 @@ defmodule Maraithon.Admin do
       job.status == "dispatched" and not is_nil(job.claimed_at) and job.claimed_at < ^stale_cutoff
     )
     |> maybe_filter_agent_user(user_id)
-    |> order_by([job, _agent], asc: job.claimed_at)
+    |> order_by([job, _agent], desc: job.claimed_at)
     |> limit(^limit)
     |> select([job, agent], %{
       source: "job",
@@ -431,16 +431,16 @@ defmodule Maraithon.Admin do
       scope: "control_center",
       message:
         "Database-backed control-center data is temporarily unavailable. Fly and runtime logs remain available below.",
-      details: "Database health check failed."
+      details: "Maraithon will refresh this section when operational data is available again."
     }
   end
 
-  defp control_center_error(reason) do
+  defp control_center_error(_reason) do
     %{
       scope: "control_center",
       message:
         "Database-backed control-center data is temporarily unavailable. Fly and runtime logs remain available below.",
-      details: format_failure_reason(reason)
+      details: "Maraithon will refresh this section when operational data is available again."
     }
   end
 
@@ -449,16 +449,16 @@ defmodule Maraithon.Admin do
       scope: "agent_inspection",
       message:
         "Selected agent inspection is temporarily unavailable while the database is degraded.",
-      details: "Database health check failed."
+      details: "Refresh this agent view in a moment."
     }
   end
 
-  defp agent_snapshot_error(reason) do
+  defp agent_snapshot_error(_reason) do
     %{
       scope: "agent_inspection",
       message:
         "Selected agent inspection is temporarily unavailable while the database is degraded.",
-      details: format_failure_reason(reason)
+      details: "Refresh this agent view in a moment."
     }
   end
 
@@ -471,10 +471,6 @@ defmodule Maraithon.Admin do
     :exit, reason ->
       {:error, {:exit, reason}}
   end
-
-  defp format_failure_reason({:exit, reason}), do: "exit: #{inspect(reason)}"
-  defp format_failure_reason(%_{} = exception), do: Exception.message(exception)
-  defp format_failure_reason(reason), do: inspect(reason)
 
   defp maybe_filter_agent_user(query, nil), do: query
   defp maybe_filter_agent_user(query, ""), do: query

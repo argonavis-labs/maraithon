@@ -189,10 +189,10 @@ defmodule Maraithon.Followthrough.ConversationContext do
         end
 
       "insufficient_context" ->
-        "Conversation context could not be fully evaluated, so this should be monitored instead of treated as direct debt."
+        "Conversation context could not be fully evaluated, so this should be monitored instead of treated as a direct ask."
 
       _ ->
-        "I found no later reply or delivery that clearly closes the loop."
+        "No later reply or delivery clearly closes the loop."
     end
   end
 
@@ -364,7 +364,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
     |> Map.put("summary", summary)
     |> Map.put(
       "recommended_action",
-      "Monitor the thread. Full context could not be confirmed, so avoid treating this as direct founder debt until the thread updates."
+      "Monitor the thread. Full context could not be confirmed, so avoid treating this as a direct ask until the thread updates."
     )
     |> Map.update("priority", 74, &max(&1 - 10, 64))
     |> Map.update("confidence", 0.72, &clamp_float(&1 - 0.08))

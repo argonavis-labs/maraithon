@@ -37,6 +37,18 @@ defmodule Maraithon.Crm.RelationshipPresets do
           domain: "family"
         },
         %{
+          id: "coach_activity_contact",
+          label: "Coach / activity",
+          value: "Coach or activity contact",
+          domain: "family"
+        },
+        %{
+          id: "coparenting_contact",
+          label: "Co-parenting / family logistics",
+          value: "Co-parenting or family logistics contact",
+          domain: "family"
+        },
+        %{
           id: "household_service",
           label: "Household service",
           value: "Household service provider",

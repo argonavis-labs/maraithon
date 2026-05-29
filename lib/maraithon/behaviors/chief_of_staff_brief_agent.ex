@@ -3,7 +3,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   Generates recurring chief-of-staff briefs from the current insight stream.
 
   It does not rescan connectors directly. Instead, it turns the user's existing
-  Gmail, Calendar, and Slack insights into morning briefs, end-of-day debt
+  Gmail, Calendar, and Slack insights into morning briefs, end-of-day review
   rollups, and weekly reviews for Telegram delivery.
   """
 
@@ -253,17 +253,17 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         debt_items == [] and watching_items == [] ->
-          {"End-of-day debt: all clear",
+          {"End-of-day review: all clear",
            "Nothing high-confidence still looks open at the end of the day."}
 
         debt_items == [] ->
-          {"End-of-day debt: action list clear",
-           "#{length(watching_items)} important threads are still being watched, with no direct founder debt tonight."}
+          {"End-of-day review: action list clear",
+           "#{length(watching_items)} important threads are still being watched, with no direct founder actions tonight."}
 
         true ->
           count = length(debt_items)
 
-          {"End-of-day debt: #{count} items still open",
+          {"End-of-day review: #{count} items still open",
            end_of_day_summary(
              debt_items,
              debt_candidates,

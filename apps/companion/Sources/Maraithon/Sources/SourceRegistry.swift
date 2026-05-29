@@ -47,13 +47,38 @@ final class SourceRegistry {
         registered[id]?.statusPublisher
     }
 
+    /// Live sources currently blocked by macOS Full Disk Access. Used by
+    /// the main window banner so a permissions regression after
+    /// onboarding is visible without making the user inspect each source.
+    func fullDiskAccessBlockedSources() -> [SourceDescriptor] {
+        let sourceOrder = ["imessage": 0, "notes": 1, "voice_memos": 2]
+
+        return sources
+            .filter { descriptor in
+                guard !descriptor.comingSoon,
+                      let publisher = registered[descriptor.id]?.statusPublisher
+                else {
+                    return false
+                }
+                return publisher.displayedState().requiresFullDiskAccess
+            }
+            .sorted {
+                let left = sourceOrder[$0.id] ?? Int.max
+                let right = sourceOrder[$1.id] ?? Int.max
+                if left == right {
+                    return $0.displayName < $1.displayName
+                }
+                return left < right
+            }
+    }
+
     /// Pull the latest state from every registered source's status
     /// publisher into the visible descriptors. UI calls this on a timer or
     /// when it observes a status change.
     func refreshStates() {
         for (index, descriptor) in sources.enumerated() {
             guard let source = registered[descriptor.id] else { continue }
-            sources[index].state = source.statusPublisher.state
+            sources[index].state = source.statusPublisher.displayedState()
         }
     }
 
@@ -196,6 +221,26 @@ enum SourceState: Hashable, Sendable {
     case paused
     case needsAttention(reason: String)
     case error(reason: String)
+
+    var requiresFullDiskAccess: Bool {
+        switch self {
+        case .needsAttention(let reason), .error(let reason):
+            return Self.isFullDiskAccessReason(reason)
+        default:
+            return false
+        }
+    }
+
+    static func isFullDiskAccessReason(_ reason: String) -> Bool {
+        switch reason {
+        case "imessage_full_disk_access_required",
+             "notes_full_disk_access_required",
+             "voice_memos_full_disk_access_required":
+            return true
+        default:
+            return false
+        }
+    }
 
     /// The state as it should be displayed to the user. Three rules:
     ///

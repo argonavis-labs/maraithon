@@ -7,7 +7,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   the message, so the mobile chat can behave like an instant command pane.
   """
 
-  alias Maraithon.AssistantChat.MobileDelivery
+  alias Maraithon.AssistantChat.{CalculationIntent, MobileDelivery}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.Run
   alias Maraithon.TelegramConversations.Conversation
@@ -22,7 +22,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   ]
 
   @fast_chat_replies %{
-    greeting: "Hey - I'm here.",
+    greeting: "I'm here. What needs attention?",
     acknowledgement: "Got it.",
     thanks: "Anytime."
   }
@@ -86,9 +86,18 @@ defmodule Maraithon.AssistantChat.DirectIntent do
         {:ok, %{type: :create_todo, title: title}}
 
       nil ->
-        case fast_chat_reply(text) do
-          {:ok, kind, reply} -> {:ok, %{type: :fast_chat_reply, kind: kind, reply: reply}}
-          :nomatch -> :nomatch
+        case CalculationIntent.classify(text) do
+          {:ok, intent} ->
+            {:ok, intent}
+
+          :nomatch ->
+            case fast_chat_reply(text) do
+              {:ok, kind, reply} ->
+                {:ok, %{type: :fast_chat_reply, kind: kind, reply: reply}}
+
+              :nomatch ->
+                :nomatch
+            end
         end
     end
   end
@@ -108,7 +117,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
            MobileDelivery.deliver_turn(
              conversation,
              conversation.chat_id,
-             "Added: #{todo.title}",
+             "Added to your open work: #{todo.title}",
              turn_kind: "action_result",
              origin_type: "chat",
              origin_id: user_turn.id,
@@ -124,6 +133,11 @@ defmodule Maraithon.AssistantChat.DirectIntent do
         status: "completed",
         result_summary: %{
           surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "direct_intent",
+          model_reasoning_effort: "none",
+          task_class: "create_todo",
+          route_reason: "direct_intent:create_todo",
           message_class: "action_result",
           direct_intent: "create_todo",
           todo_id: todo.id,
@@ -160,9 +174,61 @@ defmodule Maraithon.AssistantChat.DirectIntent do
         status: "completed",
         result_summary: %{
           surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "direct_intent",
+          model_reasoning_effort: "none",
+          task_class: "fast_chat_reply",
+          route_reason: "direct_intent:fast_chat_reply",
           message_class: "assistant_reply",
           direct_intent: "fast_chat_reply",
           fast_chat_kind: Atom.to_string(kind),
+          tool_steps: 0,
+          llm_turns: 0
+        }
+      })
+    end
+  end
+
+  def execute(
+        %Conversation{} = conversation,
+        %Run{} = run,
+        %Turn{} = user_turn,
+        %{type: :simple_calculation, expression: expression, result: result, reply: reply}
+      ) do
+    with {:ok, _conversation, _turn, _delivery} <-
+           MobileDelivery.deliver_turn(
+             conversation,
+             conversation.chat_id,
+             reply,
+             turn_kind: "assistant_reply",
+             origin_type: "chat",
+             origin_id: user_turn.id,
+             structured_data: %{
+               "surface" => "mobile",
+               "run_id" => run.id,
+               "message_class" => "assistant_reply",
+               "direct_intent" => "simple_calculation",
+               "calculation" => %{
+                 "expression" => expression,
+                 "result" => result
+               }
+             }
+           ) do
+      TelegramAssistant.complete_run(run, %{
+        status: "completed",
+        result_summary: %{
+          surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "direct_intent",
+          model_reasoning_effort: "none",
+          task_class: "simple_calculation",
+          route_reason: "direct_intent:simple_calculation",
+          message_class: "assistant_reply",
+          direct_intent: "simple_calculation",
+          calculation: %{
+            expression: expression,
+            result: result
+          },
           tool_steps: 0,
           llm_turns: 0
         }
@@ -238,7 +304,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
       "kind" => "general",
       "attention_mode" => "act_now",
       "title" => title,
-      "summary" => "Captured from mobile assistant chat.",
+      "summary" => "You asked Maraithon to track this as open work.",
       "next_action" => title,
       "priority" => 60,
       "status" => "open",

@@ -18,14 +18,18 @@ struct SourceDetailScaffold: View {
     let displayName: String
     let stats: [SourceStat]
     let activity: [SourceActivityRow]
-    var emptyDescription: String = "Once your first batch finishes, this view will show today's stats and your most recent sync runs."
-    var clearDataDescription: String = "This will delete every record Maraithon has synced from this Mac out of the cloud. Local data on your device is not affected."
+    var syncedItemSingular: String = "item"
+    var syncedItemPlural: String = "items"
+    var emptyDescription: String = "After the first sync, this view shows recent activity and sync history."
+    var clearDataDescription: String = "This deletes every record synced from this Mac from Maraithon's synced copy. Local data on your device is not affected."
 
     @Environment(AppEnvironment.self) private var env
 
     var body: some View {
         Group {
-            if let reason = needsAttentionReason {
+            if let issue = activeIssue {
+                issueView(issue: issue)
+            } else if let reason = needsAttentionReason {
                 SourceUnblockView(
                     sourceID: sourceID,
                     displayName: displayName,
@@ -41,57 +45,119 @@ struct SourceDetailScaffold: View {
         }
     }
 
-    /// Minimal user-facing pane: a single status line, the total
-    /// synced count, last-sync recency, and Sync now. Everything else
-    /// (per-batch stats, cursor, recent activity table, raw publisher
-    /// state) is debug-grade and lives in **Settings → Diagnostics**.
+    /// Healthy detail pane. Shows the useful operational facts a user
+    /// needs when a source is green: current state, last successful sync,
+    /// recent totals, last-check counts, and the recent activity rows.
     private var cleanUserView: some View {
         ScrollView {
-            VStack(alignment: .center, spacing: Tokens.Spacing.large) {
-                SourceStatusBadge(state: liveBadgeState, variant: .prominent)
-                Text(headlineCopy)
-                    .font(.title3)
-                    .multilineTextAlignment(.center)
-                Text(liveStatusSubtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-
-                Button {
-                    env.sources.syncNow(id: sourceID)
-                } label: {
-                    Label(isPaused ? "Resume sync" : "Sync now", systemImage: isPaused ? "play.fill" : "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("r", modifiers: .command)
-
-                if isPaused {
-                    Button("Pause") { env.sources.pause(id: sourceID) }
-                        .buttonStyle(.bordered)
-                } else {
-                    Button("Pause") { env.sources.pause(id: sourceID) }
-                        .buttonStyle(.bordered)
-                }
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xlarge) {
+                overviewSection
+                Divider()
+                statsSection
+                Divider()
+                activitySection
             }
             .padding(Tokens.Spacing.xlarge)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .animation(.default, value: isPaused)
         }
         .navigationTitle(displayName)
     }
 
-    /// Big copy line. Surfaces the total synced count when one batch
-    /// has shipped; otherwise sticks to a plain status phrase.
+    private var overviewSection: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
+            HStack(alignment: .top, spacing: Tokens.Spacing.medium) {
+                VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+                    SourceStatusBadge(state: liveBadgeState, variant: .prominent)
+                }
+
+                Spacer(minLength: Tokens.Spacing.large)
+
+                actionButtons
+            }
+
+            VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+                Text(headlineCopy)
+                    .font(.title2.weight(.semibold))
+                Text(summaryCopy)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var actionButtons: some View {
+        HStack(spacing: Tokens.Spacing.small) {
+            Button {
+                if isPaused {
+                    env.sources.resume(id: sourceID)
+                } else {
+                    env.sources.syncNow(id: sourceID)
+                }
+            } label: {
+                Label(isPaused ? "Resume sync" : "Sync now", systemImage: isPaused ? "play.fill" : "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut("r", modifiers: .command)
+
+            if !isPaused {
+                Button {
+                    env.sources.pause(id: sourceID)
+                } label: {
+                    Label("Pause", systemImage: "pause.fill")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    /// Primary healthy-state outcome. Counts live in the stats and
+    /// summary line so the title can answer whether the source is OK.
     private var headlineCopy: String {
-        let publisher = env.sources.statusPublisher(for: sourceID)
-        let total = publisher?.totalAccepted ?? 0
         if isPaused {
-            return "\(displayName) is paused"
+            return "\(displayName) sync is paused"
         }
-        if total > 0 {
-            return "\(total.formatted(.number)) \(displayName) synced this session"
+
+        guard let publisher = env.sources.statusPublisher(for: sourceID) else {
+            return "\(displayName) is not connected"
         }
-        return "\(displayName) is up to date"
+
+        switch publisher.displayedState() {
+        case .syncing:
+            return "Checking \(displayName)"
+        case .connected:
+            return "\(displayName) is up to date"
+        case .paused:
+            return "\(displayName) sync is paused"
+        case .needsAttention:
+            return "\(displayName) needs attention"
+        case .error:
+            return "\(displayName) could not sync"
+        case .disconnected:
+            return "\(displayName) is not syncing"
+        }
+    }
+
+    private var summaryCopy: String {
+        guard let publisher = env.sources.statusPublisher(for: sourceID) else {
+            return "Open Maraithon from this Mac to start syncing \(syncedItemPlural)."
+        }
+
+        if isPaused {
+            return "Resume sync when you want \(displayName) to update again."
+        }
+
+        return SourceDetailCopy.connectedSummary(
+            displayName: displayName,
+            totalSynced: publisher.totalAccepted,
+            lastCheckSynced: publisher.lastBatchAccepted,
+            lastCheckAlreadySynced: publisher.lastBatchDuplicate,
+            lastCheckNotSynced: publisher.lastBatchFailed,
+            lastSyncAt: publisher.lastSyncAt,
+            singular: syncedItemSingular,
+            plural: syncedItemPlural
+        )
     }
 
     // MARK: Sections
@@ -146,7 +212,7 @@ struct SourceDetailScaffold: View {
                 .disabled(isPaused)
 
                 Spacer()
-                // Destructive actions (clear cloud data, reset cursor)
+                // Destructive data deletion and local re-sync actions
                 // live in Settings → Data, not on the per-source detail
                 // pane — keeps the wipe-everything affordance in one
                 // place and removes the "did I just clear the right
@@ -174,25 +240,32 @@ struct SourceDetailScaffold: View {
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn("Count") { row in
+                    TableColumn("Checked") { row in
                         Text(String(row.count))
                             .monospacedDigit()
                     }
                     .width(min: 60, ideal: 70)
 
-                    TableColumn("Accepted") { row in
+                    TableColumn("Synced") { row in
                         Text(String(row.accepted))
                             .monospacedDigit()
                             .foregroundStyle(StatusTone.good.color)
                     }
                     .width(min: 70, ideal: 80)
 
-                    TableColumn("Duplicates") { row in
+                    TableColumn("Already synced") { row in
                         Text(String(row.duplicates))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 80, ideal: 100)
+
+                    TableColumn("Not synced") { row in
+                        Text(String(row.failed))
+                            .monospacedDigit()
+                            .foregroundStyle(row.failed > 0 ? StatusTone.error.color : StatusTone.muted.color)
+                    }
+                    .width(min: 60, ideal: 70)
                 }
                 .frame(minHeight: 240)
             }
@@ -229,18 +302,21 @@ struct SourceDetailScaffold: View {
         guard let publisher = env.sources.statusPublisher(for: sourceID) else {
             return nil
         }
-        if case .error(let reason) = publisher.state {
+        if case .error(let reason) = publisher.displayedState() {
             return reason
         }
         return nil
     }
 
+    private var activeIssue: SourceStatusPublisher.IssueEvent? {
+        env.sources.statusPublisher(for: sourceID)?.activeIssue
+    }
+
     /// Focused detail content for the `.error` state. Mirrors the
     /// unblock-view shape from `SourceUnblockView`: strip stats /
     /// controls / activity entirely, surface the action that gets the
-    /// source back to green (Retry via Sync now), and show the raw
-    /// error string in a copy-friendly monospaced block so the user can
-    /// share it for debugging.
+    /// source back to green (Retry via Sync now) without exposing raw
+    /// error dumps in the product UI.
     private func errorView(reason: String) -> some View {
         ContentUnavailableView {
             Label("Sync error", systemImage: "xmark.octagon.fill")
@@ -248,14 +324,8 @@ struct SourceDetailScaffold: View {
                 .foregroundStyle(StatusTone.error.color)
         } description: {
             VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
-                Text("\(displayName) ran into an error on its last sync. Most errors are transient — tap Sync now to retry. Open Logs in the sidebar for the full trace.")
-                Text(reason)
-                    .font(.footnote.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, Tokens.Spacing.medium)
-                    .padding(.vertical, Tokens.Spacing.small)
-                    .background(.secondary.opacity(0.08), in: .rect(cornerRadius: Tokens.CornerRadius.small))
-                    .textSelection(.enabled)
+                Text(SourceIssueCopy.detail(reason, sourceName: displayName))
+                    .font(.body)
             }
             .multilineTextAlignment(.center)
             .frame(maxWidth: 480)
@@ -271,28 +341,71 @@ struct SourceDetailScaffold: View {
         .navigationTitle(displayName)
     }
 
-    /// True when the source is configured/connected at the source layer
-    /// but has never produced a successful sync. The detail pane swaps
-    /// to a focused view that tells the user the one action that gets
-    /// the row to green: tap Sync now. `.syncing` is excluded — the
-    /// normal scaffold's animated badge already conveys "in flight."
+    private func issueView(issue: SourceStatusPublisher.IssueEvent) -> some View {
+        let isError = issue.severity == .error
+        let title = isError ? "Sync is failing" : "Some items need attention"
+        let symbol = isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
+        let tone = isError ? StatusTone.error : StatusTone.attention
+        return ContentUnavailableView {
+            Label(title, systemImage: symbol)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(tone.color)
+        } description: {
+            VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
+                Text(SourceIssueCopy.issue(issue.reason, failedCount: issue.failedCount))
+                Text(issue.failedCount == 1 ? "1 item did not finish syncing." : "\(issue.failedCount.formatted(.number)) items did not finish syncing.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if let last = env.sources.statusPublisher(for: sourceID)?.lastSyncAt {
+                    Text("Last successful sync: \(SourceStat.relative(last))")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 480)
+        } actions: {
+            VStack(spacing: Tokens.Spacing.small) {
+                Button {
+                    env.sources.syncNow(id: sourceID)
+                } label: {
+                    Label("Sync now", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+
+                Button {
+                    env.sources.resetCursor(id: sourceID)
+                    env.sources.syncNow(id: sourceID)
+                } label: {
+                    Label("Start this source over", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .navigationTitle(displayName)
+    }
+
+    /// True when the source is connected at the source layer but has
+    /// never produced a successful sync. Disconnected sources must not
+    /// enter this state: telling the user a source is "connected" while
+    /// it is not syncing breaks trust in the setup flow.
     private var isWaitingForFirstSync: Bool {
         guard let publisher = env.sources.statusPublisher(for: sourceID) else {
             return false
         }
-        if publisher.lastSyncAt != nil { return false }
-        switch publisher.state {
-        case .connected, .disconnected: return true
-        default: return false
-        }
+        return SourceDetailCopy.isWaitingForFirstSync(
+            state: publisher.state,
+            lastSyncAt: publisher.lastSyncAt
+        )
     }
 
     private var waitingForFirstSyncView: some View {
         ContentUnavailableView {
-            Label("Waiting for first sync", systemImage: "clock.arrow.circlepath")
+            Label(SourceDetailCopy.firstSyncTitle, systemImage: "clock.arrow.circlepath")
                 .symbolRenderingMode(.hierarchical)
         } description: {
-            Text("\(displayName) is connected but hasn't completed a sync yet. Tap Sync now to fetch your first batch — otherwise Maraithon will sync on its own within a few minutes.")
+            Text(SourceDetailCopy.firstSyncDescription(displayName: displayName))
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
         } actions: {
@@ -311,10 +424,7 @@ struct SourceDetailScaffold: View {
         guard let publisher = env.sources.statusPublisher(for: sourceID) else {
             return .disconnected
         }
-        let displayed = publisher.state.displayed(
-            lastSyncAt: publisher.lastSyncAt,
-            shippedBatch: !publisher.recentBatches.isEmpty
-        )
+        let displayed = publisher.displayedState()
         switch displayed {
         case .connected: return .connected
         case .syncing: return .syncing
@@ -330,27 +440,111 @@ struct SourceDetailScaffold: View {
             return "Not yet connected"
         }
         // A source that's connected at the source layer but has no
-        // successful sync yet reads as "Waiting for first sync" — the
-        // badge is muted by `displayed(...)`, the subtitle says why.
+        // successful sync yet reads as ready for first sync; the badge
+        // is muted by `displayed(...)`, the subtitle says why.
         if case .connected = publisher.state, publisher.lastSyncAt == nil {
-            return "Waiting for first sync"
+            return SourceDetailCopy.firstSyncTitle
         }
         let prefix: String
-        switch publisher.state {
+        switch publisher.displayedState() {
         case .syncing: prefix = "Syncing now"
         case .connected: prefix = "Connected"
         case .paused: prefix = "Paused"
-        case .needsAttention(let r): prefix = r
+        case .needsAttention(let r): prefix = SourceIssueCopy.status(r)
         case .disconnected: prefix = "Not yet connected"
-        case .error(let r): prefix = r
+        case .error(let r): prefix = SourceIssueCopy.status(r)
         }
         if let last = publisher.lastSyncAt {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .short
-            let ago = formatter.localizedString(for: last, relativeTo: Date())
-            return "\(prefix) — last sync \(ago)"
+            return "\(prefix) — last sync \(SourceDetailCopy.relativeSyncTime(last))"
         }
         return prefix
+    }
+}
+
+/// Product copy shared by per-source detail panes. Keeps user-facing
+/// source metrics in outcome language instead of sync-engine vocabulary
+/// like "accepted" or "duplicates."
+enum SourceDetailCopy {
+    static let lastCheckTitle = "Last check"
+    static let lastBatchSyncedCaption = "synced"
+    static let alreadySyncedTitle = "Already synced"
+    static let alreadySyncedCaption = "last check"
+    static let notSyncedTitle = "Not synced"
+    static let notSyncedCaption = "last check"
+    static let totalSyncedCaption = "recently"
+    static let firstSyncTitle = "Ready for first sync"
+
+    static func syncedHeadline(total: Int, singular: String, plural: String) -> String {
+        "\(total.formatted(.number)) \(itemNoun(total: total, singular: singular, plural: plural)) synced"
+    }
+
+    static func itemNoun(total: Int, singular: String, plural: String) -> String {
+        total == 1 ? singular : plural
+    }
+
+    static func countedItem(_ count: Int, singular: String, plural: String) -> String {
+        "\(count.formatted(.number)) \(itemNoun(total: count, singular: singular, plural: plural))"
+    }
+
+    static func connectedSummary(
+        displayName: String,
+        totalSynced: Int,
+        lastCheckSynced: Int,
+        lastCheckAlreadySynced: Int,
+        lastCheckNotSynced: Int,
+        lastSyncAt: Date?,
+        singular: String,
+        plural: String,
+        relativeTo now: Date = Date()
+    ) -> String {
+        guard let lastSyncAt else {
+            if totalSynced > 0 {
+                return "\(syncedHeadline(total: totalSynced, singular: singular, plural: plural)) so far. Sync now to check \(displayName) again."
+            }
+            return "Sync now to start checking \(displayName)."
+        }
+
+        var sentences: [String] = []
+        if lastCheckSynced > 0 {
+            sentences.append("Maraithon synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)) in the last check.")
+        } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
+            sentences.append("Maraithon checked \(displayName) and found no new \(plural).")
+        } else {
+            sentences.append("Maraithon checked \(displayName) and found nothing new to sync.")
+        }
+
+        if lastCheckNotSynced > 0 {
+            let verb = lastCheckNotSynced == 1 ? "needs" : "need"
+            sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention from the last check.")
+        } else {
+            sentences.append("Automatic checks are on.")
+        }
+
+        sentences.append("Last sync \(relativeSyncTime(lastSyncAt, relativeTo: now)).")
+        return sentences.joined(separator: " ")
+    }
+
+    static func firstSyncDescription(displayName: String) -> String {
+        "Maraithon is ready to sync \(displayName), but the first check has not finished yet. Sync now starts it immediately; otherwise it will begin automatically within a few minutes."
+    }
+
+    static func isWaitingForFirstSync(state: SourceState, lastSyncAt: Date?) -> Bool {
+        guard lastSyncAt == nil else { return false }
+        if case .connected = state {
+            return true
+        }
+        return false
+    }
+
+    static func relativeSyncTime(_ date: Date, relativeTo now: Date = Date()) -> String {
+        let distance = date.timeIntervalSince(now)
+        if abs(distance) < 60 {
+            return "just now"
+        }
+
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: now)
     }
 }
 
@@ -379,9 +573,7 @@ struct SourceStat: Identifiable, Hashable {
     /// "—" when the source hasn't completed a sync yet.
     static func relative(_ date: Date?) -> String {
         guard let date else { return "—" }
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
+        return SourceDetailCopy.relativeSyncTime(date)
     }
 }
 
@@ -392,13 +584,15 @@ struct SourceActivityRow: Identifiable, Hashable {
     let count: Int
     let accepted: Int
     let duplicates: Int
+    let failed: Int
 
-    init(id: UUID = UUID(), timestamp: Date, count: Int, accepted: Int, duplicates: Int) {
+    init(id: UUID = UUID(), timestamp: Date, count: Int, accepted: Int, duplicates: Int, failed: Int = 0) {
         self.id = id
         self.timestamp = timestamp
         self.count = count
         self.accepted = accepted
         self.duplicates = duplicates
+        self.failed = failed
     }
 
     /// Build a recent-activity list from a publisher's ring buffer,
@@ -410,21 +604,22 @@ struct SourceActivityRow: Identifiable, Hashable {
             SourceActivityRow(
                 id: event.id,
                 timestamp: event.timestamp,
-                count: event.accepted + event.duplicate,
+                count: event.accepted + event.duplicate + event.failed,
                 accepted: event.accepted,
-                duplicates: event.duplicate
+                duplicates: event.duplicate,
+                failed: event.failed
             )
         } ?? []
     }
 }
 
-/// Destructive confirmation sheet shared across detail panes. Mirrors
-/// the iMessage Clear Cloud Data sheet, but accepts a per-source body
-/// string so each pane can frame the consequence in its own language.
+/// Destructive confirmation sheet shared across data-management panes.
+/// Accepts a per-source body string so each pane can frame the
+/// consequence in its own language.
 struct ClearCloudDataSheet: View {
     @Binding var isPresented: Bool
     let description: String
-    /// Destructive action — wipes cloud data for this source.
+    /// Destructive action — deletes synced data for this source.
     var onConfirmClearCloud: () -> Void
     /// Non-destructive action — drops the local cursor and lets the next
     /// polling tick repopulate. `nil` hides the section (e.g., used by
@@ -451,15 +646,15 @@ struct ClearCloudDataSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
             if let onResetLocalCursor {
-                Section("Repair") {
-                    Text("Drop the local sync cursor and re-pull from the source on this Mac. Cloud data is left untouched.")
+                Section("Re-sync Source") {
+                    Text("Re-sync this source from this Mac. Maraithon's synced copy is left untouched.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button {
                         onResetLocalCursor()
                         isPresented = false
                     } label: {
-                        Label("Reset local cursor only", systemImage: "arrow.counterclockwise")
+                        Label("Re-sync this source", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -472,7 +667,7 @@ struct ClearCloudDataSheet: View {
                 Button("Cancel") { isPresented = false }
             }
             ToolbarItem(placement: .destructiveAction) {
-                Button("Clear cloud data") {
+                Button("Delete synced data") {
                     onConfirmClearCloud()
                     isPresented = false
                 }
@@ -481,6 +676,6 @@ struct ClearCloudDataSheet: View {
                 .disabled(!canConfirm)
             }
         }
-        .navigationTitle("Clear cloud data")
+        .navigationTitle("Delete synced data")
     }
 }

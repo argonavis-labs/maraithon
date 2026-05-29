@@ -3,9 +3,50 @@ defmodule MaraithonWeb.PeopleLive do
 
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
+  alias Maraithon.Crm.RelationshipPresentation
   alias Maraithon.Crm.RelationshipPresets
+  alias Maraithon.Memory
 
   @default_filters %{"q" => ""}
+  @default_family_member_form %{
+    "display_name" => "",
+    "preset" => "child",
+    "contact_hint" => "",
+    "communication_frequency" => "",
+    "preferred_communication_method" => "",
+    "todo_policy" => "family_logistics_only",
+    "push_policy" => "time_sensitive_only",
+    "notes" => ""
+  }
+  @default_family_proxy_form %{
+    "display_name" => "",
+    "preset" => "school_contact",
+    "proxy_for_person_id" => "",
+    "contact_hint" => "",
+    "preferred_communication_method" => "",
+    "todo_policy" => "family_logistics_only",
+    "push_policy" => "time_sensitive_only",
+    "notes" => ""
+  }
+  @family_member_presets ~w(spouse_partner child parent sibling extended_family)
+  @family_proxy_presets ~w(
+    school_contact
+    coach_activity_contact
+    family_event_organizer
+    coparenting_contact
+    household_service
+    medical_provider
+  )
+  @todo_policy_options [
+    %{value: "family_logistics_only", label: "Logistics only"},
+    %{value: "quiet_relationship_support", label: "Quiet support"},
+    %{value: "opt_in_rhythm", label: "Opt-in rhythm"}
+  ]
+  @push_policy_options [
+    %{value: "time_sensitive_only", label: "Time-sensitive only"},
+    %{value: "digest_only", label: "Digest only"},
+    %{value: "never_push", label: "Never push"}
+  ]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -16,6 +57,10 @@ defmodule MaraithonWeb.PeopleLive do
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
        people: [],
+       family_context_people: [],
+       family_onboarding_mode: nil,
+       family_member_form: to_form(@default_family_member_form, as: :family_member),
+       family_proxy_form: to_form(@default_family_proxy_form, as: :family_proxy),
        selected_person_ids: MapSet.new(),
        selected_person_id: nil,
        selected_person: nil,
@@ -123,6 +168,72 @@ defmodule MaraithonWeb.PeopleLive do
     {:noreply, assign_bulk_action(socket, nil)}
   end
 
+  def handle_event("show_people_onboarding", %{"mode" => mode}, socket) do
+    {:noreply, assign(socket, :family_onboarding_mode, family_onboarding_mode(mode))}
+  end
+
+  def handle_event("cancel_people_onboarding", _params, socket) do
+    {:noreply, reset_family_onboarding(socket)}
+  end
+
+  def handle_event("create_family_member", %{"family_member" => params}, socket) do
+    user_id = current_user_id(socket)
+
+    socket =
+      case family_member_attrs(params) do
+        {:ok, attrs} ->
+          case Crm.upsert_person(user_id, attrs) do
+            {:ok, person} ->
+              write_family_context_memory(user_id, person)
+
+              socket
+              |> put_flash(:info, "Added #{person.display_name} to family context.")
+              |> reset_family_onboarding()
+              |> refresh_people()
+
+            {:error, reason} ->
+              put_flash(socket, :error, onboarding_error(reason))
+          end
+
+        {:error, reason} ->
+          socket
+          |> put_flash(:error, onboarding_error(reason))
+          |> assign(:family_onboarding_mode, "member")
+          |> assign(:family_member_form, to_family_member_form(params))
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("create_family_proxy", %{"family_proxy" => params}, socket) do
+    user_id = current_user_id(socket)
+
+    socket =
+      case family_proxy_attrs(user_id, params) do
+        {:ok, attrs} ->
+          case Crm.upsert_person(user_id, attrs) do
+            {:ok, person} ->
+              write_family_context_memory(user_id, person)
+
+              socket
+              |> put_flash(:info, "Added #{person.display_name} as family-related context.")
+              |> reset_family_onboarding()
+              |> refresh_people()
+
+            {:error, reason} ->
+              put_flash(socket, :error, onboarding_error(reason))
+          end
+
+        {:error, reason} ->
+          socket
+          |> put_flash(:error, onboarding_error(reason))
+          |> assign(:family_onboarding_mode, "proxy")
+          |> assign(:family_proxy_form, to_family_proxy_form(params))
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_event("open_person_detail", %{"id" => person_id}, socket) do
     if visible_person_id?(socket, person_id) do
       {:noreply,
@@ -140,6 +251,8 @@ defmodule MaraithonWeb.PeopleLive do
         {:ok, attrs} ->
           case Crm.upsert_person(user_id, attrs) do
             {:ok, person} ->
+              if family_context_person?(person), do: write_family_context_memory(user_id, person)
+
               socket
               |> put_flash(:info, "Updated relationship for #{person.display_name}.")
               |> refresh_people()
@@ -223,7 +336,14 @@ defmodule MaraithonWeb.PeopleLive do
       <div class="space-y-6">
         <.page_header
           title="People"
-          subtitle="CRM relationships Maraithon has learned from connected work and conversations."
+          subtitle="Relationships Maraithon has learned from connected work and conversations."
+        />
+
+        <.family_onboarding
+          family_context_people={@family_context_people}
+          family_onboarding_mode={@family_onboarding_mode}
+          family_member_form={@family_member_form}
+          family_proxy_form={@family_proxy_form}
         />
 
         <.panel body_class="px-5 py-4">
@@ -282,7 +402,7 @@ defmodule MaraithonWeb.PeopleLive do
                     <.table_header>Person</.table_header>
                     <.table_header>Relationship</.table_header>
                     <.table_header>Activity</.table_header>
-                    <.table_header>Signal</.table_header>
+                    <.table_header>Relationship health</.table_header>
                     <.table_header>Status</.table_header>
                   </.table_row>
                 </.table_head>
@@ -319,7 +439,7 @@ defmodule MaraithonWeb.PeopleLive do
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
-                      <div class="text-sm/6 text-zinc-950"><%= fallback(person.relationship) %></div>
+                      <div class="text-sm/6 text-zinc-950"><%= fallback(person.relationship, "Relationship not set") %></div>
                       <div class="mt-1 flex flex-wrap items-center gap-2 text-xs/5 text-zinc-500">
                         <span><%= communication_frequency(person) %></span>
                         <span :if={present?(person.preferred_communication_method)} aria-hidden="true">·</span>
@@ -336,10 +456,10 @@ defmodule MaraithonWeb.PeopleLive do
                     </.table_cell>
                     <.table_cell class="align-top">
                       <div class="text-sm/6 text-zinc-950">
-                        <%= metric_label("Strength", person.relationship_strength) %>
+                        <%= RelationshipPresentation.health_label(person.relationship_strength) %>
                       </div>
                       <div class="mt-1 text-xs/5 text-zinc-500">
-                        <%= metric_label("Affinity", person.affinity_score) %>
+                        <%= RelationshipPresentation.warmth_label(person.affinity_score) %>
                       </div>
                     </.table_cell>
                     <.table_cell class="align-top">
@@ -367,26 +487,719 @@ defmodule MaraithonWeb.PeopleLive do
   end
 
   defp refresh_people(socket) do
+    user_id = current_user_id(socket)
+
     people =
-      Crm.list_people(current_user_id(socket),
+      Crm.list_people(user_id,
         query: normalize_text(socket.assigns.filters["q"]),
         limit: 100
       )
 
+    family_context_people = Crm.list_family_context(user_id, limit: 100)
     visible_ids = people |> Enum.map(& &1.id) |> MapSet.new()
     selected_person_ids = MapSet.intersection(socket.assigns.selected_person_ids, visible_ids)
     has_selection? = MapSet.size(selected_person_ids) > 0
 
     assign(socket,
       people: people,
+      family_context_people: family_context_people,
       selected_person_ids: selected_person_ids,
       bulk_action_menu_open?: has_selection? && socket.assigns.bulk_action_menu_open?,
       bulk_action_mode: if(has_selection?, do: socket.assigns.bulk_action_mode, else: nil),
       bulk_action_anchor: if(has_selection?, do: socket.assigns.bulk_action_anchor, else: nil),
-      selected_person:
-        selected_person_for_user(current_user_id(socket), socket.assigns.selected_person_id)
+      selected_person: selected_person_for_user(user_id, socket.assigns.selected_person_id)
     )
   end
+
+  attr :family_context_people, :list, required: true
+  attr :family_onboarding_mode, :string, default: nil
+  attr :family_member_form, :any, required: true
+  attr :family_proxy_form, :any, required: true
+
+  defp family_onboarding(assigns) do
+    assigns =
+      assigns
+      |> assign(
+        :family_member_count,
+        Enum.count(assigns.family_context_people, &family_member?/1)
+      )
+      |> assign(:family_proxy_count, Enum.count(assigns.family_context_people, &family_proxy?/1))
+
+    ~H"""
+    <.panel id="people-family-onboarding" body_class="px-5 py-4">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-sm/6 font-semibold text-zinc-950">Family context</h2>
+            <.badge color={if @family_context_people == [], do: "amber", else: "blue"}>
+              <%= family_context_summary(@family_member_count, @family_proxy_count) %>
+            </.badge>
+          </div>
+          <p class="mt-1 max-w-3xl text-sm/6 text-zinc-500">
+            Tell Maraithon who is family so it can separate family logistics from work follow-ups.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <.button
+            type="button"
+            variant={if @family_onboarding_mode == "member", do: "solid", else: "outline"}
+            phx-click="show_people_onboarding"
+            phx-value-mode="member"
+          >
+            Add family member
+          </.button>
+          <.button
+            type="button"
+            variant={if @family_onboarding_mode == "proxy", do: "solid", else: "outline"}
+            phx-click="show_people_onboarding"
+            phx-value-mode="proxy"
+          >
+            Add school or household contact
+          </.button>
+        </div>
+      </div>
+
+      <div :if={@family_context_people != []} class="mt-4 border-t border-zinc-950/10 pt-4">
+        <.table>
+          <.table_head>
+            <.table_row>
+              <.table_header>Person</.table_header>
+              <.table_header>Role</.table_header>
+              <.table_header>Handling</.table_header>
+              <.table_header>Delivery</.table_header>
+            </.table_row>
+          </.table_head>
+          <.table_body>
+            <.table_row
+              :for={person <- @family_context_people}
+              id={"family-context-#{person.id}"}
+              phx-click="open_person_detail"
+              phx-value-id={person.id}
+              class="cursor-pointer transition-colors hover:bg-zinc-950/[0.025]"
+            >
+              <.table_cell class="max-w-lg whitespace-normal align-top">
+                <div class="font-medium text-zinc-950"><%= person.display_name %></div>
+                <div class="mt-1 text-xs/5 text-zinc-500"><%= contact_preview(person) %></div>
+              </.table_cell>
+              <.table_cell class="whitespace-normal align-top">
+                <div class="flex flex-wrap items-center gap-2">
+                  <.badge color={if family_member?(person), do: "blue", else: "zinc"}>
+                    <%= family_context_kind(person) %>
+                  </.badge>
+                  <span class="text-sm/6 text-zinc-950"><%= family_role_label(person) %></span>
+                </div>
+                <div :if={proxy_for_label(person, @family_context_people)} class="mt-1 text-xs/5 text-zinc-500">
+                  For <%= proxy_for_label(person, @family_context_people) %>
+                </div>
+              </.table_cell>
+              <.table_cell class="whitespace-normal align-top">
+                <div class="text-sm/6 text-zinc-950"><%= todo_policy_label(person) %></div>
+                <div class="mt-1 text-xs/5 text-zinc-500"><%= communication_frequency(person) %></div>
+              </.table_cell>
+              <.table_cell class="whitespace-normal align-top">
+                <div class="text-sm/6 text-zinc-950"><%= push_policy_label(person) %></div>
+                <div :if={present?(person.preferred_communication_method)} class="mt-1 text-xs/5 text-zinc-500">
+                  <%= label(person.preferred_communication_method) %>
+                </div>
+              </.table_cell>
+            </.table_row>
+          </.table_body>
+        </.table>
+      </div>
+
+      <div :if={@family_context_people == []} class="mt-4 border-t border-zinc-950/10 pt-4 text-sm/6 text-zinc-500">
+        No family context yet.
+      </div>
+
+      <.family_member_onboarding_form
+        :if={@family_onboarding_mode == "member"}
+        form={@family_member_form}
+      />
+      <.family_proxy_onboarding_form
+        :if={@family_onboarding_mode == "proxy"}
+        form={@family_proxy_form}
+        family_context_people={@family_context_people}
+      />
+    </.panel>
+    """
+  end
+
+  attr :form, :any, required: true
+
+  defp family_member_onboarding_form(assigns) do
+    ~H"""
+    <.form
+      for={@form}
+      id="family-member-onboarding-form"
+      phx-submit="create_family_member"
+      class="mt-4 border-t border-zinc-950/10 pt-4"
+    >
+      <div class="grid gap-4 lg:grid-cols-4">
+        <.field label="Name" for="family-member-display-name">
+          <.c_input
+            id="family-member-display-name"
+            name={@form[:display_name].name}
+            value={@form[:display_name].value}
+            required
+            placeholder="Jack Fenwick"
+          />
+        </.field>
+
+        <.field label="Role" for="family-member-preset">
+          <.c_select id="family-member-preset" name={@form[:preset].name}>
+            <option
+              :for={preset <- family_member_preset_options()}
+              value={preset.id}
+              selected={@form[:preset].value == preset.id}
+            >
+              <%= preset.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Handling" for="family-member-todo-policy">
+          <.c_select id="family-member-todo-policy" name={@form[:todo_policy].name}>
+            <option
+              :for={option <- todo_policy_options()}
+              value={option.value}
+              selected={@form[:todo_policy].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Push" for="family-member-push-policy">
+          <.c_select id="family-member-push-policy" name={@form[:push_policy].name}>
+            <option
+              :for={option <- push_policy_options()}
+              value={option.value}
+              selected={@form[:push_policy].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Cadence" for="family-member-cadence">
+          <.c_select id="family-member-cadence" name={@form[:communication_frequency].name}>
+            <option value="">No cadence</option>
+            <option
+              :for={option <- RelationshipPresets.cadence_options()}
+              value={option.value}
+              selected={@form[:communication_frequency].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Channel" for="family-member-channel">
+          <.c_select id="family-member-channel" name={@form[:preferred_communication_method].name}>
+            <option value="">No preference</option>
+            <option
+              :for={option <- RelationshipPresets.channel_options()}
+              value={option.value}
+              selected={@form[:preferred_communication_method].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Contact hint" for="family-member-contact-hint">
+          <.c_input
+            id="family-member-contact-hint"
+            name={@form[:contact_hint].name}
+            value={@form[:contact_hint].value}
+            placeholder="email or phone"
+          />
+        </.field>
+
+        <.field label="Context" for="family-member-notes" class="lg:col-span-4">
+          <.c_textarea
+            id="family-member-notes"
+            name={@form[:notes].name}
+            value={@form[:notes].value}
+            rows={3}
+            placeholder="What should Maraithon remember before surfacing this person?"
+          />
+        </.field>
+      </div>
+
+      <div class="mt-4 flex justify-end gap-2">
+        <.button type="button" variant="plain" phx-click="cancel_people_onboarding">Cancel</.button>
+        <.button type="submit">Save family context</.button>
+      </div>
+    </.form>
+    """
+  end
+
+  attr :form, :any, required: true
+  attr :family_context_people, :list, required: true
+
+  defp family_proxy_onboarding_form(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :family_members,
+        Enum.filter(assigns.family_context_people, &family_member?/1)
+      )
+
+    ~H"""
+    <.form
+      for={@form}
+      id="family-proxy-onboarding-form"
+      phx-submit="create_family_proxy"
+      class="mt-4 border-t border-zinc-950/10 pt-4"
+    >
+      <div class="grid gap-4 lg:grid-cols-4">
+        <.field label="Name" for="family-proxy-display-name">
+          <.c_input
+            id="family-proxy-display-name"
+            name={@form[:display_name].name}
+            value={@form[:display_name].value}
+            required
+            placeholder="School office"
+          />
+        </.field>
+
+        <.field label="Role" for="family-proxy-preset">
+          <.c_select id="family-proxy-preset" name={@form[:preset].name}>
+            <option
+              :for={preset <- family_proxy_preset_options()}
+              value={preset.id}
+              selected={@form[:preset].value == preset.id}
+            >
+              <%= preset.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="For" for="family-proxy-for-person">
+          <.c_select id="family-proxy-for-person" name={@form[:proxy_for_person_id].name}>
+            <option value="">No specific person</option>
+            <option
+              :for={person <- @family_members}
+              value={person.id}
+              selected={@form[:proxy_for_person_id].value == person.id}
+            >
+              <%= person.display_name %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Handling" for="family-proxy-todo-policy">
+          <.c_select id="family-proxy-todo-policy" name={@form[:todo_policy].name}>
+            <option
+              :for={option <- todo_policy_options()}
+              value={option.value}
+              selected={@form[:todo_policy].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Push" for="family-proxy-push-policy">
+          <.c_select id="family-proxy-push-policy" name={@form[:push_policy].name}>
+            <option
+              :for={option <- push_policy_options()}
+              value={option.value}
+              selected={@form[:push_policy].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Channel" for="family-proxy-channel">
+          <.c_select id="family-proxy-channel" name={@form[:preferred_communication_method].name}>
+            <option value="">No preference</option>
+            <option
+              :for={option <- RelationshipPresets.channel_options()}
+              value={option.value}
+              selected={@form[:preferred_communication_method].value == option.value}
+            >
+              <%= option.label %>
+            </option>
+          </.c_select>
+        </.field>
+
+        <.field label="Contact hint" for="family-proxy-contact-hint">
+          <.c_input
+            id="family-proxy-contact-hint"
+            name={@form[:contact_hint].name}
+            value={@form[:contact_hint].value}
+            placeholder="email or phone"
+          />
+        </.field>
+
+        <.field label="Context" for="family-proxy-notes" class="lg:col-span-4">
+          <.c_textarea
+            id="family-proxy-notes"
+            name={@form[:notes].name}
+            value={@form[:notes].value}
+            rows={3}
+            placeholder="What family logistics should this contact represent?"
+          />
+        </.field>
+      </div>
+
+      <div class="mt-4 flex justify-end gap-2">
+        <.button type="button" variant="plain" phx-click="cancel_people_onboarding">Cancel</.button>
+        <.button type="submit">Save family contact</.button>
+      </div>
+    </.form>
+    """
+  end
+
+  defp family_member_preset_options do
+    RelationshipPresets.all()
+    |> Enum.filter(&(&1.id in @family_member_presets))
+  end
+
+  defp family_proxy_preset_options do
+    RelationshipPresets.all()
+    |> Enum.filter(&(&1.id in @family_proxy_presets))
+  end
+
+  defp todo_policy_options, do: @todo_policy_options
+  defp push_policy_options, do: @push_policy_options
+
+  defp family_onboarding_mode("proxy"), do: "proxy"
+  defp family_onboarding_mode(_mode), do: "member"
+
+  defp reset_family_onboarding(socket) do
+    assign(socket,
+      family_onboarding_mode: nil,
+      family_member_form: to_family_member_form(%{}),
+      family_proxy_form: to_family_proxy_form(%{})
+    )
+  end
+
+  defp to_family_member_form(params) do
+    params
+    |> form_values(@default_family_member_form)
+    |> to_form(as: :family_member)
+  end
+
+  defp to_family_proxy_form(params) do
+    params
+    |> form_values(@default_family_proxy_form)
+    |> to_form(as: :family_proxy)
+  end
+
+  defp form_values(params, defaults) when is_map(params) do
+    params =
+      params
+      |> stringify_params()
+      |> Map.take(Map.keys(defaults))
+
+    Map.merge(defaults, params)
+  end
+
+  defp family_member_attrs(params) do
+    params = stringify_params(params)
+    display_name = normalize_text(Map.get(params, "display_name"))
+    preset_id = normalize_text(Map.get(params, "preset")) || "child"
+
+    with display_name when is_binary(display_name) <- display_name,
+         {:ok, preset} <- allowed_preset(preset_id, @family_member_presets) do
+      relationship = preset.value
+
+      metadata =
+        %{}
+        |> relationship_metadata(preset.id, relationship)
+        |> Map.merge(%{
+          "family_member" => true,
+          "family_role" => preset.id,
+          "people_onboarding" => true,
+          "relationship_context_source" => "people_onboarding",
+          "sensitivity" => family_sensitivity(preset.id),
+          "todo_policy" => todo_policy_value(params),
+          "push_policy" => push_policy_value(params)
+        })
+        |> maybe_put("dependent_context", if(preset.id == "child", do: true))
+
+      attrs =
+        %{
+          "display_name" => display_name,
+          "relationship" => relationship,
+          "metadata" => metadata
+        }
+        |> maybe_put(
+          "communication_frequency",
+          normalize_text(Map.get(params, "communication_frequency"))
+        )
+        |> maybe_put(
+          "preferred_communication_method",
+          normalize_text(Map.get(params, "preferred_communication_method"))
+        )
+        |> maybe_put("notes", normalize_text(Map.get(params, "notes")))
+        |> maybe_put_contact_hint(params)
+
+      {:ok, attrs}
+    else
+      nil -> {:error, :missing_display_name}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp family_proxy_attrs(user_id, params) do
+    params = stringify_params(params)
+    display_name = normalize_text(Map.get(params, "display_name"))
+    preset_id = normalize_text(Map.get(params, "preset")) || "school_contact"
+
+    with display_name when is_binary(display_name) <- display_name,
+         {:ok, preset} <- allowed_preset(preset_id, @family_proxy_presets),
+         {:ok, proxy_for_person_id} <- proxy_for_person_id(user_id, params) do
+      relationship = preset.value
+
+      metadata =
+        %{}
+        |> relationship_metadata(preset.id, relationship)
+        |> Map.merge(%{
+          "relationship_domain" => "family",
+          "family_proxy" => true,
+          "proxy_role" => preset.id,
+          "people_onboarding" => true,
+          "relationship_context_source" => "people_onboarding",
+          "todo_policy" => todo_policy_value(params),
+          "default_todo_policy" => "family_logistics",
+          "push_policy" => push_policy_value(params)
+        })
+        |> maybe_put("proxy_for_person_id", proxy_for_person_id)
+
+      attrs =
+        %{
+          "display_name" => display_name,
+          "relationship" => relationship,
+          "metadata" => metadata
+        }
+        |> maybe_put(
+          "preferred_communication_method",
+          normalize_text(Map.get(params, "preferred_communication_method"))
+        )
+        |> maybe_put("notes", normalize_text(Map.get(params, "notes")))
+        |> maybe_put_contact_hint(params)
+
+      {:ok, attrs}
+    else
+      nil -> {:error, :missing_display_name}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp allowed_preset(preset_id, allowed_ids) do
+    case RelationshipPresets.get(preset_id) do
+      nil ->
+        {:error, :invalid_relationship_preset}
+
+      preset ->
+        if preset.id in allowed_ids,
+          do: {:ok, preset},
+          else: {:error, :invalid_relationship_preset}
+    end
+  end
+
+  defp proxy_for_person_id(_user_id, %{"proxy_for_person_id" => ""}), do: {:ok, nil}
+  defp proxy_for_person_id(_user_id, %{"proxy_for_person_id" => nil}), do: {:ok, nil}
+
+  defp proxy_for_person_id(user_id, params) do
+    case normalize_text(Map.get(params, "proxy_for_person_id")) do
+      nil ->
+        {:ok, nil}
+
+      person_id ->
+        case Crm.get_person_for_user(user_id, person_id) do
+          %Person{} = person ->
+            if family_member?(person),
+              do: {:ok, person.id},
+              else: {:error, :proxy_family_member_not_found}
+
+          nil ->
+            {:error, :proxy_family_member_not_found}
+        end
+    end
+  end
+
+  defp maybe_put_contact_hint(attrs, params) do
+    case normalize_text(Map.get(params, "contact_hint")) do
+      nil ->
+        attrs
+
+      contact_hint ->
+        if String.contains?(contact_hint, "@") do
+          Map.put(attrs, "email", contact_hint)
+        else
+          Map.put(attrs, "phone", contact_hint)
+        end
+    end
+  end
+
+  defp todo_policy_value(params) do
+    params
+    |> Map.get("todo_policy")
+    |> normalize_text()
+    |> option_value(@todo_policy_options, "family_logistics_only")
+  end
+
+  defp push_policy_value(params) do
+    params
+    |> Map.get("push_policy")
+    |> normalize_text()
+    |> option_value(@push_policy_options, "time_sensitive_only")
+  end
+
+  defp option_value(value, options, default) do
+    values = Enum.map(options, & &1.value)
+    if value in values, do: value, else: default
+  end
+
+  defp write_family_context_memory(user_id, %Person{} = person) do
+    _result =
+      Memory.write(
+        user_id,
+        %{
+          "title" => "Family context: #{person.display_name}",
+          "content" => family_memory_content(person),
+          "kind" => "relationship",
+          "scope" => "user",
+          "author_type" => "user",
+          "source" => "people_onboarding",
+          "source_ref_type" => "crm_person",
+          "source_ref_id" => person.id,
+          "tags" => ["family", "people_onboarding", "todo_policy"],
+          "importance" => 86,
+          "confidence" => 1.0,
+          "dedupe_key" => "people_onboarding:family_context:#{person.id}",
+          "metadata" => %{
+            "person_id" => person.id,
+            "relationship_domain" => metadata_value(person, "relationship_domain"),
+            "relationship_preset" => metadata_value(person, "relationship_preset"),
+            "family_member" => family_member?(person),
+            "family_proxy" => family_proxy?(person),
+            "todo_policy" => metadata_value(person, "todo_policy"),
+            "push_policy" => metadata_value(person, "push_policy")
+          }
+        },
+        source: "people_onboarding"
+      )
+
+    :ok
+  rescue
+    _exception -> :ok
+  end
+
+  defp family_memory_content(%Person{} = person) do
+    [
+      "#{person.display_name} is #{family_role_label(person)} in #{String.downcase(family_context_kind(person))} context.",
+      "Treat items involving #{person.display_name} as family context, not generic work follow-up.",
+      "Handling: #{todo_policy_label(person)}.",
+      "Delivery: #{push_policy_label(person)}.",
+      person.notes
+    ]
+    |> Enum.filter(&present?/1)
+    |> Enum.join(" ")
+  end
+
+  defp family_sensitivity("child"), do: "child_family"
+  defp family_sensitivity(_preset_id), do: "family"
+
+  defp family_context_summary(0, 0), do: "Needs setup"
+  defp family_context_summary(member_count, 0), do: pluralize(member_count, "family member")
+  defp family_context_summary(0, proxy_count), do: pluralize(proxy_count, "family contact")
+
+  defp family_context_summary(member_count, proxy_count) do
+    "#{pluralize(member_count, "family member")} · #{pluralize(proxy_count, "family contact")}"
+  end
+
+  defp family_context_kind(%Person{} = person) do
+    if family_member?(person), do: "Family member", else: "Family contact"
+  end
+
+  defp family_context_person?(%Person{} = person) do
+    metadata_value(person, "relationship_domain") == "family" or family_member?(person) or
+      family_proxy?(person)
+  end
+
+  defp family_member?(%Person{} = person) do
+    truthy?(metadata_value(person, "family_member")) or
+      metadata_value(person, "relationship_preset") in @family_member_presets
+  end
+
+  defp family_proxy?(%Person{} = person) do
+    truthy?(metadata_value(person, "family_proxy")) or
+      metadata_value(person, "proxy_role") in @family_proxy_presets
+  end
+
+  defp family_role_label(%Person{} = person) do
+    preset_id =
+      metadata_value(person, "family_role") ||
+        metadata_value(person, "proxy_role") ||
+        metadata_value(person, "relationship_preset")
+
+    case RelationshipPresets.get(preset_id) do
+      nil -> fallback(person.relationship)
+      preset -> preset.label
+    end
+  end
+
+  defp todo_policy_label(%Person{} = person) do
+    person
+    |> metadata_value("todo_policy")
+    |> option_label(@todo_policy_options, "Logistics only")
+  end
+
+  defp push_policy_label(%Person{} = person) do
+    person
+    |> metadata_value("push_policy")
+    |> option_label(@push_policy_options, "Time-sensitive only")
+  end
+
+  defp option_label(value, options, default) do
+    options
+    |> Enum.find(&(&1.value == value))
+    |> case do
+      nil -> default
+      option -> option.label
+    end
+  end
+
+  defp proxy_for_label(%Person{} = person, people) do
+    proxy_for_person_id = metadata_value(person, "proxy_for_person_id")
+
+    people
+    |> Enum.find(&(&1.id == proxy_for_person_id))
+    |> case do
+      %Person{} = proxy_for -> proxy_for.display_name
+      nil -> nil
+    end
+  end
+
+  defp metadata_value(%Person{metadata: metadata}, key) when is_map(metadata) do
+    Map.get(metadata, key)
+  end
+
+  defp metadata_value(_person, _key), do: nil
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(_value), do: false
+
+  defp pluralize(1, label), do: "1 #{label}"
+  defp pluralize(count, label), do: "#{count} #{label}s"
+
+  defp onboarding_error(:missing_display_name), do: "Add a name before saving family context."
+
+  defp onboarding_error(:invalid_relationship_preset),
+    do: "Choose one of the family relationship presets."
+
+  defp onboarding_error(:proxy_family_member_not_found),
+    do: "Choose a family member from this account, or leave For blank."
+
+  defp onboarding_error(_reason), do: "Could not save that family context."
 
   attr :people, :list, required: true
   attr :selected_person_ids, :any, required: true
@@ -543,7 +1356,7 @@ defmodule MaraithonWeb.PeopleLive do
         <div>
           <p class="text-sm/6 font-semibold text-zinc-950">Merge contacts</p>
           <p class="mt-1 text-xs/5 text-zinc-500">
-            Choose the canonical CRM person. The other selected contacts will be folded into it.
+            Choose the person to keep. The other selected contacts will be folded into it.
           </p>
         </div>
         <button
@@ -600,7 +1413,7 @@ defmodule MaraithonWeb.PeopleLive do
         <div>
           <p class="text-sm/6 font-semibold text-zinc-950">Delete contacts?</p>
           <p class="mt-1 text-xs/5 text-zinc-500">
-            This removes <%= pluralize_people(@selected_count) %> and their CRM links.
+            This removes <%= pluralize_people(@selected_count) %> and their relationship links.
           </p>
         </div>
         <button
@@ -738,6 +1551,38 @@ defmodule MaraithonWeb.PeopleLive do
           </.field>
         </div>
 
+        <div :if={family_context_person?(@person)} class="grid gap-3 sm:grid-cols-2">
+          <.field label="Family handling" for={"relationship-todo-policy-#{@person.id}"}>
+            <.c_select
+              id={"relationship-todo-policy-#{@person.id}"}
+              name={@relationship_form[:todo_policy].name}
+            >
+              <option
+                :for={option <- todo_policy_options()}
+                value={option.value}
+                selected={@relationship_form[:todo_policy].value == option.value}
+              >
+                <%= option.label %>
+              </option>
+            </.c_select>
+          </.field>
+
+          <.field label="Push policy" for={"relationship-push-policy-#{@person.id}"}>
+            <.c_select
+              id={"relationship-push-policy-#{@person.id}"}
+              name={@relationship_form[:push_policy].name}
+            >
+              <option
+                :for={option <- push_policy_options()}
+                value={option.value}
+                selected={@relationship_form[:push_policy].value == option.value}
+              >
+                <%= option.label %>
+              </option>
+            </.c_select>
+          </.field>
+        </div>
+
         <.field label="Context" for={"relationship-notes-#{@person.id}"}>
           <.c_textarea
             id={"relationship-notes-#{@person.id}"}
@@ -765,6 +1610,9 @@ defmodule MaraithonWeb.PeopleLive do
         "relationship" => person.relationship || "",
         "communication_frequency" => person.communication_frequency || "",
         "preferred_communication_method" => person.preferred_communication_method || "",
+        "todo_policy" =>
+          get_in(person.metadata || %{}, ["todo_policy"]) || "family_logistics_only",
+        "push_policy" => get_in(person.metadata || %{}, ["push_policy"]) || "time_sensitive_only",
         "notes" => person.notes || ""
       },
       as: :relationship
@@ -790,7 +1638,10 @@ defmodule MaraithonWeb.PeopleLive do
           %{
             "id" => person.id,
             "display_name" => display_name,
-            "metadata" => relationship_metadata(person.metadata, preset_id, relationship),
+            "metadata" =>
+              person.metadata
+              |> relationship_metadata(preset_id, relationship)
+              |> relationship_preferences_metadata(params),
             "notes" => notes
           }
           |> maybe_put("relationship", relationship)
@@ -829,7 +1680,74 @@ defmodule MaraithonWeb.PeopleLive do
         |> Map.put("relationship_preset", preset.id)
         |> Map.put("relationship_domain", preset.domain)
         |> Map.put("relationship_preset_label", preset.label)
+        |> relationship_kind_metadata(preset)
     end
+  end
+
+  defp relationship_kind_metadata(metadata, preset) do
+    cond do
+      preset.id in @family_member_presets ->
+        metadata
+        |> Map.put("family_member", true)
+        |> Map.put("family_role", preset.id)
+        |> Map.put("family_proxy", false)
+        |> Map.delete("proxy_role")
+        |> Map.delete("proxy_for_person_id")
+        |> Map.put("sensitivity", family_sensitivity(preset.id))
+        |> maybe_put("dependent_context", if(preset.id == "child", do: true))
+
+      preset.id in @family_proxy_presets ->
+        metadata
+        |> Map.put("relationship_domain", "family")
+        |> Map.put("family_member", false)
+        |> Map.delete("family_role")
+        |> Map.put("family_proxy", true)
+        |> Map.put("proxy_role", preset.id)
+
+      preset.domain == "family" ->
+        metadata
+
+      true ->
+        clear_family_metadata(metadata)
+    end
+  end
+
+  defp relationship_preferences_metadata(metadata, params) do
+    if family_metadata?(metadata) do
+      metadata
+      |> Map.put_new("people_onboarding", false)
+      |> Map.put("todo_policy", todo_policy_value(params))
+      |> Map.put("push_policy", push_policy_value(params))
+    else
+      metadata
+    end
+  end
+
+  defp family_metadata?(metadata) when is_map(metadata) do
+    Map.get(metadata, "relationship_domain") == "family" or
+      truthy?(Map.get(metadata, "family_member")) or
+      truthy?(Map.get(metadata, "family_proxy"))
+  end
+
+  defp family_metadata?(_metadata), do: false
+
+  defp clear_family_metadata(metadata) do
+    Map.drop(
+      metadata,
+      ~w(
+        family_member
+        family_role
+        family_proxy
+        proxy_role
+        proxy_for_person_id
+        dependent_context
+        sensitivity
+        todo_policy
+        push_policy
+        default_todo_policy
+        people_onboarding
+      )
+    )
   end
 
   defp selected_people(people, selected_person_ids) do
@@ -885,7 +1803,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp visible_person_id?(_socket, _person_id), do: false
 
   defp visible_person_ids(socket) do
-    socket.assigns.people
+    (socket.assigns.people ++ socket.assigns.family_context_people)
     |> Enum.map(& &1.id)
     |> MapSet.new()
   end
@@ -944,9 +1862,9 @@ defmodule MaraithonWeb.PeopleLive do
     Enum.reduce_while(duplicate_ids, {:ok, 0}, fn duplicate_id, {:ok, count} ->
       case Crm.merge_people(user_id, survivor.id, duplicate_id, %{
              "performed_by" => "operator_people",
-             "evidence" => "Manual bulk duplicate merge from the People CRM index.",
+             "evidence" => "Manual bulk duplicate merge from the People index.",
              "model_rationale" =>
-               "The user selected multiple visible CRM rows and chose the canonical person to keep."
+               "The user selected multiple visible People rows and chose the canonical person to keep."
            }) do
         {:ok, _result} -> {:cont, {:ok, count + 1}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -971,7 +1889,7 @@ defmodule MaraithonWeb.PeopleLive do
              "performed_by" => "operator_people",
              "evidence" => "Manual duplicate merge from the People operator table.",
              "model_rationale" =>
-               "The user selected the canonical CRM row and the duplicate row to collapse."
+               "The user selected the canonical People row and the duplicate row to collapse."
            }) do
       {:ok, surviving, merged}
     else
@@ -1113,9 +2031,6 @@ defmodule MaraithonWeb.PeopleLive do
   defp interaction_label(count) when is_integer(count), do: "#{count} interactions"
   defp interaction_label(_count), do: "0 interactions"
 
-  defp metric_label(label, value) when is_integer(value), do: "#{label} #{value}"
-  defp metric_label(label, _value), do: "#{label} 0"
-
   defp empty_message(%{"q" => query}) do
     if present?(query), do: "No people match this search.", else: "No people found yet."
   end
@@ -1125,7 +2040,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp status_color("archived"), do: "zinc"
   defp status_color(_status), do: "zinc"
 
-  defp format_datetime(nil), do: "Never"
+  defp format_datetime(nil), do: "No activity yet"
 
   defp format_datetime(%DateTime{} = datetime) do
     Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
@@ -1141,7 +2056,7 @@ defmodule MaraithonWeb.PeopleLive do
 
   defp label(value), do: to_string(value)
 
-  defp fallback(value, fallback \\ "Unknown")
+  defp fallback(value, fallback \\ "Not set")
 
   defp fallback(value, fallback) when is_binary(value),
     do: if(present?(value), do: value, else: fallback)
@@ -1149,6 +2064,12 @@ defmodule MaraithonWeb.PeopleLive do
   defp fallback(_value, fallback), do: fallback
 
   defp current_user_id(socket), do: socket.assigns.current_user.id
+
+  defp stringify_params(params) when is_map(params) do
+    Map.new(params, fn {key, value} -> {to_string(key), value} end)
+  end
+
+  defp stringify_params(_params), do: %{}
 
   defp normalize_text(value) when is_binary(value) do
     case String.trim(value) do

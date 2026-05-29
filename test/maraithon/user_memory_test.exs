@@ -28,11 +28,22 @@ defmodule Maraithon.UserMemoryTest do
                metadata: %{"email" => user_id}
              })
 
+    assert {:ok, _slack_account} =
+             ConnectedAccounts.upsert_manual(user_id, "slack:TSECRET123", %{
+               external_account_id: "TSECRET123",
+               scopes: ["search:read"],
+               metadata: %{"team_id" => "TSECRET123", "team_name" => "Executive Ops"}
+             })
+
     assert {:ok, profile} =
              UserMemory.refresh_profile(user_id,
                llm_complete: fn prompt ->
                  assert prompt =~ "Operator Core"
                  assert prompt =~ "\"provider\":\"google\""
+                 assert prompt =~ "\"provider\":\"slack\""
+                 refute prompt =~ "TSECRET123"
+                 refute prompt =~ "search:read"
+                 refute prompt =~ "external_account_id"
 
                  {:ok,
                   Jason.encode!(%{

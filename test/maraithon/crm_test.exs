@@ -44,6 +44,40 @@ defmodule Maraithon.CrmTest do
     assert listed.id == person.id
   end
 
+  test "lists family context and preserves family metadata in prompt summaries" do
+    user_id = "crm-family-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _work_person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Dana Lee",
+        "relationship" => "Customer sponsor",
+        "relationship_strength" => 99
+      })
+
+    {:ok, child} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Jack Fenwick",
+        "relationship" => "Child",
+        "metadata" => %{
+          "relationship_domain" => "family",
+          "relationship_preset" => "child",
+          "family_member" => true,
+          "family_role" => "child",
+          "todo_policy" => "family_logistics_only"
+        }
+      })
+
+    assert [family_person] = Crm.list_family_context(user_id, limit: 5)
+    assert family_person.id == child.id
+
+    assert [serialized] = Crm.summarize_for_prompt(user_id, 1)
+    assert serialized.display_name == "Jack Fenwick"
+    assert serialized.metadata["relationship_domain"] == "family"
+    assert serialized.metadata["relationship_preset"] == "child"
+    assert serialized.metadata["todo_policy"] == "family_logistics_only"
+  end
+
   test "grows relationship metrics from repeated model-backed observations" do
     user_id = "crm-metrics-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

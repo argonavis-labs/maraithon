@@ -436,7 +436,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp todo_digest_candidate(%Brief{} = brief, todos) when is_list(todos) do
-    payload = Briefs.telegram_payload(brief)
+    payload = Briefs.todo_digest_telegram_payload(brief, todos)
 
     %{
       user_id: brief.user_id,
@@ -499,7 +499,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     if todos == [] do
       deliver_standard_brief(brief)
     else
-      payload = Briefs.telegram_payload(brief)
+      payload = Briefs.todo_digest_telegram_payload(brief, todos)
 
       case deliver(%{
              user_id: brief.user_id,

@@ -97,14 +97,9 @@ struct DiagnosticsView: View {
     private var activeSourceCount: Int { visibleSources.count }
 
     private var eventsToday: Int {
-        // Aggregate from each publisher's last accepted batch. This is an
-        // approximation (it counts the most recent batch, not literally
-        // "today") — when the source layer grows a per-day counter the
-        // call site here switches over without UI changes.
-        visibleSources.reduce(0) { total, source in
-            let count = env.sources.statusPublisher(for: source.id)?.lastBatchAccepted ?? 0
-            return total + count
-        }
+        DiagnosticsSummaryMetrics.eventsSyncedToday(
+            visibleSources.map { env.sources.statusPublisher(for: $0.id) }
+        )
     }
 
     private var authLabel: String {
@@ -151,6 +146,15 @@ struct DiagnosticsView: View {
                 pendingRetryCount = engine.consecutiveFailures
                 try? await Task.sleep(for: .seconds(5))
             }
+        }
+    }
+}
+
+enum DiagnosticsSummaryMetrics {
+    @MainActor
+    static func eventsSyncedToday(_ publishers: [SourceStatusPublisher?]) -> Int {
+        publishers.reduce(0) { total, publisher in
+            total + (publisher?.acceptedToday ?? 0)
         }
     }
 }

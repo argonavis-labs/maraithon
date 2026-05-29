@@ -113,7 +113,7 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "proactive check-in"},
     "mock_output": {
       "message_class": "todo_digest",
-      "assistant_message": "This older follow-up has been sitting a while, so I am not treating it as urgent. Dan Bourke is the A-Team video project contact tied to the artifact-status commitment. Mark it important if it still matters, or dismiss it.",
+      "assistant_message": "Older follow-up, not urgent based on the available evidence. Item: Dan Bourke is the A-Team video project contact tied to the artifact-status commitment. Mark it important if it still matters, or dismiss it.",
       "tool_calls": [{"tool": "list_todos"}]
     },
     "expected": {

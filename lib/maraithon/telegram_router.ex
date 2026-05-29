@@ -12,6 +12,8 @@ defmodule Maraithon.TelegramRouter do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.ActionFailureCopy
+  alias Maraithon.TelegramAssistant.PreferenceConfirmationCopy
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramInterpreter
   alias Maraithon.TelegramResponder
@@ -265,17 +267,12 @@ defmodule Maraithon.TelegramRouter do
          user_turn,
          _delivery,
          _insight,
-         %{"intent" => "preference_reject"} = interpretation
+         %{"intent" => "preference_reject"}
        ) do
     pending = pending_rule_ids(conversation)
 
     if pending == [] do
-      {:ok,
-       Map.get(
-         interpretation,
-         "assistant_reply",
-         "I don’t have a pending rule to reject right now."
-       ), []}
+      {:ok, PreferenceConfirmationCopy.no_pending_text(), []}
     else
       {:ok, _} =
         PreferenceMemory.reject_rules(user_id, pending,
@@ -284,7 +281,7 @@ defmodule Maraithon.TelegramRouter do
         )
 
       _ = TelegramConversations.close(conversation, %{"metadata" => %{"pending_rule_ids" => []}})
-      {:ok, "Understood. I kept that as local feedback only and did not save a durable rule.", []}
+      {:ok, PreferenceConfirmationCopy.local_only_text(), []}
     end
   end
 
@@ -296,7 +293,7 @@ defmodule Maraithon.TelegramRouter do
          user_turn,
          _delivery,
          _insight,
-         %{"candidate_rules" => rules} = interpretation
+         %{"candidate_rules" => rules}
        )
        when is_list(rules) and rules != [] do
     {:ok, saved} =
@@ -318,21 +315,15 @@ defmodule Maraithon.TelegramRouter do
             "metadata" => %{"pending_rule_ids" => Enum.map(pending, &Map.get(&1, "rule_id"))}
           })
 
-        text =
-          Map.get(interpretation, "assistant_reply") ||
-            "I think this should become a saved rule. Should I remember it?"
+        text = PreferenceConfirmationCopy.text(pending)
 
         {:ok, text, [reply_markup: TelegramResponder.confirmation_markup(conversation.id)]}
 
       active != [] ->
-        {:ok,
-         Map.get(interpretation, "assistant_reply") ||
-           "Understood. I saved that as a durable preference.", []}
+        {:ok, PreferenceConfirmationCopy.saved_text(active), []}
 
       true ->
-        {:ok,
-         Map.get(interpretation, "assistant_reply") ||
-           "I captured that as local feedback, but I did not save a durable rule yet.", []}
+        {:ok, PreferenceConfirmationCopy.local_only_text(), []}
     end
   end
 
@@ -416,7 +407,7 @@ defmodule Maraithon.TelegramRouter do
   defp confirm_pending_rules(conversation, user_turn, chat_id, source_message_id) do
     pending = pending_rule_ids(conversation)
 
-    {:ok, _} =
+    {:ok, confirmed} =
       PreferenceMemory.confirm_rules(conversation.user_id, pending,
         conversation_id: conversation.id,
         source_turn_id: user_turn.id
@@ -428,7 +419,7 @@ defmodule Maraithon.TelegramRouter do
       conversation,
       chat_id,
       source_message_id,
-      "Understood. I saved that as a durable rule and will use it in future reasoning.",
+      PreferenceConfirmationCopy.saved_text(confirmed),
       %{"intent" => "preference_create", "confidence" => 1.0},
       []
     )
@@ -449,7 +440,7 @@ defmodule Maraithon.TelegramRouter do
       conversation,
       chat_id,
       source_message_id,
-      "Understood. I treated that as local feedback only and did not save a durable rule.",
+      PreferenceConfirmationCopy.local_only_text(),
       %{"intent" => "preference_reject", "confidence" => 1.0},
       []
     )
@@ -465,7 +456,7 @@ defmodule Maraithon.TelegramRouter do
 
         case decision do
           :confirm ->
-            {:ok, _} =
+            {:ok, confirmed} =
               PreferenceMemory.confirm_rules(conversation.user_id, pending,
                 conversation_id: conversation.id
               )
@@ -475,13 +466,13 @@ defmodule Maraithon.TelegramRouter do
                 "metadata" => %{"pending_rule_ids" => []}
               })
 
-            TelegramResponder.answer_callback(callback_id, "Saved")
+            TelegramResponder.answer_callback(callback_id, "Preference saved")
 
             send_assistant_turn(
               conversation,
               chat_id,
               message_id,
-              "Saved as a durable rule.",
+              PreferenceConfirmationCopy.saved_text(confirmed),
               %{"intent" => "preference_create", "confidence" => 1.0},
               []
             )
@@ -497,13 +488,13 @@ defmodule Maraithon.TelegramRouter do
                 "metadata" => %{"pending_rule_ids" => []}
               })
 
-            TelegramResponder.answer_callback(callback_id, "Not saved")
+            TelegramResponder.answer_callback(callback_id, "Kept local only")
 
             send_assistant_turn(
               conversation,
               chat_id,
               message_id,
-              "Okay, I kept that as local feedback only.",
+              PreferenceConfirmationCopy.local_only_text(),
               %{"intent" => "preference_reject", "confidence" => 1.0},
               []
             )
@@ -544,7 +535,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp send_model_unavailable_turn(conversation, chat_id, reply_to_message_id, reason) do
     text =
-      "I saved that message in this thread, but the model-backed assistant is unavailable right now. I did not guess from local rules."
+      "I saved your message, but I cannot verify a reliable answer from your connected context right now. I did not send a guess."
 
     send_assistant_turn(
       conversation,
@@ -751,28 +742,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp render_task_created(_result), do: "Created a Linear task."
 
-  defp action_failure_text(reason) when is_binary(reason) do
-    case reason do
-      "google_account_reauth_required" ->
-        "I couldn't send that yet because Google needs reconnecting: #{connector_url("google")}"
-
-      "slack_workspace_reauth_required" ->
-        "I couldn't complete that because Slack needs reconnecting: #{connector_url("slack")}"
-
-      "linear_not_connected" ->
-        "I couldn't create a task because Linear isn't connected yet: #{connector_url("linear")}"
-
-      "linear_default_team_missing" ->
-        "I couldn't create a task because I don't know which Linear team to use yet."
-
-      other ->
-        "I couldn't do that yet: #{other}"
-    end
-  end
-
-  defp action_failure_text(reason), do: "I couldn't do that yet: #{inspect(reason)}"
-
-  defp connector_url(provider), do: Maraithon.AppUrl.url("/connectors/#{provider}")
+  defp action_failure_text(reason), do: ActionFailureCopy.insight_action(reason)
 
   defp send_ephemeral_reply(chat_id, reply_to_message_id, text) do
     _ = TelegramResponder.reply(chat_id, reply_to_message_id, text)

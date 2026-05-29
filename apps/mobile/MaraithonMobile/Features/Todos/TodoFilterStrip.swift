@@ -15,7 +15,7 @@ struct TodoFilterStrip: View {
                     tint: tint(for: filter)
                 )
             },
-            accessibilityNoun: "todos"
+            accessibilityNoun: "work items"
         )
         .padding(.vertical, 8)
         .background(.bar)

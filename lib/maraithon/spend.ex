@@ -8,6 +8,7 @@ defmodule Maraithon.Spend do
   - claude-3-haiku: $0.25 input, $1.25 output
   - claude-sonnet-4: $3 input, $15 output (default)
   - gpt-5.4: $2.50 input, $15 output
+  - qwen/qwen3.7-max: $2.50 input, $7.50 output via OpenRouter
 
   GPT-5.4 has a 1.05M context window. OpenAI prices requests with more than
   272K input tokens at 2x input and 1.5x output for the full session.
@@ -52,6 +53,8 @@ defmodule Maraithon.Spend do
     },
     "gpt-5.4-mini" => %{input: 0.75, output: 4.5},
     "gpt-5.4-nano" => %{input: 0.2, output: 1.25},
+    # OpenRouter models
+    "qwen/qwen3.7-max" => %{input: 2.50, output: 7.50},
     # Fallback for unknown models
     "default" => %{input: 3.0, output: 15.0}
   }

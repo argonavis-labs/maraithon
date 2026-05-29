@@ -51,7 +51,10 @@ defmodule Maraithon.PreferenceMemoryTest do
                llm_complete: llm_complete
              )
 
-    assert reply =~ "receipt-style noise"
+    assert reply =~ "Preference saved: Ignore receipt-style notifications."
+    assert reply =~ "Future triage will apply it automatically."
+    refute reply =~ "Understood"
+    refute reply =~ "I'll"
     assert rule["id"] == "ignore_receipts"
     assert [%{"id" => "ignore_receipts"}] = PreferenceMemory.active_rules(user_id)
     assert PreferenceMemory.render_summary(user_id) =~ "`ignore_receipts`"
@@ -87,7 +90,9 @@ defmodule Maraithon.PreferenceMemoryTest do
                llm_complete: llm_complete
              )
 
-    assert reply =~ "ignore sales outreach"
+    assert reply =~ "Preference saved: Ignore sales outreach unless engaged."
+    refute reply =~ "Understood"
+    refute reply =~ "I'll"
     assert rule["kind"] == "content_filter"
     assert rule["filters"]["topics"] == ["sales_outreach", "cold_outreach"]
   end

@@ -10,7 +10,7 @@ struct RootView: View {
         Group {
             switch sessionStore.phase {
             case .checking:
-                ProgressView("Checking session")
+                ProgressView(AppLaunchCopy.checkingAccount)
                     .controlSize(.large)
             case .signedOut, .magicLinkSent:
                 MagicSigninView()
@@ -32,4 +32,8 @@ struct RootView: View {
             }
         }
     }
+}
+
+enum AppLaunchCopy {
+    static let checkingAccount = "Opening Maraithon"
 }

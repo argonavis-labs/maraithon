@@ -39,6 +39,28 @@ defmodule Maraithon.Crm do
 
   def list_people(_user_id, _opts), do: []
 
+  def list_family_context(user_id, opts \\ [])
+
+  def list_family_context(user_id, opts) when is_binary(user_id) do
+    limit = opts |> Keyword.get(:limit, @default_people_limit) |> clamp_limit(1, 100)
+    status = normalize_string(Keyword.get(opts, :status, "active"))
+
+    Person
+    |> where([person], person.user_id == ^user_id)
+    |> maybe_filter_status(status)
+    |> where(
+      [person],
+      fragment("? ->> 'relationship_domain' = ?", person.metadata, "family") or
+        fragment("? ->> 'family_member' = ?", person.metadata, "true") or
+        fragment("? ->> 'family_proxy' = ?", person.metadata, "true")
+    )
+    |> order_people(nil)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def list_family_context(_user_id, _opts), do: []
+
   @doc """
   Substring search across the user's CRM people on `display_name`,
   `first_name`, `last_name`, `notes`, and stored contact details. Thin
@@ -440,8 +462,13 @@ defmodule Maraithon.Crm do
   def summarize_for_prompt(user_id, limit \\ 12)
 
   def summarize_for_prompt(user_id, limit) when is_binary(user_id) do
-    user_id
-    |> list_people(limit: limit)
+    limit = clamp_limit(limit, 1, 100)
+
+    family_people = list_family_context(user_id, limit: limit)
+
+    (family_people ++ list_people(user_id, limit: limit))
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.take(limit)
     |> Enum.map(&serialize_for_prompt/1)
   end
 
@@ -461,7 +488,8 @@ defmodule Maraithon.Crm do
       interaction_count: person.interaction_count,
       relationship_strength: person.relationship_strength,
       affinity_score: person.affinity_score,
-      last_interaction_at: person.last_interaction_at
+      last_interaction_at: person.last_interaction_at,
+      metadata: person.metadata || %{}
     }
   end
 

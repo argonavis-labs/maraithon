@@ -51,12 +51,63 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGateTest do
     assert verified["decision"] == "send_now"
     assert verified["message_class"] == "todo_digest"
     assert verified["todo_ids"] == ["dan"]
-    assert verified["assistant_message"] =~ "older follow-up"
+    assert verified["assistant_message"] =~ "Older follow-up, not urgent"
     assert verified["assistant_message"] =~ "Dan Bourke (A-Team; video project contact)"
-    assert verified["assistant_message"] =~ "Mark it important"
+    assert verified["assistant_message"] =~ "Keep it active"
+    refute verified["assistant_message"] =~ ".."
     refute verified["assistant_message"] =~ "several overdue follow-ups"
+    refute verified["assistant_message"] =~ "I found"
+    refute verified["assistant_message"] =~ "not treating it as urgent"
+    refute verified["assistant_message"] =~ "look stale"
     refute verified["assistant_message"] =~ "Emma's Soccer Practice"
     assert verified["_quality_verification"]["score"] == 10
+  end
+
+  test "rewrites delivery digest intros without assistant-centric hedging" do
+    personal_candidate = %{
+      "id" => "candidate-personal",
+      "title" => "Emma's soccer pickup",
+      "body" => "Emma's soccer pickup starts soon.",
+      "urgency" => 0.72,
+      "attention_profile" => %{"bucket" => "personal_family"},
+      "related_todos" => []
+    }
+
+    stale_candidate = %{
+      "id" => "candidate-stale-work",
+      "title" => "Old artifact follow-up",
+      "body" => "Old artifact follow-up remains open.",
+      "urgency" => 0.34,
+      "attention_profile" => %{
+        "bucket" => "business_project_waiting",
+        "stale_confirmation_candidate" => true
+      },
+      "related_todos" => []
+    }
+
+    verified =
+      ProactiveQualityGate.verify_delivery_plan(
+        %{
+          "dispositions" => [
+            %{"candidate_id" => "candidate-personal", "disposition" => "digest"},
+            %{"candidate_id" => "candidate-stale-work", "disposition" => "hold"}
+          ],
+          "digest_intro" => "Several overdue follow-ups need your attention now."
+        },
+        %{
+          "candidates" => [personal_candidate, stale_candidate],
+          "context" => %{},
+          "recent_pushes" => []
+        }
+      )
+
+    assert verified["digest_intro"] ==
+             "Personal/family logistics are the highest-signal item right now."
+
+    refute verified["digest_intro"] =~ "I grouped"
+    refute verified["digest_intro"] =~ "looks worth"
+    refute verified["digest_intro"] =~ "overdue"
+    refute verified["digest_intro"] =~ "follow-ups"
   end
 
   test "holds personal logistics framed as business follow-up when no confirmation card is possible" do

@@ -11,6 +11,7 @@ final class ChatThread {
     var remoteStatusRawValue: String?
     var syncStatusRawValue: String?
     var pendingRunID: UUID?
+    var pendingRunWorkSummary: Data?
     var lastSyncedAt: Date?
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.thread) var messages: [ChatMessage] = []
 
@@ -28,6 +29,11 @@ final class ChatThread {
         return ChatRunStatus(rawValue: value)
     }
 
+    var pendingWorkSummary: ChatWorkSummary? {
+        guard let pendingRunWorkSummary else { return nil }
+        return try? JSONDecoder().decode(ChatWorkSummary.self, from: pendingRunWorkSummary)
+    }
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -37,6 +43,7 @@ final class ChatThread {
         remoteStatusRawValue: String? = nil,
         syncStatus: ChatSyncStatus = .local,
         pendingRunID: UUID? = nil,
+        pendingRunWorkSummary: Data? = nil,
         lastSyncedAt: Date? = nil
     ) {
         self.id = id
@@ -47,6 +54,7 @@ final class ChatThread {
         self.remoteStatusRawValue = remoteStatusRawValue
         self.syncStatusRawValue = syncStatus.rawValue
         self.pendingRunID = pendingRunID
+        self.pendingRunWorkSummary = pendingRunWorkSummary
         self.lastSyncedAt = lastSyncedAt
     }
 }

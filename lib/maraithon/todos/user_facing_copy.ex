@@ -36,6 +36,8 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   def polish_text(value) when is_binary(value) do
     value
+    |> strip_internal_label_lines()
+    |> replace_internal_source_labels()
     |> String.replace(~r/^\s*User committed\b/i, "You committed")
     |> String.replace(~r/\bUser committed\b/i, "you committed")
     |> String.replace(~r/^\s*Kent needs\b/i, "You need")
@@ -255,7 +257,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     [
       "You committed to follow up with #{person}#{topic}.",
       context.why && "Context: #{context.why}.",
-      "I found no later reply or delivery that clearly closes the loop."
+      "No later reply or delivery clearly closes the loop."
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
@@ -711,6 +713,28 @@ defmodule Maraithon.Todos.UserFacingCopy do
   defp present?(_value), do: false
 
   defp blank?(value), do: not present?(value)
+
+  defp strip_internal_label_lines(text) do
+    text
+    |> String.split(~r/\R/u)
+    |> Enum.reject(&internal_label_line?/1)
+    |> Enum.join(" ")
+  end
+
+  defp internal_label_line?(line) when is_binary(line) do
+    String.match?(
+      line,
+      ~r/^\s*(from|source|priority|status|open|title|kind|ref|reference|direction|origin|cadence)\s*:/i
+    )
+  end
+
+  defp replace_internal_source_labels(text) do
+    text
+    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "my morning briefing")
+    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "my commitment review")
+    |> String.replace(~r/\bchief_of_staff_holiday(?:_radar)?\b/i, "my holiday radar")
+    |> String.replace(~r/\bchief_of_staff_weekend\b/i, "my weekend review")
+  end
 
   defp single_line(text) do
     text

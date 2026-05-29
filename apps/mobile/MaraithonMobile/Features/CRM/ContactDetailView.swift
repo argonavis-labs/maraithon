@@ -28,7 +28,7 @@ struct ContactDetailView: View {
                 .padding(.vertical, 4)
             }
 
-            Section("Reach") {
+            Section(ContactDetailCopy.contactDetailsSectionTitle) {
                 if !contact.email.isEmpty {
                     LabeledContent("Email", value: contact.email)
                 }
@@ -36,13 +36,13 @@ struct ContactDetailView: View {
                     LabeledContent("Phone", value: contact.phone)
                 }
                 if let lastContactedAt = contact.lastContactedAt {
-                    LabeledContent("Last Contacted", value: AppFormatters.relativeString(for: lastContactedAt))
+                    LabeledContent(ContactDetailCopy.lastContactedLabel, value: AppFormatters.relativeString(for: lastContactedAt))
                 }
             }
 
-            Section("Relationship") {
+            Section(ContactDetailCopy.relationshipSectionTitle) {
                 Picker(
-                    "Status",
+                    ContactDetailCopy.statusPickerTitle,
                     selection: Binding(
                         get: { contact.status },
                         set: {
@@ -57,7 +57,7 @@ struct ContactDetailView: View {
                 }
 
                 Picker(
-                    "Circle",
+                    ContactDetailCopy.circlePickerTitle,
                     selection: Binding(
                         get: { contact.dealStage },
                         set: {
@@ -72,14 +72,14 @@ struct ContactDetailView: View {
                 }
             }
 
-            Section("Notes") {
-                TextField("Notes", text: $contact.notes, axis: .vertical)
+            Section(ContactDetailCopy.notesSectionTitle) {
+                TextField(ContactDetailCopy.notesPlaceholder, text: $contact.notes, axis: .vertical)
                     .lineLimit(5...10)
                     .onSubmit(save)
             }
 
             if !contact.todos.isEmpty {
-                Section("Linked Todos") {
+                Section(ContactDetailCopy.linkedWorkSectionTitle) {
                     ForEach(contact.todos) { todo in
                         Label(todo.title, systemImage: todo.isCompleted ? "checkmark.circle.fill" : "circle")
                     }
@@ -94,7 +94,7 @@ struct ContactDetailView: View {
                 } label: {
                     Image(systemName: "pencil")
                 }
-                .accessibilityLabel("Edit Person")
+                .accessibilityLabel("Edit person")
             }
 
             ToolbarItem(placement: .topBarTrailing) {
@@ -103,7 +103,7 @@ struct ContactDetailView: View {
                 } label: {
                     Image(systemName: "phone.arrow.up.right")
                 }
-                .accessibilityLabel("Mark Contacted")
+                .accessibilityLabel(ContactDetailCopy.markContactedAccessibilityLabel)
             }
         }
         .sheet(isPresented: $isEditingContact) {
@@ -140,7 +140,7 @@ struct ContactDetailView: View {
             VStack(spacing: 1) {
                 CommandRow(
                     title: careSummary.actionTitle,
-                    subtitle: "Update the relationship timestamp",
+                    subtitle: ContactDetailCopy.logContactSubtitle,
                     systemImage: "phone.arrow.up.right",
                     tint: .blue
                 ) {
@@ -148,8 +148,8 @@ struct ContactDetailView: View {
                 }
                 Divider().padding(.leading, 48)
                 CommandRow(
-                    title: "Create Follow-up",
-                    subtitle: "Add a linked todo for this person",
+                    title: ContactDetailCopy.addFollowUpTitle,
+                    subtitle: ContactDetailCopy.addFollowUpSubtitle,
                     systemImage: "checklist",
                     tint: .orange
                 ) {
@@ -222,5 +222,37 @@ struct ContactDetailView: View {
                 try? modelContext.save()
             }
         }
+    }
+}
+
+enum ContactDetailCopy {
+    static let contactDetailsSectionTitle = "Contact details"
+    static let relationshipSectionTitle = "Relationship status"
+    static let notesSectionTitle = "Relationship notes"
+    static let linkedWorkSectionTitle = "Linked work"
+    static let lastContactedLabel = "Last reached out"
+    static let statusPickerTitle = "Status"
+    static let circlePickerTitle = "Circle"
+    static let notesPlaceholder = "Notes"
+    static let logContactSubtitle = "Record that you reached out"
+    static let addFollowUpTitle = "Add follow-up"
+    static let addFollowUpSubtitle = "Create a linked next move"
+    static let markContactedAccessibilityLabel = "Mark reached out"
+
+    static var visibleLabels: [String] {
+        [
+            contactDetailsSectionTitle,
+            relationshipSectionTitle,
+            notesSectionTitle,
+            linkedWorkSectionTitle,
+            lastContactedLabel,
+            statusPickerTitle,
+            circlePickerTitle,
+            notesPlaceholder,
+            logContactSubtitle,
+            addFollowUpTitle,
+            addFollowUpSubtitle,
+            markContactedAccessibilityLabel
+        ]
     }
 }

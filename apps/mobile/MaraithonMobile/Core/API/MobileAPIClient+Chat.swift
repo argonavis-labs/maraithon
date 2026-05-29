@@ -9,6 +9,16 @@ protocol MobileChatAPI {
         clientThreadID: UUID
     ) async throws -> MobileAPIClient.RemoteChatThread
     func getChatThread(sessionToken: String, id: UUID) async throws -> MobileAPIClient.RemoteChatThread
+    func updateChatThread(
+        sessionToken: String,
+        id: UUID,
+        title: String
+    ) async throws -> MobileAPIClient.RemoteChatThread
+    func deleteChatMessage(
+        sessionToken: String,
+        threadID: UUID,
+        messageID: UUID
+    ) async throws -> MobileAPIClient.RemoteChatThread
     func sendChatMessage(
         sessionToken: String,
         threadID: UUID,
@@ -141,6 +151,7 @@ extension MobileAPIClient: MobileChatAPI {
         let runID: UUID?
         let actions: [RemoteChatAction]
         let linkedTodo: JSONValue?
+        let workSummary: ChatWorkSummary?
         let structuredData: [String: JSONValue]
 
         enum CodingKeys: String, CodingKey {
@@ -155,6 +166,7 @@ extension MobileAPIClient: MobileChatAPI {
             case runID = "run_id"
             case actions
             case linkedTodo = "linked_todo"
+            case workSummary = "work_summary"
             case structuredData = "structured_data"
         }
 
@@ -170,6 +182,7 @@ extension MobileAPIClient: MobileChatAPI {
             runID: UUID? = nil,
             actions: [RemoteChatAction] = [],
             linkedTodo: JSONValue? = nil,
+            workSummary: ChatWorkSummary? = nil,
             structuredData: [String: JSONValue] = [:]
         ) {
             self.id = id
@@ -183,6 +196,7 @@ extension MobileAPIClient: MobileChatAPI {
             self.runID = runID
             self.actions = actions
             self.linkedTodo = linkedTodo
+            self.workSummary = workSummary
             self.structuredData = structuredData
         }
 
@@ -199,6 +213,7 @@ extension MobileAPIClient: MobileChatAPI {
             runID = try container.decodeIfPresent(UUID.self, forKey: .runID)
             actions = try container.decodeIfPresent([RemoteChatAction].self, forKey: .actions) ?? []
             linkedTodo = try container.decodeIfPresent(JSONValue.self, forKey: .linkedTodo)
+            workSummary = try container.decodeIfPresent(ChatWorkSummary.self, forKey: .workSummary)
             structuredData = try container.decodeIfPresent([String: JSONValue].self, forKey: .structuredData) ?? [:]
         }
     }
@@ -219,6 +234,7 @@ extension MobileAPIClient: MobileChatAPI {
         let finishedAt: Date?
         let error: String?
         let messageClass: String?
+        let workSummary: ChatWorkSummary?
 
         var runStatus: ChatRunStatus {
             ChatRunStatus(rawValue: status) ?? .running
@@ -232,6 +248,39 @@ extension MobileAPIClient: MobileChatAPI {
             case finishedAt = "finished_at"
             case error
             case messageClass = "message_class"
+            case workSummary = "work_summary"
+        }
+
+        init(
+            id: UUID,
+            threadID: UUID,
+            status: String,
+            startedAt: Date? = nil,
+            finishedAt: Date? = nil,
+            error: String? = nil,
+            messageClass: String? = nil,
+            workSummary: ChatWorkSummary? = nil
+        ) {
+            self.id = id
+            self.threadID = threadID
+            self.status = status
+            self.startedAt = startedAt
+            self.finishedAt = finishedAt
+            self.error = error
+            self.messageClass = messageClass
+            self.workSummary = workSummary
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            threadID = try container.decode(UUID.self, forKey: .threadID)
+            status = try container.decodeIfPresent(String.self, forKey: .status) ?? ChatRunStatus.running.rawValue
+            startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+            finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+            error = try container.decodeIfPresent(String.self, forKey: .error)
+            messageClass = try container.decodeIfPresent(String.self, forKey: .messageClass)
+            workSummary = try container.decodeIfPresent(ChatWorkSummary.self, forKey: .workSummary)
         }
     }
 
@@ -273,6 +322,25 @@ extension MobileAPIClient: MobileChatAPI {
         return response.thread
     }
 
+    func updateChatThread(
+        sessionToken: String,
+        id: UUID,
+        title: String
+    ) async throws -> RemoteChatThread {
+        let response: ChatThreadResponse = try await send(
+            path: "/chat/threads/\(id.uuidString.lowercased())",
+            method: "PATCH",
+            sessionToken: sessionToken,
+            body: [
+                "thread": [
+                    "title": title
+                ]
+            ],
+            responseType: ChatThreadResponse.self
+        )
+        return response.thread
+    }
+
     func sendChatMessage(
         sessionToken: String,
         threadID: UUID,
@@ -291,6 +359,20 @@ extension MobileAPIClient: MobileChatAPI {
             ],
             responseType: ChatMessageResponse.self
         )
+    }
+
+    func deleteChatMessage(
+        sessionToken: String,
+        threadID: UUID,
+        messageID: UUID
+    ) async throws -> RemoteChatThread {
+        let response: ChatThreadResponse = try await send(
+            path: "/chat/threads/\(threadID.uuidString.lowercased())/messages/\(messageID.uuidString.lowercased())",
+            method: "DELETE",
+            sessionToken: sessionToken,
+            responseType: ChatThreadResponse.self
+        )
+        return response.thread
     }
 
     func getChatRun(sessionToken: String, id: UUID) async throws -> RemoteChatRun {

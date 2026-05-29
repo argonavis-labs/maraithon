@@ -34,7 +34,7 @@ defmodule MaraithonWeb.MobileAuthController do
       {:error, :invalid_email} ->
         conn
         |> put_status(:unprocessable_entity)
-        |> json(%{error: "invalid_email"})
+        |> json(MobileJSON.error(:invalid_email))
 
       {:error, reason} ->
         conn
@@ -56,7 +56,7 @@ defmodule MaraithonWeb.MobileAuthController do
       {:error, :invalid_or_expired_code} ->
         conn
         |> put_status(:unauthorized)
-        |> json(%{error: "invalid_or_expired_code"})
+        |> json(MobileJSON.error(:invalid_or_expired_code))
 
       {:error, reason} ->
         conn
@@ -76,7 +76,7 @@ defmodule MaraithonWeb.MobileAuthController do
       {:error, :invalid_or_expired_link} ->
         conn
         |> put_status(:unauthorized)
-        |> json(%{error: "invalid_or_expired_link"})
+        |> json(MobileJSON.error(:invalid_or_expired_link))
 
       {:error, reason} ->
         conn

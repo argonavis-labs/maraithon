@@ -60,6 +60,12 @@ defmodule Maraithon.TrustMetricsTest do
     metrics = baseline.metrics
 
     assert baseline.definitions["material_side_effects_with_ledger_entry"]
+
+    assert baseline.definitions["confirmation_required_actions"] ==
+             "Actions that required confirmation."
+
+    assert baseline.definitions["denied_tool_calls"] == "Actions blocked by safety rules."
+    refute Jason.encode!(baseline.definitions) =~ "Tool calls"
     assert metrics.side_effecting_tool_calls_with_policy_decision == 3
     assert metrics.material_side_effects_with_ledger_entry == 1
     assert metrics.confirmation_required_actions == 1

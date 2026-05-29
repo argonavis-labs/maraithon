@@ -7,6 +7,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias MaraithonWeb.AgentActionCopy
 
   @tool_provider_requirements %{
     "gmail_get_message" => %{provider: "google", service: "gmail", label: "Google Gmail"},
@@ -48,7 +49,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     socket =
       socket
       |> assign(
-        page_title: "Build Agent",
+        page_title: "New automation",
         current_path: "/agents/new",
         behavior_specs: AgentBuilder.library_specs(),
         cost_profile_options: AgentBuilder.cost_profile_options(),
@@ -128,7 +129,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
          {:ok, agent} <- Runtime.start_agent(start_params) do
       {:noreply,
        socket
-       |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} created")
+       |> put_flash(:info, "Automation created")
        |> push_navigate(to: "/agents?id=#{agent.id}")}
     else
       [_ | _] = blocking_items ->
@@ -147,13 +148,13 @@ defmodule MaraithonWeb.AgentBuilderLive do
         {:noreply,
          socket
          |> assign_builder_state(launch)
-         |> assign(:builder_error, "Failed to create agent: #{changeset_errors(changeset)}")}
+         |> assign(:builder_error, AgentActionCopy.error(:create, changeset))}
 
       {:error, reason} ->
         {:noreply,
          socket
          |> assign_builder_state(launch)
-         |> assign(:builder_error, "Failed to create agent: #{inspect(reason)}")}
+         |> assign(:builder_error, AgentActionCopy.error(:create, reason))}
     end
   end
 
@@ -168,10 +169,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
               navigate={~p"/agents"}
               class="inline-flex items-center gap-1 text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
             >
-              <span aria-hidden="true">←</span> Agents
+              <span aria-hidden="true">←</span> Automations
             </.link>
             <h1 class="mt-1 text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-              New agent
+              New automation
             </h1>
             <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
               Pick the job, confirm the connected apps it can use, then launch.
@@ -283,7 +284,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <div class="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
                   <div>
                     <label for="launch_name" class="block text-sm font-medium text-zinc-700">
-                      Agent name
+                      Automation name
                     </label>
                     <input
                       id="launch_name"
@@ -329,7 +330,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                           </option>
                         </select>
                         <p class="mt-2 text-xs text-zinc-500">
-                          Attach this agent to a project so Maraithon can use its output when you ask about that project in chat.
+                          Attach this automation to a project so Maraithon can use its output when you ask about that project in chat.
                         </p>
                       </div>
 
@@ -338,7 +339,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                           Why this matters
                         </p>
                         <p class="mt-2 text-sm text-zinc-700">
-                          Project-scoped agents feed local project state instead of disappearing into global noise. This is especially important for the project manager and coding agent flows.
+                          Project-scoped automations feed local project state instead of disappearing into global noise. This is especially important for project-management and delivery flows.
                         </p>
                       </div>
                     </div>
@@ -390,7 +391,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   label="Prompt"
                   value={@launch["prompt"]}
                   rows={5}
-                  description="Define how the agent should reason, what tone it should use, and which actions it should avoid."
+                  description="Define how the automation should reason, what tone it should use, and which actions it should avoid."
                 />
 
                 <%= if field_visible?(@selected_spec, "subscriptions") or field_visible?(@selected_spec, "tools") do %>
@@ -402,7 +403,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         label="Input subscriptions"
                         value={@launch["subscriptions"]}
                         placeholder="github:owner/repo,email:kent"
-                        description="Comma-separated topics. Leave blank if the agent should only react to direct operator messages."
+                        description="Comma-separated topics. Leave blank if the automation should only react to direct operator messages."
                       />
                     <% end %>
 
@@ -410,10 +411,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_tools"
                         name="launch[tools]"
-                        label="Allowed tools"
+                        label="Allowed actions"
                         value={@launch["tools"]}
-                        placeholder="read_file,search_files,http_get"
-                        description="Comma-separated tool allowlist. Any tool not listed here is off-limits to the agent."
+                        placeholder="read_file,search_files"
+                        description="Comma-separated action allowlist. Any action not listed here is off-limits to the automation."
                       />
                     <% end %>
                   </div>
@@ -428,7 +429,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       name="launch[memory_limit]"
                       label="Memory limit"
                       value={@launch["memory_limit"]}
-                      description="How many recent events the prompt agent keeps in rolling memory."
+                      description="How many recent updates the custom automation keeps in rolling memory."
                     />
                   </div>
                 <% end %>
@@ -465,7 +466,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[file_patterns]"
                         label="Include patterns"
                         value={@launch["file_patterns"]}
-                        description="Comma-separated glob patterns that define the files the agent may inspect."
+                        description="Comma-separated glob patterns that define the files the automation may inspect."
                       />
                     <% end %>
 
@@ -488,7 +489,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     label="Optional URL to check"
                     value={@launch["check_url"]}
                     placeholder="https://status.example.com/health"
-                    description="If set, the watchdog will periodically issue http_get checks against this URL."
+                    description="If set, the watchdog will check this URL on its schedule."
                   />
                 <% end %>
 
@@ -591,14 +592,21 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <%= if field_visible?(@selected_spec, "team_id") or field_visible?(@selected_spec, "channel_scan_limit") or field_visible?(@selected_spec, "dm_scan_limit") or field_visible?(@selected_spec, "lookback_hours") do %>
                   <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                     <%= if field_visible?(@selected_spec, "team_id") do %>
-                      <.launch_input
+                      <.launch_select
                         id="launch_team_id"
                         name="launch[team_id]"
-                        label="Slack team ID"
+                        label="Slack workspace"
                         value={@launch["team_id"]}
-                        placeholder="T01234567"
-                        description="Leave blank to scan every connected workspace; set this to pin the agent to one team."
-                      />
+                        description="Leave as all workspaces, or choose one connected Slack workspace for this automation."
+                      >
+                        <option
+                          :for={option <- @slack_workspace_options}
+                          value={option.value}
+                          selected={@launch["team_id"] == option.value}
+                        >
+                          <%= option.label %>
+                        </option>
+                      </.launch_select>
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "channel_scan_limit") do %>
@@ -641,12 +649,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <%= if field_visible?(@selected_spec, "wakeup_interval_ms") do %>
                       <.launch_input
                         id="launch_wakeup_interval_ms"
-                        type="number"
-                        min="1"
                         name="launch[wakeup_interval_ms]"
-                        label="Wakeup interval (ms)"
+                        label="Wakeup cadence"
                         value={@launch["wakeup_interval_ms"]}
-                        description="How frequently the behavior wakes up to continue work or check for new tasks."
+                        placeholder="30m"
+                        description="How often this automation checks in. Use 30m, 1h, 1d, or a custom millisecond value."
                       />
                     <% end %>
 
@@ -759,7 +766,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_llm_calls]"
-                      label="LLM call budget"
+                      label="Reasoning budget"
                       value={@launch["budget_llm_calls"]}
                     />
 
@@ -768,7 +775,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_tool_calls]"
-                      label="Tool call budget"
+                      label="Action budget"
                       value={@launch["budget_tool_calls"]}
                     />
                   </div>
@@ -787,7 +794,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-950/10 pt-5">
                   <div class="text-sm text-zinc-500">
                     <%= if @blockers == [] do %>
-                      Ready to create. Maraithon will persist the agent and start it right away.
+                      Ready to create. Maraithon will persist the automation and start it right away.
                     <% else %>
                       Resolve the highlighted blockers before launch.
                     <% end %>
@@ -799,7 +806,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     disabled={@blockers != []}
                     color={if @blockers == [], do: "dark", else: "zinc"}
                   >
-                    Create Agent
+                    Create automation
                   </.button>
                 </div>
               </form>
@@ -883,12 +890,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
     visible_fields = AgentBuilder.visible_fields_for_mode(selected_spec_full, builder_mode)
     hidden_fields = AgentBuilder.hidden_fields_for_mode(selected_spec_full, builder_mode)
     selected_spec = %{selected_spec_full | fields: visible_fields}
+    provider_map = socket.assigns.provider_map
+    slack_workspace_options = slack_workspace_options(provider_map, launch["team_id"])
 
     readiness_items =
       readiness_items(
         selected_spec_full,
         launch,
-        socket.assigns.provider_map,
+        provider_map,
         socket.assigns.tool_allowed_paths
       )
 
@@ -900,10 +909,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
       hidden_simple_count: length(hidden_fields) + hidden_control_count(builder_mode),
       readiness_items: readiness_items,
       blockers: Enum.filter(readiness_items, &(&1.required? and not &1.ready?)),
-      input_preview: input_preview(selected_spec_full, launch),
+      input_preview: input_preview(selected_spec_full, launch, provider_map),
       output_preview: output_preview(selected_spec_full, launch),
       architecture: AgentArchitecture.for_launch(launch),
-      starter_values: starter_values(selected_spec_full, launch)
+      starter_values: starter_values(selected_spec_full, launch, provider_map),
+      slack_workspace_options: slack_workspace_options
     )
   end
 
@@ -933,7 +943,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         [
           %{
             label: "No external permissions required",
-            description: "This template can run without OAuth grants or special setup.",
+            description:
+              "This template can run without connected app permissions or special setup.",
             details:
               "You can create it immediately and add more permissions later if the behavior evolves.",
             ready?: true,
@@ -971,7 +982,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         [
           %{
             label: "Local file access",
-            description: "Needed because the selected tool list includes file-reading tools.",
+            description: "Needed because the selected action list includes file access.",
             details:
               "Allowed roots: " <>
                 (tool_allowed_paths |> Enum.map(&Path.expand/1) |> Enum.join(", ")),
@@ -1091,16 +1102,106 @@ defmodule MaraithonWeb.AgentBuilderLive do
     "Resolve these blockers before launch: #{labels}."
   end
 
-  defp input_preview(spec, launch) do
+  defp input_preview(spec, launch, provider_map) do
     base = Enum.map(spec.inputs, fn line -> %{title: nil, body: line} end)
-    base ++ dynamic_input_preview(spec.id, launch)
+    base ++ dynamic_input_preview(spec.id, launch, provider_map)
   end
+
+  defp dynamic_input_preview("inbox_calendar_advisor", launch, provider_map) do
+    [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("inbox_calendar_advisor", launch["cost_profile"])
+      },
+      %{
+        title: "Scan coverage",
+        body:
+          "Checks up to #{launch["email_scan_limit"]} inbox emails, #{launch["event_scan_limit"]} calendar events, #{launch["channel_scan_limit"]} Slack channel messages, and #{launch["dm_scan_limit"]} Slack DM messages each cycle."
+      },
+      %{
+        title: "Workspace scope",
+        body:
+          slack_scope_sentence(
+            launch,
+            provider_map,
+            "Scanning all connected Slack workspaces for unresolved commitments.",
+            "Scoped to %{workspace}."
+          )
+      },
+      %{
+        title: "Insight tuning",
+        body:
+          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview("ai_chief_of_staff", launch, provider_map) do
+    [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("ai_chief_of_staff", launch["cost_profile"])
+      },
+      %{
+        title: "Built-in skills",
+        body:
+          "Runs follow-through, travel logistics, and recurring briefing inside one assistant."
+      },
+      %{
+        title: "Slack scope",
+        body:
+          slack_scope_sentence(
+            launch,
+            provider_map,
+            "Scanning all connected Slack workspaces for the follow-through skill.",
+            "Scoped to %{workspace} for follow-through."
+          )
+      },
+      %{
+        title: "Brief timing",
+        body:
+          "Uses timezone offset #{blank_fallback(launch["timezone_offset_hours"], "-5")} with morning brief #{launch["morning_brief_hour_local"]}:00 and end-of-day brief #{launch["end_of_day_brief_hour_local"]}:00."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview("slack_followthrough_agent", launch, provider_map) do
+    [
+      %{
+        title: "Operating profile",
+        body: cost_profile_summary("slack_followthrough_agent", launch["cost_profile"])
+      },
+      %{
+        title: "Workspace scope",
+        body:
+          slack_scope_sentence(
+            launch,
+            provider_map,
+            "Scanning all connected Slack workspaces.",
+            "Scoped to %{workspace}."
+          )
+      },
+      %{
+        title: "Scan coverage",
+        body:
+          "Checks up to #{launch["channel_scan_limit"]} channel messages and #{launch["dm_scan_limit"]} DM messages over the last #{launch["lookback_hours"]} hours each cycle."
+      },
+      %{
+        title: "Escalation tuning",
+        body:
+          "Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
+      }
+    ]
+  end
+
+  defp dynamic_input_preview(behavior, launch, _provider_map),
+    do: dynamic_input_preview(behavior, launch)
 
   defp dynamic_input_preview("prompt_agent", launch) do
     subscriptions =
       case launch["subscriptions"] do
         "" ->
-          "No subscriptions yet. This agent will only react to direct operator messages until you add topics."
+          "No subscriptions yet. This automation will only react to direct operator messages until you add topics."
 
         value ->
           "Subscribed topics: #{value}"
@@ -1108,8 +1209,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
     tools =
       case launch["tools"] do
-        "" -> "No tools enabled. The agent will stay text-only."
-        value -> "Allowed tools: #{value}"
+        "" -> "No actions enabled. The automation will stay text-only."
+        value -> "Allowed actions: #{value}"
       end
 
     [
@@ -1118,7 +1219,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body: cost_profile_summary("prompt_agent", launch["cost_profile"])
       },
       %{title: "Current subscriptions", body: subscriptions},
-      %{title: "Current tool allowlist", body: tools}
+      %{title: "Current action allowlist", body: tools}
     ]
   end
 
@@ -1147,69 +1248,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{
         title: "Heartbeat cadence",
-        body: "Wakes up every #{launch["wakeup_interval_ms"]} ms to emit summaries."
+        body: "Wakes up every #{format_cadence(launch["wakeup_interval_ms"])} to emit summaries."
       },
       %{
         title: "URL check",
         body:
           if(launch["check_url"] == "",
-            do: "No URL configured. The watchdog will only emit internal summaries.",
+            do: "No URL configured. The watchdog will only send status summaries.",
             else: "Configured endpoint: #{launch["check_url"]}"
           )
-      }
-    ]
-  end
-
-  defp dynamic_input_preview("inbox_calendar_advisor", launch) do
-    [
-      %{
-        title: "Operating profile",
-        body: cost_profile_summary("inbox_calendar_advisor", launch["cost_profile"])
-      },
-      %{
-        title: "Scan coverage",
-        body:
-          "Checks up to #{launch["email_scan_limit"]} inbox emails, #{launch["event_scan_limit"]} calendar events, #{launch["channel_scan_limit"]} Slack channel messages, and #{launch["dm_scan_limit"]} Slack DM messages each cycle."
-      },
-      %{
-        title: "Workspace scope",
-        body:
-          if(launch["team_id"] == "",
-            do: "Scanning all connected Slack teams for unresolved commitments.",
-            else: "Scoped to Slack team #{launch["team_id"]}."
-          )
-      },
-      %{
-        title: "Insight tuning",
-        body:
-          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
-      }
-    ]
-  end
-
-  defp dynamic_input_preview("ai_chief_of_staff", launch) do
-    [
-      %{
-        title: "Operating profile",
-        body: cost_profile_summary("ai_chief_of_staff", launch["cost_profile"])
-      },
-      %{
-        title: "Built-in skills",
-        body:
-          "Runs follow-through, travel logistics, and recurring briefing inside one assistant."
-      },
-      %{
-        title: "Slack scope",
-        body:
-          if(launch["team_id"] == "",
-            do: "Scanning all connected Slack teams for the follow-through skill.",
-            else: "Scoped to Slack team #{launch["team_id"]} for follow-through."
-          )
-      },
-      %{
-        title: "Brief timing",
-        body:
-          "Uses timezone offset #{blank_fallback(launch["timezone_offset_hours"], "-5")} with morning brief #{launch["morning_brief_hour_local"]}:00 and end-of-day brief #{launch["end_of_day_brief_hour_local"]}:00."
       }
     ]
   end
@@ -1234,33 +1281,6 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "Confidence gate",
         body:
           "Requires a minimum itinerary confidence of #{launch["min_confidence"]} before interrupting you."
-      }
-    ]
-  end
-
-  defp dynamic_input_preview("slack_followthrough_agent", launch) do
-    [
-      %{
-        title: "Operating profile",
-        body: cost_profile_summary("slack_followthrough_agent", launch["cost_profile"])
-      },
-      %{
-        title: "Workspace scope",
-        body:
-          if(launch["team_id"] == "",
-            do: "Scanning all connected Slack teams.",
-            else: "Scoped to Slack team #{launch["team_id"]}."
-          )
-      },
-      %{
-        title: "Scan coverage",
-        body:
-          "Checks up to #{launch["channel_scan_limit"]} channel messages and #{launch["dm_scan_limit"]} DM messages over the last #{launch["lookback_hours"]} hours each cycle."
-      },
-      %{
-        title: "Escalation tuning",
-        body:
-          "Max insights: #{launch["max_insights_per_cycle"]}, minimum confidence: #{launch["min_confidence"]}."
       }
     ]
   end
@@ -1298,9 +1318,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_output_preview("prompt_agent", launch) do
     [
       %{
-        title: "Launch effect",
+        title: "Launch result",
         body:
-          "The agent is created in running state with LLM budget #{launch["budget_llm_calls"]} and tool budget #{launch["budget_tool_calls"]}."
+          "The automation starts immediately with reasoning budget #{launch["budget_llm_calls"]} and action budget #{launch["budget_tool_calls"]}."
       }
     ]
   end
@@ -1310,7 +1330,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Stored records",
         body:
-          "The assistant can persist both follow-through insights and travel-related brief artifacts under one agent identity."
+          "The assistant can persist both follow-through insights and travel-related brief artifacts under one automation."
       }
     ]
   end
@@ -1377,14 +1397,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp dynamic_output_preview(_behavior, _launch), do: []
 
-  defp starter_values(spec, launch) do
+  defp starter_values(spec, launch, provider_map) do
     case spec.id do
       "ai_chief_of_staff" ->
         [
           %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
           %{
-            label: "Slack team",
-            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+            label: "Slack workspace",
+            value: slack_scope_value(launch, provider_map)
           },
           %{
             label: "Timezone",
@@ -1400,11 +1420,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
             value:
               launch["cost_profile"]
               |> cost_profile_label()
-              |> Kernel.<>(" agent spend")
+              |> Kernel.<>(" automation spend")
           },
           %{label: "Memory limit", value: launch["memory_limit"] <> " events"},
-          %{label: "LLM call budget", value: launch["budget_llm_calls"]},
-          %{label: "Tool call budget", value: launch["budget_tool_calls"]}
+          %{label: "Reasoning budget", value: launch["budget_llm_calls"]},
+          %{label: "Action budget", value: launch["budget_tool_calls"]}
         ]
 
       "inbox_calendar_advisor" ->
@@ -1413,8 +1433,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
           %{label: "Email scan limit", value: launch["email_scan_limit"]},
           %{label: "Event scan limit", value: launch["event_scan_limit"]},
           %{
-            label: "Slack team",
-            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+            label: "Slack workspace",
+            value: slack_scope_value(launch, provider_map)
           },
           %{label: "Slack DM scan", value: launch["dm_scan_limit"]}
         ]
@@ -1432,8 +1452,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         [
           %{label: "Cost profile", value: cost_profile_label(launch["cost_profile"])},
           %{
-            label: "Slack team",
-            value: if(launch["team_id"] == "", do: "All connected teams", else: launch["team_id"])
+            label: "Slack workspace",
+            value: slack_scope_value(launch, provider_map)
           },
           %{label: "Channel scan limit", value: launch["channel_scan_limit"]},
           %{label: "DM scan limit", value: launch["dm_scan_limit"]}
@@ -1442,7 +1462,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "codebase_advisor" ->
         [
           %{label: "Codebase path", value: launch["codebase_path"]},
-          %{label: "Wakeup interval", value: launch["wakeup_interval_ms"] <> " ms"},
+          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])},
           %{label: "Output path", value: launch["output_path"]}
         ]
 
@@ -1453,17 +1473,17 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Write plan files",
             value: if(launch["write_plan_files"] == "true", do: "Yes", else: "No")
           },
-          %{label: "Wakeup interval", value: launch["wakeup_interval_ms"] <> " ms"}
+          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])}
         ]
 
       "watchdog_summarizer" ->
         [
-          %{label: "Wakeup interval", value: launch["wakeup_interval_ms"] <> " ms"},
+          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])},
           %{
             label: "Optional URL",
             value: if(launch["check_url"] == "", do: "None", else: launch["check_url"])
           },
-          %{label: "Tool budget", value: launch["budget_tool_calls"]}
+          %{label: "Action budget", value: launch["budget_tool_calls"]}
         ]
 
       "github_product_planner" ->
@@ -1477,15 +1497,185 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Daily shortlist",
             value: blank_fallback(launch["feature_limit"], "3") <> " features"
           },
-          %{label: "Wakeup interval", value: launch["wakeup_interval_ms"] <> " ms"}
+          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])}
         ]
 
       _ ->
         [
-          %{label: "LLM call budget", value: launch["budget_llm_calls"]},
-          %{label: "Tool call budget", value: launch["budget_tool_calls"]}
+          %{label: "Reasoning budget", value: launch["budget_llm_calls"]},
+          %{label: "Action budget", value: launch["budget_tool_calls"]}
         ]
     end
+  end
+
+  defp format_cadence(value) do
+    case parse_cadence_ms(value) do
+      {:ok, ms} -> format_duration_ms(ms)
+      :error -> blank_fallback(value, "Not set")
+    end
+  end
+
+  defp parse_cadence_ms(value) do
+    value = value |> to_string() |> String.trim() |> String.downcase()
+
+    cond do
+      value == "" ->
+        :error
+
+      match =
+          Regex.run(
+            ~r/^(\d+)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)$/,
+            value
+          ) ->
+        [_full, amount, unit] = match
+        {:ok, String.to_integer(amount) * cadence_unit_multiplier(unit)}
+
+      true ->
+        case Integer.parse(value) do
+          {parsed, ""} when parsed > 0 -> {:ok, parsed}
+          _ -> :error
+        end
+    end
+  end
+
+  defp cadence_unit_multiplier(unit) when unit in ["ms"], do: 1
+
+  defp cadence_unit_multiplier(unit) when unit in ["s", "sec", "secs", "second", "seconds"],
+    do: 1_000
+
+  defp cadence_unit_multiplier(unit) when unit in ["m", "min", "mins", "minute", "minutes"],
+    do: 60_000
+
+  defp cadence_unit_multiplier(unit) when unit in ["h", "hr", "hrs", "hour", "hours"],
+    do: 3_600_000
+
+  defp cadence_unit_multiplier(unit) when unit in ["d", "day", "days"], do: 86_400_000
+  defp cadence_unit_multiplier(unit) when unit in ["w", "week", "weeks"], do: 604_800_000
+
+  defp format_duration_ms(ms) when is_integer(ms) and ms > 0 do
+    cond do
+      rem(ms, 604_800_000) == 0 -> duration_unit(div(ms, 604_800_000), "week")
+      rem(ms, 86_400_000) == 0 -> duration_unit(div(ms, 86_400_000), "day")
+      rem(ms, 3_600_000) == 0 -> duration_unit(div(ms, 3_600_000), "hour")
+      rem(ms, 60_000) == 0 -> duration_unit(div(ms, 60_000), "minute")
+      rem(ms, 1_000) == 0 -> duration_unit(div(ms, 1_000), "second")
+      true -> "#{ms} ms"
+    end
+  end
+
+  defp duration_unit(1, unit), do: "1 #{unit}"
+  defp duration_unit(count, unit), do: "#{count} #{unit}s"
+
+  defp slack_workspace_options(provider_map, selected_team_id) do
+    selected_team_id = normalize_blank(selected_team_id)
+
+    account_options =
+      provider_map
+      |> Map.get("slack", %{})
+      |> Map.get(:accounts, [])
+      |> Enum.with_index(1)
+      |> Enum.map(fn {account, index} -> slack_workspace_option(account, index) end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(& &1.value)
+
+    account_options =
+      if selected_team_id && Enum.all?(account_options, &(&1.value != selected_team_id)) do
+        [%{label: "Selected Slack workspace", value: selected_team_id} | account_options]
+      else
+        account_options
+      end
+
+    [%{label: "All connected workspaces", value: ""} | account_options]
+  end
+
+  defp slack_workspace_option(account, index) when is_map(account) do
+    with team_id when is_binary(team_id) <- slack_workspace_team_id(account) do
+      %{
+        value: team_id,
+        label: slack_workspace_option_label(account, team_id, index)
+      }
+    end
+  end
+
+  defp slack_workspace_option(_account, _index), do: nil
+
+  defp slack_scope_sentence(launch, provider_map, all_workspaces, selected_template) do
+    case normalize_blank(launch["team_id"]) do
+      nil ->
+        all_workspaces
+
+      team_id ->
+        workspace = slack_workspace_display_name(provider_map, team_id)
+        String.replace(selected_template, "%{workspace}", workspace)
+    end
+  end
+
+  defp slack_scope_value(launch, provider_map) do
+    case normalize_blank(launch["team_id"]) do
+      nil -> "All connected workspaces"
+      team_id -> slack_workspace_display_name(provider_map, team_id)
+    end
+  end
+
+  defp slack_workspace_display_name(provider_map, team_id) do
+    provider_map
+    |> slack_workspace_options(team_id)
+    |> Enum.find(&(&1.value == team_id))
+    |> case do
+      %{label: label} when is_binary(label) -> slack_scope_display_label(label)
+      _ -> "the selected Slack workspace"
+    end
+  end
+
+  defp slack_scope_display_label("Selected Slack workspace"), do: "the selected Slack workspace"
+  defp slack_scope_display_label("Connected Slack workspace"), do: "the selected Slack workspace"
+
+  defp slack_scope_display_label("Connected Slack workspace " <> _suffix),
+    do: "the selected Slack workspace"
+
+  defp slack_scope_display_label(label), do: label
+
+  defp slack_workspace_option_label(account, team_id, index) do
+    label =
+      account
+      |> Map.get(:account)
+      |> normalize_blank()
+
+    cond do
+      is_nil(label) ->
+        fallback_slack_workspace_label(index)
+
+      raw_slack_identifier?(label, team_id) ->
+        fallback_slack_workspace_label(index)
+
+      true ->
+        label
+    end
+  end
+
+  defp fallback_slack_workspace_label(1), do: "Connected Slack workspace"
+  defp fallback_slack_workspace_label(index), do: "Connected Slack workspace #{index}"
+
+  defp slack_workspace_team_id(account) do
+    account
+    |> Map.get(:provider)
+    |> normalize_blank()
+    |> case do
+      "slack:" <> rest ->
+        rest
+        |> String.split(":")
+        |> List.first()
+        |> normalize_blank()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp raw_slack_identifier?(label, team_id) do
+    label == team_id or
+      String.starts_with?(label, "slack:") or
+      Regex.match?(~r/^[TE][A-Z0-9]{6,}$/i, label)
   end
 
   attr :id, :string, required: true
@@ -1586,7 +1776,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("prompt_agent", "lean"),
     do:
-      "Lower memory and lower budgets. Best when you want a lightweight helper, not a constantly reasoning agent."
+      "Lower memory and lower budgets. Best when you want a lightweight helper, not a constantly reasoning automation."
 
   defp cost_profile_summary("prompt_agent", "balanced"),
     do:
@@ -1660,6 +1850,15 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp parse_csv(_values), do: []
 
+  defp normalize_blank(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      normalized -> normalized
+    end
+  end
+
+  defp normalize_blank(_value), do: nil
+
   defp blank_fallback(value, fallback) when is_binary(value) do
     case String.trim(value) do
       "" -> fallback
@@ -1721,15 +1920,4 @@ defmodule MaraithonWeb.AgentBuilderLive do
   end
 
   defp current_path_from_uri(_uri), do: "/agents/new"
-
-  defp changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, errors} -> "#{field} #{Enum.join(errors, ", ")}" end)
-    |> Enum.join("; ")
-  end
 end

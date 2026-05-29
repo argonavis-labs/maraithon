@@ -9,6 +9,14 @@ defmodule MaraithonWeb.PwaStaticTest do
     assert manifest =~ ~s("name": "Maraithon")
     assert manifest =~ ~s("display": "standalone")
     assert manifest =~ ~s("/images/app-icon-512.png")
+    assert manifest =~ "chief-of-staff workspace"
+    assert manifest =~ ~s("name": "Work")
+    assert manifest =~ "current work queue"
+    assert manifest =~ "Open relationship context"
+    refute manifest =~ "agent runtime"
+    refute manifest =~ ~s("name": "Todos")
+    refute manifest =~ "todo command surface"
+    refute manifest =~ "relationship CRM"
 
     sw_conn = conn |> recycle() |> get("/sw.js")
     sw = response(sw_conn, 200)
@@ -23,6 +31,10 @@ defmodule MaraithonWeb.PwaStaticTest do
 
     assert offline =~ "You are offline"
     assert offline =~ "Maraithon needs a connection"
+    assert offline =~ "current work"
+    assert offline =~ "relationships"
+    refute offline =~ "live agents"
+    refute offline =~ "todos"
   end
 
   test "authenticated app shell renders mobile PWA metadata and tab bar", %{conn: conn} do

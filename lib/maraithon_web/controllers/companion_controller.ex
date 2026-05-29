@@ -20,6 +20,7 @@ defmodule MaraithonWeb.CompanionController do
   alias Maraithon.LocalReminders
   alias Maraithon.LocalVoiceMemos
   alias Maraithon.Tools.RecallAnywhere
+  alias MaraithonWeb.ApiErrorCopy
 
   @max_batch_size 500
   @max_files_batch_size 200
@@ -66,23 +67,23 @@ defmodule MaraithonWeb.CompanionController do
 
           conn
           |> put_status(:bad_request)
-          |> json(%{error: "invalid_batch"})
+          |> json(ApiErrorCopy.companion_sync(reason, "messages"))
       end
     else
       {:error, :missing_messages} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "messages array is required"})
+        |> json(ApiErrorCopy.companion_sync(:missing_items, "messages"))
 
       {:error, :too_many_messages} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "batch exceeds maximum of #{@max_batch_size}"})
+        |> json(ApiErrorCopy.companion_sync(:too_many_items, @max_batch_size))
 
       {:error, :device_mismatch} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "device_id does not match this token"})
+        |> json(ApiErrorCopy.companion_sync(:device_mismatch, nil))
     end
   end
 
@@ -181,7 +182,21 @@ defmodule MaraithonWeb.CompanionController do
          :ok <- validate_device(device, params) do
       items = Enum.map(items, &Map.put_new(stringify(&1), "source", source))
 
-      case LocalBrowserHistory.ingest_batch(user_id, device.device_id, items) do
+      result =
+        try do
+          LocalBrowserHistory.ingest_batch(user_id, device.device_id, items)
+        rescue
+          exception ->
+            Logger.error(
+              "companion browser_history ingest crashed",
+              error: Exception.format(:error, exception, __STACKTRACE__),
+              batch_size: length(items)
+            )
+
+            {:error, :ingest_exception}
+        end
+
+      case result do
         {:ok, %{accepted: accepted, duplicate: duplicate, invalid: invalid, filtered: filtered}} ->
           json(conn, %{
             accepted: accepted,
@@ -195,23 +210,23 @@ defmodule MaraithonWeb.CompanionController do
 
           conn
           |> put_status(:bad_request)
-          |> json(%{error: "invalid_batch"})
+          |> json(ApiErrorCopy.companion_sync(reason, "browser_history"))
       end
     else
       {:error, :missing_items} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "visits array is required"})
+        |> json(ApiErrorCopy.companion_sync(:missing_items, "visits"))
 
       {:error, :too_many_items} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "batch exceeds maximum of #{@max_batch_size}"})
+        |> json(ApiErrorCopy.companion_sync(:too_many_items, @max_batch_size))
 
       {:error, :device_mismatch} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "device_id does not match this token"})
+        |> json(ApiErrorCopy.companion_sync(:device_mismatch, nil))
     end
   end
 
@@ -242,13 +257,13 @@ defmodule MaraithonWeb.CompanionController do
 
             conn
             |> put_status(:bad_request)
-            |> json(%{error: format_error(reason)})
+            |> json(ApiErrorCopy.companion_recall(reason))
         end
 
       {:error, message} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: message})
+        |> json(ApiErrorCopy.companion_recall(message))
     end
   end
 
@@ -318,7 +333,7 @@ defmodule MaraithonWeb.CompanionController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "device not found"})
+        |> json(ApiErrorCopy.companion_device(:not_found))
     end
   end
 
@@ -344,14 +359,14 @@ defmodule MaraithonWeb.CompanionController do
       {:error, :not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "device not found"})
+        |> json(ApiErrorCopy.companion_device(:not_found))
 
       {:error, reason} ->
         Logger.warning("companion device delete failed", reason: inspect(reason))
 
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "delete_failed"})
+        |> json(ApiErrorCopy.companion_device(:delete_failed))
     end
   end
 
@@ -374,7 +389,7 @@ defmodule MaraithonWeb.CompanionController do
       true ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "device not found"})
+        |> json(ApiErrorCopy.companion_device(:not_found))
     end
   end
 
@@ -413,12 +428,12 @@ defmodule MaraithonWeb.CompanionController do
       {:error, :missing_key_id} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "key_id is required"})
+        |> json(ApiErrorCopy.companion_device_key(:missing_key_id))
 
       {:error, :missing_public_key} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "public_key is required"})
+        |> json(ApiErrorCopy.companion_device_key(:missing_public_key))
 
       {:error, %Ecto.Changeset{} = changeset} ->
         Logger.warning("device_key upload invalid",
@@ -427,7 +442,14 @@ defmodule MaraithonWeb.CompanionController do
 
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "invalid_device_key"})
+        |> json(ApiErrorCopy.companion_device_key(changeset))
+
+      {:error, reason} ->
+        Logger.warning("device_key upload failed", reason: inspect(reason))
+
+        conn
+        |> put_status(:bad_request)
+        |> json(ApiErrorCopy.companion_device_key(reason))
     end
   end
 
@@ -533,23 +555,23 @@ defmodule MaraithonWeb.CompanionController do
 
           conn
           |> put_status(:bad_request)
-          |> json(%{error: "invalid_batch"})
+          |> json(ApiErrorCopy.companion_sync(reason, batch_key))
       end
     else
       {:error, :missing_items} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "#{batch_key} array is required"})
+        |> json(ApiErrorCopy.companion_sync(:missing_items, batch_key))
 
       {:error, :too_many_items} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "batch exceeds maximum of #{max_batch}"})
+        |> json(ApiErrorCopy.companion_sync(:too_many_items, max_batch))
 
       {:error, :device_mismatch} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "device_id does not match this token"})
+        |> json(ApiErrorCopy.companion_sync(:device_mismatch, nil))
     end
   end
 
@@ -624,7 +646,7 @@ defmodule MaraithonWeb.CompanionController do
         {:ok, args}
 
       _ ->
-        {:error, "query is required"}
+        {:error, :missing_query}
     end
   end
 
@@ -645,7 +667,4 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   defp maybe_add_sources(args, _), do: args
-
-  defp format_error(reason) when is_binary(reason), do: reason
-  defp format_error(reason), do: inspect(reason)
 end

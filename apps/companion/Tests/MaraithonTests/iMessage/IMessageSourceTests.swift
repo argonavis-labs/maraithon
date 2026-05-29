@@ -138,6 +138,26 @@ final class IMessageSourceTests: XCTestCase {
         XCTAssertEqual(IMessageCursor(defaults: defaultsSuite).lastSyncedRowID, 0)
     }
 
+    @MainActor
+    func testAuthorizationDeniedMapsToFullDiskAccessIssue() {
+        let openError = IMessageDatabase.DatabaseError.openFailed(
+            code: 23,
+            message: "authorization denied"
+        )
+        XCTAssertEqual(
+            IMessageSource.accessIssueReason(for: openError),
+            "imessage_full_disk_access_required"
+        )
+
+        let prepareError = IMessageDatabase.DatabaseError.prepareFailed(
+            message: "authorization denied"
+        )
+        XCTAssertEqual(
+            IMessageSource.accessIssueReason(for: prepareError),
+            "imessage_full_disk_access_required"
+        )
+    }
+
     // MARK: - Helpers
 
     @MainActor

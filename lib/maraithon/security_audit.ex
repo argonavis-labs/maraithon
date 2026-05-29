@@ -151,15 +151,16 @@ defmodule Maraithon.SecurityAudit do
     |> maybe_add(missing_metadata != [], %{
       id: "tool_policy_metadata_missing",
       severity: "high",
-      message: "Some tools lack ToolPolicy metadata: #{Enum.join(missing_metadata, ", ")}.",
-      remediation: "Add policy metadata before exposing new tools to model-controlled surfaces."
+      message: "Some actions lack safety metadata: #{Enum.join(missing_metadata, ", ")}.",
+      remediation:
+        "Add safety metadata before exposing new actions to assistant-controlled surfaces."
     })
     |> maybe_add(unsafe_mutations != [], %{
       id: "tool_policy_confirmation_missing",
       severity: "critical",
       message:
-        "Destructive or external-send tools do not require confirmation: #{Enum.join(unsafe_mutations, ", ")}.",
-      remediation: "Mark all destructive and external-send tools confirmation_required."
+        "Destructive or external-send actions do not require confirmation: #{Enum.join(unsafe_mutations, ", ")}.",
+      remediation: "Mark all destructive and external-send actions confirmation_required."
     })
   end
 

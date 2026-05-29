@@ -51,7 +51,7 @@ defmodule MaraithonWeb.MobilePeopleController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
     end
   end
 
@@ -73,7 +73,7 @@ defmodule MaraithonWeb.MobilePeopleController do
       nil ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
     end
   end
 
@@ -87,7 +87,7 @@ defmodule MaraithonWeb.MobilePeopleController do
       {:error, :person_not_found} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found"})
+        |> json(MobileJSON.error(:not_found))
 
       {:error, reason} ->
         conn
@@ -103,7 +103,7 @@ defmodule MaraithonWeb.MobilePeopleController do
       nil ->
         conn
         |> put_status(:unprocessable_entity)
-        |> json(%{error: "missing_duplicate"})
+        |> json(MobileJSON.error(:missing_duplicate))
 
       merged_id ->
         case Crm.merge_people(user_id, surviving_id, merged_id, merge_attrs(params)) do
@@ -120,7 +120,7 @@ defmodule MaraithonWeb.MobilePeopleController do
           {:error, :person_not_found} ->
             conn
             |> put_status(:not_found)
-            |> json(%{error: "not_found"})
+            |> json(MobileJSON.error(:not_found))
 
           {:error, reason} ->
             conn
@@ -131,10 +131,22 @@ defmodule MaraithonWeb.MobilePeopleController do
   end
 
   defp person_params(%{"person" => person}) when is_map(person) do
-    MobileParams.sanitize(person, @person_param_keys)
+    person
+    |> MobileParams.sanitize(@person_param_keys)
+    |> sanitize_person_metadata()
   end
 
-  defp person_params(params), do: MobileParams.sanitize(params, @person_param_keys)
+  defp person_params(params) do
+    params
+    |> MobileParams.sanitize(@person_param_keys)
+    |> sanitize_person_metadata()
+  end
+
+  defp sanitize_person_metadata(%{"metadata" => metadata} = params) do
+    Map.put(params, "metadata", MobileJSON.public_person_metadata(metadata))
+  end
+
+  defp sanitize_person_metadata(params), do: params
 
   defp merge_person_id(%{"merge" => %{} = merge_params}), do: merge_person_id(merge_params)
 
@@ -148,12 +160,12 @@ defmodule MaraithonWeb.MobilePeopleController do
 
   defp merge_attrs(params) do
     %{
-      "performed_by" => "mobile_api",
-      "evidence" => text_param(params, "evidence") || "Manual CRM merge from the mobile API.",
+      "performed_by" => "mobile",
+      "evidence" => text_param(params, "evidence") || "Merged from mobile.",
       "model_rationale" =>
         text_param(params, "model_rationale") ||
           text_param(params, "rationale") ||
-          "The user chose one CRM record to keep and another duplicate to merge."
+          "The user chose one person record to keep and another duplicate to merge."
     }
   end
 

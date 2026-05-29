@@ -26,12 +26,16 @@ fi
 if selected_component "${component}" "companion"; then
   generate_xcode_project "${COMPANION_DIR}"
   run_in "${COMPANION_DIR}" swift build
+  companion_signing_args=()
+  while IFS= read -r arg; do
+    companion_signing_args+=("${arg}")
+  done < <(companion_xcode_signing_args)
   run_in "${COMPANION_DIR}" xcodebuild \
     -project Maraithon.xcodeproj \
     -scheme Maraithon \
     -configuration Debug \
     -destination "platform=macOS" \
-    CODE_SIGNING_ALLOWED=NO \
+    "${companion_signing_args[@]}" \
     build
 fi
 

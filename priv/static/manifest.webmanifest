@@ -1,7 +1,7 @@
 {
   "name": "Maraithon",
   "short_name": "Maraithon",
-  "description": "A personal chief-of-staff agent runtime for todos, relationships, connected accounts, and proactive follow-through.",
+  "description": "A personal chief-of-staff workspace for open work, relationships, connected accounts, and proactive follow-through.",
   "id": "/dashboard",
   "start_url": "/dashboard?source=pwa",
   "scope": "/",
@@ -39,16 +39,16 @@
       "description": "Open today's chief-of-staff dashboard."
     },
     {
-      "name": "Todos",
-      "short_name": "Todos",
+      "name": "Work",
+      "short_name": "Work",
       "url": "/todos?source=pwa-shortcut",
-      "description": "Open the todo command surface."
+      "description": "Open the current work queue."
     },
     {
       "name": "People",
       "short_name": "People",
       "url": "/operator/people?source=pwa-shortcut",
-      "description": "Open the relationship CRM."
+      "description": "Open relationship context."
     }
   ]
 }

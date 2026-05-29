@@ -45,7 +45,7 @@ defmodule Maraithon.AgentHarness.Runner do
       Enum.join(Manifest.get(manifest, :goals, []), "\n"),
       "Skills:",
       skill_instructions(Manifest.get(manifest, :skills, [])),
-      "Allowed tools:",
+      "Allowed actions:",
       tool_descriptions(Manifest.get(manifest, :tool_allowlist, []))
     ]
     |> Enum.reject(&blank?/1)

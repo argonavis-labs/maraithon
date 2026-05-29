@@ -8,7 +8,7 @@ defmodule Maraithon.ToolPolicy.Decision do
 
   defstruct status: :deny,
             reason_code: "policy_denied",
-            message: "The tool call was denied by policy.",
+            message: "This action is not allowed.",
             metadata: %{}
 
   @type status :: :allow | :deny | :needs_confirmation

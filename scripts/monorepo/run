@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+component="${1:-companion}"
+
+validate_component "${component}" companion mac
+
+if selected_component "${component}" "companion"; then
+  install_app="${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
+  install_dir="$(dirname "${install_app}")"
+
+  quit_running_companion_app
+  mkdir -p "${install_dir}"
+  "${ROOT_DIR}/scripts/monorepo/build" companion
+  built_app="$(companion_debug_app_path)"
+
+  if [[ ! -d "${built_app}" ]]; then
+    echo "Companion app was not built at ${built_app}" >&2
+    exit 1
+  fi
+
+  if [[ "${built_app%/}" != "${install_app%/}" ]]; then
+    if [[ -d "${install_app}" ]]; then
+      # Preserve the app bundle directory itself so macOS privacy grants
+      # attached to this dev install path survive rebuild/reload cycles.
+      find "${install_app}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    else
+      rm -rf "${install_app}"
+    fi
+    ditto "${built_app}" "${install_app}"
+  fi
+  xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
+  if [[ -x "${LSREGISTER}" ]]; then
+    unregister_stale_companion_apps "${install_app}"
+    "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
+  fi
+  remove_derived_companion_apps "${install_app}"
+  if [[ -x "${LSREGISTER}" ]]; then
+    unregister_stale_companion_apps "${install_app}"
+    "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
+  fi
+  reset_stale_companion_tcc_if_needed "${install_app}"
+
+  echo
+  echo "Installed companion dev app at ${install_app}"
+  echo "Grant Full Disk Access to this app path once; future reloads preserve it."
+  open "${install_app}"
+fi

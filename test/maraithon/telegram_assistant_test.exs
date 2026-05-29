@@ -325,7 +325,10 @@ defmodule Maraithon.TelegramAssistantTest do
 
     prompt_reply = last_telegram_message(:send)
     assert prompt_reply.opts[:parse_mode] == "HTML"
+    assert prompt_reply.text =~ "Save this preference?"
+    assert prompt_reply.text =~ "Treat investors as urgent"
     assert prompt_reply.text =~ "Reply <code>yes</code>"
+    refute prompt_reply.text =~ "I think"
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -340,7 +343,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Repo.get!(Conversation, conversation.id).status == "closed"
 
     confirmation_reply = last_telegram_message(:send)
-    assert confirmation_reply.text =~ "saved that as a durable rule"
+    assert confirmation_reply.text =~ "Preference saved: Treat investors as urgent."
+    assert confirmation_reply.text =~ "Future triage will apply it automatically."
+    refute confirmation_reply.text =~ "saved that as a durable rule"
   end
 
   test "assistant prepares a destructive agent action and executes it after text confirmation", %{
@@ -377,7 +382,7 @@ defmodule Maraithon.TelegramAssistantTest do
          %{
            "status" => "final",
            "assistant_message" =>
-             "Delete agent Kent's Gmail agent. This removes its saved definition and runtime history dependencies. Reply `yes` or use the buttons to delete it, or `no` to cancel.",
+             "Delete the \"Kent's Gmail agent\" automation. This removes its saved setup and history. Reply `yes` or use the buttons to delete it, or `no` to cancel.",
            "message_class" => "approval_prompt",
            "tool_calls" => [],
            "summary" => "Ask for confirmation."
@@ -392,7 +397,8 @@ defmodule Maraithon.TelegramAssistantTest do
       })
 
     approval = last_telegram_message(:send)
-    assert approval.text =~ "Delete agent Kent's Gmail agent"
+    assert approval.text =~ "Delete the \"Kent's Gmail agent\" automation"
+    refute approval.text =~ "runtime history"
 
     prepared_action =
       Repo.one!(
@@ -595,6 +601,71 @@ defmodule Maraithon.TelegramAssistantTest do
     assert result_message.text == "Created the project."
   end
 
+  test "prepared action failure copy hides internal reason in Telegram", %{user_id: user_id} do
+    {:ok, conversation} =
+      Maraithon.TelegramConversations.start_or_continue(user_id, "12345", %{
+        "root_message_id" => "9301"
+      })
+
+    {:ok, run} =
+      Maraithon.TelegramAssistant.start_run(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        surface: "telegram",
+        trigger_type: "inbound_message",
+        status: "completed",
+        model_provider: "test",
+        model_name: "test",
+        prompt_snapshot: %{},
+        result_summary: %{"message_class" => "approval_prompt"},
+        started_at: DateTime.utc_now(),
+        finished_at: DateTime.utc_now()
+      })
+
+    missing_project_id = Ecto.UUID.generate()
+
+    {:ok, prepared_action} =
+      Maraithon.TelegramAssistant.create_prepared_action(%{
+        user_id: user_id,
+        chat_id: conversation.chat_id,
+        conversation_id: conversation.id,
+        run_id: run.id,
+        surface: "telegram",
+        action_type: "project_update",
+        target_type: "project",
+        target_id: missing_project_id,
+        payload: %{
+          "project_id" => missing_project_id,
+          "attrs" => %{"summary" => "Should not apply"}
+        },
+        preview_text: "Update project",
+        status: "awaiting_confirmation",
+        expires_at: DateTime.add(DateTime.utc_now(), 600, :second)
+      })
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          "chat_id" => 12345,
+          "message_id" => 9301,
+          "callback_id" => "project-update-failure-callback",
+          "data" => "tgact:#{prepared_action.id}:confirm"
+        }
+      })
+
+    result_message = last_telegram_message(:send)
+
+    assert result_message.text ==
+             "I could not complete the project update yet. " <>
+               "The project it referenced is no longer available."
+
+    refute result_message.text =~ ":project_not_found"
+    refute result_message.text =~ "project_not_found"
+    assert Repo.get!(PreparedAction, prepared_action.id).status == "failed"
+  end
+
   test "assistant can inspect a project by name and return project-manager recommendations", %{
     user_id: user_id
   } do
@@ -794,7 +865,9 @@ defmodule Maraithon.TelegramAssistantTest do
       |> Enum.filter(&(&1.type == :send))
 
     assert Enum.count(initial_sends) == 3
-    assert Enum.at(initial_sends, 0).text =~ "sending the actionable items one by one"
+    assert Enum.at(initial_sends, 0).text =~ "Each item is ready for a decision"
+    refute Enum.at(initial_sends, 0).text =~ "ready to clear"
+    refute Enum.at(initial_sends, 0).text =~ "sending the actionable items one by one"
 
     billing_message = Enum.at(initial_sends, 1)
     oauth_message = Enum.at(initial_sends, 2)
@@ -1119,7 +1192,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
     assert length(sends) == 1
-    assert hd(sends).text =~ "Todo 1 of 2"
+    assert hd(sends).text =~ "Open work 1 of 2"
     assert hd(sends).text =~ "Confirm the soccer practice timing."
     assert hd(sends).text =~ "Emma's organizer needs confirmation"
 
@@ -1138,7 +1211,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Todo 2 of 2"
+    assert List.last(sends).text =~ "Open work 2 of 2"
     assert List.last(sends).text =~ "Reply with the recommended setup path"
 
     :ok =
@@ -1155,10 +1228,10 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Todos.get_for_user(user_id, second.id).status == "dismissed"
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
-    assert List.last(sends).text =~ "Todo review complete"
+    assert List.last(sends).text =~ "Open work review complete"
     assert List.last(sends).text =~ "Done: 1"
     assert List.last(sends).text =~ "Dismissed: 1"
-    assert List.last(sends).text =~ "Tomorrow's briefing will build on this"
+    assert List.last(sends).text =~ "Next brief will stay cleaner"
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
@@ -1248,7 +1321,8 @@ defmodule Maraithon.TelegramAssistantTest do
       |> Enum.filter(&(&1.type == :send))
 
     assert Enum.count(sends) == 3
-    assert Enum.at(sends, 0).text =~ "sending each with context"
+    assert Enum.at(sends, 0).text =~ "context needed for a decision"
+    refute Enum.at(sends, 0).text =~ "clear it"
     refute Enum.at(sends, 0).text =~ "Dan Bourke:"
     refute Enum.at(sends, 0).text =~ "Matthew Diakonov:"
 
@@ -1291,7 +1365,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     keyboard = get_in(payload.reply_markup, ["inline_keyboard"])
     assert keyboard != nil
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Source"))
     assert serialized_payload.text =~ "Reply with the owner and the exact billing contact."
     refute payload.text =~ "Maraithon Todo"
@@ -1301,7 +1375,12 @@ defmodule Maraithon.TelegramAssistantTest do
     refute payload.text =~ "About:"
     assert payload.text =~ "Reply with the owner and the exact billing contact."
     assert payload.text =~ "Finance needs an owner confirmation for the invoice thread."
-    assert payload.text =~ "I found this in Gmail."
+
+    assert payload.text =~ "Decision: Handle this now, snooze it, or dismiss it."
+
+    assert payload.text =~ "From Gmail."
+    refute payload.text =~ "Choose whether this Gmail thread"
+    refute payload.text =~ "I found this in"
     refute payload.text =~ "Priority:"
     refute payload.text =~ "From:"
     refute payload.text =~ "Source:"
@@ -1315,6 +1394,17 @@ defmodule Maraithon.TelegramAssistantTest do
                telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup],
                structured_data: %{"linked_todo" => Todos.serialize_for_prompt(todo)}
              )
+
+    linked_todo = turn.structured_data["linked_todo"]
+    assert linked_todo["id"] == todo.id
+    assert linked_todo["title"] == "Reply to the billing owner"
+    assert linked_todo["metadata"] == %{}
+    refute Map.has_key?(linked_todo, "owner_user_id")
+    refute Map.has_key?(linked_todo, "source_item_id")
+    refute Map.has_key?(linked_todo, "dedupe_key")
+    refute Map.has_key?(linked_todo, "attention_profile")
+    refute Map.has_key?(linked_todo, "surface_quality")
+    refute inspect(linked_todo) =~ "mail.google.com"
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -1488,7 +1578,7 @@ defmodule Maraithon.TelegramAssistantTest do
              "Marked done",
              "Dismissed",
              "Saved helpful feedback",
-             "Marked not important"
+             "Feedback saved"
            ]
 
     assert Enum.count(Enum.filter(telegram_events(), &(&1.type == :edit))) == 4
@@ -1672,7 +1762,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert turn.origin_id == delivery.id
   end
 
-  test "check-in briefs deliver an intro with a List Todos review button", %{
+  test "check-in briefs deliver an intro with a review open work button", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1694,7 +1784,7 @@ defmodule Maraithon.TelegramAssistantTest do
                "cadence" => "check_in",
                "title" => "Check-in: 2 items still need movement",
                "summary" => "Two open communication loops still need movement.",
-               "body" => "Superseded by todo delivery.",
+               "body" => "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND",
                "scheduled_for" => scheduled_for,
                "dedupe_key" => "telegram-assistant:check-in:todo-style",
                "metadata" => %{
@@ -1714,11 +1804,17 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert intro.text =~ "<b>Chief of staff check-in</b>"
     assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
-    assert intro.text =~ "Superseded by todo delivery."
+    assert intro.text =~ "checking on these today"
+    assert intro.text =~ "1 new today"
+    assert intro.text =~ "1 still open from earlier"
+    assert intro.text =~ "Best next move: review each item now"
+    assert intro.text =~ "keep what still matters"
+    refute intro.text =~ "not important"
+    refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
     keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "List Todos"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review Open Work"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
 
     updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
     assert updated_brief.status == "sent"
@@ -1743,7 +1839,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert get_in(hd(turns).structured_data, ["todo_ids"]) == [new_todo.id, older_todo.id]
   end
 
-  test "end-of-day briefs deliver an intro with a List Todos review button", %{
+  test "end-of-day briefs deliver an intro with a review open work button", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1763,9 +1859,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert {:ok, brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "end_of_day",
-               "title" => "End-of-day debt: 2 items still open",
+               "title" => "End-of-day review: 2 items still open",
                "summary" => "Two items still need movement before the day closes.",
-               "body" => "Superseded by todo delivery.",
+               "body" => "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND",
                "scheduled_for" => scheduled_for,
                "dedupe_key" => "telegram-assistant:end-of-day:todo-style",
                "metadata" => %{
@@ -1783,13 +1879,20 @@ defmodule Maraithon.TelegramAssistantTest do
     assert length(sends) == 1
     [intro] = sends
 
-    assert intro.text =~ "<b>End-of-day debt</b>"
-    assert intro.text =~ "<b>End-of-day debt: 2 items still open</b>"
-    assert intro.text =~ "Superseded by todo delivery."
+    assert intro.text =~ "<b>End-of-day review</b>"
+    assert intro.text =~ "<b>End-of-day review: 2 items still open</b>"
+    refute intro.text =~ "debt"
+    assert intro.text =~ "these still need movement tonight"
+    assert intro.text =~ "1 new today"
+    assert intro.text =~ "1 still open from earlier"
+    assert intro.text =~ "Best next move: review each item now"
+    assert intro.text =~ "move anything that can wait"
+    refute intro.text =~ "stale"
+    refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
     keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "List Todos"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Dashboard"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review Open Work"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
   end
 
   test "medium runs emit native typing without a progress note" do
@@ -2002,6 +2105,80 @@ defmodule Maraithon.TelegramAssistantTest do
              telegram_events(),
              &(&1.type == :edit and &1.text == "I do not have a confident Charlie yet.")
            )
+  end
+
+  test "relationship lookup timeout copy avoids internal CRM language" do
+    parent = self()
+
+    configure_liveness(
+      typing_initial_delay_ms: 25,
+      typing_refresh_ms: 50,
+      contextual_progress_delay_ms: 75,
+      timeout_notice_ms: 140,
+      hard_timeout_ms: 200
+    )
+
+    start_supervised!(%{
+      id: :telegram_assistant_relationship_timeout_sequence,
+      start:
+        {Agent, :start_link,
+         [fn -> 0 end, [name: :telegram_assistant_relationship_timeout_sequence]]}
+    })
+
+    set_assistant(fn _payload ->
+      sequence =
+        Agent.get_and_update(:telegram_assistant_relationship_timeout_sequence, fn current ->
+          {current, current + 1}
+        end)
+
+      if sequence == 0 do
+        {:ok,
+         %{
+           "status" => "tool_calls",
+           "assistant_message" => "",
+           "message_class" => "assistant_reply",
+           "tool_calls" => [
+             %{"tool" => "get_relationship_context", "arguments" => %{"query" => "Charlie"}}
+           ],
+           "summary" => "Need relationship context."
+         }}
+      else
+        run_pid = self()
+        send(parent, {:assistant_waiting, run_pid})
+
+        receive do
+          {:release_assistant, ^run_pid} ->
+            {:ok,
+             %{
+               "status" => "final",
+               "assistant_message" => "This late Charlie answer should still be delivered.",
+               "message_class" => "assistant_reply",
+               "tool_calls" => [],
+               "summary" => "Late relationship answer."
+             }}
+        end
+      end
+    end)
+
+    task =
+      Task.async(fn ->
+        InsightNotifications.handle_telegram_event(%{
+          type: "message",
+          data: %{chat_id: 12345, message_id: 9205, text: "Who is Charlie?"}
+        })
+      end)
+
+    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 1_000
+    assert progress_text == "Still checking what I know about Charlie."
+    assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
+    assert timeout_text =~ "I saved the question about Charlie"
+    assert timeout_text =~ "relationship context plus connected sources"
+    refute timeout_text =~ "CRM"
+    refute timeout_text =~ "partial evidence"
+
+    send(run_pid, {:release_assistant, run_pid})
+    assert :ok = Task.await(task, 2_000)
   end
 
   test "timed out runs tell the user and edit the timeout notice into a late final reply" do

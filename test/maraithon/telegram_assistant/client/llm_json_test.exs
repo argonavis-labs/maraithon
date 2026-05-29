@@ -3,7 +3,7 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
 
   alias Maraithon.TelegramAssistant.Client.LLMJson
 
-  test "build_prompt instructs the model to persist and resolve todos" do
+  test "build_prompt instructs the model to persist and resolve open work" do
     prompt =
       LLMJson.build_prompt(
         payload(
@@ -25,30 +25,32 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
         )
       )
 
-    assert prompt =~ "Persist actionable work as todos."
+    assert prompt =~
+             "Persist actionable work as durable work items through the internal todo tools."
+
     assert prompt =~ "do not infer from the sender, subject, snippet"
     assert prompt =~ "Only summarize or explain an email after `gmail_get_message`"
     assert prompt =~ "\"todo_digest\""
-    assert prompt =~ "one Telegram message per todo"
+    assert prompt =~ "one Telegram message per item"
     assert prompt =~ "call `list_todos` with a narrow `query` first"
     assert prompt =~ "Handled the billing, what else?"
     assert prompt =~ "\"tool\":\"list_todos\""
   end
 
-  test "build_prompt instructs the model to use CRM relationship tools" do
+  test "build_prompt instructs the model to use People relationship tools" do
     prompt = LLMJson.build_prompt(payload("What do I owe Justin?"))
 
-    assert prompt =~ "The built-in CRM is the durable relationship layer"
+    assert prompt =~ "People is the durable relationship layer"
     assert prompt =~ "get_open_loops"
     assert prompt =~ "get_relationship_context"
     assert prompt =~ "upsert_person"
     assert prompt =~ "link_person_data"
     assert prompt =~ "review_connected_context"
-    assert prompt =~ "Do not stop with `I don't have Charlie in your CRM`"
+    assert prompt =~ "If People lookup misses for a named person"
     assert prompt =~ "what do I owe Justin?"
   end
 
-  test "build_prompt distinguishes connected accounts from CRM people" do
+  test "build_prompt distinguishes connected accounts from People relationships" do
     prompt = LLMJson.build_prompt(payload("Which connections are currently connected?"))
 
     assert prompt =~ "`connected_accounts` and `source_freshness`"
@@ -56,7 +58,7 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "answer directly from those context fields or call `list_connected_accounts`"
     assert prompt =~ "Do not call `list_people`, `upsert_todos`, or any write tool"
     assert prompt =~ "`upsert_todos`"
-    assert prompt =~ "`list_people` is only for human CRM relationships"
+    assert prompt =~ "`list_people` is only for human People relationships"
   end
 
   test "build_prompt instructs the model to use deep memory tools" do
@@ -80,18 +82,18 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "actionable chief-of-staff note"
   end
 
-  test "build_prompt instructs the model to capture manual todos and return itemized todo lists" do
+  test "build_prompt instructs the model to capture manual open work and return itemized lists" do
     prompt =
       LLMJson.build_prompt(payload("Add renew the domain this week to my todo list."))
 
-    assert prompt =~ "store it as a durable todo"
+    assert prompt =~ "store it as a durable work item"
     assert prompt =~ "source: \"telegram\""
     assert prompt =~ "kind: \"general\""
     assert prompt =~ "what's on my todo list?"
-    assert prompt =~ "one individual todo card per item"
+    assert prompt =~ "one individual work item card per item"
   end
 
-  test "build_prompt instructs the model to answer review questions with the full todo digest" do
+  test "build_prompt instructs the model to answer review questions with the full work digest" do
     prompt = LLMJson.build_prompt(payload("What should I review?"))
 
     assert String.contains?(String.downcase(prompt), "what should i review?")
@@ -99,7 +101,7 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert String.contains?(prompt, "get_open_loops")
     assert String.contains?(prompt, "do not offer to send the full list later")
     assert String.contains?(prompt, "do not stop at a short top-3 or top-5 summary")
-    assert String.contains?(prompt, "full actionable todo digest")
+    assert String.contains?(prompt, "full actionable work digest")
     assert String.contains?(prompt, "\"todo_digest\"")
   end
 

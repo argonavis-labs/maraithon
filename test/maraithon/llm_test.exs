@@ -158,6 +158,19 @@ defmodule Maraithon.LLMTest do
       assert LLM.model() == "gpt-5.4"
       assert LLM.openai_model() == "gpt-5.4"
     end
+
+    test "returns the active OpenRouter model when configured" do
+      Application.put_env(:maraithon, Maraithon.Runtime,
+        llm_provider_name: "openrouter",
+        llm_model: "qwen/qwen3.7-max",
+        openrouter_model: "qwen/qwen3.7-max",
+        openrouter_reasoning_effort: "medium"
+      )
+
+      assert LLM.model() == "qwen/qwen3.7-max"
+      assert LLM.openrouter_model() == "qwen/qwen3.7-max"
+      assert LLM.intelligence() == "medium"
+    end
   end
 
   describe "api_key/0" do

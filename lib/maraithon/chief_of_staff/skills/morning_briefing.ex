@@ -156,7 +156,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         provider: "google",
         service: "gmail",
         label: "Gmail",
-        description: "Needed for inbox triage and reply-debt signals.",
+        description: "Needed for inbox triage and unanswered-reply signals.",
         required?: false
       },
       %{
@@ -1061,7 +1061,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "title" => brief |> read_string("title", "Morning briefing") |> truncate_text(180),
         "summary" =>
           brief
-          |> read_string("summary", "Review the morning briefing todos.")
+          |> read_string("summary", "Review the morning briefing work items.")
           |> truncate_text(500),
         "body" => brief |> read_string("body", "") |> truncate_text(3_900),
         "scheduled_for" => DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -1381,7 +1381,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     source_backed_fallback_brief(%{}, error_message)
   end
 
-  defp source_backed_fallback_brief(brief_input, error_message) when is_map(brief_input) do
+  defp source_backed_fallback_brief(brief_input, _error_message) when is_map(brief_input) do
     date = read_string(brief_input, "date", "today")
     calendar = read_map(brief_input, "calendar")
     today_events = read_list(calendar, "today_events")
@@ -1390,6 +1390,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     required_meetings = read_list(read_map(brief_input, "schedule_coverage"), "required_meetings")
     required_threads = read_list(read_map(brief_input, "commercial_coverage"), "required_threads")
     open_todos = fallback_ranked_todos(brief_input)
+    commitment_lines = commitment_bucket_lines(brief_input)
+    commitment_count = fallback_commitment_count(brief_input, commitment_lines)
 
     body =
       [
@@ -1409,6 +1411,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.take(8)
           |> Enum.map(&fallback_todo_line/1)
         ),
+        fallback_section("Open Commitments", commitment_lines),
         fallback_section(
           "Commercial Threads",
           required_threads
@@ -1416,7 +1419,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.map(&fallback_commercial_thread_line/1)
         ),
         fallback_lookahead_section(tomorrow, brief_input),
-        fallback_source_note(error_message)
+        fallback_unknowns_note(),
+        fallback_todays_move(
+          open_todos,
+          personal_events,
+          today_events,
+          commitment_lines,
+          required_threads,
+          brief_input
+        )
       ]
       |> Enum.reject(&blank?/1)
       |> Enum.join("\n\n")
@@ -1424,7 +1435,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     %{
       "title" => "Morning briefing - #{date}",
       "summary" =>
-        "Compact source-backed briefing from calendar, todos, CRM, Gmail, Slack, and local context.",
+        fallback_summary(
+          open_todos,
+          personal_events,
+          today_events,
+          commitment_count,
+          required_threads,
+          brief_input
+        ),
       "body" => body,
       "todos" =>
         open_todos
@@ -1437,11 +1455,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp source_backed_fallback_brief(_brief_input, error_message) do
     %{
       "title" => "Morning briefing",
-      "summary" => "Compact source-backed briefing could not be assembled.",
-      "body" =>
-        "## Source Status\nThe model briefing path could not finish and no source bundle was available for compact fallback.\n\n#{error_message}",
+      "summary" => "No reliable priority could be checked yet.",
+      "body" => fallback_no_source_body(error_message),
       "todos" => []
     }
+  end
+
+  defp fallback_summary(
+         open_todos,
+         personal_events,
+         today_events,
+         commitment_count,
+         required_threads,
+         brief_input
+       ) do
+    focus =
+      [
+        count_phrase(length(personal_events), "personal/family item", "personal/family items"),
+        count_phrase(length(today_events), "calendar item", "calendar items"),
+        count_phrase(commitment_count, "open commitment", "open commitments"),
+        count_phrase(length(open_todos), "open follow-up", "open follow-ups"),
+        count_phrase(length(required_threads), "commercial thread", "commercial threads")
+      ]
+      |> Enum.reject(&blank?/1)
+      |> human_join()
+
+    cond do
+      not blank?(focus) ->
+        "Start with #{focus}; anything absent here is unknown, not clear."
+
+      weekend_brief?(brief_input) ->
+        "Use today to check next week's meetings, family logistics, and unresolved decisions."
+
+      true ->
+        "No reliable priority stood out; verify calendar and open work before committing the day."
+    end
   end
 
   defp fallback_section(_title, []), do: nil
@@ -1568,7 +1616,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp fallback_todo_line(todo) when is_map(todo) do
-    title = read_string(todo, "title", "Open todo")
+    title = read_string(todo, "title", "Open work item")
     summary = read_string(todo, "summary", nil) || read_string(todo, "next_action", nil)
 
     if blank?(summary) do
@@ -1615,10 +1663,80 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     fallback_section("Look Ahead", [line])
   end
 
-  defp fallback_source_note(error_message) do
-    fallback_section("Source Status", [
-      "Compact mode used because full model synthesis did not finish: #{truncate_prompt_string(error_message, 260)}"
+  defp fallback_unknowns_note do
+    fallback_section("Unknowns", [
+      "Only checked data is included here. If a section is missing, treat it as unverified, not clear."
     ])
+  end
+
+  defp fallback_no_source_body(_error_message) do
+    """
+    ## Needs Your Attention
+    - No reliable priority could be checked yet.
+
+    ## Unknowns
+    Calendar, open work, inbox, Slack, and local sources still need a fresh pass.
+
+    Today's move: verify the day before committing to lower-priority work.
+    """
+    |> String.trim()
+  end
+
+  defp fallback_todays_move(
+         open_todos,
+         personal_events,
+         today_events,
+         commitment_lines,
+         required_threads,
+         brief_input
+       ) do
+    line =
+      cond do
+        personal_events != [] ->
+          "Today's move: handle the first personal/family item before work triage."
+
+        commitment_lines != [] ->
+          "Today's move: clear or explicitly keep the first open commitment before lower-signal inbox."
+
+        open_todos != [] ->
+          "Today's move: clear or explicitly keep the first open follow-up before lower-signal inbox."
+
+        required_threads != [] ->
+          "Today's move: decide which commercial thread needs your reply before opening lower-signal inbox."
+
+        today_events != [] ->
+          "Today's move: review the next calendar item and prep the decision or ask before the meeting."
+
+        weekend_brief?(brief_input) ->
+          "Today's move: prep next week's meetings and family logistics before Monday starts."
+
+        true ->
+          "Today's move: verify calendar and open work before committing the day."
+      end
+
+    line
+  end
+
+  defp fallback_commitment_count(brief_input, commitment_lines) do
+    commitments = read_map(brief_input, "commitments")
+
+    case read_integer(commitments, "active_count", 0) do
+      count when count > 0 -> count
+      _ -> Enum.count(commitment_lines, &String.starts_with?(&1, "- "))
+    end
+  end
+
+  defp count_phrase(0, _singular, _plural), do: nil
+  defp count_phrase(1, singular, _plural), do: "1 #{singular}"
+  defp count_phrase(count, _singular, plural), do: "#{count} #{plural}"
+
+  defp human_join([]), do: nil
+  defp human_join([item]), do: item
+  defp human_join([first, second]), do: "#{first} and #{second}"
+
+  defp human_join(items) do
+    {last, rest} = List.pop_at(items, -1)
+    Enum.join(rest, ", ") <> ", and " <> last
   end
 
   defp fallback_todo_card(todo, brief_input) when is_map(todo) do
@@ -1689,7 +1807,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
         "action_card_and_draft_handles_stay_attached_to_work",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
-        "structured_todos_available_behind_list_todos_button_and_sent_one_at_a_time"
+        "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
     }
 
@@ -1785,7 +1903,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         case lines do
           [] ->
             [
-              "- **Brief shape needs attention**: the original model output missed the morning attention header. Review the source-backed sections below before starting lower-signal inbox."
+              "- **Start with source-backed priorities**: review the sections below before starting lower-signal inbox work."
             ]
 
           lines ->
@@ -3853,12 +3971,87 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp decode_json(content) when is_binary(content) do
     content
-    |> String.trim()
-    |> String.trim_leading("```json")
-    |> String.trim_leading("```")
-    |> String.trim_trailing("```")
-    |> String.trim()
-    |> Jason.decode()
+    |> json_decode_candidates()
+    |> Enum.reduce_while({:error, :no_json_candidate}, fn candidate, _error ->
+      case Jason.decode(candidate) do
+        {:ok, decoded} -> {:halt, {:ok, decoded}}
+        {:error, reason} -> {:cont, {:error, reason}}
+      end
+    end)
+  end
+
+  defp json_decode_candidates(content) do
+    trimmed = String.trim(content)
+
+    ([trimmed, strip_markdown_json_fence(trimmed)] ++
+       fenced_json_candidates(trimmed) ++ [first_balanced_json_object(trimmed)])
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp strip_markdown_json_fence(content) when is_binary(content) do
+    case Regex.run(~r/\A```(?:json)?\s*(.*?)\s*```\z/s, content, capture: :all_but_first) do
+      [json] -> String.trim(json)
+      _ -> content
+    end
+  end
+
+  defp fenced_json_candidates(content) when is_binary(content) do
+    ~r/```(?:json)?\s*(.*?)\s*```/s
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp first_balanced_json_object(content) when is_binary(content) do
+    content
+    |> String.graphemes()
+    |> Enum.reduce_while({:searching, []}, &collect_first_json_object/2)
+    |> case do
+      {:done, chars} -> chars |> Enum.reverse() |> Enum.join() |> String.trim()
+      _ -> nil
+    end
+  end
+
+  defp collect_first_json_object("{", {:searching, _chars}),
+    do: {:cont, {:collecting, 1, false, false, ["{"]}}
+
+  defp collect_first_json_object(_char, {:searching, _chars}), do: {:cont, {:searching, []}}
+
+  defp collect_first_json_object(char, {:collecting, depth, in_string?, escaped?, chars}) do
+    chars = [char | chars]
+
+    cond do
+      in_string? and escaped? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      in_string? and char == "\\" ->
+        {:cont, {:collecting, depth, true, true, chars}}
+
+      in_string? and char == "\"" ->
+        {:cont, {:collecting, depth, false, false, chars}}
+
+      in_string? ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "\"" ->
+        {:cont, {:collecting, depth, true, false, chars}}
+
+      char == "{" ->
+        {:cont, {:collecting, depth + 1, false, false, chars}}
+
+      char == "}" ->
+        depth = depth - 1
+
+        if depth == 0 do
+          {:halt, {:done, chars}}
+        else
+          {:cont, {:collecting, depth, false, false, chars}}
+        end
+
+      true ->
+        {:cont, {:collecting, depth, false, false, chars}}
+    end
   end
 
   defp prompt_time(%DateTime{} = value), do: DateTime.to_iso8601(value)

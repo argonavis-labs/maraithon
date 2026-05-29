@@ -24,7 +24,7 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
       <div class={header_class(@mode)}>
         <div class="flex items-start justify-between gap-3">
           <div>
-            <p class={eyebrow_class(@mode)}>Architecture</p>
+            <p class={eyebrow_class(@mode)}>Operating model</p>
             <h3 class={title_class(@mode)}><%= @architecture.label %></h3>
           </div>
           <span class={category_class(@mode)}>
@@ -43,8 +43,8 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
 
       <div :if={@mode == "full"} class="border-t border-zinc-950/10 px-4 py-4">
         <div class="mb-3 flex items-center justify-between gap-3 text-xs/5">
-          <span class="font-medium text-zinc-500">Runtime contract</span>
-          <span class="font-mono text-zinc-500"><%= @architecture.contract.behaviour %></span>
+          <span class="font-medium text-zinc-500">Run controls</span>
+          <span class="text-zinc-500"><%= run_controls_summary(@architecture) %></span>
         </div>
         <.component_grid components={@components} columns="two" />
       </div>
@@ -66,7 +66,7 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
         <div class="flex items-center justify-between gap-3">
           <p class="text-sm/6 font-medium text-zinc-950"><%= component.label %></p>
           <span class="inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-600">
-            <%= component.kind %>
+            <%= component_kind_label(component.kind) %>
           </span>
         </div>
         <p class="mt-1 line-clamp-2 text-xs/5 text-zinc-500">
@@ -113,4 +113,27 @@ defmodule MaraithonWeb.AgentArchitectureComponents do
 
   defp component_grid_class("two"), do: "grid grid-cols-1 gap-2 md:grid-cols-2"
   defp component_grid_class(_columns), do: "space-y-2"
+
+  defp component_kind_label(:runtime), do: "Service"
+  defp component_kind_label(:behavior), do: "Automation"
+  defp component_kind_label(:skill), do: "Skill"
+  defp component_kind_label(:tool), do: "Action"
+  defp component_kind_label(:subscription), do: "Topic"
+  defp component_kind_label(:memory), do: "Memory"
+  defp component_kind_label(:scope), do: "Scope"
+  defp component_kind_label(:connector), do: "Connection"
+  defp component_kind_label(kind), do: kind |> to_string() |> String.capitalize()
+
+  defp run_controls_summary(architecture) do
+    components = Map.get(architecture, :components, [])
+    action_count = count_components(components, :tool)
+    topic_count = count_components(components, :subscription)
+
+    "#{pluralize(action_count, "approved action")} / #{pluralize(topic_count, "watched topic")}"
+  end
+
+  defp count_components(components, kind), do: Enum.count(components, &(&1.kind == kind))
+
+  defp pluralize(1, label), do: "1 #{label}"
+  defp pluralize(count, label), do: "#{count} #{label}s"
 end

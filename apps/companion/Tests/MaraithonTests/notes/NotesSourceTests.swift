@@ -109,6 +109,11 @@ final class NotesSourceTests: XCTestCase {
             0,
             "cursor stays at zero on failed POST so the next cycle retries"
         )
+        if case .error = env.source.statusPublisher.displayedState() {
+            // expected
+        } else {
+            XCTFail("failed sync should render red, got \(env.source.statusPublisher.displayedState())")
+        }
     }
 
     @MainActor
@@ -201,6 +206,29 @@ final class NotesSourceTests: XCTestCase {
         // no fractional seconds).
         XCTAssertEqual(note?.createdAt, "2025-09-13T23:46:40Z")
         XCTAssertEqual(note?.modifiedAt, "2025-09-13T23:48:20Z")
+    }
+
+    @MainActor
+    func testAuthorizationDeniedMapsToFullDiskAccessIssue() {
+        let openError = NotesDatabase.DatabaseError.openFailed(
+            code: 23,
+            message: "authorization denied"
+        )
+        XCTAssertEqual(
+            NotesSource.accessIssueReason(for: openError),
+            "notes_full_disk_access_required"
+        )
+
+        let prepareError = NotesDatabase.DatabaseError.prepareFailed(
+            message: "authorization denied"
+        )
+        XCTAssertEqual(
+            NotesSource.accessIssueReason(for: prepareError),
+            "notes_full_disk_access_required"
+        )
+
+        let schemaError = NotesDatabase.DatabaseError.entityMissing(name: "ICNote")
+        XCTAssertNil(NotesSource.accessIssueReason(for: schemaError))
     }
 
     // MARK: - Helpers

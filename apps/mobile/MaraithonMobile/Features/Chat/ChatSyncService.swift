@@ -4,6 +4,7 @@ import SwiftData
 enum ChatSyncError: LocalizedError, Equatable {
     case missingSession
     case emptyMessage
+    case emptyThreadTitle
     case pollingTimedOut
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum ChatSyncError: LocalizedError, Equatable {
             return "Sign in again to keep chatting with Maraithon."
         case .emptyMessage:
             return "Message is empty."
+        case .emptyThreadTitle:
+            return "Enter a chat name before saving."
         case .pollingTimedOut:
             return "Maraithon is still working. Pull to refresh this chat in a moment."
         }
@@ -56,7 +59,43 @@ struct ChatSyncService {
         guard let remoteID = thread.remoteID else { return }
         let sessionToken = try sessionToken(from: sessionStore)
         let remoteThread = try await api.getChatThread(sessionToken: sessionToken, id: remoteID)
-        try merge(remoteThread, modelContext: modelContext, preferredThread: thread)
+        try merge(
+            remoteThread,
+            modelContext: modelContext,
+            preferredThread: thread,
+            reconcileMessages: true
+        )
+        try modelContext.save()
+    }
+
+    func renameThread(
+        _ thread: ChatThread,
+        title rawTitle: String,
+        modelContext: ModelContext,
+        sessionStore: SessionStore
+    ) async throws {
+        guard let title = ChatThreadNaming.manualTitle(for: rawTitle) else {
+            throw ChatSyncError.emptyThreadTitle
+        }
+
+        if let remoteID = thread.remoteID {
+            let sessionToken = try sessionToken(from: sessionStore)
+            let remoteThread = try await api.updateChatThread(
+                sessionToken: sessionToken,
+                id: remoteID,
+                title: title
+            )
+            try merge(
+                remoteThread,
+                modelContext: modelContext,
+                preferredThread: thread,
+                reconcileMessages: true
+            )
+        } else {
+            thread.title = title
+            thread.updatedAt = now()
+        }
+
         try modelContext.save()
     }
 
@@ -79,7 +118,7 @@ struct ChatSyncService {
         thread.updatedAt = now()
         thread.syncStatus = .syncing
 
-        if thread.title == "New conversation" {
+        if thread.title == ChatThreadNaming.defaultTitle {
             thread.title = ChatThreadNaming.title(for: body)
         }
 
@@ -99,7 +138,12 @@ struct ChatSyncService {
                 body: body
             )
 
-            try merge(response.thread, modelContext: modelContext, preferredThread: thread)
+            try merge(
+                response.thread,
+                modelContext: modelContext,
+                preferredThread: thread,
+                reconcileMessages: true
+            )
             if let run = response.run {
                 apply(run, to: thread)
             }
@@ -156,7 +200,39 @@ struct ChatSyncService {
             decision: decision,
             clientMessageID: UUID()
         )
-        try merge(response.thread, modelContext: modelContext, preferredThread: thread)
+        try merge(
+            response.thread,
+            modelContext: modelContext,
+            preferredThread: thread,
+            reconcileMessages: true
+        )
+        try modelContext.save()
+    }
+
+    func deleteMessage(
+        _ message: ChatMessage,
+        from thread: ChatThread,
+        modelContext: ModelContext,
+        sessionStore: SessionStore
+    ) async throws {
+        if let remoteThreadID = thread.remoteID, let remoteMessageID = message.remoteID {
+            let sessionToken = try sessionToken(from: sessionStore)
+            let remoteThread = try await api.deleteChatMessage(
+                sessionToken: sessionToken,
+                threadID: remoteThreadID,
+                messageID: remoteMessageID
+            )
+            try merge(
+                remoteThread,
+                modelContext: modelContext,
+                preferredThread: thread,
+                reconcileMessages: true
+            )
+        } else {
+            deleteLocalMessage(message, from: thread, modelContext: modelContext)
+            thread.updatedAt = now()
+        }
+
         try modelContext.save()
     }
 
@@ -175,7 +251,12 @@ struct ChatSyncService {
             title: thread.title,
             clientThreadID: thread.id
         )
-        try merge(remoteThread, modelContext: modelContext, preferredThread: thread)
+        try merge(
+            remoteThread,
+            modelContext: modelContext,
+            preferredThread: thread,
+            reconcileMessages: true
+        )
         try modelContext.save()
         return remoteThread
     }
@@ -183,7 +264,8 @@ struct ChatSyncService {
     private func merge(
         _ remoteThread: MobileAPIClient.RemoteChatThread,
         modelContext: ModelContext,
-        preferredThread: ChatThread? = nil
+        preferredThread: ChatThread? = nil,
+        reconcileMessages: Bool = false
     ) throws {
         let thread = try localThread(
             for: remoteThread,
@@ -199,12 +281,23 @@ struct ChatSyncService {
         thread.updatedAt = remoteThread.updatedAt ?? remoteThread.lastTurnAt ?? thread.updatedAt
 
         if let pendingRun = remoteThread.pendingRun, pendingRun.runStatus.isPending {
-            thread.pendingRunID = pendingRun.id
+            apply(pendingRun, to: thread)
         } else {
             thread.pendingRunID = nil
+            thread.pendingRunWorkSummary = nil
         }
 
-        for remoteMessage in remoteMessages(from: remoteThread) {
+        let remoteMessageList = remoteMessages(from: remoteThread)
+
+        if reconcileMessages {
+            removeMessagesMissingFromRemote(
+                remoteMessageList,
+                from: thread,
+                modelContext: modelContext
+            )
+        }
+
+        for remoteMessage in remoteMessageList {
             try merge(remoteMessage, into: thread, modelContext: modelContext)
         }
     }
@@ -294,11 +387,37 @@ struct ChatSyncService {
         return nil
     }
 
+    private func removeMessagesMissingFromRemote(
+        _ remoteMessages: [MobileAPIClient.RemoteChatMessage],
+        from thread: ChatThread,
+        modelContext: ModelContext
+    ) {
+        let remoteIDs = Set(remoteMessages.map(\.id))
+        let messagesToDelete = thread.messages.filter { message in
+            message.remoteID.map { !remoteIDs.contains($0) } == true
+        }
+
+        for message in messagesToDelete {
+            deleteLocalMessage(message, from: thread, modelContext: modelContext)
+        }
+    }
+
+    private func deleteLocalMessage(
+        _ message: ChatMessage,
+        from thread: ChatThread,
+        modelContext: ModelContext
+    ) {
+        thread.messages.removeAll { $0.id == message.id }
+        modelContext.delete(message)
+    }
+
     private func apply(_ run: MobileAPIClient.RemoteChatRun, to thread: ChatThread) {
         if run.runStatus.isPending {
             thread.pendingRunID = run.id
+            thread.pendingRunWorkSummary = encodedWorkSummary(run.workSummary)
         } else {
             thread.pendingRunID = nil
+            thread.pendingRunWorkSummary = nil
         }
         thread.remoteStatusRawValue = run.status
     }
@@ -331,9 +450,21 @@ struct ChatSyncService {
                 )
             },
             linkedTodo: remoteMessage.linkedTodo,
-            structuredData: remoteMessage.structuredData
+            workSummary: remoteMessage.workSummary,
+            structuredData: publicStructuredData(remoteMessage.structuredData)
         )
         return try JSONEncoder().encode(metadata)
+    }
+
+    private func publicStructuredData(_ structuredData: [String: JSONValue]) -> [String: JSONValue] {
+        structuredData.filter { key, _ in
+            key == "calculation"
+        }
+    }
+
+    private func encodedWorkSummary(_ workSummary: ChatWorkSummary?) -> Data? {
+        guard let workSummary else { return nil }
+        return try? JSONEncoder().encode(workSummary)
     }
 
     private func sessionToken(from sessionStore: SessionStore) throws -> String {

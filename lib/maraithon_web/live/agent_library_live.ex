@@ -1,8 +1,8 @@
 defmodule MaraithonWeb.AgentLibraryLive do
   @moduledoc """
-  Marketing-style detail page for a single agent template in the
+  Marketing-style detail page for a single automation template in the
   library. Lets the operator read the full description, see what each
-  agent reads from / writes to, which connectors it needs, and install
+  automation reads from / writes to, which connectors it needs, and install
   it with a single click.
   """
 
@@ -11,6 +11,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
   alias Maraithon.AgentBuilder
   alias Maraithon.Connections
   alias Maraithon.Runtime
+  alias MaraithonWeb.AgentActionCopy
 
   @impl true
   def mount(%{"behavior" => behavior_id}, _session, socket) do
@@ -18,7 +19,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
       nil ->
         {:ok,
          socket
-         |> put_flash(:error, "Agent template not found")
+         |> put_flash(:error, "Automation template not found")
          |> push_navigate(to: ~p"/agents")}
 
       spec ->
@@ -76,13 +77,13 @@ defmodule MaraithonWeb.AgentLibraryLive do
        |> push_navigate(to: ~p"/agents?id=#{agent.id}")}
     else
       {:error, message} when is_binary(message) ->
-        {:noreply, put_flash(socket, :error, "Could not install: #{message}")}
+        {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, message))}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+        {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, changeset))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, reason))}
     end
   end
 
@@ -116,7 +117,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
             </div>
             <form phx-submit="install" class="shrink-0">
               <.button type="submit" phx-disable-with="Installing...">
-                Install agent
+                Install automation
               </.button>
             </form>
           </div>
@@ -208,7 +209,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
             </.link>
             <form phx-submit="install">
               <.button type="submit" phx-disable-with="Installing...">
-                Install agent
+                Install automation
               </.button>
             </form>
           </div>
@@ -263,15 +264,5 @@ defmodule MaraithonWeb.AgentLibraryLive do
 
   defp display_name(%{config: %{"name" => name}}) when is_binary(name) and name != "", do: name
   defp display_name(%{behavior: behavior}), do: behavior
-  defp display_name(_), do: "agent"
-
-  defp changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map_join("; ", fn {field, errors} -> "#{field}: #{Enum.join(errors, ", ")}" end)
-  end
+  defp display_name(_), do: "automation"
 end

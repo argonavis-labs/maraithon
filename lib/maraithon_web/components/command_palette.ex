@@ -319,19 +319,19 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp context_commands("/dashboard") do
     [
-      command("Review today's todo cards", "/dashboard#todos", :todos, "Suggested",
-        description: "Jump to the one-by-one chief-of-staff todo review.",
-        keywords: "today review cards one by one dashboard",
+      command("Review today's work", "/dashboard#todos", :todos, "Suggested",
+        description: "Jump to the one-by-one chief-of-staff work review.",
+        keywords: "today review one by one dashboard work",
         priority: 145
       ),
-      command("Open full todo list", "/todos", :todos, "Suggested",
-        description: "Open the searchable todo table.",
-        keywords: "todos table filters search",
+      command("Open full work queue", "/todos", :todos, "Suggested",
+        description: "Open the searchable work queue.",
+        keywords: "work queue filters search",
         priority: 135
       ),
-      command("Create an agent", "/agents/new", :plus, "Suggested",
-        description: "Start a new automation agent.",
-        keywords: "new agent create install",
+      command("Create an automation", "/agents/new", :plus, "Suggested",
+        description: "Start a new chief-of-staff automation.",
+        keywords: "new automation create install",
         priority: 125
       )
     ]
@@ -339,19 +339,19 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp context_commands("/todos") do
     [
-      command("Needs action todos", "/todos?status=active&attention=act_now", :todos, "Suggested",
+      command("Needs action work", "/todos?status=active&attention=act_now", :todos, "Suggested",
         description: "Open active items that need a decision, reply, or next step.",
-        keywords: "action urgent decide reply active todos",
+        keywords: "action urgent decide reply active work",
         priority: 150
       ),
-      command("Overdue todos", "/todos?status=active&due=overdue", :todos, "Suggested",
+      command("Past-due work", "/todos?status=active&due=overdue", :todos, "Suggested",
         description: "Show active work past its due time.",
-        keywords: "late stale overdue due date todos",
+        keywords: "late stale overdue due date work",
         priority: 145
       ),
-      command("Todos due today", "/todos?status=active&due=today", :todos, "Suggested",
+      command("Work due today", "/todos?status=active&due=today", :todos, "Suggested",
         description: "Show active work due today.",
-        keywords: "today deadline due now todos",
+        keywords: "today deadline due now work",
         priority: 140
       )
     ]
@@ -361,13 +361,13 @@ defmodule MaraithonWeb.Components.CommandPalette do
     [
       command("Merge contacts", "/operator/people", :people, "Suggested",
         description: "Select duplicate people, then merge them from bulk actions.",
-        keywords: "crm people contacts duplicates merge same person",
+        keywords: "people contacts duplicates merge same person",
         priority: 150
       ),
       command("Update relationship context", "/operator/people", :people, "Suggested",
         description:
           "Classify family, business, investor, customer, vendor, or friend relationships.",
-        keywords: "crm relationship context family business labels classify",
+        keywords: "relationship context family business labels classify",
         priority: 145
       ),
       command(
@@ -376,7 +376,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         :memory,
         "Suggested",
         description: "Review learned relationship facts and corrections.",
-        keywords: "memory relationship facts corrections crm",
+        keywords: "memory relationship facts corrections",
         priority: 135
       )
     ]
@@ -385,7 +385,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
   defp context_commands("/operator/memories") do
     [
       command("Active memory", "/operator/memories?status=active", :memory, "Suggested",
-        description: "Show facts currently used by the assistant.",
+        description: "Show facts currently used by Maraithon.",
         keywords: "active memory facts",
         priority: 145
       ),
@@ -395,7 +395,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         priority: 140
       ),
       command("Corrections memory", "/operator/memories?kind=correction", :memory, "Suggested",
-        description: "Show feedback the assistant should honor next time.",
+        description: "Show feedback Maraithon should honor next time.",
         keywords: "correction feedback learn memory",
         priority: 135
       )
@@ -424,19 +424,19 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp context_commands("/agents") do
     [
-      command("New agent", "/agents/new", :plus, "Suggested",
-        description: "Create or install an agent.",
-        keywords: "create install new agent",
+      command("New automation", "/agents/new", :plus, "Suggested",
+        description: "Create or install an automation.",
+        keywords: "create install new automation",
         priority: 145
       ),
-      command("Running agents", "/agents?status=running", :agents, "Suggested",
-        description: "Show agents currently doing work.",
-        keywords: "running active agents status",
+      command("Running automations", "/agents?status=running", :agents, "Suggested",
+        description: "Show automations currently doing work.",
+        keywords: "running active automations status",
         priority: 140
       ),
-      command("Degraded agents", "/agents?status=degraded", :agents, "Suggested",
-        description: "Show agents that need attention.",
-        keywords: "degraded unhealthy failed agents status",
+      command("Automations needing attention", "/agents?status=degraded", :agents, "Suggested",
+        description: "Show automations that need attention.",
+        keywords: "degraded unhealthy failed automations status",
         priority: 135
       )
     ]
@@ -467,13 +467,13 @@ defmodule MaraithonWeb.Components.CommandPalette do
   defp chief_of_staff_commands do
     [
       command("Open chief-of-staff dashboard", "/dashboard", :home, "Chief of Staff",
-        description: "Review today's work, live agents, and connected context.",
+        description: "Review today's work, active automations, and connected context.",
         keywords: "assistant chief of staff dashboard home briefing proactive",
         priority: 95
       ),
-      command("Review todos one by one", "/dashboard#todos", :todos, "Chief of Staff",
+      command("Review work one by one", "/dashboard#todos", :todos, "Chief of Staff",
         description: "Use the card review surface for decisions, done, and dismiss.",
-        keywords: "todo review one at a time done dismiss important",
+        keywords: "work review one at a time done dismiss important",
         priority: 100
       ),
       command(
@@ -481,7 +481,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         "/operator/memories?kind=correction",
         :memory,
         "Chief of Staff",
-        description: "See feedback the assistant learned from prior corrections.",
+        description: "See feedback Maraithon learned from prior corrections.",
         keywords: "memory correction feedback learn instruction",
         priority: 85
       )
@@ -490,24 +490,24 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp todo_commands do
     [
-      command("All active todos", "/todos?status=active", :todos, "Todos",
-        description: "Search, filter, sort, and bulk-manage active todos.",
-        keywords: "todo task active open list table",
+      command("All active work", "/todos?status=active", :todos, "Open Work",
+        description: "Search, filter, sort, and bulk-manage active work.",
+        keywords: "work task active open list queue",
         priority: 90
       ),
-      command("Watching todos", "/todos?status=active&attention=monitor", :todos, "Todos",
+      command("Watching work", "/todos?status=active&attention=monitor", :todos, "Open Work",
         description: "Show lower-interruption items being monitored.",
-        keywords: "watch monitor low priority passive todos",
+        keywords: "watch monitor low priority passive work",
         priority: 80
       ),
-      command("Done todos", "/todos?status=done", :todos, "Todos",
+      command("Done work", "/todos?status=done", :todos, "Open Work",
         description: "Review completed items.",
-        keywords: "completed finished done todos",
+        keywords: "completed finished done work",
         priority: 70
       ),
-      command("Dismissed todos", "/todos?status=dismissed", :todos, "Todos",
+      command("Dismissed work", "/todos?status=dismissed", :todos, "Open Work",
         description: "Review items dismissed as no longer important.",
-        keywords: "dismissed not important archived todos",
+        keywords: "dismissed not important archived work",
         priority: 65
       )
     ]
@@ -515,19 +515,19 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp people_commands do
     [
-      command("Review CRM insights", "/insights", :insights, "People",
+      command("Review relationship insights", "/insights", :insights, "People",
         description: "Review duplicate contacts and relationship suggestions.",
-        keywords: "insights crm duplicates relationships suggestions review",
+        keywords: "insights duplicates relationships suggestions review",
         priority: 92
       ),
-      command("People CRM", "/operator/people", :people, "People",
+      command("People directory", "/operator/people", :people, "People",
         description: "Manage contacts, relationships, context, and duplicate merges.",
-        keywords: "people crm contacts relationships context merge",
+        keywords: "people contacts relationships context merge",
         priority: 90
       ),
       command("Find a person", "/operator/people", :search, "People",
-        description: "Search CRM contacts by name, email, company, or relationship.",
-        keywords: "search find person contact who is this crm",
+        description: "Search people by name, email, company, or relationship.",
+        keywords: "search find person contact who is this",
         priority: 88
       ),
       command("Update relationship labels", "/operator/people", :people, "People",
@@ -545,27 +545,27 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp connector_commands do
     [
-      command("Connect Google account", "/auth/google", :connectors, "Connectors",
+      command("Connect Google account", "/auth/google", :connectors, "Connected Apps",
         description: "Add Gmail, Calendar, Contacts, and Google account context.",
         keywords: "google gmail calendar contacts connect oauth",
         priority: 78
       ),
-      command("Connect Slack workspace", "/auth/slack", :connectors, "Connectors",
+      command("Connect Slack workspace", "/auth/slack", :connectors, "Connected Apps",
         description: "Add Slack messages, workspaces, and DMs.",
         keywords: "slack connect oauth workspace messages",
         priority: 76
       ),
-      command("Connect Linear", "/auth/linear", :connectors, "Connectors",
+      command("Connect Linear", "/auth/linear", :connectors, "Connected Apps",
         description: "Add Linear issues and project context.",
         keywords: "linear connect issues projects oauth",
         priority: 72
       ),
-      command("Connect GitHub", "/auth/github", :connectors, "Connectors",
+      command("Connect GitHub", "/auth/github", :connectors, "Connected Apps",
         description: "Add GitHub repositories, issues, and pull requests.",
         keywords: "github repos pull requests issues connect",
         priority: 70
       ),
-      command("Connect Notion", "/auth/notion", :connectors, "Connectors",
+      command("Connect Notion", "/auth/notion", :connectors, "Connected Apps",
         description: "Add Notion workspace context.",
         keywords: "notion docs workspace connect",
         priority: 68
@@ -575,14 +575,14 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp agent_commands do
     [
-      command("Agents", "/agents", :agents, "Agents",
-        description: "Inspect installed agents, status, cost, and logs.",
-        keywords: "agents runtime status logs cost",
+      command("Automations", "/agents", :agents, "Automations",
+        description: "Inspect installed automations, status, cost, and logs.",
+        keywords: "automations status logs cost",
         priority: 84
       ),
-      command("New agent", "/agents/new", :plus, "Agents",
-        description: "Build, configure, or install a new agent.",
-        keywords: "new create install agent builder",
+      command("New automation", "/agents/new", :plus, "Automations",
+        description: "Build, configure, or install a new automation.",
+        keywords: "new create install automation builder",
         priority: 82
       )
     ]
@@ -591,38 +591,38 @@ defmodule MaraithonWeb.Components.CommandPalette do
   defp navigation_commands do
     [
       command("Dashboard", "/dashboard", :home, "Navigate",
-        description: "Today, todo review, agents, and workspace overview.",
+        description: "Today, open work, automations, and workspace overview.",
         keywords: "home dashboard overview today",
         shortcut: "G D",
         priority: 60
       ),
-      command("Todos", "/todos", :todos, "Navigate",
-        description: "Search, filter, sort, and bulk-manage todos.",
-        keywords: "tasks todos todo list table",
+      command("Open Work", "/todos", :todos, "Navigate",
+        description: "Search, filter, sort, and bulk-manage open work.",
+        keywords: "tasks work queue list table",
         shortcut: "G T",
         priority: 60
       ),
       command("Insights", "/insights", :insights, "Navigate",
-        description: "CRM cleanup and relationship suggestion cards.",
-        keywords: "insights crm duplicate relationship suggestions cards",
+        description: "Relationship cleanup and suggestion cards.",
+        keywords: "insights duplicate relationship suggestions cards",
         shortcut: "G I",
         priority: 59
       ),
-      command("Agents", "/agents", :agents, "Navigate",
-        description: "Manage running agents.",
-        keywords: "agents runtime automations",
+      command("Automations", "/agents", :agents, "Navigate",
+        description: "Manage running automations.",
+        keywords: "automations status",
         shortcut: "G A",
         priority: 58
       ),
-      command("Connectors", "/connectors", :connectors, "Navigate",
+      command("Connected Apps", "/connectors", :connectors, "Navigate",
         description: "Manage connected accounts and services.",
         keywords: "connected apps accounts integrations connectors",
         shortcut: "G C",
         priority: 58
       ),
       command("People", "/operator/people", :people, "Navigate",
-        description: "CRM contacts, relationships, and context.",
-        keywords: "people crm contacts relationships",
+        description: "People, relationships, and context.",
+        keywords: "people contacts relationships",
         shortcut: "G P",
         priority: 58
       ),
@@ -633,7 +633,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         priority: 55
       ),
       command("How it works", "/how-it-works", :book, "Navigate",
-        description: "Read how the agent runtime operates.",
+        description: "Read how Maraithon works.",
         keywords: "docs guide help how it works",
         priority: 45
       ),
@@ -648,7 +648,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
   defp admin_commands(%{is_admin: true}) do
     [
       command("Settings", "/settings", :settings, "Admin",
-        description: "Manage runtime settings.",
+        description: "Review workspace setup.",
         keywords: "settings admin configuration",
         priority: 54
       ),

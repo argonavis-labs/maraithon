@@ -60,13 +60,13 @@ defmodule MaraithonWeb.OAuthController do
   def google_callback(conn, %{"error" => error, "error_description" => description}) do
     Logger.warning("Google OAuth error", error: error, description: description)
 
-    bad_request(conn, "OAuth authorization failed", %{error: error, description: description})
+    bad_request(conn, "OAuth authorization failed", oauth_error_details("google", error))
   end
 
   def google_callback(conn, %{"error" => error}) do
     Logger.warning("Google OAuth error", error: error)
 
-    bad_request(conn, "OAuth authorization failed", %{error: error, description: nil})
+    bad_request(conn, "OAuth authorization failed", oauth_error_details("google", error))
   end
 
   def google_callback(conn, _params), do: bad_request(conn, "Missing code or state parameter")
@@ -402,7 +402,7 @@ defmodule MaraithonWeb.OAuthController do
               conn,
               state_payload["return_to"],
               "slack",
-              "Failed to store tokens",
+              token_storage_failed_message("slack"),
               :internal_server_error
             )
         end
@@ -575,7 +575,7 @@ defmodule MaraithonWeb.OAuthController do
               conn,
               state_payload["return_to"],
               "notaui",
-              "Failed to store tokens",
+              token_storage_failed_message("notaui"),
               :internal_server_error
             )
         end
@@ -783,14 +783,20 @@ defmodule MaraithonWeb.OAuthController do
         case service do
           "calendar" ->
             case GoogleCalendar.setup_watch(user_id, access_token) do
-              {:ok, watch} -> %{status: "active", watch_id: watch.id}
-              {:error, reason} -> %{status: "failed", reason: inspect(reason)}
+              {:ok, watch} ->
+                %{status: "active", watch_id: watch.id}
+
+              {:error, reason} ->
+                %{status: "failed", reason: watch_setup_message("calendar", reason)}
             end
 
           "gmail" ->
             case Gmail.setup_watch(user_id, access_token) do
-              {:ok, watch} -> %{status: "active", history_id: watch.history_id}
-              {:error, reason} -> %{status: "failed", reason: inspect(reason)}
+              {:ok, watch} ->
+                %{status: "active", history_id: watch.history_id}
+
+              {:error, reason} ->
+                %{status: "failed", reason: watch_setup_message("gmail", reason)}
             end
 
           "contacts" ->
@@ -869,7 +875,7 @@ defmodule MaraithonWeb.OAuthController do
       _account ->
         {:redirect,
          conn
-         |> put_flash(:error, "Connect Telegram before linking other connectors.")
+         |> put_flash(:error, "Connect Telegram before linking other apps.")
          |> redirect(to: return_to || ~p"/connectors")}
     end
   end
@@ -877,7 +883,7 @@ defmodule MaraithonWeb.OAuthController do
   defp require_telegram_first(conn, _user_id, _return_to) do
     {:redirect,
      conn
-     |> put_flash(:error, "Connect Telegram before linking other connectors.")
+     |> put_flash(:error, "Connect Telegram before linking other apps.")
      |> redirect(to: ~p"/connectors")}
   end
 
@@ -938,7 +944,13 @@ defmodule MaraithonWeb.OAuthController do
           error: inspect(changeset)
         )
 
-        respond_error(conn, return_to, provider, "Failed to store tokens", :internal_server_error)
+        respond_error(
+          conn,
+          return_to,
+          provider,
+          token_storage_failed_message(provider),
+          :internal_server_error
+        )
     end
   end
 
@@ -967,7 +979,7 @@ defmodule MaraithonWeb.OAuthController do
       conn,
       return_to,
       provider,
-      "Failed to exchange authorization code",
+      token_exchange_failed_message(provider),
       :bad_request
     )
   end
@@ -998,7 +1010,7 @@ defmodule MaraithonWeb.OAuthController do
           description: description
         )
 
-        bad_request(conn, "OAuth authorization failed", %{error: error, description: description})
+        bad_request(conn, "OAuth authorization failed", oauth_error_details(provider, error))
     end
   end
 
@@ -1010,7 +1022,7 @@ defmodule MaraithonWeb.OAuthController do
       description: description
     )
 
-    bad_request(conn, "OAuth authorization failed", description || error)
+    bad_request(conn, "OAuth authorization failed", oauth_error_details(provider, error))
   end
 
   defp split_scope_string(nil), do: []
@@ -1149,15 +1161,52 @@ defmodule MaraithonWeb.OAuthController do
     |> URI.to_string()
   end
 
-  defp provider_error_message(provider, error, description) do
+  defp provider_error_message(provider, error, _description) do
     label = provider_display_name(provider)
 
-    if description in [nil, ""] do
-      "#{label} authorization failed: #{error}"
-    else
-      "#{label} authorization failed: #{description}"
+    case oauth_error_reason(error) do
+      "access_denied" -> "#{label} authorization was cancelled."
+      _reason -> "#{label} authorization failed. Try again."
     end
   end
+
+  defp token_exchange_failed_message(provider) do
+    "#{provider_display_name(provider)} connection could not be completed. Start the connection again."
+  end
+
+  defp token_storage_failed_message(provider) do
+    "#{provider_display_name(provider)} connected, but Maraithon could not save the connection. Try again."
+  end
+
+  defp oauth_error_details(provider, error) do
+    %{provider: provider, reason: oauth_error_reason(error)}
+  end
+
+  defp oauth_error_reason("access_denied"), do: "access_denied"
+  defp oauth_error_reason("invalid_request"), do: "invalid_request"
+  defp oauth_error_reason("temporarily_unavailable"), do: "temporarily_unavailable"
+  defp oauth_error_reason("server_error"), do: "provider_error"
+  defp oauth_error_reason(_error), do: "provider_error"
+
+  defp watch_setup_message("calendar", :webhook_url_not_configured),
+    do: "Calendar watch is not configured yet."
+
+  defp watch_setup_message("gmail", :pubsub_topic_not_configured),
+    do: "Gmail watch is not configured yet."
+
+  defp watch_setup_message(_service, :no_token), do: "Google account needs to reconnect."
+
+  defp watch_setup_message(service, {:http_status, status, _body}) when is_integer(status) do
+    "#{watch_service_label(service)} returned HTTP #{status} while setting up sync."
+  end
+
+  defp watch_setup_message(service, _reason) do
+    "Could not set up #{String.downcase(watch_service_label(service))} sync. Try again later."
+  end
+
+  defp watch_service_label("calendar"), do: "Calendar"
+  defp watch_service_label("gmail"), do: "Gmail"
+  defp watch_service_label(service), do: service
 
   defp success_message(provider, nil), do: "#{provider_display_name(provider)} connected"
   defp success_message(provider, ""), do: "#{provider_display_name(provider)} connected"

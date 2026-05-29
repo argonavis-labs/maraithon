@@ -13,6 +13,7 @@ defmodule Maraithon.SourceFreshness do
   alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.Normalization
   alias Maraithon.Repo
+  alias Maraithon.SourceErrorCopy
 
   @default_stale_after_hours 24
   @provider_stale_after_hours %{
@@ -61,6 +62,7 @@ defmodule Maraithon.SourceFreshness do
       user_id: account.user_id,
       provider: account.provider,
       account_id: account.external_account_id,
+      account_label: account_label(account),
       status: status,
       last_successful_sync: last_success && DateTime.to_iso8601(last_success),
       last_webhook: metadata_datetime_iso(metadata, "last_webhook_at"),
@@ -78,13 +80,14 @@ defmodule Maraithon.SourceFreshness do
     |> for_user(opts)
     |> Enum.map(fn snapshot ->
       %{
-        provider: snapshot.provider,
-        account_id: snapshot.account_id,
+        provider: public_provider(snapshot.provider),
+        account_label: snapshot.account_label,
         status: snapshot.status,
         last_successful_sync: snapshot.last_successful_sync,
-        stale_reason: snapshot.stale_reason,
-        last_error: snapshot.last_error
+        stale_reason: prompt_stale_reason(snapshot),
+        last_error: prompt_last_error(snapshot.last_error)
       }
+      |> compact_map()
     end)
   end
 
@@ -213,7 +216,7 @@ defmodule Maraithon.SourceFreshness do
   defp stale_reason("stale", account, last_success, _last_error, now) do
     hours = if last_success, do: DateTime.diff(now, last_success, :hour), else: nil
 
-    "last successful #{account.provider} sync is #{hours || "unknown"} hours old"
+    "last successful #{provider_label(account.provider)} sync is #{hours || "unknown"} hours old"
   end
 
   defp stale_reason("reauth_required", _account, _last_success, last_error, _now) do
@@ -225,7 +228,7 @@ defmodule Maraithon.SourceFreshness do
   end
 
   defp stale_reason("never_synced", account, _last_success, _last_error, _now) do
-    "#{account.provider} has never synced"
+    "#{provider_label(account.provider)} has never synced"
   end
 
   defp stale_reason(_status, _account, _last_success, _last_error, _now), do: nil
@@ -282,6 +285,127 @@ defmodule Maraithon.SourceFreshness do
 
   defp safe_reason(reason), do: reason |> inspect() |> safe_reason()
 
+  defp prompt_stale_reason(%{status: "reauth_required"}), do: "needs reconnect"
+
+  defp prompt_stale_reason(%{status: "error", last_error: %{"reason" => reason}}),
+    do: SourceErrorCopy.reason(reason)
+
+  defp prompt_stale_reason(%{stale_reason: reason}) when is_binary(reason), do: reason
+  defp prompt_stale_reason(_snapshot), do: nil
+
+  defp prompt_last_error(%{"reason" => reason, "at" => at}) do
+    %{"reason" => SourceErrorCopy.reason(reason), "at" => at}
+  end
+
+  defp prompt_last_error(_last_error), do: nil
+
+  defp account_label(%ConnectedAccount{provider: provider, metadata: metadata} = account) do
+    metadata = metadata || %{}
+
+    cond do
+      String.starts_with?(provider, "slack:") ->
+        metadata_value(metadata, "team_name") || "Slack workspace"
+
+      String.starts_with?(provider, "google:") or provider == "google" ->
+        metadata_value(metadata, "account_email") || metadata_value(metadata, "email") ||
+          google_provider_suffix(provider) || email_account_id(account.external_account_id) ||
+          "Google account"
+
+      provider == "telegram" ->
+        "Telegram"
+
+      provider == "notion" ->
+        metadata_value(metadata, "workspace_name") || "Notion workspace"
+
+      provider == "notaui" ->
+        metadata_value(metadata, "default_account_label") || "Notaui workspace"
+
+      provider == "github" ->
+        github_account_label(metadata)
+
+      provider == "linear" ->
+        linear_account_label(metadata)
+
+      true ->
+        provider_label(provider)
+    end
+  end
+
+  defp account_label(_account), do: nil
+
+  defp github_account_label(metadata) do
+    case metadata_value(metadata, "login") do
+      login when is_binary(login) -> "@#{login}"
+      _ -> "GitHub account"
+    end
+  end
+
+  defp linear_account_label(metadata) do
+    metadata
+    |> Map.get("teams")
+    |> List.wrap()
+    |> Enum.find_value(fn
+      %{"name" => name} when is_binary(name) and name != "" -> name
+      _other -> nil
+    end) || "Linear workspace"
+  end
+
+  defp metadata_value(metadata, key) when is_map(metadata) and is_binary(key) do
+    value = Map.get(metadata, key) || Map.get(metadata, metadata_atom_key(key))
+
+    case value do
+      value when is_binary(value) ->
+        value
+        |> String.trim()
+        |> case do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _other ->
+        nil
+    end
+  end
+
+  defp metadata_value(_metadata, _key), do: nil
+
+  defp metadata_atom_key("account_email"), do: :account_email
+  defp metadata_atom_key("default_account_label"), do: :default_account_label
+  defp metadata_atom_key("email"), do: :email
+  defp metadata_atom_key("login"), do: :login
+  defp metadata_atom_key("team_name"), do: :team_name
+  defp metadata_atom_key("workspace_name"), do: :workspace_name
+  defp metadata_atom_key(key), do: key
+
+  defp google_provider_suffix("google:" <> account) do
+    email_account_id(account)
+  end
+
+  defp google_provider_suffix(_provider), do: nil
+
+  defp email_account_id(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.contains?(value, "@"), do: value
+  end
+
+  defp email_account_id(_value), do: nil
+
+  defp public_provider("google:" <> _), do: "google"
+  defp public_provider("slack:" <> _), do: "slack"
+  defp public_provider(provider) when is_binary(provider), do: provider
+  defp public_provider(provider), do: to_string(provider)
+
+  defp provider_label("google:" <> _), do: "Google"
+  defp provider_label("slack:" <> _), do: "Slack"
+  defp provider_label("notaui"), do: "Notaui"
+  defp provider_label("notion"), do: "Notion"
+  defp provider_label("github"), do: "GitHub"
+  defp provider_label("linear"), do: "Linear"
+  defp provider_label("telegram"), do: "Telegram"
+  defp provider_label(provider) when is_binary(provider), do: provider
+  defp provider_label(provider), do: to_string(provider)
+
   defp reauth_error?(%{"reason" => reason}) when is_binary(reason) do
     normalized = String.downcase(reason)
     String.contains?(normalized, "reauth") or String.contains?(normalized, "invalid_grant")
@@ -298,4 +422,10 @@ defmodule Maraithon.SourceFreshness do
   end
 
   defp normalize_stale_config(_value), do: %{}
+
+  defp compact_map(map) when is_map(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", [], %{}] end)
+    |> Map.new()
+  end
 end

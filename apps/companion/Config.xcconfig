@@ -11,6 +11,9 @@
 // The "#include?" form is the optional include: if the local file is
 // missing (e.g. a fresh clone), xcodebuild simply continues without it,
 // which is what we want — Debug builds use ad-hoc signing ("-") and
-// only Release archives need a real team.
+// only Release archives need a real team. For local companion runs that
+// need Full Disk Access to persist across rebuilds, run:
+//   make setup-companion-signing
+//   make run-companion
 
 #include? "Config.local.xcconfig"

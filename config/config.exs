@@ -44,11 +44,13 @@ config :maraithon, Maraithon.Runtime,
   llm_model: "gpt-5.4",
   anthropic_model: "claude-sonnet-4-20250514",
   openai_model: "gpt-5.4",
+  openrouter_model: "qwen/qwen3.7-max",
+  openrouter_reasoning_effort: "medium",
   openai_reasoning_effort: "high",
   llm_primary_max_tokens: 32_000
 
 config :maraithon, :telegram_assistant,
-  chat_reasoning_effort: "medium",
+  chat_reasoning_effort: "none",
   telegram_proactive_checkins_enabled: false,
   proactive_delivery_planner_enabled: true,
   proactive_candidate_ttl_minutes: 120

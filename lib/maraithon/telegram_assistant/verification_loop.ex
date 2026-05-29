@@ -14,6 +14,8 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   alias Maraithon.ActionCards
   alias Maraithon.ActionLedger.Action
   alias Maraithon.AssistantHarness
+  alias Maraithon.AssistantChat.DirectIntent
+  alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ChiefOfStaff.Skills.MorningBriefing
   alias Maraithon.ConnectedAccounts
   alias Maraithon.ContextEngine
@@ -381,6 +383,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         ModelRouting.tier_for_text("2+2") == :chat,
         "simple general chat must stay on the fast chat tier"
       )
+      |> require_finding(
+        match?({:ok, %{type: :simple_calculation}}, DirectIntent.classify("2+2")),
+        "safe arithmetic must bypass LLM through direct intent"
+      )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
   end
@@ -688,7 +694,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     stale_candidate = %{
       "id" => "candidate-stale-work",
       "body" =>
-        "Dan Bourke (A-Team video project contact) is attached to the artifact-status commitment. Mark it important if it still matters, otherwise dismiss it.",
+        "Dan Bourke (A-Team video project contact) is attached to the artifact-status commitment. Keep it active if it still matters, otherwise dismiss it.",
       "planning_rank" => 2,
       "attention_profile" => %{
         "bucket" => "business_project_waiting",
@@ -760,7 +766,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "delivery quality gate must hold stale unprotected work when higher-priority context exists"
       )
       |> require_finding(
-        contains_any?(intro, ["personal/family", "worth attention"]) and
+        contains_any?(intro, ["personal/family", "highest-signal"]) and
           not contains_any?(intro, ["overdue", "follow-ups"]),
         "delivery digest intro must match the revised attention plan"
       )
@@ -825,12 +831,12 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "weekend morning brief must add next-week prep context"
       )
       |> require_finding(
-        "structured_todos_available_behind_list_todos_button_and_sent_one_at_a_time" in Map.get(
+        "structured_open_work_available_behind_review_button_and_sent_one_at_a_time" in Map.get(
           verification,
           "criteria",
           []
         ),
-        "morning brief score must include List Todos plus sequential actionable todo cards in the rubric"
+        "morning brief score must include Review Open Work plus sequential actionable work cards in the rubric"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -1575,10 +1581,18 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         Map.get(defaults, :default_project_id) || Map.get(defaults, "default_project_id"),
       default_project_slug:
         Map.get(defaults, :default_project_slug) || Map.get(defaults, "default_project_slug"),
-      default_slack_team_id:
-        Map.get(defaults, :default_slack_team_id) || Map.get(defaults, "default_slack_team_id")
+      default_slack_team_id: default_slack_team_id(env.user_id)
     }
   end
+
+  defp default_slack_team_id(user_id) when is_binary(user_id) do
+    user_id
+    |> SourceScope.resolve()
+    |> SourceScope.slack_team_ids()
+    |> List.first()
+  end
+
+  defp default_slack_team_id(_user_id), do: nil
 
   defp run_loop(runtime_context, state, started_monotonic_ms) do
     policy_opts = Map.get(runtime_context, :llm_opts, [])
@@ -1715,7 +1729,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "linked todo update must use the exact linked todo id"
     )
     |> require_finding(
-      todo && todo.priority == 88 and
+      (todo && todo.priority == 88) and
         contains_all?(todo.next_action || "", ["return", "book", "today"]),
       "linked todo update must persist the requested priority and next action"
     )
@@ -1811,7 +1825,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "CRM merge must use the requested survivor and merged person ids"
     )
     |> require_finding(
-      duplicate && duplicate.status == "merged" and duplicate.merged_into_id == env.matthew.id,
+      (duplicate && duplicate.status == "merged") and duplicate.merged_into_id == env.matthew.id,
       "CRM merge must mark the duplicate person merged into the survivor"
     )
   end
@@ -2017,7 +2031,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "summary" =>
         "Dan Bourke is the A-Team video project contact attached to the stale artifact-status commitment.",
       "next_action" =>
-        "Decide whether the A-Team artifact follow-up still matters; mark it important or dismiss it.",
+        "Decide whether the A-Team artifact follow-up still matters; keep it active or dismiss it.",
       "priority" => 50,
       "source_occurred_at" => occurred_at,
       "metadata" => %{

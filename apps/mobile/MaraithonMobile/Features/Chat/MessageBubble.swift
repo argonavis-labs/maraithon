@@ -24,6 +24,11 @@ struct MessageBubble: View {
                     .foregroundStyle(isUser ? .white : .primary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if !isUser, let workSummary = message.workSummary, workSummary.hasVisibleWork {
+                    ChatWorkSummaryDisclosure(summary: workSummary)
+                        .padding(.top, 2)
+                }
+
                 HStack(spacing: 4) {
                     if message.deliveryState == .sending {
                         ProgressView()

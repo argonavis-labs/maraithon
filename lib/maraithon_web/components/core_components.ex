@@ -304,6 +304,8 @@ defmodule MaraithonWeb.CoreComponents do
   attr :value, :any, default: nil
   attr :rows, :integer, default: 4
   attr :class, :string, default: nil
+  attr :maxlength, :any, default: nil
+  attr :required, :boolean, default: false
   attr :rest, :global
 
   def c_textarea(assigns) do
@@ -312,6 +314,8 @@ defmodule MaraithonWeb.CoreComponents do
       id={@id}
       name={@name}
       rows={@rows}
+      maxlength={@maxlength}
+      required={@required}
       class={["block w-full resize-y rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6", @class]}
       {@rest}
     ><%= @value %></textarea>
@@ -424,7 +428,7 @@ defmodule MaraithonWeb.CoreComponents do
   def flash_group(assigns) do
     ~H"""
     <div class="fixed top-4 right-4 z-50 space-y-2">
-      <%= if info = @flash["info"] do %>
+      <%= if info = flash_value(@flash, :info) do %>
         <div class="rounded-md bg-blue-50 p-4 shadow-lg">
           <div class="flex">
             <div class="ml-3">
@@ -433,7 +437,7 @@ defmodule MaraithonWeb.CoreComponents do
           </div>
         </div>
       <% end %>
-      <%= if error = @flash["error"] do %>
+      <%= if error = flash_value(@flash, :error) do %>
         <div class="rounded-md bg-red-50 p-4 shadow-lg">
           <div class="flex">
             <div class="ml-3">
@@ -445,6 +449,12 @@ defmodule MaraithonWeb.CoreComponents do
     </div>
     """
   end
+
+  defp flash_value(flash, key) when is_map(flash) do
+    Map.get(flash, Atom.to_string(key)) || Map.get(flash, key)
+  end
+
+  defp flash_value(_flash, _key), do: nil
 
   @doc """
   Renders a badge with status colors.

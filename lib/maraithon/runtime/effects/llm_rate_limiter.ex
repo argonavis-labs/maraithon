@@ -22,7 +22,9 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   @default_bucket :default
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
@@ -33,29 +35,53 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
   already full.
   """
   def checkout(bucket \\ @default_bucket) do
-    call({:checkout, normalize_bucket(bucket)}, :ok)
+    checkout(__MODULE__, bucket)
+  end
+
+  def checkout(server, bucket) do
+    call(server, {:checkout, normalize_bucket(bucket)}, :ok)
   end
 
   @doc """
   Release one LLM execution slot for the calling process.
   """
   def checkin(bucket \\ @default_bucket) do
-    cast({:checkin, self(), normalize_bucket(bucket)})
+    checkin(__MODULE__, bucket)
+  end
+
+  def checkin(server, bucket) do
+    cast(server, {:checkin, self(), normalize_bucket(bucket)})
   end
 
   @doc """
   Share a provider retry-after with future callers.
   """
   def record_rate_limit(retry_after_ms) do
-    call({:record_rate_limit, retry_after_ms}, :ok)
+    record_rate_limit(__MODULE__, retry_after_ms)
+  end
+
+  def record_rate_limit(server, retry_after_ms) do
+    call(server, {:record_rate_limit, retry_after_ms}, :ok)
   end
 
   def reset do
-    call(:reset, :ok)
+    reset(__MODULE__)
+  end
+
+  def reset(server) do
+    call(server, :reset, :ok)
   end
 
   def status do
-    call(:status, %{in_flight: 0, max_concurrency: @default_max_concurrency, blocked_for_ms: 0})
+    status(__MODULE__)
+  end
+
+  def status(server) do
+    call(server, :status, %{
+      in_flight: 0,
+      max_concurrency: @default_max_concurrency,
+      blocked_for_ms: 0
+    })
   end
 
   @impl true
@@ -290,22 +316,26 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiter do
 
   defp now_ms, do: System.monotonic_time(:millisecond)
 
-  defp call(message, fallback) do
-    case Process.whereis(__MODULE__) do
+  defp call(server, message, fallback) do
+    case resolve_server(server) do
       nil ->
         fallback
 
-      _pid ->
-        GenServer.call(__MODULE__, message)
+      target ->
+        GenServer.call(target, message)
     end
   catch
     :exit, _reason -> fallback
   end
 
-  defp cast(message) do
-    case Process.whereis(__MODULE__) do
+  defp cast(server, message) do
+    case resolve_server(server) do
       nil -> :ok
-      _pid -> GenServer.cast(__MODULE__, message)
+      target -> GenServer.cast(target, message)
     end
   end
+
+  defp resolve_server(server) when is_pid(server), do: server
+  defp resolve_server(server) when is_atom(server), do: Process.whereis(server)
+  defp resolve_server(_server), do: nil
 end

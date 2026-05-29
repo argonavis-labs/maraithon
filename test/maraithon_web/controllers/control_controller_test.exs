@@ -106,6 +106,107 @@ defmodule MaraithonWeb.ControlControllerTest do
            |> get_in(["error", "code"]) == -32073
   end
 
+  test "does not expose unknown tool names in policy denial copy", %{conn: conn} do
+    response =
+      post(conn, "/api/v1/control", %{
+        "jsonrpc" => "2.0",
+        "id" => 6,
+        "method" => "tools.call",
+        "params" => %{
+          "name" => "internal_secret_tool",
+          "arguments" => %{"user_id" => "control@example.com"}
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["error", "code"]) == -32070
+    assert get_in(response, ["error", "message"]) == "Action is not available."
+
+    assert get_in(response, ["error", "data", "policy_decision", "message"]) ==
+             "Action is not available."
+
+    refute Map.has_key?(
+             get_in(response, ["error", "data", "policy_decision", "metadata"]),
+             "tool_name"
+           )
+
+    refute inspect(response) =~ "internal_secret_tool"
+    refute inspect(response) =~ "Tool call"
+    refute inspect(response) =~ "Tool policy"
+  end
+
+  test "does not expose connector error codes from tool failures", %{conn: conn} do
+    response =
+      post(conn, "/api/v1/control", %{
+        "jsonrpc" => "2.0",
+        "id" => 7,
+        "method" => "tools.call",
+        "params" => %{
+          "name" => "gmail_list_recent",
+          "arguments" => %{"user_id" => "control-gmail-missing@example.com"}
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["result", "is_error"]) == true
+    assert get_in(response, ["result", "error", "code"]) == "tool_error"
+
+    assert get_in(response, ["result", "error", "message"]) ==
+             "Connect the missing account, then try again."
+
+    refute inspect(response) =~ "google_account_not_connected"
+  end
+
+  test "does not expose raw scheduled task failures", %{conn: conn} do
+    response =
+      post(conn, "/api/v1/control", %{
+        "jsonrpc" => "2.0",
+        "id" => 8,
+        "method" => "scheduled_tasks.create",
+        "params" => %{
+          "user_id" => "control-scheduled@example.com",
+          "idempotency_key" => "control-scheduled-#{System.unique_integer([:positive])}",
+          "task" => %{
+            "title" => "Review the brief",
+            "command" => %{"type" => "assistant_prompt", "prompt" => "Review the brief"}
+          }
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["result", "is_error"]) == true
+    assert get_in(response, ["result", "error", "code"]) == "scheduled_task_error"
+
+    assert get_in(response, ["result", "error", "message"]) ==
+             "Scheduled task needs a valid schedule."
+
+    refute inspect(response) =~ "invalid_schedule"
+    refute inspect(response) =~ "Ecto.Changeset"
+  end
+
+  test "does not expose raw mobile pairing failures", %{conn: conn} do
+    response =
+      post(conn, "/api/v1/control", %{
+        "jsonrpc" => "2.0",
+        "id" => 9,
+        "method" => "mobile_nodes.pair",
+        "params" => %{
+          "user_id" => "control-mobile@example.com",
+          "idempotency_key" => "control-mobile-#{System.unique_integer([:positive])}",
+          "allowed_commands" => ["notify", "exec"]
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["result", "is_error"]) == true
+    assert get_in(response, ["result", "error", "code"]) == "mobile_pairing_error"
+
+    assert get_in(response, ["result", "error", "message"]) ==
+             "Pairing can only grant supported mobile commands."
+
+    refute inspect(response) =~ "forbidden_mobile_command"
+  end
+
   test "checked-in protocol schema matches runtime method set" do
     schema =
       "priv/control_protocol.schema.json"

@@ -131,6 +131,110 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
            end)
   end
 
+  test "spends scarce public prep budget on the earliest required external meeting while preserving calendar order",
+       %{user_id: user_id} do
+    parent = self()
+
+    web_search = fn query, opts ->
+      send(parent, {:web_search, query, opts})
+      {:ok, %{"results" => []}}
+    end
+
+    page_fetch = fn url, opts ->
+      send(parent, {:page_fetch, url, opts})
+      {:error, :not_needed}
+    end
+
+    later_meeting = %{
+      "event_id" => "evt-later",
+      "summary" => "Nolan Park partnership review",
+      "start" => "2026-05-11T21:00:00Z",
+      "end" => "2026-05-11T21:30:00Z",
+      "attendees" => [
+        %{"display_name" => "Nolan Park", "email" => "nolan@laterco.com"}
+      ]
+    }
+
+    earlier_meeting = %{
+      "event_id" => "evt-earlier",
+      "summary" => "Mira Shah investor prep",
+      "start" => "2026-05-11T14:00:00Z",
+      "end" => "2026-05-11T14:30:00Z",
+      "attendees" => [
+        %{"display_name" => "Mira Shah", "email" => "mira@priorityco.com"}
+      ]
+    }
+
+    result =
+      MeetingEnrichment.enrich(user_id, [later_meeting, earlier_meeting],
+        web_search_fun: web_search,
+        web_page_fetch_fun: page_fetch,
+        max_web_queries: 1
+      )
+
+    assert Enum.map(result["meetings"], & &1["event_id"]) == ["evt-later", "evt-earlier"]
+    assert get_in(result, ["counts", "required_schedule_meetings"]) == 2
+    assert get_in(result, ["counts", "web_searches"]) == 1
+
+    later = Enum.find(result["meetings"], &(&1["event_id"] == "evt-later"))
+    earlier = Enum.find(result["meetings"], &(&1["event_id"] == "evt-earlier"))
+
+    assert later["schedule_required"] == true
+    assert earlier["schedule_required"] == true
+    assert (later["web_context"] || []) == []
+    assert Enum.any?(earlier["web_context"], &(&1["query"] == "Mira Shah priorityco.com"))
+
+    assert_received {:web_search, "Mira Shah priorityco.com", [limit: 10]}
+    assert_received {:page_fetch, "https://priorityco.com/", [text_limit: 20000]}
+    refute_received {:web_search, "Nolan Park laterco.com", _opts}
+  end
+
+  test "web search failures stay executive-safe in meeting prep context", %{user_id: user_id} do
+    raw_reason =
+      {:transport, "clientError(status: 500, body: SECRET_STACKTRACE public web lookup blew up)"}
+
+    web_search = fn _query, _opts ->
+      {:error, raw_reason}
+    end
+
+    page_fetch = fn _url, _opts ->
+      {:error, "SECRET_PAGE_STACKTRACE"}
+    end
+
+    event = %{
+      "event_id" => "evt-dawn",
+      "summary" => "Dawn Nguyen intro",
+      "start" => "2026-05-11T19:00:00Z",
+      "end" => "2026-05-11T19:30:00Z",
+      "attendees" => [
+        %{"display_name" => "Dawn Nguyen", "email" => "dawn@kilnstudio.io"}
+      ]
+    }
+
+    result =
+      MeetingEnrichment.enrich(user_id, [event],
+        web_search_fun: web_search,
+        web_page_fetch_fun: page_fetch,
+        max_web_queries: 1
+      )
+
+    [meeting] = result["meetings"]
+    [web_context] = meeting["web_context"]
+
+    assert web_context["status"] == "error"
+    assert web_context["error"] == "Public sources were unavailable."
+
+    serialized_meeting = inspect(meeting)
+    refute serialized_meeting =~ "SECRET_STACKTRACE"
+    refute serialized_meeting =~ "clientError"
+    refute serialized_meeting =~ "lookup blew up"
+
+    data_gaps = meeting["data_gaps"]
+    refute Enum.any?(data_gaps, &(String.downcase(&1) =~ "fallback"))
+    assert Enum.any?(data_gaps, &(&1 =~ "Public sources were unavailable"))
+    assert Enum.any?(data_gaps, &(&1 =~ "avoid inventing background"))
+  end
+
   test "does not let personal logistics consume required-meeting web enrichment", %{
     user_id: user_id
   } do

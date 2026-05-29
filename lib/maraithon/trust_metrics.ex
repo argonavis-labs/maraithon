@@ -12,14 +12,14 @@ defmodule Maraithon.TrustMetrics do
 
   @metric_definitions %{
     "side_effecting_tool_calls_with_policy_decision" =>
-      "Material tool ledger entries that include a policy decision.",
+      "Material action ledger entries with a safety decision.",
     "material_side_effects_with_ledger_entry" =>
       "Completed material side effects recorded in the action ledger.",
     "proactive_sends" => "Proactive assistant pushes sent now.",
     "proactive_holds" => "Proactive assistant decisions held or suppressed.",
-    "confirmation_required_actions" => "Tool calls that required confirmation.",
-    "denied_tool_calls" => "Tool calls denied by ToolPolicy.",
-    "failed_tool_calls" => "Tool ledger entries with failed status.",
+    "confirmation_required_actions" => "Actions that required confirmation.",
+    "denied_tool_calls" => "Actions blocked by safety rules.",
+    "failed_tool_calls" => "Action ledger entries with failed status.",
     "connector_freshness_by_status" => "Connected source count grouped by freshness status."
   }
 

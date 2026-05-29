@@ -4,6 +4,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
   alias Maraithon.Accounts
   alias Maraithon.Companion.Devices
   alias Maraithon.LocalBrowserHistory.LocalVisit
+  alias Maraithon.LocalCalendar.LocalEvent
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.LocalNotes.LocalNote
   alias Maraithon.LocalReminders.LocalReminder
@@ -76,6 +77,30 @@ defmodule MaraithonWeb.CompanionChannelTest do
     )
   end
 
+  defp sample_calendar_event(guid, overrides) do
+    Map.merge(
+      %{
+        "local_id" => "cal:#{guid}",
+        "guid" => guid,
+        "calendar_name" => "Home",
+        "calendar_color" => "#ff8800",
+        "title" => "Coffee with Charlie",
+        "notes" => "Talk through Q3 plan",
+        "location" => "Java Hut",
+        "start_at" => "2026-05-12T15:00:00Z",
+        "end_at" => "2026-05-12T15:30:00Z",
+        "is_all_day" => false,
+        "is_recurring" => false,
+        "organizer_email" => "kent@example.com",
+        "attendees_count" => 2,
+        "attendee_emails" => ["charlie@example.com", "kent@example.com"],
+        "created_at" => "2026-05-09T08:00:00Z",
+        "modified_at" => "2026-05-10T13:14:22Z"
+      },
+      overrides
+    )
+  end
+
   defp sample_visit(guid, overrides \\ %{}) do
     Map.merge(
       %{
@@ -131,7 +156,11 @@ defmodule MaraithonWeb.CompanionChannelTest do
       %{token: token} = pair_device()
       {:ok, socket} = connect(CompanionSocket, %{"token" => token})
 
-      assert {:error, %{reason: "device_mismatch"}} =
+      assert {:error,
+              %{
+                reason: "device_mismatch",
+                message: "This Mac is paired as a different device. Sign out and pair it again."
+              }} =
                subscribe_and_join(
                  socket,
                  CompanionChannel,
@@ -192,7 +221,45 @@ defmodule MaraithonWeb.CompanionChannelTest do
         subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
 
       ref = push(socket, "ingest:messages", %{})
-      assert_reply ref, :error, %{reason: "messages_required"}
+
+      assert_reply ref, :error, %{
+        reason: "messages_required",
+        message: "Required sync data was missing. Try again."
+      }
+    end
+
+    test "rejects oversized realtime batches before ingesting" do
+      %{user: user, device: device, token: token} = pair_device()
+      {:ok, socket} = connect(CompanionSocket, %{"token" => token})
+
+      {:ok, _, socket} =
+        subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
+
+      messages =
+        for i <- 1..501 do
+          sample_message("g-#{i}")
+        end
+
+      ref = push(socket, "ingest:messages", %{"messages" => messages})
+
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "batch_too_large",
+                     message: "Sync fewer than 500 items at a time and try again."
+                   },
+                   1000
+
+      count =
+        Repo.aggregate(
+          from(m in LocalMessage,
+            where: m.user_id == ^user.id and m.device_id == ^device.device_id
+          ),
+          :count,
+          :id
+        )
+
+      assert count == 0
     end
   end
 
@@ -248,6 +315,54 @@ defmodule MaraithonWeb.CompanionChannelTest do
     end
   end
 
+  describe "handle_in/3 ingest:calendar_events" do
+    test "upserts rescheduled events and accepts long EventKit fields" do
+      %{user: user, device: device, token: token} = pair_device()
+      {:ok, socket} = connect(CompanionSocket, %{"token" => token})
+
+      {:ok, _, socket} =
+        subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
+
+      guid = String.duplicate("eventkit-identifier-", 18)
+      location = String.duplicate("Long conference bridge location ", 20)
+
+      original =
+        sample_calendar_event(guid, %{
+          "local_id" => "cal:#{guid}",
+          "location" => location
+        })
+
+      ref1 = push(socket, "ingest:calendar_events", %{"calendar_events" => [original]})
+      assert_reply ref1, :ok, %{accepted: 1, duplicate: 0, invalid: 0}
+
+      updated =
+        sample_calendar_event(guid, %{
+          "local_id" => "cal:#{guid}",
+          "title" => "Moved meeting",
+          "location" => location,
+          "start_at" => "2026-05-12T18:00:00Z",
+          "end_at" => "2026-05-12T18:30:00Z",
+          "modified_at" => "2026-05-10T16:14:22Z"
+        })
+
+      ref2 = push(socket, "ingest:calendar_events", %{"calendar_events" => [updated]})
+      assert_reply ref2, :ok, %{accepted: 1, duplicate: 0, invalid: 0}
+
+      [stored] =
+        Repo.all(
+          from(event in LocalEvent,
+            where: event.user_id == ^user.id and event.device_id == ^device.device_id
+          )
+        )
+
+      assert stored.guid == guid
+      assert stored.local_id == "cal:#{guid}"
+      assert stored.location == location
+      assert stored.title == "Moved meeting"
+      assert stored.start_at == ~U[2026-05-12 18:00:00.000000Z]
+    end
+  end
+
   describe "handle_in/3 ingest:browser_history" do
     test "inserts visits and replies with the four-key counts" do
       %{user: user, device: device, token: token} = pair_device()
@@ -274,6 +389,40 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
       assert count == 2
     end
+
+    test "counts invalid rows without dropping the realtime channel" do
+      %{user: user, device: device, token: token} = pair_device()
+      {:ok, socket} = connect(CompanionSocket, %{"token" => token})
+
+      {:ok, _, socket} =
+        subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
+
+      long_host = String.duplicate("a", 260)
+
+      ref =
+        push(socket, "ingest:browser_history", %{
+          "visits" => [
+            sample_visit("ok", %{"host" => "example.com"}),
+            sample_visit("too-long", %{
+              "host" => long_host,
+              "url" => "https://#{long_host}/post"
+            })
+          ]
+        })
+
+      assert_reply ref, :ok, %{accepted: 1, duplicate: 0, invalid: 1, filtered: 0}
+
+      count =
+        Repo.aggregate(
+          from(v in LocalVisit,
+            where: v.user_id == ^user.id and v.device_id == ^device.device_id
+          ),
+          :count,
+          :id
+        )
+
+      assert count == 1
+    end
   end
 
   describe "handle_in/3 unknown events" do
@@ -285,7 +434,11 @@ defmodule MaraithonWeb.CompanionChannelTest do
         subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
 
       ref = push(socket, "ingest:bogus", %{})
-      assert_reply ref, :error, %{reason: "unknown_event"}
+
+      assert_reply ref, :error, %{
+        reason: "unknown_event",
+        message: "Maraithon could not handle that sync request. Try again."
+      }
     end
   end
 end

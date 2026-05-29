@@ -46,13 +46,15 @@ defmodule Maraithon.Insights.Detail do
   end
 
   def summary_text(detail, %Insight{} = insight, opts \\ []) when is_map(detail) do
+    reason_sent = reason_sent_text(detail)
+
     reason_text =
       case Map.get(detail, :open_loop_reason) do
         %{text: text} when is_binary(text) and text != "" ->
           text
 
         _ ->
-          "This still appears open based on the persisted evidence I checked."
+          "Persisted evidence has no completion signal for this open loop."
       end
 
     evidence_text =
@@ -62,7 +64,7 @@ defmodule Maraithon.Insights.Detail do
       |> Enum.reject(&is_nil/1)
       |> Enum.take(@max_summary_evidence)
       |> case do
-        [] -> "I didn't find completion evidence after the original commitment."
+        [] -> "No completion evidence was found after the original commitment."
         lines -> Enum.map_join(lines, "\n", &"- #{&1}")
       end
 
@@ -76,7 +78,8 @@ defmodule Maraithon.Insights.Detail do
       end
 
     """
-    I surfaced this because it still looks like an open loop.
+    Reason sent:
+    #{reason_sent}
 
     Why now:
     #{reason_text}
@@ -89,6 +92,28 @@ defmodule Maraithon.Insights.Detail do
     """
     |> String.trim()
   end
+
+  defp reason_sent_text(detail) when is_map(detail) do
+    promise_text = detail |> Map.get(:promise_text) |> detail_text()
+    requested_by = detail |> Map.get(:requested_by) |> detail_text()
+
+    cond do
+      is_binary(requested_by) and is_binary(promise_text) ->
+        "#{requested_by} is tied to this unresolved commitment: #{truncate(promise_text, 180)}"
+
+      is_binary(promise_text) ->
+        "Unresolved commitment: #{truncate(promise_text, 180)}"
+
+      is_binary(requested_by) ->
+        "Unresolved open loop involving #{requested_by}."
+
+      true ->
+        "Persisted evidence still shows an unresolved open loop."
+    end
+  end
+
+  defp detail_text(%{text: text}) when is_binary(text), do: normalize_text(text)
+  defp detail_text(_value), do: nil
 
   def telemetry_metadata(%Insight{} = insight, detail) when is_map(detail) do
     %{
@@ -338,7 +363,7 @@ defmodule Maraithon.Insights.Detail do
       sent_at: delivery.sent_at,
       feedback: normalize_text(delivery.feedback),
       feedback_at: delivery.feedback_at,
-      error_message: sanitize_error_message(delivery.error_message)
+      error_message: public_delivery_error_message(delivery.error_message)
     }
   end
 
@@ -357,23 +382,16 @@ defmodule Maraithon.Insights.Detail do
       end
   end
 
-  defp sanitize_error_message(value) when is_binary(value) do
+  defp public_delivery_error_message(value) when is_binary(value) do
     value
     |> String.trim()
     |> case do
-      "" ->
-        nil
-
-      message ->
-        message
-        |> String.replace(~r/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, "[redacted]")
-        |> String.replace(~r/\b(?:C|D|G|U|T)[A-Z0-9]{6,}\b/, "[redacted]")
-        |> String.replace(~r/\b\d{5,}\b/, "[redacted]")
-        |> truncate(140)
+      "" -> nil
+      _message -> "Delivery failed. Check the connected channel and try again."
     end
   end
 
-  defp sanitize_error_message(_value), do: nil
+  defp public_delivery_error_message(_value), do: nil
 
   defp build_open_loop_reason(insight, metadata, detail_metadata, record, delivery_evidence) do
     case stored_open_loop_reason(detail_metadata) do
@@ -525,7 +543,7 @@ defmodule Maraithon.Insights.Detail do
   defp source_occurrence_factor(_insight), do: nil
 
   defp ensure_reason_fallback([], %Insight{}) do
-    ["The insight still appears open and no persisted completion signal closes it."]
+    ["Persisted evidence has no completion signal for this open loop."]
   end
 
   defp ensure_reason_fallback(factors, _insight), do: factors

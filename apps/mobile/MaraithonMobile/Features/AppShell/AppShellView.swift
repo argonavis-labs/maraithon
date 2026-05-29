@@ -19,7 +19,7 @@ struct AppShellView: View {
                 TodayView()
             }
 
-            Tab("Todos", systemImage: "checklist", value: .todos) {
+            Tab("Work", systemImage: "checklist", value: .todos) {
                 TodosView()
             }
 

@@ -8,8 +8,8 @@ defmodule Maraithon.ContextEngineTest do
     context = %{
       todos: Enum.map(1..5, &%{id: "todo-#{&1}"}),
       source_freshness: [
-        %{provider: "gmail", account_id: "a", status: "fresh"},
-        %{provider: "slack", account_id: "b", status: "stale", stale_reason: "old"}
+        %{provider: "gmail", account_label: "Work Gmail", status: "fresh"},
+        %{provider: "slack", account_label: "Agora", status: "stale", stale_reason: "old"}
       ]
     }
 
@@ -26,7 +26,7 @@ defmodule Maraithon.ContextEngineTest do
 
     assert get_in(diagnostics, [:source_freshness, :aggregate_status]) == "stale"
 
-    assert [%{"provider" => "slack", "status" => "stale"}] =
+    assert [%{"provider" => "slack", "account_label" => "Agora", "status" => "stale"}] =
              get_in(diagnostics, [:source_freshness, :stale_or_broken])
   end
 

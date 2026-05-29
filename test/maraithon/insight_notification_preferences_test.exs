@@ -109,7 +109,10 @@ defmodule Maraithon.InsightNotificationPreferencesTest do
 
     message = last_telegram_message(:send)
     assert message.chat_id == "12345"
-    assert message.text =~ "receipt-style noise"
+    assert message.text =~ "Preference saved: Ignore receipt-style notifications."
+    assert message.text =~ "Future triage will apply it automatically."
+    refute message.text =~ "Understood"
+    refute message.text =~ "I'll"
   end
 
   test "telegram callback feedback can learn a durable preference", %{
@@ -153,7 +156,8 @@ defmodule Maraithon.InsightNotificationPreferencesTest do
     assert [%{"id" => "ignore_receipts"}] = PreferenceMemory.active_rules(user_id)
 
     callback = last_telegram_message(:callback)
-    assert callback.opts[:text] =~ "Learned"
+    assert callback.opts[:text] =~ "Preference saved: Ignore receipt-style notifications."
+    refute callback.opts[:text] =~ "Learned"
   end
 
   defp last_telegram_message(type) do

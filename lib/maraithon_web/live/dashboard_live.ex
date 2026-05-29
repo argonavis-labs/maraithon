@@ -16,14 +16,32 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
   alias Maraithon.Projects.ProjectItem
+  alias Maraithon.Redaction
   alias Maraithon.Runtime
+  alias Maraithon.RunErrorCopy
   alias Maraithon.Todos
+  alias Maraithon.Todos.PublicMetadata
   alias Maraithon.UserMemory
+  alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.OperationFailureCopy
+  alias MaraithonWeb.TodoActionCopy
 
   @refresh_interval 5_000
   @event_limit 50
   @activity_limit 40
   @failure_limit 20
+  @safe_oauth_statuses ~w(connected error)
+  @technical_oauth_message_markers [
+    "dbconnection",
+    "ecto.",
+    "http_status",
+    "internal",
+    "oauth_tokens",
+    "postgrex",
+    "stacktrace",
+    "token=",
+    "traceback"
+  ]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -168,7 +186,7 @@ defmodule MaraithonWeb.DashboardLive do
          items: [],
          sources: [],
          generated_at: nil,
-         error: inspect(reason)
+         error: OperationFailureCopy.onboarding_preview(reason)
        }
      )}
   end
@@ -181,7 +199,7 @@ defmodule MaraithonWeb.DashboardLive do
          items: [],
          sources: [],
          generated_at: nil,
-         error: inspect(reason)
+         error: OperationFailureCopy.onboarding_preview(reason)
        }
      )}
   end
@@ -205,7 +223,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   def handle_event("refresh_fly_logs", _params, socket) do
     send(self(), :load_fly_logs)
-    {:noreply, put_flash(socket, :info, "Fly logs refresh started")}
+    {:noreply, put_flash(socket, :info, "Platform log refresh started")}
   end
 
   def handle_event("disconnect_connection", %{"provider" => provider}, socket) do
@@ -223,7 +241,7 @@ defmodule MaraithonWeb.DashboardLive do
          |> put_flash(:error, "#{provider_label(provider)} is not connected")}
 
       {:error, :unsupported_provider} ->
-        {:noreply, put_flash(socket, :error, "Unsupported provider")}
+        {:noreply, put_flash(socket, :error, "That connected app is not available.")}
 
       {:error, reason} ->
         {:noreply,
@@ -231,7 +249,7 @@ defmodule MaraithonWeb.DashboardLive do
          |> refresh_connections()
          |> put_flash(
            :error,
-           "Failed to disconnect #{provider_label(provider)}: #{inspect(reason)}"
+           OperationFailureCopy.disconnect(provider_label(provider), reason)
          )}
     end
   end
@@ -271,10 +289,10 @@ defmodule MaraithonWeb.DashboardLive do
            :project_form,
            to_form(Map.merge(default_project_form_params(), params), as: :project)
          )
-         |> put_flash(:error, "Failed to create project: #{changeset_errors(changeset)}")}
+         |> put_flash(:error, OperationFailureCopy.project(:create, changeset))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to create project: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.project(:create, reason))}
     end
   end
 
@@ -322,10 +340,10 @@ defmodule MaraithonWeb.DashboardLive do
            :project_item_form,
            to_form(Map.merge(default_project_item_form_params(), params), as: :project_item)
          )
-         |> put_flash(:error, "Failed to save project memory: #{changeset_errors(changeset)}")}
+         |> put_flash(:error, OperationFailureCopy.project(:memory, changeset))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to save project memory: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.project(:memory, reason))}
     end
   end
 
@@ -363,11 +381,10 @@ defmodule MaraithonWeb.DashboardLive do
             {:noreply, put_flash(socket, :error, "Choose a valid project before installing")}
 
           {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply,
-             put_flash(socket, :error, "Could not install: #{changeset_errors(changeset)}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, changeset))}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not install: #{inspect(reason)}")}
+            {:noreply, put_flash(socket, :error, AgentActionCopy.error(:install, reason))}
         end
     end
   end
@@ -395,7 +412,7 @@ defmodule MaraithonWeb.DashboardLive do
 
       {:error, reason} ->
         {:noreply,
-         put_flash(socket, :error, "Failed to save recommendation decision: #{inspect(reason)}")}
+         put_flash(socket, :error, OperationFailureCopy.project(:recommendation_decision, reason))}
     end
   end
 
@@ -419,7 +436,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Project not found")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to grant repo access: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.project(:repo_access, reason))}
     end
   end
 
@@ -433,7 +450,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply,
          socket
          |> refresh_dashboard()
-         |> put_flash(:info, run.result_summary || "Implementation run started")}
+         |> put_flash(:info, run.result_summary || "Delivery work started")}
 
       {:error, :project_not_found} ->
         {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Project not found")}
@@ -443,7 +460,7 @@ defmodule MaraithonWeb.DashboardLive do
 
       {:error, reason} ->
         {:noreply,
-         put_flash(socket, :error, "Failed to start implementation run: #{inspect(reason)}")}
+         put_flash(socket, :error, OperationFailureCopy.project(:implementation_run, reason))}
     end
   end
 
@@ -453,13 +470,16 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply,
          socket
          |> refresh_dashboard()
-         |> put_flash(:info, "Todo completed")}
+         |> put_flash(:info, "Work item completed")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:error, TodoActionCopy.error(:complete, :not_found))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to complete todo: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:complete, reason))}
     end
   end
 
@@ -469,13 +489,16 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply,
          socket
          |> refresh_dashboard()
-         |> put_flash(:info, "Todo dismissed")}
+         |> put_flash(:info, "Work item dismissed")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:error, TodoActionCopy.error(:dismiss, :not_found))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to dismiss todo: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:dismiss, reason))}
     end
   end
 
@@ -522,13 +545,16 @@ defmodule MaraithonWeb.DashboardLive do
          |> mark_todo_reviewed(todo_id)
          |> increment_todo_review_session(:completed)
          |> refresh_dashboard()
-         |> put_flash(:info, "Todo completed")}
+         |> put_flash(:info, "Work item completed")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:error, TodoActionCopy.error(:complete, :not_found))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to complete todo: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:complete, reason))}
     end
   end
 
@@ -540,13 +566,16 @@ defmodule MaraithonWeb.DashboardLive do
          |> mark_todo_reviewed(todo_id)
          |> increment_todo_review_session(:dismissed)
          |> refresh_dashboard()
-         |> put_flash(:info, "Todo dismissed")}
+         |> put_flash(:info, "Work item dismissed")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:error, TodoActionCopy.error(:dismiss, :not_found))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to dismiss todo: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:dismiss, reason))}
     end
   end
 
@@ -558,13 +587,16 @@ defmodule MaraithonWeb.DashboardLive do
          |> mark_todo_reviewed(todo_id)
          |> increment_todo_review_session(:important)
          |> refresh_dashboard()
-         |> put_flash(:info, "Todo marked important")}
+         |> put_flash(:info, "Work item kept active")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Todo not found")}
+        {:noreply,
+         socket
+         |> refresh_dashboard()
+         |> put_flash(:error, TodoActionCopy.error(:mark_important, :not_found))}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to mark important: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, TodoActionCopy.error(:mark_important, reason))}
     end
   end
 
@@ -657,7 +689,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to acknowledge insight: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.insight(:acknowledge, reason))}
     end
   end
 
@@ -674,7 +706,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to dismiss insight: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.insight(:dismiss, reason))}
     end
   end
 
@@ -695,7 +727,7 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply, socket |> refresh_insights() |> put_flash(:error, "Insight not found")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to snooze insight: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, OperationFailureCopy.insight(:snooze, reason))}
     end
   end
 
@@ -712,7 +744,7 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("edit_agent", %{"id" => id}, socket) do
     case Agents.get_agent_for_user(id, current_user_id(socket)) do
       nil ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
 
       agent ->
         {:noreply,
@@ -738,14 +770,14 @@ defmodule MaraithonWeb.DashboardLive do
         {:noreply,
          assign(socket,
            launch: launch,
-           launch_error: "Failed to save agent: #{changeset_errors(changeset)}"
+           launch_error: AgentActionCopy.error(:create, changeset)
          )}
 
       {:error, reason} ->
         {:noreply,
          assign(socket,
            launch: launch,
-           launch_error: "Failed to save agent: #{inspect(reason)}"
+           launch_error: AgentActionCopy.error(:create, reason)
          )}
     end
   end
@@ -758,23 +790,23 @@ defmodule MaraithonWeb.DashboardLive do
            socket
            |> refresh_dashboard()
            |> refresh_if_selected(id)
-           |> put_flash(:info, "Agent started")}
+           |> put_flash(:info, "Automation started")}
 
         {:error, :already_running} ->
           {:noreply,
-           socket |> refresh_dashboard() |> put_flash(:info, "Agent is already running")}
+           socket |> refresh_dashboard() |> put_flash(:info, "Automation is already active")}
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
 
         {:error, reason} ->
           {:noreply,
            socket
            |> refresh_dashboard()
-           |> put_flash(:error, "Failed to start agent: #{inspect(reason)}")}
+           |> put_flash(:error, AgentActionCopy.error(:start, reason))}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -786,13 +818,13 @@ defmodule MaraithonWeb.DashboardLive do
            socket
            |> refresh_dashboard()
            |> refresh_if_selected(id)
-           |> put_flash(:info, "Agent stopped")}
+           |> put_flash(:info, "Automation paused")}
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -804,7 +836,7 @@ defmodule MaraithonWeb.DashboardLive do
             socket
             |> maybe_reset_editor(id)
             |> refresh_dashboard()
-            |> put_flash(:info, "Agent deleted")
+            |> put_flash(:info, "Automation deleted")
 
           if socket.assigns.selected_agent && socket.assigns.selected_agent.id == id do
             {:noreply,
@@ -821,16 +853,16 @@ defmodule MaraithonWeb.DashboardLive do
           end
 
         {:error, :not_found} ->
-          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+          {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
 
         {:error, reason} ->
           {:noreply,
            socket
            |> refresh_dashboard()
-           |> put_flash(:error, "Failed to delete agent: #{inspect(reason)}")}
+           |> put_flash(:error, AgentActionCopy.error(:delete, reason))}
       end
     else
-      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+      {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
     end
   end
 
@@ -839,10 +871,10 @@ defmodule MaraithonWeb.DashboardLive do
 
     cond do
       socket.assigns.selected_agent == nil ->
-        {:noreply, put_flash(socket, :error, "Select an agent first")}
+        {:noreply, put_flash(socket, :error, "Select an automation first")}
 
       not agent_owned_by_current_user?(socket, socket.assigns.selected_agent.id) ->
-        {:noreply, put_flash(socket, :error, "Agent not found")}
+        {:noreply, put_flash(socket, :error, "Automation not found")}
 
       message == "" ->
         {:noreply, put_flash(socket, :error, "Message cannot be empty")}
@@ -860,7 +892,7 @@ defmodule MaraithonWeb.DashboardLive do
       <header class="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-            Todos
+            Control Center
           </h1>
           <p class="mt-1 text-sm/6 text-zinc-500">
             <%= dashboard_greeting(@current_user) %>
@@ -875,7 +907,7 @@ defmodule MaraithonWeb.DashboardLive do
             Refresh
           </button>
           <.button navigate={"/agents/new"}>
-            New agent
+            New automation
           </.button>
         </div>
       </header>
@@ -906,13 +938,13 @@ defmodule MaraithonWeb.DashboardLive do
             <h2 class="text-base/7 font-semibold text-zinc-950">Today</h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
               <%= if @open_todo_count > 0 do %>
-                <%= @open_todo_count %> open cards are ready to review.
+                <%= review_ready_label(@open_todo_count) %>
               <% else %>
-                All caught up. Maraithon will surface work here as agents notice it.
+                All caught up. Maraithon will surface new work here when something needs your attention.
               <% end %>
             </p>
           </div>
-          <.button navigate="/todos" variant="outline">Open Todos</.button>
+          <.button navigate="/todos" variant="outline">Open Work</.button>
         </div>
       </section>
 
@@ -922,14 +954,12 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
         <dl class="mt-6 grid grid-cols-1 gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
           <.overview_stat
-            label="Agents"
+            label="Automations"
             value={length(@agents)}
-            note={
-              "#{Enum.count(@agents, &(&1.status == "running"))} running · #{Enum.count(@agents, &(&1.status == "degraded"))} degraded"
-            }
+            note={automation_status_note(@agents)}
           />
           <.overview_stat
-            label="LLM calls"
+            label="Assistant work"
             value={@total_spend.llm_calls}
             note="last 30 days"
           />
@@ -939,9 +969,9 @@ defmodule MaraithonWeb.DashboardLive do
             note="last 30 days"
           />
           <.overview_stat
-            label="Pending effects"
+            label="Queued actions"
             value={@queue_metrics.effects.pending}
-            note={"#{@queue_metrics.effects.failed} failed"}
+            note={queued_action_note(@queue_metrics.effects.failed)}
           />
         </dl>
       </section>
@@ -950,7 +980,7 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Workspace</h2>
           <.link navigate="/connectors" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
-            Manage connectors →
+            Manage apps →
           </.link>
         </div>
         <dl class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -963,7 +993,7 @@ defmodule MaraithonWeb.DashboardLive do
                 else: "Linked accounts feed every project."
             }
             href="/connectors"
-            cta="Connectors"
+            cta="Connected Apps"
           />
           <.workspace_summary
             label="Memory"
@@ -993,7 +1023,7 @@ defmodule MaraithonWeb.DashboardLive do
 
       <section id="chief-of-staff-install">
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Install agent</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Start Chief of Staff</h2>
           <span class="text-xs/5 text-zinc-500">
             <%= chief_of_staff_install_state(@chief_of_staff_agent, @chief_of_staff_readiness, @projects) %>
           </span>
@@ -1143,9 +1173,6 @@ defmodule MaraithonWeb.DashboardLive do
       >
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Memory</h2>
-          <span class="text-xs/5 text-zinc-500">
-            confidence <%= format_confidence(@memory_profile.confidence) %>
-          </span>
         </div>
         <div class="mt-4 space-y-4">
           <p
@@ -1170,7 +1197,7 @@ defmodule MaraithonWeb.DashboardLive do
             <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
               <li
                 :for={rule <- Enum.take(@memory_rules, 3)}
-                class="flex flex-wrap items-start justify-between gap-3 py-2.5"
+                class="py-2.5"
               >
                 <div class="min-w-0 flex-1">
                   <p class="text-xs/5 font-medium text-zinc-500">
@@ -1178,9 +1205,6 @@ defmodule MaraithonWeb.DashboardLive do
                   </p>
                   <p class="mt-0.5 text-sm/6 text-zinc-700"><%= rule["instruction"] || rule["label"] %></p>
                 </div>
-                <span class="text-xs/5 text-zinc-500">
-                  <%= format_confidence(rule["confidence"]) %>
-                </span>
               </li>
             </ul>
           </div>
@@ -1190,7 +1214,7 @@ defmodule MaraithonWeb.DashboardLive do
             <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
               <li
                 :for={summary <- Enum.take(@global_memory_summaries, 3)}
-                class="flex flex-wrap items-start justify-between gap-3 py-2.5"
+                class="py-2.5"
               >
                 <div class="min-w-0 flex-1">
                   <p class="text-xs/5 font-medium text-zinc-500">
@@ -1198,9 +1222,6 @@ defmodule MaraithonWeb.DashboardLive do
                   </p>
                   <p class="mt-0.5 text-sm/6 text-zinc-700"><%= summary.content %></p>
                 </div>
-                <span class="text-xs/5 text-zinc-500">
-                  <%= format_confidence(summary.confidence) %>
-                </span>
               </li>
             </ul>
           </div>
@@ -1329,7 +1350,7 @@ defmodule MaraithonWeb.DashboardLive do
 
               <div class="mt-4 flex flex-wrap gap-2">
                 <.badge class="bg-white">
-                  <%= length(project_card.agents) %> agents
+                  <%= pluralize(length(project_card.agents), "automation") %>
                 </.badge>
                 <.badge class="bg-white">
                   <%= length(project_card.items) %> recent items
@@ -1341,14 +1362,14 @@ defmodule MaraithonWeb.DashboardLive do
 
               <%= if project_card.agents != [] do %>
                 <div class="mt-4">
-                  <p class="text-sm/6 font-medium text-zinc-950">Attached agents</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">Attached automations</p>
                   <div class="mt-2 flex flex-wrap gap-2">
                     <.badge
                       :for={agent <- project_card.agents}
                       color="zinc"
                       class="bg-zinc-950 text-white"
                     >
-                      <%= get_in(agent.config || %{}, ["name"]) || agent.behavior %>
+                      <%= get_in(agent.config || %{}, ["name"]) || automation_behavior_label(agent.behavior) %>
                     </.badge>
                   </div>
                 </div>
@@ -1363,7 +1384,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </div>
                   <%= if project_card.items == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No project memory yet. Add a note, todo, or grant above so the agent has local context.
+                      No project memory yet. Add a note, work item, or grant above so Maraithon has local context.
                     </p>
                   <% else %>
                     <div
@@ -1383,11 +1404,11 @@ defmodule MaraithonWeb.DashboardLive do
 
                 <div class="space-y-3">
                   <p class="text-sm/6 font-medium text-zinc-950">
-                    Project manager recommendations
+                    Planning recommendations
                   </p>
                   <%= if project_card.recommendations == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No project-manager output yet. Attach a GitHub Product Planner to this project and let it run.
+                      No planning recommendations yet. Attach a GitHub Product Planner to this project and let it run.
                     </p>
                   <% else %>
                     <div
@@ -1538,11 +1559,11 @@ defmodule MaraithonWeb.DashboardLive do
 
                   <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                     <p class="text-sm/6 font-medium text-zinc-950">
-                      Delivery Runs
+                      Delivery Work
                     </p>
                     <%= if project_card.implementation_runs == [] do %>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        No implementation runs yet.
+                        No delivery work yet.
                       </p>
                     <% else %>
                       <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-zinc-950/10 px-3 py-2">
@@ -1565,8 +1586,8 @@ defmodule MaraithonWeb.DashboardLive do
                               Open PR
                             </a>
                           <% end %>
-                          <%= if plan_file_path = get_in(run.metadata || %{}, ["plan_file_path"]) do %>
-                            <span>Plan: <%= plan_file_path %></span>
+                          <%= if get_in(run.metadata || %{}, ["plan_file_path"]) do %>
+                            <span>Delivery plan recorded</span>
                           <% end %>
                         </div>
                       </div>
@@ -1579,7 +1600,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @projects == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No projects yet. Use “New project” above and attach a specialist agent to start building project-local state.
+              No projects yet. Use “New project” above and attach a specialist automation to start building project-local state.
             </p>
           <% end %>
         </div>
@@ -1597,7 +1618,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </.badge>
                 </div>
                 <.text class="mt-1">
-                  Real examples from your connected accounts. This is a lightweight proof-of-value scan, not a full always-on agent run.
+                  Real examples from your connected accounts. This is a lightweight proof-of-value scan, not a full always-on run.
                 </.text>
               </div>
               <.button
@@ -1624,7 +1645,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <div class="px-4 py-6 sm:px-6">
                   <p class="text-sm/6 font-medium text-zinc-950">Nothing high-signal surfaced in the recent sample.</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    That is a good sign. Once you start an agent, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
+                    That is a good sign. Once you start an automation, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
                   </p>
                 </div>
               <% :ready -> %>
@@ -1638,9 +1659,6 @@ defmodule MaraithonWeb.DashboardLive do
                           </span>
                           <span class="text-xs/5 text-zinc-500">
                             <%= item.account_label %>
-                          </span>
-                          <span class="text-xs/5 text-zinc-500">
-                            confidence <%= format_confidence(item.confidence) %>
                           </span>
                         </div>
                         <p class="mt-2 text-base/7 font-semibold text-zinc-950"><%= item.title %></p>
@@ -1661,7 +1679,7 @@ defmodule MaraithonWeb.DashboardLive do
                           Start <%= onboarding_behavior_label(item.suggested_behavior) %>
                         </p>
                         <p class="mt-1 text-sm/6 text-zinc-600">
-                          This agent is the best fit to catch this kind of loop continuously and escalate only when it matters.
+                          This automation is the best fit to catch this kind of loop continuously and escalate only when it matters.
                         </p>
                         <.button
                           navigate={"/agents/new?behavior=#{item.suggested_behavior}"}
@@ -1677,7 +1695,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <div class="px-4 py-6 sm:px-6">
                   <p class="text-sm/6 font-medium text-zinc-950">Preview temporarily unavailable.</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    Maraithon could not build the onboarding proof just now. You can refresh this preview or go straight to the agent builder.
+                    Maraithon could not build the onboarding proof just now. You can refresh this preview or go straight to the automation builder.
                   </p>
                 </div>
               <% _ -> %>
@@ -1697,7 +1715,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <.insight_group
             title="Needs Action"
-            subtitle="Threads that currently look like direct founder debt."
+            subtitle="Threads that currently need a direct decision or reply."
             cards={@act_now_insights}
             expanded_insight_ids={@expanded_insight_ids}
           />
@@ -1710,16 +1728,16 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @insights == [] do %>
             <p class="text-sm/6 text-zinc-500">
-              No actionable insights yet. Start an <code class="font-mono">ai_chief_of_staff</code>, <code class="font-mono">inbox_calendar_advisor</code>, or <code class="font-mono">slack_followthrough_agent</code> agent.
+              No actionable insights yet. Start a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation.
             </p>
           <% end %>
       </section>
 
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Agent activity</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Automation activity</h2>
           <.link navigate="/agents" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
-            All agents →
+            All automations →
           </.link>
         </div>
 
@@ -1733,11 +1751,11 @@ defmodule MaraithonWeb.DashboardLive do
                       <%= agent_display_name(overview.agent) %>
                     </h3>
                     <span class={agent_status_class(overview.agent.status)}>
-                      <%= overview.agent.status %>
+                      <%= automation_status_label(overview.agent.status) %>
                     </span>
                   </div>
                   <p class="mt-1 text-xs/5 text-zinc-500">
-                    <%= humanize_text_token(overview.agent.behavior) %>
+                    <%= automation_behavior_label(overview.agent.behavior) %>
                   </p>
                   <p :if={overview.project_name} class="mt-2 text-sm/6 text-zinc-600">
                     Project: <span class="font-medium text-zinc-950"><%= overview.project_name %></span>
@@ -1756,7 +1774,7 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="mt-4 grid grid-cols-3 gap-3">
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Events
+                    Updates
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.event_count %>
@@ -1764,7 +1782,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Effects
+                    Actions
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.effect_counts.pending %>
@@ -1772,7 +1790,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Jobs
+                    Queued
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.job_counts.pending %>
@@ -1783,10 +1801,10 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
                 <div>
                   <p class="text-sm/6 font-medium text-zinc-950">
-                    Recent events
+                    Recent updates
                   </p>
                   <%= if overview.recent_activity == [] do %>
-                    <p class="mt-2 text-sm/6 text-zinc-500">No recent events recorded.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No recent updates recorded.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
@@ -1797,7 +1815,7 @@ defmodule MaraithonWeb.DashboardLive do
                           <p class="text-sm/6 font-medium text-zinc-950"><%= activity.event_type %></p>
                           <span class="text-xs/5 text-zinc-500"><%= format_time(activity.inserted_at) %></span>
                         </div>
-                        <p class="mt-2 text-xs/5 text-zinc-500"><%= payload_preview(activity.payload) %></p>
+                        <p class="mt-2 text-xs/5 text-zinc-500"><%= event_preview(activity) %></p>
                       </div>
                     </div>
                   <% end %>
@@ -1805,10 +1823,10 @@ defmodule MaraithonWeb.DashboardLive do
 
                 <div>
                   <p class="text-sm/6 font-medium text-zinc-950">
-                    Recent logs
+                    Technical notes
                   </p>
                   <%= if overview.inspection.recent_logs == [] do %>
-                    <p class="mt-2 text-sm/6 text-zinc-500">No recent logs captured.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No technical notes captured.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
@@ -1823,7 +1841,7 @@ defmodule MaraithonWeb.DashboardLive do
                             <%= format_log_timestamp(log.timestamp) %>
                           </span>
                         </div>
-                        <p class="mt-2 text-xs/5 text-zinc-100"><%= log.message %></p>
+                        <p class="mt-2 text-xs/5 text-zinc-100"><%= log_message_preview(log) %></p>
                       </div>
                     </div>
                   <% end %>
@@ -1841,7 +1859,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @agent_overviews == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No agents yet. Install a chief of staff, project manager, or coding agent to start building the operator system.
+              No automations yet. Start a Chief of Staff or specialist automation to build the operating system.
             </p>
           <% end %>
         </div>
@@ -1940,8 +1958,8 @@ defmodule MaraithonWeb.DashboardLive do
                   <span class="mx-1">·</span>
                   <span class="font-mono"><%= short_id(activity.agent_id) %></span>
                 </div>
-                <div class="mt-2 break-all rounded-md bg-zinc-50 px-2 py-1 font-mono text-xs/5 text-zinc-600">
-                  <%= payload_preview(activity.payload) %>
+                <div class="mt-2 rounded-md bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
+                  <%= event_preview(activity) %>
                 </div>
               </div>
               <%= if @recent_activity == [] do %>
@@ -1951,7 +1969,7 @@ defmodule MaraithonWeb.DashboardLive do
           </div>
 
           <div class="px-4 py-4 sm:px-6">
-            <p class="text-xs/5 font-medium text-zinc-500">Failures &amp; stale work</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Needs attention</p>
             <div class="mt-2 max-h-80 space-y-2 overflow-y-auto">
               <div
                 :for={failure <- @recent_failures}
@@ -1975,7 +1993,7 @@ defmodule MaraithonWeb.DashboardLive do
                   <span>attempts <%= failure.attempts %></span>
                 </div>
                 <div class="mt-2 break-all rounded-md bg-white px-2 py-1 font-mono text-xs/5 text-zinc-700">
-                  <%= failure.details %>
+                  <%= failure_details_preview(failure) %>
                 </div>
               </div>
               <%= if @recent_failures == [] do %>
@@ -1989,8 +2007,8 @@ defmodule MaraithonWeb.DashboardLive do
       <details class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
-            <span>Raw logs</span>
-            <span class="text-xs/5 text-zinc-500">runtime · in-app</span>
+            <span>System logs</span>
+            <span class="text-xs/5 text-zinc-500">recent activity</span>
           </span>
           <span class="text-xs/5 text-zinc-500 group-open:hidden">Show</span>
           <span class="hidden text-xs/5 text-zinc-500 group-open:inline">Hide</span>
@@ -2003,10 +2021,9 @@ defmodule MaraithonWeb.DashboardLive do
                 <%= log.level %>
               </span>
               <div class="min-w-0">
-                <%= if metadata = log_metadata_preview(log.metadata) do %>
-                  <span class="mr-2 text-zinc-500"><%= metadata %></span>
-                <% end %>
-                <span class="break-words whitespace-pre-wrap text-zinc-700"><%= log.message %></span>
+                <span class="break-words whitespace-pre-wrap text-zinc-700">
+                  <%= log_message_preview(log) %>
+                </span>
               </div>
             </div>
           <% end %>
@@ -2019,8 +2036,8 @@ defmodule MaraithonWeb.DashboardLive do
       <details class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
-            <span>Fly.io platform logs</span>
-            <span class="text-xs/5 text-zinc-500">app · machine · runner</span>
+            <span>Platform logs</span>
+            <span class="text-xs/5 text-zinc-500">deployment health</span>
           </span>
           <span class="flex items-center gap-3">
             <button
@@ -2056,11 +2073,11 @@ defmodule MaraithonWeb.DashboardLive do
 
             <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
               <p class="font-sans text-sm/6 text-zinc-500">
-                Configure <code class="font-mono">FLY_API_TOKEN</code> and <code class="font-mono">FLY_LOG_APPS</code> to load Fly logs in-app.
+                Platform logs are not configured for this environment.
               </p>
             <% else %>
               <%= if @fly_logs.logs == [] do %>
-                <p class="font-sans text-sm/6 text-zinc-500">No Fly logs returned yet.</p>
+                <p class="font-sans text-sm/6 text-zinc-500">No platform logs returned yet.</p>
               <% else %>
                 <%= for log <- @fly_logs.logs do %>
                   <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-zinc-950/5 py-1.5 last:border-0">
@@ -2069,10 +2086,12 @@ defmodule MaraithonWeb.DashboardLive do
                       <%= log.level %>
                     </span>
                     <div class="min-w-0">
-                      <%= if metadata = fly_log_metadata_preview(log) do %>
-                        <span class="mr-2 text-zinc-500"><%= metadata %></span>
+                      <%= if app = fly_log_app_label(log) do %>
+                        <span class="mr-2 text-zinc-500"><%= app %></span>
                       <% end %>
-                      <span class="break-words whitespace-pre-wrap text-zinc-700"><%= log.message %></span>
+                      <span class="break-words whitespace-pre-wrap text-zinc-700">
+                        <%= public_log_message(log.message) %>
+                      </span>
                     </div>
                   </div>
                 <% end %>
@@ -2100,7 +2119,7 @@ defmodule MaraithonWeb.DashboardLive do
                editing_agent_id: nil
              )
              |> refresh_dashboard()
-             |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} created")
+             |> put_flash(:info, AgentActionCopy.success(:create, agent_display_name(agent)))
              |> push_patch(to: "/dashboard?id=#{agent.id}")}
 
           {:error, message} when is_binary(message) ->
@@ -2110,14 +2129,14 @@ defmodule MaraithonWeb.DashboardLive do
             {:noreply,
              assign(socket,
                launch: launch,
-               launch_error: "Failed to create agent: #{changeset_errors(changeset)}"
+               launch_error: AgentActionCopy.error(:create, changeset)
              )}
 
           {:error, reason} ->
             {:noreply,
              assign(socket,
                launch: launch,
-               launch_error: "Failed to create agent: #{inspect(reason)}"
+               launch_error: AgentActionCopy.error(:create, reason)
              )}
         end
 
@@ -2134,7 +2153,7 @@ defmodule MaraithonWeb.DashboardLive do
              )
              |> refresh_dashboard()
              |> refresh_if_selected(id)
-             |> put_flash(:info, "Agent #{String.slice(agent.id, 0, 8)} updated")
+             |> put_flash(:info, AgentActionCopy.success(:update, agent_display_name(agent)))
              |> push_patch(to: "/dashboard?id=#{agent.id}")}
 
           {:error, message} when is_binary(message) ->
@@ -2144,14 +2163,14 @@ defmodule MaraithonWeb.DashboardLive do
             {:noreply,
              assign(socket,
                launch: launch,
-               launch_error: "Failed to update agent: #{changeset_errors(changeset)}"
+               launch_error: AgentActionCopy.error(:update, changeset)
              )}
 
           {:error, reason} ->
             {:noreply,
              assign(socket,
                launch: launch,
-               launch_error: "Failed to update agent: #{inspect(reason)}"
+               launch_error: AgentActionCopy.error(:update, reason)
              )}
         end
     end
@@ -2164,16 +2183,16 @@ defmodule MaraithonWeb.DashboardLive do
          socket
          |> assign(command: %{"message" => ""})
          |> refresh_if_selected(agent_id)
-         |> put_flash(:info, "Message accepted by agent")}
+         |> put_flash(:info, "Message sent to automation")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Agent not found")}
+        {:noreply, socket |> refresh_dashboard() |> put_flash(:error, "Automation not found")}
 
       {:error, :agent_stopped} ->
-        {:noreply, put_flash(socket, :error, "Agent is not running")}
+        {:noreply, put_flash(socket, :error, "Automation is paused")}
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Failed to send message: #{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, AgentActionCopy.error(:send_message, reason))}
     end
   end
 
@@ -2396,17 +2415,6 @@ defmodule MaraithonWeb.DashboardLive do
   defp build_agent_start_params(launch, user_id),
     do: AgentBuilder.build_start_params(launch, user_id)
 
-  defp changeset_errors(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Enum.reduce(opts, msg, fn {key, value}, acc ->
-        String.replace(acc, "%{#{key}}", to_string(value))
-      end)
-    end)
-    |> Enum.map(fn {field, errors} -> "#{field} #{Enum.join(errors, ", ")}" end)
-    |> Enum.join("; ")
-  end
-
   defp empty_spend do
     %{
       total_cost: 0.0,
@@ -2465,7 +2473,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp refresh_fly_logs(socket) do
     case Admin.fly_logs(limit: 120) do
       {:ok, snapshot} ->
-        assign(socket, fly_logs: snapshot)
+        assign(socket, fly_logs: sanitize_fly_logs(snapshot))
 
       {:error, reason} ->
         assign(socket,
@@ -2474,10 +2482,22 @@ defmodule MaraithonWeb.DashboardLive do
             apps: [],
             logs: [],
             next_tokens: %{},
-            errors: [%{app: nil, message: "Failed to fetch Fly logs: #{inspect(reason)}"}]
+            errors: [%{app: nil, message: OperationFailureCopy.fly_logs(reason)}]
           }
         )
     end
+  end
+
+  defp sanitize_fly_logs(snapshot) when is_map(snapshot) do
+    errors =
+      snapshot
+      |> Map.get(:errors, [])
+      |> Enum.map(fn
+        %{app: app} -> %{app: app, message: OperationFailureCopy.fly_logs(:snapshot_error)}
+        _ -> %{app: nil, message: OperationFailureCopy.fly_logs(:snapshot_error)}
+      end)
+
+    Map.put(snapshot, :errors, errors)
   end
 
   defp refresh_connections(socket) do
@@ -2623,7 +2643,7 @@ defmodule MaraithonWeb.DashboardLive do
     todo_ids = selected_visible_todo_ids(socket)
 
     if todo_ids == [] do
-      put_flash(socket, :error, "Select at least one todo first")
+      put_flash(socket, :error, "Select at least one work item first")
     else
       {updated_count, errors} =
         Enum.reduce(todo_ids, {0, []}, fn todo_id, {count, errors} ->
@@ -2661,8 +2681,8 @@ defmodule MaraithonWeb.DashboardLive do
   defp bulk_todo_flash(action, updated_count, errors) do
     base =
       case action do
-        :complete -> "Marked #{pluralize_todo(updated_count)} done"
-        :dismiss -> "Dismissed #{pluralize_todo(updated_count)}"
+        :complete -> "Marked #{pluralize_work_item(updated_count)} done"
+        :dismiss -> "Dismissed #{pluralize_work_item(updated_count)}"
       end
 
     case length(errors) do
@@ -2671,8 +2691,17 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp pluralize_todo(1), do: "1 todo"
-  defp pluralize_todo(count), do: "#{count} todos"
+  defp pluralize_work_item(1), do: "1 work item"
+  defp pluralize_work_item(count), do: "#{count} work items"
+
+  defp pluralize(1, label), do: "1 #{label}"
+  defp pluralize(count, label), do: "#{count} #{label}s"
+
+  defp review_ready_label(1), do: "1 open work item is ready to review."
+  defp review_ready_label(count), do: "#{count} open work items are ready to review."
+
+  defp remaining_today_label(1), do: "1 open work item remains in Today."
+  defp remaining_today_label(count), do: "#{count} open work items remain in Today."
 
   defp selected_visible_todo_ids(socket) do
     socket.assigns.selected_todo_ids
@@ -2830,17 +2859,36 @@ defmodule MaraithonWeb.DashboardLive do
     )
   end
 
-  defp maybe_put_oauth_flash(socket, %{"oauth_status" => "connected", "oauth_message" => message})
-       when is_binary(message) do
-    put_flash(socket, :info, message)
-  end
-
-  defp maybe_put_oauth_flash(socket, %{"oauth_status" => "error", "oauth_message" => message})
-       when is_binary(message) do
-    put_flash(socket, :error, message)
+  defp maybe_put_oauth_flash(socket, %{"oauth_status" => status, "oauth_message" => message})
+       when status in @safe_oauth_statuses and is_binary(message) do
+    kind = if status == "connected", do: :info, else: :error
+    put_flash(socket, kind, oauth_flash_message(status, message))
   end
 
   defp maybe_put_oauth_flash(socket, _params), do: socket
+
+  defp oauth_flash_message("connected", message),
+    do: safe_oauth_flash_message(message, "App connected.")
+
+  defp oauth_flash_message("error", message),
+    do: safe_oauth_flash_message(message, "App connection failed. Try again.")
+
+  defp safe_oauth_flash_message(message, fallback) do
+    trimmed = String.trim(message)
+
+    cond do
+      trimmed == "" -> fallback
+      technical_oauth_message?(trimmed) -> fallback
+      true -> trimmed
+    end
+  end
+
+  defp technical_oauth_message?(message) do
+    lower = String.downcase(message)
+
+    Enum.any?(@technical_oauth_message_markers, &String.contains?(lower, &1)) or
+      String.contains?(message, ["{", "}", "=>"])
+  end
 
   defp connection_return_to(socket) do
     socket.assigns.connection_return_to || "/dashboard"
@@ -2909,13 +2957,13 @@ defmodule MaraithonWeb.DashboardLive do
   defp chief_of_staff_install_state(%{install_status: install_status}, _readiness, _projects),
     do: install_status_label(install_status)
 
-  defp chief_of_staff_install_state(_agent, _readiness, []), do: "project required"
+  defp chief_of_staff_install_state(_agent, _readiness, []), do: "Project required"
 
   defp chief_of_staff_install_state(_agent, readiness, _projects) do
     if chief_of_staff_missing_readiness(readiness) == [] do
-      "ready"
+      "Ready to install"
     else
-      "setup required"
+      "Setup required"
     end
   end
 
@@ -2951,11 +2999,11 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp chief_of_staff_schedule_label(_schedule), do: "8:00 AM UTC-05:00"
 
-  defp install_status_label("enabled"), do: "enabled"
-  defp install_status_label("setup_required"), do: "setup required"
-  defp install_status_label("paused"), do: "paused"
-  defp install_status_label("error"), do: "error"
-  defp install_status_label("removed"), do: "removed"
+  defp install_status_label("enabled"), do: "Enabled"
+  defp install_status_label("setup_required"), do: "Setup required"
+  defp install_status_label("paused"), do: "Paused"
+  defp install_status_label("error"), do: "Error"
+  defp install_status_label("removed"), do: "Removed"
   defp install_status_label(status) when is_binary(status), do: status
   defp install_status_label(_status), do: "unknown"
 
@@ -3047,7 +3095,7 @@ defmodule MaraithonWeb.DashboardLive do
     project.summary || project.description || "No project summary yet."
   end
 
-  defp item_type_label("todo"), do: "Todo"
+  defp item_type_label("todo"), do: "Work item"
   defp item_type_label("note"), do: "Note"
   defp item_type_label("decision"), do: "Decision"
   defp item_type_label("resource"), do: "Resource"
@@ -3085,7 +3133,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp todo_status_label("snoozed"), do: "Snoozed"
   defp todo_status_label("done"), do: "Done"
   defp todo_status_label("dismissed"), do: "Dismissed"
-  defp todo_status_label(value), do: humanize_text_token(value) || "Todo"
+  defp todo_status_label(value), do: humanize_text_token(value) || "Work item"
 
   defp todo_status_class("open"),
     do:
@@ -3104,14 +3152,13 @@ defmodule MaraithonWeb.DashboardLive do
   defp todo_source_label(source), do: insight_source_label(source)
 
   defp todo_source_account_value(todo) do
-    metadata = todo.metadata || %{}
+    metadata = public_todo_metadata(todo)
 
     metadata_account =
       todo.source_account_label ||
         fetch_map_value(metadata, "account") ||
         fetch_map_value(metadata, "account_email") ||
-        fetch_map_value(metadata, "mailbox") ||
-        fetch_map_value(metadata, "workspace_name")
+        fetch_map_value(metadata, "source_account_label")
 
     normalized_text(metadata_account)
   end
@@ -3119,9 +3166,39 @@ defmodule MaraithonWeb.DashboardLive do
   defp agent_display_name(agent) do
     get_in(agent.config || %{}, ["name"]) ||
       get_in(agent.config || %{}, [:name]) ||
-      humanize_text_token(agent.behavior) ||
-      "Agent"
+      automation_behavior_label(agent.behavior)
   end
+
+  defp automation_behavior_label("founder_followthrough_agent"), do: "Chief of Staff"
+  defp automation_behavior_label("inbox_calendar_advisor"), do: "Inbox and Calendar Assistant"
+  defp automation_behavior_label("slack_followthrough_agent"), do: "Slack Follow-through"
+  defp automation_behavior_label("github_product_planner"), do: "Project Manager"
+  defp automation_behavior_label("repo_planner"), do: "Delivery Planner"
+
+  defp automation_behavior_label(value) do
+    value
+    |> humanize_text_token()
+    |> case do
+      nil -> "Automation"
+      label -> String.replace(label, " agent", " automation")
+    end
+  end
+
+  defp automation_status_note(agents) do
+    active = Enum.count(agents, &(&1.status == "running"))
+    needs_attention = Enum.count(agents, &(&1.status == "degraded"))
+
+    "#{active} active · #{needs_attention} need attention"
+  end
+
+  defp queued_action_note(0), do: "all clear"
+  defp queued_action_note(1), do: "1 needs attention"
+  defp queued_action_note(count), do: "#{count} need attention"
+
+  defp automation_status_label("running"), do: "active"
+  defp automation_status_label("degraded"), do: "needs attention"
+  defp automation_status_label("stopped"), do: "paused"
+  defp automation_status_label(status), do: humanize_text_token(status) || "queued"
 
   defp agent_status_class("running"),
     do:
@@ -3151,10 +3228,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp preview_source_class(_),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  defp onboarding_behavior_label("founder_followthrough_agent"), do: "Chief of Staff"
-  defp onboarding_behavior_label("inbox_calendar_advisor"), do: "Chief of Staff"
-  defp onboarding_behavior_label("slack_followthrough_agent"), do: "Slack Followthrough"
-  defp onboarding_behavior_label(other), do: other
+  defp onboarding_behavior_label(value), do: automation_behavior_label(value)
 
   defp insight_category_label("reply_urgent"), do: "Reply Needed"
   defp insight_category_label("tone_risk"), do: "Tone Risk"
@@ -3171,8 +3245,17 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_source_label("slack"), do: "Slack"
   defp insight_source_label("github"), do: "GitHub"
   defp insight_source_label("telegram"), do: "Telegram"
-  defp insight_source_label(source) when is_binary(source) and source != "", do: source
-  defp insight_source_label(_), do: "system"
+  defp insight_source_label("manual"), do: "Added by you"
+  defp insight_source_label("system"), do: "Maraithon"
+
+  defp insight_source_label(source) when is_binary(source) do
+    case normalized_text(source) do
+      nil -> "Maraithon"
+      value -> humanize_text_token(value) || "Maraithon"
+    end
+  end
+
+  defp insight_source_label(_), do: "Maraithon"
 
   defp attention_mode_label("monitor"), do: "Watching"
   defp attention_mode_label(_), do: "Needs Action"
@@ -3221,9 +3304,22 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_priority_class(_),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  defp format_confidence(value) when is_float(value), do: "#{Float.round(value * 100, 0)}%"
-  defp format_confidence(value) when is_integer(value), do: "#{value}%"
-  defp format_confidence(_), do: "n/a"
+  defp insight_priority_label(%{attention_mode: "monitor"}), do: "watching"
+
+  defp insight_priority_label(%{priority: priority}) when is_integer(priority) and priority >= 85,
+    do: "high priority"
+
+  defp insight_priority_label(%{priority: priority}) when is_integer(priority) and priority >= 70,
+    do: "priority"
+
+  defp insight_priority_label(_insight), do: "normal priority"
+
+  defp insight_source_context(insight) do
+    case insight_account_label(insight) do
+      nil -> "from #{insight_source_label(insight.source)}"
+      account -> "from #{insight_source_label(insight.source)} · account #{account}"
+    end
+  end
 
   defp insight_account_label(insight) do
     metadata_account =
@@ -3235,7 +3331,7 @@ defmodule MaraithonWeb.DashboardLive do
 
     case normalized_text(metadata_account) do
       nil ->
-        insight_source_account_fallback(insight) || "unknown"
+        insight_source_account_fallback(insight)
 
       value ->
         value
@@ -3356,13 +3452,20 @@ defmodule MaraithonWeb.DashboardLive do
       format_datetime(delivery.sent_at),
       delivery.feedback && "feedback #{humanize_text_token(delivery.feedback)}",
       delivery.feedback_at && format_datetime(delivery.feedback_at),
-      delivery.error_message && "error #{delivery.error_message}"
+      delivery_error_metadata(delivery)
     ]
     |> Enum.reject(&blank_metadata?/1)
     |> Enum.join(" · ")
   end
 
   defp delivery_metadata(_delivery), do: nil
+
+  defp delivery_error_metadata(%{error_message: error_message})
+       when is_binary(error_message) and error_message != "" do
+    OperationFailureCopy.insight_delivery(error_message)
+  end
+
+  defp delivery_error_metadata(_delivery), do: nil
 
   defp humanize_text_token(value) when is_atom(value),
     do: value |> Atom.to_string() |> humanize_text_token()
@@ -3448,7 +3551,7 @@ defmodule MaraithonWeb.DashboardLive do
     if reviewed == 0 do
       "No review actions yet"
     else
-      "#{reviewed} reviewed this session"
+      "#{reviewed} reviewed now"
     end
   end
 
@@ -3541,7 +3644,7 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp fallback_todo_context_items(todo) do
-    metadata = todo.metadata || %{}
+    metadata = public_todo_metadata(todo)
 
     [
       %{
@@ -3549,13 +3652,12 @@ defmodule MaraithonWeb.DashboardLive do
         value:
           todo_metadata_text(
             metadata,
-            ~w(person contact requested_by requester sender sender_name)
+            ~w(person contact requested_by sender_name)
           )
       },
       %{
         label: "Company",
-        value:
-          todo_metadata_text(metadata, ~w(company organization account_name customer partner))
+        value: todo_metadata_text(metadata, ~w(company organization account))
       },
       %{
         label: "Relationship",
@@ -3571,15 +3673,15 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp fallback_todo_why_important(todo) do
-    metadata = todo.metadata || %{}
+    metadata = public_todo_metadata(todo)
 
-    todo_metadata_text(metadata, ~w(why_now why_it_matters why rationale urgency_reason))
+    todo_metadata_text(metadata, ~w(why_now why_it_matters))
     |> case do
       nil when not is_nil(todo.due_at) ->
         "Due #{format_datetime(todo.due_at)}."
 
       nil ->
-        "#{attention_mode_label(todo.attention_mode)} item from #{todo_source_label(todo.source)}. Last updated #{format_datetime(todo.updated_at)}."
+        todo_updated_why_text(todo)
 
       value ->
         value
@@ -3587,10 +3689,9 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp fallback_todo_source_excerpt(todo) do
-    todo.metadata
-    |> todo_metadata_text(
-      ~w(source_quote quote source_excerpt body_excerpt excerpt evidence source_body source_evidence checked_evidence)
-    )
+    todo
+    |> public_todo_metadata()
+    |> todo_metadata_text(~w(source_quote quote source_excerpt body_excerpt))
     |> case do
       nil -> nil
       value -> truncate(value, 280)
@@ -3615,6 +3716,16 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp todo_updated_why_text(todo) do
+    base =
+      "#{attention_mode_label(todo.attention_mode)} item from #{todo_source_label(todo.source)}."
+
+    case format_datetime(todo.updated_at) do
+      nil -> base
+      timestamp -> "#{base} Last updated #{timestamp}."
+    end
+  end
+
   defp todo_priority_label(%{attention_mode: "monitor"}), do: "watching"
 
   defp todo_priority_label(%{priority: priority}) when is_integer(priority) and priority >= 85,
@@ -3624,6 +3735,11 @@ defmodule MaraithonWeb.DashboardLive do
     do: "priority"
 
   defp todo_priority_label(_todo), do: "normal priority"
+
+  defp public_todo_metadata(%{metadata: metadata}) when is_map(metadata),
+    do: PublicMetadata.todo(metadata)
+
+  defp public_todo_metadata(_todo), do: %{}
 
   defp todo_metadata_text(metadata, keys) when is_map(metadata) and is_list(keys) do
     Enum.find_value(keys, fn key ->
@@ -3717,13 +3833,13 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div class="flex flex-wrap items-center gap-2">
-              <h2 class="text-base/7 font-semibold text-zinc-950">Today's cards</h2>
+              <h2 class="text-base/7 font-semibold text-zinc-950">Today's work</h2>
               <.badge color="emerald" class="bg-white">
-                Review queue
+                One at a time
               </.badge>
             </div>
             <p class="mt-1 text-sm/6 text-zinc-600">
-              Decide open loops one at a time.
+              Decide the next move for each open loop.
             </p>
           </div>
           <div class="text-right">
@@ -3749,7 +3865,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <%= todo_source_label(@current_todo.source) %>
               </span>
               <span :if={@current_todo.due_at} class="text-xs/5 font-medium text-amber-700">
-                due <%= format_datetime(@current_todo.due_at) %>
+                Due <%= format_datetime(@current_todo.due_at) %>
               </span>
             </div>
 
@@ -3777,7 +3893,7 @@ defmodule MaraithonWeb.DashboardLive do
 
             <div class="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
               <div class="border-l border-zinc-950/10 pl-3">
-                <p class="text-xs/5 font-medium text-zinc-500">Why important</p>
+                <p class="text-xs/5 font-medium text-zinc-500">Why it matters</p>
                 <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo_card, @current_todo) %></p>
               </div>
               <div class="border-l border-zinc-950/10 pl-3">
@@ -3795,7 +3911,7 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
 
             <div :if={todo_source_health_text(@current_todo_card)} class="mt-5 border-l border-zinc-950/10 pl-3">
-              <p class="text-xs/5 font-medium text-zinc-500">Source health</p>
+              <p class="text-xs/5 font-medium text-zinc-500">What was checked</p>
               <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_health_text(@current_todo_card) %></p>
             </div>
 
@@ -3805,7 +3921,7 @@ defmodule MaraithonWeb.DashboardLive do
                 phx-click="review_complete_todo"
                 phx-value-id={@current_todo.id}
               >
-                Mark done
+                Done
               </.button>
               <.button
                 type="button"
@@ -3814,7 +3930,7 @@ defmodule MaraithonWeb.DashboardLive do
                 variant="outline"
                 class="text-amber-800"
               >
-                Important
+                Keep active
               </.button>
               <.button
                 type="button"
@@ -3822,7 +3938,7 @@ defmodule MaraithonWeb.DashboardLive do
                 phx-value-id={@current_todo.id}
                 variant="outline"
               >
-                Keep open
+                Keep for later
               </.button>
               <.button
                 type="button"
@@ -3882,7 +3998,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </dd>
               </div>
               <div>
-                <dt class="text-xs/5 font-medium text-zinc-500">Important</dt>
+                <dt class="text-xs/5 font-medium text-zinc-500">Kept active</dt>
                 <dd class="mt-0.5 font-semibold text-zinc-950">
                   <%= Map.get(@todo_review_session, :important, 0) %>
                 </dd>
@@ -3901,21 +4017,21 @@ defmodule MaraithonWeb.DashboardLive do
               </ul>
             </div>
             <p :if={@queue_preview == []} class="mt-6 text-sm/6 text-zinc-500">
-              No more cards in this queue.
+              No more work items in this review.
             </p>
           </aside>
         </div>
       <% else %>
         <div class="px-4 py-8 sm:px-6">
           <%= if @todos == [] do %>
-            <p class="text-sm/6 font-medium text-zinc-950">No open cards.</p>
+            <p class="text-sm/6 font-medium text-zinc-950">No open work items.</p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              Maraithon will add cards here as it turns connected activity into durable todos.
+              When Maraithon finds a real commitment, it will appear here.
             </p>
           <% else %>
-            <p class="text-sm/6 font-medium text-zinc-950">Review complete for this session.</p>
+            <p class="text-sm/6 font-medium text-zinc-950">Review complete for now.</p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              <%= length(@todos) %> open <%= if length(@todos) == 1, do: "card remains", else: "cards remain" %> in Today.
+              <%= remaining_today_label(length(@todos)) %>
             </p>
           <% end %>
         </div>
@@ -3960,19 +4076,14 @@ defmodule MaraithonWeb.DashboardLive do
                     <%= insight_category_label(insight.category) %>
                   </span>
                   <span class={insight_priority_class(insight.priority)}>
-                    P<%= insight.priority %>
-                  </span>
-                  <span class="text-xs/5 text-zinc-500">
-                    confidence <%= format_confidence(insight.confidence) %>
+                    <%= insight_priority_label(insight) %>
                   </span>
                   <span :if={insight.due_at} class="text-xs/5 text-amber-700">
                     due <%= format_datetime(insight.due_at) %>
                   </span>
                 </div>
                 <p class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= insight.title %></p>
-                <p class="mt-1 text-xs/5 text-zinc-500">
-                  from <%= insight_source_label(insight.source) %> · account <%= insight_account_label(insight) %>
-                </p>
+                <p class="mt-1 text-xs/5 text-zinc-500"><%= insight_source_context(insight) %></p>
                 <p class="mt-1 text-sm/6 text-zinc-600"><%= insight.summary %></p>
                 <p class="mt-2 text-sm/6 text-indigo-700">
                   <span class="font-medium">
@@ -4313,15 +4424,138 @@ defmodule MaraithonWeb.DashboardLive do
     """
   end
 
-  defp payload_preview(payload) when is_map(payload) do
+  defp event_preview(%{payload: payload} = activity) when is_map(payload) do
     payload
-    |> Jason.encode!()
-    |> truncate(220)
-  rescue
-    _ -> inspect(payload, limit: 8)
+    |> product_payload_message()
+    |> safe_product_detail(event_type_summary(Map.get(activity, :event_type)))
   end
 
-  defp payload_preview(payload), do: payload |> inspect(limit: 8) |> truncate(220)
+  defp event_preview(%{event_type: event_type}), do: event_type_summary(event_type)
+  defp event_preview(_activity), do: "Recorded Maraithon activity."
+
+  defp product_payload_message(payload) when is_map(payload) do
+    Enum.find_value(["message", "summary", "title", "description", "status", "action"], fn key ->
+      case fetch_map_value(payload, key) do
+        value when is_binary(value) -> value
+        _ -> nil
+      end
+    end)
+  end
+
+  defp product_payload_message(_payload), do: nil
+
+  defp event_type_summary(event_type) when is_binary(event_type) do
+    normalized = String.downcase(event_type)
+
+    cond do
+      String.contains?(normalized, ["fail", "error"]) ->
+        "Recorded a failed action."
+
+      String.contains?(normalized, ["complete", "success", "finish"]) ->
+        "Recorded completed work."
+
+      String.contains?(normalized, ["start", "run", "claim"]) ->
+        "Recorded work in progress."
+
+      true ->
+        "Recorded Maraithon activity."
+    end
+  end
+
+  defp event_type_summary(_event_type), do: "Recorded Maraithon activity."
+
+  defp failure_details_preview(failure), do: RunErrorCopy.runtime_failure(failure)
+
+  defp log_message_preview(%{message: message}), do: public_log_message(message)
+
+  defp log_message_preview(message), do: public_log_message(message)
+
+  defp public_log_message(message) when is_binary(message) do
+    cond do
+      database_query_log?(message) ->
+        if String.contains?(message, "QUERY ERROR") do
+          "Database query failed."
+        else
+          "Database query completed."
+        end
+
+      true ->
+        message
+        |> Redaction.redact_string()
+        |> redact_common_log_values()
+        |> safe_product_detail("Diagnostic details are hidden from this view.")
+    end
+  end
+
+  defp public_log_message(message) do
+    message
+    |> inspect(limit: 8)
+    |> redact_common_log_values()
+    |> safe_product_detail("Diagnostic details are hidden from this view.")
+  end
+
+  defp database_query_log?(message) when is_binary(message) do
+    normalized = String.trim_leading(message)
+
+    String.contains?(message, ["QUERY OK", "QUERY ERROR"]) or
+      String.starts_with?(normalized, [
+        "SELECT ",
+        "INSERT INTO ",
+        "UPDATE ",
+        "DELETE FROM ",
+        "begin",
+        "commit",
+        "rollback"
+      ])
+  end
+
+  defp redact_common_log_values(message) when is_binary(message) do
+    message
+    |> String.replace(
+      ~r/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
+      "[redacted-email]"
+    )
+    |> then(fn text ->
+      Regex.replace(
+        ~r/\b(token|secret|api[_-]?key|password|chat_id)=("[^"]*"|'[^']*'|\S+)/i,
+        text,
+        fn _match, key, _value -> "#{key}=<redacted>" end
+      )
+    end)
+  end
+
+  defp redact_common_log_values(message), do: message
+
+  defp safe_product_detail(value, fallback) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" -> fallback
+      technical_detail?(trimmed) -> fallback
+      true -> truncate(trimmed, 500)
+    end
+  end
+
+  defp safe_product_detail(_value, fallback), do: fallback
+
+  defp technical_detail?(value) when is_binary(value) do
+    lower = String.downcase(value)
+
+    String.contains?(lower, [
+      "dbconnection",
+      "ecto.",
+      "http_status",
+      "internal_stacktrace",
+      "nsurlerrordomain",
+      "oauth_tokens",
+      "postgrex",
+      "stacktrace",
+      "token=",
+      "traceback"
+    ]) or String.contains?(value, ["{", "}", "=>", "#PID<"])
+  end
+
+  defp technical_detail?(_value), do: false
 
   defp truncate(value, max) when is_binary(value) do
     if String.length(value) > max do
@@ -4392,28 +4626,11 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp log_level_text_class(_), do: "text-zinc-600"
 
-  defp log_metadata_preview(metadata) when metadata in [%{}, nil], do: nil
-
-  defp log_metadata_preview(metadata) when is_map(metadata) do
-    metadata
-    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
-    |> Enum.sort_by(fn {key, _value} -> key end)
-    |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
-    |> truncate(120)
+  defp fly_log_app_label(%{app: app}) when is_binary(app) do
+    safe_product_detail(app, nil)
   end
 
-  defp log_metadata_preview(_), do: nil
-
-  defp fly_log_metadata_preview(%{app: app, metadata: metadata}) when is_map(metadata) do
-    metadata
-    |> Map.put_new("app", app)
-    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
-    |> Enum.sort_by(fn {key, _value} -> key end)
-    |> Enum.map_join(" ", fn {key, value} -> "#{key}=#{value}" end)
-    |> truncate(140)
-  end
-
-  defp fly_log_metadata_preview(_), do: nil
+  defp fly_log_app_label(_log), do: nil
 
   defp format_uptime(seconds) when is_integer(seconds) and seconds >= 0 do
     hours = div(seconds, 3600)
@@ -4427,9 +4644,9 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp format_uptime(_), do: "n/a"
+  defp format_uptime(_), do: "Unavailable"
 
-  defp format_time(nil), do: "N/A"
+  defp format_time(nil), do: "No timestamp"
 
   defp format_time(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
@@ -4441,7 +4658,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp format_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_time(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
 
-  defp format_datetime(nil), do: "N/A"
+  defp format_datetime(nil), do: nil
 
   defp format_datetime(datetime) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do

@@ -28,26 +28,6 @@ enum SessionPhase: Equatable {
     case signedIn
 }
 
-enum AuthEntryMode: String, CaseIterable, Identifiable {
-    case signIn
-    case signUp
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .signIn: "Sign In"
-        case .signUp: "Sign Up"
-        }
-    }
-
-    var actionTitle: String {
-        switch self {
-        case .signIn, .signUp: "Email Me a Code"
-        }
-    }
-}
-
 enum AuthError: LocalizedError, Equatable {
     case invalidEmail
     case magicLinkNotFound
@@ -63,7 +43,7 @@ enum AuthError: LocalizedError, Equatable {
         case .invalidOrExpiredLink:
             "Sign-in code is invalid or expired."
         case .restoreFailed:
-            "The saved session could not be restored."
+            "Sign-in could not be restored. Sign in again."
         }
     }
 }

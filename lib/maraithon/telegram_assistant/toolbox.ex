@@ -24,6 +24,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.ScheduledTasks
   alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant
+  alias Maraithon.TelegramAssistant.ActionFailureCopy
+  alias Maraithon.TelegramAssistant.PreferenceConfirmationCopy
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
@@ -34,6 +36,20 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   @immediate_agent_actions ~w(start stop restart)
   @gmail_insight_stale_threshold_hours 72
+  @source_health_issue_statuses ~w(stale reauth_required error unknown never_synced)
+  @preview_label_max_chars 72
+  @automation_behavior_labels %{
+    "ai_chief_of_staff" => "Chief of Staff",
+    "codebase_advisor" => "Codebase Advisor",
+    "founder_followthrough_agent" => "Founder Follow-Through",
+    "github_product_planner" => "GitHub Product Planner",
+    "inbox_calendar_advisor" => "Inbox and Calendar Advisor",
+    "personal_assistant_agent" => "Personal Assistant",
+    "prompt_agent" => "Custom",
+    "repo_planner" => "Repository Planner",
+    "slack_followthrough_agent" => "Slack Follow-Through",
+    "watchdog_summarizer" => "Watchdog Summary"
+  }
   @external_action_tools %{
     "gmail_send" => %{
       tool: "gmail_send_message",
@@ -98,7 +114,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     [
       tool_definition(
         "get_open_work_summary",
-        "Summarize open work, recent insights, and active agents for the linked user.",
+        "Summarize open work, recent insights, and active automations for the linked user.",
         %{
           "type" => "object",
           "properties" => %{
@@ -120,7 +136,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_open_loops",
-        "Fetch the linked user's durable open-loop snapshot across todos, CRM relationships, and deep memory.",
+        "Fetch the linked user's durable open-loop snapshot across open work, relationships, and memory.",
         %{
           "type" => "object",
           "properties" => %{
@@ -394,7 +410,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_todos",
-        "List the linked user's persisted todos and their statuses.",
+        "List the linked user's persisted open work items and their statuses.",
         %{
           "type" => "object",
           "properties" => %{
@@ -413,7 +429,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "upsert_todos",
-        "Create, update, or skip persisted todos for the linked user using model-level todo intelligence and semantic dedupe.",
+        "Create, update, or skip persisted open work items for the linked user using semantic dedupe.",
         %{
           "type" => "object",
           "required" => ["todos"],
@@ -453,7 +469,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "resolve_todo",
-        "Mark one persisted todo done, dismissed, or snoozed.",
+        "Mark one persisted work item done, dismissed, or snoozed.",
         %{
           "type" => "object",
           "required" => ["todo_id"],
@@ -476,7 +492,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "update_todo",
-        "Patch one persisted todo's title, context, priority, due date, status, owner, metadata, or next action.",
+        "Patch one persisted work item's title, context, priority, due date, status, owner, metadata, or next action.",
         %{
           "type" => "object",
           "required" => ["todo_id"],
@@ -506,7 +522,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "delete_todo",
-        "Dismiss one persisted todo as no longer relevant, optionally returning the remaining open todos.",
+        "Dismiss one persisted work item as no longer relevant, optionally returning the remaining open work.",
         %{
           "type" => "object",
           "required" => ["todo_id"],
@@ -527,7 +543,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_people",
-        "List the linked user's CRM people and relationship metadata.",
+        "List the linked user's people and relationship metadata.",
         %{
           "type" => "object",
           "properties" => %{
@@ -543,7 +559,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_person",
-        "Get one CRM person by id, search query, or contact detail.",
+        "Get one person by id, search query, or contact detail.",
         %{
           "type" => "object",
           "properties" => %{
@@ -558,7 +574,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "upsert_person",
-        "Create or update one CRM person with contact details, preferred communication, relationship, and speaking frequency.",
+        "Create or update one person with contact details, preferred communication, relationship, and speaking frequency.",
         %{
           "type" => "object",
           "properties" => %{
@@ -585,7 +601,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "link_person_data",
-        "Attach or detach a CRM person from a todo or another user-owned object.",
+        "Attach or detach a person from a work item or another user-owned object.",
         %{
           "type" => "object",
           "required" => ["person_id"],
@@ -606,7 +622,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "get_relationship_context",
-        "Fetch CRM relationship context for one person, including linked todos.",
+        "Fetch relationship context for one person, including linked work items.",
         %{
           "type" => "object",
           "properties" => %{
@@ -620,7 +636,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "learn_relationship_context",
-        "Learn CRM people, relationship memories, and source links from recent source observations using model-level relationship intelligence.",
+        "Learn people, relationship memories, and source links from recent source observations.",
         %{
           "type" => "object",
           "required" => ["observations"],
@@ -650,7 +666,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "delete_person",
-        "Delete one CRM person only when the user explicitly asks to remove that CRM record.",
+        "Delete one person only when the user explicitly asks to remove that relationship record.",
         %{
           "type" => "object",
           "required" => ["person_id"],
@@ -659,7 +675,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "merge_people",
-        "Merge two CRM person records after the user explicitly confirms they represent the same person.",
+        "Merge two person records after the user explicitly confirms they represent the same person.",
         %{
           "type" => "object",
           "required" => ["surviving_person_id", "merged_person_id"],
@@ -687,7 +703,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "review_connected_context",
-        "Review connected CRM, Gmail, Google Contacts, Calendar, Slack, iMessage, Apple Notes, Reminders, Files, Browser History, Voice Memos, open loops, and memory in one fast source-gathering call.",
+        "Review connected people, Gmail, Google Contacts, Calendar, Slack, iMessage, Apple Notes, Reminders, Files, Browser History, Voice Memos, open loops, and memory in one fast source-gathering call.",
         %{
           "type" => "object",
           "properties" => %{
@@ -844,7 +860,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "inspect_project",
-        "Inspect one project by id, slug, or human name, including local memory, attached agents, and top project-manager recommendations.",
+        "Inspect one project by id, slug, or human name, including local memory, attached automations, and top planning recommendations.",
         %{
           "type" => "object",
           "properties" => %{
@@ -964,7 +980,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_agents",
-        "List the linked user's saved agents and runtime status.",
+        "List the linked user's saved automations and current status.",
         %{
           "type" => "object",
           "properties" => %{
@@ -975,7 +991,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "inspect_agent",
-        "Inspect one agent, including runtime, spend, logs, events, and queued work.",
+        "Inspect one automation, including status, spend, logs, events, and queued work.",
         %{
           "type" => "object",
           "required" => ["agent_id"],
@@ -984,7 +1000,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "prepare_agent_action",
-        "Prepare or execute an agent lifecycle or CRUD action.",
+        "Prepare or execute an automation lifecycle or setup action.",
         %{
           "type" => "object",
           "required" => ["action"],
@@ -1009,7 +1025,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "query_agent",
-        "Ask a running agent a question and wait briefly for a response.",
+        "Ask a running automation a question and wait briefly for a response.",
         %{
           "type" => "object",
           "required" => ["agent_id", "message"],
@@ -1173,7 +1189,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "reminders_open",
-        "List the user's open Apple Reminders ordered by due date then priority. Use as the entry point when the user asks about reminders, things they need to do, or their to-do list (the durable Reminders.app list, not assistant-written todos).",
+        "List the user's open Apple Reminders ordered by due date then priority. Use as the entry point when the user asks about reminders, things they need to do, or their to-do list in Reminders.app.",
         %{
           "type" => "object",
           "properties" => %{
@@ -1317,7 +1333,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "recall_anywhere",
-        "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
+        "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
         %{
           "type" => "object",
           "required" => ["query"],
@@ -1714,6 +1730,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
     source_health = source_health_summary(user_id, open_insights)
     todos = Todos.list_open_for_user(user_id, limit: limit)
+    summary = open_work_summary(insights, todos, source_health)
 
     agents =
       Agents.list_agents(user_id: user_id)
@@ -1728,6 +1745,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
     {:ok,
      %{
+       summary: summary,
+       next_action: open_work_next_action(insights, todos, source_health),
        insight_count: length(insights),
        top_insights: insights,
        todo_count: length(todos),
@@ -1895,9 +1914,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           {:ok,
            preference_snapshot(runtime_context.user_id)
            |> Map.merge(%{
-             status: if(pending == [], do: "saved", else: "awaiting_confirmation"),
+             status: remember_preferences_status(active, pending, saved),
              saved_count: length(saved),
              saved_rules: saved,
+             durable_saved_count: length(active) + length(pending),
              active_saved_count: length(active),
              pending_saved_count: length(pending),
              requires_confirmation: pending != [],
@@ -2348,10 +2368,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         explanation.message ||
         "I found the ledger entry, but it did not include a model summary."
 
-    stale =
+    source_health_line =
       freshness
-      |> Enum.filter(&(&1.status in ["stale", "reauth_required", "error", "unknown"]))
-      |> Enum.map_join(", ", fn source -> "#{source.provider}: #{source.status}" end)
+      |> source_health_line()
 
     basis =
       case explanation.reason_code do
@@ -2359,15 +2378,82 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         reason -> "Policy reason: #{reason}."
       end
 
-    freshness_line =
-      if stale == "" do
-        "Sources were not marked stale in the current freshness snapshot."
-      else
-        "Source freshness issues: #{stale}."
-      end
-
-    "#{summary} #{basis} #{freshness_line}"
+    "#{summary} #{basis} #{source_health_line}"
   end
+
+  defp source_health_line(freshness) when is_list(freshness) do
+    freshness
+    |> Enum.map(&source_health_issue_copy/1)
+    |> Enum.reject(&blank_string?/1)
+    |> case do
+      [] -> "No source health issues were found for this check."
+      issues -> "Source health issues: #{Enum.join(issues, ", ")}."
+    end
+  end
+
+  defp source_health_line(_freshness), do: "No source health issues were found for this check."
+
+  defp source_health_issue_copy(source) when is_map(source) do
+    status = source_health_status(source_value(source, :status))
+
+    if status in @source_health_issue_statuses do
+      "#{source_health_label(source)} #{source_health_status_phrase(status)}"
+    end
+  end
+
+  defp source_health_issue_copy(_source), do: nil
+
+  defp source_value(source, key) when is_map(source) and is_atom(key) do
+    Map.get(source, key) || Map.get(source, Atom.to_string(key))
+  end
+
+  defp source_health_label(source) do
+    label = source_value(source, :account_label)
+
+    if blank_string?(label) do
+      source_provider_label(source_value(source, :provider))
+    else
+      label
+    end
+  end
+
+  defp source_health_status(value) when is_binary(value), do: value
+  defp source_health_status(value) when is_atom(value), do: Atom.to_string(value)
+  defp source_health_status(_value), do: nil
+
+  defp source_health_status_phrase("stale"), do: "is out of date"
+  defp source_health_status_phrase("reauth_required"), do: "needs reconnecting"
+  defp source_health_status_phrase("error"), do: "needs attention"
+  defp source_health_status_phrase("unknown"), do: "needs a status check"
+  defp source_health_status_phrase("never_synced"), do: "has not synced yet"
+  defp source_health_status_phrase(_status), do: "needs attention"
+
+  defp source_provider_label("google"), do: "Google"
+  defp source_provider_label("slack"), do: "Slack"
+  defp source_provider_label("telegram"), do: "Telegram"
+  defp source_provider_label("github"), do: "GitHub"
+  defp source_provider_label("linear"), do: "Linear"
+  defp source_provider_label("notion"), do: "Notion"
+  defp source_provider_label("notaui"), do: "Notaui"
+  defp source_provider_label("imessage"), do: "iMessage"
+  defp source_provider_label("messages"), do: "Messages"
+  defp source_provider_label("notes"), do: "Notes"
+  defp source_provider_label("voice_memos"), do: "Voice Memos"
+  defp source_provider_label("files"), do: "Files"
+  defp source_provider_label("browser_history"), do: "Browser History"
+  defp source_provider_label("calendar_local"), do: "Calendar"
+  defp source_provider_label("reminders"), do: "Reminders"
+  defp source_provider_label("desktop"), do: "Mac companion"
+
+  defp source_provider_label(provider) when is_binary(provider) do
+    provider
+    |> String.split(":")
+    |> List.first()
+    |> String.replace("_", " ")
+    |> String.capitalize()
+  end
+
+  defp source_provider_label(_provider), do: "Source"
 
   defp slack_search(runtime_context, args) do
     args =
@@ -2399,9 +2485,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           end
       end
     else
-      {:error, :no_token} -> {:error, "linear_not_connected"}
-      {:error, :reauth_required} -> {:error, "linear_reauth_required"}
-      {:error, reason} -> {:error, "linear_lookup_failed: #{inspect(reason)}"}
+      {:error, :no_token} ->
+        {:error, ActionFailureCopy.linear_lookup("linear_not_connected")}
+
+      {:error, :reauth_required} ->
+        {:error, ActionFailureCopy.linear_lookup("linear_reauth_required")}
+
+      {:error, reason} ->
+        {:error, ActionFailureCopy.linear_lookup(reason)}
     end
   end
 
@@ -2435,12 +2526,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            ) do
         {:ok, snapshot} -> {:ok, snapshot}
         {:degraded, snapshot} -> {:ok, Map.put(snapshot, :degraded, true)}
-        {:error, :not_found} -> {:error, "agent_not_found"}
-        {:error, reason} -> {:error, "agent_inspection_failed: #{inspect(reason)}"}
+        {:error, :not_found} -> {:error, ActionFailureCopy.agent_inspection("agent_not_found")}
+        {:error, reason} -> {:error, ActionFailureCopy.agent_inspection(reason)}
       end
     else
-      nil -> {:error, "agent_not_found"}
-      {:error, reason} -> {:error, reason}
+      nil -> {:error, ActionFailureCopy.agent_inspection("agent_not_found")}
+      {:error, reason} -> {:error, ActionFailureCopy.agent_inspection(reason)}
     end
   end
 
@@ -2461,11 +2552,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           execute_immediate_agent_action(runtime_context, action, args)
 
         _ ->
-          {:error, "unsupported_agent_action"}
+          {:error, ActionFailureCopy.prepared_action("unsupported_agent_action")}
       end
     else
-      false -> {:error, "agent_control_disabled"}
-      {:error, reason} -> {:error, reason}
+      false -> {:error, ActionFailureCopy.prepared_action("agent_control_disabled")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2507,13 +2598,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            }}
 
         {:error, reason} ->
-          {:error, inspect(reason)}
+          {:error, ActionFailureCopy.prepared_action(reason)}
       end
     else
-      false -> {:error, "write_tools_disabled"}
-      nil -> {:error, "unsupported_external_action"}
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, "invalid_external_payload"}
+      false -> {:error, ActionFailureCopy.prepared_action("write_tools_disabled")}
+      nil -> {:error, ActionFailureCopy.prepared_action("unsupported_external_action")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
+      _ -> {:error, ActionFailureCopy.prepared_action("invalid_external_payload")}
     end
   end
 
@@ -2531,8 +2622,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            ) do
       {:ok, result}
     else
-      false -> {:error, "agent_control_disabled"}
-      nil -> {:error, "agent_not_found"}
+      false -> {:error, ActionFailureCopy.prepared_action("agent_control_disabled")}
+      nil -> {:error, ActionFailureCopy.agent_inspection("agent_not_found")}
       {:error, reason} -> {:error, normalize_error(reason)}
     end
   end
@@ -2572,8 +2663,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            }}
 
         {:error, reason} ->
-          {:error, inspect(reason)}
+          {:error, ActionFailureCopy.prepared_action(reason)}
       end
+    else
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2628,12 +2721,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
              }}
 
           {:error, reason} ->
-            {:error, inspect(reason)}
+            {:error, ActionFailureCopy.prepared_action(reason)}
         end
+      else
+        {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
       end
     else
-      nil -> {:error, "agent_not_found"}
-      {:error, reason} -> {:error, reason}
+      nil -> {:error, ActionFailureCopy.prepared_action("agent_not_found")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2672,11 +2767,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            }}
 
         {:error, reason} ->
-          {:error, inspect(reason)}
+          {:error, ActionFailureCopy.prepared_action(reason)}
       end
     else
-      nil -> {:error, "agent_not_found"}
-      {:error, reason} -> {:error, reason}
+      nil -> {:error, ActionFailureCopy.prepared_action("agent_not_found")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2713,7 +2808,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
          result: result
        }}
     else
-      nil -> {:error, "agent_not_found"}
+      nil -> {:error, ActionFailureCopy.agent_inspection("agent_not_found")}
       {:error, reason} -> {:error, normalize_error(reason)}
     end
   end
@@ -2729,11 +2824,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
           prepare_project_update(runtime_context, args)
 
         _ ->
-          {:error, "unsupported_project_action"}
+          {:error, ActionFailureCopy.prepared_action("unsupported_project_action")}
       end
     else
-      false -> {:error, "write_tools_disabled"}
-      {:error, reason} -> {:error, reason}
+      false -> {:error, ActionFailureCopy.prepared_action("write_tools_disabled")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2777,11 +2872,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
              }}
 
           {:error, reason} ->
-            {:error, inspect(reason)}
+            {:error, ActionFailureCopy.prepared_action(reason)}
         end
 
       {:error, reason} ->
-        {:error, reason}
+        {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2822,11 +2917,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
            }}
 
         {:error, reason} ->
-          {:error, inspect(reason)}
+          {:error, ActionFailureCopy.prepared_action(reason)}
       end
     else
-      nil -> {:error, "project_not_found"}
-      {:error, reason} -> {:error, reason}
+      nil -> {:error, ActionFailureCopy.prepared_action("project_not_found")}
+      {:error, reason} -> {:error, ActionFailureCopy.prepared_action(reason)}
     end
   end
 
@@ -2849,8 +2944,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp normalize_tool_result({:ok, result}), do: {:ok, result}
-  defp normalize_tool_result({:error, reason}) when is_binary(reason), do: {:error, reason}
-  defp normalize_tool_result({:error, reason}), do: {:error, inspect(reason)}
+  defp normalize_tool_result({:error, reason}), do: {:error, ActionFailureCopy.tool_error(reason)}
 
   defp runtime_surface(runtime_context) do
     case Map.get(runtime_context, :surface) || Map.get(runtime_context, "surface") do
@@ -2891,10 +2985,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         {:ok, %{issue: issue}}
 
       {:ok, %{"issues" => %{"nodes" => []}}} ->
-        {:error, "linear_issue_not_found"}
+        {:error, ActionFailureCopy.linear_lookup("linear_issue_not_found")}
 
       {:error, reason} ->
-        {:error, "linear_lookup_failed: #{inspect(reason)}"}
+        {:error, ActionFailureCopy.linear_lookup(reason)}
     end
   end
 
@@ -2927,35 +3021,194 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp external_action_preview("gmail_send", payload) do
-    "Send Gmail message to #{Map.get(payload, "to")} with subject \"#{Map.get(payload, "subject")}\"."
+    recipient = preview_value(payload, ["to", "recipient", "recipient_email"], "the recipient")
+
+    case preview_value(payload, ["subject"], nil) do
+      nil -> "Send Gmail message to #{recipient}."
+      subject -> "Send Gmail message to #{recipient} with subject \"#{subject}\"."
+    end
   end
 
   defp external_action_preview("slack_post", payload) do
-    "Post Slack message to #{Map.get(payload, "channel")} on workspace #{Map.get(payload, "team_id")}."
+    workspace_suffix =
+      case preview_value(payload, ["workspace_name", "team_name"], nil) do
+        nil -> ""
+        workspace -> " in #{workspace}"
+      end
+
+    "Post a Slack message to #{slack_conversation_label(payload)}#{workspace_suffix}."
   end
 
   defp external_action_preview("linear_create_issue", payload) do
-    "Create Linear issue \"#{Map.get(payload, "title")}\" in team #{Map.get(payload, "team_id")}."
+    title =
+      case preview_value(payload, ["title"], nil) do
+        nil -> "a Linear issue"
+        title -> "Linear issue \"#{title}\""
+      end
+
+    team_suffix =
+      case preview_value(payload, ["team_name", "team_key"], nil) do
+        nil -> " in the selected team"
+        team -> " in #{team}"
+      end
+
+    "Create #{title}#{team_suffix}."
   end
 
   defp external_action_preview("linear_create_comment", payload) do
-    "Add a Linear comment to issue #{Map.get(payload, "issue_id")}."
+    "Add a Linear comment to #{linear_issue_label(payload)}."
   end
 
   defp external_action_preview("linear_update_issue_state", payload) do
-    "Move Linear issue #{Map.get(payload, "issue_id")} to state #{Map.get(payload, "state_id")}."
+    "Move #{linear_issue_label(payload)} to #{linear_state_label(payload)}."
   end
 
   defp external_action_preview("notaui_complete_task", payload) do
-    "Complete Notaui task #{Map.get(payload, "task_id")}."
+    "Complete #{notaui_task_label(payload)}."
   end
 
   defp external_action_preview("notaui_update_task", payload) do
-    "Update Notaui task #{Map.get(payload, "task_id")}."
+    "Update #{notaui_task_label(payload)}."
   end
 
   defp external_action_preview(_action_type, _payload),
     do: "Prepare the requested external action."
+
+  defp preview_value(payload, keys, fallback) do
+    Enum.find_value(keys, fn key ->
+      payload
+      |> Map.get(key)
+      |> preview_value()
+    end) || fallback
+  end
+
+  defp preview_value(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" -> nil
+      technical_preview_value?(value) -> nil
+      true -> truncate_preview_value(value)
+    end
+  end
+
+  defp preview_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp preview_value(_value), do: nil
+
+  defp technical_preview_value?(value) when is_binary(value) do
+    sensitive_preview_value?(value) or
+      Regex.match?(~r/^[A-Z][A-Z0-9]{6,}$/, value) or
+      Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, value) or
+      Regex.match?(~r/^(?:lin|notaui|slack|gmail|google)-[a-z0-9-]+$/i, value)
+  end
+
+  defp sensitive_preview_value?(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.contains?([
+      "access_token",
+      "authorization",
+      "bearer ",
+      "client_secret",
+      "refresh_token",
+      "secret",
+      "token="
+    ])
+  end
+
+  defp truncate_preview_value(value) do
+    if String.length(value) > @preview_label_max_chars do
+      String.slice(value, 0, @preview_label_max_chars) <> "..."
+    else
+      value
+    end
+  end
+
+  defp slack_conversation_label(payload) when is_map(payload) do
+    payload
+    |> slack_channel_preview_value([
+      "channel_name",
+      "channel_label",
+      "conversation_name",
+      "channel"
+    ])
+    |> slack_conversation_label()
+  end
+
+  defp slack_conversation_label(nil), do: "the selected Slack conversation"
+
+  defp slack_conversation_label("#" <> _ = channel), do: channel
+
+  defp slack_conversation_label(channel) do
+    cond do
+      slack_id?(channel) and String.starts_with?(channel, "D") ->
+        "the selected Slack conversation"
+
+      slack_id?(channel) ->
+        "the selected Slack channel"
+
+      true ->
+        "##{channel}"
+    end
+  end
+
+  defp slack_channel_preview_value(payload, keys) do
+    Enum.find_value(keys, fn key ->
+      payload
+      |> Map.get(key)
+      |> slack_channel_preview_value()
+    end)
+  end
+
+  defp slack_channel_preview_value(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" ->
+        nil
+
+      sensitive_preview_value?(value) ->
+        nil
+
+      Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, value) ->
+        nil
+
+      Regex.match?(~r/^(?:lin|notaui|slack|gmail|google)-[a-z0-9-]+$/i, value) ->
+        nil
+
+      true ->
+        truncate_preview_value(value)
+    end
+  end
+
+  defp slack_channel_preview_value(_value), do: nil
+
+  defp slack_id?(value) when is_binary(value), do: Regex.match?(~r/^[CDG][A-Z0-9]{6,}$/, value)
+  defp slack_id?(_value), do: false
+
+  defp linear_issue_label(payload) do
+    cond do
+      identifier = preview_value(payload, ["issue_identifier", "issue_key", "identifier"], nil) ->
+        "Linear issue #{identifier}"
+
+      title = preview_value(payload, ["issue_title", "title"], nil) ->
+        "Linear issue \"#{title}\""
+
+      true ->
+        "the selected Linear issue"
+    end
+  end
+
+  defp linear_state_label(payload) do
+    preview_value(payload, ["state_name", "status_name", "state", "status"], "the selected state")
+  end
+
+  defp notaui_task_label(payload) do
+    case preview_value(payload, ["task_title", "title", "task_name", "name"], nil) do
+      nil -> "the selected Notaui task"
+      title -> "Notaui task \"#{title}\""
+    end
+  end
 
   defp external_target_id(action_type, payload)
        when action_type in [
@@ -2972,7 +3225,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp create_agent_preview(runtime_context, start_params) do
     config = Map.get(start_params, "config", %{})
-    name = Map.get(config, "name") || start_params["behavior"]
+    name = automation_name(config, start_params["behavior"])
 
     project_suffix =
       case project_name(runtime_context, Map.get(start_params, "project_id")) do
@@ -2980,12 +3233,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         project_name -> " and attach it to project #{project_name}"
       end
 
-    "Create agent #{name} using behavior #{start_params["behavior"]}#{project_suffix}."
+    "Create the #{automation_label(name)} automation#{project_suffix}."
   end
 
   defp update_agent_preview(runtime_context, agent, update_params) do
-    name = get_in(agent.config || %{}, ["name"]) || agent.behavior
-    behavior = Map.get(update_params, "behavior", agent.behavior)
+    name = automation_name(agent)
 
     project_suffix =
       case project_name(runtime_context, Map.get(update_params, "project_id", agent.project_id)) do
@@ -2993,37 +3245,75 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         project_name -> " Attach it to project #{project_name}."
       end
 
-    "Update agent #{name} with behavior #{behavior} and apply the new configuration.#{project_suffix}"
+    "Update the #{automation_label(name)} automation and apply the new settings.#{project_suffix}"
   end
 
   defp delete_agent_preview(agent) do
-    name = get_in(agent.config || %{}, ["name"]) || agent.behavior
-    "Delete agent #{name}. This removes its saved definition and runtime history dependencies."
+    name = automation_name(agent)
+    "Delete the #{automation_label(name)} automation. This removes its saved setup and history."
   end
 
   defp immediate_agent_preview(action, agent) do
-    name = get_in(agent.config || %{}, ["name"]) || agent.behavior
-    "#{String.capitalize(action)} agent #{name}."
+    name = automation_name(agent)
+    "#{String.capitalize(action)} the #{automation_label(name)} automation."
   end
 
   defp immediate_agent_result_text("start", agent, _result) do
-    "Started agent #{agent_name(agent)}."
+    "Started the #{automation_label(automation_name(agent))} automation."
   end
 
   defp immediate_agent_result_text("stop", agent, _result) do
-    "Stopped agent #{agent_name(agent)}."
+    "Stopped the #{automation_label(automation_name(agent))} automation."
   end
 
   defp immediate_agent_result_text("restart", agent, _result) do
-    "Restarted agent #{agent_name(agent)}."
+    "Restarted the #{automation_label(automation_name(agent))} automation."
   end
 
   defp immediate_agent_result_text(_action, agent, _result) do
-    "Updated agent #{agent_name(agent)}."
+    "Updated the #{automation_label(automation_name(agent))} automation."
   end
 
-  defp agent_name(agent) do
-    get_in(agent.config || %{}, ["name"]) || agent.behavior
+  defp automation_name(agent) do
+    automation_name(agent.config || %{}, agent.behavior)
+  end
+
+  defp automation_name(config, behavior) do
+    config
+    |> Map.get("name")
+    |> case do
+      name when is_binary(name) ->
+        case String.trim(name) do
+          "" -> automation_behavior_label(behavior)
+          trimmed -> trimmed
+        end
+
+      _ ->
+        automation_behavior_label(behavior)
+    end
+  end
+
+  defp automation_label(name) do
+    name = name |> to_string() |> String.replace(~s("), "'")
+    ~s("#{name}")
+  end
+
+  defp automation_behavior_label(behavior) when is_binary(behavior) do
+    Map.get_lazy(@automation_behavior_labels, behavior, fn ->
+      behavior
+      |> String.replace_suffix("_agent", "")
+      |> String.replace("_", " ")
+      |> String.split(" ", trim: true)
+      |> Enum.map_join(" ", &String.capitalize/1)
+      |> case do
+        "" -> "Custom"
+        label -> label
+      end
+    end)
+  end
+
+  defp automation_behavior_label(_behavior) do
+    "Custom"
   end
 
   defp create_project_preview(attrs) do
@@ -3362,18 +3652,188 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp gmail_insights_stale?(_freshest_visible_email_at, _latest_insight_at), do: false
 
   defp gmail_recommended_next_step("not_connected", _insights_stale, _freshest_visible_email_at) do
-    "Tell the user Gmail is not connected, or that Maraithon cannot currently inspect inbox state."
+    "Gmail is not connected, so email follow-up may be missing."
   end
 
   defp gmail_recommended_next_step("error", _insights_stale, _freshest_visible_email_at) do
-    "Tell the user Gmail access failed and that Maraithon should notify them to reconnect."
+    "Gmail needs attention before this is a complete inbox review."
   end
 
   defp gmail_recommended_next_step("ok", true, %DateTime{} = _freshest_visible_email_at) do
-    "Open Gmail insights look stale relative to live inbox mail. Use gmail_search_messages before answering latest or today inbox questions."
+    "Gmail has newer mail than this summary; search Gmail before treating email follow-up as complete."
   end
 
   defp gmail_recommended_next_step("ok", _insights_stale, _freshest_visible_email_at), do: nil
+
+  defp open_work_summary(insights, todos, source_health) do
+    count_line = open_work_count_line(length(insights), length(todos))
+    focus_line = open_work_focus_line(insights, todos, source_health)
+    source_line = gmail_user_gap(source_health)
+
+    [count_line, focus_line, source_line]
+    |> Enum.reject(&blank_string?/1)
+    |> Enum.join(" ")
+  end
+
+  defp open_work_next_action(insights, todos, source_health) do
+    cond do
+      gmail_stale?(source_health) ->
+        "Search Gmail before answering questions about the latest inbox or today's priorities."
+
+      focus = open_work_focus_item(insights, todos) ->
+        "Start with #{sentence_fragment(open_work_focus_action(focus))}."
+
+      gmail_not_connected?(source_health) ->
+        "Connect Gmail before relying on this as a complete inbox review."
+
+      gmail_error?(source_health) ->
+        "Reconnect Gmail before relying on this as a complete inbox review."
+
+      true ->
+        "No open work needs action right now."
+    end
+  end
+
+  defp open_work_count_line(0, 0), do: "No open work needs attention right now."
+
+  defp open_work_count_line(insight_count, todo_count) do
+    parts =
+      [
+        count_phrase(insight_count, "insight"),
+        count_phrase(todo_count, "work item")
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    "Open work: #{Enum.join(parts, " and ")}."
+  end
+
+  defp open_work_focus_line(insights, todos, source_health) when is_map(source_health) do
+    if gmail_stale?(source_health), do: nil, else: open_work_focus_line(insights, todos)
+  end
+
+  defp open_work_focus_line(insights, todos, _source_health),
+    do: open_work_focus_line(insights, todos)
+
+  defp open_work_focus_line(insights, todos) do
+    case open_work_focus_item(insights, todos) do
+      nil -> nil
+      focus -> "Start with #{sentence_fragment(open_work_focus_action(focus))}."
+    end
+  end
+
+  defp open_work_focus_item(insights, todos) do
+    (Enum.map(insights, &open_work_item_from_insight/1) ++
+       Enum.map(todos, &open_work_item_from_todo/1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.max_by(& &1.priority, fn -> nil end)
+  end
+
+  defp open_work_item_from_insight(insight) when is_map(insight) do
+    title = open_work_field(insight, :title)
+    action = open_work_field(insight, :recommended_action)
+
+    if blank_string?(title) do
+      nil
+    else
+      %{
+        title: title,
+        action: open_work_action_or_title(action, title),
+        priority: normalize_priority(open_work_field(insight, :priority))
+      }
+    end
+  end
+
+  defp open_work_item_from_insight(_insight), do: nil
+
+  defp open_work_item_from_todo(todo) do
+    title = open_work_field(todo, :title)
+    action = open_work_field(todo, :next_action)
+
+    if blank_string?(title) do
+      nil
+    else
+      %{
+        title: title,
+        action: open_work_action_or_title(action, title),
+        priority: normalize_priority(open_work_field(todo, :priority))
+      }
+    end
+  end
+
+  defp open_work_focus_action(%{action: action}) when not is_nil(action), do: action
+  defp open_work_focus_action(%{title: title}), do: title
+
+  defp open_work_action_or_title(action, title) do
+    action = trim_open_work_text(action)
+
+    cond do
+      blank_string?(action) -> title
+      same_open_work_text?(action, title) -> title
+      true -> action
+    end
+  end
+
+  defp open_work_field(map, key) when is_map(map) and is_atom(key) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp trim_open_work_text(value) when is_binary(value), do: String.trim(value)
+  defp trim_open_work_text(value), do: value
+
+  defp same_open_work_text?(left, right) when is_binary(left) and is_binary(right) do
+    String.downcase(String.trim(left)) == String.downcase(String.trim(right))
+  end
+
+  defp same_open_work_text?(_left, _right), do: false
+
+  defp gmail_user_gap(source_health) do
+    cond do
+      gmail_stale?(source_health) ->
+        "Gmail has newer mail than this summary; search Gmail before treating email follow-up as complete."
+
+      gmail_not_connected?(source_health) ->
+        "Gmail is not connected, so email follow-up may be missing."
+
+      gmail_error?(source_health) ->
+        "Gmail needs attention before this is a complete inbox review."
+
+      true ->
+        nil
+    end
+  end
+
+  defp gmail_stale?(source_health),
+    do:
+      gmail_field(source_health, :status) == "ok" and
+        gmail_field(source_health, :insights_stale) == true
+
+  defp gmail_not_connected?(source_health),
+    do: gmail_field(source_health, :status) == "not_connected"
+
+  defp gmail_error?(source_health), do: gmail_field(source_health, :status) == "error"
+
+  defp gmail_field(source_health, field) do
+    gmail = Map.get(source_health, :gmail) || Map.get(source_health, "gmail") || %{}
+    Map.get(gmail, field) || Map.get(gmail, to_string(field))
+  end
+
+  defp count_phrase(0, _word), do: nil
+  defp count_phrase(1, word), do: "1 #{word}"
+  defp count_phrase(count, word), do: "#{count} #{word}s"
+
+  defp normalize_priority(value) when is_number(value), do: value
+  defp normalize_priority(_value), do: 0
+
+  defp sentence_fragment(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.trim_trailing(".")
+  end
+
+  defp sentence_fragment(value), do: value |> to_string() |> sentence_fragment()
+
+  defp blank_string?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_string?(value), do: is_nil(value)
 
   defp normalize_source("gmail:" <> _rest), do: "gmail"
   defp normalize_source("gmail"), do: "gmail"
@@ -3547,16 +4007,25 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp remember_preferences_message(active, pending, saved) do
     cond do
       pending != [] ->
-        "I think this should become durable memory. Reply `yes` to save it, or `no` to keep it local only."
+        PreferenceConfirmationCopy.text(pending)
 
       active != [] ->
-        "Saved durable preference memory for future operator decisions."
+        PreferenceConfirmationCopy.saved_text(active)
 
       saved != [] ->
-        "Captured the preference update."
+        PreferenceConfirmationCopy.failed_text()
 
       true ->
-        "I couldn't persist a durable preference from that yet."
+        PreferenceConfirmationCopy.failed_text()
+    end
+  end
+
+  defp remember_preferences_status(active, pending, saved) do
+    cond do
+      pending != [] -> "awaiting_confirmation"
+      active != [] -> "saved"
+      saved != [] -> "not_saved"
+      true -> "not_saved"
     end
   end
 
@@ -3617,6 +4086,5 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
   defp stringify_value(value), do: value
 
-  defp normalize_error(error) when is_binary(error), do: error
-  defp normalize_error(error), do: inspect(error)
+  defp normalize_error(error), do: ActionFailureCopy.tool_error(error)
 end

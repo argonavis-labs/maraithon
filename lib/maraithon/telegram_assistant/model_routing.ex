@@ -8,7 +8,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   alias Maraithon.LLM
 
-  @default_chat_reasoning_effort "medium"
+  @default_chat_reasoning_effort "none"
   @default_reasoning_max_tokens 6_000
   @default_reasoning_wall_clock_ms 120_000
   @default_reasoning_llm_turns 8
@@ -72,6 +72,12 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     ~r/\bwaiting\s+on\b/u
   ]
 
+  @meeting_prep_patterns [
+    ~r/\b(meeting\s+prep|prep\s+for|prepare\s+for)\b.*\b(meeting|call|conversation)\b/u,
+    ~r/\bwhat\s+should\s+i\s+know\b.*\b(meeting|call|conversation|before)\b/u,
+    ~r/\bwho\s+(am\s+i\s+meeting|is\s+on\s+my\s+calendar)\b/u
+  ]
+
   @person_context_patterns [
     ~r/\bwho\s+(is|are)\s+(?!this|that|they|them|he|she|it|person)\p{L}/u,
     ~r/\b(tell|remind)\s+me\s+about\s+\p{L}/u,
@@ -108,12 +114,16 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     text = Map.get(attrs, :text) || Map.get(attrs, "text")
     tier = tier_for_text(text)
     request_focus = request_focus_for_attrs(attrs, text)
+    task_class = task_class_for(tier, request_focus, text)
+    route_reason = route_reason_for(tier, request_focus, text)
     model = model_for_tier(tier)
     reasoning_effort = reasoning_effort_for_tier(tier)
 
     %{
       tier: tier,
       request_focus: request_focus,
+      task_class: task_class,
+      route_reason: route_reason,
       model: model,
       reasoning_effort: reasoning_effort,
       max_tokens: max_tokens_for_tier(tier),
@@ -123,12 +133,16 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   def escalated_profile_for(profile) when is_map(profile) do
     request_focus = Map.get(profile, :request_focus) || Map.get(profile, "request_focus")
+    task_class = Map.get(profile, :task_class) || Map.get(profile, "task_class") || :reasoning
+    route_reason = Map.get(profile, :route_reason) || Map.get(profile, "route_reason") || "chat"
     model = model_for_tier(:reasoning)
     reasoning_effort = reasoning_effort_for_tier(:reasoning)
 
     %{
       tier: :reasoning,
       request_focus: request_focus,
+      task_class: task_class,
+      route_reason: "escalated_to_reasoning:#{route_label(route_reason)}",
       model: model,
       reasoning_effort: reasoning_effort,
       max_tokens: max_tokens_for_tier(:reasoning),
@@ -168,6 +182,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   defp request_focus_for_attrs(attrs, text) do
     cond do
+      linked_reply?(attrs) && linked_item_action_request?(text) ->
+        :linked_item_context
+
       linked_reply?(attrs) && linked_item_context_request?(text) ->
         :linked_item_context
 
@@ -180,17 +197,23 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     normalized = normalize_text(text)
 
     cond do
+      source_hint_person_question?(normalized) ->
+        :source_hint_identity
+
       Enum.any?(@connector_status_patterns, &Regex.match?(&1, normalized)) ->
         :connector_status
 
       Enum.any?(@today_mode_patterns, &Regex.match?(&1, normalized)) ->
         :today_mode
 
-      Enum.any?(@person_context_patterns, &Regex.match?(&1, normalized)) ->
-        :person_context
+      Enum.any?(@meeting_prep_patterns, &Regex.match?(&1, normalized)) ->
+        :meeting_prep
 
       Enum.any?(@waiting_on_patterns, &Regex.match?(&1, normalized)) ->
         :waiting_on
+
+      Enum.any?(@person_context_patterns, &Regex.match?(&1, normalized)) ->
+        :person_context
 
       Enum.any?(@quick_chat_patterns, &Regex.match?(&1, normalized)) ->
         :quick_chat
@@ -215,6 +238,21 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:request_focus, :connector_status)
     |> Keyword.put(:context_scope, :connector_status)
     |> Keyword.put(:tool_scope, :connector_status)
+    |> Keyword.put(:max_tokens, 700)
+    |> Keyword.put(:max_wall_clock_ms, 15_000)
+    |> Keyword.put(:max_llm_turns, 3)
+    |> Keyword.put(:max_tool_steps, 3)
+  end
+
+  defp maybe_put_focus(keyword, :source_hint_identity) do
+    keyword
+    |> Keyword.put(:request_focus, :source_hint_identity)
+    |> Keyword.put(:context_scope, :person_context)
+    |> Keyword.put(:tool_scope, :person_context)
+    |> Keyword.put(:max_tokens, 900)
+    |> Keyword.put(:max_wall_clock_ms, 30_000)
+    |> Keyword.put(:max_llm_turns, 4)
+    |> Keyword.put(:max_tool_steps, 5)
   end
 
   defp maybe_put_focus(keyword, :linked_item_context) do
@@ -234,6 +272,7 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:request_focus, :quick_chat)
     |> Keyword.put(:context_scope, :quick_chat)
     |> Keyword.put(:tool_scope, :quick_chat)
+    |> Keyword.put(:max_tokens, 700)
     |> Keyword.put(:max_wall_clock_ms, 15_000)
     |> Keyword.put(:max_llm_turns, 3)
     |> Keyword.put(:max_tool_steps, 1)
@@ -244,6 +283,23 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:request_focus, :today_mode)
     |> Keyword.put(:context_scope, :today_mode)
     |> Keyword.put(:tool_scope, :today_mode)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 12)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
+  end
+
+  defp maybe_put_focus(keyword, :meeting_prep) do
+    keyword
+    |> Keyword.put(:request_focus, :meeting_prep)
+    |> Keyword.put(:context_scope, :meeting_prep)
+    |> Keyword.put(:tool_scope, :meeting_prep)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 12)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
   end
 
   defp maybe_put_focus(keyword, :waiting_on) do
@@ -251,6 +307,11 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
     |> Keyword.put(:request_focus, :waiting_on)
     |> Keyword.put(:context_scope, :waiting_on)
     |> Keyword.put(:tool_scope, :waiting_on)
+    |> Keyword.put(:max_wall_clock_ms, 90_000)
+    |> Keyword.put(:max_llm_turns, 6)
+    |> Keyword.put(:max_tool_steps, 12)
+    |> Keyword.put(:model_busy_max_retries, 24)
+    |> Keyword.put(:model_retry_max_delay_ms, 1_500)
   end
 
   defp maybe_put_focus(keyword, :person_context) do
@@ -275,6 +336,19 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   defp linked_reply?(_attrs), do: false
 
+  defp linked_item_action_request?(text) when is_binary(text) do
+    text
+    |> normalize_text()
+    |> then(fn normalized ->
+      Regex.match?(
+        ~r/\b(done|handled|complete|completed|close|closed|resolve|resolved|dismiss|delete|remove|irrelevant|no\s+longer\s+relevant|not\s+relevant|noise|change|update|edit|snooze|later|tomorrow|work|home|personal)\b/u,
+        normalized
+      )
+    end)
+  end
+
+  defp linked_item_action_request?(_text), do: false
+
   defp linked_item_context_request?(text) when is_binary(text) do
     normalized = normalize_text(text)
 
@@ -294,6 +368,76 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
   end
 
   defp source_hint_person_question?(_text), do: false
+
+  defp task_class_for(_tier, :linked_item_context, _text), do: :linked_item_context
+  defp task_class_for(_tier, :source_hint_identity, _text), do: :source_hint_identity
+  defp task_class_for(_tier, :connector_status, _text), do: :connector_status
+  defp task_class_for(_tier, :today_mode, _text), do: :today_mode
+  defp task_class_for(_tier, :meeting_prep, _text), do: :meeting_prep
+  defp task_class_for(_tier, :person_context, _text), do: :person_context
+  defp task_class_for(_tier, :waiting_on, _text), do: :waiting_on
+  defp task_class_for(_tier, :quick_chat, _text), do: :quick_chat
+
+  defp task_class_for(:reasoning, _focus, text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    cond do
+      Enum.any?(@planning_patterns, &Regex.match?(&1, normalized)) -> :planning
+      true -> :reasoning
+    end
+  end
+
+  defp task_class_for(:chat, _focus, text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    cond do
+      source_hint_person_question?(normalized) -> :source_hint_identity
+      normalized == "" -> :empty_chat
+      Regex.scan(~r/\S+/u, normalized) |> length() <= 8 -> :simple_answer
+      true -> :general_chat
+    end
+  end
+
+  defp task_class_for(tier, _focus, _text), do: tier
+
+  defp route_reason_for(_tier, :linked_item_context, _text), do: "reply_to_linked_item_context"
+
+  defp route_reason_for(_tier, :source_hint_identity, _text),
+    do: "bounded_source_hint_identity_chat"
+
+  defp route_reason_for(_tier, :connector_status, _text), do: "connector_status_focus"
+  defp route_reason_for(_tier, :today_mode, _text), do: "today_mode_or_attention_request"
+  defp route_reason_for(_tier, :meeting_prep, _text), do: "meeting_prep_requires_context"
+  defp route_reason_for(_tier, :person_context, _text), do: "person_or_contact_context"
+  defp route_reason_for(_tier, :waiting_on, _text), do: "waiting_on_or_commitment_analysis"
+  defp route_reason_for(_tier, :quick_chat, _text), do: "quick_wording_request"
+
+  defp route_reason_for(:reasoning, _focus, text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    cond do
+      Enum.any?(@planning_patterns, &Regex.match?(&1, normalized)) ->
+        "planning_source_or_open_loop_analysis"
+
+      true ->
+        "reasoning_pattern"
+    end
+  end
+
+  defp route_reason_for(:chat, _focus, text) when is_binary(text) do
+    normalized = normalize_text(text)
+
+    cond do
+      source_hint_person_question?(normalized) -> "bounded_source_hint_identity_chat"
+      true -> "default_fast_chat_tier"
+    end
+  end
+
+  defp route_reason_for(tier, _focus, _text), do: "#{tier}_tier"
+
+  defp route_label(value) when is_atom(value), do: Atom.to_string(value)
+  defp route_label(value) when is_binary(value), do: value
+  defp route_label(_value), do: "chat"
 
   defp model_for_tier(:reasoning), do: non_empty(LLM.model()) || non_empty(LLM.chat_model())
   defp model_for_tier(:chat), do: non_empty(LLM.chat_model()) || non_empty(LLM.model())

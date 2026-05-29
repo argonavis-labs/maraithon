@@ -2,7 +2,7 @@
   <div class="space-y-6">
     <header class="flex flex-wrap items-end justify-between gap-3">
       <h1 class="text-2xl/8 font-semibold tracking-tight text-zinc-950 sm:text-xl/8">
-        Connectors
+        Connected Apps
       </h1>
       <span class="text-xs/5 text-zinc-500"><%= @connected_count %> connected</span>
     </header>
@@ -11,7 +11,9 @@
       <.alert color="amber">
         <%= for error <- @connection_errors do %>
           <p class="text-sm font-medium"><%= error.message %></p>
-          <p class="mt-1 text-xs"><%= error.details %></p>
+          <%= if detail = connection_error_detail(error) do %>
+            <p class="mt-1 text-xs"><%= detail %></p>
+          <% end %>
         <% end %>
       </.alert>
     <% end %>
@@ -19,7 +21,7 @@
     <%= if not telegram_connected?(@providers) do %>
       <.alert color="blue" title="Connect Telegram first">
         <p>
-          Maraithon needs a Telegram chat before OAuth connectors become available. The Desktop App can still sync local sources from your Mac.
+          Connect Telegram first so Maraithon can send proactive updates. The Desktop App can still sync local context from your Mac.
         </p>
       </.alert>
     <% end %>
@@ -71,7 +73,7 @@
                   <%= connection_primary_action(provider) %>
                 </span>
               <% true -> %>
-                <span class="text-xs/5 text-zinc-400">Configure OAuth first</span>
+                <span class="text-xs/5 text-zinc-400">Setup needed</span>
             <% end %>
             <span class="text-zinc-400" aria-hidden="true">→</span>
           </span>

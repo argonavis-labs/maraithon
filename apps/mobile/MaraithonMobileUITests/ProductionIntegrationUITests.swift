@@ -164,7 +164,7 @@ final class ProductionIntegrationUITests: XCTestCase {
         waitForAssistantTurn(app: app)
 
         XCTAssertTrue(
-            app.staticTexts["Hey - I'm here."].waitForExistence(timeout: 10),
+            app.staticTexts["I'm here. What needs attention?"].waitForExistence(timeout: 10),
             app.debugDescription
         )
 

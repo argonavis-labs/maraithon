@@ -276,7 +276,8 @@ defmodule Maraithon.ChiefOfStaff.MorningBriefingVerifier do
       "chat_model" => chat_model,
       "routing_model" => routing_model,
       "model_fallbacks" => model_fallbacks,
-      "openai_reasoning_effort" => LLM.openai_reasoning_effort()
+      "openai_reasoning_effort" => LLM.openai_reasoning_effort(),
+      "openrouter_reasoning_effort" => LLM.openrouter_reasoning_effort()
     }
   end
 

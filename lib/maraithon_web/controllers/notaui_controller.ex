@@ -2,6 +2,7 @@ defmodule MaraithonWeb.NotauiController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Connectors.Notaui
+  alias MaraithonWeb.ApiErrorCopy
 
   @default_topic "notaui:tasks"
 
@@ -42,7 +43,7 @@ defmodule MaraithonWeb.NotauiController do
       {:error, reason} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "Failed to sync Notaui tasks", reason: inspect(reason)})
+        |> json(ApiErrorCopy.notaui_sync(reason))
     end
   end
 

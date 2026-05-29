@@ -86,38 +86,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignmentTest do
     assert Map.has_key?(waiting_state.pending_projects, work_project.id)
     assert Map.has_key?(waiting_state.pending_todos, todo.id)
 
+    scope_payload = %{
+      "summary" => "Sorted the current weekend backlog and need one confirmation.",
+      "projects" => [
+        %{
+          "project_id" => work_project.id,
+          "life_domain" => "work",
+          "confidence" => 0.94,
+          "reasoning" => "This project is about the Maraithon product and software delivery.",
+          "ask_user" => false
+        },
+        %{
+          "project_id" => home_project.id,
+          "life_domain" => "home",
+          "confidence" => 0.61,
+          "reasoning" => "The summary and note look like personal household work.",
+          "ask_user" => true,
+          "question" => "Is Garage Renovation a home project or a work project?"
+        }
+      ],
+      "todos" => [
+        %{
+          "todo_id" => todo.id,
+          "project_id" => work_project.id,
+          "project_name" => work_project.name,
+          "life_domain" => "work",
+          "confidence" => 0.88,
+          "reasoning" => "Reviewing the dashboard PR belongs with the product project."
+        }
+      ]
+    }
+
     response = %{
-      content:
-        Jason.encode!(%{
-          "summary" => "Sorted the current weekend backlog and need one confirmation.",
-          "projects" => [
-            %{
-              "project_id" => work_project.id,
-              "life_domain" => "work",
-              "confidence" => 0.94,
-              "reasoning" => "This project is about the Maraithon product and software delivery.",
-              "ask_user" => false
-            },
-            %{
-              "project_id" => home_project.id,
-              "life_domain" => "home",
-              "confidence" => 0.61,
-              "reasoning" => "The summary and note look like personal household work.",
-              "ask_user" => true,
-              "question" => "Is Garage Renovation a home project or a work project?"
-            }
-          ],
-          "todos" => [
-            %{
-              "todo_id" => todo.id,
-              "project_id" => work_project.id,
-              "project_name" => work_project.name,
-              "life_domain" => "work",
-              "confidence" => 0.88,
-              "reasoning" => "Reviewing the dashboard PR belongs with the product project."
-            }
-          ]
-        })
+      content: """
+      Here is the weekend scope pass.
+
+      ```json
+      #{Jason.encode!(scope_payload)}
+      ```
+      """
     }
 
     assert {:emit, {:briefs_recorded, payload}, next_state} =
@@ -145,9 +152,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignmentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "weekend_scope"
-    assert brief.title =~ "Garage Renovation"
-    assert brief.body =~ "Reply in-thread with `work` or `home`"
+    assert brief.title == "Confirm project scope: Garage Renovation"
+    assert brief.summary =~ "Confirm whether Garage Renovation is a home project"
+    assert brief.body =~ "Needs your call: is Garage Renovation a home project?"
+    assert brief.body =~ "Current read: Garage Renovation looks like home"
+    assert brief.body =~ "Reply with `home` or `work`"
+    refute brief.summary =~ "todos"
+    refute brief.body =~ "todos"
+    refute brief.body =~ "Weekend home/work pass"
+    refute brief.body =~ "confidence"
+    refute brief.body =~ "%"
     assert get_in(brief.metadata, ["linked_project", "id"]) == home_project.id
+    assert brief.metadata["life_domain_confidence"] == 0.61
   end
 
   test "stays idle on weekdays", %{user_id: user_id, agent: agent} do

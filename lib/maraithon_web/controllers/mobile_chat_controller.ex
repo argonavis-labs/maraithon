@@ -43,6 +43,25 @@ defmodule MaraithonWeb.MobileChatController do
     end
   end
 
+  def update(conn, %{"id" => thread_id} = params) do
+    user_id = conn.assigns.current_user.id
+
+    case AssistantChat.update_thread(user_id, thread_id, thread_params(params)) do
+      {:ok, thread} ->
+        json(conn, MobileChatJSON.thread(thread))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(MobileChatJSON.error(:not_found))
+
+      {:error, reason} ->
+        conn
+        |> put_status(status_for_error(reason))
+        |> json(MobileChatJSON.error(reason))
+    end
+  end
+
   def create_message(conn, %{"thread_id" => thread_id} = params) do
     user_id = conn.assigns.current_user.id
 
@@ -79,6 +98,25 @@ defmodule MaraithonWeb.MobileChatController do
     end
   end
 
+  def delete_message(conn, %{"thread_id" => thread_id, "message_id" => message_id}) do
+    user_id = conn.assigns.current_user.id
+
+    case AssistantChat.delete_message(user_id, thread_id, message_id) do
+      {:ok, thread} ->
+        json(conn, MobileChatJSON.thread(thread))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(MobileChatJSON.error(:not_found))
+
+      {:error, reason} ->
+        conn
+        |> put_status(status_for_error(reason))
+        |> json(MobileChatJSON.error(reason))
+    end
+  end
+
   def show_run(conn, %{"id" => run_id}) do
     user_id = conn.assigns.current_user.id
 
@@ -102,13 +140,11 @@ defmodule MaraithonWeb.MobileChatController do
         json(conn, MobileChatJSON.action_result(prepared_action, thread))
 
       {:error, :prepared_action_expired, prepared_action, thread} ->
+        error = MobileChatJSON.error(:prepared_action_expired)
+
         conn
         |> put_status(:gone)
-        |> json(
-          Map.merge(MobileChatJSON.action_result(prepared_action, thread), %{
-            error: "prepared_action_expired"
-          })
-        )
+        |> json(Map.merge(MobileChatJSON.action_result(prepared_action, thread), error))
 
       {:error, :not_found} ->
         conn
@@ -138,7 +174,11 @@ defmodule MaraithonWeb.MobileChatController do
   defp status_for_error(:message_too_long), do: :unprocessable_entity
   defp status_for_error(:missing_client_message_id), do: :unprocessable_entity
   defp status_for_error(:empty_message), do: :unprocessable_entity
+  defp status_for_error(:empty_thread_title), do: :unprocessable_entity
+  defp status_for_error(:thread_title_too_long), do: :unprocessable_entity
+  defp status_for_error(:message_not_found), do: :not_found
   defp status_for_error(:invalid_decision), do: :bad_request
+  defp status_for_error(:assistant_run_in_progress), do: :conflict
   defp status_for_error(_reason), do: :unprocessable_entity
 
   defp text_param(params, key) do

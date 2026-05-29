@@ -136,6 +136,37 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "Do not use em dashes"
   end
 
+  test "prompts enforce product language while preserving internal work-item contracts" do
+    request = AssistantHarness.build_step_request(payload("What should I review?"))
+    proactive_request = AssistantHarness.build_proactive_request(%{context: %{}})
+
+    assert [%{"role" => "system", "content" => system}, %{"role" => "user", "content" => prompt}] =
+             request["messages"]
+
+    proactive_prompt = get_in(proactive_request, ["messages", Access.at(1), "content"])
+
+    assert system =~ "durable work state lives in open work, projects, People, and deep memory"
+    assert prompt =~ "Use product language in final text"
+    assert prompt =~ "say `open work`, `work item`, `People`, or `relationship context`"
+    assert prompt =~ "do not say `todo` or `CRM` unless quoting the operator"
+
+    assert prompt =~
+             "Persist actionable work as durable work items through the internal todo tools"
+
+    assert prompt =~ "People is the durable relationship layer"
+    assert prompt =~ "message_class:\"todo_digest\""
+    assert proactive_prompt =~ "Reason over open work, open loops"
+    assert proactive_prompt =~ "People relationship context"
+    assert proactive_prompt =~ "work item cards from the listed todo_ids"
+
+    refute system =~ "control agents"
+    refute system =~ "lives in todos, projects, CRM"
+    refute prompt =~ "The built-in CRM is the durable relationship layer"
+    refute prompt =~ "Persist actionable work as todos."
+    refute prompt =~ "generic CRM labels"
+    refute prompt =~ "I don't have Charlie in your CRM"
+  end
+
   test "uses chat-tier models for proactive planning requests" do
     proactive_request =
       AssistantHarness.build_proactive_request(%{context: %{}}, chat_model: "chat-tier")
@@ -244,6 +275,13 @@ defmodule Maraithon.AssistantHarnessTest do
             ],
             connected_accounts: [%{provider: "telegram", status: "connected"}],
             source_freshness: [%{provider: "telegram", status: "fresh"}],
+            defaults: %{
+              default_slack_team_id: "TSECRET123",
+              slack_team_ids: ["TSECRET123"],
+              provider_ids: ["slack:TSECRET123:user:USECRET", "google"],
+              providers: ["slack:TSECRET123", "google"],
+              linear_connected: false
+            },
             todos: [%{title: "Unrelated todo"}],
             relationships: [%{name: "Unrelated person"}]
           },
@@ -265,12 +303,92 @@ defmodule Maraithon.AssistantHarnessTest do
     assert Map.has_key?(payload.context, :source_freshness)
     refute Map.has_key?(payload.context, :todos)
     refute Map.has_key?(payload.context, :relationships)
+    assert payload.context.defaults.providers == ["google", "slack"]
+    refute Map.has_key?(payload.context.defaults, :default_slack_team_id)
+    refute Map.has_key?(payload.context.defaults, :slack_team_ids)
+    refute Map.has_key?(payload.context.defaults, :provider_ids)
     assert [%{"name" => "list_connected_accounts"}] = payload.tools
 
     prompt = AssistantHarness.build_prompt(payload)
     assert prompt =~ "Current user request JSON"
     assert prompt =~ "Which connections are currently connected?"
     assert prompt =~ "Request focus JSON"
+    refute prompt =~ "TSECRET123"
+    refute prompt =~ "USECRET"
+  end
+
+  test "prioritizes calendar-by-person for focused meeting prep" do
+    payload =
+      AssistantHarness.build_loop_request_payload(
+        %{
+          context: %{
+            recent_turns: [
+              %{
+                role: "user",
+                text: "What should I know before my meeting with Matthew tomorrow?"
+              }
+            ]
+          },
+          tools: [
+            %{"name" => "list_todos"},
+            %{"name" => "calendar_events_around"},
+            %{"name" => "review_connected_context"},
+            %{"name" => "calendar_events_for_person"},
+            %{"name" => "get_open_loops"},
+            %{"name" => "get_relationship_context"}
+          ]
+        },
+        AssistantHarness.initial_loop_state(),
+        request_focus: :meeting_prep,
+        context_scope: :meeting_prep,
+        tool_scope: :meeting_prep
+      )
+
+    names = Enum.map(payload.tools, & &1["name"])
+
+    assert Enum.take(names, 3) == [
+             "calendar_events_for_person",
+             "get_relationship_context",
+             "review_connected_context"
+           ]
+
+    prompt = AssistantHarness.build_prompt(payload)
+    assert prompt =~ "call `calendar_events_for_person` first"
+  end
+
+  test "linked todo prompt contract uses exact id deletion for dismissal replies" do
+    payload =
+      AssistantHarness.build_loop_request_payload(
+        %{
+          context: %{
+            linked_item: %{
+              todo: %{id: "todo_123", title: "Check Matthew setup pricing"}
+            },
+            recent_turns: [
+              %{role: "user", text: "Dismiss this todo as no longer relevant"}
+            ]
+          },
+          tools: [
+            %{"name" => "list_todos"},
+            %{"name" => "resolve_todo"},
+            %{"name" => "delete_todo"}
+          ]
+        },
+        AssistantHarness.initial_loop_state(),
+        request_focus: :linked_item_context,
+        context_scope: :linked_item_context,
+        tool_scope: :linked_item_context
+      )
+
+    assert Enum.map(payload.tools, & &1["name"]) == [
+             "list_todos",
+             "resolve_todo",
+             "delete_todo"
+           ]
+
+    prompt = AssistantHarness.build_prompt(payload)
+    assert prompt =~ "dismiss/delete/remove/no-longer-relevant -> `delete_todo`"
+    assert prompt =~ "with `todo_id:\"todo_123\"`, not `list_todos` or `resolve_todo`"
   end
 
   test "guard_loop owns timeout and loop budget decisions" do
@@ -340,7 +458,7 @@ defmodule Maraithon.AssistantHarnessTest do
       assert prompt =~ "What are the emails to triage today?"
       assert prompt =~ "Decision contract:"
       assert prompt =~ "Do not rely on keyword heuristics"
-      assert prompt =~ "Available tools JSON"
+      assert prompt =~ "Available actions JSON"
 
       {:ok,
        %{

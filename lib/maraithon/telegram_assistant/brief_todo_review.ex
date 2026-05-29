@@ -1,6 +1,6 @@
 defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   @moduledoc """
-  Drives one-at-a-time Telegram review sessions for todos linked to a brief.
+  Drives one-at-a-time Telegram review sessions for open work linked to a brief.
   """
 
   import Ecto.Query
@@ -135,7 +135,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp todo_subject?(text) do
-    Regex.match?(~r/\b(to-?dos?|tasks?|open loops?|action items?)\b/u, text)
+    Regex.match?(~r/\b(to-?dos?|tasks?|open work|work items?|open loops?|action items?)\b/u, text)
   end
 
   defp sequential_review_request?(text) do
@@ -156,7 +156,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp direct_list_request?(text) do
     Regex.match?(
-      ~r/^(list|show|pull up|give me|send me|surface)\b.*\b(to-?dos?|tasks?|open loops?|action items?)\b/u,
+      ~r/^(list|show|pull up|give me|send me|surface)\b.*\b(to-?dos?|tasks?|open work|work items?|open loops?|action items?)\b/u,
       text
     )
   end
@@ -232,7 +232,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   def list_button(%Brief{} = brief) do
     if reviewable?(brief) do
-      %{"text" => "List Todos", "callback_data" => callback_data(brief.id, "start")}
+      %{"text" => "Review Open Work", "callback_data" => callback_data(brief.id, "start")}
     end
   end
 
@@ -279,7 +279,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         :ignored
 
       _ ->
-        maybe_answer_callback(callback_id, "I couldn't open that todo list.")
+        maybe_answer_callback(callback_id, "I couldn't open that open-work list.")
         :ok
     end
   end
@@ -293,7 +293,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
       case action do
         "start" ->
-          maybe_answer_callback(callback_id, "Sending the first todo")
+          maybe_answer_callback(callback_id, "Sending the first work item")
           start_latest_review(user_id, chat_id)
 
         "list" ->
@@ -341,20 +341,20 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     text =
       case todos do
         [] ->
-          "I don't see any open todos ready to review right now."
+          "I don't see any open work ready to review right now."
 
         todos ->
           lines =
             todos
             |> Enum.with_index(1)
-            |> Enum.map(fn {todo, index} -> "#{index}. #{safe(todo.title)}" end)
+            |> Enum.map(fn {todo, index} -> todo_review_line(todo, "#{index}.") end)
             |> Enum.join("\n")
 
           """
-          <b>Open todos</b>
+          <b>Open work</b>
           #{lines}
 
-          Want to work through them with buttons? Tap One by One.
+          Best next move: review each item now, close what is done, keep what still matters, and move anything that can wait.
           """
           |> String.trim()
       end
@@ -392,7 +392,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
       nil ->
         brief = complete_review!(brief)
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open todos")
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work")
         send_summary(chat_id, brief)
     end
   end
@@ -478,9 +478,9 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
          {:ok, brief} <-
            Briefs.record(user_id, agent_id, %{
              "cadence" => "check_in",
-             "title" => "Open todo review",
-             "summary" => "Review open todos one at a time.",
-             "body" => "Natural-language Telegram todo review queue.",
+             "title" => "Open work review",
+             "summary" => "Review open work one item at a time.",
+             "body" => "Natural-language Telegram open-work review queue.",
              "scheduled_for" => now_iso8601(),
              "dedupe_key" => "telegram_todo_review:#{Ecto.UUID.generate()}",
              "status" => "sent",
@@ -505,7 +505,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_review_todo(chat_id, %Brief{} = _brief, %Todo{} = todo, position, total) do
-    payload = TodoActions.telegram_payload(todo, prefix_text: "Todo #{position} of #{total}")
+    payload = TodoActions.telegram_payload(todo, prefix_text: "Open work #{position} of #{total}")
 
     case TelegramResponder.send(chat_id, payload.text,
            parse_mode: "HTML",
@@ -526,7 +526,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_no_todos(chat_id) do
-    text = "I don't see any open todos ready to review right now."
+    text = "I don't see any open work ready to review right now."
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
@@ -535,7 +535,9 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_review_canceled(chat_id) when is_binary(chat_id) do
-    case TelegramResponder.send(chat_id, "Okay, I won't start a todo review.", parse_mode: "HTML") do
+    case TelegramResponder.send(chat_id, "Okay, I won't start the open work review.",
+           parse_mode: "HTML"
+         ) do
       {:ok, _result} -> :ok
       {:error, _reason} -> :ok
     end
@@ -552,7 +554,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       maybe_mark_pending_clarification(attrs, intent)
 
       text = """
-      Do you want to review your todos one at a time with action buttons, or just see the list?
+      Do you want to review each item now, or scan the list first?
       """
 
       case TelegramResponder.send(chat_id, String.trim(text),
@@ -590,8 +592,8 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     %{
       "inline_keyboard" => [
         [
-          %{"text" => "One by One", "callback_data" => latest_callback_data("start")},
-          %{"text" => "Quick List", "callback_data" => latest_callback_data("list")}
+          %{"text" => "Review one by one", "callback_data" => latest_callback_data("start")},
+          %{"text" => "Show list", "callback_data" => latest_callback_data("list")}
         ],
         [%{"text" => "Cancel", "callback_data" => latest_callback_data("cancel")}]
       ]
@@ -603,7 +605,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp maybe_review_choice_markup(_todos) do
     %{
       "inline_keyboard" => [
-        [%{"text" => "One by One", "callback_data" => latest_callback_data("start")}]
+        [%{"text" => "Review one by one", "callback_data" => latest_callback_data("start")}]
       ]
     }
   end
@@ -624,7 +626,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
           lines =
             todos
             |> Enum.take(6)
-            |> Enum.map(fn todo -> "• #{safe(todo.title)}" end)
+            |> Enum.map(fn todo -> todo_review_line(todo, "•") end)
             |> Enum.join("\n")
 
           extra =
@@ -638,13 +640,13 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       end
 
     """
-    <b>Todo review complete</b>
+    <b>Open work review complete</b>
     Reviewed: #{reviewed_count}
     Done: #{length(done)}
     Dismissed: #{length(dismissed)}
     #{still_open}
 
-    Tomorrow's briefing will build on this: done and dismissed items stay out; still-open items can carry forward.
+    Next brief will stay cleaner: done and dismissed work stays out; anything still open can carry forward.
     """
     |> String.trim()
   end
@@ -697,6 +699,36 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
     Todos.list_by_ids(brief.user_id, todo_ids)
   end
+
+  defp todo_review_line(todo, marker) do
+    title = todo_title(todo)
+
+    case todo_next_action(todo) do
+      nil -> "#{marker} #{safe(title)}"
+      next_action -> "#{marker} #{safe(title)}\n   Next: #{safe(next_action)}"
+    end
+  end
+
+  defp todo_title(todo) do
+    read_string(todo, "title", "Open work")
+  end
+
+  defp todo_next_action(todo) do
+    next_action = read_string(todo, "next_action")
+    title = todo_title(todo)
+
+    cond do
+      is_nil(next_action) -> nil
+      same_text?(next_action, title) -> nil
+      true -> next_action
+    end
+  end
+
+  defp same_text?(left, right) when is_binary(left) and is_binary(right) do
+    String.downcase(left) == String.downcase(right)
+  end
+
+  defp same_text?(_left, _right), do: false
 
   defp linked_todo_ids(%Brief{metadata: metadata}) when is_map(metadata) do
     metadata
@@ -844,7 +876,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp read_string(map, key, default \\ nil)
 
   defp read_string(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
+    value =
+      Map.get(map, key) ||
+        case existing_atom_key(key) do
+          nil -> nil
+          atom_key -> Map.get(map, atom_key)
+        end
+
+    case value do
       value when is_binary(value) ->
         value = String.trim(value)
         if value == "", do: default, else: value
@@ -853,23 +892,17 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         Integer.to_string(value)
 
       _ ->
-        Enum.find_value(map, default, fn
-          {map_key, value} when is_atom(map_key) ->
-            if Atom.to_string(map_key) == key do
-              cond do
-                is_binary(value) and String.trim(value) != "" -> String.trim(value)
-                is_integer(value) -> Integer.to_string(value)
-                true -> nil
-              end
-            end
-
-          _ ->
-            nil
-        end)
+        default
     end
   end
 
   defp read_string(_map, _key, default), do: default
+
+  defp existing_atom_key(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp read_id_string(map, key) when is_map(map) and is_binary(key) do
     case Map.get(map, key) do

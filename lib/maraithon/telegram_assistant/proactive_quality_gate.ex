@@ -465,9 +465,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
       end)
 
     if has_personal? do
-      "I grouped the personal/family item that looks worth attention now."
+      "Personal/family logistics are the highest-signal item right now."
     else
-      "I grouped only the item that still looks worth attention now."
+      "Only the highest-signal item met the bar for attention now."
     end
   end
 
@@ -490,19 +490,19 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   end
 
   defp stale_confirmation_message(todo, stale_count) do
-    context = todo_context(todo)
+    context = todo |> todo_context() |> trim_terminal_punctuation()
 
     if stale_count > 1 do
       [
-        "I found older work follow-ups still open, but they look stale rather than urgent.",
-        context && "The top one is #{context}.",
-        "Mark it important if it still matters, or dismiss it."
+        "Older work follow-ups remain open, but the evidence does not justify an urgent interruption.",
+        context && "Top item: #{context}.",
+        "Keep it active if it still matters, or dismiss it."
       ]
     else
       [
-        "This older follow-up has been sitting a while, so I’m not treating it as urgent.",
-        context && "It’s #{context}.",
-        "Mark it important if it still matters, or dismiss it."
+        "Older follow-up, not urgent based on the available evidence.",
+        context && "Item: #{context}.",
+        "Keep it active if it still matters, or dismiss it."
       ]
     end
     |> Enum.reject(&blank?/1)
@@ -543,6 +543,12 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
       true -> read_field(todo, "title")
     end
   end
+
+  defp trim_terminal_punctuation(value) when is_binary(value) do
+    String.replace(value, ~r/[.!?]\s*$/u, "")
+  end
+
+  defp trim_terminal_punctuation(value), do: value
 
   defp todo_focus(todo, context) do
     todo
@@ -711,7 +717,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
 
     String.contains?(downcased, "still important") or
       String.contains?(downcased, "still matters") or
-      String.contains?(downcased, "mark it important") or
+      String.contains?(downcased, "keep it active") or
       String.contains?(downcased, "dismiss")
   end
 

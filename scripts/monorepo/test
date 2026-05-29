@@ -15,13 +15,18 @@ fi
 if selected_component "${component}" "companion"; then
   generate_xcode_project "${COMPANION_DIR}"
   run_in "${COMPANION_DIR}" swift test
+  companion_signing_args=()
+  while IFS= read -r arg; do
+    companion_signing_args+=("${arg}")
+  done < <(companion_xcode_signing_args)
   run_in "${COMPANION_DIR}" xcodebuild \
     -project Maraithon.xcodeproj \
     -scheme Maraithon \
     -configuration Debug \
     -destination "platform=macOS" \
-    CODE_SIGNING_ALLOWED=NO \
+    "${companion_signing_args[@]}" \
     test
+  remove_derived_companion_apps "${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
 fi
 
 if selected_component "${component}" "mobile"; then

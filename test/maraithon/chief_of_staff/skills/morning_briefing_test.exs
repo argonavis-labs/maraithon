@@ -282,7 +282,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert payload.source_backed == true
 
-    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
     assert brief.title =~ "Check the security alert"
     assert brief.metadata["source_backed"] == true
     assert brief.metadata["generation_mode"] == "llm"
@@ -361,6 +361,53 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
              "chief_of_staff_morning_briefing"
+  end
+
+  test "accepts markdown-fenced model JSON as the real morning brief", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-07 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => -4,
+        "morning_brief_hour_local" => 8
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-fenced-json"
+    }
+
+    {:effect, {:llm_call, _params}, state} = MorningBriefing.handle_wakeup(state, context)
+
+    response = %{
+      content: """
+      Here is the briefing JSON:
+
+      ```json
+      {"title":"Thursday, May 7 - Review the launch note","summary":"One source-backed priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before lower-signal inbox.","todos":[]}
+      ```
+      """
+    }
+
+    {:emit, {:briefs_recorded, payload}, _state} =
+      MorningBriefing.handle_effect_result({:llm_call, response}, state, context)
+
+    assert payload.generation_mode == "llm"
+    assert payload.error_message == nil
+
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
+    assert brief.title == "Thursday, May 7 - Review the launch note"
+    assert brief.body =~ "Runner launch note"
+    assert brief.metadata["generation_mode"] == "llm"
+    refute brief.body =~ "Only checked data is included"
   end
 
   test "quality verifier patches packed-day reference briefing gaps" do
@@ -489,6 +536,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert "action_card_and_draft_handles_stay_attached_to_work" in verification["criteria"]
 
     assert revised["body"] =~ "## Needs Your Attention"
+    refute revised["body"] =~ "Brief shape needs attention"
+    refute revised["body"] =~ "original model"
     assert revised["body"] =~ "## Schedule Conflicts"
     assert revised["body"] =~ "Sara Franca"
     assert revised["body"] =~ "## Open Commitments"
@@ -497,6 +546,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "actc_c154"
     assert revised["body"] =~ "## Not a draft job"
     assert revised["body"] =~ "Pydantic failed payment"
+  end
+
+  test "quality verifier uses chief-of-staff copy when adding a generic attention section" do
+    brief = %{
+      "title" => "Morning briefing",
+      "summary" => "Short brief.",
+      "body" => "A short generic brief with no attention section.",
+      "todos" => []
+    }
+
+    {revised, verification} =
+      MorningBriefing.verify_quality(brief, %{"date" => "2026-05-07"}, "llm")
+
+    assert "missing_needs_attention" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["body"] =~ "Start with source-backed priorities"
+    refute revised["body"] =~ "Brief shape needs attention"
+    refute revised["body"] =~ "original model"
+    refute revised["body"] =~ "model output"
   end
 
   test "invalid model output records a compact source-backed fallback briefing",
@@ -541,15 +609,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "model_response_invalid"
 
-    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
 
     assert brief.title == "Morning briefing - 2026-05-07"
     assert brief.status == "pending"
     assert brief.error_message =~ "model_response_invalid"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.metadata["error_message"] =~ "model_response_invalid"
-    assert brief.body =~ "## Source Status"
-    assert brief.body =~ "Compact mode used because full model synthesis did not finish"
+    assert brief.summary =~ "Start with"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Only checked data is included"
+    assert brief.body =~ "Today's move:"
+    refute brief.body =~ "full narrative briefing"
+    refute brief.body =~ "model_response_invalid"
+    refute brief.body =~ "model synthesis"
+    refute brief.body =~ "finish_reason"
   end
 
   test "model provider errors record a compact source-backed fallback briefing", %{
@@ -587,7 +661,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "max_output_tokens"
 
-    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
     assert brief.title == "Morning briefing - 2026-05-07"
     assert brief.error_message =~ "max_output_tokens"
     assert brief.metadata["llm_finish_reason"] == "error"
@@ -596,8 +670,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief.metadata["llm_request"]["max_tokens"] == 16_000
     assert brief.metadata["llm_request"]["reasoning_effort"] == "high"
     assert brief.metadata["generation_mode"] == "source_fallback"
-    assert brief.body =~ "## Source Status"
-    assert brief.body =~ "Compact mode used because full model synthesis did not finish"
+    assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Only checked data is included"
+    assert brief.body =~ "Today's move:"
+    refute brief.body =~ "full narrative briefing"
+    refute brief.body =~ "max_output_tokens"
+    refute brief.body =~ "model synthesis"
+    refute brief.body =~ "finish_reason"
   end
 
   test "lets skill config override the LLM budget while capping risky intelligence", %{

@@ -69,4 +69,33 @@ defmodule Maraithon.ScheduledTasksTest do
     assert [%{id: task_id}] = ScheduledTasks.due_tasks(due_at)
     assert task_id == task.id
   end
+
+  test "serialized run history hides raw failure details" do
+    user_id = "scheduled-error-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    future = DateTime.utc_now() |> DateTime.add(120, :second) |> DateTime.truncate(:second)
+
+    assert {:ok, task} =
+             ScheduledTasks.create_task(user_id, %{
+               "title" => "Send status update",
+               "once_at" => DateTime.to_iso8601(future),
+               "command" => %{"type" => "assistant_prompt", "prompt" => "send it"}
+             })
+
+    raw_error = "http_status: 500 internal_stacktrace db_timeout token=secret"
+
+    assert {:ok, run, _updated_task} =
+             ScheduledTasks.record_run(task, "failed", %{"error" => raw_error})
+
+    assert run.error == raw_error
+
+    serialized = ScheduledTasks.serialize_run(run)
+
+    assert serialized.error == "That scheduled task could not finish. Review it and run it again."
+    refute serialized.error =~ "http_status"
+    refute serialized.error =~ "internal_stacktrace"
+    refute serialized.error =~ "db_timeout"
+    refute serialized.error =~ "token=secret"
+  end
 end

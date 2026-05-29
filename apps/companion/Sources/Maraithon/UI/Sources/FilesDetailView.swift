@@ -12,8 +12,10 @@ struct FilesDetailView: View {
             displayName: "Files",
             stats: stats,
             activity: SourceActivityRow.recent(from: publisher),
-            emptyDescription: "Once your first Files batch finishes, this view will show indexed-document rollups and recent sync runs.",
-            clearDataDescription: "This deletes every file record Maraithon has synced from this Mac out of the cloud. The files on your disk are not affected."
+            syncedItemSingular: "file",
+            syncedItemPlural: "files",
+            emptyDescription: "After the first Files sync, this view shows recently indexed files and sync history.",
+            clearDataDescription: "This deletes every file record synced from this Mac from Maraithon's synced copy. The files on your disk are not affected."
         )
     }
 
@@ -25,9 +27,9 @@ struct FilesDetailView: View {
         let pub = publisher
         return [
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "files indexed"),
-            SourceStat(id: "last", title: "Last batch", value: SourceStat.format(pub?.lastBatchAccepted), caption: "accepted"),
-            SourceStat(id: "dupes", title: "Duplicates", value: SourceStat.format(pub?.lastBatchDuplicate), caption: "skipped this batch"),
-            SourceStat(id: "total", title: "Total synced", value: SourceStat.format(pub?.totalAccepted), caption: "since app launch")
+            SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
+            SourceStat(id: "already_synced", title: SourceDetailCopy.alreadySyncedTitle, value: SourceStat.format(pub?.lastBatchDuplicate), caption: SourceDetailCopy.alreadySyncedCaption),
+            SourceStat(id: "total", title: "Indexed", value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption)
         ]
     }
 }

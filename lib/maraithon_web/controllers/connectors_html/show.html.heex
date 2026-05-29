@@ -5,7 +5,7 @@
         navigate={~p"/connectors"}
         class="inline-flex items-center gap-1 text-xs/5 font-medium text-zinc-500 hover:text-zinc-950"
       >
-        <span aria-hidden="true">←</span> Connectors
+        <span aria-hidden="true">←</span> Connected Apps
       </.link>
       <div class="mt-1 flex flex-wrap items-start justify-between gap-3">
         <div class="flex min-w-0 items-start gap-3">
@@ -39,7 +39,9 @@
       <.alert color="amber">
         <%= for error <- @connection_errors do %>
           <p class="text-sm font-medium"><%= error.message %></p>
-          <p class="mt-1 text-xs"><%= error.details %></p>
+          <%= if detail = connection_error_detail(error) do %>
+            <p class="mt-1 text-xs"><%= detail %></p>
+          <% end %>
         <% end %>
       </.alert>
     <% end %>
@@ -67,7 +69,7 @@
               <%= connection_primary_action(@provider) %> →
             </.link>
           <% true -> %>
-            <span class="text-xs/5 text-zinc-400">Configure OAuth first</span>
+            <span class="text-xs/5 text-zinc-400">Setup needed</span>
         <% end %>
       </div>
 
@@ -158,7 +160,7 @@
     <%= if provider_grant_panels_visible?(@provider) do %>
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Grant</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Access Details</h2>
           <.badge
             color={refresh_token_status_color(@provider[:refresh_token_status])}
             class="whitespace-nowrap"
@@ -179,7 +181,7 @@
                 Updated <%= format_datetime(@token.updated_at) %>
               </p>
             <% else %>
-              <p class="text-zinc-500">No token stored for this connector yet.</p>
+              <p class="text-zinc-500">Connect this account to begin syncing.</p>
             <% end %>
 
             <%= if @provider[:disconnectable?] do %>
@@ -233,12 +235,12 @@
     <%= if provider_oauth_setup_visible?(@provider) do %>
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">OAuth setup</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Connection Setup</h2>
         </div>
 
         <div class="mt-4 grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-2">
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Callback URLs</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Return URLs</p>
             <div class="mt-2 space-y-3">
               <div :for={callback <- @provider.callback_urls}>
                 <div class="flex items-center gap-2">
@@ -258,7 +260,7 @@
           </div>
 
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Environment</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Setup Checklist</p>
             <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
               <li :for={env <- @provider.env_requirements} class="py-2.5">
                 <div class="flex items-center justify-between gap-2">

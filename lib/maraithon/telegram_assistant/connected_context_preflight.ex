@@ -7,7 +7,7 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
   worse than waiting briefly for connected evidence.
   """
 
-  alias Maraithon.Tools
+  alias Maraithon.{SourceErrorCopy, Tools}
 
   @sources ~w(crm gmail google_contacts calendar slack open_loops memory)
   @preflight_timeout_ms 8_000
@@ -66,7 +66,7 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
         "status" => "failed",
         "mandatory" => true,
         "query" => query,
-        "error" => Exception.message(error)
+        "error" => normalize_error(error)
       })
   end
 
@@ -272,6 +272,5 @@ defmodule Maraithon.TelegramAssistant.ConnectedContextPreflight do
 
   defp normalize_json_value(value), do: value
 
-  defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: SourceErrorCopy.reason(reason)
 end

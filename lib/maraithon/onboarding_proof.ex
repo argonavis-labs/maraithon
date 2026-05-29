@@ -19,6 +19,20 @@ defmodule Maraithon.OnboardingProof do
   @calendar_sample_limit 10
   @slack_sample_limit 12
   @slack_workspace_limit 2
+  @internal_output_terms ~w(
+    assistant
+    confidence
+    heuristic
+    internal
+    json
+    llm
+    model
+    prompt
+    rationale
+    reasoning
+    score
+    threshold
+  )
 
   @type preview_item :: %{
           title: String.t(),
@@ -270,7 +284,7 @@ defmodule Maraithon.OnboardingProof do
     valuable to a founder or operator after connecting Gmail, Calendar, and Slack.
 
     Prioritize:
-    - reply debt and unresolved follow-up in Gmail
+    - unanswered replies and unresolved follow-up in Gmail
     - explicit promises or likely missed commitments
     - important meetings that likely create next steps, owners, or recap work
     - Slack messages that imply open loops in channels or DMs
@@ -285,6 +299,8 @@ defmodule Maraithon.OnboardingProof do
     - If the data is suggestive but not conclusive, say Maraithon "would have watched"
       or "would have checked whether" instead of overstating certainty.
     - Prefer concrete counterparties, artifacts, owners, or follow-up obligations.
+    - Text fields are shown directly in the product. Do not mention confidence,
+      model scores, heuristics, classification, JSON, prompts, or internal reasoning.
     - Suggested behavior must be one of:
       founder_followthrough_agent, inbox_calendar_advisor, slack_followthrough_agent
 
@@ -312,10 +328,15 @@ defmodule Maraithon.OnboardingProof do
   end
 
   defp normalize_item(item) when is_map(item) do
-    title = read_string(item, "title", nil)
-    summary = read_string(item, "summary", nil)
-    rationale = read_string(item, "rationale", nil)
-    recommended_action = read_string(item, "recommended_action", nil)
+    title = item |> read_string("title", nil) |> user_facing_preview_text()
+    summary = item |> read_string("summary", nil) |> user_facing_preview_text()
+    rationale = item |> read_string("rationale", nil) |> user_facing_preview_text(summary)
+
+    recommended_action =
+      item
+      |> read_string("recommended_action", nil)
+      |> user_facing_preview_text("Watch the thread and escalate only if it still needs you.")
+
     source = normalize_source(read_string(item, "source", nil))
     account_label = read_string(item, "account_label", nil)
     suggested_behavior = normalize_behavior(read_string(item, "suggested_behavior", nil))
@@ -347,6 +368,38 @@ defmodule Maraithon.OnboardingProof do
   end
 
   defp normalize_item(_), do: nil
+
+  defp user_facing_preview_text(value, fallback \\ nil)
+
+  defp user_facing_preview_text(value, fallback) when is_binary(value) do
+    value
+    |> String.split(~r/\R/u)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or internal_output_text?(&1)))
+    |> Enum.map(&strip_output_label/1)
+    |> Enum.join(" ")
+    |> case do
+      "" -> fallback
+      clean -> clean
+    end
+  end
+
+  defp user_facing_preview_text(_value, fallback), do: fallback
+
+  defp strip_output_label(value) do
+    Regex.replace(
+      ~r/^\s*(title|summary|rationale|reasoning|recommended action|action|confidence|score)\s*:\s*/iu,
+      value,
+      ""
+    )
+  end
+
+  defp internal_output_text?(value) do
+    normalized = String.downcase(value)
+
+    Regex.match?(~r/\b\d{1,3}%/u, normalized) or
+      Enum.any?(@internal_output_terms, &String.contains?(normalized, &1))
+  end
 
   defp normalize_source("google_calendar"), do: "calendar"
   defp normalize_source("gmail"), do: "gmail"

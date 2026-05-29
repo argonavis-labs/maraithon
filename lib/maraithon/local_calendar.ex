@@ -1,7 +1,7 @@
 defmodule Maraithon.LocalCalendar do
   @moduledoc """
   Context for macOS Calendar.app events synced from a user's local
-  machine via EventKit. Owns bulk-insert with idempotent dedupe,
+  machine via EventKit. Owns bulk upsert with idempotent identity,
   date-window lookups, attendee filtering, substring search, and
   per-device purges.
 
@@ -18,15 +18,40 @@ defmodule Maraithon.LocalCalendar do
   alias Maraithon.LocalEmbeddings
   alias Maraithon.Repo
 
+  @upsert_fields [
+    :local_id,
+    :calendar_name,
+    :calendar_color,
+    :title,
+    :notes,
+    :location,
+    :start_at,
+    :end_at,
+    :is_all_day,
+    :is_recurring,
+    :organizer_email,
+    :attendees_count,
+    :attendee_emails,
+    :created_at,
+    :modified_at,
+    :encrypted_with_device_key,
+    :key_id,
+    :updated_at
+  ]
+
   @doc """
   Ingests a batch of event maps from a device for the given user.
 
   Each entry should be a string-keyed or atom-keyed map matching the
-  payload defined in the companion spec. Inserts are idempotent via the
-  `(user_id, device_id, source, guid)` unique constraint — re-sending the
-  same payload is a no-op.
+  payload defined in the companion spec. Rows are upserted via the
+  `(user_id, device_id, source, guid)` unique constraint, so reschedules,
+  title edits, attendee changes, and location updates from Calendar.app
+  replace the stored event instead of leaving the assistant with stale
+  meeting context.
 
   Returns `{:ok, %{accepted: integer, duplicate: integer, invalid: integer}}`.
+  Because this path upserts mutable events, existing rows that are
+  refreshed are reported as accepted just like fresh inserts.
   """
   def ingest_batch(user_id, device_id, events)
       when is_binary(user_id) and is_list(events) do
@@ -41,21 +66,22 @@ defmodule Maraithon.LocalCalendar do
 
     rows = Enum.map(prepared, fn {:ok, row} -> row end)
 
-    {inserted_count, inserted_rows} =
+    {affected_count, affected_rows} =
       if rows == [] do
         {0, []}
       else
         Repo.insert_all(LocalEvent, rows,
-          on_conflict: :nothing,
+          on_conflict: {:replace, @upsert_fields},
           conflict_target: [:user_id, :device_id, :source, :guid],
           returning: [:id]
         )
       end
 
-    enqueue_embed_jobs(user_id, inserted_rows)
+    enqueue_embed_jobs(user_id, affected_rows)
 
     total = length(rows)
-    duplicate_count = total - inserted_count
+    accepted_count = affected_count
+    duplicate_count = max(total - affected_count, 0)
     invalid_count = length(invalid)
     latency_ms = System.monotonic_time(:millisecond) - started_at
 
@@ -63,7 +89,7 @@ defmodule Maraithon.LocalCalendar do
       [:maraithon, :companion, :calendar_events_ingested],
       %{
         count: length(events),
-        accepted: inserted_count,
+        accepted: accepted_count,
         duplicate: duplicate_count,
         invalid: invalid_count,
         latency_ms: latency_ms
@@ -73,7 +99,7 @@ defmodule Maraithon.LocalCalendar do
 
     {:ok,
      %{
-       accepted: inserted_count,
+       accepted: accepted_count,
        duplicate: duplicate_count,
        invalid: invalid_count
      }}

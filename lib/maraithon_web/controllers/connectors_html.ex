@@ -23,8 +23,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def telegram_connected?(_providers), do: false
 
-  def setup_completion_text(%{setup_status: :configured}), do: "Connector configured"
-  def setup_completion_text(_provider), do: "Connector setup required"
+  def setup_completion_text(%{setup_status: :configured}), do: "Connection ready"
+  def setup_completion_text(_provider), do: "Connection setup needed"
 
   def provider_account_summary(provider) when is_map(provider) do
     accounts = Map.get(provider, :accounts, [])
@@ -48,6 +48,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   end
 
   def provider_account_summary(_provider), do: "No accounts connected"
+
+  def connection_error_detail(%{details: details}), do: public_error_detail(details)
+  def connection_error_detail(_error), do: nil
 
   def provider_local_source_summary(%{provider: "desktop", details: details})
       when is_list(details) do
@@ -149,9 +152,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def connection_status_label(:connected), do: "connected"
   def connection_status_label(:partial), do: "partial"
-  def connection_status_label(:missing_scope), do: "needs scope"
-  def connection_status_label(:needs_refresh), do: "refresh required"
-  def connection_status_label(:not_configured), do: "not configured"
+  def connection_status_label(:missing_scope), do: "needs permission"
+  def connection_status_label(:needs_refresh), do: "reconnect needed"
+  def connection_status_label(:not_configured), do: "setup needed"
   def connection_status_label(:unknown), do: "unknown"
   def connection_status_label(_status), do: "disconnected"
 
@@ -160,9 +163,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_color(:needs_refresh), do: "rose"
   def connection_status_color(_status), do: "zinc"
 
-  def refresh_token_status_label(:active), do: "refresh active"
-  def refresh_token_status_label(:inactive), do: "refresh inactive"
-  def refresh_token_status_label(:missing), do: "no refresh token"
+  def refresh_token_status_label(:active), do: "background access on"
+  def refresh_token_status_label(:inactive), do: "background access off"
+  def refresh_token_status_label(:missing), do: "reconnect needed"
   def refresh_token_status_label(:not_required), do: "not required"
   def refresh_token_status_label(:not_applicable), do: "not applicable"
   def refresh_token_status_label(:unknown), do: "unknown"
@@ -255,23 +258,67 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_token_summary(token) when is_map(token) do
     scopes =
       case Map.get(token, :scopes) || Map.get(token, "scopes") do
-        values when is_list(values) and values != [] -> "Scopes: #{Enum.join(values, ", ")}"
-        _ -> nil
+        values when is_list(values) and values != [] ->
+          "Permissions: #{Enum.join(values, ", ")}"
+
+        _ ->
+          nil
       end
 
     expires =
       case Map.get(token, :expires_at) || Map.get(token, "expires_at") do
-        %DateTime{} = value -> "Expires #{format_datetime(value)}"
-        %NaiveDateTime{} = value -> "Expires #{format_datetime(value)}"
+        %DateTime{} = value -> "Access expires #{format_datetime(value)}"
+        %NaiveDateTime{} = value -> "Access expires #{format_datetime(value)}"
         _ -> nil
       end
 
     [scopes, expires]
     |> Enum.reject(&is_nil/1)
     |> case do
-      [] -> "No additional token metadata"
+      [] -> "No additional connection details"
       values -> Enum.join(values, " • ")
     end
+  end
+
+  defp public_error_detail(details) when is_binary(details) do
+    details = String.trim(details)
+
+    cond do
+      details == "" ->
+        nil
+
+      technical_error_detail?(details) ->
+        "Refresh this page or try again in a few minutes."
+
+      true ->
+        details
+    end
+  end
+
+  defp public_error_detail(_details), do: nil
+
+  defp technical_error_detail?(details) do
+    downcased = String.downcase(details)
+
+    Regex.match?(~r/^[a-z0-9_]+$/, details) or
+      Enum.any?(
+        [
+          "dbconnection",
+          "postgrex",
+          "ecto.",
+          "exception",
+          "stacktrace",
+          "{:",
+          "%{",
+          "=>",
+          "token",
+          "oauth",
+          "select ",
+          "insert ",
+          "update "
+        ],
+        &String.contains?(downcased, &1)
+      )
   end
 
   defp provider_account_unit(%{provider: "slack"}), do: "workspace"
@@ -328,5 +375,5 @@ defmodule MaraithonWeb.ConnectorsHTML do
     |> String.capitalize()
   end
 
-  defp connector_logo_alt(_provider), do: "Connector"
+  defp connector_logo_alt(_provider), do: "Connected app"
 end

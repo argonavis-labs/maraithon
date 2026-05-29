@@ -16,13 +16,17 @@ defmodule Maraithon.ToolPolicy do
 
     cond do
       context.tool_name in [nil, ""] ->
-        deny("missing_tool_name", "Tool name is required.", context)
+        deny("missing_tool_name", "Choose an action before continuing.", context)
 
       not context.known? ->
-        deny("unknown_tool", "Unknown tool: #{context.tool_name}.", context)
+        deny("unknown_tool", "Action is not available.", context)
 
       context.user_required? and not valid_user_id?(context.user_id) ->
-        deny("invalid_user_context", "A valid user context is required for this tool.", context)
+        deny(
+          "invalid_user_context",
+          "Sign in again so Maraithon can confirm the account.",
+          context
+        )
 
       is_tuple(agent_policy_block) ->
         {reason_code, message} = agent_policy_block
@@ -32,12 +36,12 @@ defmodule Maraithon.ToolPolicy do
         Decision.new(
           :needs_confirmation,
           "confirmation_required",
-          "This tool call requires explicit confirmation before execution.",
+          "Confirm this action before Maraithon continues.",
           decision_metadata(context)
         )
 
       true ->
-        Decision.new(:allow, "policy_allowed", "Tool call allowed.", decision_metadata(context))
+        Decision.new(:allow, "policy_allowed", "Action allowed.", decision_metadata(context))
     end
   end
 
@@ -169,7 +173,7 @@ defmodule Maraithon.ToolPolicy do
 
   defp remediation_hint(%Decision{status: :deny, reason_code: reason_code})
        when reason_code in ["agent_tool_denied", "agent_tool_not_allowed"] do
-    "Update the agent isolation binding tool policy or use an allowed tool."
+    "Update the agent action allowlist or use an allowed action."
   end
 
   defp remediation_hint(_decision), do: nil
@@ -262,10 +266,10 @@ defmodule Maraithon.ToolPolicy do
 
     cond do
       tool_name in denied_tools ->
-        {"agent_tool_denied", "This agent is not allowed to call #{tool_name}."}
+        {"agent_tool_denied", "This agent is not allowed to use that action."}
 
       allowed_tools != [] and tool_name not in allowed_tools ->
-        {"agent_tool_not_allowed", "This agent policy does not include #{tool_name}."}
+        {"agent_tool_not_allowed", "This agent is not allowed to use that action."}
 
       true ->
         nil

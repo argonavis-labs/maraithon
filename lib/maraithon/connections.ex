@@ -293,11 +293,17 @@ defmodule Maraithon.Connections do
       errors: [
         %{
           message: "Connection inventory is temporarily unavailable.",
-          details: Exception.message(reason)
+          details: connection_inventory_error_detail(reason)
         }
       ]
     }
   end
+
+  defp connection_inventory_error_detail(:database_unavailable),
+    do: "Connection status will refresh when the database is available again."
+
+  defp connection_inventory_error_detail(_reason),
+    do: "Refresh this page or try again in a few minutes."
 
   defp google_card(user_id, tokens, account_by_provider, return_to)
        when is_list(tokens) and is_map(account_by_provider) do
@@ -337,7 +343,7 @@ defmodule Maraithon.Connections do
       id: "google",
       provider: "google",
       label: "Google Workspace",
-      description: "Server-side OAuth for Gmail, Calendar, and Contacts.",
+      description: "Gmail, Calendar, and Contacts access for Maraithon.",
       status: status,
       configured?: configured?,
       updated_at: latest_updated_at(tokens),
@@ -478,7 +484,8 @@ defmodule Maraithon.Connections do
       %{
         id: "dms",
         label: "Personal DMs",
-        description: "Read DM and MPIM context to catch reply debt and private commitments.",
+        description:
+          "Read DM and MPIM context to catch unanswered replies and private commitments.",
         status:
           slack_service_status(
             configured?,
@@ -563,7 +570,6 @@ defmodule Maraithon.Connections do
   defp telegram_card(user_id, account, return_to) do
     configured? = Telegram.configured?()
     metadata = if account, do: account.metadata || %{}, else: %{}
-    chat_id = account && (account.external_account_id || metadata["chat_id"])
     username = metadata["username"]
 
     status =
@@ -589,8 +595,7 @@ defmodule Maraithon.Connections do
       details:
         if account && account.status == "connected" do
           [
-            telegram_chat_detail(chat_id),
-            if(is_binary(username) and username != "", do: "@#{username}"),
+            telegram_chat_detail(username),
             "Last updated #{format_datetime(account.updated_at)}"
           ]
           |> Enum.reject(&is_nil/1)
@@ -1034,10 +1039,10 @@ defmodule Maraithon.Connections do
     |> Enum.reject(&(&1 == "Scopes: "))
   end
 
-  defp telegram_chat_detail(chat_id) when is_binary(chat_id) and chat_id != "",
-    do: "Chat ID #{chat_id}"
+  defp telegram_chat_detail(username) when is_binary(username) and username != "",
+    do: "Delivery linked to @#{username}"
 
-  defp telegram_chat_detail(_chat_id), do: "Chat connected"
+  defp telegram_chat_detail(_username), do: "Telegram delivery linked"
 
   defp serialize_token(%Token{} = token) do
     %{
@@ -1117,10 +1122,8 @@ defmodule Maraithon.Connections do
 
     [
       if(enabled_services != [], do: "Enabled: #{Enum.join(enabled_services, ", ")}"),
-      if(scopes != [],
-        do: "Granted #{length(scopes)} Google OAuth #{scope_word(length(scopes))}"
-      ),
-      if(token.expires_at, do: "Expires #{format_datetime(token.expires_at)}")
+      if(scopes != [], do: "#{length(scopes)} Google #{permission_word(length(scopes))} granted"),
+      if(token.expires_at, do: "Access expires #{format_datetime(token.expires_at)}")
     ]
     |> Enum.reject(&is_nil/1)
   end
@@ -1667,8 +1670,8 @@ defmodule Maraithon.Connections do
   defp account_word(1), do: "account"
   defp account_word(_count), do: "accounts"
 
-  defp scope_word(1), do: "scope"
-  defp scope_word(_count), do: "scopes"
+  defp permission_word(1), do: "permission"
+  defp permission_word(_count), do: "permissions"
 
   defp provider_sort_key(%Token{provider: provider}) do
     cond do
@@ -1731,7 +1734,7 @@ defmodule Maraithon.Connections do
         "Google Contacts read-only People API access"
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: oauth_callback, required?: true},
+        %{label: "App return URL", url: oauth_callback, required?: true},
         %{label: "Calendar webhook callback", url: calendar_webhook, required?: false},
         %{label: "Gmail Pub/Sub push callback", url: gmail_webhook, required?: false}
       ],
@@ -1739,19 +1742,19 @@ defmodule Maraithon.Connections do
         env_requirement(
           "GOOGLE_CLIENT_ID",
           config_value(:google, :client_id),
-          "Google OAuth client ID",
+          "Google app client ID",
           true
         ),
         env_requirement(
           "GOOGLE_CLIENT_SECRET",
           config_value(:google, :client_secret),
-          "Google OAuth client secret",
+          "Google app client secret",
           true
         ),
         env_requirement(
           "GOOGLE_REDIRECT_URI",
           config_value(:google, :redirect_uri),
-          "Must match the Google OAuth redirect URI",
+          "Must match the Google app return URL",
           true,
           oauth_callback
         ),
@@ -1770,8 +1773,8 @@ defmodule Maraithon.Connections do
         )
       ],
       setup_notes: [
-        "Register the OAuth redirect URI in Google Cloud Console.",
-        "Set the OAuth consent screen publishing status to Production to avoid short-lived testing refresh tokens.",
+        "Register the app return URL in Google Cloud Console.",
+        "Set the Google permission screen publishing status to Production to avoid short-lived testing access.",
         "If you want Calendar watches, point GOOGLE_CALENDAR_WEBHOOK_URL at the calendar webhook callback.",
         "If you want Gmail push, grant Gmail Pub/Sub push access to the Gmail webhook callback."
       ]
@@ -1788,26 +1791,26 @@ defmodule Maraithon.Connections do
         "user:email"
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: callback_url("/auth/github/callback"), required?: true},
+        %{label: "App return URL", url: callback_url("/auth/github/callback"), required?: true},
         %{label: "Webhook callback", url: callback_url("/webhooks/github"), required?: false}
       ],
       env_requirements: [
         env_requirement(
           "GITHUB_CLIENT_ID",
           config_value(:github, :client_id),
-          "GitHub OAuth app client ID",
+          "GitHub app client ID",
           true
         ),
         env_requirement(
           "GITHUB_CLIENT_SECRET",
           config_value(:github, :client_secret),
-          "GitHub OAuth app client secret",
+          "GitHub app client secret",
           true
         ),
         env_requirement(
           "GITHUB_REDIRECT_URI",
           config_value(:github, :redirect_uri),
-          "Must match the GitHub OAuth callback URL",
+          "Must match the GitHub app return URL",
           true,
           callback_url("/auth/github/callback")
         ),
@@ -1825,7 +1828,7 @@ defmodule Maraithon.Connections do
         )
       ],
       setup_notes: [
-        "Create a GitHub OAuth App and register the OAuth callback URL.",
+        "Create a GitHub App connection and register the app return URL.",
         "For repo events, add a repository or org webhook pointing at the GitHub webhook callback.",
         "Agents can use a per-user GitHub grant or the optional fallback access token."
       ]
@@ -1845,7 +1848,7 @@ defmodule Maraithon.Connections do
         "Process Slack Events API webhooks for near-real-time updates"
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: oauth_callback, required?: true},
+        %{label: "App return URL", url: oauth_callback, required?: true},
         %{label: "Events callback", url: events_callback, required?: true}
       ],
       env_requirements: [
@@ -1864,7 +1867,7 @@ defmodule Maraithon.Connections do
         env_requirement(
           "SLACK_REDIRECT_URI",
           config_value(:slack, :redirect_uri),
-          "Must match the Slack OAuth callback URL",
+          "Must match the Slack app return URL",
           true,
           oauth_callback
         ),
@@ -1876,7 +1879,7 @@ defmodule Maraithon.Connections do
         )
       ],
       setup_notes: [
-        "Enable OAuth token rotation in your Slack app so refresh tokens are issued.",
+        "Enable background access rotation in your Slack app so Maraithon can stay connected.",
         "Install the app to each workspace and request both bot scopes and user scopes for read/write as user.",
         "Configure Event Subscriptions with the events callback URL and enable message events for channels and DMs.",
         "After install, reconnect once if scopes change so Maraithon stores the updated grant."
@@ -1894,26 +1897,26 @@ defmodule Maraithon.Connections do
         "comments:create"
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: callback_url("/auth/linear/callback"), required?: true},
+        %{label: "App return URL", url: callback_url("/auth/linear/callback"), required?: true},
         %{label: "Webhook callback", url: callback_url("/webhooks/linear"), required?: false}
       ],
       env_requirements: [
         env_requirement(
           "LINEAR_CLIENT_ID",
           config_value(:linear, :client_id),
-          "Linear OAuth client ID",
+          "Linear app client ID",
           true
         ),
         env_requirement(
           "LINEAR_CLIENT_SECRET",
           config_value(:linear, :client_secret),
-          "Linear OAuth client secret",
+          "Linear app client secret",
           true
         ),
         env_requirement(
           "LINEAR_REDIRECT_URI",
           config_value(:linear, :redirect_uri),
-          "Must match the Linear OAuth callback URL",
+          "Must match the Linear app return URL",
           true,
           callback_url("/auth/linear/callback")
         ),
@@ -1938,7 +1941,7 @@ defmodule Maraithon.Connections do
         "Workspace permissions are configured in the Notion integration dashboard."
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: callback_url("/auth/notion/callback"), required?: true}
+        %{label: "App return URL", url: callback_url("/auth/notion/callback"), required?: true}
       ],
       env_requirements: [
         env_requirement(
@@ -1956,7 +1959,7 @@ defmodule Maraithon.Connections do
         env_requirement(
           "NOTION_REDIRECT_URI",
           config_value(:notion, :redirect_uri),
-          "Must match the Notion OAuth callback URL",
+          "Must match the Notion app return URL",
           true,
           callback_url("/auth/notion/callback")
         )
@@ -1980,32 +1983,32 @@ defmodule Maraithon.Connections do
         "Call Notaui MCP tools with a user bearer token"
       ],
       callback_urls: [
-        %{label: "OAuth callback", url: oauth_callback, required?: true}
+        %{label: "App return URL", url: oauth_callback, required?: true}
       ],
       env_requirements: [
         env_requirement(
           "NOTAUI_CLIENT_ID",
           config_value(:notaui, :client_id),
-          "Notaui OAuth client ID",
+          "Notaui app client ID",
           true
         ),
         env_requirement(
           "NOTAUI_CLIENT_SECRET",
           config_value(:notaui, :client_secret),
-          "Notaui OAuth client secret",
+          "Notaui app client secret",
           true
         ),
         env_requirement(
           "NOTAUI_REDIRECT_URI",
           config_value(:notaui, :redirect_uri),
-          "Must match the Notaui OAuth callback URL",
+          "Must match the Notaui app return URL",
           true,
           oauth_callback
         ),
         env_requirement(
           "NOTAUI_SCOPE",
           config_value(:notaui, :scope),
-          "Requested OAuth scopes for the Notaui connector",
+          "Requested Notaui permissions for this app connection",
           false,
           "tasks:read tasks:write projects:read projects:write tags:write"
         ),
@@ -2033,21 +2036,21 @@ defmodule Maraithon.Connections do
         env_requirement(
           "NOTAUI_ISSUER",
           config_value(:notaui, :issuer),
-          "Issuer used for Notaui OAuth metadata and diagnostics",
+          "Issuer used for Notaui connection metadata and diagnostics",
           false,
           "https://api.notaui.com"
         ),
         env_requirement(
           "NOTAUI_REGISTER_URL",
           config_value(:notaui, :register_url),
-          "Optional Notaui OAuth dynamic registration endpoint",
+          "Optional Notaui dynamic registration endpoint",
           false,
           "https://api.notaui.com/oauth/register"
         ),
         env_requirement(
           "NOTAUI_AUTH_SERVER_METADATA_URL",
           config_value(:notaui, :auth_server_metadata_url),
-          "Optional Notaui OAuth authorization-server metadata endpoint",
+          "Optional Notaui authorization-server metadata endpoint",
           false,
           "https://api.notaui.com/.well-known/oauth-authorization-server"
         ),
@@ -2060,7 +2063,7 @@ defmodule Maraithon.Connections do
         )
       ],
       setup_notes: [
-        "Register the OAuth callback URL exactly as shown above in Notaui.",
+        "Register the app return URL exactly as shown above in Notaui.",
         "Use authorization code + PKCE (S256) for the browser connect flow.",
         "Configure token endpoint auth as client_secret_basic.",
         "After connect, Maraithon discovers accessible Notaui accounts with account.list and stores a default account.",
@@ -2073,7 +2076,7 @@ defmodule Maraithon.Connections do
     %{
       logo: :desktop,
       permissions: [
-        "Pair a desktop device with a one-time token",
+        "Pair a Mac securely with Maraithon",
         "Sync local iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memo context",
         "Scope all synced data to the signed-in Maraithon user"
       ],
@@ -2082,7 +2085,7 @@ defmodule Maraithon.Connections do
       setup_notes: [
         "Install the Maraithon Desktop App on a Mac you control.",
         "Pair the app with Maraithon, then choose which local sources to sync.",
-        "Data is sent by the paired device token and stays scoped to the Maraithon account."
+        "Only the sources you enable are synced, and they stay scoped to your Maraithon account."
       ]
     }
   end

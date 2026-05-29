@@ -34,6 +34,10 @@ final class ChatMessage {
         storedMetadata?.linkedTodo
     }
 
+    var workSummary: ChatWorkSummary? {
+        storedMetadata?.workSummary
+    }
+
     var storedMetadata: ChatMessageStoredMetadata? {
         guard let structuredData else { return nil }
         return try? JSONDecoder().decode(ChatMessageStoredMetadata.self, from: structuredData)

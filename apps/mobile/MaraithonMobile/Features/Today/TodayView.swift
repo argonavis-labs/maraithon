@@ -9,6 +9,8 @@ struct TodayView: View {
     @Query(sort: \CRMContact.name) private var contacts: [CRMContact]
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
     @State private var editingTodo: TodoItem?
+    @State private var refreshErrorMessage: String?
+    @State private var isRefreshing = false
 
     private var metrics: TodayMetrics {
         TodayInsightEngine.metrics(todos: todos, contacts: contacts)
@@ -29,6 +31,18 @@ struct TodayView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let refreshErrorMessage {
+                    Section {
+                        SyncIssueBanner(
+                            message: refreshErrorMessage,
+                            retry: { Task { await refreshLatestData() } },
+                            dismiss: { self.refreshErrorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+
                 Section {
                     TodayBriefCard(
                         greeting: greeting,
@@ -48,11 +62,11 @@ struct TodayView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                Section("Command Center") {
+                Section(TodayViewCopy.snapshotSectionTitle) {
                     VStack(spacing: 1) {
                         CommandRow(
-                            title: "Open",
-                            subtitle: "Outstanding work",
+                            title: TodayViewCopy.openWorkTitle,
+                            subtitle: TodayViewCopy.openWorkSubtitle,
                             value: "\(metrics.openTodos)",
                             systemImage: "circle",
                             tint: .blue
@@ -61,8 +75,8 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
-                            title: "Late",
-                            subtitle: "Needs a decision",
+                            title: TodayViewCopy.overdueTitle,
+                            subtitle: TodayViewCopy.overdueSubtitle,
                             value: "\(metrics.overdueTodos)",
                             systemImage: "clock.badge.exclamationmark",
                             tint: .orange
@@ -71,8 +85,8 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
-                            title: "Today",
-                            subtitle: "Due before tomorrow",
+                            title: TodayViewCopy.dueTodayTitle,
+                            subtitle: TodayViewCopy.dueTodaySubtitle,
                             value: "\(metrics.dueTodayTodos)",
                             systemImage: "calendar.badge.clock",
                             tint: .indigo
@@ -81,8 +95,8 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
-                            title: "People",
-                            subtitle: "Relationships tracked",
+                            title: TodayViewCopy.peopleTitle,
+                            subtitle: TodayViewCopy.peopleSubtitle,
                             value: "\(metrics.peopleCount)",
                             systemImage: "person.2.fill",
                             tint: .green
@@ -91,8 +105,8 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
-                            title: "Follow-up",
-                            subtitle: "People need attention",
+                            title: TodayViewCopy.followUpTitle,
+                            subtitle: TodayViewCopy.followUpSubtitle,
                             value: "\(metrics.atRiskContacts)",
                             systemImage: "person.crop.circle.badge.exclamationmark",
                             tint: .red
@@ -105,12 +119,12 @@ struct TodayView: View {
                     .listRowSeparator(.hidden)
                 }
 
-                Section("Focus Queue") {
+                Section(TodayViewCopy.focusSectionTitle) {
                     if focusItems.isEmpty {
                         ContentUnavailableView(
-                            "Nothing Urgent",
+                            TodayViewCopy.emptyFocusTitle,
                             systemImage: "sparkles",
-                            description: Text("No overdue todos or stale active relationships need attention.")
+                            description: Text(TodayViewCopy.emptyFocusDescription)
                         )
                     } else {
                         ForEach(focusItems) { item in
@@ -119,12 +133,12 @@ struct TodayView: View {
                     }
                 }
 
-                Section("Recent Chat") {
+                Section(TodayViewCopy.recentChatsSectionTitle) {
                     if recentThreads.isEmpty {
                         ContentUnavailableView(
-                            "No Recent Chats",
+                            TodayViewCopy.emptyRecentChatsTitle,
                             systemImage: "bubble.left.and.bubble.right",
-                            description: Text("Start a thread from Chat when you need drafting help.")
+                            description: Text(TodayViewCopy.emptyRecentChatsDescription)
                         )
                     } else {
                         ForEach(recentThreads) { thread in
@@ -150,11 +164,24 @@ struct TodayView: View {
                 TodoEditorView(todo: todo)
             }
             .task {
-                try? await ProductionDataSync.refreshAll(
-                    sessionStore: sessionStore,
-                    modelContext: modelContext
-                )
+                await refreshLatestData()
             }
+        }
+    }
+
+    private func refreshLatestData() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+
+        do {
+            try await ProductionDataSync.refreshAll(
+                sessionStore: sessionStore,
+                modelContext: modelContext
+            )
+            refreshErrorMessage = nil
+        } catch {
+            refreshErrorMessage = "Could not refresh your latest brief. \(MobileErrorCopy.message(for: error))"
         }
     }
 
@@ -229,6 +256,48 @@ struct TodayView: View {
         default:
             return "evening"
         }
+    }
+}
+
+enum TodayViewCopy {
+    static let snapshotSectionTitle = "Priority Snapshot"
+    static let focusSectionTitle = "Focus queue"
+    static let recentChatsSectionTitle = "Recent chats"
+    static let openWorkTitle = "Open work"
+    static let openWorkSubtitle = "Unfinished items"
+    static let overdueTitle = "Past due"
+    static let overdueSubtitle = "Needs action"
+    static let dueTodayTitle = "Due today"
+    static let dueTodaySubtitle = "Before tomorrow"
+    static let peopleTitle = "People"
+    static let peopleSubtitle = "Relationships tracked"
+    static let followUpTitle = "Needs follow-up"
+    static let followUpSubtitle = "Relationships need attention"
+    static let emptyFocusTitle = "Nothing urgent"
+    static let emptyFocusDescription = "No past-due work or relationship follow-ups need attention."
+    static let emptyRecentChatsTitle = "No recent chats"
+    static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
+
+    static var snapshotLabels: [String] {
+        [
+            snapshotSectionTitle,
+            focusSectionTitle,
+            recentChatsSectionTitle,
+            openWorkTitle,
+            openWorkSubtitle,
+            overdueTitle,
+            overdueSubtitle,
+            dueTodayTitle,
+            dueTodaySubtitle,
+            peopleTitle,
+            peopleSubtitle,
+            followUpTitle,
+            followUpSubtitle,
+            emptyFocusTitle,
+            emptyFocusDescription,
+            emptyRecentChatsTitle,
+            emptyRecentChatsDescription
+        ]
     }
 }
 

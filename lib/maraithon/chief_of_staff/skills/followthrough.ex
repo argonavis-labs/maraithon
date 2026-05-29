@@ -74,7 +74,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
         service: "dms",
         label: "Slack Personal DMs",
         description:
-          "Needed to detect private reply debt and unresolved commitments in direct messages.",
+          "Needed to detect private unanswered replies and unresolved commitments in direct messages.",
         required?: true
       },
       %{

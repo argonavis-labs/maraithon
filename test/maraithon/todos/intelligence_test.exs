@@ -123,6 +123,61 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert get_in(created.metadata, ["todo_intelligence", "source"]) == "test"
   end
 
+  test "prompt frames generated copy as work items while preserving internal todo contracts" do
+    user_id = unique_user_email("todo-intelligence-copy")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "title" => "Jordan follow-up",
+        "summary" => "Jordan asked for the latest launch timing.",
+        "next_action" => "Reply to Jordan with the launch timing.",
+        "dedupe_key" => "gmail:jordan-launch"
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      assert prompt =~ "Maraithon's built-in work-item intelligence layer"
+      assert prompt =~ "`candidate_todos`,"
+      assert prompt =~ "existing_todo_id"
+      assert prompt =~ "the `todo` response object are internal JSON contract names"
+      assert prompt =~ "Include People enrichment whenever source evidence identifies people"
+      assert prompt =~ "put `crm_people` in todo.metadata"
+      assert prompt =~ "Work item title, summary, next_action, notes, and action_plan"
+      assert prompt =~ "Use product language for user-facing fields"
+      assert prompt =~ "do not write `todo` or `CRM`"
+
+      refute prompt =~ "Maraithon's built-in todo intelligence layer"
+      refute prompt =~ "Include CRM enrichment whenever source evidence identifies people"
+      refute prompt =~ "Every person-linked todo needs enough context"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Skipped one non-actionable candidate.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "skip",
+                 "reasoning" => "No durable work is needed."
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+  end
+
   test "ingest_many does not fall back when the model response is invalid" do
     user_id = unique_user_email("todo-intelligence-invalid")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

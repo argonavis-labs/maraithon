@@ -28,6 +28,75 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
         case .closed: .closed
         }
     }
+
+    func emptyState(searchText: String, hasAnyPeople: Bool) -> PeopleEmptyState {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !query.isEmpty {
+            return PeopleEmptyState(
+                title: "No matching people",
+                systemImage: "magnifyingglass",
+                description: "No \(searchScopeLabel) match \"\(query)\". Clear search or switch filters."
+            )
+        }
+
+        if !hasAnyPeople {
+            return PeopleEmptyState(
+                title: "No people yet",
+                systemImage: "person.crop.circle.badge.plus",
+                description: "Add someone important so Maraithon can remember context, cadence, and follow-up history."
+            )
+        }
+
+        switch self {
+        case .all:
+            return PeopleEmptyState(
+                title: "No people found",
+                systemImage: "person.2",
+                description: "Nothing matches the current view."
+            )
+        case .lead:
+            return PeopleEmptyState(
+                title: "No new relationships",
+                systemImage: "person.badge.plus",
+                description: "People you are still qualifying will appear here."
+            )
+        case .active:
+            return PeopleEmptyState(
+                title: "No active relationships",
+                systemImage: "person.2",
+                description: "Current relationships that are not overdue for care will appear here."
+            )
+        case .atRisk:
+            return PeopleEmptyState(
+                title: "No relationships need care",
+                systemImage: "person.crop.circle.badge.checkmark",
+                description: "You are clear on follow-ups and relationship check-ins that need attention."
+            )
+        case .closed:
+            return PeopleEmptyState(
+                title: "No archived people",
+                systemImage: "archivebox",
+                description: "Archived relationships will appear here when they are no longer active."
+            )
+        }
+    }
+
+    private var searchScopeLabel: String {
+        switch self {
+        case .all: "people"
+        case .lead: "new relationships"
+        case .active: "active relationships"
+        case .atRisk: "relationships needing care"
+        case .closed: "archived people"
+        }
+    }
+}
+
+struct PeopleEmptyState: Equatable {
+    let title: String
+    let systemImage: String
+    let description: String
 }
 
 struct CRMStatusCounts: Equatable {
@@ -51,27 +120,65 @@ struct CRMStatusCounts: Equatable {
 enum CRMFiltering {
     static func counts(
         _ contacts: [CRMContact],
-        searchText: String = ""
+        searchText: String = "",
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> CRMStatusCounts {
         CRMStatusCounts(
-            all: filter(contacts, statusFilter: .all, searchText: searchText).count,
-            lead: filter(contacts, statusFilter: .lead, searchText: searchText).count,
-            active: filter(contacts, statusFilter: .active, searchText: searchText).count,
-            atRisk: filter(contacts, statusFilter: .atRisk, searchText: searchText).count,
-            closed: filter(contacts, statusFilter: .closed, searchText: searchText).count
+            all: filter(contacts, statusFilter: .all, searchText: searchText, now: now, calendar: calendar).count,
+            lead: filter(contacts, statusFilter: .lead, searchText: searchText, now: now, calendar: calendar).count,
+            active: filter(contacts, statusFilter: .active, searchText: searchText, now: now, calendar: calendar).count,
+            atRisk: filter(contacts, statusFilter: .atRisk, searchText: searchText, now: now, calendar: calendar).count,
+            closed: filter(contacts, statusFilter: .closed, searchText: searchText, now: now, calendar: calendar).count
         )
     }
 
     static func filter(
         _ contacts: [CRMContact],
         statusFilter: CRMStatusFilter,
-        searchText: String = ""
+        searchText: String = "",
+        now: Date = Date(),
+        calendar: Calendar = .current
     ) -> [CRMContact] {
         contacts.filter { contact in
-            if let status = statusFilter.status, contact.status != status {
+            if !matchesStatus(contact, statusFilter: statusFilter, now: now, calendar: calendar) {
                 return false
             }
             return matchesSearch(contact, searchText: searchText)
+        }
+    }
+
+    static func needsCare(
+        _ contact: CRMContact,
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Bool {
+        guard !isArchived(contact) else { return false }
+        let level = RelationshipCareInsight.summary(for: contact, now: now, calendar: calendar).level
+        return level == .due || level == .needsCare
+    }
+
+    static func isArchived(_ contact: CRMContact) -> Bool {
+        contact.status == .closed || contact.dealStage == .lost
+    }
+
+    private static func matchesStatus(
+        _ contact: CRMContact,
+        statusFilter: CRMStatusFilter,
+        now: Date,
+        calendar: Calendar
+    ) -> Bool {
+        switch statusFilter {
+        case .all:
+            return true
+        case .lead:
+            return contact.status == .lead && !isArchived(contact)
+        case .active:
+            return contact.status == .active && !isArchived(contact) && !needsCare(contact, now: now, calendar: calendar)
+        case .atRisk:
+            return needsCare(contact, now: now, calendar: calendar)
+        case .closed:
+            return isArchived(contact)
         }
     }
 

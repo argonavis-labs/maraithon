@@ -65,10 +65,10 @@ Relationship card:
 
 | Element | Behavior |
 | --- | --- |
-| Title | `I think <person> is your <relationship>` |
-| Summary | Evidence-backed explanation |
+| Title | `Review relationship: <person> as your <relationship>` |
+| Summary | Evidence-backed explanation that tells the user to confirm before changing the CRM record |
 | Evidence | One or more snippets from person notes, person links, or CRM observations |
-| Primary action | `Apply relationship`, updating the CRM person relationship |
+| Primary action | `Apply relationship`, updating the CRM person relationship and structured family metadata for family roles |
 | Secondary action | `Review person`, navigating to the person detail panel |
 | Quiet action | `Hide for now`, hiding the card for the current LiveView session only |
 
@@ -173,4 +173,4 @@ Verification:
 
 - "Insight cards" for this request means CRM-native insight cards, not replacing the existing agent-generated dashboard insights.
 - Auto-merge is too destructive for a first pass; review-in-People is the right action boundary.
-- "I think Christina is your wife" style copy is acceptable only when backed by CRM evidence and paired with confirmation.
+- Relationship copy should be review-first, not model-persona speculation; family and close personal labels require explicit confirmation before changing CRM data.
