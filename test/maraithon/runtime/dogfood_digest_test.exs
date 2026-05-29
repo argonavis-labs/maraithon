@@ -25,6 +25,13 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
         config: %{}
       })
 
+    {:ok, unrecovered_agent} =
+      Agents.create_agent(%{
+        behavior: "ai_chief_of_staff",
+        status: "running",
+        config: %{}
+      })
+
     assert {:ok, _} =
              IncidentLog.record(%{
                kind: :node_boot,
@@ -47,6 +54,30 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
                occurred_at: ~U[2026-05-20 09:00:00Z]
              })
 
+    assert {:ok, _} =
+             IncidentLog.record(%{
+               kind: :agent_resumed,
+               agent_id: agent.id,
+               occurred_at: ~U[2026-05-20 09:01:00Z],
+               metadata: %{"resume_trigger" => "targeted_reresume"}
+             })
+
+    assert {:ok, _} =
+             IncidentLog.record(%{
+               kind: :agent_crash,
+               agent_id: unrecovered_agent.id,
+               reason: "crash_loop_threshold",
+               occurred_at: ~U[2026-05-20 09:10:00Z]
+             })
+
+    assert {:ok, _} =
+             IncidentLog.record(%{
+               kind: :agent_stopped_unexpectedly,
+               agent_id: unrecovered_agent.id,
+               reason: "crash_loop_threshold",
+               occurred_at: ~U[2026-05-20 09:11:00Z]
+             })
+
     body =
       DogfoodDigest.compose(~U[2026-05-20 10:00:00Z],
         timezone: "America/Toronto"
@@ -54,10 +85,14 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
 
     assert body =~ "Chief of Staff dogfood digest"
     assert body =~ "Uptime:"
-    assert body =~ "agent_crash=1"
+    assert body =~ "agent_crash=2"
     assert body =~ "Agent crashes:"
     assert body =~ agent.id
+    assert body =~ "#{agent.id}: killed -> recovered"
+    assert body =~ "#{unrecovered_agent.id}: crash_loop_threshold -> not recovered"
     assert body =~ "Last boot baseline:"
+    assert body =~ "memory "
+    assert body =~ " MB"
   end
 
   test "delivers the digest to the configured user's Telegram destination" do

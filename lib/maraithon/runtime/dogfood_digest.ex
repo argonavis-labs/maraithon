@@ -94,7 +94,7 @@ defmodule Maraithon.Runtime.DogfoodDigest do
       crash_lines(incidents),
       "Backlog now: #{backlog_line(IncidentLog.backlog_snapshot())}",
       baseline && "Last boot baseline: #{backlog_line(baseline)}",
-      "Health: #{health.status}; DB #{health.checks.database}; agents #{inspect(health.checks.agents)}"
+      "Health: #{health.status}; DB #{health.checks.database}; agents #{inspect(health.checks.agents)}; memory #{health.checks.memory_mb} MB"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
@@ -183,12 +183,36 @@ defmodule Maraithon.Runtime.DogfoodDigest do
         "Agent crashes:",
         crashes
         |> Enum.map_join("\n", fn incident ->
-          "- #{format_time(incident.occurred_at)} #{incident.agent_id}: #{incident.reason || "unknown"}"
+          "- #{format_time(incident.occurred_at)} #{incident.agent_id}: #{incident.reason || "unknown"} -> #{recovery_outcome(incident, incidents)}"
         end)
       ]
       |> Enum.join("\n")
     end
   end
+
+  defp recovery_outcome(crash, incidents) do
+    incidents
+    |> Enum.filter(&same_agent_after?(&1, crash))
+    |> Enum.find_value("recovery pending", fn
+      %RuntimeIncident{kind: "agent_resumed", metadata: metadata} ->
+        if metadata["resume_trigger"] == "targeted_reresume" do
+          "recovered"
+        end
+
+      %RuntimeIncident{kind: "agent_stopped_unexpectedly"} ->
+        "not recovered"
+
+      _incident ->
+        nil
+    end)
+  end
+
+  defp same_agent_after?(incident, crash) when is_binary(crash.agent_id) do
+    incident.agent_id == crash.agent_id and
+      DateTime.compare(incident.occurred_at, crash.occurred_at) == :gt
+  end
+
+  defp same_agent_after?(_incident, _crash), do: false
 
   defp backlog_line(snapshot) when is_map(snapshot) do
     snapshot
