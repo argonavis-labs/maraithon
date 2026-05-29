@@ -3,9 +3,9 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   alias Maraithon.AppUrl
 
-  @generic_action_failure "Could not complete that yet. Try again from the latest message or open Maraithon to review it."
-  @generic_todo_failure "Could not update that work item. Refresh the latest work message and try again."
-  @generic_tool_failure "Could not complete that check yet. Try again from the latest message or open Maraithon to review it."
+  @generic_action_failure "Action did not complete. Open the latest message or review it in Maraithon before deciding."
+  @generic_todo_failure "Could not update that work item. Refresh the latest work message before using this action."
+  @generic_tool_failure "Could not complete that check. Open the latest message or review Maraithon before continuing."
 
   @technical_message_markers [
     "access_token",
@@ -51,11 +51,11 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   def insight_action(_reason), do: @generic_action_failure
 
   def todo_callback(reason) when reason in [:not_found, "not_found"] do
-    "That work item is no longer available."
+    "That work item is no longer available. Refresh the latest work message."
   end
 
   def todo_callback(reason) when reason in [:chat_mismatch, "chat_mismatch"] do
-    "This work item is not linked to this chat anymore."
+    "This work item is not linked to this chat anymore. Refresh the latest work message."
   end
 
   def todo_callback("google_account_reauth_required"), do: "Reconnect Google in Maraithon."
@@ -78,15 +78,20 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "Could not find that Linear issue."
 
       _ ->
-        "Could not check Linear right now. Try again after refreshing the Linear connection."
+        "Could not check Linear right now. Refresh the Linear connection before checking that issue."
     end
   end
 
   def agent_inspection(reason) do
     case normalize_reason(reason) do
-      "agent_not_found" -> "That automation is no longer available."
-      "agent_control_disabled" -> "Automation controls are not enabled."
-      _ -> "Could not load that automation right now. Refresh automations and try again."
+      "agent_not_found" ->
+        "That automation is no longer available. Refresh automations."
+
+      "agent_control_disabled" ->
+        "Automation controls are not enabled."
+
+      _ ->
+        "Could not load that automation right now. Refresh automations before using this action."
     end
   end
 
@@ -99,10 +104,10 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "Automation controls are not enabled."
 
       "agent_not_found" ->
-        "That automation is no longer available."
+        "That automation is no longer available. Refresh automations."
 
       "project_not_found" ->
-        "That project is no longer available."
+        "That project is no longer available. Refresh projects."
 
       "unsupported_agent_action" ->
         "That automation action is not available."
@@ -117,7 +122,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "Could not prepare that action. Review the action details before asking again."
 
       _ ->
-        "Could not prepare that action. Refresh the latest message and try again."
+        "Could not prepare that action. Refresh the latest message before deciding."
     end
   end
 

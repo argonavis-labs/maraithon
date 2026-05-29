@@ -339,12 +339,13 @@ defmodule Maraithon.InsightNotificationActionsTest do
     callback = last_telegram_message(:callback)
 
     assert callback.opts[:text] ==
-             "Could not complete that yet. Try again from the latest message or open Maraithon to review it."
+             "Action did not complete. Open the latest message or review it in Maraithon before deciding."
 
     refute callback.opts[:text] =~ "Req.TransportError"
     refute callback.opts[:text] =~ "token"
     refute callback.opts[:text] =~ "abc123"
     refute callback.opts[:text] =~ "gmail_send_failed"
+    refute String.contains?(String.downcase(callback.opts[:text]), "try again")
   end
 
   test "verifies proactive Telegram copy stays concise and chief-of-staff shaped", %{

@@ -556,8 +556,9 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
                %{user_id: user_id, context: %{}}
              )
 
-    assert agent_copy == "That automation is no longer available."
+    assert agent_copy == "That automation is no longer available. Refresh automations."
     refute agent_copy =~ "agent_not_found"
+    refute String.contains?(String.downcase(agent_copy), "try again")
 
     assert {:error, action_copy} =
              Toolbox.execute(
