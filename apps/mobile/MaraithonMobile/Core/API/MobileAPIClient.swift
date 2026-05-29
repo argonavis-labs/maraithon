@@ -396,7 +396,7 @@ struct MobileAPIClient {
                 }
             }
 
-            throw MobileAPIError.server("Maraithon could not complete that request. Try again.")
+            throw MobileAPIError.server("request_failed")
         }
     }
 

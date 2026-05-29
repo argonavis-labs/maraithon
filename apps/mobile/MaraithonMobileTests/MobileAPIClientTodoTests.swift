@@ -43,7 +43,7 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
-    func serverErrorPrefersHumanMessageButKeepsMachineCode() async throws {
+    func serverErrorKeepsMachineCodeAndUsesRecoveryCopy() async throws {
         let recorder = HTTPRequestRecorder()
         var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
         client.session = recorder.session(
@@ -62,7 +62,7 @@ struct MobileAPIClientTodoTests {
             Issue.record("Expected a structured server error")
         } catch let error as MobileAPIError {
             #expect(error.isNotFound)
-            #expect(MobileErrorCopy.message(for: error) == "That item is no longer available.")
+            #expect(MobileErrorCopy.message(for: error) == "That item is no longer available. Refresh to see current work.")
         }
     }
 

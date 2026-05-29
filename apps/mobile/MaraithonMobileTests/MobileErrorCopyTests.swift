@@ -10,7 +10,7 @@ struct MobileErrorCopyTests {
             for: MobileAPIError.server("DBConnection.ConnectionError: token abc123")
         )
 
-        #expect(copy == "Maraithon could not complete that request. Try again.")
+        #expect(copy == "Request did not complete. Refresh before retrying.")
         #expect(!copy.contains("DBConnection"))
         #expect(!copy.contains("token"))
         #expect(!copy.contains("abc123"))
@@ -31,7 +31,7 @@ struct MobileErrorCopyTests {
             for: MobileAPIError.server("Authorization: Bearer abc123 token=secret")
         )
 
-        #expect(copy == "Maraithon could not complete that request. Try again.")
+        #expect(copy == "Request did not complete. Refresh before retrying.")
         #expect(!copy.lowercased().contains("authorization"))
         #expect(!copy.lowercased().contains("bearer"))
         #expect(!copy.lowercased().contains("token"))
@@ -53,6 +53,10 @@ struct MobileErrorCopyTests {
                 "Choose the duplicate person to merge."
         )
         #expect(
+            MobileErrorCopy.message(for: MobileAPIError.server("not_found")) ==
+                "That item is no longer available. Refresh to see current work."
+        )
+        #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("message_too_long")) ==
                 "Message is too long. Send a shorter note."
         )
@@ -68,28 +72,44 @@ struct MobileErrorCopyTests {
             MobileErrorCopy.message(for: MobileAPIError.server("prepared_action_expired")) ==
                 "That action expired. Ask Maraithon to prepare it again."
         )
+        #expect(
+            MobileErrorCopy.message(for: MobileAPIError.server("invalid_decision")) ==
+                "Choose confirm or cancel before continuing."
+        )
     }
 
     @Test
-    func preservesProductCopyFromStructuredServerResponses() {
+    func usesRecoveryCopyForStaleKnownStructuredServerResponses() {
         let error = MobileAPIError.serverResponse(
             code: "not_found",
             message: "That item is no longer available."
         )
 
         #expect(error.isNotFound)
-        #expect(MobileErrorCopy.message(for: error) == "That item is no longer available.")
+        #expect(MobileErrorCopy.message(for: error) == "That item is no longer available. Refresh to see current work.")
     }
 
     @Test
     func mapsTransportAndFrameworkErrors() {
         #expect(
             MobileErrorCopy.message(for: URLError(.notConnectedToInternet)) ==
-                "Connection issue. Try again when you are online."
+                "Connection issue. Retry when you are online."
         )
         #expect(
             MobileErrorCopy.message(for: URLError(.userAuthenticationRequired)) ==
                 "Sign-in expired. Sign in again."
+        )
+        #expect(
+            MobileErrorCopy.message(for: URLError(.timedOut)) ==
+                "Connection timed out. Retry when the network is stable."
+        )
+        #expect(
+            MobileErrorCopy.message(for: URLError(.badServerResponse)) ==
+                "Connection issue. Refresh when the network is stable."
+        )
+        #expect(
+            MobileErrorCopy.message(for: MobileAPIError.invalidResponse) ==
+                "Maraithon returned an unexpected response. Update the app, then refresh."
         )
         #expect(
             MobileErrorCopy.message(for: AuthError.restoreFailed) ==
@@ -97,7 +117,7 @@ struct MobileErrorCopyTests {
         )
 
         let copy = MobileErrorCopy.message(for: TechnicalLocalizedError())
-        #expect(copy == "Could not finish that request. Try again.")
+        #expect(copy == "Request did not complete. Refresh before retrying.")
     }
 
     @Test
@@ -113,7 +133,7 @@ struct MobileErrorCopyTests {
     func hidesCredentialLikeLocalizedErrors() {
         let copy = MobileErrorCopy.message(for: CredentialLocalizedError())
 
-        #expect(copy == "Could not finish that request. Try again.")
+        #expect(copy == "Request did not complete. Refresh before retrying.")
         #expect(!copy.lowercased().contains("bearer"))
         #expect(!copy.lowercased().contains("secret"))
     }

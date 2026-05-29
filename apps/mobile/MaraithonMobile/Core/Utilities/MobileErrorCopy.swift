@@ -1,16 +1,22 @@
 import Foundation
 
 enum MobileErrorCopy {
+    private static let requestFallback = "Request did not complete. Refresh before retrying."
+    private static let assistantFallback =
+        "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+    private static let unexpectedResponseFallback =
+        "Maraithon returned an unexpected response. Update the app, then refresh."
+
     static func message(for error: Error) -> String {
         switch error {
         case MobileAPIError.unauthorized:
             return "Sign-in expired. Sign in again."
         case MobileAPIError.invalidResponse:
-            return "Maraithon returned an unexpected response. Try again."
+            return unexpectedResponseFallback
         case let MobileAPIError.server(message):
             return serverMessage(for: message)
-        case let MobileAPIError.serverResponse(_, message):
-            return serverMessage(for: message)
+        case let MobileAPIError.serverResponse(code, message):
+            return serverResponseMessage(code: code, message: message)
         case AuthError.invalidEmail:
             return "Enter a valid email address."
         case AuthError.magicLinkNotFound:
@@ -22,11 +28,11 @@ enum MobileErrorCopy {
         case let urlError as URLError:
             return message(forURLError: urlError)
         case is DecodingError:
-            return "Maraithon returned an unexpected response. Try again."
+            return unexpectedResponseFallback
         default:
             let description = error.localizedDescription
             if looksTechnical(description) {
-                return "Could not finish that request. Try again."
+                return requestFallback
             }
             return description
         }
@@ -36,12 +42,12 @@ enum MobileErrorCopy {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed.isEmpty {
-            return "Maraithon could not complete that request. Try again."
+            return requestFallback
         }
 
         switch trimmed {
         case "not_found":
-            return "That item is no longer available."
+            return "That item is no longer available. Refresh to see current work."
         case "missing_duplicate":
             return "Choose the duplicate person to merge."
         case "unsupported_todo_action":
@@ -65,7 +71,7 @@ enum MobileErrorCopy {
         case "thread_title_too_long":
             return "Keep the chat name shorter."
         case "invalid_decision":
-            return "Choose confirm or cancel and try again."
+            return "Choose confirm or cancel before continuing."
         case "prepared_action_expired":
             return "That action expired. Ask Maraithon to prepare it again."
         default:
@@ -73,35 +79,44 @@ enum MobileErrorCopy {
         }
 
         if looksTechnical(trimmed) {
-            return "Maraithon could not complete that request. Try again."
+            return requestFallback
         }
 
         return trimmed
     }
 
     static func assistantRunFailureMessage(for message: String?) -> String {
-        let fallback = "I could not finish that response. Try again, or ask for a narrower check."
-        guard let message else { return fallback }
+        guard let message else { return assistantFallback }
 
         let publicMessage = serverMessage(for: message)
-        if publicMessage == "Maraithon could not complete that request. Try again." ||
-            publicMessage == "Could not finish that request. Try again." {
-            return fallback
+        if publicMessage == requestFallback {
+            return assistantFallback
         }
 
         return publicMessage
     }
 
+    private static func serverResponseMessage(code: String, message: String) -> String {
+        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch trimmedCode {
+        case "not_found", "invalid_decision":
+            return serverMessage(for: trimmedCode)
+        default:
+            return serverMessage(for: message)
+        }
+    }
+
     private static func message(forURLError error: URLError) -> String {
         switch error.code {
         case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost:
-            return "Connection issue. Try again when you are online."
+            return "Connection issue. Retry when you are online."
         case .timedOut:
-            return "Connection timed out. Try again."
+            return "Connection timed out. Retry when the network is stable."
         case .userAuthenticationRequired, .userCancelledAuthentication:
             return "Sign-in expired. Sign in again."
         default:
-            return "Connection issue. Try again."
+            return "Connection issue. Refresh when the network is stable."
         }
     }
 

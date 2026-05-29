@@ -51,7 +51,7 @@ struct AccountMenuButton: View {
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(resetError ?? "Try again.")
+            Text(resetError ?? AccountMenuCopy.resetFailedFallback)
         }
     }
 
@@ -78,11 +78,13 @@ enum AccountMenuCopy {
     static let resetLocalWorkspaceMessage =
         "This replaces the local preview work, people, and chats on this device. Your Maraithon account is not affected."
     static let resetFailedTitle = "Could Not Reset Workspace"
+    static let resetFailedFallback = "Reset did not complete. Close and reopen Maraithon before retrying."
 
     static let resetVisibleStrings = [
         resetLocalWorkspaceLabel,
         resetLocalWorkspaceTitle,
         resetLocalWorkspaceMessage,
-        resetFailedTitle
+        resetFailedTitle,
+        resetFailedFallback
     ]
 }
