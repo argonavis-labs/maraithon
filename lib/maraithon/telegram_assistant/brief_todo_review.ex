@@ -318,7 +318,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         :ok
 
       nil ->
-        case latest_reviewable_brief(user_id) || build_open_todo_review_brief(user_id) do
+        case current_open_work_review_brief(user_id) || latest_reviewable_brief(user_id) do
           %Brief{} = brief ->
             start_review_for_brief(brief, chat_id)
             :ok
@@ -333,10 +333,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp start_latest_review(_user_id, _chat_id), do: :ignored
 
   defp send_todo_list_summary(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
-    todos =
-      user_id
-      |> Todos.list_open_for_user(limit: @text_review_limit)
-      |> Briefs.order_todo_digest_items(%Brief{metadata: %{}})
+    todos = current_review_todos(user_id)
 
     text =
       case todos do
@@ -467,12 +464,40 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     |> Enum.find(fn brief -> linked_todo_ids(brief) != [] and review_todos(brief) != [] end)
   end
 
-  defp build_open_todo_review_brief(user_id) do
-    todos =
-      user_id
-      |> Todos.list_open_for_user(limit: @text_review_limit)
-      |> Briefs.order_todo_digest_items(%Brief{metadata: %{}})
+  defp current_open_work_review_brief(user_id) do
+    todos = current_review_todos(user_id)
 
+    case todos do
+      [] ->
+        nil
+
+      todos ->
+        latest = latest_reviewable_brief(user_id)
+
+        if same_review_todos?(latest, todos) do
+          latest
+        else
+          build_open_todo_review_brief(user_id, todos)
+        end
+    end
+  end
+
+  defp current_review_todos(user_id) do
+    user_id
+    |> Todos.list_open_for_user(limit: @text_review_limit)
+    |> Briefs.order_todo_digest_items(%Brief{metadata: %{}})
+  end
+
+  defp same_review_todos?(%Brief{} = brief, todos) when is_list(todos) do
+    brief_ids = brief |> review_todos() |> Enum.map(& &1.id) |> MapSet.new()
+    current_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
+
+    MapSet.equal?(brief_ids, current_ids)
+  end
+
+  defp same_review_todos?(_brief, _todos), do: false
+
+  defp build_open_todo_review_brief(user_id, todos) do
     with [_ | _] <- todos,
          agent_id when is_binary(agent_id) <- latest_agent_id(user_id),
          {:ok, brief} <-

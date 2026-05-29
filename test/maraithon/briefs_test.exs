@@ -539,6 +539,65 @@ defmodule Maraithon.BriefsTest do
     assert List.last(sends).text =~ second_todo.next_action
   end
 
+  test "telegram text review uses the current open work set over an older brief", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [old_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-text-current:old", "Confirm the old shipment note",
+          priority: 40,
+          source_occurred_at: "2026-04-01T14:00:00Z",
+          next_action: "Confirm whether the old shipment note still matters."
+        )
+      ])
+
+    {:ok, %Brief{} = old_brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: older linked list",
+        "summary" => "Only the older item existed when this brief was written.",
+        "body" => "Review the older item.",
+        "scheduled_for" => ~U[2026-04-01 16:30:00Z],
+        "dedupe_key" => "brief:morning:older-linked-list",
+        "metadata" => %{"linked_todo_ids" => [old_todo.id]}
+      })
+
+    {:ok, [new_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-text-current:new", "Reply to school about today's form",
+          priority: 99,
+          source_occurred_at: "2026-04-02T15:30:00Z",
+          next_action: "Send the signed school form and ask for confirmation today."
+        )
+      ])
+
+    assert :ok =
+             TelegramAssistant.handle_inbound(%{
+               user_id: user_id,
+               chat_id: "777123",
+               text: "Let's go through my open work one at a time",
+               source_message_id: "text-review-current-open-work"
+             })
+
+    [message] = sent_messages()
+    assert message.text =~ "Open work 1 of 2"
+    assert message.text =~ new_todo.next_action
+
+    fresh_review =
+      Brief
+      |> Repo.all()
+      |> Enum.find(fn brief ->
+        get_in(brief.metadata || %{}, ["origin"]) == "telegram_text_request"
+      end)
+
+    assert fresh_review
+    refute fresh_review.id == old_brief.id
+
+    assert Enum.sort(get_in(fresh_review.metadata, ["linked_todo_ids"])) ==
+             Enum.sort([old_todo.id, new_todo.id])
+  end
+
   test "quick todo list includes the next action for each item", %{user_id: user_id} do
     {:ok, [todo]} =
       Todos.upsert_many(user_id, [
