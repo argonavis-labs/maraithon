@@ -418,11 +418,11 @@ defmodule Maraithon.ControlProtocol do
   defp tool_error_message(reason) when is_binary(reason) do
     cond do
       String.ends_with?(reason, "_not_connected") ->
-        "Connect the missing account, then try again."
+        "Connect the missing account before running this action."
 
       String.ends_with?(reason, "_reauth_required") or
           String.ends_with?(reason, "_reconnect_required") ->
-        "Reconnect the account, then try again."
+        "Reconnect the account before running this action."
 
       String.starts_with?(reason, "missing_") ->
         "Required action details are missing."
@@ -434,17 +434,18 @@ defmodule Maraithon.ControlProtocol do
         "Action is not available."
 
       String.contains?(reason, ":") ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
 
       Regex.match?(~r/^[a-z0-9_]+$/, reason) ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
 
       true ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
     end
   end
 
-  defp tool_error_message(_reason), do: "Action could not finish. Try again."
+  defp tool_error_message(_reason),
+    do: "Action did not complete. No confirmed change was recorded."
 
   defp policy_message(decision) do
     decision

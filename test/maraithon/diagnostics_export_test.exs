@@ -103,9 +103,15 @@ defmodule Maraithon.DiagnosticsExportTest do
     refute encoded =~ "internal_stacktrace"
     refute encoded =~ "db_timeout"
     refute encoded =~ "token=secret"
-    assert encoded =~ "I could not finish that response. Try again, or ask for a narrower check."
-    assert encoded =~ "That run could not finish. Review the last action and try again."
-    assert encoded =~ "Background job failed. Retry when ready."
+
+    assert encoded =~
+             "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+
+    assert encoded =~ "That run did not complete. Review the last action before running it again."
+
+    assert encoded =~
+             "Background job did not complete. Review the latest status before rerunning it."
+
     assert encoded =~ "<redacted>"
   end
 end

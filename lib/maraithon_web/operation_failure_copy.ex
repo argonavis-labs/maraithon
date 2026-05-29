@@ -55,24 +55,24 @@ defmodule MaraithonWeb.OperationFailureCopy do
     with_detail(
       "Could not create that project.",
       validation_detail(changeset),
-      "Review the details and try again."
+      "Review the highlighted fields before saving again."
     )
   end
 
   def project(:create, _reason) do
-    "Could not create that project. Review the details and try again."
+    "Could not create that project. Review the highlighted fields before saving again."
   end
 
   def project(:memory, %Ecto.Changeset{} = changeset) do
     with_detail(
       "Could not save that project memory.",
       validation_detail(changeset),
-      "Review the details and try again."
+      "Review the highlighted fields before saving again."
     )
   end
 
   def project(:memory, _reason) do
-    "Could not save that project memory. Review the details and try again."
+    "Could not save that project memory. Review the highlighted fields before saving again."
   end
 
   def project(:recommendation_decision, _reason) do

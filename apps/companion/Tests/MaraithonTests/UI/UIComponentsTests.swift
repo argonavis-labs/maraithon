@@ -77,8 +77,8 @@ final class UIComponentsTests: XCTestCase {
             lastSyncAt: nil
         )
 
-        XCTAssertEqual(label, "Notes, error, Some items could not be synced. Try again.")
-        XCTAssertEqual(tooltip, "Some items could not be synced. Try again.")
+        XCTAssertEqual(label, "Notes, error, Some items were not accepted. Maraithon will keep the last successful data until the next sync.")
+        XCTAssertEqual(tooltip, "Some items were not accepted. Maraithon will keep the last successful data until the next sync.")
         XCTAssertFalse(label.contains("secret"))
         XCTAssertFalse(tooltip.contains("secret"))
         XCTAssertFalse(label.contains("clientError"))
@@ -177,7 +177,7 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
 
-        XCTAssertTrue(line.contains("Status: Error - Maraithon is temporarily unavailable. Try again shortly."))
+        XCTAssertTrue(line.contains("Status: Error - Maraithon is temporarily unavailable. Sync again shortly."))
         XCTAssertTrue(line.contains("Last sync: Never"))
         XCTAssertFalse(line.contains("state="))
         XCTAssertFalse(line.contains("clientError"))
@@ -303,7 +303,7 @@ final class UIComponentsTests: XCTestCase {
     func testRecallErrorCopyUsesSearchLanguage() {
         let copy = RecallCopy.searchError(MaraithonClientError.serverError(status: 503))
 
-        XCTAssertEqual(copy, "Search could not finish. Maraithon is temporarily unavailable. Try again shortly.")
+        XCTAssertEqual(copy, "Search could not finish. Maraithon is temporarily unavailable. Retry in a moment.")
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Recall failed"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("serverError"))
     }

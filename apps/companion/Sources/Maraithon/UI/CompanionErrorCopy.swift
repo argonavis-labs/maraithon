@@ -12,7 +12,7 @@ struct CompanionErrorCopy {
         case MaraithonClientError.unauthorized:
             return "Reconnect Maraithon to continue."
         case MaraithonClientError.invalidResponse:
-            return "Maraithon returned an unexpected response. Try again."
+            return "Maraithon returned an unexpected response. Update the app or try again later."
         case let MaraithonClientError.clientError(status, body):
             if let serverMessage = serverBodyMessage(from: body) {
                 return serverMessage
@@ -21,9 +21,9 @@ struct CompanionErrorCopy {
         case let MaraithonClientError.serverError(status):
             return serverMessage(status: status)
         case MaraithonClientError.transport:
-            return "Connection issue. Try again when you are online."
+            return "Connection issue. Retry when you are online."
         default:
-            return "Could not finish that request. Try again."
+            return "Request did not complete. Refresh before retrying."
         }
     }
 
@@ -31,7 +31,7 @@ struct CompanionErrorCopy {
         let lower = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         if lower.isEmpty {
-            return "Could not finish that request. Try again."
+            return "Request did not complete. Refresh before retrying."
         }
 
         if lower.contains("unauthorized") || lower.contains("401") || lower == "no_token" {
@@ -39,11 +39,11 @@ struct CompanionErrorCopy {
         }
 
         if lower.contains("timeout") || lower.contains("timed out") {
-            return "Connection timed out. Try again."
+            return "Connection timed out. Retry when the network is stable."
         }
 
         if lower.contains("servererror") || lower.contains("status: 5") {
-            return "Maraithon is temporarily unavailable. Try again shortly."
+            return "Maraithon is temporarily unavailable. Retry in a moment."
         }
 
         if lower.contains("nsurlerrordomain")
@@ -51,18 +51,18 @@ struct CompanionErrorCopy {
             || lower.contains("network")
             || lower.contains("offline")
             || lower.contains("transport(") {
-            return "Connection issue. Try again when you are online."
+            return "Connection issue. Retry when you are online."
         }
 
         if lower.contains("invalidresponse")
             || lower.contains("decodefailure")
             || lower.contains("decodingerror")
             || lower.contains("json") {
-            return "Maraithon returned an unexpected response. Try again."
+            return "Maraithon returned an unexpected response. Update the app or try again later."
         }
 
         if looksTechnical(reason) {
-            return "Could not finish that request. Try again."
+            return "Request did not complete. Refresh before retrying."
         }
 
         return reason
@@ -73,26 +73,26 @@ struct CompanionErrorCopy {
         case 401:
             return "Reconnect Maraithon to continue."
         case 404:
-            return "That item is no longer available. Refresh and try again."
+            return "That item is no longer available. Refresh before continuing."
         case 408:
-            return "Connection timed out. Try again."
+            return "Connection timed out. Retry when the network is stable."
         case 409:
-            return "The request was out of date. Refresh and try again."
+            return "The request was out of date. Refresh before continuing."
         case 413:
-            return "That request was too large. Sync fewer items and try again."
+            return "That request was too large. Sync fewer items."
         case 429:
-            return "Maraithon is busy right now. Try again shortly."
+            return "Maraithon is busy right now. Retry in a moment."
         default:
-            return "Maraithon could not complete that request. Try again."
+            return "Request did not complete. Refresh before retrying."
         }
     }
 
     private static func serverMessage(status: Int) -> String {
         if status >= 500 {
-            return "Maraithon is temporarily unavailable. Try again shortly."
+            return "Maraithon is temporarily unavailable. Retry in a moment."
         }
 
-        return "Maraithon could not complete that request. Try again."
+        return "Request did not complete. Refresh before retrying."
     }
 
     private static func looksTechnical(_ value: String) -> Bool {

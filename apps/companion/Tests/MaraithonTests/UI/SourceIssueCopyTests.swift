@@ -25,7 +25,7 @@ final class SourceIssueCopyTests: XCTestCase {
         let clientError = "clientError(status: 400, body: Optional(\"{\\\"error\\\":\\\"invalid_batch\\\",\\\"secret\\\":\\\"abc\\\"}\"))"
         XCTAssertEqual(
             SourceIssueCopy.status(clientError),
-            "Some items could not be synced. Try again."
+            "Some items were not accepted. Maraithon will keep the last successful data until the next sync."
         )
 
         let transport = "Error Domain=NSURLErrorDomain Code=-1009 \"The Internet connection appears to be offline.\""
@@ -38,14 +38,14 @@ final class SourceIssueCopyTests: XCTestCase {
     func testUnknownMachineCodesUseGenericRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("something_weird"),
-            "This source needs attention. Try again."
+            "This source needs attention. Open the source detail before syncing again."
         )
     }
 
     func testCredentialLikeReasonsUseGenericRecoveryCopy() {
         let copy = SourceIssueCopy.status("Authorization: Bearer abc123 token=secret")
 
-        XCTAssertEqual(copy, "This source needs attention. Try again.")
+        XCTAssertEqual(copy, "This source needs attention. Open the source detail before syncing again.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.lowercased().contains("token"))
@@ -62,7 +62,7 @@ final class SourceIssueCopyTests: XCTestCase {
     func testServerRejectionSummariesUseRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("2 messages were rejected by the server."),
-            "Some items did not sync. Try again."
+            "Some items did not sync. Maraithon will keep the last successful data until the next sync."
         )
     }
 
@@ -74,7 +74,7 @@ final class SourceIssueCopyTests: XCTestCase {
 
         XCTAssertEqual(
             detail,
-            "Notes could not finish its last sync. Connection issue. Sync again when you are online. Select Sync now to try again."
+            "Notes could not finish its last sync. Connection issue. Sync again when you are online. Select Sync now when ready."
         )
         XCTAssertFalse(detail.contains("Logs"))
         XCTAssertFalse(detail.lowercased().contains("diagnostic"))

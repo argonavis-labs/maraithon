@@ -475,7 +475,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     {:ok, _view, html} = live(conn, "/dashboard")
 
-    assert html =~ "Background job failed. Retry when ready."
+    assert html =~
+             "Background job did not complete. Review the latest status before rerunning it."
+
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "123456789")

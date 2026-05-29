@@ -224,7 +224,8 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
       assert_reply ref, :error, %{
         reason: "messages_required",
-        message: "Required sync data was missing. Try again."
+        message:
+          "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
       }
     end
 
@@ -246,7 +247,8 @@ defmodule MaraithonWeb.CompanionChannelTest do
                    :error,
                    %{
                      reason: "batch_too_large",
-                     message: "Sync fewer than 500 items at a time and try again."
+                     message:
+                       "Sync fewer than 500 items at a time. Maraithon will keep the last successful data until then."
                    },
                    1000
 
@@ -437,7 +439,8 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
       assert_reply ref, :error, %{
         reason: "unknown_event",
-        message: "Maraithon could not handle that sync request. Try again."
+        message:
+          "The companion app sent a sync request this server does not support. Update the app, then sync again."
       }
     end
   end

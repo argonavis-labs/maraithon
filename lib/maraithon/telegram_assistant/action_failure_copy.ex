@@ -114,7 +114,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "That project action is not available."
 
       "invalid_external_payload" ->
-        "Could not prepare that action. Review the details and try again."
+        "Could not prepare that action. Review the action details before asking again."
 
       _ ->
         "Could not prepare that action. Refresh the latest message and try again."

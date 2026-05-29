@@ -152,7 +152,7 @@ defmodule MaraithonWeb.ControlControllerTest do
     assert get_in(response, ["result", "error", "code"]) == "tool_error"
 
     assert get_in(response, ["result", "error", "message"]) ==
-             "Connect the missing account, then try again."
+             "Connect the missing account before running this action."
 
     refute inspect(response) =~ "google_account_not_connected"
   end

@@ -96,7 +96,7 @@ defmodule MaraithonWeb.NotauiControllerTest do
 
       assert json_response(conn, 400) == %{
                "error" =>
-                 "Could not sync Notaui tasks. Check the Notaui connection and try again."
+                 "Notaui tasks did not sync. Check the Notaui connection before syncing again."
              }
     end
   end

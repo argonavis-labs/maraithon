@@ -22,7 +22,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert copy == %{
              error: "request_failed",
-             message: "Could not finish that request. Try again."
+             message: "Request did not complete. Refresh before retrying."
            }
 
     refute_leaks_internal_reason(copy.error)
@@ -50,13 +50,13 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     raw = "http_status: 500 internal_stacktrace db_timeout token=secret"
 
     assert ApiErrorCopy.mobile_chat_run_error(raw) ==
-             "I could not finish that response. Try again, or ask for a narrower check."
+             "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
 
     assert ApiErrorCopy.mobile_chat_run_error("google_account_not_connected") ==
-             "Connect the missing account, then try again."
+             "Connect the missing account before running this again."
 
     assert ApiErrorCopy.mobile_chat_run_error("tool_timeout") ==
-             "That response took too long. Try again with a narrower ask."
+             "That response took too long. Ask for a narrower check."
 
     refute_leaks_internal_reason(ApiErrorCopy.mobile_chat_run_error(raw))
   end
@@ -70,7 +70,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     copy = ApiErrorCopy.mobile(changeset)
 
     assert copy.error == "invalid_params"
-    assert copy.message == "Review the details and try again."
+    assert copy.message == "Review the highlighted details before saving again."
     assert copy.details == %{title: ["can't be blank"]}
     refute inspect(copy) =~ "Ecto.Changeset"
   end
@@ -86,20 +86,24 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert %{
              error: "recall_unavailable",
-             message: "Recall is unavailable right now. Try again."
+             message: "Recall could not finish. No saved data changed; search again in a moment."
            } in copies
 
-    assert %{error: "invalid_batch", message: "Some items could not be synced. Try again."} in copies
+    assert %{
+             error: "invalid_batch",
+             message:
+               "Some items were not accepted. Sync again from the companion app; Maraithon will keep the last successful data until then."
+           } in copies
 
     assert %{
              error: "device_request_failed",
-             message: "Could not update that Mac. Refresh the device list and try again."
+             message: "Could not update that Mac. Refresh the device list before trying again."
            } in copies
 
     assert %{
              error: "invalid_device_key",
              message:
-               "Maraithon could not save this Mac's encryption key. Reconnect this Mac and try again."
+               "Maraithon could not save this Mac's encryption key. Re-pair this Mac before syncing encrypted sources."
            } in copies
 
     Enum.each(copies, fn copy ->
@@ -112,24 +116,25 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
   test "companion device and key payloads use actionable product copy" do
     assert ApiErrorCopy.companion_device(:not_found) == %{
              error: "device_not_found",
-             message: "That Mac is no longer paired. Refresh the device list and try again."
+             message:
+               "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
            }
 
     assert ApiErrorCopy.companion_device(:delete_failed) == %{
              error: "device_delete_failed",
-             message: "Could not remove that Mac. Refresh the device list and try again."
+             message: "Could not remove that Mac. Refresh the device list before trying again."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_key_id) == %{
              error: "missing_key_id",
              message:
-               "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+               "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_public_key) == %{
              error: "missing_public_key",
              message:
-               "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+               "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
            }
 
     assert ApiErrorCopy.companion_recall(:missing_query) == %{
@@ -141,12 +146,14 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
   test "companion sync payloads pair stable codes with product copy" do
     assert ApiErrorCopy.companion_sync(:missing_items, "messages") == %{
              error: "messages_required",
-             message: "Required sync data was missing. Try again."
+             message:
+               "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
            }
 
     assert ApiErrorCopy.companion_sync(:too_many_items, 200) == %{
              error: "batch_too_large",
-             message: "Sync fewer than 200 items at a time and try again."
+             message:
+               "Sync fewer than 200 items at a time. Maraithon will keep the last successful data until then."
            }
 
     assert ApiErrorCopy.companion_channel_error(:device_mismatch, nil) == %{
@@ -160,13 +167,15 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
              "Action is not available."
 
     assert ApiErrorCopy.mcp_tool("google_api_failed: 500 %{token: \"secret\"}") ==
-             "Action could not finish. Try again."
+             "Action did not complete. No confirmed change was recorded."
 
     raw_sentence = "Provider returned HTTP 500 for token=secret and request_id=req_123"
 
-    assert ApiErrorCopy.mcp_tool(raw_sentence) == "Action could not finish. Try again."
+    assert ApiErrorCopy.mcp_tool(raw_sentence) ==
+             "Action did not complete. No confirmed change was recorded."
 
-    assert ApiErrorCopy.mcp_tool(@internal_reason) == "Action could not finish. Try again."
+    assert ApiErrorCopy.mcp_tool(@internal_reason) ==
+             "Action did not complete. No confirmed change was recorded."
 
     assert ApiErrorCopy.mcp_batch(@internal_reason) == %{
              "reason" => "A request in the batch failed unexpectedly."

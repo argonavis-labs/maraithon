@@ -41,13 +41,16 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile(%Ecto.Changeset{} = changeset) do
     %{
       error: "invalid_params",
-      message: "Review the details and try again.",
+      message: "Review the highlighted details before saving again.",
       details: validation_errors(changeset)
     }
   end
 
   def mobile(_reason) do
-    %{error: "request_failed", message: "Could not finish that request. Try again."}
+    %{
+      error: "request_failed",
+      message: "Request did not complete. Refresh before retrying."
+    }
   end
 
   def mobile_chat(reason) when reason in @mobile_chat_code_errors do
@@ -60,13 +63,17 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile_chat(%Ecto.Changeset{} = changeset) do
     %{
       error: "invalid_params",
-      message: "Could not update the conversation. Review the details and try again.",
+      message: "Review the highlighted conversation details before saving again.",
       details: validation_errors(changeset)
     }
   end
 
   def mobile_chat(_reason) do
-    %{error: "request_failed", message: "Could not update the conversation. Try again."}
+    %{
+      error: "request_failed",
+      message:
+        "Conversation update did not complete. Refresh the conversation before sending again."
+    }
   end
 
   def mobile_chat_run_error(nil), do: nil
@@ -84,42 +91,45 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_recall(_reason) do
     %{
       error: "recall_unavailable",
-      message: "Recall is unavailable right now. Try again."
+      message: "Recall could not finish. No saved data changed; search again in a moment."
     }
   end
 
   def companion_device(:not_found) do
     %{
       error: "device_not_found",
-      message: "That Mac is no longer paired. Refresh the device list and try again."
+      message:
+        "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
     }
   end
 
   def companion_device(:delete_failed) do
     %{
       error: "device_delete_failed",
-      message: "Could not remove that Mac. Refresh the device list and try again."
+      message: "Could not remove that Mac. Refresh the device list before trying again."
     }
   end
 
   def companion_device(_reason) do
     %{
       error: "device_request_failed",
-      message: "Could not update that Mac. Refresh the device list and try again."
+      message: "Could not update that Mac. Refresh the device list before trying again."
     }
   end
 
   def companion_device_key(:missing_key_id) do
     %{
       error: "missing_key_id",
-      message: "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+      message:
+        "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
     }
   end
 
   def companion_device_key(:missing_public_key) do
     %{
       error: "missing_public_key",
-      message: "Maraithon's encryption setup is incomplete. Reconnect this Mac and try again."
+      message:
+        "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
     }
   end
 
@@ -127,21 +137,23 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "invalid_device_key",
       message:
-        "Maraithon could not save this Mac's encryption key. Reconnect this Mac and try again."
+        "Maraithon could not save this Mac's encryption key. Re-pair this Mac before syncing encrypted sources."
     }
   end
 
   def companion_sync(:missing_items, batch_key) do
     %{
       error: "#{batch_key}_required",
-      message: "Required sync data was missing. Try again."
+      message:
+        "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
     }
   end
 
   def companion_sync(:too_many_items, max_batch) do
     %{
       error: "batch_too_large",
-      message: "Sync fewer than #{max_batch} items at a time and try again."
+      message:
+        "Sync fewer than #{max_batch} items at a time. Maraithon will keep the last successful data until then."
     }
   end
 
@@ -155,14 +167,16 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_sync(:unknown_event, _context) do
     %{
       error: "unknown_event",
-      message: "Maraithon could not handle that sync request. Try again."
+      message:
+        "The companion app sent a sync request this server does not support. Update the app, then sync again."
     }
   end
 
   def companion_sync(_reason, _context) do
     %{
       error: "invalid_batch",
-      message: "Some items could not be synced. Try again."
+      message:
+        "Some items were not accepted. Sync again from the companion app; Maraithon will keep the last successful data until then."
     }
   end
 
@@ -178,7 +192,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   def notaui_sync(_reason) do
-    %{error: "Could not sync Notaui tasks. Check the Notaui connection and try again."}
+    %{error: "Notaui tasks did not sync. Check the Notaui connection before syncing again."}
   end
 
   def mcp_batch(_reason) do
@@ -200,21 +214,24 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   def mcp_policy_decision(_decision) do
-    %{"message" => "Action could not finish. Try again.", "reason_code" => "tool_failed"}
+    %{
+      "message" => "Action did not complete. No confirmed change was recorded.",
+      "reason_code" => "tool_failed"
+    }
   end
 
   def mcp_policy_message(decision) do
     decision
     |> mcp_policy_decision()
-    |> Map.get("message", "Action could not finish. Try again.")
+    |> Map.get("message", "Action did not complete. No confirmed change was recorded.")
   end
 
   def mcp_tool(:tool_crashed) do
-    "Action failed before it could finish. Try again."
+    "Action stopped before completion. No confirmed change was recorded."
   end
 
   def mcp_tool(:tool_timeout) do
-    "Action took too long to finish. Try again."
+    "Action took too long. Check the latest state before running it again."
   end
 
   def mcp_tool({:tool_policy_denied, decision}) do
@@ -228,7 +245,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mcp_tool(reason) when is_binary(reason) do
     cond do
       reason == "invalid_args" ->
-        "Action details are invalid. Review the request and try again."
+        "Action details are invalid. Review the request before running it again."
 
       reason == "invalid_user_context" ->
         "Sign in again so Maraithon can confirm the account."
@@ -246,27 +263,27 @@ defmodule MaraithonWeb.ApiErrorCopy do
         "Requested item was not found."
 
       account_connection_error?(reason) ->
-        "Connect the missing account, then try again."
+        "Connect the missing account before running this action."
 
       account_reauth_error?(reason) ->
-        "Reconnect the account, then try again."
+        "Reconnect the account before running this action."
 
       String.starts_with?(reason, "missing_") ->
         "Required action details are missing."
 
       String.contains?(reason, ":") ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
 
       Regex.match?(~r/^[a-z0-9_]+$/, reason) ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
 
       true ->
-        "Action could not finish. Try again."
+        "Action did not complete. No confirmed change was recorded."
     end
   end
 
   def mcp_tool(_reason) do
-    "Action could not finish. Try again."
+    "Action did not complete. No confirmed change was recorded."
   end
 
   defp validation_errors(changeset) do

@@ -10,7 +10,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Maraithon could not complete that request. Try again.")
+        XCTAssertEqual(copy, "Request did not complete. Refresh before retrying.")
         XCTAssertFalse(copy.contains("invalid_batch"))
         XCTAssertFalse(copy.contains("secret"))
     }
@@ -19,11 +19,11 @@ final class CompanionErrorCopyTests: XCTestCase {
         let copy = CompanionErrorCopy.message(
             for: MaraithonClientError.clientError(
                 status: 404,
-                body: "{\"error\":\"device_not_found\",\"message\":\"That Mac is no longer paired. Refresh the device list and try again.\",\"secret\":\"abc\"}"
+                body: "{\"error\":\"device_not_found\",\"message\":\"That Mac is no longer paired. Refresh the device list; pair it again if it should still sync.\",\"secret\":\"abc\"}"
             )
         )
 
-        XCTAssertEqual(copy, "That Mac is no longer paired. Refresh the device list and try again.")
+        XCTAssertEqual(copy, "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync.")
         XCTAssertFalse(copy.contains("device_not_found"))
         XCTAssertFalse(copy.contains("secret"))
     }
@@ -36,7 +36,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Maraithon could not complete that request. Try again.")
+        XCTAssertEqual(copy, "Request did not complete. Refresh before retrying.")
         XCTAssertFalse(copy.contains("Postgrex"))
         XCTAssertFalse(copy.contains("token=secret"))
     }
@@ -49,7 +49,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Maraithon could not complete that request. Try again.")
+        XCTAssertEqual(copy, "Request did not complete. Refresh before retrying.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.contains("abc123"))
@@ -60,7 +60,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             for: MaraithonClientError.transport(message: "NSURLErrorDomain Code=-1009")
         )
 
-        XCTAssertEqual(copy, "Connection issue. Try again when you are online.")
+        XCTAssertEqual(copy, "Connection issue. Retry when you are online.")
         XCTAssertFalse(copy.contains("NSURLErrorDomain"))
     }
 
@@ -72,14 +72,14 @@ final class CompanionErrorCopyTests: XCTestCase {
 
         XCTAssertEqual(
             CompanionErrorCopy.message(for: "some_internal_code"),
-            "Could not finish that request. Try again."
+            "Request did not complete. Refresh before retrying."
         )
     }
 
     func testStringReasonsHideCredentialValues() {
         let copy = CompanionErrorCopy.message(for: "Authorization: Bearer abc123 token=secret")
 
-        XCTAssertEqual(copy, "Could not finish that request. Try again.")
+        XCTAssertEqual(copy, "Request did not complete. Refresh before retrying.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.lowercased().contains("token"))

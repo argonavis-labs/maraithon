@@ -26,7 +26,7 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
       OperationFailureCopy.project(:implementation_run, @internal_reason)
     ]
 
-    assert "Could not create that project. Review the details and try again." in copies
+    assert "Could not create that project. Review the highlighted fields before saving again." in copies
     assert "Could not start that delivery work. Refresh the dashboard and try again." in copies
 
     Enum.each(copies, &refute_leaks_internal_reason/1)

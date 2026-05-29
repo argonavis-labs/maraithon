@@ -250,7 +250,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "agent inspection log"
     assert html =~ "Automation notes"
     assert html =~ "Diagnostic details are hidden from this view."
-    assert html =~ "Action failed. Check the connection and try again."
+    assert html =~ "Action did not complete. No confirmed change was recorded."
     assert html =~ "Operating model"
     assert html =~ "Run controls"
     assert html =~ "Maraithon Automation Service"

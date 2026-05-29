@@ -92,7 +92,9 @@ defmodule Maraithon.ScheduledTasksTest do
 
     serialized = ScheduledTasks.serialize_run(run)
 
-    assert serialized.error == "That scheduled task could not finish. Review it and run it again."
+    assert serialized.error ==
+             "That scheduled task did not complete. Review it before running it again."
+
     refute serialized.error =~ "http_status"
     refute serialized.error =~ "internal_stacktrace"
     refute serialized.error =~ "db_timeout"
