@@ -72,7 +72,7 @@ struct RootWindow: View {
             return
         }
 
-        if FullDiskAccessView.probeChatDBReadability() {
+        if FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
         }
         env.sources.syncNow()
@@ -201,7 +201,7 @@ struct FullDiskAccessRequiredBanner: View {
     }
 
     private func checkAgain() {
-        if FullDiskAccessView.probeChatDBReadability() {
+        if FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
         }
         env.sources.syncNow()

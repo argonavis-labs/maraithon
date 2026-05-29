@@ -4,13 +4,12 @@ import AppKit
 #endif
 
 /// Second onboarding step: walks the user to System Settings → Privacy &
-/// Security → Full Disk Access. Polls every 2 seconds for `chat.db`
-/// readability so the "Continue" button can light up the moment access is
-/// granted (no manual refresh needed).
+/// Security → Full Disk Access. Polls every 2 seconds for protected local
+/// store readability so the "Continue" button can light up the moment access
+/// is granted (no manual refresh needed).
 ///
-/// Owned by the UI team; the iMessage team is the source of truth for the
-/// actual database path but this view performs only a `O_RDONLY` open
-/// probe — no schema reads.
+/// Owned by the UI team; source adapters are the source of truth for database
+/// paths. This view performs only `O_RDONLY` open probes — no schema reads.
 struct FullDiskAccessView: View {
     @Environment(AppEnvironment.self) private var env
 
@@ -22,8 +21,8 @@ struct FullDiskAccessView: View {
     /// jump past the backfill step (iMessage cannot be backfilled).
     var onSkip: () -> Void = {}
 
-    /// Test seam for the readability probe. Production passes `nil` and
-    /// uses `probeChatDBReadability`.
+    /// Test seam for the readability probe. Production passes `nil` and uses
+    /// `FullDiskAccessProbe`.
     var probe: (@MainActor () -> Bool)? = nil
 
     /// Test seam for the auto-advance delay so tests don't have to wait
@@ -162,7 +161,7 @@ struct FullDiskAccessView: View {
 
     private func startPolling() {
         stopPolling()
-        let probeClosure: @MainActor () -> Bool = probe ?? { Self.probeChatDBReadability() }
+        let probeClosure: @MainActor () -> Bool = probe ?? { FullDiskAccessProbe.isGranted() }
         pollTask = Task { @MainActor in
             while !Task.isCancelled {
                 let access = probeClosure()
@@ -213,20 +212,4 @@ struct FullDiskAccessView: View {
         }
     }
 
-    /// Attempts an `O_RDONLY` open on `~/Library/Messages/chat.db`. We don't
-    /// keep the handle — the question is purely whether the OS lets us
-    /// read it without permission errors.
-    static func probeChatDBReadability() -> Bool {
-        let fm = FileManager.default
-        guard let home = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else {
-            return false
-        }
-        let chatDB = home
-            .appendingPathComponent("Messages", isDirectory: true)
-            .appendingPathComponent("chat.db")
-        guard fm.fileExists(atPath: chatDB.path) else { return false }
-        guard let handle = try? FileHandle(forReadingFrom: chatDB) else { return false }
-        try? handle.close()
-        return true
-    }
 }

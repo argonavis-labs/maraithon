@@ -81,7 +81,7 @@ struct SourceUnblockView: View {
 
     private func checkAgain() {
         if env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
-           FullDiskAccessView.probeChatDBReadability() {
+           FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
         }
         env.sources.syncNow(id: sourceID)
