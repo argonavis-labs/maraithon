@@ -681,6 +681,92 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "model output"
   end
 
+  test "source-backed fallback opens with ranked executive attention items" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{
+          "today_events" => [
+            %{
+              "summary" => "School pickup",
+              "start" => "2026-05-27T15:00:00Z",
+              "end" => "2026-05-27T15:30:00Z",
+              "display_start" => "11:00 AM",
+              "display_end" => "11:30 AM",
+              "calendar_name" => "Family"
+            },
+            %{
+              "summary" => "Runner Weekly Planning",
+              "start" => "2026-05-27T15:00:00Z",
+              "end" => "2026-05-27T15:45:00Z",
+              "display_start" => "11:00 AM",
+              "display_end" => "11:45 AM",
+              "calendar_name" => "Runner"
+            },
+            %{
+              "summary" => "Sara Franca",
+              "start" => "2026-05-27T15:30:00Z",
+              "end" => "2026-05-27T16:00:00Z",
+              "display_start" => "11:30 AM",
+              "display_end" => "12:00 PM",
+              "calendar_name" => "Runner"
+            }
+          ]
+        },
+        "commitments" => %{
+          "active_count" => 2,
+          "overdue" => [
+            %{
+              "title" => "Reply to Renat about Represent launch-video concept",
+              "owed_to" => "Renat",
+              "project" => "Runner",
+              "due_at" => "2026-05-20T16:00:00Z",
+              "source_id" => "k2_kp3zotvz"
+            }
+          ],
+          "due_today" => []
+        },
+        "open_work" => %{
+          "todos" => [
+            %{
+              "title" => "Resolve duplicate Sara Franca invite",
+              "summary" => "Lock Google Meet and decline Teams before the 11:30 call.",
+              "next_action" => "Choose the canonical invite and decline the duplicate.",
+              "priority" => 95,
+              "metadata" => %{
+                "action_card_id" => "actc_c154",
+                "work_type" => "decision"
+              }
+            }
+          ]
+        },
+        "commercial_coverage" => %{
+          "required_threads" => [
+            %{
+              "subject" => "Cogniate Enterprise plan discussion",
+              "from" => "Charlie Feng <charlie@runner.now>",
+              "body" =>
+                "Charlie looped Kent into Cogniate's Enterprise plan discussion for pricing guidance."
+            }
+          ]
+        }
+      })
+
+    [attention_section | _rest] = String.split(brief["body"], "\n\n")
+    attention_lines = attention_section |> String.split("\n") |> tl()
+
+    assert String.starts_with?(brief["body"], "## Needs Your Attention")
+    assert length(attention_lines) in 4..6
+    assert attention_section =~ "School pickup"
+    assert attention_section =~ "Schedule conflict"
+    assert attention_section =~ "Reply to Renat"
+    assert attention_section =~ "actc_c154"
+    assert attention_section =~ "Cogniate Enterprise plan discussion"
+    assert brief["body"] =~ "## Personal / Family First"
+    assert brief["body"] =~ "## Unknowns"
+    assert brief["body"] =~ "Today's move:"
+  end
+
   test "invalid model output records a compact source-backed fallback briefing",
        %{
          user_id: user_id,

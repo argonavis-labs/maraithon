@@ -1394,6 +1394,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     body =
       [
+        fallback_needs_attention_section(
+          brief_input,
+          open_todos,
+          personal_events,
+          today_events,
+          required_threads
+        ),
         fallback_section(
           "Personal / Family First",
           personal_events
@@ -1505,6 +1512,117 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "## #{title}\n" <> Enum.join(lines, "\n")
     end
   end
+
+  defp fallback_needs_attention_section(
+         brief_input,
+         open_todos,
+         personal_events,
+         today_events,
+         required_threads
+       ) do
+    lines =
+      [
+        personal_events
+        |> Enum.take(1)
+        |> Enum.map(&fallback_personal_attention_line/1),
+        calendar_conflicts(brief_input)
+        |> Enum.take(2)
+        |> Enum.map(fn {left, right} ->
+          "- **Schedule conflict**: #{calendar_event_short_label(left)} overlaps #{calendar_event_short_label(right)}. Pick one, move one, or leave the first early."
+        end),
+        commitment_attention_lines(brief_input, 2),
+        action_stack_items(brief_input)
+        |> Enum.take(1)
+        |> Enum.map(fn item ->
+          "- **Pending action card**: #{action_stack_item_label(item)}. Review or clear it before lower-signal inbox."
+        end),
+        required_threads
+        |> Enum.take(1)
+        |> Enum.map(&fallback_commercial_attention_line/1),
+        open_todos
+        |> Enum.take(2)
+        |> Enum.map(&fallback_open_work_attention_line/1),
+        today_events
+        |> Enum.reject(&personal_calendar_event?/1)
+        |> Enum.take(1)
+        |> Enum.map(&fallback_schedule_attention_line/1)
+      ]
+      |> List.flatten()
+      |> Enum.reject(&blank?/1)
+      |> Enum.uniq()
+      |> Enum.take(6)
+
+    lines =
+      case lines do
+        [] ->
+          [
+            "- **Start with source-backed priorities**: only checked data is included; verify calendar and open work before lower-signal inbox."
+          ]
+
+        lines ->
+          lines
+      end
+
+    fallback_section("Needs Your Attention", lines)
+  end
+
+  defp fallback_personal_attention_line(event) when is_map(event) do
+    "- **Personal / family first**: #{calendar_event_inline_label(event)}. Protect this before work triage."
+  end
+
+  defp fallback_personal_attention_line(_event), do: nil
+
+  defp fallback_commercial_attention_line(thread) when is_map(thread) do
+    subject = read_string(thread, "subject", "Commercial thread")
+    from = read_string(thread, "from", nil)
+    ask = read_string(thread, "body", nil) || read_string(thread, "snippet", nil)
+
+    [
+      "- **Commercial thread**: #{subject}",
+      from && "from #{from}",
+      ask && "- have guidance ready on #{truncate_prompt_string(ask, 180)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp fallback_commercial_attention_line(_thread), do: nil
+
+  defp fallback_open_work_attention_line(todo) when is_map(todo) do
+    title = read_string(todo, "title", "Open work item")
+    action = read_string(todo, "next_action", nil) || read_string(todo, "summary", nil)
+
+    [
+      "- **Open follow-up**: #{title}",
+      action && "- #{truncate_prompt_string(action, 180)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp fallback_open_work_attention_line(_todo), do: nil
+
+  defp fallback_schedule_attention_line(event) when is_map(event) do
+    "- **Next calendar item**: #{calendar_event_inline_label(event)}. Prep the decision or ask before joining."
+  end
+
+  defp fallback_schedule_attention_line(_event), do: nil
+
+  defp calendar_event_inline_label(event) when is_map(event) do
+    event
+    |> calendar_event_brief_line()
+    |> case do
+      line when is_binary(line) ->
+        line
+        |> String.replace_prefix("- ", "")
+        |> String.replace(~r/\*\*/, "")
+
+      _ ->
+        "Calendar event"
+    end
+  end
+
+  defp calendar_event_inline_label(_event), do: "Calendar event"
 
   defp fallback_schedule_lines(required_meetings, today_events) do
     required_ids =
