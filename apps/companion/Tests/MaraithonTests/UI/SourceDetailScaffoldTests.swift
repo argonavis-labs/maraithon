@@ -100,6 +100,27 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
     }
 
+    func testConnectedSummaryExplainsEmptyHealthyCheckAfterPriorSync() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 4,
+            lastCheckSynced: 0,
+            lastCheckAlreadySynced: 0,
+            lastCheckNotSynced: 0,
+            lastSyncAt: now,
+            singular: "message",
+            plural: "messages",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "No new messages found. Everything is current. Automatic checks are on. Last sync just now."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
+    }
+
     func testConnectedSummaryUsesAttentionCopyForPartialFailures() {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let copy = SourceDetailCopy.connectedSummary(

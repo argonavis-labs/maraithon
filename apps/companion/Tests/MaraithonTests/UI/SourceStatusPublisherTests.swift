@@ -110,6 +110,25 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertTrue(publisher.recentBatches.isEmpty)
     }
 
+    func testRecordHealthyCycleClearsStaleLastCheckCountsButKeepsTotals() {
+        let publisher = SourceStatusPublisher()
+        let first = date("2026-05-11T08:00:00Z")
+        let second = date("2026-05-11T08:05:00Z")
+
+        publisher.recordSync(at: first, accepted: 4, duplicate: 2, failed: 1)
+        publisher.recordHealthyCycle(at: second)
+
+        XCTAssertEqual(publisher.lastSyncAt, second)
+        XCTAssertEqual(publisher.lastBatchAccepted, 0)
+        XCTAssertEqual(publisher.lastBatchDuplicate, 0)
+        XCTAssertEqual(publisher.lastBatchFailed, 0)
+        XCTAssertEqual(publisher.totalAccepted, 4)
+        XCTAssertEqual(publisher.totalDuplicate, 2)
+        XCTAssertEqual(publisher.totalFailed, 1)
+        XCTAssertEqual(publisher.acceptedToday, 4)
+        XCTAssertEqual(publisher.recentBatches.count, 1)
+    }
+
     func testRecordHealthyCycleClearsTransportFailureButNotPartialIssue() {
         let publisher = SourceStatusPublisher(state: .connected)
         publisher.recordCycleFailure(at: Date(), reason: "network down")

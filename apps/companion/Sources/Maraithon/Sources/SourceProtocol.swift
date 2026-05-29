@@ -147,11 +147,15 @@ final class SourceStatusPublisher {
 
     /// Records that a cycle completed successfully but had nothing new
     /// to ship. Sets `lastSyncAt` so the UI knows the source is alive
-    /// and healthy — but does NOT touch `recentBatches`, `totalAccepted`,
-    /// `acceptedToday`, or the last-batch counters, since no real batch
-    /// occurred. Use this from a source's empty-cycle path.
+    /// and healthy. Resets the last-check counters to zero so the UI
+    /// does not keep presenting an older batch as the latest result.
+    /// Does not touch `recentBatches`, `totalAccepted`, or
+    /// `acceptedToday`, since no real batch occurred.
     func recordHealthyCycle(at date: Date) {
         self.lastSyncAt = date
+        self.lastBatchAccepted = 0
+        self.lastBatchDuplicate = 0
+        self.lastBatchFailed = 0
         self.consecutiveFailureCount = 0
         self.lastFailureAt = nil
         self.lastFailureReason = nil
