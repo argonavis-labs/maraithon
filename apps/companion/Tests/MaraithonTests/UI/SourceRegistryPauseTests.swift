@@ -5,6 +5,46 @@ import XCTest
 /// panes can drive a single source without disturbing the others.
 @MainActor
 final class SourceRegistryPauseTests: XCTestCase {
+    func testRegisterPreservesProductSourceOrder() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let voiceMemos = FakeSource(id: "voice_memos", displayName: "Voice Memos", symbol: "waveform")
+        let reminders = FakeSource(id: "reminders", displayName: "Reminders", symbol: "list.bullet")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        let files = FakeSource(id: "files", displayName: "Files", symbol: "folder")
+        let browser = FakeSource(id: "browser_history", displayName: "Browser History", symbol: "safari")
+
+        registry.register(imessage)
+        registry.register(notes)
+        registry.register(voiceMemos)
+        registry.register(reminders)
+        registry.register(calendar)
+        registry.register(files)
+        registry.register(browser)
+
+        XCTAssertEqual(
+            registry.sources.map(\.displayName),
+            ["iMessage", "Notes", "Voice Memos", "Reminders", "Calendar", "Files", "Browser History"]
+        )
+    }
+
+    func testRegisteringExistingSourceKeepsItsPosition() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let replacement = FakeSource(id: "imessage", displayName: "Messages", symbol: "message.fill")
+
+        registry.register(imessage)
+        registry.register(notes)
+        registry.register(replacement)
+
+        XCTAssertEqual(registry.sources.map(\.displayName), ["Messages", "Notes"])
+        XCTAssertEqual(registry.sources.map(\.id), ["imessage", "notes"])
+    }
+
     func testPauseRoutesToTheRightSource() {
         let log = EventLog()
         let registry = SourceRegistry(eventLog: log)

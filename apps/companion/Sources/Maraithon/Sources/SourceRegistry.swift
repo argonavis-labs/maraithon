@@ -1,8 +1,7 @@
 import Foundation
 import Observation
 
-/// Owns the set of installed sources (iMessage today, more later) and
-/// exposes their statuses to UI.
+/// Owns the set of installed sources and exposes their statuses to UI.
 ///
 /// Real sources are registered through `register(_:)`. Sources still in
 /// development are surfaced as `coming-soon` rows so the sidebar shape is
@@ -19,8 +18,9 @@ final class SourceRegistry {
         self.eventLog = eventLog
     }
 
-    /// Register a real source. Inserts a `SourceDescriptor` at the top of
-    /// the list so live sources appear above the "coming soon" placeholders.
+    /// Register a real source. Preserves the product order chosen by
+    /// `AppEnvironment` so core sources like iMessage and Notes do not
+    /// get buried under later registrations.
     func register(_ source: any SourceProtocol) {
         registered[source.id] = source
         let descriptor = SourceDescriptor(
@@ -30,8 +30,11 @@ final class SourceRegistry {
             state: source.statusPublisher.state,
             comingSoon: false
         )
-        sources.removeAll { $0.id == source.id }
-        sources.insert(descriptor, at: 0)
+        if let index = sources.firstIndex(where: { $0.id == source.id }) {
+            sources[index] = descriptor
+        } else {
+            sources.append(descriptor)
+        }
         eventLog.info(
             "source_registry.registered",
             source: .system,
