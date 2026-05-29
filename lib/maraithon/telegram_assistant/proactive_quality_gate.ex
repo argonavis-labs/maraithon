@@ -428,7 +428,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   defp maybe_neutralize_bad_digest_intro(plan, dispositions, candidates_by_id) do
     intro = read_field(plan, "digest_intro") || ""
 
-    if backlog_dump?(intro) or personal_as_business?(intro) or
+    if generic_digest_intro?(intro) or backlog_dump?(intro) or personal_as_business?(intro) or
          stale_intro_without_stale_digest?(intro, dispositions, candidates_by_id) do
       Map.put(
         plan,
@@ -453,23 +453,128 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   end
 
   defp replacement_digest_intro(dispositions, candidates_by_id) do
+    digest_candidates = digest_disposition_candidates(dispositions, candidates_by_id)
+
     has_personal? =
-      Enum.any?(dispositions, fn disposition ->
-        read_field(disposition, "disposition") == "digest" and
-          disposition
-          |> read_field("candidate_id")
-          |> then(&Map.get(candidates_by_id, &1))
-          |> candidate_profile()
-          |> read_field("bucket")
-          |> Kernel.==("personal_family")
+      Enum.any?(digest_candidates, fn candidate ->
+        candidate |> candidate_profile() |> read_field("bucket") == "personal_family"
       end)
 
-    if has_personal? do
-      "Personal/family logistics are the highest-signal item right now."
-    else
-      "Only the highest-signal item met the bar for attention now."
+    labels = digest_candidates |> Enum.map(&digest_candidate_label/1) |> Enum.reject(&blank?/1)
+
+    cond do
+      has_personal? ->
+        "Personal/family logistics are the highest-signal item right now."
+
+      labels == [] ->
+        "Only the highest-signal item met the bar for attention now."
+
+      length(labels) == 1 ->
+        "#{List.first(labels)} is worth a look now."
+
+      length(labels) == 2 ->
+        [first, second] = labels
+        "Two updates are worth a look together: #{first}; #{second}."
+
+      true ->
+        [first, second | rest] = labels
+        "Top updates are worth a look together: #{first}; #{second}; and #{length(rest)} more."
     end
   end
+
+  defp generic_digest_intro?(intro) when is_binary(intro) do
+    normalized = normalize_for_match(intro)
+
+    intro |> String.trim() |> blank?() or
+      Regex.match?(
+        ~r/\b(proactive updates?|updates? to review|grouped here|review together)\b/i,
+        intro
+      ) or
+      normalized in [
+        "a few updates are grouped here",
+        "a few proactive updates are grouped here",
+        "here are the updates",
+        "here are the proactive updates to review together"
+      ]
+  end
+
+  defp generic_digest_intro?(_intro), do: true
+
+  defp digest_disposition_candidates(dispositions, candidates_by_id) do
+    dispositions
+    |> Enum.filter(&(read_field(&1, "disposition") == "digest"))
+    |> Enum.map(fn disposition ->
+      disposition
+      |> read_field("candidate_id")
+      |> then(&Map.get(candidates_by_id, &1))
+    end)
+    |> Enum.filter(&is_map/1)
+    |> Enum.sort_by(fn candidate ->
+      profile = candidate_profile(candidate)
+
+      {
+        read_integer(profile, "bucket_rank", 99),
+        -read_integer(profile, "score", 0),
+        read_integer(candidate, "planning_rank", 999_999)
+      }
+    end)
+  end
+
+  defp digest_candidate_label(candidate) when is_map(candidate) do
+    title = candidate |> read_field("title") |> clean_digest_label()
+
+    if generic_candidate_title?(title) do
+      [
+        candidate |> read_field("body") |> first_sentence(),
+        candidate |> read_field("why_now") |> first_sentence(),
+        title
+      ]
+      |> Enum.find_value(&clean_digest_label/1)
+    else
+      title
+    end
+  end
+
+  defp digest_candidate_label(_candidate), do: nil
+
+  defp generic_candidate_title?(value) when is_binary(value) do
+    normalize_for_match(value) in [
+      "",
+      "check in",
+      "checkin",
+      "morning brief",
+      "maraithon digest",
+      "proactive update",
+      "update"
+    ]
+  end
+
+  defp generic_candidate_title?(_value), do: true
+
+  defp clean_digest_label(value) when is_binary(value) do
+    value
+    |> one_line()
+    |> String.replace(~r/<[^>]*>/, "")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> trim_terminal_punctuation()
+    |> truncate(96)
+    |> case do
+      "" -> nil
+      cleaned -> cleaned
+    end
+  end
+
+  defp clean_digest_label(_value), do: nil
+
+  defp first_sentence(value) when is_binary(value) do
+    value
+    |> one_line()
+    |> String.split(~r/(?<=[.!?])\s+/, parts: 2)
+    |> List.first()
+  end
+
+  defp first_sentence(_value), do: nil
 
   defp hold_disposition(disposition, reason) do
     disposition

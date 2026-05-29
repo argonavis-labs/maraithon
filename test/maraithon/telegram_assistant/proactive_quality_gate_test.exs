@@ -110,6 +110,52 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGateTest do
     refute verified["digest_intro"] =~ "follow-ups"
   end
 
+  test "rewrites generic delivery digest intros with the ranked item context" do
+    first_candidate = %{
+      "id" => "candidate-brief",
+      "title" => "Morning brief",
+      "body" => "The morning brief has two open loops.",
+      "planning_rank" => 1,
+      "attention_profile" => %{
+        "bucket" => "business_project_waiting",
+        "bucket_rank" => 2,
+        "score" => 80
+      },
+      "related_todos" => []
+    }
+
+    second_candidate = %{
+      "id" => "candidate-checkin",
+      "title" => "Check-in",
+      "body" => "The Rippling todo still needs a reply.",
+      "planning_rank" => 2,
+      "attention_profile" => %{"bucket" => "other", "bucket_rank" => 5, "score" => 62},
+      "related_todos" => []
+    }
+
+    verified =
+      ProactiveQualityGate.verify_delivery_plan(
+        %{
+          "dispositions" => [
+            %{"candidate_id" => "candidate-checkin", "disposition" => "digest"},
+            %{"candidate_id" => "candidate-brief", "disposition" => "digest"}
+          ],
+          "digest_intro" => "Here are the proactive updates to review together."
+        },
+        %{
+          "candidates" => [second_candidate, first_candidate],
+          "context" => %{},
+          "recent_pushes" => []
+        }
+      )
+
+    assert verified["digest_intro"] ==
+             "Two updates are worth a look together: The morning brief has two open loops; The Rippling todo still needs a reply."
+
+    refute verified["digest_intro"] =~ "proactive updates"
+    refute verified["digest_intro"] =~ "review together"
+  end
+
   test "holds personal logistics framed as business follow-up when no confirmation card is possible" do
     plan = %{
       "decision" => "send_now",
