@@ -29,7 +29,7 @@ struct FilesDetailView: View {
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "files indexed"),
             SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
             SourceStat(id: "already_synced", title: SourceDetailCopy.alreadySyncedTitle, value: SourceStat.format(pub?.lastBatchDuplicate), caption: SourceDetailCopy.alreadySyncedCaption),
-            SourceStat(id: "total", title: "Indexed", value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption)
+            SourceStat(id: "last_sync", title: SourceDetailCopy.lastSyncTitle, value: SourceStat.relative(pub?.lastSyncAt), caption: SourceDetailCopy.lastSyncCaption)
         ]
     }
 }

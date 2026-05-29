@@ -72,11 +72,12 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Maraithon synced 4 messages in the last check. Automatic checks are on. Last sync just now."
+            "Synced 4 messages. Everything is current. Automatic checks are on. Last sync just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("last check"))
     }
 
     func testConnectedSummaryExplainsNoNewItems() {
@@ -95,7 +96,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Maraithon checked iMessage and found no new messages. Automatic checks are on. Last sync just now."
+            "No new messages found. Everything is current. Automatic checks are on. Last sync just now."
         )
     }
 
@@ -115,7 +116,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Maraithon synced 3 notes in the last check. 1 note needs attention from the last check. Last sync just now."
+            "Synced 3 notes. 1 note needs attention. Last sync just now."
         )
     }
 
@@ -126,7 +127,8 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
         XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Not synced")
         XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
-        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "recently")
+        XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last sync")
+        XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
     }
 

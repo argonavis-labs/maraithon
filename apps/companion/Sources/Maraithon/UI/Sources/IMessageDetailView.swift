@@ -29,7 +29,7 @@ struct IMessageDetailView: View {
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "messages synced"),
             SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
             SourceStat(id: "not_synced", title: SourceDetailCopy.notSyncedTitle, value: SourceStat.format(pub?.lastBatchFailed), caption: SourceDetailCopy.notSyncedCaption),
-            SourceStat(id: "total", title: "Synced", value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption)
+            SourceStat(id: "last_sync", title: SourceDetailCopy.lastSyncTitle, value: SourceStat.relative(pub?.lastSyncAt), caption: SourceDetailCopy.lastSyncCaption)
         ]
     }
 }

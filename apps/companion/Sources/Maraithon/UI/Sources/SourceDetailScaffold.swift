@@ -68,21 +68,18 @@ struct SourceDetailScaffold: View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
             HStack(alignment: .top, spacing: Tokens.Spacing.medium) {
                 VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+                    Text(headlineCopy)
+                        .font(.title2.weight(.semibold))
+                    Text(summaryCopy)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     SourceStatusBadge(state: liveBadgeState, variant: .prominent)
                 }
 
                 Spacer(minLength: Tokens.Spacing.large)
 
                 actionButtons
-            }
-
-            VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-                Text(headlineCopy)
-                    .font(.title2.weight(.semibold))
-                Text(summaryCopy)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -471,7 +468,8 @@ enum SourceDetailCopy {
     static let alreadySyncedCaption = "last check"
     static let notSyncedTitle = "Not synced"
     static let notSyncedCaption = "last check"
-    static let totalSyncedCaption = "recently"
+    static let lastSyncTitle = "Last sync"
+    static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
 
     static func syncedHeadline(total: Int, singular: String, plural: String) -> String {
@@ -505,17 +503,24 @@ enum SourceDetailCopy {
         }
 
         var sentences: [String] = []
+        let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
-            sentences.append("Maraithon synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)) in the last check.")
+            sentences.append("Synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
+            if !hasUnfinishedItems {
+                sentences.append("Everything is current.")
+            }
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
-            sentences.append("Maraithon checked \(displayName) and found no new \(plural).")
+            sentences.append("No new \(plural) found.")
+            if !hasUnfinishedItems {
+                sentences.append("Everything is current.")
+            }
         } else {
-            sentences.append("Maraithon checked \(displayName) and found nothing new to sync.")
+            sentences.append("No \(plural) found yet.")
         }
 
-        if lastCheckNotSynced > 0 {
+        if hasUnfinishedItems {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
-            sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention from the last check.")
+            sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention.")
         } else {
             sentences.append("Automatic checks are on.")
         }
