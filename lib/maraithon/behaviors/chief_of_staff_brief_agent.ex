@@ -3,8 +3,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   Generates recurring chief-of-staff briefs from the current insight stream.
 
   It does not rescan connectors directly. Instead, it turns the user's existing
-  Gmail, Calendar, and Slack insights into morning briefs, end-of-day review
-  rollups, and weekly reviews for Telegram delivery.
+  insight stream into morning briefs, end-of-day review rollups, and weekly
+  reviews for Telegram delivery.
   """
 
   @behaviour Maraithon.Behaviors.Behavior
@@ -167,8 +167,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         top_items == [] and watching_items == [] ->
-          {"Morning brief: clean slate",
-           "No urgent open items are surfacing right now across Gmail, Calendar, or Slack."}
+          {"Morning brief: no active work surfaced",
+           "No urgent open items surfaced in the current brief window."}
 
         top_items == [] ->
           {"Morning brief: clear action list",
@@ -177,7 +177,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         true ->
           count = length(top_items)
 
-          {"Morning brief: #{count} items worth watching",
+          {"Morning brief: #{count_phrase(count, "item")} worth watching",
            morning_summary(
              top_items,
              due_today,
@@ -254,8 +254,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         debt_items == [] and watching_items == [] ->
-          {"End-of-day review: all clear",
-           "Nothing important still looks open at the end of the day."}
+          {"End-of-day review: no active work surfaced",
+           "No unresolved action items surfaced for tonight's review."}
 
         debt_items == [] ->
           {"End-of-day review: action list clear",
@@ -264,7 +264,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         true ->
           count = length(debt_items)
 
-          {"End-of-day review: #{count} items still open",
+          {"End-of-day review: #{count_phrase(count, "item")} still open",
            end_of_day_summary(
              debt_items,
              debt_candidates,
@@ -387,9 +387,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "cadence" => "weekly_review",
       "scheduled_for" => plan.scheduled_for,
       "dedupe_key" => dedupe_key("weekly_review", plan.period_key),
-      "title" => "Weekly review: #{open_count} items still open",
-      "summary" =>
-        "#{length(weekly_items)} items surfaced this week, #{closed_count} were resolved or triaged, and #{open_count} remain open.",
+      "title" => "Weekly review: #{count_phrase(open_count, "item")} still open",
+      "summary" => weekly_summary(length(weekly_items), closed_count, open_count),
       "body" =>
         weekly_body(top_open, weekly_items, state.timezone_offset_hours, plan.scheduled_for),
       "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items, context)
@@ -538,20 +537,43 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          offset_hours,
          now
        ) do
+    workload =
+      workload_section(
+        [
+          count_line(
+            length(act_now_insights),
+            "item needs direct action in connected sources",
+            "items need direct action in connected sources"
+          ),
+          count_line(
+            overdue_count(act_now_insights, offset_hours, now),
+            "item is already overdue",
+            "items are already overdue"
+          ),
+          count_line(
+            due_today_count(act_now_insights, offset_hours, now),
+            "item is due today",
+            "items are due today"
+          ),
+          count_line(
+            length(monitor_insights),
+            "thread is still in Watching",
+            "threads are still in Watching"
+          )
+        ],
+        "No active work surfaced in connected sources during this brief window."
+      )
+
     """
     Best use of today:
     #{morning_guidance(top_items)}
 
     Focus now:
-    #{format_items(top_items, offset_hours, now, "1. Nothing needs direct action right now.")}
+    #{format_items(top_items, offset_hours, now, "1. No active work surfaced that needs direct action.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
-    Pressure:
-    - #{length(act_now_insights)} items need direct action across Gmail, Calendar, and Slack
-    - #{overdue_count(act_now_insights, offset_hours, now)} already overdue
-    - #{due_today_count(act_now_insights, offset_hours, now)} due today
-    - #{length(monitor_insights)} threads are still in Watching
+    #{workload}
     """
     |> String.trim()
   end
@@ -564,35 +586,73 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          offset_hours,
          now
        ) do
+    workload =
+      workload_section(
+        [
+          count_line(
+            overdue_count(act_now_insights, offset_hours, now),
+            "item is already overdue across the full backlog",
+            "items are already overdue across the full backlog"
+          ),
+          count_line(
+            due_today_count(act_now_insights, offset_hours, now),
+            "item was due today and is still unresolved",
+            "items were due today and are still unresolved"
+          ),
+          count_line(
+            length(monitor_insights),
+            "thread is still being watched",
+            "threads are still being watched"
+          )
+        ],
+        "No active work surfaced for tonight's review."
+      )
+
     """
     Tonight's move:
     #{end_of_day_guidance(debt_items)}
 
     Close or reset:
-    #{format_items(debt_items, offset_hours, now, "1. Nothing needs direct action tonight.")}
+    #{format_items(debt_items, offset_hours, now, "1. No active work surfaced that needs action tonight.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
-    Pressure:
-    - #{overdue_count(act_now_insights, offset_hours, now)} items are already overdue across the full backlog
-    - #{due_today_count(act_now_insights, offset_hours, now)} were due today and still unresolved
-    - #{length(monitor_insights)} threads are still being watched
+    #{workload}
     """
     |> String.trim()
   end
 
   defp check_in_body(top_items, act_now_insights, offset_hours, reference_at) do
+    workload =
+      workload_section(
+        [
+          count_line(
+            length(act_now_insights),
+            "item still needs a decision or reply",
+            "items still need a decision or reply"
+          ),
+          count_line(
+            overdue_count(act_now_insights, offset_hours, reference_at),
+            "item is already overdue",
+            "items are already overdue"
+          ),
+          count_line(
+            due_today_count(act_now_insights, offset_hours, reference_at),
+            "item still lands today",
+            "items still land today"
+          )
+        ],
+        "No active work surfaced that warrants an interruption."
+      )
+
     """
     Why I'm checking in:
     #{check_in_guidance(top_items)}
 
     Move now:
-    #{format_items(top_items, offset_hours, reference_at, "1. Nothing important still needs movement.")}
+    #{format_items(top_items, offset_hours, reference_at, "1. No active work surfaced that still needs movement.")}
 
-    Pressure:
-    - #{length(act_now_insights)} items still need a decision or reply
-    - #{overdue_count(act_now_insights, offset_hours, reference_at)} are already overdue
-    - #{due_today_count(act_now_insights, offset_hours, reference_at)} still land today
+    #{workload}
 
     Reply here when one is handled and I'll refresh the rest.
     """
@@ -602,12 +662,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp weekly_body(top_open, weekly_items, offset_hours, reference_at) do
     """
     Week in review:
-    - #{count_by_source(weekly_items, "gmail")} Gmail items
-    - #{count_by_source(weekly_items, "calendar")} Calendar follow-ups
-    - #{count_by_source(weekly_items, "slack")} Slack loops
+    #{weekly_source_lines(weekly_items)}
 
     Most important open items:
-    #{format_items(top_open, offset_hours, reference_at)}
+    #{format_items(top_open, offset_hours, reference_at, "1. No active work surfaced in this week's review.")}
     """
     |> String.trim()
   end
@@ -616,7 +674,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          items,
          offset_hours,
          reference_at,
-         empty_text \\ "1. Nothing important is open."
+         empty_text
        )
 
   defp format_items([], _offset_hours, _reference_at, empty_text), do: empty_text
@@ -635,9 +693,51 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp watching_section(items, offset_hours, reference_at) do
     """
     Watching, not blocking right now:
-    #{format_items(items, offset_hours, reference_at, "1. Nothing newly changed is being watched.")}
+    #{format_items(items, offset_hours, reference_at, "1. No newly changed watched items surfaced.")}
     """
     |> String.trim()
+  end
+
+  defp workload_section(lines, empty_text) do
+    lines = Enum.reject(lines, &is_nil/1)
+
+    if lines == [] do
+      """
+      Status:
+      #{empty_text}
+      """
+    else
+      """
+      Open work:
+      #{Enum.join(lines, "\n")}
+      """
+    end
+    |> String.trim()
+  end
+
+  defp count_line(0, _singular, _plural), do: nil
+  defp count_line(1, singular, _plural), do: "- 1 #{singular}"
+
+  defp count_line(count, _singular, plural) when is_integer(count) and count > 1,
+    do: "- #{count} #{plural}"
+
+  defp count_line(_count, _singular, _plural), do: nil
+
+  defp weekly_source_lines(weekly_items) do
+    [
+      count_line(count_by_source(weekly_items, "gmail"), "Gmail item", "Gmail items"),
+      count_line(
+        count_by_source(weekly_items, "calendar"),
+        "Calendar follow-up",
+        "Calendar follow-ups"
+      ),
+      count_line(count_by_source(weekly_items, "slack"), "Slack loop", "Slack loops")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> "- No source-backed items surfaced this week"
+      lines -> Enum.join(lines, "\n")
+    end
   end
 
   defp format_item_block({card, index}, offset_hours, reference_at) do
@@ -667,11 +767,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     top_items
     |> lead_summary(offset_hours, now)
     |> append_sentence(extra_open_item_summary(top_items))
-    |> append_sentence("#{length(due_today)} due today")
+    |> append_sentence(count_summary(length(due_today), "due today", "due today"))
     |> append_sentence(
-      "#{overdue_count(act_now_insights, offset_hours, now)} overdue across the backlog"
+      count_summary(
+        overdue_count(act_now_insights, offset_hours, now),
+        "overdue across the backlog",
+        "overdue across the backlog"
+      )
     )
-    |> append_sentence("#{length(monitor_insights)} being watched")
+    |> append_sentence(count_summary(length(monitor_insights), "being watched", "being watched"))
   end
 
   defp end_of_day_summary(
@@ -685,20 +789,64 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> lead_summary(offset_hours, reference_at)
     |> append_sentence(extra_open_item_summary(debt_items))
     |> append_sentence(
-      "#{overdue_count(debt_candidates, offset_hours, reference_at)} overdue tonight"
+      count_summary(
+        overdue_count(debt_candidates, offset_hours, reference_at),
+        "overdue tonight",
+        "overdue tonight"
+      )
     )
-    |> append_sentence("#{length(monitor_insights)} being watched")
+    |> append_sentence(count_summary(length(monitor_insights), "being watched", "being watched"))
   end
 
   defp check_in_summary(top_items, act_now_insights, offset_hours, reference_at) do
     top_items
     |> lead_summary(offset_hours, reference_at)
     |> append_sentence(extra_open_item_summary(top_items))
-    |> append_sentence("#{overdue_count(act_now_insights, offset_hours, reference_at)} overdue")
     |> append_sentence(
-      "#{due_today_count(act_now_insights, offset_hours, reference_at)} still due today"
+      count_summary(
+        overdue_count(act_now_insights, offset_hours, reference_at),
+        "overdue",
+        "overdue"
+      )
+    )
+    |> append_sentence(
+      count_summary(
+        due_today_count(act_now_insights, offset_hours, reference_at),
+        "still due today",
+        "still due today"
+      )
     )
   end
+
+  defp count_summary(0, _singular, _plural), do: nil
+  defp count_summary(1, singular, _plural), do: "1 #{singular}"
+
+  defp count_summary(count, _singular, plural) when is_integer(count) and count > 1,
+    do: "#{count} #{plural}"
+
+  defp count_summary(_count, _singular, _plural), do: nil
+
+  defp weekly_summary(weekly_count, closed_count, open_count) do
+    [
+      count_summary(weekly_count, "item surfaced this week", "items surfaced this week"),
+      count_summary(closed_count, "was resolved or triaged", "were resolved or triaged"),
+      count_summary(open_count, "remains open", "remain open")
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> summary_sentence()
+  end
+
+  defp summary_sentence([]), do: "No items surfaced this week."
+  defp summary_sentence([part]), do: part <> "."
+  defp summary_sentence([first, second]), do: "#{first}, and #{second}."
+
+  defp summary_sentence(parts) do
+    {last, rest} = List.pop_at(parts, -1)
+    "#{Enum.join(rest, ", ")}, and #{last}."
+  end
+
+  defp count_phrase(1, noun), do: "1 #{noun}"
+  defp count_phrase(count, noun) when is_integer(count), do: "#{count} #{noun}s"
 
   defp lead_summary([], _offset_hours, _reference_at), do: nil
 
@@ -725,7 +873,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp append_sentence(text, nil), do: text
   defp append_sentence(text, extra), do: text <> ". " <> sentence_case(extra)
 
-  defp morning_guidance([]), do: "Nothing needs direct action right now."
+  defp morning_guidance([]), do: "No direct action surfaced in this brief window."
 
   defp morning_guidance(items) do
     if mostly_reply_loops?(items) do
@@ -735,7 +883,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp end_of_day_guidance([]), do: "Nothing needs direct action tonight."
+  defp end_of_day_guidance([]), do: "No direct action surfaced for tonight's review."
 
   defp end_of_day_guidance(items) do
     if mostly_reply_loops?(items) do
@@ -745,7 +893,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp check_in_guidance([]), do: "Nothing important still warrants an interruption."
+  defp check_in_guidance([]), do: "No item surfaced that warrants an interruption."
 
   defp check_in_guidance(items) do
     if mostly_reply_loops?(items) do

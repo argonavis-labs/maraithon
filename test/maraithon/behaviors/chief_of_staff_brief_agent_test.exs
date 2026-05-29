@@ -75,13 +75,124 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "morning"
-    assert brief.title =~ "Morning brief"
+    assert brief.title == "Morning brief: 1 item worth watching"
     assert brief.summary =~ "Most urgent"
+    refute brief.summary =~ "0 overdue"
+    refute brief.summary =~ "0 being watched"
+    refute brief.title =~ "1 items"
     assert brief.body =~ "Best use of today:"
     assert brief.body =~ "Send the investor deck"
     assert is_list(brief.metadata["linked_todo_ids"])
     assert length(brief.metadata["linked_todo_ids"]) == 1
     assert brief.metadata["timezone_offset_hours"] == -5
+  end
+
+  test "clean morning briefs avoid false all-clear and zero-count pressure copy" do
+    user_id = "chief-clean-morning-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
+    scheduled_at = ~U[2026-03-11 13:05:00Z]
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["morning"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Morning brief: no active work surfaced"
+    assert brief.summary == "No urgent open items surfaced in the current brief window."
+    assert brief.body =~ "Best use of today:"
+    assert brief.body =~ "No direct action surfaced in this brief window."
+    assert brief.body =~ "Status:"
+    assert brief.body =~ "No active work surfaced in connected sources during this brief window."
+
+    refute brief.body =~ "Pressure:"
+    refute brief.body =~ "0 items"
+    refute brief.body =~ "Gmail, Calendar"
+    refute brief.body =~ "Nothing needs"
+    refute brief.title =~ "clean slate"
+  end
+
+  test "clean end-of-day briefs avoid all-clear claims when no work surfaced" do
+    user_id = "chief-clean-evening-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
+    scheduled_at = ~U[2026-03-11 23:05:00Z]
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+      |> Map.put(:last_generated_keys, %{"morning" => "2026-03-11"})
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["end_of_day"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "End-of-day review: no active work surfaced"
+    assert brief.summary == "No unresolved action items surfaced for tonight's review."
+    assert brief.body =~ "Tonight's move:"
+    assert brief.body =~ "No direct action surfaced for tonight's review."
+    assert brief.body =~ "Status:"
+    assert brief.body =~ "No active work surfaced for tonight's review."
+
+    refute brief.body =~ "Pressure:"
+    refute brief.body =~ "0 items"
+    refute brief.body =~ "Nothing important"
+    refute brief.title =~ "all clear"
   end
 
   test "renders end-of-day briefs as concrete operator guidance with structured context", %{
@@ -147,7 +258,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "end_of_day"
+    assert brief.title == "End-of-day review: 1 item still open"
     assert brief.summary =~ "Most urgent"
+    refute brief.summary =~ "0 being watched"
+    refute brief.title =~ "1 items"
     assert brief.body =~ "Tonight's move:"
     assert brief.body =~ "Close or reset:"
     assert brief.body =~ "Waiting on: Growth team"
@@ -230,7 +344,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Watching, not blocking right now:"
     assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
     assert brief.body =~ "Watch: Watch for a blocker"
-    assert brief.body =~ "threads are still being watched"
+    assert brief.body =~ "1 thread is still being watched"
   end
 
   test "records an adaptive daytime check-in when important work is still open", %{
@@ -299,7 +413,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.summary =~ "Most urgent"
     assert brief.body =~ "Why I'm checking in:"
     assert brief.body =~ "Move now:"
-    assert brief.body =~ "items still need a decision or reply"
+    assert brief.body =~ "1 item still needs a decision or reply"
     assert brief.body =~ "Reply here when one is handled"
     assert brief.body =~ "Send revised pricing to David"
     refute brief.body =~ "act-now"
@@ -368,8 +482,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "weekly_review"
+    assert brief.title == "Weekly review: 1 item still open"
+    assert brief.summary == "1 item surfaced this week, and 1 remains open."
     assert brief.body =~ "Week in review:"
+    assert brief.body =~ "- 1 Gmail item"
     assert brief.body =~ "Most important open items:"
+    refute brief.body =~ "0 Calendar"
+    refute brief.body =~ "0 Slack"
+    refute brief.title =~ "1 items"
+    refute brief.summary =~ "0 were"
     refute brief.body =~ "scorecard"
     refute brief.body =~ "score"
     refute brief.body =~ "confidence"
