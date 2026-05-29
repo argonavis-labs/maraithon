@@ -71,8 +71,7 @@ generate_xcode_project() {
 companion_xcode_signing_args() {
   local config="${COMPANION_DIR}/Config.local.xcconfig"
 
-  if [[ ! -f "${config}" ]] ||
-    ! grep -Eq '^[[:space:]]*(CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM)[[:space:]]*=' "${config}"; then
+  if ! companion_has_persistent_signing_config; then
     printf '%s\n' "CODE_SIGNING_ALLOWED=NO"
     return
   fi
@@ -91,6 +90,27 @@ companion_xcode_signing_args() {
   if [[ -n "${team}" ]]; then
     printf '%s\n' "DEVELOPMENT_TEAM=${team}"
   fi
+}
+
+companion_has_persistent_signing_config() {
+  local config="${COMPANION_DIR}/Config.local.xcconfig"
+
+  [[ -f "${config}" ]] &&
+    grep -Eq '^[[:space:]]*(CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM)[[:space:]]*=' "${config}"
+}
+
+ensure_companion_dev_signing() {
+  if [[ "${MARAITHON_COMPANION_SKIP_SIGNING_SETUP:-}" == "1" ]]; then
+    echo "Skipping companion signing setup; Full Disk Access may not persist across reloads." >&2
+    return
+  fi
+
+  if companion_has_persistent_signing_config; then
+    return
+  fi
+
+  echo "Configuring stable companion signing so macOS privacy grants persist across reloads..."
+  "${COMPANION_DIR}/scripts/create_dev_signing_identity.sh"
 }
 
 xcconfig_value() {

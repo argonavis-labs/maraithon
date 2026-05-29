@@ -33,6 +33,16 @@ xcodebuild -project Maraithon.xcodeproj -scheme Maraithon \
            -configuration Debug -destination 'platform=macOS' test
 ```
 
+For local runs that need Full Disk Access, use the root launcher from the repo
+root:
+
+```sh
+make run-companion
+```
+
+It installs the Debug app at `~/Applications/Maraithon.app` with stable local
+signing so macOS privacy grants survive rebuilds and reloads.
+
 The `.xcodeproj` is **not** committed — it's regenerated from
 [`project.yml`](project.yml) every time. Treat `project.yml` as the source
 of truth; never hand-edit the generated project.

@@ -4,7 +4,7 @@ Maraithon uses **automatic** code signing with a **per-developer team ID**
 supplied via a gitignored `Config.local.xcconfig` file. This keeps team IDs
 out of the committed `project.yml` while letting Xcode auto-manage certs.
 
-## One-time local setup for rebuild-stable privacy grants
+## Rebuild-stable privacy grants
 
 Full Disk Access and other macOS privacy grants are attached to the app's
 code-signing identity. If Debug builds are ad-hoc signed, a rebuild can look
@@ -12,15 +12,16 @@ like a new app to TCC and the grant will not persist. For local companion
 development, run:
 
 ```sh
-make setup-companion-signing
 make run-companion
 ```
 
-This uses an existing Apple Development certificate when one is available,
-falling back to Developer ID or a local self-signed `Maraithon Dev` identity
-only when needed. The setup pins the full signing identity in gitignored
-`Config.local.xcconfig`, which makes future companion builds keep the same TCC
-identity instead of letting Xcode choose a different local certificate.
+`make run-companion` configures stable signing automatically the first time it
+sees no local signing config. It uses an existing Apple Development
+certificate when one is available, falling back to Developer ID or a local
+self-signed `Maraithon Dev` identity only when needed. The setup pins the full
+signing identity in gitignored `Config.local.xcconfig`, which makes future
+companion builds keep the same TCC identity instead of letting Xcode choose a
+different local certificate.
 `make run-companion` also installs the Debug app at
 `~/Applications/Maraithon.app` before launching it, preserving that app bundle
 directory across reloads so Full Disk Access is granted to one stable app path
@@ -28,12 +29,15 @@ instead of an Xcode DerivedData bundle. It removes generated DerivedData
 `Maraithon.app` copies after installation so System Settings does not show
 multiple indistinguishable development builds.
 
-The first `make run-companion` after this setup also records the installed
-app's designated code-signing requirement. If there is no prior marker, or the
-requirement changes, the launcher resets stale Full Disk Access rows for
-`com.maraithon.companion` once and asks you to grant the stable
-`~/Applications/Maraithon.app` copy again. Future reloads with the same signing
-requirement do not reset TCC and should preserve the grant.
+You can still run `make setup-companion-signing` explicitly to prepare signing
+without launching the app.
+
+The first `make run-companion` after signing is configured also records the
+installed app's designated code-signing requirement. If there is no prior
+marker, or the requirement changes, the launcher resets stale Full Disk Access
+rows for `com.maraithon.companion` once and asks you to grant the stable
+`~/Applications/Maraithon.app` copy again. Future reloads with the same
+signing requirement do not reset TCC and should preserve the grant.
 
 If Full Disk Access still does not apply after that switch, reset the stale TCC
 row and grant the stable installed app again:

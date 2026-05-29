@@ -12,6 +12,7 @@ if selected_component "${component}" "companion"; then
   install_app="${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
   install_dir="$(dirname "${install_app}")"
 
+  ensure_companion_dev_signing
   quit_running_companion_app
   mkdir -p "${install_dir}"
   "${ROOT_DIR}/scripts/monorepo/build" companion
