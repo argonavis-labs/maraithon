@@ -4,4 +4,4 @@
 
 Identify upcoming travel from email confirmations and calendar context.
 
-Produce only actionable logistics: departure and arrival timing, lodging, check-in constraints, conflicts, missing confirmations, and what the operator should do next. If no reliable trip exists in the connected sources, say so directly.
+Produce only actionable logistics: departure and arrival timing, lodging, check-in constraints, conflicts, missing confirmations, and what the operator should do next. The operator should never receive a raw itinerary dump; call out missing flight, hotel, confirmation-code, address, and cancellation risk explicitly, then end with the next move. If no reliable trip exists in the connected sources, say so directly.

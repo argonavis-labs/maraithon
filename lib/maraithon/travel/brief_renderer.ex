@@ -33,7 +33,9 @@ defmodule Maraithon.Travel.BriefRenderer do
       [
         render_flight_section(visible_items),
         render_hotel_section(visible_items),
-        render_cancelled_section(cancelled_items)
+        render_cancelled_section(cancelled_items),
+        render_check_before_you_go_section(visible_items, destination),
+        render_next_move_section(visible_items, destination)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -137,6 +139,115 @@ defmodule Maraithon.Travel.BriefRenderer do
 
     Enum.join([heading | lines], "\n")
   end
+
+  defp render_check_before_you_go_section(items, destination) do
+    bullets = missing_detail_bullets(items, destination)
+
+    case bullets do
+      [] -> nil
+      _ -> Enum.join(["CHECK BEFORE YOU GO" | bullets], "\n")
+    end
+  end
+
+  defp render_next_move_section(items, destination) do
+    "NEXT MOVE\n#{next_move_line(items, destination)}"
+  end
+
+  defp missing_detail_bullets(items, destination) do
+    active_flights = active_items(items, "flight")
+    active_hotels = active_items(items, "hotel")
+    active_count = length(active_flights) + length(active_hotels)
+    cancelled_count = Enum.count(items, &(&1.status == "cancelled"))
+
+    []
+    |> maybe_add(active_flights != [] and active_hotels == [], fn ->
+      "- No hotel confirmation found for #{destination_phrase(destination)}; confirm lodging before departure."
+    end)
+    |> maybe_add(active_hotels != [] and active_flights == [], fn ->
+      "- No active flight confirmation found for #{destination_phrase(destination)}; confirm transportation before relying on the hotel reservation."
+    end)
+    |> maybe_add(active_count == 0 and cancelled_count > 0, fn ->
+      "- All known reservations are cancelled; confirm whether the trip is still happening before relying on old details."
+    end)
+    |> Kernel.++(missing_flight_bullets(active_flights))
+    |> Kernel.++(missing_hotel_bullets(active_hotels))
+  end
+
+  defp missing_flight_bullets(flights) do
+    Enum.flat_map(flights, fn flight ->
+      [
+        missing_bullet(
+          blank?(flight.confirmation_code),
+          "#{item_name(flight, "Flight")} is missing a booking reference; keep the carrier email handy."
+        ),
+        missing_bullet(
+          blank?(get_in(flight.metadata || %{}, ["display_date"])),
+          "#{item_name(flight, "Flight")} is missing a readable departure time; verify the departure window before leaving."
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+    end)
+  end
+
+  defp missing_hotel_bullets(hotels) do
+    Enum.flat_map(hotels, fn hotel ->
+      [
+        missing_bullet(
+          blank?(get_in(hotel.metadata || %{}, ["address"])),
+          "#{item_name(hotel, "Hotel")} is missing the street address; open the reservation before heading there."
+        ),
+        missing_bullet(
+          blank?(hotel.confirmation_code),
+          "#{item_name(hotel, "Hotel")} is missing a confirmation number; keep the booking email handy at check-in."
+        )
+      ]
+      |> Enum.reject(&is_nil/1)
+    end)
+  end
+
+  defp next_move_line(items, destination) do
+    active_flights = active_items(items, "flight")
+    active_hotels = active_items(items, "hotel")
+    active_count = length(active_flights) + length(active_hotels)
+    cancelled_count = Enum.count(items, &(&1.status == "cancelled"))
+
+    missing_detail_count =
+      length(missing_flight_bullets(active_flights) ++ missing_hotel_bullets(active_hotels))
+
+    cond do
+      active_count == 0 and cancelled_count > 0 ->
+        "Confirm whether the trip is still happening and look for replacement reservations before you travel."
+
+      active_flights != [] and active_hotels == [] ->
+        "Confirm lodging for #{destination_phrase(destination)}, then save the flight details somewhere reachable offline."
+
+      active_hotels != [] and active_flights == [] ->
+        "Confirm transportation to #{destination_phrase(destination)}, then save the hotel address and confirmation."
+
+      missing_detail_count > 0 ->
+        "Open the carrier and hotel emails now, fill the missing confirmation details, and save the itinerary offline."
+
+      true ->
+        "Save the flight time, hotel address, and confirmation codes somewhere reachable offline."
+    end
+  end
+
+  defp active_items(items, item_type) do
+    Enum.filter(items, &(&1.item_type == item_type and &1.status != "cancelled"))
+  end
+
+  defp missing_bullet(true, text), do: "- #{text}"
+  defp missing_bullet(false, _text), do: nil
+
+  defp maybe_add(list, true, callback), do: list ++ [callback.()]
+  defp maybe_add(list, false, _callback), do: list
+
+  defp item_name(item, fallback) do
+    item.title || item.vendor_name || fallback
+  end
+
+  defp destination_phrase("your trip"), do: "this trip"
+  defp destination_phrase(destination), do: destination
 
   defp cancelled_item_lines(item) do
     metadata = item.metadata || %{}

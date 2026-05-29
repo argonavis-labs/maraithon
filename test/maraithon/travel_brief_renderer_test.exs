@@ -81,6 +81,69 @@ defmodule Maraithon.Travel.BriefRendererTest do
     assert rendered.body =~ "Flight: Air Canada AC 123"
   end
 
+  test "adds chief-of-staff checks and next move for incomplete travel details" do
+    rendered =
+      itinerary([
+        %ItineraryItem{
+          item_type: "flight",
+          status: "active",
+          title: "Air Canada AC 123",
+          location_label: "Toronto YYZ -> Austin AUS",
+          confirmation_code: nil,
+          metadata: %{"display_date" => "Mar 15, 2026 at 2:00 PM"}
+        }
+      ])
+      |> BriefRenderer.render(:travel_prep,
+        timezone_offset_hours: -5,
+        reference_now: ~U[2026-03-14 22:00:00Z]
+      )
+
+    assert rendered.summary == "Ready flight details for Austin."
+    assert rendered.body =~ "CHECK BEFORE YOU GO"
+    assert rendered.body =~ "No hotel confirmation found for Austin"
+    assert rendered.body =~ "Air Canada AC 123 is missing a booking reference"
+    assert rendered.body =~ "NEXT MOVE"
+    assert rendered.body =~ "Confirm lodging for Austin"
+    refute rendered.body =~ "I detected"
+    refute rendered.body =~ "I found"
+  end
+
+  test "keeps complete travel briefs action-oriented without inventing missing work" do
+    rendered =
+      itinerary([
+        %ItineraryItem{
+          item_type: "flight",
+          status: "active",
+          title: "Air Canada AC 123",
+          location_label: "Toronto YYZ -> Austin AUS",
+          confirmation_code: "ABC123",
+          metadata: %{"display_date" => "Mar 15, 2026 at 2:00 PM"}
+        },
+        %ItineraryItem{
+          item_type: "hotel",
+          status: "active",
+          title: "Austin Marriott Downtown",
+          location_label: "Austin",
+          confirmation_code: "H98765",
+          metadata: %{
+            "address" => "304 East Cesar Chavez St, Austin, TX 78701",
+            "display_check_in" => "Mar 15, 2026",
+            "display_check_out" => "Mar 17, 2026"
+          }
+        }
+      ])
+      |> BriefRenderer.render(:travel_prep,
+        timezone_offset_hours: -5,
+        reference_now: ~U[2026-03-14 22:00:00Z]
+      )
+
+    refute rendered.body =~ "CHECK BEFORE YOU GO"
+    assert rendered.body =~ "NEXT MOVE"
+    assert rendered.body =~ "Save the flight time, hotel address, and confirmation codes"
+    refute rendered.body =~ "No hotel confirmation found"
+    refute rendered.body =~ "No active flight confirmation found"
+  end
+
   defp itinerary(items) do
     %Itinerary{
       title: "Travel to Austin",
