@@ -91,6 +91,57 @@ final class UIComponentsTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testSourceRowTrailingStatusUsesActionableCopy() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .needsAttention(reason: "imessage_full_disk_access_required"),
+                displayedState: .needsAttention(reason: "imessage_full_disk_access_required"),
+                lastSyncAt: nil,
+                now: now
+            ),
+            "Fix"
+        )
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .error(reason: "serverError(status: 503)"),
+                displayedState: .error(reason: "serverError(status: 503)"),
+                lastSyncAt: nil,
+                now: now
+            ),
+            "Fix"
+        )
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .connected,
+                displayedState: .disconnected,
+                lastSyncAt: nil,
+                now: now
+            ),
+            "Waiting"
+        )
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .disconnected,
+                displayedState: .disconnected,
+                lastSyncAt: nil,
+                now: now
+            ),
+            "Set up"
+        )
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .connected,
+                displayedState: .connected,
+                lastSyncAt: now.addingTimeInterval(-2 * 60 * 60),
+                now: now
+            ),
+            "2hr"
+        )
+    }
+
     func testUnavailableSourceDetailCopyAvoidsRoadmapLanguage() {
         XCTAssertEqual(SourceAvailabilityCopy.unavailableTitle, "Source not available yet")
         XCTAssertEqual(SourceAvailabilityCopy.unavailableNavigationTitle, "Not available yet")

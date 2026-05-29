@@ -94,8 +94,9 @@ struct SourceRow: View {
             } else {
                 SourceStatusBadge(state: badgeState(for: displayedState))
                 SourceRecencyChip(
-                    lastSyncAt: publisher?.lastSyncAt,
-                    suppress: shouldSuppressRecency(displayedState)
+                    rawState: liveState,
+                    displayedState: displayedState,
+                    lastSyncAt: publisher?.lastSyncAt
                 )
             }
         }
@@ -128,13 +129,6 @@ struct SourceRow: View {
         case .paused: return .paused
         case .needsAttention(let reason): return .needsAttention(reason)
         case .error(let reason): return .error(reason)
-        }
-    }
-
-    private func shouldSuppressRecency(_ state: SourceState) -> Bool {
-        switch state {
-        case .needsAttention, .error: return true
-        default: return false
         }
     }
 
@@ -199,6 +193,34 @@ struct SourceRowCopy {
         return "Last sync \(formatter.localizedString(for: last, relativeTo: now))"
     }
 
+    static func trailingStatus(
+        rawState: SourceState,
+        displayedState: SourceState,
+        lastSyncAt: Date?,
+        now: Date = Date()
+    ) -> String {
+        switch displayedState {
+        case .connected:
+            guard let last = lastSyncAt else { return "Ready" }
+            return SourceRecencyChip.format(interval: now.timeIntervalSince(last))
+        case .syncing:
+            return "Syncing"
+        case .paused:
+            return "Paused"
+        case .disconnected:
+            if case .connected = rawState {
+                return "Waiting"
+            }
+            return "Set up"
+        case .needsAttention, .error:
+            return "Fix"
+        }
+    }
+
+    static func trailingStatusIsRecency(_ status: String) -> Bool {
+        status == "now" || status.first?.isNumber == true
+    }
+
     private static func statePhrase(_ state: SourceState) -> String {
         switch state {
         case .connected: return "connected"
@@ -213,32 +235,54 @@ struct SourceRowCopy {
     }
 }
 
-/// Trailing per-row chip that shows the abbreviated time since the
-/// source's last successful sync (`now`, `2m`, `3hr`, `1d`, `2w`).
+/// Trailing per-row chip that shows either the abbreviated time since a
+/// healthy source's last successful sync (`now`, `2m`, `3hr`, `1d`,
+/// `2w`) or a short action/status label for sources that need work.
 /// Uses `TimelineView` so the label refreshes on its own without
 /// needing the publisher to fire.
 struct SourceRecencyChip: View {
+    let rawState: SourceState
+    let displayedState: SourceState
     let lastSyncAt: Date?
-    /// When true, recency is suppressed (e.g., needs attention / error)
-    /// and the chip renders an em-dash placeholder.
-    let suppress: Bool
+    var now: Date = Date()
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let text = label(now: context.date)
+        TimelineView(.periodic(from: now, by: 30)) { context in
+            let text = SourceRowCopy.trailingStatus(
+                rawState: rawState,
+                displayedState: displayedState,
+                lastSyncAt: lastSyncAt,
+                now: context.date
+            )
             Text(text)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .font(
+                    SourceRowCopy.trailingStatusIsRecency(text)
+                        ? .callout.monospacedDigit()
+                        : .callout
+                )
+                .foregroundStyle(
+                    tone(rawState: rawState, displayedState: displayedState).color
+                )
                 .contentTransition(.numericText())
                 .animation(.default, value: text)
-                .frame(minWidth: 32, alignment: .trailing)
+                .frame(minWidth: 52, alignment: .trailing)
         }
     }
 
-    private func label(now: Date) -> String {
-        if suppress { return "—" }
-        guard let last = lastSyncAt else { return "—" }
-        return Self.format(interval: now.timeIntervalSince(last))
+    private func tone(rawState: SourceState, displayedState: SourceState) -> StatusTone {
+        switch displayedState {
+        case .needsAttention:
+            return .attention
+        case .error:
+            return .error
+        case .disconnected:
+            if case .connected = rawState {
+                return .muted
+            }
+            return .error
+        default:
+            return .muted
+        }
     }
 
     /// Pure formatter exposed for tests and for the accessibility label.
