@@ -125,7 +125,11 @@ defmodule Maraithon.BriefsTest do
 
     updated = Repo.get!(Brief, brief.id)
     assert updated.status == "failed"
-    assert updated.error_message == "Telegram is temporarily unavailable. Try again in a minute."
+
+    assert updated.error_message ==
+             "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
+
+    refute String.contains?(String.downcase(updated.error_message), "try again")
     refute updated.error_message =~ "token"
     refute updated.error_message =~ "stacktrace"
     refute updated.error_message =~ "chat_id"

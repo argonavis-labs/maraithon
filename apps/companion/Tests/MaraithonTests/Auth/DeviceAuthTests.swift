@@ -106,6 +106,34 @@ final class DeviceAuthTests: XCTestCase {
         }
     }
 
+    func testHandleIncomingURLKeepsTokenAndUsesRecoveryCopyWhenVerificationFails() async throws {
+        let log = EventLog(capacity: 64)
+        let keychain = InMemoryKeychain()
+        let auth = DeviceAuth(
+            eventLog: log,
+            keychain: keychain,
+            defaults: defaults,
+            clientFactory: { _ in MaraithonClient(tokenProvider: { "tok" }, transport: { _ in throw URLError(.timedOut) }) },
+            urlOpener: { _ in }
+        )
+
+        auth.handleIncomingURL(URL(string: "maraithon://device-token/tok")!)
+
+        for _ in 0..<50 {
+            if case .error = auth.state { break }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(try keychain.get(), "tok")
+        if case .error(let message) = auth.state {
+            XCTAssertEqual(message, "Could not verify account. Reopen Maraithon to finish pairing.")
+            XCTAssertFalse(message.localizedCaseInsensitiveContains("try again"))
+        } else {
+            XCTFail("Expected error state, got \(auth.state)")
+        }
+    }
+
     func testHandleIncomingURLIgnoresWrongScheme() {
         let log = EventLog(capacity: 16)
         let keychain = InMemoryKeychain()

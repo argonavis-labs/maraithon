@@ -9,9 +9,9 @@ defmodule Maraithon.DeliveryErrorCopy do
 
   @missing_chat "Telegram is not linked yet. Connect Telegram before sending this message."
   @needs_reconnect "Telegram needs reconnecting before delivery can continue."
-  @temporarily_unavailable "Telegram is temporarily unavailable. Try again in a minute."
-  @timed_out "Delivery timed out. Try again in a minute."
-  @generic "Delivery could not be sent. Check the connected channel and try again."
+  @temporarily_unavailable "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
+  @timed_out "Delivery timed out. Check Telegram status before sending another delivery."
+  @generic "Delivery could not be sent. Check the connected channel before sending another delivery."
 
   @legacy_terminal_messages [
     ":missing_chat_id",

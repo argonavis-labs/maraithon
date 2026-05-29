@@ -28,7 +28,7 @@ defmodule Maraithon.Tools.ToolErrorCopyTest do
     assert ToolErrorCopy.connected_source(
              {:http_status, 500, ~s({"error":"stacktrace token=secret"})},
              opts
-           ) == "Google is temporarily unavailable. Try again in a minute."
+           ) == "Google is temporarily unavailable. Wait a minute before running this action."
   end
 
   test "safe messages preserve validation copy and hide technical detail" do
@@ -40,6 +40,7 @@ defmodule Maraithon.Tools.ToolErrorCopyTest do
              fallback
 
     assert ToolErrorCopy.safe_message({:db, :timeout}, fallback) == fallback
+    refute String.contains?(String.downcase(fallback), "try again")
   end
 
   test "provider helper errors do not leak tokens, status bodies, or inspected terms" do

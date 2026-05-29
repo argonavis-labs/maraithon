@@ -22,7 +22,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert copy == %{
              error: "request_failed",
-             message: "Request did not complete. Refresh before retrying."
+             message: "Request did not complete. Refresh before continuing."
            }
 
     refute_leaks_internal_reason(copy.error)
@@ -82,7 +82,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     copy = ApiErrorCopy.mobile(changeset)
 
     assert copy.error == "invalid_params"
-    assert copy.message == "Review the highlighted details before saving again."
+    assert copy.message == "Review the highlighted details before saving."
     assert copy.details == %{title: ["can't be blank"]}
     refute inspect(copy) =~ "Ecto.Changeset"
   end
@@ -109,7 +109,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert %{
              error: "device_request_failed",
-             message: "Could not update that Mac. Refresh the device list before trying again."
+             message: "Could not update that Mac. Refresh the device list before changing it."
            } in copies
 
     assert %{
@@ -134,7 +134,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert ApiErrorCopy.companion_device(:delete_failed) == %{
              error: "device_delete_failed",
-             message: "Could not remove that Mac. Refresh the device list before trying again."
+             message: "Could not remove that Mac. Refresh the device list before removing it."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_key_id) == %{

@@ -41,7 +41,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile(%Ecto.Changeset{} = changeset) do
     %{
       error: "invalid_params",
-      message: "Review the highlighted details before saving again.",
+      message: "Review the highlighted details before saving.",
       details: validation_errors(changeset)
     }
   end
@@ -49,7 +49,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile(_reason) do
     %{
       error: "request_failed",
-      message: "Request did not complete. Refresh before retrying."
+      message: "Request did not complete. Refresh before continuing."
     }
   end
 
@@ -63,7 +63,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile_chat(%Ecto.Changeset{} = changeset) do
     %{
       error: "invalid_params",
-      message: "Review the highlighted conversation details before saving again.",
+      message: "Review the highlighted conversation details before saving.",
       details: validation_errors(changeset)
     }
   end
@@ -72,7 +72,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "request_failed",
       message:
-        "Conversation update did not complete. Refresh the conversation before sending again."
+        "Conversation update did not complete. Refresh the conversation before sending another message."
     }
   end
 
@@ -106,14 +106,14 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_device(:delete_failed) do
     %{
       error: "device_delete_failed",
-      message: "Could not remove that Mac. Refresh the device list before trying again."
+      message: "Could not remove that Mac. Refresh the device list before removing it."
     }
   end
 
   def companion_device(_reason) do
     %{
       error: "device_request_failed",
-      message: "Could not update that Mac. Refresh the device list before trying again."
+      message: "Could not update that Mac. Refresh the device list before changing it."
     }
   end
 

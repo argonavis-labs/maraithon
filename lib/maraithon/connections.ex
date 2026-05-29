@@ -303,7 +303,7 @@ defmodule Maraithon.Connections do
     do: "Connection status will refresh when the database is available again."
 
   defp connection_inventory_error_detail(_reason),
-    do: "Refresh this page or try again in a few minutes."
+    do: "Refresh this page before continuing."
 
   defp google_card(user_id, tokens, account_by_provider, return_to)
        when is_list(tokens) and is_map(account_by_provider) do

@@ -288,7 +288,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
         nil
 
       technical_error_detail?(details) ->
-        "Refresh this page or try again in a few minutes."
+        "Refresh this page before continuing."
 
       true ->
         details

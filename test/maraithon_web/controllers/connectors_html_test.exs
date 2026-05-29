@@ -9,7 +9,7 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
         details: "DBConnection.ConnectionError queue timeout on select * from oauth_tokens"
       })
 
-    assert detail == "Refresh this page or try again in a few minutes."
+    assert detail == "Refresh this page before continuing."
     refute detail =~ "DBConnection"
     refute detail =~ "oauth_tokens"
   end

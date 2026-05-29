@@ -26,7 +26,7 @@ defmodule Maraithon.Tools.ToolErrorCopy do
       Keyword.get(
         opts,
         :unavailable,
-        "#{label} is temporarily unavailable. Try again in a minute."
+        "#{label} is temporarily unavailable. Wait a minute before running this action."
       )
 
     not_found = Keyword.get(opts, :not_found, "#{label} could not find that item.")
@@ -66,7 +66,7 @@ defmodule Maraithon.Tools.ToolErrorCopy do
         unavailable
 
       {:exit, _reason} ->
-        "#{label} was interrupted before it could finish. Try again."
+        "#{label} was interrupted before it could finish. Refresh #{label} before continuing."
 
       message when is_binary(message) ->
         safe_message(message, unavailable)
@@ -77,7 +77,7 @@ defmodule Maraithon.Tools.ToolErrorCopy do
   end
 
   def action_failed(label, action) when is_binary(label) and is_binary(action) do
-    "Could not #{action}. Try again after refreshing #{label}."
+    "Could not #{action}. Refresh #{label} before continuing."
   end
 
   def safe_message(message, fallback) when is_binary(message) and is_binary(fallback) do

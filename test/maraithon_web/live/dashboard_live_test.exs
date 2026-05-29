@@ -425,7 +425,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
       |> render_click()
 
-    assert html =~ "Delivery failed. Check the connected channel and try again."
+    assert html =~ "Delivery failed. Check the connected channel before sending another delivery."
     assert html =~ "Why this still needs attention"
     assert html =~ "Built from saved evidence"
     assert html =~ "Missing context"

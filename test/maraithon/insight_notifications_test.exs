@@ -91,8 +91,9 @@ defmodule Maraithon.InsightNotificationsTest do
       assert delivery.status == "failed"
 
       assert delivery.error_message ==
-               "Telegram is temporarily unavailable. Try again in a minute."
+               "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
 
+      refute String.contains?(String.downcase(delivery.error_message), "try again")
       refute delivery.error_message =~ "token"
       refute delivery.error_message =~ "stacktrace"
       refute delivery.error_message =~ "chat_id"

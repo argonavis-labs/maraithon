@@ -52,7 +52,7 @@ defmodule Maraithon.Insights.DetailTest do
     assert hd(detail.delivery_evidence).destination_label == "Telegram linked chat"
 
     assert hd(detail.delivery_evidence).error_message ==
-             "Delivery failed. Check the connected channel and try again."
+             "Delivery failed. Check the connected channel before sending another delivery."
 
     refute hd(detail.delivery_evidence).error_message =~ "123456789"
     refute hd(detail.delivery_evidence).error_message =~ "sarah@example.com"

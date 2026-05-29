@@ -44,7 +44,10 @@ defmodule MaraithonWeb.CompanionAuthController do
 
           {:error, _changeset} ->
             conn
-            |> put_flash(:error, "Could not pair this device. Please try again.")
+            |> put_flash(
+              :error,
+              "Could not pair this device. Reopen the pairing request from the companion app."
+            )
             |> redirect(
               to: ~p"/companion/auth?#{[device_id: device_id, device_name: device_name]}"
             )

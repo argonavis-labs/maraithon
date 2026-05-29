@@ -387,7 +387,7 @@ defmodule Maraithon.Insights.Detail do
     |> String.trim()
     |> case do
       "" -> nil
-      _message -> "Delivery failed. Check the connected channel and try again."
+      _message -> "Delivery failed. Check the connected channel before sending another delivery."
     end
   end
 

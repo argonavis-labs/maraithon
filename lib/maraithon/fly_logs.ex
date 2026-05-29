@@ -316,7 +316,7 @@ defmodule Maraithon.FlyLogs do
   end
 
   defp format_fetch_error({:request_failed, _exception}) do
-    "Could not reach the platform log provider. Check log access and network connectivity, then try again."
+    "Could not reach the platform log provider. Check log access and network connectivity before refreshing logs."
   end
 
   defp format_fetch_error({:task_exit, _reason}) do

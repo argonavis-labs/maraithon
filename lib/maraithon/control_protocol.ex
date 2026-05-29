@@ -384,10 +384,10 @@ defmodule Maraithon.ControlProtocol do
     do: "Scheduled task needs a valid command or prompt."
 
   defp scheduled_task_error_message(%Ecto.Changeset{}),
-    do: "Scheduled task could not be saved. Review required fields and try again."
+    do: "Scheduled task could not be saved. Review required fields before saving."
 
   defp scheduled_task_error_message(_reason),
-    do: "Scheduled task could not be created. Review the request and try again."
+    do: "Scheduled task could not be created. Review the request before creating it."
 
   defp mobile_pairing_error_message(:forbidden_mobile_command),
     do: "Pairing can only grant supported mobile commands."
@@ -405,10 +405,10 @@ defmodule Maraithon.ControlProtocol do
     do: "Pairing expiration must be between 1 second and 24 hours."
 
   defp mobile_pairing_error_message(%Ecto.Changeset{}),
-    do: "Mobile pairing could not be saved. Review the request and try again."
+    do: "Mobile pairing could not be saved. Review the request before saving."
 
   defp mobile_pairing_error_message(_reason),
-    do: "Mobile pairing could not be created. Review the request and try again."
+    do: "Mobile pairing could not be created. Review the request before creating it."
 
   defp tool_error_message({:tool_policy_denied, decision}), do: policy_message(decision)
 
@@ -461,7 +461,9 @@ defmodule Maraithon.ControlProtocol do
 
   defp control_error_message(%{"message" => message}) when is_binary(message), do: message
   defp control_error_message(%{message: message}) when is_binary(message), do: message
-  defp control_error_message(_error), do: "Control action could not be completed. Try again."
+
+  defp control_error_message(_error),
+    do: "Control action could not be completed. Review the request before continuing."
 
   defp tool_descriptor(%{
          name: name,

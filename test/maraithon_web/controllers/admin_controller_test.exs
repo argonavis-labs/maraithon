@@ -390,7 +390,7 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert response["error"] == "gmail_unavailable"
 
       assert response["message"] ==
-               "Could not fetch recent Gmail messages. Check the Google connection and try again."
+               "Could not fetch recent Gmail messages. Check the Google connection before fetching."
 
       encoded = Jason.encode!(response)
       refute encoded =~ "google_account_not_connected"

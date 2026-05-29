@@ -7,12 +7,14 @@ import Foundation
 /// other companion-level views: no HTTP bodies, enum dumps, or transport
 /// domains should reach the screen.
 struct CompanionErrorCopy {
+    private static let requestFallback = "Request did not complete. Refresh before continuing."
+
     static func message(for error: Error) -> String {
         switch error {
         case MaraithonClientError.unauthorized:
             return "Reconnect Maraithon to continue."
         case MaraithonClientError.invalidResponse:
-            return "Maraithon returned an unexpected response. Update the app or try again later."
+            return "Maraithon returned an unexpected response. Update the app before continuing."
         case let MaraithonClientError.clientError(status, body):
             if let serverMessage = serverBodyMessage(from: body) {
                 return serverMessage
@@ -23,7 +25,7 @@ struct CompanionErrorCopy {
         case MaraithonClientError.transport:
             return "Connection issue. Retry when you are online."
         default:
-            return "Request did not complete. Refresh before retrying."
+            return requestFallback
         }
     }
 
@@ -31,7 +33,7 @@ struct CompanionErrorCopy {
         let lower = reason.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         if lower.isEmpty {
-            return "Request did not complete. Refresh before retrying."
+            return requestFallback
         }
 
         if lower.contains("unauthorized") || lower.contains("401") || lower == "no_token" {
@@ -58,11 +60,11 @@ struct CompanionErrorCopy {
             || lower.contains("decodefailure")
             || lower.contains("decodingerror")
             || lower.contains("json") {
-            return "Maraithon returned an unexpected response. Update the app or try again later."
+            return "Maraithon returned an unexpected response. Update the app before continuing."
         }
 
         if looksTechnical(reason) {
-            return "Request did not complete. Refresh before retrying."
+            return requestFallback
         }
 
         return reason
@@ -83,7 +85,7 @@ struct CompanionErrorCopy {
         case 429:
             return "Maraithon is busy right now. Retry in a moment."
         default:
-            return "Request did not complete. Refresh before retrying."
+            return requestFallback
         }
     }
 
@@ -92,7 +94,7 @@ struct CompanionErrorCopy {
             return "Maraithon is temporarily unavailable. Retry in a moment."
         }
 
-        return "Request did not complete. Refresh before retrying."
+        return requestFallback
     }
 
     private static func looksTechnical(_ value: String) -> Bool {

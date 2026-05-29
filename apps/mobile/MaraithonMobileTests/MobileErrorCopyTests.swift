@@ -10,7 +10,7 @@ struct MobileErrorCopyTests {
             for: MobileAPIError.server("DBConnection.ConnectionError: token abc123")
         )
 
-        #expect(copy == "Request did not complete. Refresh before retrying.")
+        #expect(copy == "Request did not complete. Refresh before continuing.")
         #expect(!copy.contains("DBConnection"))
         #expect(!copy.contains("token"))
         #expect(!copy.contains("abc123"))
@@ -31,7 +31,7 @@ struct MobileErrorCopyTests {
             for: MobileAPIError.server("Authorization: Bearer abc123 token=secret")
         )
 
-        #expect(copy == "Request did not complete. Refresh before retrying.")
+        #expect(copy == "Request did not complete. Refresh before continuing.")
         #expect(!copy.lowercased().contains("authorization"))
         #expect(!copy.lowercased().contains("bearer"))
         #expect(!copy.lowercased().contains("token"))
@@ -117,7 +117,7 @@ struct MobileErrorCopyTests {
         )
 
         let copy = MobileErrorCopy.message(for: TechnicalLocalizedError())
-        #expect(copy == "Request did not complete. Refresh before retrying.")
+        #expect(copy == "Request did not complete. Refresh before continuing.")
     }
 
     @Test
@@ -133,7 +133,7 @@ struct MobileErrorCopyTests {
     func hidesCredentialLikeLocalizedErrors() {
         let copy = MobileErrorCopy.message(for: CredentialLocalizedError())
 
-        #expect(copy == "Request did not complete. Refresh before retrying.")
+        #expect(copy == "Request did not complete. Refresh before continuing.")
         #expect(!copy.lowercased().contains("bearer"))
         #expect(!copy.lowercased().contains("secret"))
     }

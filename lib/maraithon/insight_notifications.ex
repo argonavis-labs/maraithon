@@ -398,7 +398,7 @@ defmodule Maraithon.InsightNotifications do
       {:error, :invalid_token} ->
         telegram_module().send_message(
           chat_id,
-          "That Telegram link expired or is invalid. Generate a new Connect Telegram link and try again."
+          "That Telegram link expired or is invalid. Generate a new Connect Telegram link before linking Telegram."
         )
 
       nil ->

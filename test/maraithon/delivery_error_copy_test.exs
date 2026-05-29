@@ -9,7 +9,10 @@ defmodule Maraithon.DeliveryErrorCopyTest do
         {:telegram_error, 500, "RuntimeError token=secret stacktrace %{chat_id: 123}"}
       )
 
-    assert copy == "Telegram is temporarily unavailable. Try again in a minute."
+    assert copy ==
+             "Telegram is temporarily unavailable. Wait a minute before sending another delivery."
+
+    refute String.contains?(String.downcase(copy), "try again")
     refute copy =~ "token"
     refute copy =~ "stacktrace"
     refute copy =~ "chat_id"

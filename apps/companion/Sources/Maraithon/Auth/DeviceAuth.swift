@@ -249,7 +249,7 @@ final class DeviceAuth {
         } catch {
             // Token is stored; whoami failed transiently. Surface an
             // actionable error but keep the token for the next retry.
-            state = .error(message: "Could not verify account. Try again.")
+            state = .error(message: "Could not verify account. Reopen Maraithon to finish pairing.")
             eventLog.error(
                 "device_auth.whoami_failed",
                 source: .auth,
