@@ -9,9 +9,12 @@ import AppKit
 /// the user's Downloads folder.
 ///
 /// Privacy invariants:
-///   - The recent in-memory log goes through `Redactor.redact` field by
-///     field so handles in `payload` (e.g. `from`, `to`, `chat`, `id`)
-///     never make it onto disk unredacted.
+///   - Recent in-memory entries and copied log files go through the
+///     central `EventLog` sensitive-token redactor before they are
+///     written into the bundle.
+///   - Handle-shaped payload values then go through `Redactor.redact`
+///     field by field so handles in `payload` (e.g. `from`, `to`, `chat`,
+///     `id`) never make it onto disk unredacted.
 ///   - UserDefaults cursor snapshot is restricted to a whitelist of
 ///     known prefixes (`com.maraithon.companion.*` and the source
 ///     cursor keys) — we never dump the full defaults dictionary.
@@ -165,7 +168,7 @@ enum DiagnosticExporter {
                 "timestamp": formatter.string(from: entry.timestamp),
                 "level": entry.level.rawValue,
                 "source": entry.source.rawValue,
-                "message": entry.message
+                "message": EventLog.redactSensitiveLogText(entry.message)
             ]
             if !entry.payload.isEmpty {
                 dict["payload"] = redactPayload(entry.payload)
@@ -178,22 +181,27 @@ enum DiagnosticExporter {
         )
     }
 
-    /// Apply `Redactor.redact` to a known set of payload keys. The
-    /// allowlist keeps the redaction cheap and predictable; non-handle
-    /// values (counts, error strings) pass through unchanged.
+    /// Apply sensitive-token redaction to every payload value, then apply
+    /// `Redactor.redact` to known handle fields. Non-handle values such
+    /// as counts pass through unless they contain secrets.
     static func redactPayload(_ payload: [String: String]) -> [String: String] {
         let handleKeys: Set<String> = [
             "from", "to", "chat", "handle", "handles", "guid", "id", "email", "url"
         ]
         var redacted: [String: String] = [:]
         for (key, value) in payload {
+            let tokenRedacted = EventLog.redactSensitiveLogText(value)
             if handleKeys.contains(key) {
-                redacted[key] = Redactor.redact(value)
+                redacted[key] = Redactor.redact(tokenRedacted)
             } else {
-                redacted[key] = value
+                redacted[key] = tokenRedacted
             }
         }
         return redacted
+    }
+
+    static func redactDiagnosticLogText(_ text: String) -> String {
+        EventLog.redactSensitiveLogText(text)
     }
 
     /// Build the manifest JSON the bundle root carries. Captures a
@@ -245,7 +253,13 @@ enum DiagnosticExporter {
                 if fm.fileExists(atPath: target.path) {
                     try fm.removeItem(at: target)
                 }
-                try fm.copyItem(at: entry, to: target)
+                let data = try Data(contentsOf: entry)
+                if let text = String(data: data, encoding: .utf8) {
+                    let redacted = redactDiagnosticLogText(text)
+                    try Data(redacted.utf8).write(to: target, options: .atomic)
+                } else {
+                    try data.write(to: target, options: .atomic)
+                }
             } catch {
                 log.warning(
                     "diagnostics.export.log_copy_failed",

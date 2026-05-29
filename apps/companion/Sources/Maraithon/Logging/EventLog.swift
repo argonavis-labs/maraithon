@@ -88,6 +88,7 @@ final class EventLog {
     }
 
     func append(_ entry: LogEntry) {
+        let entry = Self.redacted(entry)
         entries.append(entry)
         if entries.count > capacity {
             entries.removeFirst(entries.count - capacity)
@@ -100,8 +101,8 @@ final class EventLog {
     /// Console.app and `log stream --predicate
     /// 'subsystem == "com.maraithon.companion"'` without anyone having to
     /// load our app to read it. Structured payload is rendered as
-    /// "key=value" pairs; sensitive values must already be redacted by the
-    /// caller (see `Redactor`).
+    /// "key=value" pairs; entries are centrally redacted before they reach
+    /// this method.
     private func emitToUnifiedLog(_ entry: LogEntry) {
         guard let logger = loggers[entry.source] else { return }
         let payload = entry.payload.isEmpty
@@ -133,6 +134,21 @@ final class EventLog {
 
     func error(_ message: String, source: LogSource, payload: [String: String] = [:]) {
         append(LogEntry(level: .error, source: source, message: message, payload: payload))
+    }
+
+    nonisolated static func redactSensitiveLogText(_ value: String) -> String {
+        EventLogRedactor.redact(value)
+    }
+
+    private nonisolated static func redacted(_ entry: LogEntry) -> LogEntry {
+        LogEntry(
+            id: entry.id,
+            timestamp: entry.timestamp,
+            level: entry.level,
+            source: entry.source,
+            message: redactSensitiveLogText(entry.message),
+            payload: entry.payload.mapValues(redactSensitiveLogText)
+        )
     }
 
     private func persist(_ entry: LogEntry) {
@@ -173,5 +189,55 @@ final class EventLog {
             _ = try? handle.seekToEnd()
         }
         return handle
+    }
+}
+
+private enum EventLogRedactor {
+    static func redact(_ value: String) -> String {
+        guard !value.isEmpty else { return value }
+
+        var result = value
+        result = replace(
+            pattern: #"(?i)\b(authorization\s*[:=]\s*bearer\s+)[^\s,;)\]\}"]+"#,
+            in: result,
+            with: "$1[redacted]"
+        )
+        result = replace(
+            pattern: #"(?i)\b((?:x-api-key|api-key|api_key|access-token|refresh-token|token)\s*:\s*)[^\s,;)\]\}"]+"#,
+            in: result,
+            with: "$1[redacted]"
+        )
+        result = replace(
+            pattern: #"(?i)\b((?:access_token|refresh_token|id_token|token|api_key|apikey|key|client_secret|secret|password|signature|sig)=)[^&\s,;)\]\}"]+"#,
+            in: result,
+            with: "$1[redacted]"
+        )
+        result = replace(
+            pattern: #"(?i)("(?:access_token|refresh_token|id_token|token|api_key|apikey|key|client_secret|secret|password|signature|sig)"\s*:\s*")[^"]+""#,
+            in: result,
+            with: "$1[redacted]\""
+        )
+        result = replace(
+            pattern: #"(?i)((?:device-token|access-token|refresh-token)/)[A-Za-z0-9._~+%=-]+"#,
+            in: result,
+            with: "$1[redacted]"
+        )
+        result = replace(
+            pattern: #"(?m)((?:^|\s)[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|KEY)[A-Z0-9_]*\s*=\s*)["']?[^"'\s]+"#,
+            in: result,
+            with: "$1[redacted]"
+        )
+        return result
+    }
+
+    private static func replace(pattern: String, in value: String, with template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return value }
+        let range = NSRange(value.startIndex..., in: value)
+        return regex.stringByReplacingMatches(
+            in: value,
+            options: [],
+            range: range,
+            withTemplate: template
+        )
     }
 }

@@ -90,6 +90,34 @@ final class DiagnosticExporterTests: XCTestCase {
         XCTAssertEqual(payload["count"], "1")
     }
 
+    func testRedactedEventsScrubsTokensInErrorPayloadsAndMessages() throws {
+        let secret = "socket-secret"
+        let rawError = "NSErrorFailingURLStringKey=https://maraithon.com/socket?token=\(secret)&vsn=2.0.0"
+        let entry = LogEntry(
+            level: .error,
+            source: .realtime,
+            message: "receive failed \(rawError)",
+            payload: ["error": rawError]
+        )
+
+        let data = try DiagnosticExporter.redactedEventsJSON([entry])
+        let rendered = String(data: data, encoding: .utf8)!
+        XCTAssertFalse(rendered.contains(secret))
+        XCTAssertTrue(rendered.contains("token=[redacted]"))
+    }
+
+    func testDiagnosticLogTextScrubsTokens() {
+        let raw = """
+        realtime.receive_error error=https://maraithon.com/socket?token=log-secret&vsn=2.0.0
+        Authorization: Bearer bearer-secret
+        """
+        let redacted = DiagnosticExporter.redactDiagnosticLogText(raw)
+
+        XCTAssertFalse(redacted.contains("log-secret"))
+        XCTAssertFalse(redacted.contains("bearer-secret"))
+        XCTAssertTrue(redacted.contains("token=[redacted]"))
+    }
+
     func testManifestCarriesDeviceHashAndVersion() throws {
         let device = UUID()
         let data = try DiagnosticExporter.manifestJSON(
@@ -128,5 +156,55 @@ final class DiagnosticExporterTests: XCTestCase {
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.bundleURL.path))
         XCTAssertGreaterThan(result.byteCount, 0)
+    }
+
+    func testZipBundleRedactsCopiedLogFiles() throws {
+        let rawLog = """
+        realtime.receive_error error=https://maraithon.com/socket?token=copied-log-secret&vsn=2.0.0
+        Authorization: Bearer copied-bearer-secret
+        """
+        try Data(rawLog.utf8).write(to: logsDir.appendingPathComponent("companion.log"))
+
+        let result = try DiagnosticExporter.export(
+            log: EventLog(),
+            deviceId: UUID(),
+            appVersion: "0.1.0",
+            recentEntries: [],
+            downloadsDirectory: downloadsDir,
+            defaults: defaults,
+            sourceLogsDirectory: logsDir,
+            revealInFinder: false
+        )
+
+        let contents = try unzipPayload(result.bundleURL)
+        XCTAssertFalse(contents.contains("copied-log-secret"))
+        XCTAssertFalse(contents.contains("copied-bearer-secret"))
+        XCTAssertTrue(contents.contains("token=[redacted]"))
+    }
+
+    private func unzipPayload(_ bundleURL: URL) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = ["-p", bundleURL.path]
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        try process.run()
+        process.waitUntilExit()
+
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        if process.terminationStatus != 0 {
+            let error = stderr.fileHandleForReading.readDataToEndOfFile()
+            let reason = String(data: error, encoding: .utf8) ?? "unzip failed"
+            throw NSError(
+                domain: "DiagnosticExporterTests",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: reason]
+            )
+        }
+        return String(data: output, encoding: .utf8) ?? ""
     }
 }
