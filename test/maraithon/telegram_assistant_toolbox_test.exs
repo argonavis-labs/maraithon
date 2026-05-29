@@ -134,6 +134,53 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute result.summary =~ "Tell the user"
   end
 
+  test "get_open_work_summary treats connected empty Gmail as checked" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    user_id = "toolbox-empty-gmail-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:empty@example.com", %{
+               access_token: "toolbox-empty-token",
+               refresh_token: "toolbox-empty-refresh",
+               metadata: %{"account_email" => "empty@example.com"}
+             })
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      ["Bearer toolbox-empty-token"] = Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "maxResults=1"
+      assert conn.query_string =~ "labelIds=INBOX"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+    end)
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert get_in(result, [:source_health, :gmail, :status]) == "ok"
+    assert get_in(result, [:source_health, :gmail, :recommended_next_step]) == nil
+
+    assert [%{status: "empty", latest_visible_email_at: nil}] =
+             get_in(result, [:source_health, :gmail, :accounts])
+
+    assert result.summary == "No open work needs attention right now."
+    assert result.next_action == "No open work needs action right now."
+
+    refute result.summary =~ "reconnection"
+    refute result.summary =~ "complete inbox review"
+  end
+
   test "get_open_work_summary returns executive-ready summary when Gmail is missing" do
     user_id = "toolbox-open-work-copy-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -160,7 +207,10 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert result.summary =~ "Open work: 1 work item."
     assert result.summary =~ "Start with Send the concise investor update."
-    assert result.summary =~ "Gmail is not connected, so email follow-up may be missing."
+
+    assert result.summary =~
+             "Gmail is not connected, so inbox-backed follow-up is not fully covered."
+
     assert result.next_action == "Start with Send the concise investor update."
 
     refute result.summary =~ "Tell the user"

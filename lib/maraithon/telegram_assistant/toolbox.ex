@@ -3599,7 +3599,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     gmail_status =
       cond do
         gmail_accounts == [] -> "not_connected"
-        Enum.any?(gmail_accounts, &(&1.status == "ok")) -> "ok"
+        Enum.any?(gmail_accounts, &(&1.status in ["ok", "empty"])) -> "ok"
         true -> "error"
       end
 
@@ -3692,15 +3692,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp gmail_insights_stale?(_freshest_visible_email_at, _latest_insight_at), do: false
 
   defp gmail_recommended_next_step("not_connected", _insights_stale, _freshest_visible_email_at) do
-    "Gmail is not connected, so email follow-up may be missing."
+    "Connect Gmail before treating inbox-backed follow-up as fully covered."
   end
 
   defp gmail_recommended_next_step("error", _insights_stale, _freshest_visible_email_at) do
-    "Gmail needs attention before this is a complete inbox review."
+    "Reconnect Gmail before treating this as a complete inbox review."
   end
 
   defp gmail_recommended_next_step("ok", true, %DateTime{} = _freshest_visible_email_at) do
-    "Gmail has newer mail than this summary; search Gmail before treating email follow-up as complete."
+    "Gmail has newer mail than this summary; search Gmail before treating inbox-backed follow-up as complete."
   end
 
   defp gmail_recommended_next_step("ok", _insights_stale, _freshest_visible_email_at), do: nil
@@ -3829,13 +3829,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp gmail_user_gap(source_health) do
     cond do
       gmail_stale?(source_health) ->
-        "Gmail has newer mail than this summary; search Gmail before treating email follow-up as complete."
+        "Gmail has newer mail than this summary; search Gmail before treating inbox-backed follow-up as complete."
 
       gmail_not_connected?(source_health) ->
-        "Gmail is not connected, so email follow-up may be missing."
+        "Gmail is not connected, so inbox-backed follow-up is not fully covered."
 
       gmail_error?(source_health) ->
-        "Gmail needs attention before this is a complete inbox review."
+        "Gmail needs reconnection before this can be treated as a complete inbox review."
 
       true ->
         nil
