@@ -94,9 +94,12 @@ companion_xcode_signing_args() {
 
 companion_has_persistent_signing_config() {
   local config="${COMPANION_DIR}/Config.local.xcconfig"
+  local identity
 
-  [[ -f "${config}" ]] &&
-    grep -Eq '^[[:space:]]*(CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM)[[:space:]]*=' "${config}"
+  [[ -f "${config}" ]] || return 1
+
+  identity="$(xcconfig_value "${config}" CODE_SIGN_IDENTITY)"
+  [[ -n "${identity}" && "${identity}" != "-" ]]
 }
 
 ensure_companion_dev_signing() {

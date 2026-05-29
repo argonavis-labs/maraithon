@@ -19,6 +19,23 @@ struct SourcePermissionHint: Equatable {
     /// Optional follow-up note for the recovery path after the user
     /// changes a macOS permission.
     let followUpNote: String?
+    /// True for Full Disk Access reasons where debug builds must be
+    /// launched from a stable app bundle to keep the macOS TCC grant.
+    let requiresStableFullDiskAccessApp: Bool
+
+    init(
+        title: String,
+        body: String,
+        settingsURL: URL?,
+        followUpNote: String?,
+        requiresStableFullDiskAccessApp: Bool = false
+    ) {
+        self.title = title
+        self.body = body
+        self.settingsURL = settingsURL
+        self.followUpNote = followUpNote
+        self.requiresStableFullDiskAccessApp = requiresStableFullDiskAccessApp
+    }
 
     static func forReason(_ reason: String) -> SourcePermissionHint {
         switch reason {
@@ -41,14 +58,16 @@ struct SourcePermissionHint: Equatable {
                 title: "Messages access needed",
                 body: "Maraithon needs Full Disk Access to read your local Messages database. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
-                followUpNote: FullDiskAccessCopy.unblockFollowUp
+                followUpNote: FullDiskAccessCopy.unblockFollowUp,
+                requiresStableFullDiskAccessApp: true
             )
         case "notes_full_disk_access_required":
             return SourcePermissionHint(
                 title: "Notes access needed",
                 body: "Maraithon needs Full Disk Access to read your local Notes database. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
-                followUpNote: FullDiskAccessCopy.unblockFollowUp
+                followUpNote: FullDiskAccessCopy.unblockFollowUp,
+                requiresStableFullDiskAccessApp: true
             )
         case "voice_memos_speech_disabled":
             return SourcePermissionHint(
@@ -69,7 +88,8 @@ struct SourcePermissionHint: Equatable {
                 title: "Voice Memos access needed",
                 body: "Maraithon needs Full Disk Access to read your local Voice Memos database and audio files. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
-                followUpNote: FullDiskAccessCopy.unblockFollowUp
+                followUpNote: FullDiskAccessCopy.unblockFollowUp,
+                requiresStableFullDiskAccessApp: true
             )
         default:
             return SourcePermissionHint(

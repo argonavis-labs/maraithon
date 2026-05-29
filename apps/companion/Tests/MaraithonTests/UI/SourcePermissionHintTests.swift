@@ -32,6 +32,7 @@ final class SourcePermissionHintTests: XCTestCase {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
+        XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
 
     func testMessagesFullDiskAccessReasonHasSettingsDeepLink() {
@@ -43,6 +44,7 @@ final class SourcePermissionHintTests: XCTestCase {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
+        XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
 
     func testNotesFullDiskAccessReasonHasSettingsDeepLink() {
@@ -54,6 +56,7 @@ final class SourcePermissionHintTests: XCTestCase {
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
+        XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
 
     func testVoiceMemosSpeechDisabledReasonPointsToSiriSettings() {
@@ -67,6 +70,7 @@ final class SourcePermissionHintTests: XCTestCase {
             "x-apple.systempreferences:com.apple.Siri-Settings.extension"
         )
         XCTAssertNotNil(hint.followUpNote)
+        XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
 
     func testUnknownReasonFallsBackToSanitizedGenericWithoutDeepLink() {
@@ -75,5 +79,6 @@ final class SourcePermissionHintTests: XCTestCase {
         XCTAssertEqual(hint.body, "This source needs attention. Try again.")
         XCTAssertNil(hint.settingsURL)
         XCTAssertNil(hint.followUpNote)
+        XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
 }

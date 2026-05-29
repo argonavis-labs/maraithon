@@ -31,6 +31,20 @@ struct SourceUnblockView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+                if let installHint = fullDiskAccessInstallHint {
+                    Label {
+                        Text(installHint)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(StatusTone.attention.color)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 480, alignment: .leading)
+                    .accessibilityElement(children: .combine)
+                }
             }
             .multilineTextAlignment(.center)
             .frame(maxWidth: 480)
@@ -71,5 +85,10 @@ struct SourceUnblockView: View {
             env.onboarding.recordFullDiskAccessGranted()
         }
         env.sources.syncNow(id: sourceID)
+    }
+
+    private var fullDiskAccessInstallHint: String? {
+        guard hint.requiresStableFullDiskAccessApp else { return nil }
+        return FullDiskAccessInstallHint.currentMessage()
     }
 }
