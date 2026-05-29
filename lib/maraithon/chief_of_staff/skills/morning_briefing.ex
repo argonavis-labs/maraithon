@@ -1802,6 +1802,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "active_waiting_business_objectives_before_intros_and_meetings",
         "stale_work_framed_as_decision_not_urgent_dump",
         "person_company_relationship_context_for_non-obvious_people",
+        "required_external_meetings_are_covered",
+        "required_commercial_threads_are_covered",
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
         "action_card_and_draft_handles_stay_attached_to_work",
@@ -1824,6 +1826,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     calendar_conflicts = calendar_conflicts(brief_input)
     action_stack_items = action_stack_items(brief_input)
     non_draft_items = non_draft_job_items(brief_input)
+    missing_required_meetings = missing_required_schedule_meetings(body, brief_input)
+    missing_required_threads = missing_required_commercial_threads(body, brief_input)
 
     []
     |> maybe_finding(blank?(body), :missing_body)
@@ -1840,6 +1844,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       generation_mode == "llm" and weekend_brief?(brief_input) and
         not week_prep_present?(body),
       :missing_week_prep
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and missing_required_meetings != [],
+      :missing_required_meetings
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and missing_required_threads != [],
+      :missing_required_commercial_threads
     )
     |> maybe_finding(
       generation_mode == "llm" and calendar_conflicts != [] and
@@ -1873,6 +1885,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_needs_attention(brief_input, findings)
     |> maybe_append_personal_calendar_context(brief_input, findings)
     |> maybe_append_week_prep(brief_input, findings)
+    |> maybe_append_required_meetings(brief_input, findings)
+    |> maybe_append_required_commercial_threads(brief_input, findings)
     |> maybe_append_schedule_conflicts(brief_input, findings)
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
@@ -1945,6 +1959,48 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         end
 
       append_body_section(brief, line)
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_required_meetings(brief, brief_input, findings) do
+    if :missing_required_meetings in findings do
+      body = read_string(brief, "body", "")
+
+      lines =
+        body
+        |> missing_required_schedule_meetings(brief_input)
+        |> Enum.take(8)
+        |> Enum.map(&fallback_meeting_line/1)
+        |> Enum.reject(&blank?/1)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section(brief, "## Required Schedule Prep\n" <> Enum.join(lines, "\n"))
+      end
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_required_commercial_threads(brief, brief_input, findings) do
+    if :missing_required_commercial_threads in findings do
+      body = read_string(brief, "body", "")
+
+      lines =
+        body
+        |> missing_required_commercial_threads(brief_input)
+        |> Enum.take(8)
+        |> Enum.map(&required_commercial_thread_line/1)
+        |> Enum.reject(&blank?/1)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section(brief, "## Decisions / Follow-ups\n" <> Enum.join(lines, "\n"))
+      end
     else
       brief
     end
@@ -2477,6 +2533,184 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp non_draft_job_label(_item), do: "Non-draft work"
+
+  defp missing_required_schedule_meetings(body, brief_input)
+       when is_binary(body) and is_map(brief_input) do
+    brief_input
+    |> required_schedule_meetings()
+    |> Enum.reject(&body_mentions_coverage_item?(body, required_meeting_labels(&1)))
+  end
+
+  defp missing_required_schedule_meetings(_body, _brief_input), do: []
+
+  defp missing_required_commercial_threads(body, brief_input)
+       when is_binary(body) and is_map(brief_input) do
+    brief_input
+    |> required_commercial_threads()
+    |> Enum.reject(&body_mentions_coverage_item?(body, required_commercial_thread_labels(&1)))
+  end
+
+  defp missing_required_commercial_threads(_body, _brief_input), do: []
+
+  defp required_schedule_meetings(brief_input) when is_map(brief_input) do
+    brief_input
+    |> read_map("schedule_coverage")
+    |> read_list("required_meetings")
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp required_schedule_meetings(_brief_input), do: []
+
+  defp required_commercial_threads(brief_input) when is_map(brief_input) do
+    brief_input
+    |> read_map("commercial_coverage")
+    |> read_list("required_threads")
+    |> Enum.filter(&is_map/1)
+  end
+
+  defp required_commercial_threads(_brief_input), do: []
+
+  defp required_meeting_labels(meeting) when is_map(meeting) do
+    [
+      read_string(meeting, "summary", nil),
+      meeting |> read_list("external_attendees") |> Enum.flat_map(&coverage_label_values/1),
+      meeting
+      |> read_list("candidate_people_and_orgs")
+      |> Enum.flat_map(&coverage_label_values/1),
+      meeting |> read_list("crm_context") |> Enum.flat_map(&coverage_label_values/1),
+      meeting |> read_list("web_context") |> Enum.flat_map(&coverage_label_values/1)
+    ]
+    |> List.flatten()
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp required_meeting_labels(_meeting), do: []
+
+  defp required_commercial_thread_labels(thread) when is_map(thread) do
+    [
+      read_string(thread, "subject", nil),
+      email_identity_labels(read_string(thread, "from", nil)),
+      email_identity_labels(read_string(thread, "to", nil))
+    ]
+    |> List.flatten()
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp required_commercial_thread_labels(_thread), do: []
+
+  defp body_mentions_coverage_item?(body, labels) when is_binary(body) and is_list(labels) do
+    normalized_body = normalize_match_text(body)
+
+    labels
+    |> Enum.uniq()
+    |> Enum.any?(&coverage_label_present?(normalized_body, &1))
+  end
+
+  defp body_mentions_coverage_item?(_body, _labels), do: false
+
+  defp coverage_label_present?(normalized_body, label)
+       when is_binary(normalized_body) and is_binary(label) do
+    normalized_label = normalize_match_text(label)
+    words = important_words(label)
+
+    cond do
+      blank?(normalized_label) ->
+        false
+
+      String.length(normalized_label) >= 6 and String.contains?(normalized_body, normalized_label) ->
+        true
+
+      length(words) >= 2 ->
+        Enum.count(words, &String.contains?(normalized_body, &1)) >= 2
+
+      match?([_word], words) ->
+        [word] = words
+        String.contains?(normalized_body, word)
+
+      true ->
+        false
+    end
+  end
+
+  defp coverage_label_present?(_normalized_body, _label), do: false
+
+  defp coverage_label_values(value) when is_binary(value), do: [value]
+
+  defp coverage_label_values(value) when is_map(value) do
+    nested =
+      ["person", "organization", "company", "account", "profile"]
+      |> Enum.flat_map(fn key -> coverage_label_values(read_any(value, key)) end)
+
+    direct =
+      [
+        "display_name",
+        "name",
+        "email",
+        "company",
+        "organization",
+        "domain",
+        "title",
+        "summary",
+        "relationship",
+        "notes"
+      ]
+      |> Enum.map(&read_string(value, &1, nil))
+
+    direct ++ nested
+  end
+
+  defp coverage_label_values(value) when is_list(value),
+    do: Enum.flat_map(value, &coverage_label_values/1)
+
+  defp coverage_label_values(_value), do: []
+
+  defp email_identity_labels(nil), do: []
+
+  defp email_identity_labels(value) when is_binary(value) do
+    value
+    |> String.split(",", trim: true)
+    |> Enum.flat_map(fn part ->
+      display =
+        part
+        |> String.replace(~r/<[^>]+>/, "")
+        |> String.trim()
+
+      cond do
+        display != "" and not String.contains?(display, "@") ->
+          [display]
+
+        true ->
+          ~r/@([A-Za-z0-9.-]+)/
+          |> Regex.scan(part)
+          |> Enum.map(fn [_match, domain] -> domain_label(domain) end)
+      end
+    end)
+  end
+
+  defp email_identity_labels(_value), do: []
+
+  defp domain_label(domain) when is_binary(domain) do
+    domain
+    |> String.split(".")
+    |> Enum.reject(&(&1 in ["com", "co", "io", "ai", "net", "org"]))
+    |> Enum.join(" ")
+  end
+
+  defp required_commercial_thread_line(thread) when is_map(thread) do
+    subject = read_string(thread, "subject", "Commercial thread")
+    from = read_string(thread, "from", nil)
+    ask = read_string(thread, "body", nil) || read_string(thread, "snippet", nil)
+
+    [
+      "- **#{subject}**",
+      from && "from #{from}",
+      ask && "- have guidance ready on: #{truncate_prompt_string(ask, 220)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp required_commercial_thread_line(_thread), do: nil
 
   defp has_any_key?(map, keys) when is_map(map) and is_list(keys) do
     Enum.any?(keys, fn key ->

@@ -564,6 +564,66 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Pydantic failed payment"
   end
 
+  test "quality verifier patches dropped required meetings and commercial threads" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "One generic priority.",
+      "body" => "## Needs Your Attention\n- Clear the generic inbox first.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dawn Nguyen",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dawn Nguyen", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dawn Nguyen",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "commercial_coverage" => %{
+        "required_threads" => [
+          %{
+            "subject" => "Cogniate Enterprise plan discussion",
+            "from" => "Charlie Feng <charlie@runner.now>",
+            "to" => "Kent Fenwick <kent@runner.now>",
+            "body" =>
+              "Charlie looped Kent into Cogniate's Enterprise plan discussion for pricing guidance."
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert "missing_required_commercial_threads" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert "required_external_meetings_are_covered" in verification["criteria"]
+    assert "required_commercial_threads_are_covered" in verification["criteria"]
+
+    assert revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "Dawn Nguyen"
+    assert revised["body"] =~ "12:00 PM PT"
+    assert revised["body"] =~ "Runner enterprise design partner"
+    assert revised["body"] =~ "## Decisions / Follow-ups"
+    assert revised["body"] =~ "Cogniate Enterprise plan discussion"
+    assert revised["body"] =~ "Charlie Feng"
+  end
+
   test "quality verifier uses chief-of-staff copy when adding a generic attention section" do
     brief = %{
       "title" => "Morning briefing",
