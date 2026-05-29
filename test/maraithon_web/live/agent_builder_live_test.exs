@@ -85,12 +85,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff"
+      assert html =~ "operators who want broader follow-through coverage"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
       assert html =~ "Resolve the highlighted blockers before launch."
+      refute html =~ "founders who want"
     end
 
     test "shows blockers when AI Chief of Staff permissions are missing", %{conn: conn} do
@@ -104,12 +106,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Chief of Staff"
+      assert html =~ "operators who want one proactive operating layer"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
+      refute html =~ "founders who want"
     end
 
     test "shows blockers when github product planner permissions are missing", %{conn: conn} do

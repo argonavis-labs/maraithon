@@ -281,7 +281,7 @@ defmodule Maraithon.OnboardingProof do
     Goal:
     Using ONLY the recent connected activity below, return up to 3 examples of
     things Maraithon would have caught this week. These should feel immediately
-    valuable to a founder or operator after connecting Gmail, Calendar, and Slack.
+    valuable to an executive or operator after connecting Gmail, Calendar, and Slack.
 
     Prioritize:
     - unanswered replies and unresolved follow-up in Gmail

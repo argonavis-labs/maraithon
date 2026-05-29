@@ -366,7 +366,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Use this when you want the Chief of Staff operating layer for follow-through and recurring briefs without the travel skill pack.",
         "Use focused review depth so the automation escalates only the strongest unresolved commitments.",
-        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per founder workflow.",
+        "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions.",
         "Set `timezone_offset_hours` to match the operator’s working day so morning and end-of-day briefs land at the right time."

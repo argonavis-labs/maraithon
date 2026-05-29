@@ -3,6 +3,39 @@ defmodule Maraithon.OnboardingProofTest do
 
   alias Maraithon.OnboardingProof
 
+  test "frames onboarding preview value for executives and operators" do
+    parent = self()
+
+    llm_complete = fn prompt ->
+      send(parent, {:onboarding_prompt, prompt})
+      {:ok, "[]"}
+    end
+
+    assert {:ok, _preview} =
+             OnboardingProof.preview("user@example.com",
+               sources: [
+                 %{
+                   "source" => "gmail",
+                   "label" => "Gmail",
+                   "account_label" => "exec@example.com",
+                   "items" => %{
+                     "inbox" => [
+                       %{
+                         "subject" => "Deck follow-up",
+                         "snippet" => "Can you send the deck today?"
+                       }
+                     ]
+                   }
+                 }
+               ],
+               llm_complete: llm_complete
+             )
+
+    assert_receive {:onboarding_prompt, prompt}
+    assert prompt =~ "valuable to an executive or operator"
+    refute prompt =~ "valuable to a founder or operator"
+  end
+
   test "normalizes up to three preview items from the llm response" do
     sources = [
       %{

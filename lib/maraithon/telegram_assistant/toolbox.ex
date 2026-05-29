@@ -41,7 +41,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   @automation_behavior_labels %{
     "ai_chief_of_staff" => "Chief of Staff",
     "codebase_advisor" => "Codebase Advisor",
-    "founder_followthrough_agent" => "Founder Follow-Through",
+    "founder_followthrough_agent" => "Chief of Staff",
     "github_product_planner" => "GitHub Product Planner",
     "inbox_calendar_advisor" => "Inbox and Calendar Advisor",
     "personal_assistant_agent" => "Personal Assistant",

@@ -1807,7 +1807,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("ai_chief_of_staff", "thorough"),
     do:
-      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for founders who want one proactive operating layer."
+      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for operators who want one proactive operating layer."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
     do: "Tighter Gmail, Calendar, and Slack scans so only the clearest commitments interrupt you."
@@ -1818,7 +1818,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
-      "Deeper cross-channel scans, a lower interruption bar, and more budget for founders who want broader follow-through coverage."
+      "Deeper cross-channel scans, a lower interruption bar, and more budget for operators who want broader follow-through coverage."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
     do: "Smaller channel and DM scans with fewer interrupts and the lowest recurring cost."

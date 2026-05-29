@@ -1,6 +1,6 @@
 defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   @moduledoc """
-  Founder follow-through accountability behavior focused on Gmail + Calendar context.
+  Executive follow-through accountability behavior focused on Gmail + Calendar context.
 
   Produces actionable unresolved commitments such as:
   - explicit promises made in sent email
@@ -2545,7 +2545,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     user_memory_json = Jason.encode!(feedback_context[:user_memory_profile] || %{})
 
     """
-    You are a founder accountability assistant for Gmail + Calendar follow-through.
+    You are an executive chief-of-staff assistant for Gmail + Calendar follow-through.
     Current time: #{DateTime.to_iso8601(timestamp)}
 
     Telegram threshold profile JSON:
@@ -2565,7 +2565,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     Task:
     - Your first job is disqualification, not escalation.
-    - Keep only unresolved commitments that either need direct founder action now or should stay monitored as a high-signal tracked thread.
+    - Keep only unresolved commitments that either need direct operator action now or should stay monitored as a high-signal tracked thread.
     - Prioritize explicit promises, missed replies, and post-meeting follow-ups after disqualifying weak candidates.
     - Apply a reasoning-first decision, not keyword heuristics:
       1. Is there a real human counterparty?
@@ -2577,7 +2577,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Drop low-confidence or ambiguous items.
     - Strongly down-rank or exclude automated transactional receipts and notifications
       (payment confirmations, invoices, password resets, marketing/autonotifications)
-      unless there is a clear human ask or explicit founder commitment that is still open.
+      unless there is a clear human ask or explicit operator commitment that is still open.
     - Strongly down-rank or exclude unsolicited sales outreach, recruiting pitches, and networking pitches.
     - A real human sender does not imply a reply owed.
     - If the only positive evidence is "a real person followed up", Gmail labels, or unread state, omit the item.
@@ -2625,7 +2625,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       enough context.
     - Include why the person matters when known: company, relationship, project,
       or why they are waiting.
-    - Include draft-ready context for founder response actions:
+    - Include draft-ready context for operator response actions:
       missing_inputs, suggested_reply_points, draft_plan
     - Write draft_plan as an instruction for drafting in the operator's first-person voice.
     - Keep or refine each item's structured record fields:
@@ -2650,7 +2650,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Set actionability to exactly "actionable" for every returned item.
     - Set human_counterparty and missing_followthrough_evidence to true for every returned item.
     - Set attention_mode to exactly "act_now" or "monitor".
-    - Set interrupt_now to true only when attention_mode is "act_now" and the conversation still clearly needs immediate founder interruption.
+    - Set interrupt_now to true only when attention_mode is "act_now" and the conversation still clearly needs immediate operator interruption.
     - Keep notification_posture as "interrupt_now", "heads_up", or "insufficient_context".
     - Set reply_obligation to true only when there is a real outstanding obligation.
     - Set importance to "important" only for items that should persist as open insights.
@@ -2785,7 +2785,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         not explicit_user_commitment
       )
       |> maybe_append(
-        "Only generic deadline cues were found without a direct ask or prior founder involvement.",
+        "Only generic deadline cues were found without a direct ask or prior operator involvement.",
         deadline_matches != [] and not founder_signal?
       )
       |> Enum.take(@max_evidence_points)

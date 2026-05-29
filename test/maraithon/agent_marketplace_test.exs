@@ -8,6 +8,14 @@ defmodule Maraithon.AgentMarketplaceTest do
   alias Maraithon.ConnectedAccounts
 
   describe "builtin_manifest/1" do
+    test "keeps Chief of Staff setup copy executive-neutral" do
+      spec = AgentBuilder.behavior_spec("inbox_calendar_advisor")
+      suggestions = Enum.join(spec.suggestions, " ")
+
+      assert suggestions =~ "one workspace per executive workflow"
+      refute suggestions =~ "founder workflow"
+    end
+
     test "wraps built-in agents in the manifest harness" do
       spec = Enum.find(AgentBuilder.library_specs(), &(&1.id == "ai_chief_of_staff"))
 

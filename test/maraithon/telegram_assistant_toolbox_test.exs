@@ -593,6 +593,13 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
         config: %{"name" => "Kent's Gmail agent", "prompt" => "Track replies."}
       })
 
+    {:ok, legacy_followthrough_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{}
+      })
+
     runtime_context = toolbox_run_context(user_id)
 
     assert {:ok, delete} =
@@ -609,6 +616,20 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert delete.message =~ "Reply `yes` or use the buttons to delete it"
     refute delete.preview_text =~ "runtime"
     refute delete.preview_text =~ "behavior"
+
+    assert {:ok, legacy_delete} =
+             Toolbox.execute(
+               "prepare_agent_action",
+               %{"action" => "delete", "agent_id" => legacy_followthrough_agent.id},
+               runtime_context
+             )
+
+    assert legacy_delete.preview_text ==
+             "Delete the \"Chief of Staff\" automation. " <>
+               "This removes its saved setup and history."
+
+    refute legacy_delete.preview_text =~ "Founder"
+    refute legacy_delete.preview_text =~ "founder_followthrough_agent"
 
     assert {:ok, create} =
              Toolbox.execute(

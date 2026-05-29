@@ -84,12 +84,20 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert prompt =~ "automated transactional receipts"
       assert prompt =~ "Uber Eats"
       assert prompt =~ "false_positive_risk"
+      assert prompt =~ "executive chief-of-staff assistant"
+      assert prompt =~ "direct operator action now"
+      assert prompt =~ "operator response actions"
       assert prompt =~ "A real human sender does not imply a reply owed"
       assert prompt =~ "evidence_for_reply_owed"
       assert prompt =~ "evidence_against_reply_owed"
       assert prompt =~ "unsolicited sales outreach"
       assert prompt =~ "Return at most 5 items"
       assert prompt =~ "Keep every string field to one short sentence"
+      refute prompt =~ "founder accountability assistant"
+      refute prompt =~ "direct founder action"
+      refute prompt =~ "founder response actions"
+      refute prompt =~ "founder interruption"
+      refute prompt =~ "founder commitment"
     end
 
     test "bounds advisor triage prompts before the llm call", %{context: context} do
