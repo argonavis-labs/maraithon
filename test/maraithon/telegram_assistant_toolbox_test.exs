@@ -260,11 +260,51 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.explanation.id == action.id
     assert result.explanation.model_summary == "The todo was due today."
     assert result.message =~ "The todo was due today."
-    assert result.message =~ "No source health issues were found for this check."
+    assert result.message =~ "Connected sources looked current for this check."
     assert [%{provider: "telegram", status: "fresh"}] = result.source_freshness
     assert result.explanation.source_evidence["authorization"] == "<redacted>"
+    refute result.message =~ "No policy reason"
+    refute result.message =~ "Policy reason"
     refute result.message =~ "freshness snapshot"
     refute result.message =~ "marked stale"
+  end
+
+  test "explain_action_ledger explains guardrails without raw reason codes" do
+    user_id = "toolbox-explain-guardrail-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "12345"})
+
+    {:ok, action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "tool.needs_confirmation",
+        status: "needs_confirmation",
+        policy_decision: %{
+          "status" => "needs_confirmation",
+          "reason_code" => "confirmation_required",
+          "message" => "Confirm this action before Maraithon continues."
+        },
+        model_summary: "Maraithon prepared a reply but did not send it."
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "explain_action_ledger",
+               %{"action_id" => action.id},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.message =~ "Maraithon prepared a reply but did not send it."
+
+    assert result.message =~
+             "This stopped for your confirmation before anything was sent or changed."
+
+    assert result.message =~ "Connected sources looked current for this check."
+    refute result.message =~ "Policy reason"
+    refute result.message =~ "confirmation_required"
   end
 
   test "explain_action_ledger describes source health in user language" do
@@ -294,7 +334,11 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              )
 
     assert [%{provider: "google", status: "stale"}] = result.source_freshness
-    assert result.message =~ "Source health issues: work@example.com is out of date."
+
+    assert result.message =~
+             "I could not fully verify every source before that action: work@example.com was out of date."
+
+    refute result.message =~ "Source health issues"
     refute result.message =~ "freshness snapshot"
     refute result.message =~ "stale"
   end

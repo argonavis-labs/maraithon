@@ -2368,30 +2368,70 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         explanation.message ||
         "I found the ledger entry, but it did not include a model summary."
 
-    source_health_line =
-      freshness
-      |> source_health_line()
-
-    basis =
-      case explanation.reason_code do
-        nil -> "No policy reason was recorded."
-        reason -> "Policy reason: #{reason}."
-      end
-
-    "#{summary} #{basis} #{source_health_line}"
+    [
+      summary,
+      action_guardrail_line(explanation),
+      source_health_line(freshness)
+    ]
+    |> Enum.reject(&blank_string?/1)
+    |> Enum.join(" ")
   end
+
+  defp action_guardrail_line(%{reason_code: reason_code, message: message})
+       when is_binary(reason_code) and reason_code != "" do
+    guardrail_reason_copy(reason_code, message)
+  end
+
+  defp action_guardrail_line(%{message: message}) when is_binary(message) and message != "" do
+    "Guardrail: #{String.trim(message)}"
+  end
+
+  defp action_guardrail_line(_explanation), do: nil
+
+  defp guardrail_reason_copy("policy_allowed", _message),
+    do: "This passed Maraithon's action guardrails."
+
+  defp guardrail_reason_copy("confirmation_required", _message),
+    do: "This stopped for your confirmation before anything was sent or changed."
+
+  defp guardrail_reason_copy("unknown_tool", _message),
+    do: "The requested action was unavailable, so nothing was changed."
+
+  defp guardrail_reason_copy("missing_tool_name", _message),
+    do: "No action was selected, so nothing was changed."
+
+  defp guardrail_reason_copy("invalid_user_context", _message),
+    do: "Maraithon could not confirm the account, so nothing was changed."
+
+  defp guardrail_reason_copy("invalid_policy_context", _message),
+    do: "Maraithon could not verify the action context, so nothing was changed."
+
+  defp guardrail_reason_copy(reason_code, _message)
+       when reason_code in ["agent_tool_denied", "agent_tool_not_allowed"],
+       do: "That agent was not allowed to take the requested action, so nothing was changed."
+
+  defp guardrail_reason_copy(_reason_code, message) when is_binary(message) and message != "" do
+    "Guardrail: #{String.trim(message)}"
+  end
+
+  defp guardrail_reason_copy(_reason_code, _message),
+    do: "A safety guardrail applied to this action."
 
   defp source_health_line(freshness) when is_list(freshness) do
     freshness
     |> Enum.map(&source_health_issue_copy/1)
     |> Enum.reject(&blank_string?/1)
     |> case do
-      [] -> "No source health issues were found for this check."
-      issues -> "Source health issues: #{Enum.join(issues, ", ")}."
+      [] ->
+        "Connected sources looked current for this check."
+
+      issues ->
+        "I could not fully verify every source before that action: #{Enum.join(issues, ", ")}."
     end
   end
 
-  defp source_health_line(_freshness), do: "No source health issues were found for this check."
+  defp source_health_line(_freshness),
+    do: "I did not have a current source check for this action."
 
   defp source_health_issue_copy(source) when is_map(source) do
     status = source_health_status(source_value(source, :status))
@@ -2421,12 +2461,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp source_health_status(value) when is_atom(value), do: Atom.to_string(value)
   defp source_health_status(_value), do: nil
 
-  defp source_health_status_phrase("stale"), do: "is out of date"
-  defp source_health_status_phrase("reauth_required"), do: "needs reconnecting"
-  defp source_health_status_phrase("error"), do: "needs attention"
-  defp source_health_status_phrase("unknown"), do: "needs a status check"
-  defp source_health_status_phrase("never_synced"), do: "has not synced yet"
-  defp source_health_status_phrase(_status), do: "needs attention"
+  defp source_health_status_phrase("stale"), do: "was out of date"
+  defp source_health_status_phrase("reauth_required"), do: "needed reconnecting"
+  defp source_health_status_phrase("error"), do: "needed attention"
+  defp source_health_status_phrase("unknown"), do: "needed a status check"
+  defp source_health_status_phrase("never_synced"), do: "had not synced yet"
+  defp source_health_status_phrase(_status), do: "needed attention"
 
   defp source_provider_label("google"), do: "Google"
   defp source_provider_label("slack"), do: "Slack"
