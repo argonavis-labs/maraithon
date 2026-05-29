@@ -156,14 +156,15 @@ struct CRMFilteringTests {
         ))
 
         #expect(CRMStatusFilter.atRisk.emptyState(searchText: "", hasAnyPeople: true) == PeopleEmptyState(
-            title: "No relationships need care",
+            title: "No relationship follow-ups flagged",
             systemImage: "person.crop.circle.badge.checkmark",
-            description: "You are clear on follow-ups and relationship check-ins that need attention."
+            description: "People will appear here when a cadence, reply, or relationship check-in needs attention."
         ))
         #expect(!CRMStatusFilter.atRisk.emptyState(searchText: "", hasAnyPeople: true)
             .description
             .localizedCaseInsensitiveContains("stale"))
 
+        #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: true).description == "No saved people match this filter. Reset filters or add the relationship to keep context.")
         #expect(CRMStatusFilter.lead.emptyState(searchText: "", hasAnyPeople: true).title == "No new relationships")
         #expect(CRMStatusFilter.active.emptyState(searchText: "", hasAnyPeople: true).title == "No active relationships")
         #expect(CRMStatusFilter.closed.emptyState(searchText: "", hasAnyPeople: true).title == "No archived people")
@@ -176,5 +177,17 @@ struct CRMFilteringTests {
         #expect(state.title == "No matching people")
         #expect(state.systemImage == "magnifyingglass")
         #expect(state.description == "No relationships needing care match \"board\". Clear search or switch filters.")
+    }
+
+    @Test
+    func emptyStateCopyAvoidsFalseAllClearLanguage() {
+        let copy = CRMStatusFilter.allCases
+            .map { $0.emptyState(searchText: "", hasAnyPeople: true).description }
+            .joined(separator: " ")
+            .lowercased()
+
+        #expect(!copy.contains("nothing"))
+        #expect(!copy.contains("you are clear"))
+        #expect(!copy.contains("all clear"))
     }
 }

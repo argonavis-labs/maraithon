@@ -53,7 +53,7 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
             return PeopleEmptyState(
                 title: "No people found",
                 systemImage: "person.2",
-                description: "Nothing matches the current view."
+                description: "No saved people match this filter. Reset filters or add the relationship to keep context."
             )
         case .lead:
             return PeopleEmptyState(
@@ -69,9 +69,9 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
             )
         case .atRisk:
             return PeopleEmptyState(
-                title: "No relationships need care",
+                title: "No relationship follow-ups flagged",
                 systemImage: "person.crop.circle.badge.checkmark",
-                description: "You are clear on follow-ups and relationship check-ins that need attention."
+                description: "People will appear here when a cadence, reply, or relationship check-in needs attention."
             )
         case .closed:
             return PeopleEmptyState(

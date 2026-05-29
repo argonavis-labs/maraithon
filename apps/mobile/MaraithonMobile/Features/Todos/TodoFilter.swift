@@ -56,13 +56,13 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             return TodoEmptyState(
                 title: "No work found",
                 systemImage: "checklist",
-                description: "Nothing matches the current view."
+                description: "No saved work matches this filter. Reset filters or add the next follow-up."
             )
         case .open:
             return TodoEmptyState(
                 title: "No open work",
                 systemImage: "checklist",
-                description: "Nothing needs action right now. Add a follow-up when something should stay visible."
+                description: "All saved work is completed. Add a follow-up when something should stay visible."
             )
         case .today:
             return TodoEmptyState(
@@ -74,7 +74,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             return TodoEmptyState(
                 title: "No past-due work",
                 systemImage: "clock.badge.checkmark",
-                description: "No past-due commitments need action."
+                description: "No saved work is past due in this list."
             )
         case .upcoming:
             return TodoEmptyState(
