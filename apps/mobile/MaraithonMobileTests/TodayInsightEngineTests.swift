@@ -158,12 +158,13 @@ struct TodayInsightEngineTests {
     }
 
     @Test
-    func briefPrioritizesOverdueWorkThenRelationshipsThenTodayThenChat() {
+    func briefPrioritizesOverdueWorkThenRelationshipsThenTodayThenOpenWorkThenChat() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let overdue = TodoItem(title: "Overdue", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
         let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
+        let open = TodoItem(title: "Undated follow-up")
         let staleActive = CRMContact(
             name: "Ada Chen",
             company: "Northstar",
@@ -194,6 +195,13 @@ struct TodayInsightEngineTests {
         ).destination == .todos(.today))
 
         #expect(TodayInsightEngine.brief(
+            todos: [open],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        ).destination == .todos(.open))
+
+        #expect(TodayInsightEngine.brief(
             todos: [],
             contacts: [],
             now: now,
@@ -206,9 +214,22 @@ struct TodayInsightEngineTests {
         let brief = TodayInsightEngine.brief(todos: [], contacts: [])
 
         #expect(brief.title == "Plan the next move")
-        #expect(brief.subtitle == "No dated work needs action right now. Ask Maraithon for a summary, draft, or prioritization pass.")
+        #expect(brief.subtitle == "No dated, high-priority, or relationship follow-up work is waiting in Today. Ask Maraithon for a summary, draft, or prioritization pass.")
         #expect(brief.actionTitle == "Ask Maraithon")
         #expect(!brief.actionTitle.localizedCaseInsensitiveContains("chief of staff"))
+    }
+
+    @Test
+    func openUndatedWorkGetsATriageBriefBeforeChat() {
+        let open = TodoItem(title: "Send partner recap")
+        let completed = TodoItem(title: "Completed", isCompleted: true)
+
+        let brief = TodayInsightEngine.brief(todos: [completed, open], contacts: [])
+
+        #expect(brief.title == "Triage open work")
+        #expect(brief.subtitle == "1 open work item needs a date, next action, or close decision.")
+        #expect(brief.actionTitle == "Review open work")
+        #expect(brief.destination == .todos(.open))
     }
 
     @Test

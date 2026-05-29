@@ -94,9 +94,19 @@ enum TodayInsightEngine {
             )
         }
 
+        if metrics.openTodos > 0 {
+            return TodayBrief(
+                title: "Triage open work",
+                subtitle: "\(metrics.openTodos) open \(plural("work item", metrics.openTodos)) \(needsVerb(metrics.openTodos)) a date, next action, or close decision.",
+                actionTitle: "Review open work",
+                systemImage: "tray.full",
+                destination: .todos(.open)
+            )
+        }
+
         return TodayBrief(
             title: "Plan the next move",
-            subtitle: "No dated work needs action right now. Ask Maraithon for a summary, draft, or prioritization pass.",
+            subtitle: "No dated, high-priority, or relationship follow-up work is waiting in Today. Ask Maraithon for a summary, draft, or prioritization pass.",
             actionTitle: "Ask Maraithon",
             systemImage: "sparkles",
             destination: .chat

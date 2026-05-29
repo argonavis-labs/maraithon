@@ -273,8 +273,8 @@ enum TodayViewCopy {
     static let peopleSubtitle = "Relationships tracked"
     static let followUpTitle = "Needs follow-up"
     static let followUpSubtitle = "Relationships need attention"
-    static let emptyFocusTitle = "Nothing urgent"
-    static let emptyFocusDescription = "No past-due work or relationship follow-ups need attention."
+    static let emptyFocusTitle = "No focus items surfaced"
+    static let emptyFocusDescription = "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for the rest."
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
 

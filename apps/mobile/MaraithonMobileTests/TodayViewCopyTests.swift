@@ -17,8 +17,8 @@ struct TodayViewCopyTests {
 
     @Test
     func emptyStatesReadLikeExecutiveBriefs() {
-        #expect(TodayViewCopy.emptyFocusTitle == "Nothing urgent")
-        #expect(TodayViewCopy.emptyFocusDescription == "No past-due work or relationship follow-ups need attention.")
+        #expect(TodayViewCopy.emptyFocusTitle == "No focus items surfaced")
+        #expect(TodayViewCopy.emptyFocusDescription == "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for the rest.")
         #expect(TodayViewCopy.emptyRecentChatsTitle == "No recent chats")
         #expect(TodayViewCopy.emptyRecentChatsDescription == "Start a chat when you need a draft, summary, or prioritization pass.")
     }
@@ -32,6 +32,7 @@ struct TodayViewCopyTests {
         #expect(!copy.contains("needs a decision"))
         #expect(!copy.contains("outstanding work"))
         #expect(!copy.contains("stale active relationships"))
+        #expect(!copy.contains("nothing urgent"))
         #expect(!exactCopy.contains("No Recent Chats"))
         #expect(!exactCopy.contains("Nothing Urgent"))
     }
