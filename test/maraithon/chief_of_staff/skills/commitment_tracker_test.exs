@@ -256,7 +256,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute brief.body =~ "Commitment check needs source review"
   end
 
-  test "invalid model output records an explicit error without heuristic todo creation", %{
+  test "invalid model output records a source-backed fallback without heuristic todo creation", %{
     user_id: user_id,
     agent: agent
   } do
@@ -280,10 +280,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     {:effect, {:llm_call, _params}, state} = CommitmentTracker.handle_wakeup(state, context)
 
-    {:emit, {:brief_generation_failed, payload}, _state} =
+    {:emit, {:briefs_recorded, payload}, _state} =
       CommitmentTracker.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
 
-    assert payload.generation_mode == "error"
+    assert payload.generation_mode == "source_fallback"
     assert payload.todo_count == 0
     assert payload.error_message =~ "model_response_invalid"
 
@@ -291,6 +291,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.title == "Commitment check needs source review"
     assert brief.cadence == "commitment_tracker"
     assert brief.error_message =~ "model_response_invalid"
+    assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "No reliable commitment review was available"
     assert brief.body =~ "## Needs Your Attention"
     assert brief.body =~ "## Unknowns"
@@ -308,6 +309,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute brief.body =~ "heuristic"
     refute brief.body =~ "keyword"
     refute brief.body =~ "finish_reason"
+
+    telegram_payload = Briefs.telegram_payload(brief)
+    buttons = telegram_payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Open Maraithon"))
+    refute telegram_payload.text =~ "model_response_invalid"
+    refute telegram_payload.text =~ "finish_reason"
     assert Todos.list_for_user(user_id, limit: 5) == []
   end
 
@@ -384,14 +392,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     {:effect, {:llm_call, _params}, state} = CommitmentTracker.handle_wakeup(state, context)
 
-    {:emit, {:brief_generation_failed, payload}, _state} =
+    {:emit, {:briefs_recorded, payload}, _state} =
       CommitmentTracker.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
 
-    assert payload.generation_mode == "error"
+    assert payload.generation_mode == "source_fallback"
     assert payload.todo_count == 0
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Commitment check: review existing open work"
+    assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "Start with 1 existing open item"
     assert brief.body =~ "Send Jordan the investor update"
     assert brief.body =~ "Next: Reply with the current metrics"
@@ -404,6 +413,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute brief.body =~ "model_response_invalid"
     refute brief.body =~ "structured JSON"
     refute brief.body =~ "finish_reason"
+
+    telegram_payload = Briefs.telegram_payload(brief)
+    buttons = telegram_payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Open Maraithon"))
+    refute telegram_payload.text =~ "model_response_invalid"
 
     [todo] = Todos.list_for_user(user_id, limit: 5)
     assert todo.id == existing_todo.id

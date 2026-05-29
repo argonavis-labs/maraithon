@@ -254,7 +254,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
             period_key = read_string(tracker_input, "date", nil)
 
             event_type =
-              if generation_mode == "llm", do: :briefs_recorded, else: :brief_generation_failed
+              if generation_mode in ["llm", "source_fallback"],
+                do: :briefs_recorded,
+                else: :brief_generation_failed
 
             {:emit,
              {event_type,
@@ -528,7 +530,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> Enum.reject(&is_nil/1)
       |> Enum.join(": ")
 
-    {fallback_commitment_report(tracker_input), "error", error_message}
+    {fallback_commitment_report(tracker_input), "source_fallback", error_message}
   end
 
   defp fallback_commitment_report(tracker_input) when is_map(tracker_input) do
