@@ -12,5 +12,5 @@ enum FullDiskAccessCopy {
     static let grantedStatus = "Full Disk Access granted"
     static let autoAdvanceStatus = "Granted, continuing..."
     static let waitingStatus = "Waiting for Full Disk Access..."
-    static let unblockFollowUp = "After enabling access, return to Maraithon. The status updates automatically; use Check again if this page does not refresh."
+    static let unblockFollowUp = "One Full Disk Access grant unlocks iMessage, Notes, and Voice Memos. After enabling Maraithon, return here; Check again rechecks every blocked local source."
 }

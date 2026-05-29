@@ -55,8 +55,8 @@ struct SourcePermissionHint: Equatable {
             )
         case "imessage_full_disk_access_required":
             return SourcePermissionHint(
-                title: "Messages access needed",
-                body: "Maraithon needs Full Disk Access to read your local Messages database. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                title: "iMessage access needed",
+                body: "Maraithon needs Full Disk Access to read your local iMessage history on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true
@@ -64,7 +64,7 @@ struct SourcePermissionHint: Equatable {
         case "notes_full_disk_access_required":
             return SourcePermissionHint(
                 title: "Notes access needed",
-                body: "Maraithon needs Full Disk Access to read your local Notes database. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                body: "Maraithon needs Full Disk Access to read your local Notes on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true
@@ -86,7 +86,7 @@ struct SourcePermissionHint: Equatable {
         case "voice_memos_full_disk_access_required":
             return SourcePermissionHint(
                 title: "Voice Memos access needed",
-                body: "Maraithon needs Full Disk Access to read your local Voice Memos database and audio files. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                body: "Maraithon needs Full Disk Access to read your local Voice Memos and audio files on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true

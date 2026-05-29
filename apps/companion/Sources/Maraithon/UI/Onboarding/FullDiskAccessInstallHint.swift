@@ -24,7 +24,7 @@ enum FullDiskAccessInstallHint {
             return nil
         }
 
-        return "This is a temporary development build. Full Disk Access is tied to the exact app copy in System Settings, so it can disappear after reloads. Launch \(stableDevelopmentAppDisplayPath) with make run-companion, then grant that app once."
+        return "This is a temporary development build. Full Disk Access is tied to the exact app copy in System Settings, so it can disappear after reloads. Run make run-companion to launch \(stableDevelopmentAppDisplayPath), then grant that app once."
     }
 
     static func isTemporaryDevelopmentLocation(
@@ -47,8 +47,6 @@ enum FullDiskAccessInstallHint {
             return false
         }
 
-        return path.contains("/DerivedData/")
-            || path.contains("/.build/")
-            || !path.hasSuffix(".app")
+        return true
     }
 }

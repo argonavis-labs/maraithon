@@ -83,8 +83,10 @@ struct SourceUnblockView: View {
         if env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
            FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
+            env.sources.syncFullDiskAccessBlockedSources()
+        } else {
+            env.sources.syncNow(id: sourceID)
         }
-        env.sources.syncNow(id: sourceID)
     }
 
     private var fullDiskAccessInstallHint: String? {

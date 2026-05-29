@@ -22,8 +22,12 @@ final class FullDiskAccessCopyTests: XCTestCase {
     }
 
     func testUnblockFollowUpDoesNotRequireARestart() {
-        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("updates automatically"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("One Full Disk Access grant"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("iMessage"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Notes"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Voice Memos"))
         XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Check again"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("every blocked local source"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("quit"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("reopen"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("restart"))
@@ -42,6 +46,16 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertTrue(message?.contains("temporary development build") == true)
         XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
         XCTAssertTrue(message?.contains("make run-companion") == true)
+    }
+
+    func testInstallHintFlagsRepoLocalAppBundles() {
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = URL(
+            fileURLWithPath: "/Users/operator/bliss/maraithon/apps/companion/build/Debug/Maraithon.app",
+            isDirectory: true
+        )
+
+        XCTAssertNotNil(FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home))
     }
 
     func testInstallHintFlagsSwiftPMBuilds() {

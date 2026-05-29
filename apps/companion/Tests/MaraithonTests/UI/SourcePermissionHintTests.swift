@@ -37,8 +37,9 @@ final class SourcePermissionHintTests: XCTestCase {
 
     func testMessagesFullDiskAccessReasonHasSettingsDeepLink() {
         let hint = SourcePermissionHint.forReason("imessage_full_disk_access_required")
-        XCTAssertEqual(hint.title, "Messages access needed")
-        XCTAssertTrue(hint.body.contains("Messages database"))
+        XCTAssertEqual(hint.title, "iMessage access needed")
+        XCTAssertTrue(hint.body.contains("iMessage history"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("database"))
         XCTAssertEqual(
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -50,7 +51,8 @@ final class SourcePermissionHintTests: XCTestCase {
     func testNotesFullDiskAccessReasonHasSettingsDeepLink() {
         let hint = SourcePermissionHint.forReason("notes_full_disk_access_required")
         XCTAssertEqual(hint.title, "Notes access needed")
-        XCTAssertTrue(hint.body.contains("Notes database"))
+        XCTAssertTrue(hint.body.contains("local Notes"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("database"))
         XCTAssertEqual(
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"

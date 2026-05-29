@@ -104,6 +104,39 @@ final class SourceRegistry {
         }
     }
 
+    /// Recheck every source currently blocked by macOS Full Disk
+    /// Access. The grant is app-wide, so checking one blocked local
+    /// source should immediately unblock the others instead of making the
+    /// user wait for each source's next polling tick.
+    func syncFullDiskAccessBlockedSources() {
+        let blockedIDs = Set(fullDiskAccessBlockedSources().map(\.id))
+
+        guard !blockedIDs.isEmpty else {
+            eventLog.info("source_registry.sync_fda_blocked_none", source: .system)
+            return
+        }
+
+        eventLog.info(
+            "source_registry.sync_fda_blocked",
+            source: .system,
+            payload: ["count": String(blockedIDs.count)]
+        )
+
+        for source in registered.values where blockedIDs.contains(source.id) {
+            Task { @MainActor in
+                do {
+                    try await source.syncNow()
+                } catch {
+                    eventLog.error(
+                        "source_registry.sync_fda_blocked_failed",
+                        source: .system,
+                        payload: ["id": source.id, "error": String(describing: error)]
+                    )
+                }
+            }
+        }
+    }
+
     func pauseAll() {
         for source in registered.values {
             source.pause()

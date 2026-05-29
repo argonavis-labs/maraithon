@@ -74,8 +74,10 @@ struct RootWindow: View {
 
         if FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
+            env.sources.syncFullDiskAccessBlockedSources()
+        } else {
+            env.sources.syncNow()
         }
-        env.sources.syncNow()
     }
 
     @ViewBuilder
@@ -163,7 +165,7 @@ struct FullDiskAccessRequiredBanner: View {
 
     static func detailText(blockedSourceNames: [String]) -> String {
         let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
-        return "\(subject) cannot sync until Maraithon is enabled in Full Disk Access. Other sources continue to sync."
+        return "\(subject) need one macOS Full Disk Access grant. Enable Maraithon once; other sources continue to sync."
     }
 
     private static func readableList(_ values: [String], fallback: String) -> String {
@@ -203,7 +205,9 @@ struct FullDiskAccessRequiredBanner: View {
     private func checkAgain() {
         if FullDiskAccessProbe.isGranted() {
             env.onboarding.recordFullDiskAccessGranted()
+            env.sources.syncFullDiskAccessBlockedSources()
+        } else {
+            env.sources.syncNow()
         }
-        env.sources.syncNow()
     }
 }
