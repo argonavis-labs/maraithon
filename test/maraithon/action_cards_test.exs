@@ -111,6 +111,19 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "stacktrace"
   end
 
+  test "source health copy humanizes local source names" do
+    card = %{
+      "source_health" => %{
+        "checked_sources" => ["voice_memos", "browser_history", "google_calendar"]
+      }
+    }
+
+    assert ActionCards.source_health_note(card) ==
+             "Checked Voice Memos, Browser History, Google Calendar."
+
+    refute ActionCards.source_health_note(card) =~ "_"
+  end
+
   test "filters model and scoring metadata out of visible card copy", %{user_id: user_id} do
     todo = %Todo{
       id: Ecto.UUID.generate(),

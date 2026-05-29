@@ -10,6 +10,7 @@ defmodule Maraithon.ConnectedAccounts do
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Token
   alias Maraithon.Repo
+  alias Maraithon.SourceLabels
 
   require Logger
 
@@ -512,15 +513,9 @@ defmodule Maraithon.ConnectedAccounts do
   defp reconnect_action_text("disconnected"), do: "was disconnected"
   defp reconnect_action_text(_reason), do: "needs re-authentication"
 
-  defp provider_label("google"), do: "Google"
-  defp provider_label("google:" <> _), do: "Google"
-  defp provider_label("slack"), do: "Slack"
-  defp provider_label("slack:" <> _), do: "Slack"
-  defp provider_label("telegram"), do: "Telegram"
-  defp provider_label("github"), do: "GitHub"
-  defp provider_label("linear"), do: "Linear"
-  defp provider_label("notion"), do: "Notion"
-  defp provider_label(provider) when is_binary(provider), do: provider
+  defp provider_label(provider) when is_binary(provider),
+    do: SourceLabels.label(provider, fallback: "Connector")
+
   defp provider_label(_provider), do: "Connector"
 
   defp account_label(%ConnectedAccount{} = account) do

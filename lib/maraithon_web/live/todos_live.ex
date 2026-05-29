@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
+  alias Maraithon.SourceLabels
   alias Maraithon.Todos
   alias Maraithon.Todos.{PublicMetadata, Todo}
   alias MaraithonWeb.TodoActionCopy
@@ -1029,12 +1030,10 @@ defmodule MaraithonWeb.TodosLive do
   defp todo_source_label("gmail"), do: "Gmail"
   defp todo_source_label("calendar"), do: "Google Calendar"
   defp todo_source_label("google_calendar"), do: "Google Calendar"
-  defp todo_source_label("slack"), do: "Slack"
-  defp todo_source_label("github"), do: "GitHub"
-  defp todo_source_label("telegram"), do: "Telegram"
-  defp todo_source_label("manual"), do: "Added by you"
-  defp todo_source_label("system"), do: "Maraithon"
-  defp todo_source_label(source) when is_binary(source) and source != "", do: label(source)
+
+  defp todo_source_label(source) when is_binary(source) and source != "",
+    do: SourceLabels.label(source)
+
   defp todo_source_label(_source), do: "Maraithon"
 
   defp format_datetime(nil, fallback), do: fallback

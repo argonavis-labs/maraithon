@@ -15,6 +15,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.SourceLabels
   alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.Todos
   alias Maraithon.Todos.UserFacingCopy
@@ -1399,11 +1400,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     end
   end
 
-  defp source_display("gmail"), do: "Gmail"
-  defp source_display("slack"), do: "Slack"
-  defp source_display("calendar"), do: "Calendar"
-  defp source_display("telegram"), do: "Telegram"
-  defp source_display(source) when is_binary(source), do: String.capitalize(source)
+  defp source_display(source) when is_binary(source),
+    do: SourceLabels.label(source, fallback: "connected context")
+
   defp source_display(_source), do: "connected context"
 
   defp build_context(%Insight{}, metadata) do

@@ -8,6 +8,7 @@ defmodule Maraithon.ActionCards do
   """
 
   alias Maraithon.SourceFreshness
+  alias Maraithon.SourceLabels
   alias Maraithon.Todos
   alias Maraithon.Todos.{AttentionRanker, PublicMetadata, SurfaceQuality, Todo, UserFacingCopy}
 
@@ -1070,11 +1071,9 @@ defmodule Maraithon.ActionCards do
     trimmed = String.trim(value)
     lower = String.downcase(trimmed)
 
-    if trimmed == "" or Enum.any?(@unsafe_source_gap_markers, &String.contains?(lower, &1)) do
-      nil
-    else
-      normalize_source(trimmed)
-    end
+    if trimmed == "" or Enum.any?(@unsafe_source_gap_markers, &String.contains?(lower, &1)),
+      do: nil,
+      else: trimmed
   end
 
   defp safe_source_name(_value), do: nil
@@ -1082,11 +1081,7 @@ defmodule Maraithon.ActionCards do
   defp source_label(source) when source in @assistant_sources, do: "Maraithon"
   defp source_label("system"), do: "Maraithon"
   defp source_label("desktop"), do: "Desktop App"
-  defp source_label("gmail"), do: "Gmail"
-  defp source_label("slack"), do: "Slack"
-  defp source_label("calendar"), do: "Calendar"
-  defp source_label("github"), do: "GitHub"
-  defp source_label(source) when is_binary(source), do: String.capitalize(source)
+  defp source_label(source) when is_binary(source), do: SourceLabels.label(source)
   defp source_label(_source), do: "Maraithon"
 
   defp humanize(nil), do: nil

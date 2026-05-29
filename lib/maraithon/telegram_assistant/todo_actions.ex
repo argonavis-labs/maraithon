@@ -6,6 +6,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   alias Maraithon.AppUrl
   alias Maraithon.ActionCards
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.SourceLabels
   alias Maraithon.TelegramAssistant.ActionFailureCopy
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.TelegramResponder
@@ -224,13 +225,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     |> Enum.join("\n")
   end
 
-  defp source_label("gmail"), do: "Gmail"
-  defp source_label("slack"), do: "Slack"
-  defp source_label("github"), do: "GitHub"
-  defp source_label("calendar"), do: "Calendar"
-
   defp source_label(source) when is_binary(source) do
-    if assistant_source?(source), do: nil, else: String.capitalize(source)
+    if assistant_source?(source), do: nil, else: SourceLabels.label(source)
   end
 
   defp source_label(_source), do: "Operator"

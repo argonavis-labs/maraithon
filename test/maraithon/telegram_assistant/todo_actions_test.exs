@@ -172,6 +172,22 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "Kent"
   end
 
+  test "todo card source line humanizes local and namespaced source keys" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "voice_memos",
+      "status" => "open",
+      "title" => "Review launch recording",
+      "summary" => "The recording contains the launch decision.",
+      "next_action" => "Review the launch recording and extract the owner decision."
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "From Voice Memos."
+    refute payload.text =~ "Voice_memos"
+  end
+
   test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do
     install_see_less_model()
 

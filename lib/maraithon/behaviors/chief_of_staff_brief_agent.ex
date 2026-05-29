@@ -13,6 +13,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   alias Maraithon.ChiefOfStaff.AttentionArbiter
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
+  alias Maraithon.SourceLabels
   alias Maraithon.Todos
 
   @default_timezone_offset_hours -5
@@ -1208,8 +1209,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     }
   end
 
-  defp source_label(source),
-    do: source |> normalize_source() |> to_string() |> String.capitalize()
+  defp source_label(source), do: SourceLabels.label(source)
 
   defp normalize_source("google_calendar"), do: "calendar"
   defp normalize_source(other), do: other

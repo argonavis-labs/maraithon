@@ -2,6 +2,7 @@ defmodule MaraithonWeb.ConnectorsController do
   use MaraithonWeb, :controller
 
   alias Maraithon.Connections
+  alias Maraithon.SourceLabels
   alias MaraithonWeb.OperationFailureCopy
 
   @safe_oauth_statuses ~w(connected error)
@@ -154,16 +155,10 @@ defmodule MaraithonWeb.ConnectorsController do
       String.contains?(message, ["{", "}", "=>"])
   end
 
-  defp provider_label("github"), do: "GitHub"
-  defp provider_label("google"), do: "Google"
-  defp provider_label("google:" <> _), do: "Google"
-  defp provider_label("slack"), do: "Slack"
-  defp provider_label("slack:" <> _), do: "Slack"
-  defp provider_label("telegram"), do: "Telegram"
-  defp provider_label("linear"), do: "Linear"
-  defp provider_label("notaui"), do: "Notaui"
-  defp provider_label("notion"), do: "Notion"
-  defp provider_label(provider), do: provider
+  defp provider_label(provider) when is_binary(provider),
+    do: SourceLabels.label(provider, fallback: "Connector")
+
+  defp provider_label(provider), do: to_string(provider)
 
   defp disconnect_provider_key(provider, params) when is_binary(provider) and is_map(params) do
     case Map.get(params, "provider_key") do

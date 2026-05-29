@@ -19,6 +19,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Redaction
   alias Maraithon.Runtime
   alias Maraithon.RunErrorCopy
+  alias Maraithon.SourceLabels
   alias Maraithon.Todos
   alias Maraithon.Todos.PublicMetadata
   alias Maraithon.UserMemory
@@ -3015,14 +3016,10 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp agent_owned_by_current_user?(_socket, _agent_id), do: false
 
-  defp provider_label("google"), do: "Google"
-  defp provider_label("github"), do: "GitHub"
-  defp provider_label("slack"), do: "Slack"
-  defp provider_label("telegram"), do: "Telegram"
-  defp provider_label("calendar"), do: "Calendar"
-  defp provider_label("linear"), do: "Linear"
-  defp provider_label("notion"), do: "Notion"
-  defp provider_label(provider), do: provider
+  defp provider_label(provider) when is_binary(provider),
+    do: SourceLabels.label(provider, fallback: "Connector")
+
+  defp provider_label(provider), do: to_string(provider)
 
   defp memory_summary_label("content_preferences"), do: "Content Preferences"
   defp memory_summary_label("telegram_behavior"), do: "Conversation Style"
@@ -3242,18 +3239,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_source_label("gmail"), do: "Gmail"
   defp insight_source_label("calendar"), do: "Google Calendar"
   defp insight_source_label("google_calendar"), do: "Google Calendar"
-  defp insight_source_label("slack"), do: "Slack"
-  defp insight_source_label("github"), do: "GitHub"
-  defp insight_source_label("telegram"), do: "Telegram"
-  defp insight_source_label("manual"), do: "Added by you"
-  defp insight_source_label("system"), do: "Maraithon"
-
-  defp insight_source_label(source) when is_binary(source) do
-    case normalized_text(source) do
-      nil -> "Maraithon"
-      value -> humanize_text_token(value) || "Maraithon"
-    end
-  end
+  defp insight_source_label(source) when is_binary(source), do: SourceLabels.label(source)
 
   defp insight_source_label(_), do: "Maraithon"
 

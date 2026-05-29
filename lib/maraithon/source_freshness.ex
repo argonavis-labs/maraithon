@@ -14,6 +14,7 @@ defmodule Maraithon.SourceFreshness do
   alias Maraithon.Normalization
   alias Maraithon.Repo
   alias Maraithon.SourceErrorCopy
+  alias Maraithon.SourceLabels
 
   @default_stale_after_hours 24
   @provider_stale_after_hours %{
@@ -396,14 +397,9 @@ defmodule Maraithon.SourceFreshness do
   defp public_provider(provider) when is_binary(provider), do: provider
   defp public_provider(provider), do: to_string(provider)
 
-  defp provider_label("google:" <> _), do: "Google"
-  defp provider_label("slack:" <> _), do: "Slack"
-  defp provider_label("notaui"), do: "Notaui"
-  defp provider_label("notion"), do: "Notion"
-  defp provider_label("github"), do: "GitHub"
-  defp provider_label("linear"), do: "Linear"
-  defp provider_label("telegram"), do: "Telegram"
-  defp provider_label(provider) when is_binary(provider), do: provider
+  defp provider_label(provider) when is_binary(provider),
+    do: SourceLabels.label(provider, fallback: "Source")
+
   defp provider_label(provider), do: to_string(provider)
 
   defp reauth_error?(%{"reason" => reason}) when is_binary(reason) do

@@ -5,6 +5,7 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
+  alias Maraithon.SourceLabels
   alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
   alias MaraithonWeb.ApiErrorCopy
 
@@ -169,13 +170,8 @@ defmodule MaraithonWeb.MobileJSON do
 
   defp source_context(_card), do: nil
 
-  defp source_label("gmail"), do: "Gmail"
-  defp source_label("slack"), do: "Slack"
-  defp source_label("calendar"), do: "Calendar"
-  defp source_label("github"), do: "GitHub"
-
   defp source_label(source) when is_binary(source),
-    do: source |> String.replace("_", " ") |> String.capitalize()
+    do: SourceLabels.label(source, fallback: "Source")
 
   defp source_label(source), do: to_string(source)
 
