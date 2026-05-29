@@ -24,6 +24,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Todos.PublicMetadata
   alias Maraithon.UserMemory
   alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.OAuthFlashCopy
   alias MaraithonWeb.OperationFailureCopy
   alias MaraithonWeb.TodoActionCopy
 
@@ -32,17 +33,6 @@ defmodule MaraithonWeb.DashboardLive do
   @activity_limit 40
   @failure_limit 20
   @safe_oauth_statuses ~w(connected error)
-  @technical_oauth_message_markers [
-    "dbconnection",
-    "ecto.",
-    "http_status",
-    "internal",
-    "oauth_tokens",
-    "postgrex",
-    "stacktrace",
-    "token=",
-    "traceback"
-  ]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -2863,33 +2853,10 @@ defmodule MaraithonWeb.DashboardLive do
   defp maybe_put_oauth_flash(socket, %{"oauth_status" => status, "oauth_message" => message})
        when status in @safe_oauth_statuses and is_binary(message) do
     kind = if status == "connected", do: :info, else: :error
-    put_flash(socket, kind, oauth_flash_message(status, message))
+    put_flash(socket, kind, OAuthFlashCopy.message(status, message))
   end
 
   defp maybe_put_oauth_flash(socket, _params), do: socket
-
-  defp oauth_flash_message("connected", message),
-    do: safe_oauth_flash_message(message, "App connected.")
-
-  defp oauth_flash_message("error", message),
-    do: safe_oauth_flash_message(message, "App connection failed. Try again.")
-
-  defp safe_oauth_flash_message(message, fallback) do
-    trimmed = String.trim(message)
-
-    cond do
-      trimmed == "" -> fallback
-      technical_oauth_message?(trimmed) -> fallback
-      true -> trimmed
-    end
-  end
-
-  defp technical_oauth_message?(message) do
-    lower = String.downcase(message)
-
-    Enum.any?(@technical_oauth_message_markers, &String.contains?(lower, &1)) or
-      String.contains?(message, ["{", "}", "=>"])
-  end
 
   defp connection_return_to(socket) do
     socket.assigns.connection_return_to || "/dashboard"

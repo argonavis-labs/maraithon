@@ -334,7 +334,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
       # Token exchange will fail, but state is valid.
       assert json_response(conn, 400) == %{
                "error" =>
-                 "Google Workspace connection could not be completed. Start the connection again."
+                 "Google Workspace connection could not be completed. Start the connection again from Connected Apps."
              }
     end
   end
@@ -424,7 +424,8 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       # Token exchange will fail, but state is valid.
       assert json_response(conn, 400) == %{
-               "error" => "Slack connection could not be completed. Start the connection again."
+               "error" =>
+                 "Slack connection could not be completed. Start the connection again from Connected Apps."
              }
     end
   end
@@ -514,7 +515,8 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       # Token exchange will fail, but state is valid.
       assert json_response(conn, 400) == %{
-               "error" => "Linear connection could not be completed. Start the connection again."
+               "error" =>
+                 "Linear connection could not be completed. Start the connection again from Connected Apps."
              }
     end
   end
@@ -557,7 +559,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert redirect_url =~ "/connectors?"
       assert redirect_url =~ "oauth_provider=github"
       assert redirect_url =~ "oauth_status=error"
-      assert redirect_url =~ "oauth_message=GitHub+authorization+failed.+Try+again."
+
+      assert redirect_url =~
+               "oauth_message=GitHub+authorization+did+not+finish.+Start+the+connection+again+from+Connected+Apps."
+
       refute redirect_url =~ "github-secret"
       refute redirect_url =~ "server_error"
     end
@@ -1009,9 +1014,10 @@ defmodule MaraithonWeb.OAuthControllerTest do
       response = json_response(conn, 500)
 
       assert response["error"] ==
-               "Linear connected, but Maraithon could not save the connection. Try again."
+               "Linear connected, but Maraithon could not save it. Reconnect from Connected Apps."
 
       refute response["error"] =~ "tokens"
+      refute String.contains?(String.downcase(response["error"]), "try again")
     end
   end
 

@@ -448,7 +448,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
         "/dashboard?oauth_status=error&oauth_message=#{URI.encode_www_form(raw_message)}"
       )
 
-    assert html =~ "App connection failed. Try again."
+    assert html =~ "App connection did not finish. Reopen the connector and complete sign-in."
+    refute_html_contains(html, "try again")
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "oauth_tokens")

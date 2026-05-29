@@ -1165,17 +1165,20 @@ defmodule MaraithonWeb.OAuthController do
     label = provider_display_name(provider)
 
     case oauth_error_reason(error) do
-      "access_denied" -> "#{label} authorization was cancelled."
-      _reason -> "#{label} authorization failed. Try again."
+      "access_denied" ->
+        "#{label} authorization was cancelled."
+
+      _reason ->
+        "#{label} authorization did not finish. Start the connection again from Connected Apps."
     end
   end
 
   defp token_exchange_failed_message(provider) do
-    "#{provider_display_name(provider)} connection could not be completed. Start the connection again."
+    "#{provider_display_name(provider)} connection could not be completed. Start the connection again from Connected Apps."
   end
 
   defp token_storage_failed_message(provider) do
-    "#{provider_display_name(provider)} connected, but Maraithon could not save the connection. Try again."
+    "#{provider_display_name(provider)} connected, but Maraithon could not save it. Reconnect from Connected Apps."
   end
 
   defp oauth_error_details(provider, error) do
@@ -1201,7 +1204,7 @@ defmodule MaraithonWeb.OAuthController do
   end
 
   defp watch_setup_message(service, _reason) do
-    "Could not set up #{String.downcase(watch_service_label(service))} sync. Try again later."
+    "Could not set up #{String.downcase(watch_service_label(service))} sync. Reconnect Google from Connected Apps."
   end
 
   defp watch_service_label("calendar"), do: "Calendar"

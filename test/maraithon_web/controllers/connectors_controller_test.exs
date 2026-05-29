@@ -11,7 +11,8 @@ defmodule MaraithonWeb.ConnectorsControllerTest do
 
     html = html_response(conn, 200)
 
-    assert html =~ "App connection failed. Try again."
+    assert html =~ "App connection did not finish. Reopen the connector and complete sign-in."
+    refute html =~ "try again"
     refute html =~ "DBConnection"
     refute html =~ "token=secret"
     refute html =~ "stacktrace"

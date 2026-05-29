@@ -3,20 +3,10 @@ defmodule MaraithonWeb.ConnectorsController do
 
   alias Maraithon.Connections
   alias Maraithon.SourceLabels
+  alias MaraithonWeb.OAuthFlashCopy
   alias MaraithonWeb.OperationFailureCopy
 
   @safe_oauth_statuses ~w(connected error)
-  @technical_message_markers [
-    "dbconnection",
-    "ecto.",
-    "http_status",
-    "internal",
-    "oauth_tokens",
-    "postgrex",
-    "stacktrace",
-    "token=",
-    "traceback"
-  ]
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
@@ -114,7 +104,7 @@ defmodule MaraithonWeb.ConnectorsController do
   defp maybe_put_oauth_flash(conn, %{"oauth_status" => status, "oauth_message" => message})
        when status in @safe_oauth_statuses and is_binary(message) do
     kind = if status == "connected", do: :info, else: :error
-    put_flash(conn, kind, oauth_flash_message(status, message))
+    put_flash(conn, kind, OAuthFlashCopy.message(status, message))
   end
 
   defp maybe_put_oauth_flash(conn, _params), do: conn
@@ -130,30 +120,6 @@ defmodule MaraithonWeb.ConnectorsController do
   end
 
   defp parse_return_to(_params), do: ~p"/connectors"
-
-  defp oauth_flash_message("connected", message),
-    do: safe_flash_message(message, "App connected.")
-
-  defp oauth_flash_message("error", message) do
-    safe_flash_message(message, "App connection failed. Try again.")
-  end
-
-  defp safe_flash_message(message, fallback) do
-    trimmed = String.trim(message)
-
-    cond do
-      trimmed == "" -> fallback
-      technical_message?(trimmed) -> fallback
-      true -> trimmed
-    end
-  end
-
-  defp technical_message?(message) do
-    lower = String.downcase(message)
-
-    Enum.any?(@technical_message_markers, &String.contains?(lower, &1)) or
-      String.contains?(message, ["{", "}", "=>"])
-  end
 
   defp provider_label(provider) when is_binary(provider),
     do: SourceLabels.label(provider, fallback: "Connector")
