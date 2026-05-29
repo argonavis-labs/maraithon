@@ -249,7 +249,7 @@ defmodule Maraithon.OpenLoops do
   Adds three new observation types backed by local sources:
 
     * `imessage_pending_reply` — non-self iMessages younger than 24h that
-      look like a question or request to Kent. Produces an open loop
+      look like a question or request to the operator. Produces an open loop
       "Reply to <person>".
     * `reminder_due_today` — local reminders due within the next 24h.
     * `voice_memo_unprocessed` — voice memos under 48h old that have

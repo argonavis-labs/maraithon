@@ -135,6 +135,43 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "exact artifact or update"
   end
 
+  test "assistant-sourced cards do not hardcode the operator name" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "chief_of_staff_morning_briefing",
+      "status" => "open",
+      "title" => "Review Runner launch note",
+      "summary" => "The GTM channel needs review before the launch window.",
+      "next_action" => "next: review the launch note and approve or leave edits.",
+      "metadata" => %{
+        "why_now" => "The launch window is today."
+      }
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "<b>Review the launch note and approve or leave edits.</b>"
+    refute payload.text =~ "Kent,"
+    refute payload.text =~ "the user"
+  end
+
+  test "assistant-sourced cards preserve direct you-language without adding a name" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "chief_of_staff_commitment_tracker",
+      "status" => "open",
+      "title" => "Reply to Sarah",
+      "summary" => "Sarah is waiting on the deck.",
+      "next_action" => "You should send Sarah the current deck and call out the two open risks."
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "<b>You should send Sarah the current deck"
+    refute payload.text =~ "Kent,"
+    refute payload.text =~ "Kent"
+  end
+
   test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do
     install_see_less_model()
 

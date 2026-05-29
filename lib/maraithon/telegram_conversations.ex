@@ -432,7 +432,7 @@ defmodule Maraithon.TelegramConversations do
       |> Map.get("historical_summary", "")
 
     prompt = """
-    You are summarizing the older portion of a Telegram chat between Kent and his assistant.
+    You are summarizing the older portion of a Telegram chat between the operator and their assistant.
     Produce a tight 4-6 sentence summary of facts, decisions, and unresolved threads from this transcript.
     Preserve names, dates, and outstanding requests. Do not editorialize. Do not add fluff.
 

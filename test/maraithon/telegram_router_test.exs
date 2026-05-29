@@ -709,8 +709,8 @@ defmodule Maraithon.TelegramRouterTest do
       })
 
     [prompt | _] = Agent.get(:action_draft_prompt_recorder, & &1)
-    assert prompt =~ "Write a concise email reply as Kent"
-    assert prompt =~ "Kent voice guidance JSON"
+    assert prompt =~ "Write a concise email reply in the operator's first-person voice"
+    assert prompt =~ "Operator voice guidance JSON"
     assert prompt =~ "no assistant or Maraithon framing"
     assert prompt =~ "Prefer short, direct, low-apology drafts"
     assert prompt =~ "Operator prefers signal over noise and concise action drafts."

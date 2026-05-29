@@ -1234,13 +1234,13 @@ defmodule Maraithon.InsightNotifications.Actions do
     voice_guidance = operator_voice_guidance(insight.user_id)
 
     """
-    Write a concise email reply as Kent.
+    Write a concise email reply in the operator's first-person voice.
 
     Return ONLY valid JSON:
     {"subject":"...","body":"..."}
 
     Constraints:
-    - Write in Kent's first-person voice, not as Maraithon or an assistant.
+    - Write in the operator's first-person voice, not as Maraithon or an assistant.
     - Be concrete, direct, calm, and brief.
     - Avoid corporate filler, over-apologizing, and vague "circling back" phrasing.
     - Do not use em dashes. Use commas, periods, colons, or parentheses.
@@ -1256,7 +1256,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     Insight JSON:
     #{Jason.encode!(draft_prompt_payload(spec, insight))}
 
-    Kent voice guidance JSON:
+    Operator voice guidance JSON:
     #{Jason.encode!(voice_guidance)}
 
     Draft memory JSON:
@@ -1269,13 +1269,13 @@ defmodule Maraithon.InsightNotifications.Actions do
     voice_guidance = operator_voice_guidance(insight.user_id)
 
     """
-    Write a concise Slack reply as Kent for an unresolved follow-through item.
+    Write a concise Slack reply in the operator's first-person voice for an unresolved follow-through item.
 
     Return ONLY valid JSON:
     {"text":"..."}
 
     Constraints:
-    - Write in Kent's first-person voice, not as Maraithon or an assistant.
+    - Write in the operator's first-person voice, not as Maraithon or an assistant.
     - Be direct, short, calm, and useful.
     - Avoid corporate filler, over-apologizing, and vague status language.
     - Do not use em dashes. Use commas, periods, colons, or parentheses.
@@ -1289,7 +1289,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     Insight JSON:
     #{Jason.encode!(draft_prompt_payload(spec, insight))}
 
-    Kent voice guidance JSON:
+    Operator voice guidance JSON:
     #{Jason.encode!(voice_guidance)}
 
     Draft memory JSON:
@@ -1484,10 +1484,10 @@ defmodule Maraithon.InsightNotifications.Actions do
           "Acknowledge the thread is moving, confirm whether you still own the final loop, and avoid implying nobody responded."
 
         insight.source == "gmail" and read_string(record, "commitment") != nil ->
-          "Reply in-thread as Kent with the actual promise, current status, and timing you can safely stand behind."
+          "Reply in-thread in your voice with the actual promise, current status, and timing you can safely stand behind."
 
         insight.source == "slack" ->
-          "Reply in the Slack thread as Kent with the shortest useful status, next step, and evidence-backed timing."
+          "Reply in the Slack thread in your voice with the shortest useful status, next step, and evidence-backed timing."
 
         true ->
           nil
@@ -1538,14 +1538,14 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp operator_voice_guidance(user_id) do
     %{
       "speaker" => speaker_name(user_id),
-      "write_as" => "Kent in first person",
+      "write_as" => "operator in first person",
       "style_rules" => [
         "short and direct",
         "specific next step over general reassurance",
-        "low-apology unless Kent clearly caused the delay",
+        "low-apology unless the operator clearly caused the delay",
         "no assistant or Maraithon framing",
         "do not invent facts, attachments, completion, or availability",
-        "use a concrete ETA only when evidence or Kent supplied one"
+        "use a concrete ETA only when evidence or the operator supplied one"
       ]
     }
   end
@@ -1637,8 +1637,23 @@ defmodule Maraithon.InsightNotifications.Actions do
       |> Keyword.get(:default_sender_name, speaker_name(user_id))
   end
 
-  defp speaker_name("kent" <> _), do: "Kent"
-  defp speaker_name(_), do: "Kent"
+  defp speaker_name(user_id) when is_binary(user_id) do
+    name =
+      user_id
+      |> String.split("@", parts: 2)
+      |> List.first()
+      |> String.split(~r/[._-]+/)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.map(&String.capitalize/1)
+      |> Enum.join(" ")
+
+    case name do
+      "" -> "the operator"
+      name -> name
+    end
+  end
+
+  defp speaker_name(_), do: "the operator"
 
   defp ensure_insight_preloaded(%Delivery{insight: %Insight{}} = delivery), do: delivery
   defp ensure_insight_preloaded(%Delivery{} = delivery), do: Repo.preload(delivery, :insight)

@@ -293,10 +293,10 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
     case context.topic do
       topic when is_binary(topic) ->
-        "Draft as Kent: reply to #{person} about #{topic} with the actual promise, current status, and timing you can safely stand behind."
+        "Draft in your voice: reply to #{person} about #{topic} with the actual promise, current status, and timing you can safely stand behind."
 
       _ ->
-        "Draft as Kent: open the source thread, confirm the actual ask, then write the shortest useful reply with the next step and evidence-backed timing."
+        "Draft in your voice: open the source thread, confirm the actual ask, then write the shortest useful reply with the next step and evidence-backed timing."
     end
   end
 

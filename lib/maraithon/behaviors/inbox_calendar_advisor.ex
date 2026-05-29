@@ -2627,7 +2627,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       or why they are waiting.
     - Include draft-ready context for founder response actions:
       missing_inputs, suggested_reply_points, draft_plan
-    - Write draft_plan as an instruction for drafting in Kent's first-person voice.
+    - Write draft_plan as an instruction for drafting in the operator's first-person voice.
     - Keep or refine each item's structured record fields:
       commitment, person, source, deadline, status, evidence, next_action
     - Status must remain unresolved for every returned item.
@@ -2635,7 +2635,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       relationship worth remembering. Use `crm_people` as an array of person
       objects and `relationship_memories` as an array of durable memory objects.
       This is how Maraithon learns recurring important people and proxies
-      without requiring Kent to correct each item manually.
+      without requiring the operator to correct each item manually.
 
     Return ONLY valid JSON array. Each item must include:
     dedupe_key, title, summary, recommended_action, priority, confidence,
@@ -3366,21 +3366,21 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp gmail_draft_plan(category, person, conversation_context) do
     case read_string(conversation_context, "notification_posture", "interrupt_now") do
       "heads_up" ->
-        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+        "Draft in your voice: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm your ownership if the evidence supports it."
 
       "insufficient_context" ->
-        "Draft as Kent: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full thread was checked."
+        "Draft in your voice: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full thread was checked."
 
       _ ->
         case category do
           "reply_urgent" ->
-            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
+            "Draft in your voice: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft as Kent: close the loop with #{person || "the recipient"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
+            "Draft in your voice: close the loop with #{person || "the recipient"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
-            "Draft as Kent: be direct, useful, and grounded in the source evidence."
+            "Draft in your voice: be direct, useful, and grounded in the source evidence."
         end
     end
   end

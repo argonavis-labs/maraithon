@@ -1143,21 +1143,21 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_draft_plan(category, person, conversation_context) do
     case read_string(conversation_context, "notification_posture", "interrupt_now") do
       "heads_up" ->
-        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+        "Draft in your voice: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm your ownership if the evidence supports it."
 
       "insufficient_context" ->
-        "Draft as Kent: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full Slack thread was checked."
+        "Draft in your voice: avoid strong claims, ask for or provide the minimum safe next step, and do not imply the full Slack thread was checked."
 
       _ ->
         case category do
           "reply_urgent" ->
-            "Draft as Kent: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
+            "Draft in your voice: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft as Kent: close the Slack loop with #{person || "the thread"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
+            "Draft in your voice: close the Slack loop with #{person || "the thread"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
-            "Draft as Kent: be direct, useful, and grounded in the source evidence."
+            "Draft in your voice: be direct, useful, and grounded in the source evidence."
         end
     end
   end

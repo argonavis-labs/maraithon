@@ -425,7 +425,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "notes": "source evidence and metadata",
              "action_plan": "draft or plan of next action",
              "owner_user_id": null,
-             "owner_label": "Kent or named owner",
+             "owner_label": "null for the main user, or named non-user owner",
              "source_account_label": "email/calendar account when known",
              "source_item_id": "message/thread/event id when known",
              "source_occurred_at": "ISO-8601 datetime when known",
@@ -455,7 +455,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        are explicitly present in the source_access payload.
 
        User-facing copy requirements:
-       - Write directly to Kent as "you"; never write "the user" or
+       - Write directly to the operator as "you"; never write "the user" or
          "User committed".
        - Every todo title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,

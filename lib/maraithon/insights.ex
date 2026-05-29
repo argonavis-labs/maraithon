@@ -431,16 +431,16 @@ defmodule Maraithon.Insights do
   defp draft_plan_for_action(person, source, context) do
     case read_string(context, "notification_posture", "interrupt_now") do
       "heads_up" ->
-        "Draft as Kent: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm Kent's ownership if the evidence supports it."
+        "Draft in your voice: acknowledge that the thread is moving, avoid saying nobody replied, and only confirm your ownership if the evidence supports it."
 
       "insufficient_context" ->
-        "Draft as Kent: avoid strong claims, provide the minimum safe next step, and do not imply the full thread was checked."
+        "Draft in your voice: avoid strong claims, provide the minimum safe next step, and do not imply the full thread was checked."
 
       _ ->
         if String.contains?(source || "", "slack") do
-          "Draft as Kent: close the Slack loop with #{person} by naming the actual promise, current status, and the timing you can safely stand behind."
+          "Draft in your voice: close the Slack loop with #{person} by naming the actual promise, current status, and the timing you can safely stand behind."
         else
-          "Draft as Kent: reply to #{person} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
+          "Draft in your voice: reply to #{person} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
         end
     end
   end

@@ -116,8 +116,8 @@ defmodule Maraithon.Todos.Intelligence do
          child/person from People or memory when possible and write the next_action
          as the concrete thing the user needs to do.
        - Work item title, summary, next_action, notes, and action_plan are user-facing
-         in Telegram and should read like Kent's human chief of staff wrote them.
-         Use `you` or `Kent`, never `the user`. Do not include labels like
+         in Telegram and should read like the operator's human chief of staff wrote them.
+         Use `you`, never `the user` or a hardcoded person name. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
        - Use product language for user-facing fields: say `work item`, `open work`,
@@ -127,7 +127,7 @@ defmodule Maraithon.Todos.Intelligence do
          "confirm artifact status" without the subject. Every person-linked work item
          must say follow up about what, why the person is involved, and what
          concrete reply/draft/action Maraithon can help prepare.
-       - Every person-linked work item needs enough context for Kent to remember why it
+       - Every person-linked work item needs enough context for the operator to remember why it
          matters: company/organization when known, relationship, why the person is
          in the thread, what they want, and what they are waiting on. Put structured
          values in metadata (`company`, `organization`, `relationship_context`,

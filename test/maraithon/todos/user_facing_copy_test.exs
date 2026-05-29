@@ -16,7 +16,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
         "next_action" =>
           "Reply now with owner, ETA, and the exact artifact or update you committed to.",
         "action_plan" =>
-          "Draft as Kent: reply to Alex Müller with the direct answer, owner, next step, and ETA.",
+          "Draft in your voice: reply to Alex Müller with the direct answer, owner, next step, and ETA.",
         "metadata" => %{
           "subject" => "Starteryou UGC Campaigns",
           "to" => "Alex Müller <alex@starteryou.example>",
@@ -38,9 +38,10 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "Reply to Alex Müller about Starteryou UGC Campaigns with the promised update, current status, and the next timing you can safely commit to."
 
     assert attrs["action_plan"] ==
-             "Draft as Kent: reply to Alex Müller about Starteryou UGC Campaigns with the actual promise, current status, and timing you can safely stand behind."
+             "Draft in your voice: reply to Alex Müller about Starteryou UGC Campaigns with the actual promise, current status, and timing you can safely stand behind."
 
     refute attrs["summary"] =~ "User"
+    refute attrs["action_plan"] =~ "Kent"
     refute attrs["summary"] =~ "I found"
   end
 

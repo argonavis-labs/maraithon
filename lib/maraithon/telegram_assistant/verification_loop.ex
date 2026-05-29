@@ -644,7 +644,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     bad_plan = %{
       "decision" => "send_now",
       "assistant_message" => """
-      Kent, several overdue follow-ups need your attention now:
+      Several overdue follow-ups need your attention now:
       • Dan Bourke: Confirm artifact status and give a clear ETA.
       • Matthew Diakonov: Confirm status and book time.
       • Faye Pang: Share update on next steps.
@@ -1179,7 +1179,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       |> require_finding(
         String.contains?(text, "tap Draft Email") and
           String.contains?(text, "approval before sending"),
-        "todo card must proactively suggest an executable draft step while keeping Kent in the approval loop"
+        "todo card must proactively suggest an executable draft step while keeping the operator in the approval loop"
       )
       |> require_finding(
         "Draft Email" in button_labels,
@@ -1187,7 +1187,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         String.contains?(text, "confirm what Michael Berlingo is waiting on"),
-        "todo card must tell Kent how to inspect the ask before replying"
+        "todo card must tell the operator how to inspect the ask before replying"
       )
       |> require_finding(
         not contains_any?(text, ["exact artifact or update", "Reply now with owner, ETA"]),

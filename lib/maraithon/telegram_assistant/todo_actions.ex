@@ -262,13 +262,13 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
     cond do
       blank?(action) ->
-        "Kent, I'd review this."
+        "Review this."
 
       Regex.match?(~r/^(I'd|I would|I can|I'll|Let me|You|We)\b/i, action) ->
-        "Kent, #{lower_first(action)}"
+        ensure_sentence_case(action)
 
       true ->
-        "Kent, I'd #{lower_first(action)}"
+        ensure_sentence_case(action)
     end
   end
 
@@ -288,11 +288,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     )
   end
 
-  defp lower_first(<<first::utf8, rest::binary>>) do
-    String.downcase(<<first::utf8>>) <> rest
+  defp ensure_sentence_case(<<first::utf8, rest::binary>>) do
+    String.upcase(<<first::utf8>>) <> rest
   end
 
-  defp lower_first(value), do: value
+  defp ensure_sentence_case(value), do: value
 
   defp source_link_button(todo) do
     case source_url(todo_metadata(todo)) do

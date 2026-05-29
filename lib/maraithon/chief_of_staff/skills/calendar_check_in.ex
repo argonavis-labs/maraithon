@@ -3,10 +3,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   Proactive calendar check-in skill for the AI Chief of Staff.
 
   A few times during the work day this skill looks for genuine openings in
-  Kent's calendar and, when there is something useful to say, sends a short
+  the operator's calendar and, when there is something useful to say, sends a short
   proactive check-in over Telegram — pointing at the opening and one or two
-  concrete things he could tee up (a todo, prep for an upcoming meeting, a
-  reply he owes).
+  concrete things they could tee up (a todo, prep for an upcoming meeting, a
+  reply they owe).
 
   Opening detection is deterministic interval math over the day's timed
   events; the *decision to interrupt* and the wording are model-backed, so a
@@ -384,12 +384,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   defp check_in_prompt(input_json) do
     """
-    You are Kent's chief of staff, deciding whether to send a short proactive
+    You are the operator's chief of staff, deciding whether to send a short proactive
     check-in over Telegram right now.
 
     It is a work day and the operator has one or more openings in the calendar (see the
     input JSON). Send a check-in only when it would genuinely help: point at a
-    real opening and, when possible, one or two concrete things he could use the
+    real opening and, when possible, one or two concrete things the operator could use the
     time for — a specific open todo, prep for an upcoming meeting, or a reply he
     owes. Hold when the openings are short or fragmented, when there is nothing
     useful to suggest, or when a message would just be noise. A "hold" is a
@@ -427,7 +427,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
         {:idle, cleared}
 
       {:error, reason} ->
-        # A proactive check-in failing should be silent to Kent (no error
+        # A proactive check-in failing should be silent to the operator (no error
         # brief) but visible to us in Logfire.
         _ = Tracing.record_error("calendar_check_in: " <> String.slice(reason, 0, 200))
         Logger.warning("Calendar check-in model synthesis failed", reason: reason)

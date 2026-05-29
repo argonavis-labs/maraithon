@@ -80,7 +80,7 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
                  "dedupe_key" => "verification:renew-passport",
                  "metadata" => %{
                    "life_domain" => "personal",
-                   "why_now" => "Kent asked to add it by Friday.",
+                   "why_now" => "The operator asked to add it by Friday.",
                    "source_evidence" => text,
                    "confidence" => 0.95
                  }
@@ -144,7 +144,7 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
              "display_name" => "Priya Shah",
              "relationship" => "Design partner",
              "preferred_communication_method" => "Slack",
-             "notes" => "Priya Shah is Kent's design partner and prefers Slack.",
+             "notes" => "Priya Shah is the operator's design partner and prefers Slack.",
              "metadata" => %{"verification_source" => "telegram_verification"}
            }}
         ])

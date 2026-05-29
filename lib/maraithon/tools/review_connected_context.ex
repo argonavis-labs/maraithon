@@ -571,7 +571,7 @@ defmodule Maraithon.Tools.ReviewConnectedContext do
       summary: read_value(message, :text_snippet),
       from:
         if(read_value(message, :is_from_me),
-          do: "Kent",
+          do: "You",
           else: read_value(message, :sender_handle)
         ),
       occurred_at: read_value(message, :sent_at),

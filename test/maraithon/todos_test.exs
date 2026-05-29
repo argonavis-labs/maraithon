@@ -79,7 +79,7 @@ defmodule Maraithon.TodosTest do
           "next_action" => "Reply in-thread with the owner and timing.",
           "due_date" => "2026-05-14",
           "notes" => "Customer is waiting on procurement details.",
-          "action_plan" => "Draft as Kent, then confirm the exact ETA before sending.",
+          "action_plan" => "Draft in your voice, then confirm the exact ETA before sending.",
           "action_draft" => %{kind: "gmail_reply", body: "I will confirm the ETA today."},
           "source_account_id" => account.id,
           "metadata" => %{"google_account_email" => "todos@example.com"},
@@ -94,7 +94,7 @@ defmodule Maraithon.TodosTest do
     assert DateTime.to_date(todo.due_at) == ~D[2026-05-14]
     assert todo.summary == "A renewal thread needs a committed owner and ETA."
     assert todo.notes == "Customer is waiting on procurement details."
-    assert todo.action_plan == "Draft as Kent, then confirm the exact ETA before sending."
+    assert todo.action_plan == "Draft in your voice, then confirm the exact ETA before sending."
 
     assert todo.action_draft == %{
              "kind" => "gmail_reply",

@@ -1426,7 +1426,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Keyword.get(last_telegram_message(:callback).opts, :text) == "Marked done"
   end
 
-  test "assistant-origin todo cards speak like Kent's chief of staff" do
+  test "assistant-origin todo cards speak like a chief of staff without hardcoding the operator name" do
     todo = %{
       "id" => Ecto.UUID.generate(),
       "source" => "chief_of_staff_morning_briefing",
@@ -1441,9 +1441,10 @@ defmodule Maraithon.TelegramAssistantTest do
     payload = Maraithon.TelegramAssistant.TodoActions.telegram_payload(todo)
 
     assert payload.text =~
-             "Kent, I'd ask the engineering owner: is it resolved, who owns it, and were any users or customers affected?"
+             "Ask the engineering owner: is it resolved, who owns it, and were any users or customers affected?"
 
     assert payload.text =~ "you need a quick answer"
+    refute payload.text =~ "Kent,"
     refute payload.text =~ "covering current state"
     refute payload.text =~ "From:"
     refute payload.text =~ "Chief_of_staff"

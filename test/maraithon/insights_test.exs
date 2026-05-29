@@ -137,7 +137,7 @@ defmodule Maraithon.InsightsTest do
             "metadata" => %{
               "thread_id" => "thread-billing",
               "subject" => "Billing account past due",
-              "draft_plan" => "Reply as Kent with payment status, owner, and ETA.",
+              "draft_plan" => "Reply in your voice with payment status, owner, and ETA.",
               "google_account_email" => "ops@example.com"
             }
           }
@@ -149,7 +149,7 @@ defmodule Maraithon.InsightsTest do
       assert DateTime.compare(todo.due_at, due_at) == :eq
 
       assert todo.action_plan ==
-               "Draft as Kent: reply to the recipient about Billing account past due with the actual promise, current status, and timing you can safely stand behind."
+               "Draft in your voice: reply to the recipient about Billing account past due with the actual promise, current status, and timing you can safely stand behind."
 
       assert todo.source_account_label == "ops@example.com"
       assert get_in(todo.metadata, ["source_insight_id"]) == insight.id

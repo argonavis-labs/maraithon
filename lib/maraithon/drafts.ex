@@ -100,13 +100,13 @@ defmodule Maraithon.Drafts do
       end
 
     """
-    Create an approval-ready #{channel_label(channel)} draft as Kent.
+    Create an approval-ready #{channel_label(channel)} draft in the operator's first-person voice.
 
     Return ONLY valid JSON:
     #{response_shape}
 
     Hard constraints:
-    - Write as Kent, not as Maraithon or an assistant.
+    - Write as the operator, not as Maraithon or an assistant.
     - Do not use em dashes. Use commas, periods, colons, or parentheses.
     - Do not include AI-ish filler such as "I hope this finds you well", "circling back", "just wanted to", or assistant sign-offs.
     - Use the channel voice profile when relevant, but do not copy sample text verbatim.
