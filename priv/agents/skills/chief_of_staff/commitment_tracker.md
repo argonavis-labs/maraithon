@@ -68,7 +68,7 @@ JSON shape:
       "action_plan": "Find the latest PDF, verify the effective date, then send with a short note asking for approval.",
       "owner_user_id": null,
       "owner_label": null,
-      "source_account_label": "kent@runner.now",
+      "source_account_label": "operator@company.com",
       "source_item_id": "thread-123",
       "source_occurred_at": "2026-05-09T15:30:00Z",
       "dedupe_key": "commitment:gmail:thread-123:send-elena-revised-ambassador-agreement",

@@ -834,7 +834,7 @@ defmodule MaraithonWeb.AgentsLive do
                               type="text"
                               name="launch[subscriptions]"
                               value={@launch["subscriptions"]}
-                              placeholder="github:owner/repo,email:kent"
+                              placeholder="github:owner/repo,email:operator@example.com"
                             />
                           </.field>
 

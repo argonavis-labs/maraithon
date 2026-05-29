@@ -402,7 +402,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[subscriptions]"
                         label="Signals to watch"
                         value={@launch["subscriptions"]}
-                        placeholder="github:owner/repo,email:kent"
+                        placeholder="github:owner/repo,email:operator@example.com"
                         description="Comma-separated source topics. Leave blank if this automation should only react when you message it."
                       />
                     <% end %>

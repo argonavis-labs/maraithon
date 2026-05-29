@@ -158,6 +158,7 @@ defmodule Maraithon.AssistantHarnessTest do
     assert proactive_prompt =~ "Reason over open work, open loops"
     assert proactive_prompt =~ "People relationship context"
     assert proactive_prompt =~ "work item cards from the listed todo_ids"
+    assert proactive_prompt =~ "from the personal calendar"
 
     refute system =~ "control agents"
     refute system =~ "lives in todos, projects, CRM"
@@ -165,6 +166,7 @@ defmodule Maraithon.AssistantHarnessTest do
     refute prompt =~ "Persist actionable work as todos."
     refute prompt =~ "generic CRM labels"
     refute prompt =~ "I don't have Charlie in your CRM"
+    refute proactive_prompt =~ "kent.fenwick"
   end
 
   test "uses chat-tier models for proactive planning requests" do

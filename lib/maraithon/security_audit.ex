@@ -174,7 +174,7 @@ defmodule Maraithon.SecurityAudit do
 
     broad_roots =
       Enum.filter(roots, fn root ->
-        root in ["/", Path.expand("~"), Path.expand("/Users"), Path.expand("/Users/kent")]
+        root in ["/", Path.expand("~"), Path.expand("/Users")]
       end)
 
     maybe_add(findings, broad_roots != [], %{

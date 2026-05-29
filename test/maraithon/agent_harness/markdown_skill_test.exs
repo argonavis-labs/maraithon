@@ -14,6 +14,8 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.name == "Morning Briefing"
     assert "llm.complete" in skill.tools
     assert skill.instructions =~ "Do not list raw marketing email"
+    refute skill.instructions =~ "kent.fenwick"
+    assert skill.instructions =~ "personal or family calendar accounts"
   end
 
   test "loads priv markdown skills through configured runtime priv dir" do

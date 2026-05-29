@@ -672,7 +672,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         contains_all?(message, ["emma", "soccer"]) and
-          contains_any?(message, ["kent.fenwick@gmail.com", "personal", "family"]),
+          contains_any?(message, ["personal", "family", "calendar"]),
         "revised proactive copy must prioritize the personal calendar item with context"
       )
       |> require_finding(
@@ -709,7 +709,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     personal_candidate = %{
       "id" => "candidate-personal",
       "body" =>
-        "Emma Soccer Practice is on kent.fenwick@gmail.com at 6:00 PM. Anything I should help prep or confirm?",
+        "Emma Soccer Practice is on the family calendar at 6:00 PM. Anything I should help prep or confirm?",
       "planning_rank" => 1,
       "attention_profile" => %{
         "bucket" => "personal_family",
@@ -823,7 +823,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         contains_all?(body, ["emma", "soccer"]) and
-          contains_any?(body, ["kent.fenwick@gmail.com", "personal", "family"]),
+          contains_any?(body, ["personal", "family", "calendar"]),
         "morning brief revision must add personal/family calendar context"
       )
       |> require_finding(
@@ -1391,7 +1391,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       dedupe_key: "verify:michael-starteryou",
       tracking_key: "verify:michael-starteryou",
       metadata: %{
-        "account" => "kent@runner.now",
+        "account" => "operator@runner.now",
         "from" => "Michael Berlingo <michael@example.com>",
         "subject" => "Starteryou UGC Campaigns",
         "context_brief" => "No later reply or follow-through was found in the conversation.",
@@ -2086,7 +2086,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
 
     %{
       "summary" => "Emma Soccer Practice",
-      "calendar_name" => "kent.fenwick@gmail.com",
+      "calendar_name" => "Family Calendar",
       "display_start" => "6:00 PM",
       "start" => start_at,
       "attention_profile" => %{"personal_family" => true}
@@ -2289,7 +2289,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           "source" => "calendar",
           "guid" => "#{run_id}:matthew-raue-meeting",
           "local_id" => "#{run_id}:matthew-raue-meeting",
-          "calendar_name" => "kent.fenwick@gmail.com",
+          "calendar_name" => "Family Calendar",
           "calendar_color" => "#2f80ed",
           "title" => "Matthew Raue setup and pricing prep",
           "notes" =>

@@ -14,7 +14,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   @web_timeout_ms 15_000
 
   @internal_terms ~w(
-    agora calendar chief crm gmail google kent maraithon meet reclaim runner slack telegram zoom
+    agora calendar chief crm gmail google maraithon meet reclaim runner slack telegram zoom
   )
 
   @title_stopwords ~w(

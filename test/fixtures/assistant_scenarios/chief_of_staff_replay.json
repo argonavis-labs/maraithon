@@ -79,7 +79,7 @@
         "metadata": {
           "company": "Raue Automation",
           "relationship_context": "automation tools contact",
-          "why_now": "Kent asked to add this with a Friday commitment.",
+          "why_now": "You asked to add this with a Friday commitment.",
           "source_evidence": "Add reply to Matthew about pricing by Friday.",
           "confidence": 0.93,
           "people": [{"display_name": "Matthew Raue", "relationship": "automation tools contact"}]
@@ -129,7 +129,7 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "What matters this weekend?"},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "First: Emma Soccer Practice from kent.fenwick@gmail.com. Then prep next week meetings.",
+      "assistant_message": "First: Emma Soccer Practice from the personal calendar. Then prep next week meetings.",
       "tool_sequence": ["calendar_events_around", "list_todos"]
     },
     "expected": {

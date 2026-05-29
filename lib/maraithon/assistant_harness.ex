@@ -520,7 +520,7 @@ defmodule Maraithon.AssistantHarness do
     - If an item has been sitting for several days and the operator has not acted, assume there may be a reason. Unless it is family/personal, a close relationship, or objectively urgent, either hold it or ask one short confirmation question such as "Is this still important to handle?" instead of calling it urgent.
     - Highest attention order: personal/family commitments; strongest relationships who need something; people actively waiting on a business objective, project, or deliverable; intro requests; meeting requests.
     - Treat `calendar.personal_events` as first-class attention input, not as background context. Same-day or next-day family/personal calendar events, school events, practices, RSVP/reply reminders, travel/logistics, and conflicts should outrank routine work even when they are not represented as saved work items.
-    - If the calendar source/account is useful context, include it briefly, e.g. "from kent.fenwick@gmail.com" or the calendar name. Do not over-explain familiar family events.
+    - If the calendar source/account is useful context, include it briefly, e.g. "from the personal calendar" or the calendar name. Do not over-explain familiar family events.
     - On weekends, personal and family items outrank routine work. Hold non-urgent work unless it protects a close relationship, a real external commitment, or the coming week.
     - Saturday/Sunday are weekly-prep windows. If sending a week-prep nudge, focus on upcoming meetings, unresolved commitments, and prep needed for the next workweek.
     - Use each work item's attention_profile and timestamps as hints, not as a substitute for judgment.
