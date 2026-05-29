@@ -79,6 +79,19 @@ enum MobileErrorCopy {
         return trimmed
     }
 
+    static func assistantRunFailureMessage(for message: String?) -> String {
+        let fallback = "I could not finish that response. Try again, or ask for a narrower check."
+        guard let message else { return fallback }
+
+        let publicMessage = serverMessage(for: message)
+        if publicMessage == "Maraithon could not complete that request. Try again." ||
+            publicMessage == "Could not finish that request. Try again." {
+            return fallback
+        }
+
+        return publicMessage
+    }
+
     private static func message(forURLError error: URLError) -> String {
         switch error.code {
         case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost:

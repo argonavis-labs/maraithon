@@ -6,6 +6,7 @@ enum ChatSyncError: LocalizedError, Equatable {
     case emptyMessage
     case emptyThreadTitle
     case pollingTimedOut
+    case assistantResponseFailed(String?)
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ enum ChatSyncError: LocalizedError, Equatable {
             return "Enter a chat name before saving."
         case .pollingTimedOut:
             return "Maraithon is still working. Pull to refresh this chat in a moment."
+        case .assistantResponseFailed(let message):
+            return MobileErrorCopy.assistantRunFailureMessage(for: message)
         }
     }
 }
@@ -124,6 +127,8 @@ struct ChatSyncService {
 
         try modelContext.save()
 
+        let response: MobileAPIClient.ChatMessageResponse
+
         do {
             let remoteThread = try await ensureRemoteThread(
                 thread,
@@ -131,7 +136,7 @@ struct ChatSyncService {
                 modelContext: modelContext
             )
 
-            let response = try await api.sendChatMessage(
+            response = try await api.sendChatMessage(
                 sessionToken: sessionToken,
                 threadID: remoteThread.id,
                 clientMessageID: clientMessageID,
@@ -149,7 +154,6 @@ struct ChatSyncService {
             }
 
             try modelContext.save()
-            return response.run?.runStatus.isPending == true ? response.run?.id : thread.pendingRunID
         } catch {
             userMessage.deliveryState = .failed
             thread.syncStatus = .failed
@@ -157,6 +161,13 @@ struct ChatSyncService {
             try? modelContext.save()
             throw error
         }
+
+        if let run = response.run,
+           shouldSurfaceRunFailure(run, in: thread) {
+            throw ChatSyncError.assistantResponseFailed(run.error)
+        }
+
+        return response.run?.runStatus.isPending == true ? response.run?.id : thread.pendingRunID
     }
 
     func pollPendingRun(
@@ -176,6 +187,9 @@ struct ChatSyncService {
 
             if !run.runStatus.isPending {
                 try await refreshThread(thread, modelContext: modelContext, sessionStore: sessionStore)
+                if shouldSurfaceRunFailure(run, in: thread) {
+                    throw ChatSyncError.assistantResponseFailed(run.error)
+                }
                 return
             }
 
@@ -420,6 +434,14 @@ struct ChatSyncService {
             thread.pendingRunWorkSummary = nil
         }
         thread.remoteStatusRawValue = run.status
+    }
+
+    private func shouldSurfaceRunFailure(_ run: MobileAPIClient.RemoteChatRun, in thread: ChatThread) -> Bool {
+        guard run.runStatus == .failed else { return false }
+
+        return !thread.messages.contains { message in
+            message.role == .assistant && message.remoteRunID == run.id
+        }
     }
 
     private func optimisticUserMessage(

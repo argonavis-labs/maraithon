@@ -346,6 +346,106 @@ struct ChatSyncServiceTests {
         #expect(localThread.messages.map(\.body) == ["Keep this"])
     }
 
+    @Test
+    func pollPendingRunSurfacesFailedRunWhenNoAssistantMessageArrives() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let remoteThreadID = UUID()
+        let runID = UUID()
+        let localThread = ChatThread(
+            title: "Board prep",
+            remoteID: remoteThreadID,
+            syncStatus: .synced,
+            pendingRunID: runID
+        )
+        context.insert(localThread)
+        try context.save()
+
+        let api = MockChatAPI()
+        api.remoteThreads = [
+            .init(id: remoteThreadID, title: "Board prep", messages: [])
+        ]
+        api.runHandler = { id in
+            MobileAPIClient.RemoteChatRun(
+                id: id,
+                threadID: remoteThreadID,
+                status: ChatRunStatus.failed.rawValue,
+                finishedAt: Date(),
+                error: "DBConnection stacktrace token=secret"
+            )
+        }
+
+        let service = ChatSyncService(api: api)
+
+        do {
+            try await service.pollPendingRun(
+                in: localThread,
+                modelContext: context,
+                sessionStore: signedInSessionStore()
+            )
+            Issue.record("Expected failed assistant run to surface an error")
+        } catch {
+            let copy = MobileErrorCopy.message(for: error)
+            #expect(copy == "I could not finish that response. Try again, or ask for a narrower check.")
+            #expect(!copy.contains("DBConnection"))
+            #expect(!copy.contains("token=secret"))
+        }
+
+        #expect(localThread.pendingRunID == nil)
+    }
+
+    @Test
+    func pollPendingRunDoesNotDuplicateFailedRunAssistantMessage() async throws {
+        let container = try PersistenceController.makeModelContainer(inMemory: true)
+        let context = container.mainContext
+        let remoteThreadID = UUID()
+        let runID = UUID()
+        let assistantMessageID = UUID()
+        let localThread = ChatThread(
+            title: "Board prep",
+            remoteID: remoteThreadID,
+            syncStatus: .synced,
+            pendingRunID: runID
+        )
+        context.insert(localThread)
+        try context.save()
+
+        let api = MockChatAPI()
+        api.remoteThreads = [
+            .init(
+                id: remoteThreadID,
+                title: "Board prep",
+                messages: [
+                    .init(
+                        id: assistantMessageID,
+                        role: ChatRole.assistant.rawValue,
+                        body: "I could not finish that response. Try again, or ask for a narrower check.",
+                        runID: runID
+                    )
+                ]
+            )
+        ]
+        api.runHandler = { id in
+            MobileAPIClient.RemoteChatRun(
+                id: id,
+                threadID: remoteThreadID,
+                status: ChatRunStatus.failed.rawValue,
+                finishedAt: Date(),
+                error: "I could not finish that response. Try again, or ask for a narrower check."
+            )
+        }
+
+        let service = ChatSyncService(api: api)
+        try await service.pollPendingRun(
+            in: localThread,
+            modelContext: context,
+            sessionStore: signedInSessionStore()
+        )
+
+        #expect(localThread.pendingRunID == nil)
+        #expect(localThread.messages.filter { $0.role == .assistant }.count == 1)
+    }
+
     private func signedInSessionStore() -> SessionStore {
         let store = SessionStore(authProvider: TestAuthProvider())
         store.user = AuthenticatedUser(
@@ -369,6 +469,7 @@ private final class MockChatAPI: MobileChatAPI {
     var deletedThreadID: UUID?
     var deletedMessageID: UUID?
     var sendHandler: ((UUID, UUID, String) throws -> MobileAPIClient.ChatMessageResponse)?
+    var runHandler: ((UUID) throws -> MobileAPIClient.RemoteChatRun)?
 
     func listChatThreads(sessionToken: String) async throws -> [MobileAPIClient.RemoteChatThread] {
         remoteThreads
@@ -436,7 +537,11 @@ private final class MockChatAPI: MobileChatAPI {
     }
 
     func getChatRun(sessionToken: String, id: UUID) async throws -> MobileAPIClient.RemoteChatRun {
-        .init(
+        if let runHandler {
+            return try runHandler(id)
+        }
+
+        return MobileAPIClient.RemoteChatRun(
             id: id,
             threadID: createdThreadID,
             status: ChatRunStatus.completed.rawValue,
