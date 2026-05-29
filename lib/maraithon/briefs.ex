@@ -9,6 +9,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.AppUrl
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.Repo
   alias Maraithon.Redaction
   alias Maraithon.TelegramAssistant
@@ -19,7 +20,6 @@ defmodule Maraithon.Briefs do
 
   require Logger
 
-  @terminal_delivery_errors [":missing_chat_id", "missing_chat_id", ":telegram_not_connected"]
   @brief_title_fallback "Chief of staff brief"
   @brief_summary_fallback "A brief is ready for review."
   @brief_body_fallback "Open Maraithon to review the latest follow-through summary."
@@ -123,12 +123,14 @@ defmodule Maraithon.Briefs do
   end
 
   def list_pending(limit \\ 20) when is_integer(limit) and limit > 0 do
+    terminal_delivery_errors = DeliveryErrorCopy.terminal_storage_messages()
+
     Brief
     |> where(
       [b],
       b.status == "pending" or
         (b.status == "failed" and
-           (is_nil(b.error_message) or b.error_message not in ^@terminal_delivery_errors))
+           (is_nil(b.error_message) or b.error_message not in ^terminal_delivery_errors))
     )
     |> order_by([b], asc: b.scheduled_for, asc: b.inserted_at)
     |> limit(^limit)
@@ -219,7 +221,7 @@ defmodule Maraithon.Briefs do
                 brief
                 |> Ecto.Changeset.change(%{
                   status: "failed",
-                  error_message: inspect(reason)
+                  error_message: DeliveryErrorCopy.storage_message(reason)
                 })
                 |> Repo.update()
 

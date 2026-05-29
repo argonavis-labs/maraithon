@@ -8,6 +8,7 @@ defmodule Maraithon.InsightNotifications do
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
@@ -205,7 +206,10 @@ defmodule Maraithon.InsightNotifications do
             )
 
             delivery
-            |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
+            |> Ecto.Changeset.change(%{
+              status: "failed",
+              error_message: DeliveryErrorCopy.storage_message(reason)
+            })
             |> Repo.update()
 
             {:error, reason}

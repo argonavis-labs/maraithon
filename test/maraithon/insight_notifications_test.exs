@@ -1,9 +1,10 @@
 defmodule Maraithon.InsightNotificationsTest do
-  use Maraithon.DataCase, async: true
+  use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications
   alias Maraithon.InsightNotifications.{Delivery, ThresholdProfile}
   alias Maraithon.Insights
@@ -11,12 +12,16 @@ defmodule Maraithon.InsightNotificationsTest do
   alias MaraithonWeb.TelegramLink
 
   setup do
+    original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
+
     Application.put_env(:maraithon, :insights,
       telegram_module: Maraithon.TestSupport.FakeTelegram
     )
 
     on_exit(fn ->
       Application.delete_env(:maraithon, :insights)
+      Application.delete_env(:maraithon, :failing_telegram)
+      Application.put_env(:maraithon, :telegram_assistant, original_assistant)
     end)
 
     user_id = "notify-user@example.com"
@@ -65,6 +70,56 @@ defmodule Maraithon.InsightNotificationsTest do
       assert delivery.status == "sent"
       assert delivery.provider_message_id == "123"
       assert delivery.score >= delivery.threshold
+    end
+
+    test "fallback delivery failures store product-safe copy", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      use_failing_delivery(
+        {:telegram_error, 500, "RuntimeError token=secret stacktrace %{chat_id: 12345}"},
+        telegram_unified_push_enabled: false,
+        proactive_delivery_planner_enabled: false
+      )
+
+      result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+      assert result.failed == 1
+
+      delivery =
+        Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+      assert delivery.status == "failed"
+
+      assert delivery.error_message ==
+               "Telegram is temporarily unavailable. Try again in a minute."
+
+      refute delivery.error_message =~ "token"
+      refute delivery.error_message =~ "stacktrace"
+      refute delivery.error_message =~ "chat_id"
+    end
+
+    test "unified push delivery failures store product-safe copy", %{
+      user_id: user_id,
+      insight: insight
+    } do
+      use_failing_delivery(
+        {:telegram_error, 403, "Forbidden: bot was blocked by the user token=secret"},
+        telegram_full_chat_enabled: true,
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: false
+      )
+
+      result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+      assert result.failed == 1
+
+      delivery =
+        Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+      assert delivery.status == "failed"
+      assert delivery.error_message == DeliveryErrorCopy.storage_message(:telegram_not_connected)
+      assert DeliveryErrorCopy.terminal?(delivery.error_message)
+      refute delivery.error_message =~ "token"
+      refute delivery.error_message =~ "Forbidden"
     end
   end
 
@@ -175,5 +230,21 @@ defmodule Maraithon.InsightNotificationsTest do
       assert Repo.get_by(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram") ==
                nil
     end
+  end
+
+  defp use_failing_delivery(reason, assistant_opts) do
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(:maraithon, :insights,
+      telegram_module: Maraithon.TestSupport.FailingTelegram
+    )
+
+    Application.put_env(:maraithon, :failing_telegram, reason: reason)
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config, assistant_opts)
+    )
   end
 end

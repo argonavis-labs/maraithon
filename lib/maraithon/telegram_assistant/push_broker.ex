@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.InsightNotifications.Actions
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Repo
@@ -66,7 +67,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
 
       {:error, reason} ->
         delivery
-        |> Ecto.Changeset.change(%{status: "failed", error_message: inspect(reason)})
+        |> Ecto.Changeset.change(%{
+          status: "failed",
+          error_message: DeliveryErrorCopy.storage_message(reason)
+        })
         |> Repo.update()
 
         {:error, reason}
@@ -551,7 +555,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
     brief
     |> Ecto.Changeset.change(%{
       status: "failed",
-      error_message: inspect(reason)
+      error_message: DeliveryErrorCopy.storage_message(reason)
     })
     |> Repo.update()
   end

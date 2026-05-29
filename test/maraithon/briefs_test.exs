@@ -6,6 +6,7 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.Briefs
   alias Maraithon.Briefs.Brief
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.DeliveryErrorCopy
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
@@ -37,6 +38,7 @@ defmodule Maraithon.BriefsTest do
 
     on_exit(fn ->
       Application.delete_env(:maraithon, :briefs)
+      Application.delete_env(:maraithon, :failing_telegram)
       Application.put_env(:maraithon, :telegram_assistant, original_assistant)
       Application.put_env(:maraithon, :insights, original_insights)
     end)
@@ -94,6 +96,77 @@ defmodule Maraithon.BriefsTest do
     assert message.text =~ "Morning brief"
     refute message.text =~ "Scheduled for"
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
+  end
+
+  test "fallback delivery failures store product-safe copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    Application.put_env(:maraithon, :briefs,
+      telegram_module: Maraithon.TestSupport.FailingTelegram
+    )
+
+    Application.put_env(:maraithon, :failing_telegram,
+      reason: {:telegram_error, 500, "RuntimeError token=secret stacktrace %{chat_id: 777123}"}
+    )
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief delivery failure",
+               "summary" => "A brief should fail with safe copy.",
+               "body" => "Keep the failure message suitable for product surfaces.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:fallback-delivery-failure"
+             })
+
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.failed == 1
+
+    updated = Repo.get!(Brief, brief.id)
+    assert updated.status == "failed"
+    assert updated.error_message == "Telegram is temporarily unavailable. Try again in a minute."
+    refute updated.error_message =~ "token"
+    refute updated.error_message =~ "stacktrace"
+    refute updated.error_message =~ "chat_id"
+  end
+
+  test "unified delivery stores terminal missing-chat copy and does not retry it", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        telegram_full_chat_enabled: true,
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: false
+      )
+    )
+
+    assert {:ok, _account} = ConnectedAccounts.mark_disconnected(user_id, "telegram")
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief missing chat",
+               "summary" => "A brief cannot send without a linked Telegram chat.",
+               "body" => "The failure should tell the user what to fix.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:unified-missing-chat"
+             })
+
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.failed == 1
+
+    updated = Repo.get!(Brief, brief.id)
+    assert updated.status == "failed"
+    assert updated.error_message == DeliveryErrorCopy.storage_message(:missing_chat_id)
+    assert DeliveryErrorCopy.terminal?(updated.error_message)
+    refute Enum.any?(Briefs.list_pending(10), &(&1.id == updated.id))
   end
 
   test "source-backed fallback briefs keep executive action buttons", %{
