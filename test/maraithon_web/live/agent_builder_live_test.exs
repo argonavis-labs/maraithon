@@ -87,7 +87,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff"
-      assert html =~ "executives who want fewer missed loops"
+      assert html =~ "executives who want fewer missed follow-ups"
       assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
@@ -109,7 +109,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Chief of Staff"
-      assert html =~ "executives who want one proactive operating layer"
+      assert html =~ "executives who want one proactive assistant"
       assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
@@ -266,10 +266,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert html =~ "Action-ready unresolved commitment summaries"
       assert html =~ "clear and still actionable"
+      assert html =~ "Slack commitments that need same-day attention"
       refute html =~ "Actionable unresolved commitment insights scored for urgency and confidence"
       refute html =~ "scored for whether they are worth interrupting you"
       refute html =~ "confidence threshold"
       refute html =~ "high-confidence"
+      refute html =~ "open loops"
+      refute html =~ "highest-signal"
+      refute html =~ "operating layer"
       refute html =~ "Raise `min_confidence`"
       refute html =~ "Interruption bar"
       refute html =~ "Current bar"

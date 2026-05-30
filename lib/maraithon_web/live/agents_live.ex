@@ -1183,7 +1183,7 @@ defmodule MaraithonWeb.AgentsLive do
                           <% end %>
 
                           <%= if @inspection.recent_effects == [] do %>
-                            <p class="text-sm/6 text-zinc-500">No queued work recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No pending automation work right now.</p>
                           <% end %>
                         </div>
                       </div>
@@ -2053,7 +2053,7 @@ defmodule MaraithonWeb.AgentsLive do
     do: "Daily briefings, follow-through, travel, projects, and reminders."
 
   defp agent_row_summary(%{behavior: "founder_followthrough_agent"}),
-    do: "Tracks open loops and reminds you when a commitment needs action."
+    do: "Watches commitments and reminds you when one needs action."
 
   defp agent_row_summary(%{behavior: "inbox_calendar_advisor"}),
     do: "Watches inbox and calendar context for timely follow-up."

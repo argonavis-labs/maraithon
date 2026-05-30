@@ -65,7 +65,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
         provider: "slack",
         service: "channels",
         label: "Slack Channels",
-        description: "Needed to detect explicit promises and open loops in channel context.",
+        description: "Needed to find explicit promises and follow-ups in channel context.",
         required?: true
       },
       %{
@@ -81,7 +81,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
         kind: :provider,
         provider: "telegram",
         label: "Telegram",
-        description: "Needed for the highest-signal follow-through nudges and summaries.",
+        description: "Needed for the most important follow-through nudges and summaries.",
         required?: true
       }
     ]

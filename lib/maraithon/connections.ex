@@ -543,7 +543,7 @@ defmodule Maraithon.Connections do
       provider: "slack",
       label: "Slack",
       description:
-        "Install Maraithon in Slack to track open loops and send replies when you approve them.",
+        "Install Maraithon in Slack to watch commitments and send replies when you approve them.",
       status: status,
       configured?: configured?,
       updated_at: latest_updated_at(tokens),

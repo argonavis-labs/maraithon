@@ -324,6 +324,25 @@ defmodule MaraithonWeb.AgentsLiveTest do
     refute html =~ "OTP Agent Runtime"
   end
 
+  test "selected inspection uses plain empty-state copy for admins" do
+    admin_email = "agents-empty-admin@example.com"
+
+    {:ok, agent} =
+      create_agent(%{
+        user_id: admin_email,
+        behavior: "prompt_agent",
+        config: %{"name" => "empty-inspection", "prompt" => "Inspect me"},
+        status: "stopped"
+      })
+
+    conn = build_conn() |> log_in_admin_user(admin_email)
+
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
+
+    assert html =~ "No pending automation work right now."
+    refute html =~ "No queued work recorded yet."
+  end
+
   test "chief of staff inspection shows attached skills and edits morning briefing time", %{
     conn: conn
   } do

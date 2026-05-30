@@ -68,7 +68,7 @@ defmodule Maraithon.AgentBuilder do
         "Shared preferences that shape notification policy across all built-in skills"
       ],
       outputs: [
-        "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
+        "Unified follow-through insights across inbox, meetings, and Slack",
         "Daily deduped commitment work items from sent mail, inbox asks, calendar context, People, and memory",
         "Travel logistics briefs and updates for upcoming trips",
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
@@ -112,7 +112,7 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "channels",
           label: "Slack Channels",
-          description: "Needed to detect channel commitments and open loops.",
+          description: "Needed to find channel commitments that may need a reply.",
           required?: false
         },
         %{
@@ -120,8 +120,7 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "dms",
           label: "Slack Personal DMs",
-          description:
-            "Needed to detect private unanswered replies and direct follow-through loops.",
+          description: "Needed to detect private unanswered replies and direct follow-ups.",
           required?: false
         },
         %{
@@ -345,7 +344,7 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "channels",
           label: "Slack Channels",
-          description: "Needed to detect explicit promises and open loops in channel context.",
+          description: "Needed to find explicit promises and follow-ups in channel context.",
           required?: true
         },
         %{
@@ -362,13 +361,13 @@ defmodule Maraithon.AgentBuilder do
           provider: "telegram",
           label: "Telegram",
           description:
-            "Needed for daily chief-of-staff briefs and the highest-signal follow-through nudges.",
+            "Needed for daily chief-of-staff briefs and the most important follow-through nudges.",
           required?: true
         }
       ],
       suggestions: [
-        "Use this when you want the Chief of Staff operating layer for follow-through and recurring briefs without the travel skill pack.",
-        "Use focused review depth so the automation escalates only the strongest unresolved commitments.",
+        "Use this when you want one Chief of Staff assistant for follow-through and recurring briefs without the travel skill pack.",
+        "Use focused review depth so the automation surfaces only the clearest unresolved commitments.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Use selective notifications if you want Telegram reserved for the clearest action-ready items.",
@@ -380,7 +379,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Slack Follow-through",
       category: "Workflow",
       summary:
-        "Tracks open loops from Slack channels and DMs, then escalates unresolved commitments that are clear and still actionable.",
+        "Finds Slack commitments and unanswered replies, then surfaces the ones that are clear and still actionable.",
       inputs: [
         "Slack channel and thread messages where commitments or deadlines were explicitly stated",
         "Personal DM and group DM messages that indicate you owe a reply or promised a follow-up",
@@ -389,7 +388,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Action-ready unresolved commitment summaries with urgency, evidence, and a next action",
         "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Telegram-ready nudges for unresolved loops that need same-day attention"
+        "Telegram-ready nudges for Slack commitments that need same-day attention"
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
@@ -420,12 +419,12 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "dms",
           label: "Slack Personal DMs",
-          description: "Needed to scan direct messages and private follow-through loops.",
+          description: "Needed to scan direct messages and private follow-ups.",
           required?: true
         }
       ],
       suggestions: [
-        "Use focused Slack review depth so only the strongest unresolved commitments are escalated.",
+        "Use focused Slack review depth so only the clearest unresolved commitments are surfaced.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
         "Use selective notifications if you want Telegram reserved for explicit Slack commitments."
       ]
@@ -527,7 +526,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Let the planner finish indexing before sending the first planning request.",
-        "Keep plan-writing enabled if you want durable artifacts that can be reviewed outside the UI.",
+        "Keep plan-writing enabled if you want saved plan files that can be reviewed outside the UI.",
         "Short wakeup intervals feel responsive, but they also cause the planner to re-check for work more often."
       ]
     },

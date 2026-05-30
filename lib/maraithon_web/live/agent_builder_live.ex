@@ -1938,7 +1938,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("ai_chief_of_staff", "thorough"),
     do:
-      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for executives who want one proactive operating layer."
+      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for executives who want one proactive assistant."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
     do:
@@ -1950,7 +1950,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
-      "Deeper cross-channel scans and broader follow-through coverage for executives who want fewer missed loops."
+      "Deeper cross-channel scans and broader follow-through coverage for executives who want fewer missed follow-ups."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
     do: "Smaller channel and DM scans with fewer Slack alerts and the lowest recurring cost."
@@ -1961,7 +1961,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("slack_followthrough_agent", "thorough"),
     do:
-      "Broader Slack coverage, faster wakeups, and more budget when Slack is your main operating system."
+      "Broader Slack coverage, faster wakeups, and more budget when Slack is where most team work happens."
 
   defp cost_profile_summary(_behavior, "lean"),
     do: "Lower spend with tighter scans and fewer wakeups."

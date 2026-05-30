@@ -21,7 +21,7 @@ defmodule MaraithonWeb.HowItWorksController do
       %{
         title: "Detect what matters",
         description:
-          "It looks for open loops, owed replies, calendar pressure, family logistics, and relationship context that could affect your day."
+          "It looks for owed replies, commitments, calendar pressure, family logistics, and relationship context that could affect your day."
       },
       %{
         title: "Prepare the brief",
