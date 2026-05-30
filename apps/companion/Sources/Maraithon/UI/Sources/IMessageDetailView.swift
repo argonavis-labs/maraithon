@@ -14,8 +14,7 @@ struct IMessageDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "message",
             syncedItemPlural: "messages",
-            emptyDescription: "After the first iMessage check, this view shows recent message activity and recent checks.",
-            clearDataDescription: "This deletes every message synced from this Mac from Maraithon's synced copy. Messages.app history on your device is not affected."
+            emptyDescription: "After the first iMessage check, this view shows recent message activity and recent checks."
         )
     }
 
@@ -27,6 +26,7 @@ struct IMessageDetailView: View {
         let pub = publisher
         return [
             SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "messages synced"),
+            SourceStat(id: "total", title: SourceDetailCopy.totalSyncedTitle, value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption),
             SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
             SourceStat(id: "not_synced", title: SourceDetailCopy.notSyncedTitle, value: SourceStat.format(pub?.lastBatchFailed), caption: SourceDetailCopy.notSyncedCaption),
             SourceStat(id: "last_sync", title: SourceDetailCopy.lastSyncTitle, value: SourceStat.relative(pub?.lastSyncAt), caption: SourceDetailCopy.lastSyncCaption)
