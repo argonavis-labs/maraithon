@@ -388,7 +388,8 @@ defmodule Maraithon.Connections do
       id: "github",
       provider: "github",
       label: "GitHub",
-      description: "Grant repo and org access so agents can inspect issues and comment back.",
+      description:
+        "Connect repos and organizations so Maraithon can inspect issues and comment when you approve it.",
       status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
@@ -402,7 +403,7 @@ defmodule Maraithon.Connections do
           [
             metadata_value(token, ["login"]) && "@#{metadata_value(token, ["login"])}",
             metadata_value(token, ["email"]),
-            "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+            permission_summary(token_scopes(token), "GitHub")
           ],
           timezone_info
         ),
@@ -502,11 +503,10 @@ defmodule Maraithon.Connections do
         bot_token,
         [
           if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
-          "Bot scopes: #{MapSet.size(bot_scopes)} granted",
-          if(user_tokens != [], do: "Personal Slack access connected for read/write as user."),
+          if(MapSet.size(bot_scopes) > 0, do: "Channel access connected"),
+          if(user_tokens != [], do: "DMs and approved replies are enabled."),
           if(user_tokens == [],
-            do:
-              "Reconnect Slack with user scopes enabled to read private context and send as the user."
+            do: "Reconnect Slack to enable DMs and approved replies."
           )
         ],
         timezone_info
@@ -543,7 +543,7 @@ defmodule Maraithon.Connections do
       provider: "slack",
       label: "Slack",
       description:
-        "Install Maraithon in Slack to track open loops and send replies with user-scoped access.",
+        "Install Maraithon in Slack to track open loops and send replies when you approve them.",
       status: status,
       configured?: configured?,
       updated_at: latest_updated_at(tokens),
@@ -604,7 +604,7 @@ defmodule Maraithon.Connections do
           token,
           [
             if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
-            "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+            permission_summary(token_scopes(token), "Linear")
           ],
           timezone_info
         ),
@@ -959,7 +959,8 @@ defmodule Maraithon.Connections do
       id: "notion",
       provider: "notion",
       label: "Notion",
-      description: "Store a workspace grant now so Notion data can feed future agents and tools.",
+      description:
+        "Connect your Notion workspace so Maraithon can use it as context for future work.",
       status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
@@ -971,9 +972,7 @@ defmodule Maraithon.Connections do
         provider_details(
           token,
           [
-            metadata_value(token, ["workspace_name"]),
-            metadata_value(token, ["workspace_id"]) &&
-              "Workspace ID: #{metadata_value(token, ["workspace_id"])}"
+            metadata_value(token, ["workspace_name"])
           ],
           timezone_info
         ),
@@ -1000,8 +999,7 @@ defmodule Maraithon.Connections do
       id: "notaui",
       provider: "notaui",
       label: "Notaui",
-      description:
-        "Connect your Notaui workspace so Maraithon can read and update tasks over MCP.",
+      description: "Connect your Notaui workspace so Maraithon can read and update tasks.",
       status: provider_status(configured?, token, account),
       configured?: configured?,
       updated_at: token && token.updated_at,
@@ -1087,7 +1085,6 @@ defmodule Maraithon.Connections do
 
     [connected_at | items]
     |> Enum.reject(&is_nil/1)
-    |> Enum.reject(&(&1 == "Scopes: "))
   end
 
   defp telegram_chat_detail(username) when is_binary(username) and username != "",
@@ -1368,20 +1365,20 @@ defmodule Maraithon.Connections do
 
   defp slack_workspace_status_note(:needs_refresh, _bot_token, _user_tokens, token_statuses) do
     if Enum.any?(token_statuses, &(&1 == :needs_refresh)) do
-      "A Slack grant needs re-authentication."
+      "Reconnect Slack so Maraithon can keep reading and posting there."
     else
       "Reconnect Slack to refresh access."
     end
   end
 
   defp slack_workspace_status_note(:partial, nil, _user_tokens, _token_statuses),
-    do: "Bot install is missing. Reconnect Slack to restore channel events."
+    do: "Reconnect Slack so Maraithon can receive channel activity."
 
   defp slack_workspace_status_note(:partial, _bot_token, [], _token_statuses),
-    do: "User access is missing. Reconnect Slack to read DMs and post as you."
+    do: "Reconnect Slack so Maraithon can read DMs and send replies when you approve them."
 
   defp slack_workspace_status_note(:missing_scope, _bot_token, _user_tokens, _token_statuses),
-    do: "Reconnect Slack to grant user chat:write."
+    do: "Reconnect Slack so Maraithon can send replies when you approve them."
 
   defp slack_workspace_status_note(_status, _bot_token, _user_tokens, _token_statuses),
     do: "Healthy"
@@ -1476,13 +1473,13 @@ defmodule Maraithon.Connections do
 
     cond do
       reauth_required_account?(account) and reason == "oauth_missing_refresh_token" ->
-        "No refresh token is stored for this account. Reconnect required."
+        reconnect_account_status_note()
 
       reauth_required_account?(account) ->
-        "Token refresh failed and the account must be re-authenticated."
+        reconnect_account_status_note()
 
       token_expired_without_refresh?(token) ->
-        "Token is expired and cannot be refreshed automatically."
+        reconnect_account_status_note()
 
       true ->
         "Healthy"
@@ -1490,6 +1487,9 @@ defmodule Maraithon.Connections do
   end
 
   defp token_account_status_note(_token, _account_by_provider), do: "Healthy"
+
+  defp reconnect_account_status_note,
+    do: "Reconnect this account so Maraithon can keep syncing in the background."
 
   defp token_or_account_updated_at(%Token{} = token, account_by_provider)
        when is_map(account_by_provider) do
@@ -1612,8 +1612,7 @@ defmodule Maraithon.Connections do
   defp linear_account_label(_token), do: "Linear workspace"
 
   defp notion_account_label(%Token{} = token) do
-    normalize_text(metadata_value(token, ["workspace_name"])) ||
-      normalize_text(metadata_value(token, ["workspace_id"])) || "Notion workspace"
+    normalize_text(metadata_value(token, ["workspace_name"])) || "Notion workspace"
   end
 
   defp notion_account_label(_token), do: "Notion workspace"
@@ -1632,11 +1631,8 @@ defmodule Maraithon.Connections do
       notaui_default_account_detail(token, account),
       notaui_account_count_detail(token, account),
       notaui_discovery_detail(token, account),
-      provider_snapshot_value(account, token, "issuer") &&
-        "Issuer: #{provider_snapshot_value(account, token, "issuer")}",
-      provider_snapshot_value(account, token, "mcp_url") &&
-        "MCP: #{provider_snapshot_value(account, token, "mcp_url")}",
-      "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+      notaui_sync_endpoint_detail(token, account),
+      permission_summary(token_scopes(token), "Notaui")
     ]
   end
 
@@ -1666,6 +1662,20 @@ defmodule Maraithon.Connections do
       "Account discovery needs attention. Reconnect Notaui if account access looks incomplete."
     end
   end
+
+  defp notaui_sync_endpoint_detail(token, account) do
+    if present?(provider_snapshot_value(account, token, "mcp_url")) do
+      "Task sync endpoint connected"
+    end
+  end
+
+  defp permission_summary([], _provider), do: nil
+
+  defp permission_summary(scopes, provider) when is_list(scopes) and is_binary(provider) do
+    "#{length(scopes)} #{provider} #{permission_word(length(scopes))} granted"
+  end
+
+  defp permission_summary(_scopes, _provider), do: nil
 
   defp provider_snapshot_value(account, token, key) when is_binary(key) do
     account_metadata_value(account, key) || metadata_value(token, [key])

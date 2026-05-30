@@ -167,7 +167,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_color(_status), do: "zinc"
 
   def refresh_token_status_label(:active), do: "background access on"
-  def refresh_token_status_label(:inactive), do: "background access off"
+  def refresh_token_status_label(:inactive), do: "reconnect needed"
   def refresh_token_status_label(:missing), do: "reconnect needed"
   def refresh_token_status_label(:not_required), do: "not required"
   def refresh_token_status_label(:not_applicable), do: "not applicable"

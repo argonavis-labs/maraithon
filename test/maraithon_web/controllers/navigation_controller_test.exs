@@ -200,17 +200,24 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "1 account needs attention"
       refute html =~ "Token refresh failed and the account must be re-authenticated."
+      refute html =~ "re-authenticated"
 
       detail_conn = conn |> recycle() |> get("/connectors/google")
       detail_html = html_response(detail_conn, 200)
 
       assert detail_html =~ "Connected Accounts"
       assert detail_html =~ "founder@example.com"
-      assert detail_html =~ "Token refresh failed and the account must be re-authenticated."
-      assert detail_html =~ "background access off"
+
+      assert detail_html =~
+               "Reconnect this account so Maraithon can keep syncing in the background."
+
+      assert detail_html =~ "reconnect needed"
       assert detail_html =~ "Reconnect"
       assert detail_html =~ "Disconnect"
       refute detail_html =~ "Stored Grant"
+      refute detail_html =~ "Token refresh failed"
+      refute detail_html =~ "refresh token"
+      refute detail_html =~ "re-authenticated"
     end
 
     test "GET /connectors/:provider renders provider details", %{conn: conn} do
@@ -263,7 +270,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "@octocat"
+      assert html =~ "1 GitHub permission granted"
       refute html =~ ">Reconnect<"
+      refute html =~ "Scopes:"
       assert html =~ "Disconnect"
     end
 
@@ -286,7 +295,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "Platform"
+      assert html =~ "1 Linear permission granted"
       refute html =~ ">Reconnect<"
+      refute html =~ "Scopes:"
       assert html =~ "Disconnect"
     end
 
@@ -310,6 +321,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connected Accounts"
       assert html =~ "Agora Docs"
       refute html =~ ">Reconnect<"
+      refute html =~ "workspace-123"
       assert html =~ "Disconnect"
     end
 
@@ -345,8 +357,12 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connected Accounts"
       assert html =~ "Default account: Personal"
       assert html =~ "Discovered 2 accessible accounts"
-      assert html =~ "https://api.notaui.com/mcp"
+      assert html =~ "Task sync endpoint connected"
+      assert html =~ "2 Notaui permissions granted"
       refute html =~ ">Reconnect<"
+      refute html =~ "https://api.notaui.com/mcp"
+      refute html =~ "MCP:"
+      refute html =~ "Scopes:"
       assert html =~ "Disconnect"
     end
 

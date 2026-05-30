@@ -27,7 +27,7 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
     assert ConnectorsHTML.connection_status_label(:needs_refresh) == "reconnect needed"
     assert ConnectorsHTML.connection_status_label(:not_configured) == "setup needed"
     assert ConnectorsHTML.refresh_token_status_label(:active) == "background access on"
-    assert ConnectorsHTML.refresh_token_status_label(:inactive) == "background access off"
+    assert ConnectorsHTML.refresh_token_status_label(:inactive) == "reconnect needed"
     assert ConnectorsHTML.refresh_token_status_label(:missing) == "reconnect needed"
   end
 
