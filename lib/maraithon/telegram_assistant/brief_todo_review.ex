@@ -240,7 +240,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   def list_button(%Brief{} = brief) do
     if reviewable?(brief) do
-      %{"text" => "Review Open Work", "callback_data" => callback_data(brief.id, "start")}
+      %{"text" => "Review open work", "callback_data" => callback_data(brief.id, "start")}
     end
   end
 
@@ -249,8 +249,8 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   def brief_buttons(%Brief{} = brief) do
     if reviewable?(brief) do
       [
-        %{"text" => "Review Open Work", "callback_data" => callback_data(brief.id, "start")},
-        %{"text" => "Show List", "callback_data" => callback_data(brief.id, "list")}
+        %{"text" => "Review open work", "callback_data" => callback_data(brief.id, "start")},
+        %{"text" => "Show list", "callback_data" => callback_data(brief.id, "list")}
       ]
     else
       []
@@ -714,7 +714,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     Dismissed: #{length(dismissed)}
     #{still_open}
 
-    Next brief will stay cleaner: done and dismissed work stays out; anything still open can carry forward.
+    Done and dismissed work will stay out of future briefs; anything still open can carry forward.
     """
     |> String.trim()
   end
@@ -788,7 +788,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_list_next_move([todo | _todos]) do
     focus = todo |> todo_list_focus() |> todo_list_sentence() |> safe()
 
-    "#{focus} Then close what is done, keep what still matters, and defer anything that can wait."
+    "#{focus} Then review the list one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
   end
 
   defp todo_list_next_move(_todos), do: "Nothing needs review right now."

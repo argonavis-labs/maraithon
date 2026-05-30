@@ -291,27 +291,42 @@ defmodule Maraithon.Briefs do
     {new_today_count, still_open_count} = todo_digest_counts(brief, todos)
 
     detail_line =
-      cond do
-        new_today_count > 0 and still_open_count > 0 ->
-          "#{new_today_count} new today. #{still_open_count} still open from earlier."
+      case todos do
+        [] ->
+          "No open work needs a decision right now."
 
-        new_today_count > 0 ->
-          "#{new_today_count} new today."
+        _ ->
+          cond do
+            new_today_count > 0 and still_open_count > 0 ->
+              "#{new_today_count} new today. #{still_open_count} carried over from earlier."
 
-        still_open_count > 0 ->
-          "#{still_open_count} still open from earlier."
+            new_today_count > 0 ->
+              "#{new_today_count} new today."
 
-        true ->
-          "Nothing new needs action right now."
+            still_open_count > 0 ->
+              "#{still_open_count} carried over from earlier."
+
+            true ->
+              "No open work needs a decision right now."
+          end
       end
 
-    """
-    #{greeting}
+    if todos == [] do
+      """
+      #{greeting}
 
-    #{detail_line}
-    Best next move: #{todo_digest_next_move(todos)}
-    """
-    |> String.trim()
+      #{detail_line}
+      """
+      |> String.trim()
+    else
+      """
+      #{greeting}
+
+      #{detail_line}
+      Best next move: #{todo_digest_next_move(todos)}
+      """
+      |> String.trim()
+    end
   end
 
   def todo_digest_prefix_text(%Brief{} = _brief, _todo), do: nil
@@ -605,7 +620,7 @@ defmodule Maraithon.Briefs do
   defp todo_digest_next_move([todo | _todos]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
-    "#{focus} Then close what is done, keep what still matters, and defer anything that can wait."
+    "#{focus} Then review the rest one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
   end
 
   defp todo_digest_next_move(_todos), do: "Nothing needs review right now."
@@ -707,10 +722,10 @@ defmodule Maraithon.Briefs do
   defp greeting_line(%Brief{} = brief) do
     body =
       case normalize_cadence(brief.cadence) do
-        "end_of_day" -> "these still need movement tonight."
-        "morning" -> "here's the full list for today."
-        "weekly_review" -> "here's everything still open this week."
-        _ -> "checking on these today."
+        "end_of_day" -> "here's the open work still worth a decision before the day closes."
+        "morning" -> "here's the open work that needs a decision today."
+        "weekly_review" -> "here's the open work still worth deciding this week."
+        _ -> "here's the open work that needs review today."
       end
 
     case greeting_name(brief.user_id) do

@@ -240,7 +240,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert Enum.any?(messages, &String.contains?(&1.text, "Review Dawn and Kiln Studio context"))
 
     keyboard = get_in(List.last(messages).opts, [:reply_markup, "inline_keyboard"]) || []
-    assert keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "Review Open Work"))
+    assert keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "Review open work"))
     assert diagnostics.telegram_delivery.todo_review_brief_id
   end
 end

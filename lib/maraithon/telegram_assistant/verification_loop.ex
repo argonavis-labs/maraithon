@@ -836,7 +836,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
           "criteria",
           []
         ),
-        "morning brief score must include Review Open Work plus sequential actionable work cards in the rubric"
+        "morning brief score must include Review open work plus sequential actionable work cards in the rubric"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})

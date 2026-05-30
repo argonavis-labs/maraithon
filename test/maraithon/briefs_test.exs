@@ -356,13 +356,15 @@ defmodule Maraithon.BriefsTest do
     assert second_todo.id == older_todo.id
 
     intro = Briefs.todo_digest_intro_text(brief, [first_todo, second_todo])
-    assert intro =~ "checking on these today"
+    assert intro =~ "here's the open work that needs review today"
     assert intro =~ "1 new today"
-    assert intro =~ "1 still open from earlier"
+    assert intro =~ "1 carried over from earlier"
 
     assert intro =~ "Best next move: Reply to finance about the receipt."
 
-    assert intro =~ "keep what still matters"
+    assert intro =~ "review the rest one by one"
+    assert intro =~ "mark resolved items done"
+    assert intro =~ "keep what still needs you"
     assert intro =~ "defer anything that can wait"
     refute intro =~ "stale"
     refute intro =~ "not important"
@@ -402,7 +404,7 @@ defmodule Maraithon.BriefsTest do
       |> Briefs.telegram_payload()
       |> get_in([:reply_markup, "inline_keyboard"])
       |> List.flatten()
-      |> Enum.find(&(&1["text"] == "Review Open Work"))
+      |> Enum.find(&(&1["text"] == "Review open work"))
 
     assert button["callback_data"] =~ "brftd:"
 
@@ -445,7 +447,7 @@ defmodule Maraithon.BriefsTest do
     assert summary.text =~ "Done: 1"
     assert summary.text =~ "Dismissed: 1"
     assert summary.text =~ "Still open: 0"
-    assert summary.text =~ "Next brief will stay cleaner"
+    assert summary.text =~ "Done and dismissed work will stay out of future briefs"
 
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
@@ -495,10 +497,10 @@ defmodule Maraithon.BriefsTest do
       |> get_in([:reply_markup, "inline_keyboard"])
       |> List.flatten()
 
-    assert Enum.find(buttons, &(&1["text"] == "Review Open Work"))["callback_data"] ==
+    assert Enum.find(buttons, &(&1["text"] == "Review open work"))["callback_data"] ==
              "brftd:#{brief.id}:start"
 
-    assert Enum.find(buttons, &(&1["text"] == "Show List"))["callback_data"] ==
+    assert Enum.find(buttons, &(&1["text"] == "Show list"))["callback_data"] ==
              "brftd:#{brief.id}:list"
 
     :ok =
@@ -758,7 +760,7 @@ defmodule Maraithon.BriefsTest do
     assert message.text =~ "Evidence: School asked for the signed form before the pickup cutoff."
 
     assert message.text =~
-             "Best next move: Send the signed pickup form and ask for confirmation. Then close what is done"
+             "Best next move: Send the signed pickup form and ask for confirmation. Then review the list one by one"
 
     refute message.text =~ "clear decisions"
   end

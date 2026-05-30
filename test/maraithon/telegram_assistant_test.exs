@@ -1231,7 +1231,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert List.last(sends).text =~ "Open work review complete"
     assert List.last(sends).text =~ "Done: 1"
     assert List.last(sends).text =~ "Dismissed: 1"
-    assert List.last(sends).text =~ "Next brief will stay cleaner"
+    assert List.last(sends).text =~ "Done and dismissed work will stay out of future briefs"
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
@@ -1805,18 +1805,19 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert intro.text =~ "<b>Chief of staff check-in</b>"
     assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
-    assert intro.text =~ "checking on these today"
+    assert intro.text =~ "here's the open work that needs review today"
     assert intro.text =~ "1 new today"
-    assert intro.text =~ "1 still open from earlier"
+    assert intro.text =~ "1 carried over from earlier"
 
     assert intro.text =~ "Best next move: Reply to Charlie about the budget."
 
-    assert intro.text =~ "keep what still matters"
+    assert intro.text =~ "review the rest one by one"
+    assert intro.text =~ "keep what still needs you"
     refute intro.text =~ "not important"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
     keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review Open Work"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review open work"))
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
 
     updated_brief = Repo.get!(Maraithon.Briefs.Brief, brief.id)
@@ -1885,9 +1886,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "<b>End-of-day review</b>"
     assert intro.text =~ "<b>End-of-day review: 2 items still open</b>"
     refute intro.text =~ "debt"
-    assert intro.text =~ "these still need movement tonight"
+    assert intro.text =~ "open work still worth a decision before the day closes"
     assert intro.text =~ "1 new today"
-    assert intro.text =~ "1 still open from earlier"
+    assert intro.text =~ "1 carried over from earlier"
 
     assert intro.text =~ "Best next move: Reply to David about the laptop."
 
@@ -1896,7 +1897,7 @@ defmodule Maraithon.TelegramAssistantTest do
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
     keyboard = get_in(intro.opts, [:reply_markup, "inline_keyboard"]) || []
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review Open Work"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Review open work"))
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
   end
 
