@@ -63,7 +63,7 @@ defmodule Maraithon.AgentBuilder do
       inputs: [
         "Gmail, Calendar, and Slack activity relevant to commitments, unanswered replies, and travel logistics",
         "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
-        "Shared operator preferences that shape interruption policy across all built-in skills"
+        "Shared preferences that shape interruption policy across all built-in skills"
       ],
       outputs: [
         "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
@@ -144,7 +144,7 @@ defmodule Maraithon.AgentBuilder do
       summary:
         "General-purpose automation that watches topics, reasons over connected context, and uses only the actions you allow.",
       inputs: [
-        "Direct operator messages from the dashboard",
+        "Direct messages from the dashboard",
         "Events published to the topics you subscribe to",
         "Results from the approved action list below"
       ],
@@ -173,7 +173,7 @@ defmodule Maraithon.AgentBuilder do
         "Project context, goals, open tasks, project memory, and attached repository activity",
         "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
         "The base branch you want reviewed, usually `main`",
-        "A weekly wakeup cadence, explicit operator invocations, and GitHub repo events"
+        "A weekly wakeup cadence, explicit requests, and GitHub repo events"
       ],
       outputs: [
         "Stored PM recommendations with titles, summaries, recommended first milestones, and evidence",
@@ -369,7 +369,7 @@ defmodule Maraithon.AgentBuilder do
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions.",
-        "Set `timezone_offset_hours` to match the operator’s working day so morning and end-of-day briefs land at the right time."
+        "Set `timezone_offset_hours` to match your working day so morning and end-of-day briefs land at the right time."
       ]
     },
     %{
@@ -481,7 +481,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Repo Planner",
       category: "Planning",
       summary:
-        "Indexes repository entry points, then turns operator tasks into implementation plans and optional plan files.",
+        "Indexes repository entry points, then turns requested work into implementation plans and optional plan files.",
       inputs: [
         "Repository entry points and source files under the chosen codebase path",
         "Direct planning requests sent to the running automation",
