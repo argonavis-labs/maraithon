@@ -102,6 +102,26 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "Decision: Decide whether"
   end
 
+  test "source link buttons name the source app" do
+    source_url = "https://mail.google.com/mail/u/0/#inbox/thread-1"
+
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "gmail",
+      "status" => "open",
+      "title" => "Reply to the partner thread",
+      "summary" => "The partner is waiting on a short reply.",
+      "next_action" => "Send the partner a clear next step.",
+      "metadata" => %{"url" => source_url}
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+    buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Open Gmail" and &1["url"] == source_url))
+    refute Enum.any?(buttons, &(&1["text"] == "Open Source"))
+  end
+
   test "legacy generic commitment cards are rewritten with person, topic, and next step" do
     todo = %{
       "id" => Ecto.UUID.generate(),

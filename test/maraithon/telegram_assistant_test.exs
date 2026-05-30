@@ -1366,7 +1366,7 @@ defmodule Maraithon.TelegramAssistantTest do
     keyboard = get_in(payload.reply_markup, ["inline_keyboard"])
     assert keyboard != nil
     assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Maraithon"))
-    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Source"))
+    assert Enum.any?(List.flatten(keyboard), &(&1["text"] == "Open Gmail"))
     assert serialized_payload.text =~ "Reply with the owner and the exact billing contact."
     refute payload.text =~ "Maraithon Todo"
     refute payload.text =~ "Reply to the billing owner"

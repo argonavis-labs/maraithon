@@ -355,8 +355,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp source_link_button(todo) do
     case source_url(todo_metadata(todo)) do
-      url when is_binary(url) -> %{"text" => "Open Source", "url" => url}
+      url when is_binary(url) -> %{"text" => source_link_label(todo_source(todo)), "url" => url}
       _ -> nil
+    end
+  end
+
+  defp source_link_label(source) do
+    case source_label(source) do
+      label when is_binary(label) and label not in ["Maraithon", "Operator"] -> "Open #{label}"
+      _ -> "Open Source"
     end
   end
 
