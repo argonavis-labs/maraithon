@@ -120,7 +120,8 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
                budget: %{llm_calls: 5, tool_calls: 5}
              })
 
-    assert note =~ "Iteration 1"
+    assert note =~ "Monitoring check 1"
+    assert note =~ "no new issues"
     assert next_state.source_behavior == "watchdog_summarizer"
     assert next_state.source_state.iteration == 1
   end
@@ -148,14 +149,16 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
     assert {:effect, {:llm_call, params}, state} = ManifestAgent.handle_wakeup(state, context)
     assert state.pending_source_effect? == true
     assert [%{"role" => "user", "content" => prompt}] = params["messages"]
-    assert prompt =~ "watchdog agent"
+    assert prompt =~ "operator-facing monitoring updates"
+    refute prompt =~ "Agent ID"
+    refute prompt =~ "Budget remaining"
 
     response = %{content: "System healthy. No urgent operator action."}
 
     assert {:emit, {:note_appended, note}, state} =
              ManifestAgent.handle_effect_result({:llm_call, response}, state, context)
 
-    assert note =~ "Summary: System healthy"
+    assert note == "Monitoring update: System healthy. No urgent operator action."
     assert state.pending_source_effect? == false
     assert state.source_state.summaries == ["System healthy. No urgent operator action."]
   end

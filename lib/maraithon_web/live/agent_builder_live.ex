@@ -490,7 +490,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     label="Optional URL to check"
                     value={@launch["check_url"]}
                     placeholder="https://status.example.com/health"
-                    description="If set, the watchdog will check this URL on its schedule."
+                    description="If set, the monitor will check this URL on its schedule."
                   />
                 <% end %>
 
@@ -1039,7 +1039,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         label: "Optional URL check",
         description:
-          "The watchdog will check the configured endpoint every sixth scheduled check.",
+          "The monitor will check the configured endpoint every sixth scheduled check.",
         details: "Configured URL: #{url}",
         ready?: true,
         required?: false
@@ -1284,13 +1284,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{
         title: "Check cadence",
-        body: "Checks every #{format_cadence(launch["wakeup_interval_ms"])} to write summaries."
+        body:
+          "Checks every #{format_cadence(launch["wakeup_interval_ms"])} to write monitoring updates."
       },
       %{
         title: "URL check",
         body:
           if(launch["check_url"] == "",
-            do: "No URL configured. The watchdog will only send status summaries.",
+            do: "No URL configured. The monitor will only write monitoring updates.",
             else: "Configured endpoint: #{launch["check_url"]}"
           )
       }

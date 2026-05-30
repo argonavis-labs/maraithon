@@ -40,7 +40,8 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
         WatchdogSummarizer.handle_wakeup(state, @context)
 
       assert new_state.iteration == 1
-      assert note =~ "Iteration 1"
+      assert note =~ "Monitoring check 1"
+      assert note =~ "no new issues"
     end
 
     test "requests LLM call on even iterations" do
@@ -76,7 +77,7 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
       {:emit, {:note_appended, note}, new_state} =
         WatchdogSummarizer.handle_effect_result({:llm_call, response}, state, @context)
 
-      assert note =~ "Summary:"
+      assert note == "Monitoring update: System status: All good"
       assert length(new_state.summaries) == 1
     end
 
@@ -99,8 +100,9 @@ defmodule Maraithon.Behaviors.WatchdogSummarizerTest do
       {:emit, {:note_appended, note}, _state} =
         WatchdogSummarizer.handle_effect_result({:tool_call, result}, state, @context)
 
-      assert note =~ "URL check"
-      assert note =~ "status=200"
+      assert note =~ "Endpoint check"
+      assert note =~ "HTTP 200"
+      refute note =~ "status="
     end
   end
 

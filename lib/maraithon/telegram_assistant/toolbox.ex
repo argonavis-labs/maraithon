@@ -59,7 +59,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     "prompt_agent" => "Custom",
     "repo_planner" => "Repository Planner",
     "slack_followthrough_agent" => "Slack Follow-Through",
-    "watchdog_summarizer" => "Watchdog Summary"
+    "watchdog_summarizer" => "Health Monitor"
   }
   @external_action_tools %{
     "gmail_send" => %{

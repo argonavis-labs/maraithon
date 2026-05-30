@@ -1,6 +1,6 @@
 defmodule Maraithon.Behaviors.WatchdogSummarizer do
   @moduledoc """
-  Demo behavior that periodically summarizes activity and checks URLs.
+  Lightweight monitor that periodically writes activity notes and checks URLs.
 
   Config:
     - check_url: URL to periodically check (optional)
@@ -52,7 +52,7 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
       # Otherwise, just note we're alive
       true ->
         note =
-          "Iteration #{state.iteration}: All quiet at #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+          "Monitoring check #{state.iteration}: no new issues at #{timestamp()}."
 
         {:emit, {:note_appended, note}, state}
     end
@@ -63,12 +63,12 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
     summary = response.content
     state = %{state | summaries: [summary | state.summaries] |> Enum.take(100)}
 
-    {:emit, {:note_appended, "Summary: #{String.slice(summary, 0, 200)}..."}, state}
+    {:emit, {:note_appended, "Monitoring update: #{truncate_summary(summary)}"}, state}
   end
 
   def handle_effect_result({:tool_call, result}, state, _context) do
     status = result["status"] || "unknown"
-    note = "URL check: status=#{status} at #{DateTime.utc_now() |> DateTime.to_iso8601()}"
+    note = "Endpoint check: #{http_status_label(status)} at #{timestamp()}."
 
     {:emit, {:note_appended, note}, state}
   end
@@ -82,18 +82,55 @@ defmodule Maraithon.Behaviors.WatchdogSummarizer do
 
   defp build_summary_prompt(context) do
     """
-    You are a watchdog agent monitoring system activity.
+    You write concise operator-facing monitoring updates.
 
     Current time: #{context.timestamp |> DateTime.to_iso8601()}
-    Agent ID: #{context.agent_id}
-    Budget remaining: LLM=#{context.budget.llm_calls}, Tools=#{context.budget.tool_calls}
+    Monitoring check: activity and endpoint status from the current run.
 
-    Please provide a brief status summary. Note:
-    - How long you've been running
-    - Any notable observations
-    - Current system health assessment
+    Write one short paragraph for a busy operator:
+    - Start with the concrete state: quiet, changed, degraded, or needs attention.
+    - Include only observations the available context supports.
+    - Do not mention agent ids, tool budgets, runtime internals, or model/provider details.
+    - Do not invent system health beyond the observed activity.
 
     Keep it under 100 words.
     """
   end
+
+  defp timestamp, do: DateTime.utc_now() |> DateTime.to_iso8601()
+
+  defp truncate_summary(summary) when is_binary(summary) do
+    summary
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> case do
+      "" -> "No notable changes."
+      text -> truncate(text, 220)
+    end
+  end
+
+  defp truncate_summary(_summary), do: "No notable changes."
+
+  defp truncate(text, max) when byte_size(text) <= max, do: text
+
+  defp truncate(text, max) do
+    text
+    |> String.slice(0, max)
+    |> String.replace(~r/\s+\S*$/, "")
+    |> Kernel.<>("...")
+  end
+
+  defp http_status_label(status) when is_integer(status), do: "HTTP #{status}"
+
+  defp http_status_label(status) when is_binary(status) do
+    value = String.trim(status)
+
+    if value == "" or value == "unknown" do
+      "no HTTP status returned"
+    else
+      "HTTP #{value}"
+    end
+  end
+
+  defp http_status_label(_status), do: "no HTTP status returned"
 end

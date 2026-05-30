@@ -532,18 +532,18 @@ defmodule Maraithon.AgentBuilder do
     },
     %{
       id: "watchdog_summarizer",
-      label: "Watchdog Summarizer",
+      label: "Health Monitor",
       category: "Monitoring",
       summary:
-        "Performs lightweight heartbeat summaries and can optionally hit one URL on a fixed cadence.",
+        "Writes concise monitoring updates and can optionally check one endpoint on a fixed cadence.",
       inputs: [
         "Scheduled wakeups on the chosen interval",
         "Optional HTTP checks against a single URL",
         "Current activity and timing context"
       ],
       outputs: [
-        "Short health and activity summaries",
-        "Optional URL availability notes",
+        "Short monitoring updates",
+        "Optional endpoint check notes",
         "A low-touch monitoring loop with minimal setup"
       ],
       fields: ~w(check_url wakeup_interval_ms),
@@ -556,9 +556,9 @@ defmodule Maraithon.AgentBuilder do
       },
       requirements: [],
       suggestions: [
-        "Leave the URL blank if you only want heartbeat summaries.",
+        "Leave the URL blank if you only want monitoring updates.",
         "A 30-minute check interval is a good default for passive monitoring.",
-        "Use this template when you want lightweight health notes, not deep analysis."
+        "Use this template when you want lightweight status notes, not deep analysis."
       ]
     }
   ]
