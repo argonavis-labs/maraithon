@@ -369,6 +369,45 @@ struct ChatWorkSummaryTests {
     }
 
     @Test
+    func decodingScopesEmptyConnectedContextToTheCurrentRequest() throws {
+        let data = Data(
+            """
+            {
+              "headline": "Checked connected context before replying",
+              "status": "completed",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "tool": "list_connected_accounts",
+                  "label": "Connected accounts",
+                  "status": "completed",
+                  "summary": "No connected accounts found."
+                },
+                {
+                  "id": "tool-2",
+                  "tool": "review_connected_context",
+                  "label": "Connected sources",
+                  "status": "completed",
+                  "summary": "No results found."
+                }
+              ],
+              "steps": []
+            }
+            """.utf8
+        )
+
+        let summary = try JSONDecoder().decode(ChatWorkSummary.self, from: data)
+        let visibleText = summary.toolCalls.compactMap(\.summary).joined(separator: " ")
+
+        #expect(summary.toolCalls.map(\.summary) == [
+            "No connected accounts were available for this request.",
+            "No connected sources were available for this request."
+        ])
+        #expect(visibleText.localizedCaseInsensitiveContains("available yet") == false)
+        #expect(visibleText.localizedCaseInsensitiveContains("No connected accounts found") == false)
+    }
+
+    @Test
     func decodingDistinguishesMemoryAndPreferenceReadsFromUpdates() throws {
         let data = Data(
             """

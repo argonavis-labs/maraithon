@@ -332,6 +332,52 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "in_progress"
   end
 
+  test "empty connected-context summaries stay scoped to the request" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "list_connected_accounts",
+            "result" => %{"connected_accounts" => []}
+          },
+          %{
+            "tool" => "review_connected_context",
+            "result" => %{"providers" => []}
+          },
+          %{
+            "tool" => "list_connected_accounts",
+            "result" => %{"summary" => "No connected accounts found."}
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert [
+             %{
+               "tool" => "connected_accounts",
+               "label" => "Connected accounts",
+               "summary" => "No connected accounts were available for this request."
+             },
+             %{
+               "tool" => "connected_sources",
+               "label" => "Connected sources",
+               "summary" => "No connected sources were available for this request."
+             },
+             %{
+               "tool" => "connected_accounts",
+               "label" => "Connected accounts",
+               "summary" => "No connected accounts were available for this request."
+             }
+           ] = summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "available yet"
+    refute visible_text =~ "No connected accounts found"
+    refute visible_text =~ "No connected sources found"
+  end
+
   test "pre-normalized public tool keys keep specific labels" do
     turn = %Turn{
       structured_data: %{

@@ -619,11 +619,11 @@ private enum ChatWorkSummaryCopy {
         switch publicToolKey(tool) {
         case "connected_accounts":
             return count == 0
-                ? "No connected accounts are available yet."
+                ? "No connected accounts were available for this request."
                 : "\(count) connected \(displayNoun(for: count, singular: "account")) available."
         case "connected_sources":
             return count == 0
-                ? "No connected sources are available yet."
+                ? "No connected sources were available for this request."
                 : "\(count) connected \(displayNoun(for: count, singular: "source")) available."
         case "open_work", "open_work_review":
             return count == 0
@@ -691,8 +691,8 @@ private enum ChatWorkSummaryCopy {
     private static func legacyProductTerms(_ value: String) -> String {
         value
             .replacingOccurrences(of: #"(?i)^No open work found\.?$"#, with: "This check returned no open work.", options: .regularExpression)
-            .replacingOccurrences(of: #"(?i)^No connected accounts found\.?$"#, with: "No connected accounts are available yet.", options: .regularExpression)
-            .replacingOccurrences(of: #"(?i)^No connected sources found\.?$"#, with: "No connected sources are available yet.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^No connected accounts found\.?$"#, with: "No connected accounts were available for this request.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^No connected sources found\.?$"#, with: "No connected sources were available for this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm context\b"#, with: "relationship context", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm\b"#, with: "relationship data", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\btodos\b"#, with: "work items", options: .regularExpression)

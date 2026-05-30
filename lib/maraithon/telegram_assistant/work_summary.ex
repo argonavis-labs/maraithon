@@ -372,11 +372,11 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     |> replace_result_regex(~r/\bstart with\s+/, "start here: ")
     |> replace_result_regex(
       ~r/^No connected accounts found\.?$/i,
-      "No connected accounts are available yet."
+      "No connected accounts were available for this request."
     )
     |> replace_result_regex(
       ~r/^No connected sources found\.?$/i,
-      "No connected sources are available yet."
+      "No connected sources were available for this request."
     )
     |> replace_result_regex(~r/\bCRM context\b/i, "relationship context")
     |> replace_result_regex(~r/\bCRM\b/i, "relationship data")
@@ -423,10 +423,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "Found #{format_count(count)} open work #{pluralize("item", count)}."
 
       {"connected account", 0} ->
-        "No connected accounts are available yet."
+        "No connected accounts were available for this request."
 
       {"connected source", 0} ->
-        "No connected sources are available yet."
+        "No connected sources were available for this request."
 
       {_singular, 0} ->
         "No #{pluralize(singular, 2, plural)} found."
