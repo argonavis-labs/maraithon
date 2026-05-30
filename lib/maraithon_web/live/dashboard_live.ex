@@ -1780,7 +1780,7 @@ defmodule MaraithonWeb.DashboardLive do
 
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Automation activity</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Automation coverage</h2>
           <.link navigate="/agents" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
             All automations →
           </.link>
@@ -1819,7 +1819,7 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="mt-4 grid grid-cols-3 gap-3">
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Updates
+                    Signals
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.event_count %>
@@ -1827,7 +1827,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Actions
+                    Waiting
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.effect_counts.pending %>
@@ -1835,7 +1835,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Queued
+                    Scheduled
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.job_counts.pending %>
@@ -1860,7 +1860,7 @@ defmodule MaraithonWeb.DashboardLive do
                         class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3"
                       >
                         <div class="flex items-center justify-between gap-3">
-                          <p class="text-sm/6 font-medium text-zinc-950"><%= activity.event_type %></p>
+                          <p class="text-sm/6 font-medium text-zinc-950"><%= event_type_label(activity.event_type) %></p>
                           <span class="text-xs/5 text-zinc-500"><%= format_time(activity.inserted_at) %></span>
                         </div>
                         <p class="mt-2 text-xs/5 text-zinc-500"><%= event_preview(activity) %></p>
@@ -4650,6 +4650,32 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp event_preview(%{event_type: event_type}), do: event_type_summary(event_type)
   defp event_preview(_activity), do: "Recorded Maraithon activity."
+
+  defp event_type_label(event_type) when is_binary(event_type) do
+    normalized = String.downcase(event_type)
+
+    cond do
+      String.contains?(normalized, ["fail", "error"]) ->
+        "Needs attention"
+
+      String.contains?(normalized, ["complete", "success", "finish"]) ->
+        "Completed work"
+
+      String.contains?(normalized, ["start", "run", "claim"]) ->
+        "Work in progress"
+
+      String.contains?(normalized, "insight") ->
+        "Insight updated"
+
+      String.contains?(normalized, ["effect", "action"]) ->
+        "Action updated"
+
+      true ->
+        "Maraithon activity"
+    end
+  end
+
+  defp event_type_label(_event_type), do: "Maraithon activity"
 
   defp product_payload_message(payload) when is_map(payload) do
     Enum.find_value(["message", "summary", "title", "description", "status", "action"], fn key ->

@@ -47,7 +47,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "New project"
     assert html =~ "Memory"
     assert has_element?(view, "h2", "Projects")
-    assert has_element?(view, "h2", "Automation activity")
+    assert has_element?(view, "h2", "Automation coverage")
     assert html =~ "No work needs attention right now."
     assert html =~ "collect context and recommend next work"
     assert html =~ "No open follow-ups yet."
@@ -56,6 +56,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "none failed"
     refute has_element?(view, "h2", "Health")
     refute html =~ "Operational activity"
+    refute html =~ "Automation activity"
     refute html =~ "Needs attention"
     refute html =~ "System logs"
     refute html =~ "Platform logs"
@@ -699,6 +700,31 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute_html_contains(html, "select * from oauth_tokens")
   end
 
+  test "automation coverage summarizes recent updates without raw event names", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "inbox_calendar_advisor",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 1,
+      event_type: "effect_completed",
+      payload: %{"summary" => "Prepared the renewal follow-up for review."}
+    })
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Automation coverage"
+    assert html =~ "Completed work"
+    assert html =~ "Prepared the renewal follow-up for review."
+    refute html =~ "effect_completed"
+    refute html =~ "Automation activity"
+  end
+
   test "separates act-now and monitor insight cards", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{
@@ -788,7 +814,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "Spend"
     refute html =~ "Queued actions"
     assert html =~ "Prompt automation"
+    assert html =~ "Automation coverage"
+    assert html =~ "Signals"
+    assert html =~ "Waiting"
+    assert html =~ "Scheduled"
     refute html =~ "Pending effects"
+    refute html =~ "Automation activity"
     refute html =~ "Prompt agent"
     refute html =~ "degraded"
   end
