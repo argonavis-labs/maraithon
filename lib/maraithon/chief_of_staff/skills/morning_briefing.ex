@@ -2453,9 +2453,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp commitment_line(commitment) when is_map(commitment) do
     title = commitment_title(commitment)
     context = commitment_context(commitment)
-    id = commitment_id(commitment)
 
-    [title, context, id && "id #{id}"]
+    [title, context]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
@@ -2473,23 +2472,70 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp commitment_context(commitment) when is_map(commitment) do
     owed_to = read_string(commitment, "owed_to", nil) || read_string(commitment, "person", nil)
     project = read_string(commitment, "project", nil)
-    due_at = read_string(commitment, "due_at", nil) || read_string(commitment, "due", nil)
+    due = commitment_due_label(commitment)
 
-    [owed_to && "for #{owed_to}", project && project, due_at && "due #{due_at}"]
+    [owed_to && "for #{owed_to}", project && project, due]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
 
   defp commitment_context(_commitment), do: nil
 
-  defp commitment_id(commitment) when is_map(commitment) do
-    read_string(commitment, "source_id", nil) ||
-      read_string(commitment, "omnifocus_id", nil) ||
-      read_string(commitment, "of_id", nil) ||
-      read_string(commitment, "id", nil)
+  defp commitment_due_label(commitment) when is_map(commitment) do
+    display_due =
+      read_string(commitment, "display_due", nil) ||
+        read_string(commitment, "display_due_at", nil) ||
+        read_string(commitment, "due_label", nil)
+
+    due_value = read_any(commitment, "due_at") || read_any(commitment, "due")
+
+    cond do
+      not blank?(display_due) ->
+        "due #{display_due}"
+
+      is_nil(due_value) ->
+        nil
+
+      true ->
+        due_value
+        |> format_commitment_due()
+        |> then(fn due -> due && "due #{due}" end)
+    end
   end
 
-  defp commitment_id(_commitment), do: nil
+  defp commitment_due_label(_commitment), do: nil
+
+  defp format_commitment_due(%DateTime{} = value) do
+    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p UTC")
+  end
+
+  defp format_commitment_due(%NaiveDateTime{} = value) do
+    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p")
+  end
+
+  defp format_commitment_due(%Date{} = value), do: Calendar.strftime(value, "%b %d, %Y")
+
+  defp format_commitment_due(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" ->
+        nil
+
+      match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
+        {:ok, datetime, _offset} = DateTime.from_iso8601(value)
+        format_commitment_due(datetime)
+
+      match?({:ok, _}, Date.from_iso8601(value)) ->
+        {:ok, date} = Date.from_iso8601(value)
+        format_commitment_due(date)
+
+      true ->
+        value
+    end
+  end
+
+  defp format_commitment_due(_value), do: nil
 
   defp action_stack_items(brief_input) when is_map(brief_input) do
     brief_input
