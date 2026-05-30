@@ -381,15 +381,21 @@ final class UIComponentsTests: XCTestCase {
 
     func testDevicesSettingsCopyDoesNotExposeServerLanguage() {
         let publicCopy = [
+            DevicesSettingsCopy.emptyDevices,
+            DevicesSettingsCopy.emptyCounts,
             DevicesSettingsCopy.footer,
             DevicesSettingsCopy.revokeConfirmation
         ].joined(separator: " ")
 
+        XCTAssertTrue(publicCopy.contains("Pair a Mac to start syncing local sources."))
+        XCTAssertTrue(publicCopy.contains("Waiting for the first source check"))
         XCTAssertTrue(publicCopy.contains("Re-pair"))
         XCTAssertTrue(publicCopy.contains("Data already uploaded to Maraithon is kept."))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
         XCTAssertFalse(publicCopy.lowercased().contains("bearer"))
         XCTAssertFalse(publicCopy.lowercased().contains("token"))
+        XCTAssertFalse(publicCopy.contains("No Macs paired yet."))
+        XCTAssertFalse(publicCopy.contains("No data synced yet"))
     }
 
     func testRecallCopyUsesReadableFallbackTitlesAndSources() {

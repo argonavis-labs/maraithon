@@ -64,7 +64,7 @@ struct DevicesSettingsView: View {
                 Button("Retry") { Task { await viewModel.load(env: env) } }
             }
         case .empty:
-            Text("No Macs paired yet.")
+            Text(DevicesSettingsCopy.emptyDevices)
                 .foregroundStyle(.secondary)
         case .loaded(let devices):
             ForEach(devices) { device in
@@ -87,6 +87,8 @@ struct DevicesSettingsView: View {
 }
 
 enum DevicesSettingsCopy {
+    static let emptyDevices = "Pair a Mac to start syncing local sources."
+    static let emptyCounts = "Waiting for the first source check"
     static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start sending data again."
     static let revokeConfirmation = "This signs the Mac out and stops it from sending new data. Data already uploaded to Maraithon is kept."
 }
@@ -145,7 +147,7 @@ private struct DeviceRow: View {
     private var countsLine: String {
         let total = device.counts.total
         if total == 0 {
-            return "No data synced yet"
+            return DevicesSettingsCopy.emptyCounts
         }
         return [
             countFragment(device.counts.messages, "messages"),
