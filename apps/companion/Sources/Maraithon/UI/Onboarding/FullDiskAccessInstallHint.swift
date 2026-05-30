@@ -26,7 +26,7 @@ enum FullDiskAccessInstallHint {
     static let revealStableAppButtonTitle = "Show Maraithon app"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return "For local builds, grant Full Disk Access to the exact app at \(stableDevelopmentAppDisplayPath). " +
+        return "For local builds, keep Full Disk Access on the exact app at \(stableDevelopmentAppDisplayPath). " +
             "If Maraithon is already enabled but still blocked, remove duplicate Maraithon entries, add this app again, then click Check again."
         #else
         return nil
@@ -75,7 +75,7 @@ enum FullDiskAccessInstallHint {
         let stableAppAction = stableAppInstalled ? "Switch to" : "Install"
 
         return Detail(
-            message: "You're running a temporary Maraithon copy. Full Disk Access is granted to an exact app copy, so access can disappear after reloads. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath) before opening System Settings.",
+            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to one exact app. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath), then grant access to that app once.",
             stableAppURL: stableAppURL,
             stableAppInstalled: stableAppInstalled,
             canInstallStableApp: canInstallStableApp

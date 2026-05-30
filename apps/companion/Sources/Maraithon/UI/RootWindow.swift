@@ -173,14 +173,14 @@ struct TemporaryFullDiskAccessAppBanner: View {
         .accessibilityElement(children: .combine)
     }
 
-    static let titleText = "Full Disk Access may reset after reloads"
+    static let titleText = "Use the stable Maraithon app"
 
     static func detailText(stableAppInstalled: Bool) -> String {
         if stableAppInstalled {
-            return "Switch to the stable app at \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access there so it persists across rebuilds."
+            return "Switch to \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads keep using the same permission."
         }
 
-        return "Install the stable app at \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access there so it persists across rebuilds."
+        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads keep using the same permission."
     }
 
     private func switchToStableApp(_ appURL: URL) {

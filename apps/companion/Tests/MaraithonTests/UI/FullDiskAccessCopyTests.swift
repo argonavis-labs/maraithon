@@ -48,6 +48,8 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         XCTAssertTrue(message?.contains("temporary Maraithon copy") == true)
         XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
+        XCTAssertTrue(message?.localizedCaseInsensitiveContains("one exact app") == true)
+        XCTAssertFalse(message?.localizedCaseInsensitiveContains("disappear after reloads") == true)
         XCTAssertFalse(message?.contains("make run-companion") == true)
         XCTAssertFalse(message?.contains("xcodebuild") == true)
         XCTAssertFalse(message?.contains("DerivedData") == true)
@@ -127,7 +129,7 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertEqual(FullDiskAccessInstallHint.installStableAppButtonTitle, "Install stable app")
         XCTAssertTrue(detail?.canInstallStableApp == true)
         XCTAssertTrue(detail?.message.contains("Switch to the stable app") == true)
-        XCTAssertTrue(detail?.message.contains("before opening System Settings") == true)
+        XCTAssertTrue(detail?.message.contains("grant access to that app once") == true)
     }
 
     func testInstallHintMarksStableAppMissing() {

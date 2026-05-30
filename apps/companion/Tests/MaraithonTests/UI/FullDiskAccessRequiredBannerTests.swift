@@ -6,14 +6,15 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
     func testTemporaryAppBannerExplainsWhyAccessDoesNotStick() {
         XCTAssertEqual(
             TemporaryFullDiskAccessAppBanner.titleText,
-            "Full Disk Access may reset after reloads"
+            "Use the stable Maraithon app"
         )
 
         let copy = TemporaryFullDiskAccessAppBanner.detailText(stableAppInstalled: false)
 
         XCTAssertTrue(copy.contains("~/Applications/Maraithon.app"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("persists across rebuilds"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("grant Full Disk Access there"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("grant Full Disk Access to that app once"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("reloads keep using the same permission"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("may reset"))
     }
 
     func testRepairActionCanRevealStableApp() {
@@ -26,7 +27,7 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
     func testTemporaryAppBannerUsesSwitchCopyWhenStableAppExists() {
         let copy = TemporaryFullDiskAccessAppBanner.detailText(stableAppInstalled: true)
 
-        XCTAssertTrue(copy.hasPrefix("Switch to the stable app"))
+        XCTAssertTrue(copy.hasPrefix("Switch to ~/Applications/Maraithon.app"))
         XCTAssertFalse(copy.hasPrefix("Install the stable app"))
     }
 
