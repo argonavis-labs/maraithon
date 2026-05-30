@@ -504,33 +504,86 @@ private struct SyncSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Cadence") {
-                LabeledContent("Poll every") {
+            Section(SyncSettingsCopy.cadenceSectionTitle) {
+                LabeledContent(SyncSettingsCopy.intervalLabel) {
                     Slider(value: $pollInterval, in: 15...300, step: 5) {
-                        Text("Poll interval")
+                        Text(SyncSettingsCopy.sliderAccessibilityLabel)
                     } minimumValueLabel: {
-                        Text("15s").font(.caption).foregroundStyle(.secondary)
+                        Text(SyncSettingsCopy.minimumIntervalLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     } maximumValueLabel: {
-                        Text("5m").font(.caption).foregroundStyle(.secondary)
+                        Text(SyncSettingsCopy.maximumIntervalLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .frame(width: 240)
                 }
-                LabeledContent("Currently", value: "\(Int(pollInterval))s")
+                LabeledContent(
+                    SyncSettingsCopy.currentIntervalLabel,
+                    value: SyncSettingsCopy.intervalValue(seconds: pollInterval)
+                )
             }
         }
         .formStyle(.grouped)
     }
 }
 
+enum SyncSettingsCopy {
+    static let cadenceSectionTitle = "Sync cadence"
+    static let intervalLabel = "Check every"
+    static let sliderAccessibilityLabel = "Check interval"
+    static let minimumIntervalLabel = "15 sec"
+    static let maximumIntervalLabel = "5 min"
+    static let currentIntervalLabel = "Current interval"
+
+    static func intervalValue(seconds: Double) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded()))
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+
+        if minutes == 0 {
+            return "\(totalSeconds) sec"
+        }
+
+        if seconds == 0 {
+            return minutes == 1 ? "1 min" : "\(minutes) min"
+        }
+
+        return "\(minutes) min \(seconds) sec"
+    }
+}
+
 private struct PrivacySettingsView: View {
+    @Environment(AppEnvironment.self) private var env
+    @AppStorage(PrivacySettingsCopy.usageStatsDefaultsKey) private var shareUsageStats = false
+    @AppStorage(PrivacySettingsCopy.crashReportsDefaultsKey) private var shareCrashReports = true
+
     var body: some View {
         Form {
             PrivacyBlocklistEditor()
             SpotlightSurfaceSection()
             EndToEndEncryptionSection()
-            Section("Telemetry") {
-                Toggle("Send anonymous usage stats", isOn: .constant(false))
-                Toggle("Send crash reports", isOn: .constant(true))
+            Section(PrivacySettingsCopy.diagnosticsSharingSectionTitle) {
+                Toggle(PrivacySettingsCopy.usageStatsToggleTitle, isOn: $shareUsageStats)
+                    .onChange(of: shareUsageStats) { _, newValue in
+                        env.eventLog.info(
+                            "privacy.usage_stats_setting_changed",
+                            source: .ui,
+                            payload: ["enabled": String(newValue)]
+                        )
+                    }
+                Toggle(PrivacySettingsCopy.crashReportsToggleTitle, isOn: $shareCrashReports)
+                    .onChange(of: shareCrashReports) { _, newValue in
+                        env.eventLog.info(
+                            "privacy.crash_reports_setting_changed",
+                            source: .ui,
+                            payload: ["enabled": String(newValue)]
+                        )
+                    }
+                Text(PrivacySettingsCopy.diagnosticsSharingFooter)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -538,6 +591,13 @@ private struct PrivacySettingsView: View {
 }
 
 enum PrivacySettingsCopy {
+    static let usageStatsDefaultsKey = "com.maraithon.companion.privacy.share_usage_stats"
+    static let crashReportsDefaultsKey = "com.maraithon.companion.privacy.share_crash_reports"
+    static let diagnosticsSharingSectionTitle = "Diagnostics sharing"
+    static let usageStatsToggleTitle = "Share anonymous usage stats"
+    static let crashReportsToggleTitle = "Share crash reports"
+    static let diagnosticsSharingFooter =
+        "Maraithon uses these choices before sending diagnostics from this Mac. Logs and synced data are never attached automatically."
     static let encryptionIntro =
         "When enabled, content is encrypted on this Mac with a key only this device holds. " +
         "Maraithon can still use details like time, sender, and source name, but not the message, " +

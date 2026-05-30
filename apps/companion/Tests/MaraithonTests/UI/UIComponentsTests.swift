@@ -255,16 +255,43 @@ final class UIComponentsTests: XCTestCase {
     func testPrivacySettingsCopyExplainsEncryptionWithoutServerJargon() {
         let publicCopy = [
             PrivacySettingsCopy.encryptionIntro,
-            PrivacySettingsCopy.browserHistoryEncryptionFooter
+            PrivacySettingsCopy.browserHistoryEncryptionFooter,
+            PrivacySettingsCopy.diagnosticsSharingSectionTitle,
+            PrivacySettingsCopy.usageStatsToggleTitle,
+            PrivacySettingsCopy.crashReportsToggleTitle,
+            PrivacySettingsCopy.diagnosticsSharingFooter
         ].joined(separator: " ")
 
         XCTAssertTrue(publicCopy.contains("encrypted on this Mac"))
         XCTAssertTrue(publicCopy.contains("time, sender, and source name"))
         XCTAssertTrue(publicCopy.contains("Search quality may drop"))
+        XCTAssertTrue(publicCopy.contains("Logs and synced data are never attached automatically"))
+        XCTAssertTrue(PrivacySettingsCopy.usageStatsDefaultsKey.contains("share_usage_stats"))
+        XCTAssertTrue(PrivacySettingsCopy.crashReportsDefaultsKey.contains("share_crash_reports"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
         XCTAssertFalse(publicCopy.lowercased().contains("ciphertext"))
         XCTAssertFalse(publicCopy.lowercased().contains("metadata"))
         XCTAssertFalse(publicCopy.lowercased().contains("comparatively low"))
+    }
+
+    func testSyncSettingsCopyUsesUserFacingCadenceLanguage() {
+        let publicCopy = [
+            SyncSettingsCopy.cadenceSectionTitle,
+            SyncSettingsCopy.intervalLabel,
+            SyncSettingsCopy.sliderAccessibilityLabel,
+            SyncSettingsCopy.minimumIntervalLabel,
+            SyncSettingsCopy.maximumIntervalLabel,
+            SyncSettingsCopy.currentIntervalLabel,
+            SyncSettingsCopy.intervalValue(seconds: 30),
+            SyncSettingsCopy.intervalValue(seconds: 90),
+            SyncSettingsCopy.intervalValue(seconds: 300)
+        ].joined(separator: " ")
+
+        XCTAssertTrue(publicCopy.contains("Check every"))
+        XCTAssertTrue(publicCopy.contains("30 sec"))
+        XCTAssertTrue(publicCopy.contains("1 min 30 sec"))
+        XCTAssertTrue(publicCopy.contains("5 min"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("poll"))
     }
 
     func testDevicesSettingsCopyDoesNotExposeServerLanguage() {
