@@ -34,6 +34,8 @@ struct RootWindow: View {
                                 .map(\.displayName)
                             if env.onboarding.isFullDiskAccessSkipped || !blockedSourceNames.isEmpty {
                                 FullDiskAccessRequiredBanner(blockedSourceNames: blockedSourceNames)
+                            } else if let installHint = FullDiskAccessInstallHint.current() {
+                                TemporaryFullDiskAccessAppBanner(installHint: installHint)
                             }
                             detailView(for: selection)
                         }
@@ -117,6 +119,80 @@ enum SidebarItem: Hashable {
     case source(id: String)
     case logs
     case diagnostics
+}
+
+/// Non-blocking DEBUG-only reminder shown while the developer is running a
+/// temporary app copy. macOS privacy grants are tied to the exact bundle
+/// copy, so a green state today can still regress on the next rebuild.
+struct TemporaryFullDiskAccessAppBanner: View {
+    let installHint: FullDiskAccessInstallHint.Detail
+
+    @Environment(AppEnvironment.self) private var env
+
+    var body: some View {
+        HStack(spacing: Tokens.Spacing.small) {
+            Image(systemName: "app.dashed")
+                .foregroundStyle(StatusTone.attention.color)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(Self.titleText)
+                    .font(.callout.weight(.medium))
+                Text(Self.detailText(stableAppInstalled: installHint.stableAppInstalled))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if installHint.stableAppInstalled {
+                Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
+                    switchToStableApp(installHint.stableAppURL)
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+            } else if installHint.canInstallStableApp {
+                Button(FullDiskAccessInstallHint.installStableAppButtonTitle) {
+                    installStableApp(installHint.stableAppURL)
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal, Tokens.Spacing.medium)
+        .padding(.vertical, Tokens.Spacing.small)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .accessibilityElement(children: .combine)
+    }
+
+    static let titleText = "Full Disk Access may reset after reloads"
+
+    static func detailText(stableAppInstalled: Bool) -> String {
+        if stableAppInstalled {
+            return "Switch to the stable app at \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access there so it persists across rebuilds."
+        }
+
+        return "Install the stable app at \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access there so it persists across rebuilds."
+    }
+
+    private func switchToStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.temporary_app_banner.open_stable_app"
+        )
+        #endif
+    }
+
+    private func installStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.installStableDevelopmentApp(
+            to: appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.temporary_app_banner.install_stable_app"
+        )
+        #endif
+    }
 }
 
 /// Persistent inline banner shown above the main detail pane when Full
