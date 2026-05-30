@@ -56,12 +56,25 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
     }
 
-    func testHealthyHeadlineExplainsBackgroundValue() {
+    func testHealthyHeadlineLeadsWithOutcomeCount() {
         XCTAssertEqual(
-            SourceDetailCopy.healthyHeadline(displayName: "iMessage"),
+            SourceDetailCopy.healthyHeadline(
+                displayName: "iMessage",
+                totalSynced: 0,
+                singular: "message",
+                plural: "messages"
+            ),
             "Maraithon is keeping iMessage current"
         )
-        XCTAssertFalse(SourceDetailCopy.healthyHeadline(displayName: "iMessage").contains("messages synced"))
+        XCTAssertEqual(
+            SourceDetailCopy.healthyHeadline(
+                displayName: "iMessage",
+                totalSynced: 4,
+                singular: "message",
+                plural: "messages"
+            ),
+            "4 messages synced"
+        )
     }
 
     func testConnectedSummaryExplainsLastCheckOutcome() {

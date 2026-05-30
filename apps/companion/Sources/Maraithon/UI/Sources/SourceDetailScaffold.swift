@@ -111,7 +111,12 @@ struct SourceDetailScaffold: View {
         case .syncing:
             return "Checking \(displayName)"
         case .connected:
-            return SourceDetailCopy.healthyHeadline(displayName: displayName)
+            return SourceDetailCopy.healthyHeadline(
+                displayName: displayName,
+                totalSynced: publisher.totalAccepted,
+                singular: syncedItemSingular,
+                plural: syncedItemPlural
+            )
         case .paused:
             return "\(displayName) sync is paused"
         case .needsAttention:
