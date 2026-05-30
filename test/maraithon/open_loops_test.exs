@@ -321,6 +321,45 @@ defmodule Maraithon.OpenLoopsTest do
       assert get_in(obs, ["metadata", "open_loop_hint", "title"]) =~ "Reply to Charlie"
     end
 
+    test "does not emit imessage_pending_reply after the user has replied in the same thread" do
+      user_id = unique_user_email("local-obs-imsg-replied")
+      {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
+      device_id = Ecto.UUID.generate()
+      now = ~U[2026-05-10 12:00:00Z]
+
+      {:ok, _} =
+        Maraithon.LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-ask",
+            "local_id" => "p:ask",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165550199",
+            "chat_handles" => ["+14165550199"],
+            "chat_display_name" => "Charlie",
+            "chat_style" => "im",
+            "text" => "Can you confirm the price?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 3_600, :second))
+          },
+          %{
+            "guid" => "msg-reply",
+            "local_id" => "p:reply",
+            "service" => "iMessage",
+            "is_from_me" => true,
+            "sender_handle" => "+14165550000",
+            "chat_handles" => ["+14165550199"],
+            "chat_display_name" => "Charlie",
+            "chat_style" => "im",
+            "text" => "Confirmed - the price is $400.",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -90 * 60, :second))
+          }
+        ])
+
+      observations = OpenLoops.local_observations(user_id, now: now)
+
+      refute Enum.any?(observations, &(&1["type"] == "imessage_pending_reply"))
+    end
+
     test "emits reminder_due_today observation for open reminders due within 24h" do
       user_id = unique_user_email("local-obs-rem")
       {:ok, _} = Accounts.get_or_create_user_by_email(user_id)

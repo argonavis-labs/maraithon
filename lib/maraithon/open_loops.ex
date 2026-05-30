@@ -271,13 +271,15 @@ defmodule Maraithon.OpenLoops do
   defp imessage_pending_reply_observations(user_id, now) do
     cutoff = DateTime.add(now, -@imessage_pending_reply_window_seconds, :second)
 
-    user_id
-    |> LocalMessages.recent_for_user(limit: 200)
+    recent_messages = LocalMessages.recent_for_user(user_id, limit: 200)
+
+    recent_messages
     |> Enum.filter(fn msg ->
       msg.is_from_me == false and
         is_struct(msg.sent_at, DateTime) and
         DateTime.compare(msg.sent_at, cutoff) != :lt and
-        imessage_question_or_ask?(msg.text)
+        imessage_question_or_ask?(msg.text) and
+        not imessage_replied_after?(recent_messages, msg)
     end)
     |> Enum.map(fn msg ->
       %{
@@ -380,6 +382,26 @@ defmodule Maraithon.OpenLoops do
   end
 
   defp imessage_question_or_ask?(_), do: false
+
+  defp imessage_replied_after?(messages, msg) do
+    Enum.any?(messages, fn candidate ->
+      candidate.is_from_me == true and
+        same_imessage_thread?(candidate, msg) and
+        is_struct(candidate.sent_at, DateTime) and
+        DateTime.compare(candidate.sent_at, msg.sent_at) == :gt
+    end)
+  end
+
+  defp same_imessage_thread?(left, right) do
+    left_key = normalized_imessage_thread_key(left)
+    right_key = normalized_imessage_thread_key(right)
+    is_binary(left_key) and left_key != "" and left_key == right_key
+  end
+
+  defp normalized_imessage_thread_key(%{chat_key: key}) when is_binary(key),
+    do: String.trim(key)
+
+  defp normalized_imessage_thread_key(_), do: nil
 
   defp imessage_participants(%{sender_handle: handle, chat_display_name: name})
        when is_binary(handle) and handle != "" do
