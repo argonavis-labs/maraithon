@@ -260,7 +260,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     refute html =~ "Upcoming checks"
     refute html =~ "Heartbeat"
     refute html =~ "Usage"
-    refute html =~ "Current settings"
+    refute html =~ "Automation settings"
     refute html =~ "agent inspection log"
     refute html =~ "Automation notes"
     refute html =~ "Diagnostic details are hidden from this view."
@@ -300,7 +300,12 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Inspection ready"
     assert html =~ "Recorded automation activity."
     assert html =~ "Usage"
-    assert html =~ "Current settings"
+    assert html =~ "Automation settings"
+    assert html =~ "Review passes"
+    assert html =~ "Context reviewed"
+    assert html =~ "Assistant output"
+    assert html =~ "review_limit"
+    assert html =~ "action_limit"
     assert html =~ "agent inspection log"
     assert html =~ "Automation notes"
     assert html =~ "Diagnostic details are hidden from this view."
@@ -322,6 +327,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
     refute html =~ "Maraithon Agent Service"
     refute html =~ "Runtime contract"
     refute html =~ "OTP Agent Runtime"
+    refute html =~ "Current settings"
+    refute html =~ "Assistant work"
+    refute html =~ "reasoning_budget"
+    refute html =~ "action_budget"
   end
 
   test "selected inspection uses plain empty-state copy for admins" do

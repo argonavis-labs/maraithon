@@ -958,9 +958,9 @@ defmodule Maraithon.AgentBuilder do
 
       true ->
         with {:ok, llm_calls} <-
-               parse_positive_integer(launch["budget_llm_calls"], "Reasoning allowance"),
+               parse_positive_integer(launch["budget_llm_calls"], "Review limit"),
              {:ok, tool_calls} <-
-               parse_positive_integer(launch["budget_tool_calls"], "Action allowance"),
+               parse_positive_integer(launch["budget_tool_calls"], "Action limit"),
              {:ok, extra_config} <- parse_optional_config_json(launch["config_json"]),
              {:ok, config} <- build_behavior_config(resolved_behavior, launch, user_id) do
           {:ok,

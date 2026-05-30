@@ -266,8 +266,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Max items per check"
       assert html =~ "Notification selectivity"
       assert html =~ "Standard - balanced follow-through"
+      assert html =~ "Review limit"
+      assert html =~ "Action limit"
       assert html =~ "Custom configuration"
       refute html =~ "Advanced JSON overrides"
+      refute html =~ "Reasoning allowance"
+      refute html =~ "Action allowance"
+      refute html =~ "reasoning steps"
       refute html =~ "Memory limit"
       refute html =~ "Input subscriptions"
       refute html =~ "Max insights per cycle"
@@ -301,6 +306,28 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "Raise `min_confidence`"
       refute html =~ "Interruption bar"
       refute html =~ "Current bar"
+    end
+
+    test "uses outcome-facing capacity language for custom automations", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new?behavior=prompt_agent")
+
+      _html =
+        view
+        |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
+        |> render_click()
+
+      html = render(view)
+
+      assert html =~ "Permitted actions"
+      assert html =~ "Review limit"
+      assert html =~ "Action limit"
+      assert html =~ "room for 200 review passes and 300 permitted actions"
+      refute html =~ "Allowed actions"
+      refute html =~ "Reasoning allowance"
+      refute html =~ "Action allowance"
+      refute html =~ "reasoning steps"
+      refute html =~ "allowed actions"
+      refute html =~ "action allowlist"
     end
   end
 

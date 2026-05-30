@@ -842,7 +842,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Allowed actions" for="launch_tools">
+                          <.field label="Permitted actions" for="launch_tools">
                             <.c_input
                               id="launch_tools"
                               type="text"
@@ -864,7 +864,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Reasoning allowance" for="launch_budget_llm_calls">
+                          <.field label="Review limit" for="launch_budget_llm_calls">
                             <.c_input
                               id="launch_budget_llm_calls"
                               type="number"
@@ -874,7 +874,7 @@ defmodule MaraithonWeb.AgentsLive do
                             />
                           </.field>
 
-                          <.field label="Action allowance" for="launch_budget_tool_calls">
+                          <.field label="Action limit" for="launch_budget_tool_calls">
                             <.c_input
                               id="launch_budget_tool_calls"
                               type="number"
@@ -1092,7 +1092,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at, @timezone_info)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at, @timezone_info)} />
                       <.summary_card title="Signals to watch" value={subscriptions_preview(@selected_agent.config)} />
-                      <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
+                      <.summary_card title="Permitted actions" value={tools_preview(@selected_agent.config)} />
                       <.summary_card
                         :if={@diagnostics_visible}
                         title="Updates"
@@ -1115,15 +1115,15 @@ defmodule MaraithonWeb.AgentsLive do
                         <.heading level={3} class="text-base/7 text-amber-950">Usage</.heading>
                         <dl class="mt-3 space-y-2 text-sm">
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">Assistant work</dt>
+                            <dt class="text-amber-700/80">Review passes</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.llm_calls %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">Context processed</dt>
+                            <dt class="text-amber-700/80">Context reviewed</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.input_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3">
-                            <dt class="text-amber-700/80">Response output</dt>
+                            <dt class="text-amber-700/80">Assistant output</dt>
                             <dd class="font-medium text-amber-950"><%= @agent_spend.output_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3 border-t border-amber-200 pt-2">
@@ -1136,7 +1136,7 @@ defmodule MaraithonWeb.AgentsLive do
                       </.panel>
 
                       <.panel class="bg-zinc-50">
-                        <.heading level={3} class="text-base/7">Current settings</.heading>
+                        <.heading level={3} class="text-base/7">Automation settings</.heading>
                         <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-all text-xs/5 text-zinc-600"><%= pretty_config(@selected_agent.config) %></pre>
                       </.panel>
                     </div>
@@ -2171,25 +2171,41 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp display_config(config) when is_map(config) do
     config
-    |> Enum.map(fn {key, value} -> {display_config_key(key), display_config(value)} end)
+    |> Enum.map(fn
+      {key, value} when key in ["budget", :budget] and is_map(value) ->
+        {"capacity", display_capacity_config(value)}
+
+      {key, value} ->
+        {display_config_key(key), display_config(value)}
+    end)
     |> Map.new()
   end
 
   defp display_config(value) when is_list(value), do: Enum.map(value, &display_config/1)
   defp display_config(value), do: value
 
-  defp display_config_key("tools"), do: "actions"
-  defp display_config_key("tool_calls"), do: "action_runs"
-  defp display_config_key("budget_tool_calls"), do: "action_budget"
-  defp display_config_key("tool_allowlist"), do: "action_allowlist"
-  defp display_config_key("llm_calls"), do: "reasoning_runs"
-  defp display_config_key("budget_llm_calls"), do: "reasoning_budget"
-  defp display_config_key(:tools), do: "actions"
-  defp display_config_key(:tool_calls), do: "action_runs"
-  defp display_config_key(:budget_tool_calls), do: "action_budget"
-  defp display_config_key(:tool_allowlist), do: "action_allowlist"
-  defp display_config_key(:llm_calls), do: "reasoning_runs"
-  defp display_config_key(:budget_llm_calls), do: "reasoning_budget"
+  defp display_capacity_config(config) when is_map(config) do
+    config
+    |> Enum.map(fn
+      {key, value} when key in ["llm_calls", :llm_calls] -> {"review_limit", value}
+      {key, value} when key in ["tool_calls", :tool_calls] -> {"action_limit", value}
+      {key, value} -> {display_config_key(key), display_config(value)}
+    end)
+    |> Map.new()
+  end
+
+  defp display_config_key("tools"), do: "permitted_actions"
+  defp display_config_key("tool_calls"), do: "actions_used"
+  defp display_config_key("budget_tool_calls"), do: "action_limit"
+  defp display_config_key("tool_allowlist"), do: "permitted_actions"
+  defp display_config_key("llm_calls"), do: "review_passes"
+  defp display_config_key("budget_llm_calls"), do: "review_limit"
+  defp display_config_key(:tools), do: "permitted_actions"
+  defp display_config_key(:tool_calls), do: "actions_used"
+  defp display_config_key(:budget_tool_calls), do: "action_limit"
+  defp display_config_key(:tool_allowlist), do: "permitted_actions"
+  defp display_config_key(:llm_calls), do: "review_passes"
+  defp display_config_key(:budget_llm_calls), do: "review_limit"
   defp display_config_key(key), do: key
 
   defp subscriptions_preview(config) do

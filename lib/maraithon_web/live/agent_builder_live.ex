@@ -412,10 +412,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_tools"
                         name="launch[tools]"
-                        label="Allowed actions"
+                        label="Permitted actions"
                         value={@launch["tools"]}
                         placeholder="read_file,search_files"
-                        description="Comma-separated action allowlist. Any action not listed here is off-limits to the automation."
+                        description="Comma-separated action names. Maraithon will not use anything else for this automation."
                       />
                     <% end %>
                   </div>
@@ -801,7 +801,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_llm_calls]"
-                      label="Reasoning allowance"
+                      label="Review limit"
                       value={@launch["budget_llm_calls"]}
                     />
 
@@ -810,7 +810,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       type="number"
                       min="1"
                       name="launch[budget_tool_calls]"
-                      label="Action allowance"
+                      label="Action limit"
                       value={@launch["budget_tool_calls"]}
                     />
                   </div>
@@ -1246,7 +1246,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     tools =
       case launch["tools"] do
         "" -> "No actions enabled. The automation will stay text-only."
-        value -> "Allowed actions: #{value}"
+        value -> "Permitted actions: #{value}"
       end
 
     [
@@ -1255,7 +1255,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body: cost_profile_summary("prompt_agent", launch["cost_profile"])
       },
       %{title: "Signals to watch", body: subscriptions},
-      %{title: "Allowed actions", body: tools}
+      %{title: "Permitted actions", body: tools}
     ]
   end
 
@@ -1357,7 +1357,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Launch result",
         body:
-          "The automation starts immediately with #{launch["budget_llm_calls"]} reasoning steps and #{launch["budget_tool_calls"]} allowed actions."
+          "The automation starts immediately with room for #{launch["budget_llm_calls"]} review passes and #{launch["budget_tool_calls"]} permitted actions."
       }
     ]
   end
@@ -1459,8 +1459,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
               |> Kernel.<>(" coverage")
           },
           %{label: "Recent context", value: launch["memory_limit"] <> " updates"},
-          %{label: "Reasoning allowance", value: launch["budget_llm_calls"]},
-          %{label: "Action allowance", value: launch["budget_tool_calls"]}
+          %{label: "Review limit", value: launch["budget_llm_calls"]},
+          %{label: "Action limit", value: launch["budget_tool_calls"]}
         ]
 
       "inbox_calendar_advisor" ->
@@ -1523,7 +1523,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Optional URL",
             value: if(launch["check_url"] == "", do: "None", else: launch["check_url"])
           },
-          %{label: "Action allowance", value: launch["budget_tool_calls"]}
+          %{label: "Action limit", value: launch["budget_tool_calls"]}
         ]
 
       "github_product_planner" ->
@@ -1542,8 +1542,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
       _ ->
         [
-          %{label: "Reasoning allowance", value: launch["budget_llm_calls"]},
-          %{label: "Action allowance", value: launch["budget_tool_calls"]}
+          %{label: "Review limit", value: launch["budget_llm_calls"]},
+          %{label: "Action limit", value: launch["budget_tool_calls"]}
         ]
     end
   end
