@@ -158,7 +158,7 @@ struct TodayInsightEngineTests {
     }
 
     @Test
-    func briefPrioritizesOverdueWorkThenRelationshipsThenTodayThenOpenWorkThenChat() {
+    func briefPrioritizesOverdueWorkThenTodayThenRelationshipsThenOpenWorkThenChat() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -185,14 +185,14 @@ struct TodayInsightEngineTests {
             contacts: [staleActive],
             now: now,
             calendar: calendar
-        ).destination == .people(.atRisk))
+        ).destination == .todos(.today))
 
         #expect(TodayInsightEngine.brief(
-            todos: [today],
-            contacts: [],
+            todos: [],
+            contacts: [staleActive],
             now: now,
             calendar: calendar
-        ).destination == .todos(.today))
+        ).destination == .people(.atRisk))
 
         #expect(TodayInsightEngine.brief(
             todos: [open],

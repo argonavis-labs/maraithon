@@ -74,16 +74,6 @@ enum TodayInsightEngine {
             )
         }
 
-        if metrics.atRiskContacts > 0 {
-            return TodayBrief(
-                title: "Relationship follow-ups",
-                subtitle: "\(metrics.atRiskContacts) \(plural("person", metrics.atRiskContacts, plural: "people")) \(needsVerb(metrics.atRiskContacts)) a follow-up or status update.",
-                actionTitle: "Review people",
-                systemImage: "person.crop.circle.badge.exclamationmark",
-                destination: .people(.atRisk)
-            )
-        }
-
         if metrics.dueTodayTodos > 0 {
             return TodayBrief(
                 title: "Handle today's commitments",
@@ -91,6 +81,16 @@ enum TodayInsightEngine {
                 actionTitle: "Review today's work",
                 systemImage: "calendar.badge.clock",
                 destination: .todos(.today)
+            )
+        }
+
+        if metrics.atRiskContacts > 0 {
+            return TodayBrief(
+                title: "Relationship follow-ups",
+                subtitle: "\(metrics.atRiskContacts) \(plural("person", metrics.atRiskContacts, plural: "people")) \(needsVerb(metrics.atRiskContacts)) a follow-up or status update.",
+                actionTitle: "Review people",
+                systemImage: "person.crop.circle.badge.exclamationmark",
+                destination: .people(.atRisk)
             )
         }
 
