@@ -89,9 +89,23 @@ struct FullDiskAccessView: View {
                     }
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
+                } else if let installHint = FullDiskAccessInstallHint.current(),
+                          installHint.canInstallStableApp {
+                    Button {
+                        installStableApp(installHint.stableAppURL)
+                    } label: {
+                        Label(
+                            FullDiskAccessInstallHint.installStableAppButtonTitle,
+                            systemImage: "square.and.arrow.down"
+                        )
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
                 }
 
-                if FullDiskAccessInstallHint.current()?.stableAppInstalled != true {
+                if FullDiskAccessInstallHint.current() == nil ||
+                    FullDiskAccessInstallHint.current()?.canInstallStableApp == false {
                     Button {
                         openSystemSettings()
                     } label: {
@@ -182,6 +196,16 @@ struct FullDiskAccessView: View {
             appURL,
             eventLog: env.eventLog,
             eventName: "onboarding.full_disk_access.open_stable_app"
+        )
+        #endif
+    }
+
+    private func installStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.installStableDevelopmentApp(
+            to: appURL,
+            eventLog: env.eventLog,
+            eventName: "onboarding.full_disk_access.install_stable_app"
         )
         #endif
     }

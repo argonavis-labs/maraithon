@@ -62,9 +62,22 @@ struct SourceUnblockView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                } else if let installHint = fullDiskAccessInstallHint,
+                          installHint.canInstallStableApp {
+                    Button {
+                        installStableApp(installHint.stableAppURL)
+                    } label: {
+                        Label(
+                            FullDiskAccessInstallHint.installStableAppButtonTitle,
+                            systemImage: "square.and.arrow.down"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 }
 
-                if fullDiskAccessInstallHint?.stableAppInstalled != true,
+                if fullDiskAccessInstallHint == nil ||
+                    fullDiskAccessInstallHint?.canInstallStableApp == false,
                    let url = hint.settingsURL {
                     Button {
                         NSWorkspace.shared.open(url)
@@ -109,6 +122,14 @@ struct SourceUnblockView: View {
             appURL,
             eventLog: env.eventLog,
             eventName: "\(sourceID).open_stable_app"
+        )
+    }
+
+    private func installStableApp(_ appURL: URL) {
+        FullDiskAccessInstallHint.installStableDevelopmentApp(
+            to: appURL,
+            eventLog: env.eventLog,
+            eventName: "\(sourceID).install_stable_app"
         )
     }
 

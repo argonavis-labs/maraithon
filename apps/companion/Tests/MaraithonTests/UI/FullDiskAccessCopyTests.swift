@@ -109,6 +109,8 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertEqual(detail?.stableAppURL.path, stableApp.standardizedFileURL.path)
         XCTAssertTrue(detail?.stableAppInstalled == true)
         XCTAssertEqual(FullDiskAccessInstallHint.switchToStableAppButtonTitle, "Switch to stable app")
+        XCTAssertEqual(FullDiskAccessInstallHint.installStableAppButtonTitle, "Install stable app")
+        XCTAssertTrue(detail?.canInstallStableApp == true)
         XCTAssertTrue(detail?.message.contains("Switch to the stable app") == true)
         XCTAssertTrue(detail?.message.contains("before opening System Settings") == true)
     }
@@ -128,6 +130,94 @@ final class FullDiskAccessCopyTests: XCTestCase {
         )
 
         XCTAssertFalse(detail?.stableAppInstalled == true)
+        XCTAssertTrue(detail?.canInstallStableApp == true)
         XCTAssertTrue(detail?.message.contains("Install the stable app") == true)
+    }
+
+    func testInstallHintDoesNotOfferInstallForSwiftPMBinary() {
+        let fileManager = FileManager.default
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = URL(
+            fileURLWithPath: "/Users/operator/bliss/maraithon/apps/companion/.build/debug/Maraithon",
+            isDirectory: false
+        )
+
+        let detail = FullDiskAccessInstallHint.detail(
+            for: bundle,
+            homeDirectory: home,
+            fileManager: fileManager
+        )
+
+        XCTAssertFalse(detail?.stableAppInstalled == true)
+        XCTAssertFalse(detail?.canInstallStableApp == true)
+    }
+
+    func testStableAppInstallCopiesTemporaryBundleToStablePath() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("maraithon-fda-install-\(UUID().uuidString)", isDirectory: true)
+        let source = root
+            .appendingPathComponent("DerivedData", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+        let sourceContents = source.appendingPathComponent("Contents", isDirectory: true)
+        let stable = root
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+
+        defer { try? fileManager.removeItem(at: root) }
+
+        try fileManager.createDirectory(at: sourceContents, withIntermediateDirectories: true)
+        try "new bundle".write(
+            to: sourceContents.appendingPathComponent("Info.plist"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try FullDiskAccessInstallHint.copyStableDevelopmentApp(
+            from: source,
+            to: stable,
+            fileManager: fileManager
+        )
+
+        let copiedInfo = stable
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        XCTAssertTrue(fileManager.fileExists(atPath: copiedInfo.path))
+    }
+
+    func testStableAppInstallRefreshesExistingBundleContents() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("maraithon-fda-refresh-\(UUID().uuidString)", isDirectory: true)
+        let source = root
+            .appendingPathComponent("Build", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+        let stable = root
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+
+        defer { try? fileManager.removeItem(at: root) }
+
+        try fileManager.createDirectory(at: source, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: stable, withIntermediateDirectories: true)
+        try "old".write(
+            to: stable.appendingPathComponent("old.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "new".write(
+            to: source.appendingPathComponent("new.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try FullDiskAccessInstallHint.copyStableDevelopmentApp(
+            from: source,
+            to: stable,
+            fileManager: fileManager
+        )
+
+        XCTAssertFalse(fileManager.fileExists(atPath: stable.appendingPathComponent("old.txt").path))
+        XCTAssertTrue(fileManager.fileExists(atPath: stable.appendingPathComponent("new.txt").path))
     }
 }

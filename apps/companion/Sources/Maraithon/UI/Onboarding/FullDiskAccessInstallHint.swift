@@ -9,14 +9,20 @@ import AppKit
 /// binaries are temporary identities, so the permission can appear to
 /// disappear on reload.
 enum FullDiskAccessInstallHint {
+    enum InstallError: Error {
+        case sourceIsNotAppBundle
+    }
+
     struct Detail: Equatable {
         let message: String
         let stableAppURL: URL
         let stableAppInstalled: Bool
+        let canInstallStableApp: Bool
     }
 
     static let stableDevelopmentAppDisplayPath = "~/Applications/Maraithon.app"
     static let switchToStableAppButtonTitle = "Switch to stable app"
+    static let installStableAppButtonTitle = "Install stable app"
 
     static func current(
         bundleURL: URL = Bundle.main.bundleURL,
@@ -56,12 +62,14 @@ enum FullDiskAccessInstallHint {
             atPath: stableAppURL.path,
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
+        let canInstallStableApp = bundleURL.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame
         let stableAppAction = stableAppInstalled ? "Switch to" : "Install"
 
         return Detail(
             message: "You're running a temporary Maraithon copy. Full Disk Access is granted to an exact app copy, so access can disappear after reloads. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath) before opening System Settings.",
             stableAppURL: stableAppURL,
-            stableAppInstalled: stableAppInstalled
+            stableAppInstalled: stableAppInstalled,
+            canInstallStableApp: canInstallStableApp
         )
     }
 
@@ -92,6 +100,90 @@ enum FullDiskAccessInstallHint {
     }
 
     #if canImport(AppKit)
+    @MainActor
+    static func installStableDevelopmentApp(
+        from sourceAppURL: URL = Bundle.main.bundleURL,
+        to stableAppURL: URL,
+        eventLog: EventLog,
+        eventName: String
+    ) {
+        do {
+            try copyStableDevelopmentApp(
+                from: sourceAppURL,
+                to: stableAppURL,
+                fileManager: .default
+            )
+            eventLog.info(
+                eventName,
+                source: .ui,
+                payload: ["from": sourceAppURL.path, "path": stableAppURL.path]
+            )
+            switchToStableDevelopmentApp(
+                stableAppURL,
+                eventLog: eventLog,
+                eventName: "\(eventName).open"
+            )
+        } catch {
+            eventLog.warning(
+                "\(eventName)_failed",
+                source: .ui,
+                payload: [
+                    "from": sourceAppURL.path,
+                    "path": stableAppURL.path,
+                    "error": String(describing: error)
+                ]
+            )
+            NSWorkspace.shared.activateFileViewerSelecting([sourceAppURL])
+        }
+    }
+
+    static func copyStableDevelopmentApp(
+        from sourceAppURL: URL,
+        to stableAppURL: URL,
+        fileManager: FileManager
+    ) throws {
+        let source = sourceAppURL.standardizedFileURL
+        let target = stableAppURL.standardizedFileURL
+        guard source.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame else {
+            throw InstallError.sourceIsNotAppBundle
+        }
+
+        try fileManager.createDirectory(
+            at: target.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        var isDirectory: ObjCBool = false
+        if fileManager.fileExists(atPath: target.path, isDirectory: &isDirectory) {
+            guard isDirectory.boolValue else {
+                try fileManager.removeItem(at: target)
+                try fileManager.copyItem(at: source, to: target)
+                return
+            }
+
+            let existingContents = try fileManager.contentsOfDirectory(
+                at: target,
+                includingPropertiesForKeys: nil
+            )
+            for item in existingContents {
+                try fileManager.removeItem(at: item)
+            }
+
+            let sourceContents = try fileManager.contentsOfDirectory(
+                at: source,
+                includingPropertiesForKeys: nil
+            )
+            for item in sourceContents {
+                try fileManager.copyItem(
+                    at: item,
+                    to: target.appendingPathComponent(item.lastPathComponent)
+                )
+            }
+        } else {
+            try fileManager.copyItem(at: source, to: target)
+        }
+    }
+
     @MainActor
     static func switchToStableDevelopmentApp(
         _ stableAppURL: URL,
