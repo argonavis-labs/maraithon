@@ -274,12 +274,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Commitment tracker - 2026-05-09"
-    assert brief.summary == "No new commitments were found in checked sources."
+    assert brief.summary =~ "No reliable commitment review was available"
     assert brief.body =~ "## Checked"
     assert brief.body =~ "## Unknowns"
+    assert brief.body =~ "Today's move: refresh Gmail and Calendar"
     assert brief.metadata["generation_mode"] == "llm"
     refute brief.error_message
     refute brief.body =~ "Commitment check needs source review"
+    refute brief.summary =~ "No new commitments were found"
   end
 
   test "invalid model output records a source-backed fallback without heuristic todo creation", %{

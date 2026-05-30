@@ -462,6 +462,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        User-facing copy requirements:
        - Write directly to the operator as "you"; never write "the user" or
          "User committed".
+       - If no new commitments are saved, do not write an all-clear. State
+         what was checked, what remains unknown, and end with "Today's move:".
        - Every todo title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,
          and the best next step.
@@ -521,7 +523,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     end
   end
 
-  defp report_or_error_notice({:ok, report}, _response, _tracker_input), do: {report, "llm", nil}
+  defp report_or_error_notice({:ok, report}, _response, tracker_input),
+    do: {repair_commitment_report(report, tracker_input), "llm", nil}
 
   defp report_or_error_notice({:error, reason}, response, tracker_input) do
     error_message =
@@ -535,6 +538,99 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
     {fallback_commitment_report(tracker_input), "source_fallback", error_message}
   end
+
+  defp repair_commitment_report(report, tracker_input) when is_map(report) do
+    todos = read_list(report, "todos")
+
+    if todos == [] do
+      report
+      |> Map.put("summary", repair_empty_commitment_summary(report, tracker_input))
+      |> Map.put("body", repair_empty_commitment_body(report, tracker_input))
+    else
+      report
+    end
+  end
+
+  defp repair_commitment_report(report, _tracker_input), do: report
+
+  defp repair_empty_commitment_summary(report, tracker_input) do
+    summary = read_string(report, "summary", "")
+
+    if overconfident_empty_summary?(summary) do
+      empty_commitment_fallback_summary(tracker_input)
+    else
+      summary
+    end
+  end
+
+  defp repair_empty_commitment_body(report, tracker_input) do
+    body = read_string(report, "body", "")
+    open_todos = tracker_input |> read_map("open_work") |> read_list("todos")
+    gmail = read_map(tracker_input, "gmail")
+    calendar = read_map(tracker_input, "calendar")
+    inbox_count = gmail |> read_list("recent_inbox") |> length()
+    sent_count = gmail |> read_list("recent_sent") |> length()
+    calendar_count = calendar |> read_list("upcoming_events") |> length()
+
+    [
+      body,
+      unless contains_heading?(body, "Checked") do
+        fallback_section(
+          "Checked",
+          fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count)
+        )
+      end,
+      unless contains_heading?(body, "Unknowns") do
+        fallback_section(
+          "Unknowns",
+          fallback_unknown_lines(inbox_count, sent_count, calendar_count)
+        )
+      end,
+      unless String.contains?(String.downcase(body), "today's move:") do
+        fallback_commitment_move(open_todos, inbox_count, sent_count, calendar_count)
+      end
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+    |> String.trim()
+  end
+
+  defp empty_commitment_fallback_summary(tracker_input) when is_map(tracker_input) do
+    open_todos = tracker_input |> read_map("open_work") |> read_list("todos")
+    gmail = read_map(tracker_input, "gmail")
+    calendar = read_map(tracker_input, "calendar")
+
+    fallback_commitment_summary(
+      open_todos,
+      gmail |> read_list("recent_inbox") |> length(),
+      gmail |> read_list("recent_sent") |> length(),
+      calendar |> read_list("upcoming_events") |> length()
+    )
+  end
+
+  defp empty_commitment_fallback_summary(_tracker_input) do
+    fallback_commitment_summary([], 0, 0, 0)
+  end
+
+  defp overconfident_empty_summary?(summary) when is_binary(summary) do
+    normalized = summary |> String.downcase() |> String.trim()
+
+    normalized == "" or
+      String.contains?(normalized, "no new commitments were found") or
+      String.contains?(normalized, "no new commitments found") or
+      String.contains?(normalized, "nothing new was found") or
+      String.contains?(normalized, "nothing is owed") or
+      String.contains?(normalized, "all clear")
+  end
+
+  defp overconfident_empty_summary?(_summary), do: true
+
+  defp contains_heading?(body, heading) when is_binary(body) and is_binary(heading) do
+    Regex.match?(~r/(^|\n)\s{0,3}#{Regex.escape(heading)}\s*:?(\n|$)/i, body) or
+      Regex.match?(~r/(^|\n)\s{0,3}#{Regex.escape("## " <> heading)}\s*(\n|$)/i, body)
+  end
+
+  defp contains_heading?(_body, _heading), do: false
 
   defp fallback_commitment_report(tracker_input) when is_map(tracker_input) do
     open_todos = tracker_input |> read_map("open_work") |> read_list("todos")
