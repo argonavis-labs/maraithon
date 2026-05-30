@@ -240,6 +240,9 @@ final class SourceStatusPublisher {
         guard let issue = activeIssue, issue.severity == .error else {
             return nil
         }
+        if SourceState.isUserRecoverablePermissionReason(issue.reason) {
+            return nil
+        }
         return issue
     }
 

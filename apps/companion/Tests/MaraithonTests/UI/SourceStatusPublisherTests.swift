@@ -80,6 +80,30 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(publisher.activeBlockingIssue?.reason, "1 item did not sync.")
     }
 
+    func testRecoverablePermissionFailuresDoNotBecomeGenericBlockingIssues() {
+        for reason in [
+            "calendar_not_authorized",
+            "imessage_full_disk_access_required",
+            "notes_full_disk_access_required",
+            "reminders_not_authorized",
+            "voice_memos_speech_not_authorized",
+            "voice_memos_full_disk_access_required"
+        ] {
+            let publisher = SourceStatusPublisher(state: .connected)
+
+            publisher.recordCycleFailure(at: Date(), reason: reason)
+
+            XCTAssertEqual(
+                publisher.displayedState(),
+                .error(reason: reason)
+            )
+            XCTAssertNil(
+                publisher.activeBlockingIssue,
+                "\(reason) should render the focused permission unblock view"
+            )
+        }
+    }
+
     func testDefaultFailureSummaryAvoidsServerRejectionLanguage() {
         let publisher = SourceStatusPublisher(state: .connected)
 
