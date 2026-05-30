@@ -20,7 +20,16 @@ defmodule MaraithonWeb.AgentsLiveTest do
       Maraithon.LogBuffer.clear()
     end)
 
-    {:ok, conn: log_in_test_user(conn, @user_email)}
+    {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(@user_email)
+    {:ok, _user} = Maraithon.Repo.update(Ecto.Changeset.change(user, is_admin: false))
+    {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
+
+    conn =
+      conn
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> Plug.Conn.put_session("user_session_token", token)
+
+    {:ok, conn: conn}
   end
 
   test "highlights the Automations tab on /agents", %{conn: conn} do
@@ -199,60 +208,49 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "No automations yet."
   end
 
-  test "selected inspection shows logs, events, queue, spend, and config", %{conn: conn} do
-    {:ok, agent} =
-      create_agent(%{
-        behavior: "prompt_agent",
-        config: %{
-          "name" => "inspected-agent",
-          "prompt" => "Inspect me",
-          "budget" => %{"llm_calls" => 100, "tool_calls" => 50}
-        },
-        status: "stopped"
-      })
+  test "selected inspection hides operational diagnostics for standard users", %{conn: conn} do
+    agent = create_inspected_agent(@user_email)
 
-    {:ok, _event} =
-      Maraithon.Events.append(agent.id, "inspection_ready", %{
-        message: "DBConnection.ConnectionError token=secret stacktrace"
-      })
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
+    html = render(view)
 
-    {:ok, _effect} =
-      %Effect{}
-      |> Effect.changeset(%{
-        id: Ecto.UUID.generate(),
-        agent_id: agent.id,
-        idempotency_key: Ecto.UUID.generate(),
-        effect_type: "tool_call",
-        status: "failed",
-        attempts: 2,
-        error: "Tool failed: DBConnection.ConnectionError token=secret stacktrace"
-      })
-      |> Maraithon.Repo.insert()
+    assert html =~ "Recent updates"
+    assert html =~ "Inspection ready"
+    assert html =~ "Recorded automation activity."
+    assert html =~ "Instructions"
+    assert html =~ "Inspect me"
+    refute html =~ "Work in progress"
+    refute html =~ "Upcoming checks"
+    refute html =~ "Heartbeat"
+    refute html =~ "Usage"
+    refute html =~ "Current settings"
+    refute html =~ "agent inspection log"
+    refute html =~ "Automation notes"
+    refute html =~ "Diagnostic details are hidden from this view."
+    refute html =~ "Action did not complete. No confirmed change was recorded."
+    refute html =~ "Operating model"
+    refute html =~ "Run controls"
+    refute html =~ "Maraithon Automation Service"
+    refute html =~ "Advanced diagnostics"
+    refute html =~ "Tool failed"
+    refute html =~ "DBConnection"
+    refute html =~ "token=secret"
+    refute html =~ "stacktrace"
+    refute html =~ "Raw log lines"
+    refute html =~ "Run Queue"
+    refute html =~ "Scheduled Work"
+    refute html =~ "Current Setup"
+    refute html =~ "Operational Notes"
+    refute html =~ "Agent Runtime"
+    refute html =~ "Maraithon Agent Service"
+    refute html =~ "Runtime contract"
+    refute html =~ "OTP Agent Runtime"
+  end
 
-    {:ok, _job} =
-      %ScheduledJob{}
-      |> ScheduledJob.changeset(%{
-        agent_id: agent.id,
-        job_type: "heartbeat",
-        fire_at: DateTime.utc_now(),
-        status: "pending",
-        attempts: 1
-      })
-      |> Maraithon.Repo.insert()
-
-    Maraithon.LogBuffer.record(%{
-      level: :warning,
-      message: "agent inspection log",
-      metadata: %{agent_id: agent.id}
-    })
-
-    Maraithon.LogBuffer.record(%{
-      level: :error,
-      message: "DBConnection.ConnectionError token=secret stacktrace",
-      metadata: %{agent_id: agent.id, token: "secret"}
-    })
-
-    _ = :sys.get_state(Maraithon.LogBuffer)
+  test "selected inspection shows operational diagnostics for admins" do
+    admin_email = "agents-admin@example.com"
+    agent = create_inspected_agent(admin_email)
+    conn = build_conn() |> log_in_admin_user(admin_email)
 
     {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}")
     html = render(view)
@@ -429,6 +427,65 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     assert html =~ "No automations match the current filters."
     assert html =~ "Reset filters"
+  end
+
+  defp create_inspected_agent(user_id) do
+    {:ok, agent} =
+      create_agent(%{
+        user_id: user_id,
+        behavior: "prompt_agent",
+        config: %{
+          "name" => "inspected-agent",
+          "prompt" => "Inspect me",
+          "budget" => %{"llm_calls" => 100, "tool_calls" => 50}
+        },
+        status: "stopped"
+      })
+
+    {:ok, _event} =
+      Maraithon.Events.append(agent.id, "inspection_ready", %{
+        message: "DBConnection.ConnectionError token=secret stacktrace"
+      })
+
+    {:ok, _effect} =
+      %Effect{}
+      |> Effect.changeset(%{
+        id: Ecto.UUID.generate(),
+        agent_id: agent.id,
+        idempotency_key: Ecto.UUID.generate(),
+        effect_type: "tool_call",
+        status: "failed",
+        attempts: 2,
+        error: "Tool failed: DBConnection.ConnectionError token=secret stacktrace"
+      })
+      |> Maraithon.Repo.insert()
+
+    {:ok, _job} =
+      %ScheduledJob{}
+      |> ScheduledJob.changeset(%{
+        agent_id: agent.id,
+        job_type: "heartbeat",
+        fire_at: DateTime.utc_now(),
+        status: "pending",
+        attempts: 1
+      })
+      |> Maraithon.Repo.insert()
+
+    Maraithon.LogBuffer.record(%{
+      level: :warning,
+      message: "agent inspection log",
+      metadata: %{agent_id: agent.id}
+    })
+
+    Maraithon.LogBuffer.record(%{
+      level: :error,
+      message: "DBConnection.ConnectionError token=secret stacktrace",
+      metadata: %{agent_id: agent.id, token: "secret"}
+    })
+
+    _ = :sys.get_state(Maraithon.LogBuffer)
+
+    agent
   end
 
   defp create_agent(attrs) do

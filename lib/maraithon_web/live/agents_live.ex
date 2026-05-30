@@ -27,6 +27,7 @@ defmodule MaraithonWeb.AgentsLive do
       assign(socket,
         page_title: "Automations",
         current_path: "/agents",
+        diagnostics_visible: admin_user?(socket.assigns.current_user),
         status_options: @status_options,
         filters: default_filters(),
         all_agents: [],
@@ -704,7 +705,7 @@ defmodule MaraithonWeb.AgentsLive do
             </nav>
           </:header>
 
-          <%= if @inspection_errors != [] do %>
+          <%= if @diagnostics_visible and @inspection_errors != [] do %>
             <div class="border-b border-amber-200 bg-amber-50 px-5 py-4">
               <%= for error <- @inspection_errors do %>
                 <div class="text-sm text-amber-900">
@@ -1088,15 +1089,24 @@ defmodule MaraithonWeb.AgentsLive do
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
                       <.summary_card title="Signals to watch" value={subscriptions_preview(@selected_agent.config)} />
                       <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
-                      <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
-                      <.summary_card title="Spend" value={"$#{Float.round(@agent_spend.total_cost, 4)}"} value_class="text-amber-700" />
+                      <.summary_card
+                        :if={@diagnostics_visible}
+                        title="Updates"
+                        value={to_string(@inspection.event_count)}
+                      />
+                      <.summary_card
+                        :if={@diagnostics_visible}
+                        title="Spend"
+                        value={"$#{Float.round(@agent_spend.total_cost, 4)}"}
+                        value_class="text-amber-700"
+                      />
                     </div>
 
-                    <%= if @selected_architecture do %>
+                    <%= if @diagnostics_visible and @selected_architecture do %>
                       <.architecture_card architecture={@selected_architecture} mode="full" />
                     <% end %>
 
-                    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div :if={@diagnostics_visible} class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                       <.panel class="bg-amber-50">
                         <.heading level={3} class="text-base/7 text-amber-950">Usage</.heading>
                         <dl class="mt-3 space-y-2 text-sm">
@@ -1132,7 +1142,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <p class="mt-3 whitespace-pre-wrap text-sm/6 text-zinc-700"><%= agent_prompt(@selected_agent.config) %></p>
                     </.panel>
 
-                    <.panel>
+                    <.panel :if={@diagnostics_visible}>
                       <:header>
                         <.heading level={3} class="text-base/7">Work in progress</.heading>
                         <.text class="mt-1">
@@ -1175,7 +1185,7 @@ defmodule MaraithonWeb.AgentsLive do
                       </div>
                     </.panel>
 
-                    <.panel>
+                    <.panel :if={@diagnostics_visible}>
                       <:header>
                         <.heading level={3} class="text-base/7">Upcoming checks</.heading>
                         <.text class="mt-1">
@@ -1245,7 +1255,10 @@ defmodule MaraithonWeb.AgentsLive do
                       </div>
                     </.panel>
 
-                    <section class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm">
+                    <section
+                      :if={@diagnostics_visible}
+                      class="overflow-hidden rounded-lg border border-zinc-950 bg-zinc-950 shadow-sm"
+                    >
                       <div class="border-b border-white/10 px-4 py-4">
                         <h3 class="text-base/7 font-semibold text-white">Automation notes</h3>
                         <p class="mt-1 text-sm/6 text-zinc-400">
@@ -1273,7 +1286,7 @@ defmodule MaraithonWeb.AgentsLive do
                   </div>
 
                   <details
-                    :if={chief_of_staff_agent?(@selected_agent)}
+                    :if={@diagnostics_visible and chief_of_staff_agent?(@selected_agent)}
                     class="rounded-lg border border-zinc-950/10 bg-white px-5 py-4 shadow-sm"
                   >
                     <summary class="cursor-pointer list-none">
@@ -1424,7 +1437,9 @@ defmodule MaraithonWeb.AgentsLive do
            agent.id,
            user_id: current_user_id(socket),
            event_limit: @event_limit,
-           log_limit: 80
+           effect_limit: diagnostic_limit(socket, :effect),
+           job_limit: diagnostic_limit(socket, :job),
+           log_limit: diagnostic_limit(socket, :log)
          ) do
       {:ok, snapshot} ->
         {:ok,
@@ -1433,7 +1448,7 @@ defmodule MaraithonWeb.AgentsLive do
            selected_agent: preload_agent_display_data(snapshot.agent),
            selected_architecture: architecture_for_agent(snapshot.agent),
            selected_panel: panel,
-           events: snapshot.events,
+           events: visible_agent_events(snapshot.events, socket.assigns.diagnostics_visible),
            agent_spend: snapshot.spend,
            inspection: snapshot.inspection,
            inspection_errors: snapshot.errors,
@@ -1949,6 +1964,31 @@ defmodule MaraithonWeb.AgentsLive do
       recent_logs: []
     }
   end
+
+  defp admin_user?(%{is_admin: true}), do: true
+  defp admin_user?(_current_user), do: false
+
+  defp diagnostic_limit(%{assigns: %{diagnostics_visible: true}}, :log), do: 80
+  defp diagnostic_limit(%{assigns: %{diagnostics_visible: true}}, _kind), do: 3
+  defp diagnostic_limit(_socket, :log), do: 1
+  defp diagnostic_limit(_socket, _kind), do: 0
+
+  defp visible_agent_events(events, true), do: events
+
+  defp visible_agent_events(events, false) when is_list(events) do
+    Enum.filter(events, &agent_event_visible?(&1, false))
+  end
+
+  defp visible_agent_events(_events, false), do: []
+
+  defp agent_event_visible?(_event, true), do: true
+
+  defp agent_event_visible?(%{event_type: event_type}, false) when is_binary(event_type) do
+    normalized = String.downcase(event_type)
+    not String.contains?(normalized, ["fail", "error", "exception"])
+  end
+
+  defp agent_event_visible?(_event, false), do: true
 
   defp merge_degraded_inspection(current, degraded) do
     %{current | recent_logs: degraded.recent_logs}
