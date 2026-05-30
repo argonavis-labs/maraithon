@@ -35,8 +35,8 @@ Routing metadata:
 - Always include useful source metadata: thread ID, message ID, event ID, account, quote, source ref, and source tags.
 - For human follow-ups, include memory-jogging relationship context in metadata: `company`, `organization`, `relationship_context`, `relationship_strength` when known, `why_it_matters`, and enough `source_tags` to identify the project/company.
 - For personal/family items that are legitimately in scope, set `metadata.life_domain` to `personal`, `family`, or `home`.
-- Preserve OmniFocus intent in metadata when obvious: `metadata.omni_project`, `metadata.source_tags`, and `runner` plus the source tag when relevant. Do not say OmniFocus was written in the body unless it actually was.
-- Prefer a project guess over leaving project metadata blank when the source clearly points to Runner, Agora, health, finances, home improvements, personal, or a named family/person project.
+- Preserve OmniFocus intent in metadata when obvious: `metadata.omni_project`, `metadata.source_tags`, and the relevant project/source tag when available. Do not say OmniFocus was written in the body unless it actually was.
+- Prefer a project guess over leaving project metadata blank when the source clearly points to a named company, active customer, health, finances, home improvements, personal, or a named family/person project.
 
 Output requirements:
 - Return only valid JSON. No prose outside JSON.
@@ -61,8 +61,8 @@ JSON shape:
   "todos": [
     {
       "source": "gmail",
-      "title": "Send Elena the revised ambassador agreement",
-      "summary": "You owe Elena the revised Runner ambassador agreement.",
+      "title": "Send Elena the revised partner agreement",
+      "summary": "You owe Elena the revised partner agreement.",
       "next_action": "Open the latest agreement draft, confirm terms, and send it to Elena.",
       "due_at": "2026-05-10T13:00:00Z",
       "notes": "To: Elena Saradidis\nDirection: i_owe\nSource: gmail\nRef: thread-123\nQuote: \"I'll send the revised version tomorrow.\"",
@@ -77,16 +77,16 @@ JSON shape:
         {
           "first_name": "Elena",
           "last_name": "Saradidis",
-          "relationship": "Runner ambassador",
+          "relationship": "partner program contact",
           "preferred_communication_method": "email"
         }
       ],
       "metadata": {
         "commitment_direction": "i_owe",
         "source_ref": "gmail thread-123",
-        "source_tags": ["runner", "gmail"],
+        "source_tags": ["partner-program", "gmail"],
         "quote": "I'll send the revised version tomorrow.",
-        "omni_project": "Runner"
+        "omni_project": "Partner Program"
       }
     }
   ]

@@ -63,29 +63,29 @@ Create a complete executive brief from the connector payloads.
 Reference shape to target on packed days:
 
 ```markdown
-# Wed, May 27 - Heavy Agora day, packed evening, get the launch-video pivot landed
+# Wed, May 27 - Heavy customer day, packed evening, get the launch pivot landed
 
 ## Needs Your Attention
-- **Sara Franca 11:30 has duplicate invites**. Draft sent to lock the Google Meet and decline Teams. -> review actc_...c154 and fire before 11am.
-- **27+ launch-video / commitment cards still pending**. -> spend 15 minutes ripping through the card stack this morning.
+- **Maya Chen 11:30 has duplicate invites**. Draft ready to lock the Google Meet and decline Teams. -> review the duplicate-invite card and send before 11am.
+- **27+ launch / commitment cards still pending**. -> spend 15 minutes ripping through the card stack this morning.
 
 ## Today's Schedule
-- **11:00-11:45** - Runner Weekly Planning.
-- **11:30-12:00** - Sara Franca. Conflicts with weekly planning; use Google Meet, drop Teams, and leave planning early or push Sara to 11:45.
+- **11:00-11:45** - Company weekly planning.
+- **11:30-12:00** - Maya Chen. Conflicts with weekly planning; use Google Meet, drop Teams, and leave planning early or push Maya to 11:45.
 
 ## Inbox
-259 unread total · Runner [28] · Agora [201] · Personal [201 - mostly noise]
+259 unread total · Company [28] · Customer account [21] · Personal [201 - mostly noise]
 
 ## Slack
-- **#growthcrew-x-runner** - Brent/Benji want event counts validated. -> draft actc_...c9c8 queued; Kevin's PR is the blocker.
+- **#customer-launch** - Account team wants event counts validated. -> draft queued; the product owner PR is the blocker.
 
 ## Open Commitments
 61 active · 3 due today · 22 overdue
-- **Reply to Renat** -> decline card actc_...c198 pending · OF k2_kp3zotvz.
+- **Reply to the design partner** -> decline-card draft pending · OmniFocus follow-up task.
 Not a draft job: payment updates, dashboard approvals, and judgment calls.
 
 ## Look Ahead
-Tomorrow starts early; unblock Alex before the workshop.
+Tomorrow starts early; unblock the customer owner before the workshop.
 
 Today's move: clear the pending action-card stack before opening lower-signal inbox.
 ```
@@ -102,7 +102,7 @@ Shape to emulate:
 - **1:00** - Team standup. Push for the launch-video decision live.
 
 ## Decisions / Follow-ups
-- **Justin Dean is still waiting** - Gmail connector send-bug fix shipped. Send the promised update today.
+- **Jordan Lee is still waiting** - customer import fix shipped. Send the promised update today.
 
 Today's move: use the first desk block to clear the oldest overdue commitment before opening lower-signal inbox.
 ```
