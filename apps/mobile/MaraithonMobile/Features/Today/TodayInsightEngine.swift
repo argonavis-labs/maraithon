@@ -153,10 +153,9 @@ enum TodayInsightEngine {
                     title: todo.title,
                     subtitle: todoFocusSubtitle(
                         for: todo,
-                        fallback: dueSubtitle(for: dueDate, now: now),
-                        prefix: dueSubtitle(for: dueDate, now: now)
+                        fallbackAction: "Handle, move, or dismiss it."
                     ),
-                    detail: todoFocusDetail(for: todo),
+                    detail: todoFocusDetail(for: todo, context: dueSubtitle(for: dueDate, now: now)),
                     systemImage: "clock.badge.exclamationmark",
                     priority: 100 + priorityWeight(for: todo.priority)
                 )
@@ -168,8 +167,11 @@ enum TodayInsightEngine {
                     kind: .todo,
                     referenceID: todo.id,
                     title: todo.title,
-                    subtitle: todoFocusSubtitle(for: todo, fallback: "Due today", prefix: "Today"),
-                    detail: todoFocusDetail(for: todo),
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallbackAction: "Finish, move, or reschedule it before tomorrow."
+                    ),
+                    detail: todoFocusDetail(for: todo, context: "Due today"),
                     systemImage: todo.priority.symbolName,
                     priority: 80 + priorityWeight(for: todo.priority)
                 )
@@ -182,10 +184,9 @@ enum TodayInsightEngine {
                     title: todo.title,
                     subtitle: todoFocusSubtitle(
                         for: todo,
-                        fallback: "\(todo.priority.title) urgency",
-                        prefix: todo.priority.title
+                        fallbackAction: "Decide, delegate, or schedule a concrete next move."
                     ),
-                    detail: todoFocusDetail(for: todo),
+                    detail: todoFocusDetail(for: todo, context: "\(todo.priority.title) priority"),
                     systemImage: todo.priority.symbolName,
                     priority: todo.priority == .critical ? 85 : 65
                 )
@@ -202,7 +203,7 @@ enum TodayInsightEngine {
                     kind: .contact,
                     referenceID: contact.id,
                     title: contact.name,
-                    subtitle: "\(relationshipContext(for: contact)) needs follow-up",
+                    subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
                     detail: relationshipDetail(for: contact, now: now),
                     systemImage: "person.crop.circle.badge.exclamationmark",
                     priority: 75
@@ -215,7 +216,7 @@ enum TodayInsightEngine {
                     kind: .contact,
                     referenceID: contact.id,
                     title: contact.name,
-                    subtitle: "Follow up with \(relationshipContext(for: contact))",
+                    subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
                     detail: relationshipDetail(for: contact, now: now),
                     systemImage: "person.wave.2",
                     priority: 60
@@ -275,6 +276,10 @@ enum TodayInsightEngine {
             return "\(title) is past due. \(briefMove(for: lead) ?? "Handle, move, or dismiss it.")"
         }
 
+        if let move = briefMove(for: lead) {
+            return "\(count) past-due work items are still open. Start with \(title): \(move)"
+        }
+
         return "\(count) past-due work items are still open. Start with \(title)."
     }
 
@@ -285,6 +290,10 @@ enum TodayInsightEngine {
 
         if count == 1 {
             return "\(title) is due today. \(briefMove(for: lead) ?? "Move it before tomorrow or reschedule it.")"
+        }
+
+        if let move = briefMove(for: lead) {
+            return "\(count) work items are due today. Start with \(title): \(move)"
         }
 
         return "\(count) work items are due today. Start with \(title)."
@@ -309,6 +318,10 @@ enum TodayInsightEngine {
 
         if count == 1 {
             return "\(title) needs a date, next action, or close decision."
+        }
+
+        if let move = briefMove(for: lead) {
+            return "\(count) open work items need triage. Start with \(title): \(move)"
         }
 
         return "\(count) open work items need triage. Start with \(title)."
@@ -376,25 +389,25 @@ enum TodayInsightEngine {
 
     private static func todoFocusSubtitle(
         for todo: TodoItem,
-        fallback: String,
-        prefix: String
+        fallbackAction: String
     ) -> String {
         if let decisionPrompt = cleanedText(todo.decisionPrompt) {
             return decisionPrompt
         }
 
         guard let nextAction = cleanedText(todo.displayNextAction) else {
-            return fallback
+            return "Next: \(sentence(fallbackAction))"
         }
 
-        return "\(prefix): \(nextAction)"
+        return "Next: \(sentence(nextAction))"
     }
 
-    private static func todoFocusDetail(for todo: TodoItem) -> String? {
+    private static func todoFocusDetail(for todo: TodoItem, context: String?) -> String? {
+        let context = cleanedText(context).map(sentence)
         let whyNow = cleanedText(todo.whyNow).map { "Why now: \($0)" }
         let sourceContext = cleanedText(todo.sourceContext)
 
-        return [whyNow, sourceContext]
+        return [context, whyNow, sourceContext]
             .compactMap { $0 }
             .joined(separator: " ")
             .nilIfBlank

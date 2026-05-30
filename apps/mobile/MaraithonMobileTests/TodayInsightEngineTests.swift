@@ -99,12 +99,12 @@ struct TodayInsightEngineTests {
             calendar: calendar
         )
 
-        #expect(queue.first { $0.referenceID == atRisk.id }?.subtitle == "Ada Chen needs follow-up")
-        #expect(queue.first { $0.referenceID == proposal.id }?.subtitle == "Follow up with Mason Patel")
+        #expect(queue.first { $0.referenceID == atRisk.id }?.subtitle == "Next: Follow up with Ada Chen")
+        #expect(queue.first { $0.referenceID == proposal.id }?.subtitle == "Next: Follow up with Mason Patel")
     }
 
     @Test
-    func focusQueueUsesUrgencyLanguageForHighUrgencyTodos() {
+    func focusQueueGivesDefaultNextMoveForHighPriorityWork() {
         let critical = TodoItem(title: "Decide board response", priority: .critical)
         let high = TodoItem(title: "Book prep call", priority: .high)
         let normal = TodoItem(title: "Draft recap", priority: .medium)
@@ -115,7 +115,12 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.map(\.title) == ["Decide board response", "Book prep call"])
-        #expect(queue.map(\.subtitle) == ["Critical urgency", "High urgency"])
+        #expect(queue.map(\.subtitle) == [
+            "Next: Decide, delegate, or schedule a concrete next move.",
+            "Next: Decide, delegate, or schedule a concrete next move."
+        ])
+        #expect(queue[0].detail == "Critical priority.")
+        #expect(queue[1].detail == "High priority.")
     }
 
     @Test
@@ -152,9 +157,12 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.map(\.title) == ["Investor reply", "Customer support plan", "Decide board response"])
-        #expect(queue[0].subtitle.contains("Send the revised terms"))
-        #expect(queue[1].subtitle == "Today: Reply with the support plan, owner, and next review date.")
-        #expect(queue[2].subtitle == "Critical: Choose the answer and send it to the board thread.")
+        #expect(queue[0].subtitle == "Next: Send the revised terms before the board packet closes.")
+        #expect(queue[0].detail?.hasPrefix("Due ") == true)
+        #expect(queue[1].subtitle == "Next: Reply with the support plan, owner, and next review date.")
+        #expect(queue[1].detail == "Due today.")
+        #expect(queue[2].subtitle == "Next: Choose the answer and send it to the board thread.")
+        #expect(queue[2].detail == "Critical priority.")
     }
 
     @Test
@@ -181,7 +189,9 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.subtitle == "Decide whether to send the campaign owner and ETA.")
-        #expect(queue.first?.detail == "Why now: Michael is waiting and no later reply was found. Checked Gmail")
+        #expect(queue.first?.detail?.localizedCaseInsensitiveContains("due ") == true)
+        #expect(queue.first?.detail?.contains("Why now: Michael is waiting and no later reply was found.") == true)
+        #expect(queue.first?.detail?.contains("Checked Gmail") == true)
     }
 
     @Test
@@ -206,7 +216,7 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.subtitle == "You need to approve the finance reply.")
-        #expect(queue.first?.detail == "Why now: This needs your attention before noon. Checked Gmail")
+        #expect(queue.first?.detail == "High priority. Why now: This needs your attention before noon. Checked Gmail")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("telegram_fit_score") == false)
     }
 
@@ -233,7 +243,7 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.title == "Ada Chen")
-        #expect(queue.first?.subtitle == "Northstar needs follow-up")
+        #expect(queue.first?.subtitle == "Next: Follow up with Northstar")
         #expect(queue.first?.detail == "Last reached out \(AppFormatters.relativeString(for: lastContactedAt, relativeTo: now)). Prefers concise weekly updates.")
     }
 
@@ -336,7 +346,7 @@ struct TodayInsightEngineTests {
             calendar: calendar
         )
 
-        #expect(brief.subtitle == "2 past-due work items are still open. Start with Investor reply.")
+        #expect(brief.subtitle == "2 past-due work items are still open. Start with Investor reply: Send the revised terms before the board packet closes.")
     }
 
     @Test
