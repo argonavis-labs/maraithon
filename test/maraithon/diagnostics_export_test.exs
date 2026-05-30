@@ -105,7 +105,7 @@ defmodule Maraithon.DiagnosticsExportTest do
     refute encoded =~ "token=secret"
 
     assert encoded =~
-             "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+             "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
 
     assert encoded =~ "That run did not complete. Review the last action before running it again."
 

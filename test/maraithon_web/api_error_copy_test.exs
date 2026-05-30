@@ -62,7 +62,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     raw = "http_status: 500 internal_stacktrace db_timeout token=secret"
 
     assert ApiErrorCopy.mobile_chat_run_error(raw) ==
-             "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+             "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
 
     assert ApiErrorCopy.mobile_chat_run_error("google_account_not_connected") ==
              "Connect the missing account before running this again."

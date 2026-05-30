@@ -7,7 +7,7 @@ defmodule Maraithon.RunErrorCopy do
   debugging, but route user-facing run history and exports through this module.
   """
 
-  @assistant_fallback "I could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+  @assistant_fallback "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
   @agent_fallback "That run did not complete. Review the last action before running it again."
   @scheduled_task_fallback "That scheduled task did not complete. Review it before running it again."
   @runtime_fallback "Operation did not complete. Check the connection before running it again."
