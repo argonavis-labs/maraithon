@@ -10,6 +10,12 @@ struct TodoRowCopyTests {
         #expect(TodoEditorCopy.titlePlaceholder == "What needs to happen")
         #expect(TodoEditorCopy.notesPlaceholder == "Context")
         #expect(TodoEditorCopy.nextActionPlaceholder == "Next move")
+        #expect(TodoEditorCopy.decisionContextSectionTitle == "Decision context")
+        #expect(TodoEditorCopy.decisionPromptLabel == "Decision")
+        #expect(TodoEditorCopy.whyNowLabel == "Why now")
+        #expect(TodoEditorCopy.sourceContextLabel == "What Maraithon checked")
+        #expect(TodoEditorCopy.preparedMoveLabel == "Prepared move")
+        #expect(TodoEditorCopy.evidenceLabel == "Evidence")
         #expect(TodoEditorCopy.timingSectionTitle == "Timing")
         #expect(TodoEditorCopy.dueDateToggleTitle == "Add due date")
         #expect(TodoEditorCopy.relatedPersonSectionTitle == "Related person")
@@ -55,5 +61,64 @@ struct TodoRowCopyTests {
         )
 
         #expect(copy == "Today")
+    }
+
+    @Test
+    func decisionContextPrioritizesSourceBackedCardOverGenericNotes() {
+        let todo = TodoItem(
+            title: "Send Michael the campaign update",
+            notes: "Michael asked for campaign status.",
+            nextAction: "Reply to Michael",
+            decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+            whyNow: "Michael is waiting and no later reply was found.",
+            sourceContext: "Checked Gmail",
+            nextBestAction: "Approve a short reply.",
+            evidenceExcerpt: "Can you send the next update?"
+        )
+
+        let context = TodoDecisionContext(todo: todo)
+
+        #expect(context.rowContext == "Decide whether to send the campaign owner and ETA.")
+        #expect(context.rowReason == "Why now: Michael is waiting and no later reply was found. Checked Gmail")
+        #expect(context.rowMove == "Approve a short reply.")
+        #expect(context.preparedMove == "Approve a short reply.")
+        #expect(context.evidence == "Can you send the next update?")
+        #expect(context.hasChiefOfStaffContext)
+    }
+
+    @Test
+    func decisionContextFallsBackToCleanNotesAndNextActionWithoutActionCard() {
+        let todo = TodoItem(
+            title: "Review customer plan",
+            notes: "Customer asked for the revised rollout plan.",
+            nextAction: "Send revised rollout plan."
+        )
+
+        let context = TodoDecisionContext(todo: todo)
+
+        #expect(context.rowContext == "Customer asked for the revised rollout plan.")
+        #expect(context.rowReason == nil)
+        #expect(context.rowMove == "Send revised rollout plan.")
+        #expect(!context.hasChiefOfStaffContext)
+    }
+
+    @Test
+    func decisionContextSuppressesDuplicatePromptAndMove() {
+        let todo = TodoItem(
+            title: "Review customer plan",
+            notes: "Review customer plan",
+            nextAction: "Review customer plan",
+            decisionPrompt: "Review customer plan",
+            nextBestAction: "Review customer plan",
+            evidenceExcerpt: "Customer asked for the revised rollout plan."
+        )
+
+        let context = TodoDecisionContext(todo: todo)
+
+        #expect(context.rowContext == nil)
+        #expect(context.rowMove == nil)
+        #expect(context.preparedMove == nil)
+        #expect(context.evidence == "Customer asked for the revised rollout plan.")
+        #expect(context.hasChiefOfStaffContext)
     }
 }

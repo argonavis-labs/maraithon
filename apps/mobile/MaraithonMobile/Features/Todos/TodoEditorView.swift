@@ -18,6 +18,12 @@ struct TodoEditorView: View {
     @State private var errorMessage: String?
     @State private var isSaving = false
 
+    private var decisionContext: TodoDecisionContext? {
+        guard let todo else { return nil }
+        let context = TodoDecisionContext(todo: todo)
+        return context.hasChiefOfStaffContext ? context : nil
+    }
+
     init(
         todo: TodoItem? = nil,
         preselectedContact: CRMContact? = nil,
@@ -52,6 +58,45 @@ struct TodoEditorView: View {
                         ForEach(TodoPriority.allCases) { priority in
                             Label(priority.title, systemImage: priority.symbolName)
                                 .tag(priority)
+                        }
+                    }
+                }
+
+                if let decisionContext {
+                    Section(TodoEditorCopy.decisionContextSectionTitle) {
+                        if let decisionPrompt = decisionContext.decisionPrompt {
+                            contextLine(
+                                label: TodoEditorCopy.decisionPromptLabel,
+                                value: decisionPrompt
+                            )
+                        }
+
+                        if let whyNow = decisionContext.whyNow {
+                            contextLine(
+                                label: TodoEditorCopy.whyNowLabel,
+                                value: whyNow
+                            )
+                        }
+
+                        if let sourceContext = decisionContext.sourceContext {
+                            contextLine(
+                                label: TodoEditorCopy.sourceContextLabel,
+                                value: sourceContext
+                            )
+                        }
+
+                        if let preparedMove = decisionContext.preparedMove {
+                            contextLine(
+                                label: TodoEditorCopy.preparedMoveLabel,
+                                value: preparedMove
+                            )
+                        }
+
+                        if let evidence = decisionContext.evidence {
+                            contextLine(
+                                label: TodoEditorCopy.evidenceLabel,
+                                value: evidence
+                            )
                         }
                     }
                 }
@@ -94,6 +139,21 @@ struct TodoEditorView: View {
                 }
             }
         }
+    }
+
+    private func contextLine(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 2)
     }
 
     private func save() async {
@@ -180,6 +240,12 @@ enum TodoEditorCopy {
     static let titlePlaceholder = "What needs to happen"
     static let notesPlaceholder = "Context"
     static let nextActionPlaceholder = "Next move"
+    static let decisionContextSectionTitle = "Decision context"
+    static let decisionPromptLabel = "Decision"
+    static let whyNowLabel = "Why now"
+    static let sourceContextLabel = "What Maraithon checked"
+    static let preparedMoveLabel = "Prepared move"
+    static let evidenceLabel = "Evidence"
     static let urgencyPickerTitle = "Urgency"
     static let timingSectionTitle = "Timing"
     static let dueDateToggleTitle = "Add due date"
@@ -196,6 +262,12 @@ enum TodoEditorCopy {
             titlePlaceholder,
             notesPlaceholder,
             nextActionPlaceholder,
+            decisionContextSectionTitle,
+            decisionPromptLabel,
+            whyNowLabel,
+            sourceContextLabel,
+            preparedMoveLabel,
+            evidenceLabel,
             urgencyPickerTitle,
             timingSectionTitle,
             dueDateToggleTitle,

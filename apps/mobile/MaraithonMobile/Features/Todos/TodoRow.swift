@@ -4,6 +4,10 @@ struct TodoRow: View {
     let todo: TodoItem
     let onToggle: () -> Void
 
+    private var decisionContext: TodoDecisionContext {
+        TodoDecisionContext(todo: todo)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Button(action: onToggle) {
@@ -20,14 +24,21 @@ struct TodoRow: View {
                     .strikethrough(todo.isCompleted)
                     .foregroundStyle(todo.isCompleted ? .secondary : .primary)
 
-                if !todo.notes.isEmpty {
-                    Text(todo.notes)
+                if let rowContext = decisionContext.rowContext {
+                    Text(rowContext)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
 
-                if let nextAction = todo.displayNextAction {
+                if let rowReason = decisionContext.rowReason {
+                    Text(rowReason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if let nextAction = decisionContext.rowMove {
                     Label(nextAction, systemImage: "arrow.turn.down.right")
                         .font(.subheadline)
                         .foregroundStyle(.primary)
@@ -82,6 +93,77 @@ struct TodoRow: View {
             return .blue
         }
         return .secondary
+    }
+}
+
+struct TodoDecisionContext: Equatable {
+    let decisionPrompt: String?
+    let notesContext: String?
+    let whyNow: String?
+    let sourceContext: String?
+    let preparedMove: String?
+    let rowMove: String?
+    let evidence: String?
+
+    init(todo: TodoItem) {
+        let title = Self.cleanedText(todo.title)
+        let notes = Self.cleanedText(todo.notes)
+        let nextAction = todo.displayNextAction
+        let decisionPrompt = Self.uniqueText(
+            todo.decisionPrompt,
+            excluding: [title, notes, nextAction]
+        )
+        let preparedMove = Self.uniqueText(
+            todo.nextBestAction,
+            excluding: [title, notes, nextAction, decisionPrompt]
+        )
+
+        self.decisionPrompt = decisionPrompt
+        self.notesContext = Self.uniqueText(notes, excluding: [title, nextAction, decisionPrompt])
+        self.whyNow = Self.cleanedText(todo.whyNow)
+        self.sourceContext = Self.cleanedText(todo.sourceContext)
+        self.preparedMove = preparedMove
+        self.rowMove = preparedMove ?? nextAction
+        self.evidence = Self.cleanedText(todo.evidenceExcerpt)
+    }
+
+    var rowContext: String? {
+        decisionPrompt ?? notesContext
+    }
+
+    var rowReason: String? {
+        let whyNow = whyNow.map { "Why now: \($0)" }
+
+        let reason = [whyNow, sourceContext]
+            .compactMap { $0 }
+            .joined(separator: " ")
+
+        return Self.cleanedText(reason)
+    }
+
+    var hasChiefOfStaffContext: Bool {
+        decisionPrompt != nil ||
+            whyNow != nil ||
+            sourceContext != nil ||
+            preparedMove != nil ||
+            evidence != nil
+    }
+
+    private static func uniqueText(_ value: String?, excluding values: [String?]) -> String? {
+        guard let cleaned = cleanedText(value) else { return nil }
+        let isDuplicate = values.contains { other in
+            guard let other = cleanedText(other) else { return false }
+            return cleaned.compare(other, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        return isDuplicate ? nil : cleaned
+    }
+
+    private static func cleanedText(_ value: String?) -> String? {
+        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
+            return nil
+        }
+
+        return text
     }
 }
 
