@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Bottom-of-sidebar diagnostics pane. Pairs a single summary card
 /// (realtime channel state, total events synced today, total queued for
-/// retry, last sync per source) with the existing `LogsView` below it.
+/// retry, last check per source) with the existing `LogsView` below it.
 ///
 /// Invariants:
 ///   - Reuses `LogsView` verbatim — this view never duplicates log
@@ -66,7 +66,7 @@ struct DiagnosticsView: View {
             }
 
             VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-                SectionHeader("Last sync per source")
+                SectionHeader("Last checked per source")
                 if visibleSources.isEmpty {
                     ContentUnavailableView(
                         "No sources yet",

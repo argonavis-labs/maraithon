@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Detail pane for the Voice Memos source. Stats and recent activity
+/// Detail pane for the Voice Memos source. Coverage and recent checks
 /// read from the live `SourceStatusPublisher` so the user sees real
 /// numbers as batches land.
 struct VoiceMemosDetailView: View {
@@ -14,7 +14,7 @@ struct VoiceMemosDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "memo",
             syncedItemPlural: "memos",
-            emptyDescription: "After the first Voice Memos sync, this view shows recent memo activity and sync history.",
+            emptyDescription: "After the first Voice Memos check, this view shows recent memo activity and recent checks.",
             clearDataDescription: "This deletes every voice memo synced from this Mac from Maraithon's synced copy. The Voice Memos app on your device is not affected."
         )
     }

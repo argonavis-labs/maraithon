@@ -238,12 +238,12 @@ private struct DiagnosticsSourceRow: View {
 }
 
 enum DiagnosticsSettingsCopy {
-    static let intro = "Review sync health for each source. Expand a source to see recent batches and the last successful sync."
+    static let intro = "Review sync health for each source. Expand a source to see recent batches and the last successful check."
     static let developerModeDescription = "Shows Logs and Diagnostics for sync health, recent batches, and support troubleshooting. Off by default."
 
     @MainActor
     static func stateLine(publisher: SourceStatusPublisher?) -> String {
-        guard let publisher else { return "Status: Not registered. Last sync: Never" }
+        guard let publisher else { return "Status: Not registered. Last checked: Never" }
         let stateString: String
         switch publisher.displayedState() {
         case .connected: stateString = "Connected"
@@ -260,7 +260,7 @@ enum DiagnosticsSettingsCopy {
             f.formatOptions = [.withInternetDateTime]
             return f.string(from: date)
         } ?? "Never"
-        return "Status: \(stateString). Last sync: \(last)"
+        return "Status: \(stateString). Last checked: \(last)"
     }
 
     static func batchLine(_ event: SourceStatusPublisher.BatchEvent) -> String {

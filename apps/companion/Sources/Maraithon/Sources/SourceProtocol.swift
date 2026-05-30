@@ -77,7 +77,7 @@ final class SourceStatusPublisher {
     private var acceptedTodayBucket: Date? = nil
     private let calendar: Calendar
     /// Ring buffer of recent batches (newest first, capped at 20) used by
-    /// the per-source detail view's "Recent activity" table.
+    /// the per-source detail view's "Recent checks" table.
     private(set) var recentBatches: [BatchEvent] = []
     /// The current unresolved source issue, if any. A warning means most
     /// records are syncing but some work failed; an error means nothing

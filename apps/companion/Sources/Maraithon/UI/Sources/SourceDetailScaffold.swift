@@ -3,7 +3,7 @@ import SwiftUI
 /// Shared scaffolding used by every per-source detail pane (Notes, Voice
 /// Memos, Reminders, Calendar, Files, Browser History). Composes the
 /// four canonical sections IMessageDetailView introduced — status card,
-/// stats grid, controls row, and recent activity table — driven off the
+/// coverage grid, controls row, and recent checks table — driven off the
 /// real `SourceStatusPublisher` so the syncing animation tracks live
 /// source state.
 ///
@@ -20,7 +20,7 @@ struct SourceDetailScaffold: View {
     let activity: [SourceActivityRow]
     var syncedItemSingular: String = "item"
     var syncedItemPlural: String = "items"
-    var emptyDescription: String = "After the first sync, this view shows recent activity and sync history."
+    var emptyDescription: String = "After the first check, this view shows recent activity and recent checks."
     var clearDataDescription: String = "This deletes every record synced from this Mac from Maraithon's synced copy. Local data on your device is not affected."
 
     @Environment(AppEnvironment.self) private var env
@@ -46,8 +46,8 @@ struct SourceDetailScaffold: View {
     }
 
     /// Healthy detail pane. Shows the useful operational facts a user
-    /// needs when a source is green: current state, last successful sync,
-    /// recent totals, last-check counts, and the recent activity rows.
+    /// needs when a source is green: current state, last successful check,
+    /// recent totals, last-check counts, and recent checks.
     private var cleanUserView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xlarge) {
@@ -172,7 +172,7 @@ struct SourceDetailScaffold: View {
 
     private var statsSection: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader("Stats")
+            SectionHeader(SourceDetailCopy.coverageSectionTitle)
             let columns = [GridItem(.adaptive(minimum: 160), spacing: Tokens.Spacing.medium)]
             LazyVGrid(columns: columns, spacing: Tokens.Spacing.medium) {
                 ForEach(stats) { stat in
@@ -220,7 +220,7 @@ struct SourceDetailScaffold: View {
 
     private var activitySection: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
-            SectionHeader("Recent activity")
+            SectionHeader(SourceDetailCopy.recentChecksSectionTitle)
             if activity.isEmpty {
                 ContentUnavailableView(
                     "Nothing yet",
@@ -237,7 +237,7 @@ struct SourceDetailScaffold: View {
                     }
                     .width(min: 90, ideal: 110)
 
-                    TableColumn("Checked") { row in
+                    TableColumn("Found") { row in
                         Text(String(row.count))
                             .monospacedDigit()
                     }
@@ -452,7 +452,7 @@ struct SourceDetailScaffold: View {
         case .error(let r): prefix = SourceIssueCopy.status(r)
         }
         if let last = publisher.lastSyncAt {
-            return "\(prefix) — last sync \(SourceDetailCopy.relativeSyncTime(last))"
+            return "\(prefix) — checked \(SourceDetailCopy.relativeSyncTime(last))"
         }
         return prefix
     }
@@ -462,13 +462,15 @@ struct SourceDetailScaffold: View {
 /// source metrics in outcome language instead of sync-engine vocabulary
 /// like "accepted" or "duplicates."
 enum SourceDetailCopy {
+    static let coverageSectionTitle = "Coverage"
+    static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"
     static let lastBatchSyncedCaption = "synced"
     static let alreadySyncedTitle = "Already synced"
     static let alreadySyncedCaption = "last check"
     static let notSyncedTitle = "Not synced"
     static let notSyncedCaption = "last check"
-    static let lastSyncTitle = "Last sync"
+    static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
 
@@ -525,7 +527,7 @@ enum SourceDetailCopy {
             sentences.append("Automatic checks are on.")
         }
 
-        sentences.append("Last sync \(relativeSyncTime(lastSyncAt, relativeTo: now)).")
+        sentences.append("Checked \(relativeSyncTime(lastSyncAt, relativeTo: now)).")
         return sentences.joined(separator: " ")
     }
 

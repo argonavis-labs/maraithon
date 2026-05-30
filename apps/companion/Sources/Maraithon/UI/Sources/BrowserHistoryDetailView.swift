@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Detail pane for the Browser History source. Stats and recent activity
+/// Detail pane for the Browser History source. Coverage and recent checks
 /// read from the live `SourceStatusPublisher` so the user sees real
 /// numbers as batches land.
 struct BrowserHistoryDetailView: View {
@@ -14,7 +14,7 @@ struct BrowserHistoryDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "visit",
             syncedItemPlural: "visits",
-            emptyDescription: "After the first Browser History sync, this view shows recent visits and sync history.",
+            emptyDescription: "After the first Browser History check, this view shows recent visits and recent checks.",
             clearDataDescription: "This deletes every browser visit synced from this Mac from Maraithon's synced copy. Your browser's own history is not affected."
         )
     }

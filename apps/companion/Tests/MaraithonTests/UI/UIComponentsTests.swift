@@ -55,7 +55,7 @@ final class UIComponentsTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(label, "iMessage, up to date, last sync 2m ago")
+        XCTAssertEqual(label, "iMessage, up to date, last checked 2m ago")
         XCTAssertFalse(label.localizedCaseInsensitiveContains("connected"))
     }
 
@@ -178,7 +178,7 @@ final class UIComponentsTests: XCTestCase {
         let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
 
         XCTAssertTrue(line.contains("Status: Error - Maraithon is temporarily unavailable. Sync again shortly."))
-        XCTAssertTrue(line.contains("Last sync: Never"))
+        XCTAssertTrue(line.contains("Last checked: Never"))
         XCTAssertFalse(line.contains("state="))
         XCTAssertFalse(line.contains("clientError"))
         XCTAssertFalse(line.contains("token=secret"))

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Detail pane for the Calendar Events source. Stats and recent activity
+/// Detail pane for the Calendar Events source. Coverage and recent checks
 /// read from the live `SourceStatusPublisher` so the user sees real
 /// numbers as batches land.
 struct CalendarDetailView: View {
@@ -14,7 +14,7 @@ struct CalendarDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "event",
             syncedItemPlural: "events",
-            emptyDescription: "After the first Calendar sync, this view shows recent event activity and sync history.",
+            emptyDescription: "After the first Calendar check, this view shows recent event activity and recent checks.",
             clearDataDescription: "This deletes every event synced from this Mac from Maraithon's synced copy. The Calendar app on your device is not affected."
         )
     }

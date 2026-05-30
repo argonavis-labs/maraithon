@@ -72,7 +72,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Synced 4 messages. Everything is current. Automatic checks are on. Last sync just now."
+            "Synced 4 messages. Everything is current. Automatic checks are on. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
@@ -96,7 +96,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages found. Everything is current. Automatic checks are on. Last sync just now."
+            "No new messages found. Everything is current. Automatic checks are on. Checked just now."
         )
     }
 
@@ -116,7 +116,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages found. Everything is current. Automatic checks are on. Last sync just now."
+            "No new messages found. Everything is current. Automatic checks are on. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
     }
@@ -137,18 +137,20 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Synced 3 notes. 1 note needs attention. Last sync just now."
+            "Synced 3 notes. 1 note needs attention. Checked just now."
         )
     }
 
     func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
+        XCTAssertEqual(SourceDetailCopy.coverageSectionTitle, "Coverage")
+        XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
         XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "synced")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already synced")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
         XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Not synced")
         XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
-        XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last sync")
+        XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
     }

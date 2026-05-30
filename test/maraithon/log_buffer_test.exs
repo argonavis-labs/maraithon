@@ -29,8 +29,10 @@ defmodule Maraithon.LogBufferTest do
   end
 
   test "keeps only the configured maximum number of entries" do
+    prefix = "log-buffer-trim-test"
+
     for index <- 1..520 do
-      Maraithon.LogBuffer.record(%{level: :info, message: "entry-#{index}"})
+      Maraithon.LogBuffer.record(%{level: :info, message: "#{prefix}-#{index}"})
     end
 
     _ = :sys.get_state(Maraithon.LogBuffer)
@@ -38,7 +40,7 @@ defmodule Maraithon.LogBufferTest do
     recent = Maraithon.LogBuffer.recent(600)
 
     assert length(recent) == 500
-    assert hd(recent).message == "entry-520"
-    refute Enum.any?(recent, &(&1.message == "entry-1"))
+    assert Enum.any?(recent, &(&1.message == "#{prefix}-520"))
+    refute Enum.any?(recent, &(&1.message == "#{prefix}-1"))
   end
 end

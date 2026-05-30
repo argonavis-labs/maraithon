@@ -162,7 +162,7 @@ struct SourceRowCopy {
         default:
             if let last = lastSyncAt {
                 let abbrev = SourceRecencyChip.format(interval: now.timeIntervalSince(last))
-                return "\(sourceName), \(stateWord), last sync \(abbrev) ago"
+                return "\(sourceName), \(stateWord), last checked \(abbrev) ago"
             }
             return "\(sourceName), \(stateWord), not yet synced"
         }
@@ -190,7 +190,7 @@ struct SourceRowCopy {
         guard let last = lastSyncAt else { return "Not yet synced" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return "Last sync \(formatter.localizedString(for: last, relativeTo: now))"
+        return "Last checked \(formatter.localizedString(for: last, relativeTo: now))"
     }
 
     static func trailingStatus(

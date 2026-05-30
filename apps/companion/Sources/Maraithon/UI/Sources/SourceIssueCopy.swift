@@ -87,7 +87,7 @@ struct SourceIssueCopy {
     }
 
     static func detail(_ reason: String, sourceName: String) -> String {
-        "\(sourceName) could not finish its last sync. \(status(reason)) Select Sync now when ready."
+        "\(sourceName) could not finish its last check. \(status(reason)) Select Sync now when ready."
     }
 
     static func issue(_ reason: String, failedCount _: Int) -> String {

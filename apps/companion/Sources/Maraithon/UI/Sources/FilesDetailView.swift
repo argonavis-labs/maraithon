@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Detail pane for the Files source. Stats and recent activity read from
+/// Detail pane for the Files source. Coverage and recent checks read from
 /// the live `SourceStatusPublisher` so the user sees real numbers as
 /// batches land.
 struct FilesDetailView: View {
@@ -14,7 +14,7 @@ struct FilesDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "file",
             syncedItemPlural: "files",
-            emptyDescription: "After the first Files sync, this view shows recently indexed files and sync history.",
+            emptyDescription: "After the first Files check, this view shows recently indexed files and recent checks.",
             clearDataDescription: "This deletes every file record synced from this Mac from Maraithon's synced copy. The files on your disk are not affected."
         )
     }

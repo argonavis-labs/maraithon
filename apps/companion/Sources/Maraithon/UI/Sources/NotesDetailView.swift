@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Detail pane for the Apple Notes source. Stats and recent activity
+/// Detail pane for the Apple Notes source. Coverage and recent checks
 /// read from the live `SourceStatusPublisher` so the user sees real
 /// numbers as batches land.
 struct NotesDetailView: View {
@@ -14,7 +14,7 @@ struct NotesDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "note",
             syncedItemPlural: "notes",
-            emptyDescription: "After the first Notes sync, this view shows recent note activity and sync history.",
+            emptyDescription: "After the first Notes check, this view shows recent note activity and recent checks.",
             clearDataDescription: "This deletes every note synced from this Mac from Maraithon's synced copy. The Notes app on your device is not affected."
         )
     }

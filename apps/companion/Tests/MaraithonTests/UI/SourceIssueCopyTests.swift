@@ -74,7 +74,7 @@ final class SourceIssueCopyTests: XCTestCase {
 
         XCTAssertEqual(
             detail,
-            "Notes could not finish its last sync. Connection issue. Sync again when you are online. Select Sync now when ready."
+            "Notes could not finish its last check. Connection issue. Sync again when you are online. Select Sync now when ready."
         )
         XCTAssertFalse(detail.contains("Logs"))
         XCTAssertFalse(detail.lowercased().contains("diagnostic"))

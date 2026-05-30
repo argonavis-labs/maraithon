@@ -14,7 +14,7 @@ struct IMessageDetailView: View {
             activity: SourceActivityRow.recent(from: publisher),
             syncedItemSingular: "message",
             syncedItemPlural: "messages",
-            emptyDescription: "After the first iMessage sync, this view shows recent message activity and sync history.",
+            emptyDescription: "After the first iMessage check, this view shows recent message activity and recent checks.",
             clearDataDescription: "This deletes every message synced from this Mac from Maraithon's synced copy. Messages.app history on your device is not affected."
         )
     }

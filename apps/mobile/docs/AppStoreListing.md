@@ -19,29 +19,29 @@ to App Store Connect character limits.
 ## Promotional Text (170 char — can update without resubmit)
 
 ```
-The mobile chief of staff for people who don't want a meeting just to remember
-what they said yesterday. Today, todos, people, chat — one calm screen.
+Your mobile chief of staff for today's priorities, relationship follow-ups, and
+delegated work. One calm surface for decisions and next moves.
 ```
 
 ## Description (4000 char)
 
 ```
 Maraithon is the mobile companion to your always-on AI chief of staff. It keeps
-your day, your todos, your people, and your background work in one calm, fast,
-operational app — built for busy humans, not for marketing screenshots.
+your day, open work, relationships, and delegated background work in one calm,
+fast operational app - built for people whose attention is expensive.
 
 What you get:
 
-• Today — A single screen for what actually needs your attention right now.
+• Today - A single screen for what actually needs your attention right now.
   Calendar, open loops, drafts waiting on you, and the next concrete move.
 
-• Todos — Quick capture, fast triage, and a real waiting-on list. The stuff
-  you owe people, and the stuff people owe you, in one place.
+• Work - Quick capture, fast triage, and a real waiting-on list. What you owe
+  people, what people owe you, and the next move that keeps it from drifting.
 
-• People — A lightweight CRM that remembers what matters about the humans in
-  your week. Last contact, open threads, what you promised them.
+• People - Relationship context that remembers what matters about the humans
+  in your week: last contact, open threads, and what you promised them.
 
-• Chat — Direct line to your Maraithon agent. Ask, delegate, redirect, and
+• Chat - Direct line to your Maraithon agent. Ask, delegate, redirect, and
   see what it's working on in the background.
 
 Maraithon is built around a different premise than most AI apps. Instead of a
@@ -50,8 +50,8 @@ your calendar, your tools, and surfaces only what needs you. The mobile app is
 the operational surface for that work: scan, decide, move on.
 
 Designed for people who run companies, manage teams, and don't have time for
-another app that demands attention. Calm, scannable, row-oriented. No
-gradient heroes. No cards-within-cards. Just your day.
+another app that demands attention. Calm, scannable, row-oriented. Built for
+decisions and follow-through, not another inbox.
 
 Requires a Maraithon account. Sign in with your email and we'll send a
 one-time code.
@@ -60,13 +60,13 @@ one-time code.
 ## Keywords (100 char, comma-separated, no spaces after commas)
 
 ```
-chief of staff,productivity,todo,crm,assistant,agent,operations,inbox,founder,executive
+chief of staff,productivity,work,relationships,assistant,operations,inbox,founder,executive
 ```
 
 ## What's New in This Version (4000 char)
 
 ```
-First release. Today, Todos, People, and Chat — the mobile surface for your
+First release. Today, Work, People, and Chat - the mobile surface for your
 Maraithon agent. Sign in with an email code.
 ```
 
@@ -109,7 +109,7 @@ Sign in flow:
 Demo magic code: <ADD BEFORE SUBMISSION>
 
 App requires a Maraithon account because the entire product is a personal
-operational surface. Reviewer-only credentials are seeded with sample todos,
+operational surface. Reviewer-only credentials are seeded with sample work items,
 people, and chat threads.
 
 Contact: kent@runner.now
@@ -125,8 +125,8 @@ Target device: iPhone 17 Pro Max / iPhone 16 Pro Max simulator.
 Capture these 5 frames in order:
 
 1. **Today** — main "Today" screen with a few open loops
-2. **Todos** — todo list with a couple of waiting-on items
-3. **People** — CRM list with 4–5 contacts, one with a recent thread
+2. **Work** — open work list with a couple of waiting-on items
+3. **People** — relationship list with 4–5 contacts, one with a recent thread
 4. **Chat** — chat thread with the agent (one user message, one agent reply)
 5. **Sign in / welcome** — clean shot of the sign-in screen (optional, can replace)
 
