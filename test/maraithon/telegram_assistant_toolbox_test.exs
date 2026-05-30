@@ -179,12 +179,14 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "Maraithon did not find open work in connected sources right now."
-    assert result.next_action == "No action is waiting in connected sources right now."
+    assert result.summary == "I do not see open work in the connected sources I checked."
+    assert result.next_action == "No follow-up is pending in the connected sources I checked."
 
+    refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "reconnection"
     refute result.summary =~ "complete inbox review"
     refute result.summary =~ "needs attention"
+    refute result.next_action =~ "No action is waiting"
     refute result.next_action =~ "needs action"
   end
 
@@ -240,16 +242,17 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "Maraithon did not find open work in the sources it could check right now."
+             "I do not see open work in the sources I could check, but coverage is incomplete."
 
-    assert result.summary =~ "Mac companion has not checked in recently"
+    assert result.summary =~ "The Mac companion has not checked in recently"
 
     assert result.summary =~
-             "local iMessage, Notes, reminders, files, and browser context may be incomplete"
+             "local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete"
 
     assert result.next_action ==
              "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
 
+    refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "companion_devices"
     refute result.summary =~ "last_seen_at"
     refute result.next_action =~ "source_health"
@@ -283,7 +286,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~ "Start with Send the concise investor update."
 
     assert result.summary =~
-             "Gmail is not connected, so inbox-backed follow-up is not fully covered."
+             "Inbox-backed follow-up is not fully covered because Gmail is not connected."
 
     assert result.next_action == "Start with Send the concise investor update."
 

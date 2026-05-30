@@ -422,7 +422,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
             "tool" => "get_open_work_summary",
             "result" => %{
               "summary" =>
-                "Open work: 1 todo. Start with Send investor update. Gmail is not connected, so inbox-backed follow-up is not fully covered.",
+                "Open work: 1 todo. Start with Send investor update. Inbox-backed follow-up is not fully covered because Gmail is not connected.",
               "todos" => [%{"title" => "Send investor update"}]
             }
           }
@@ -439,7 +439,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "open_work_review",
                "label" => "Open work",
                "summary" =>
-                 "Open work: 1 work item. Start with Send investor update. Gmail is not connected, so inbox-backed follow-up is not fully covered."
+                 "Open work: 1 work item. Start with Send investor update. Inbox-backed follow-up is not fully covered because Gmail is not connected."
              }
            ] = summary["tool_calls"]
 

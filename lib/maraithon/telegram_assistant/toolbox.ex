@@ -3886,13 +3886,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         local_context_next_action(source_health)
 
       true ->
-        "No action is waiting in connected sources right now."
+        "No follow-up is pending in the connected sources I checked."
     end
   end
 
   defp open_work_count_line(0, 0, source_health) do
     if source_coverage_gap?(source_health) do
-      "Maraithon did not find open work in the sources it could check right now."
+      "I do not see open work in the sources I could check, but coverage is incomplete."
     else
       open_work_count_line(0, 0)
     end
@@ -3902,7 +3902,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     do: open_work_count_line(insight_count, todo_count)
 
   defp open_work_count_line(0, 0),
-    do: "Maraithon did not find open work in connected sources right now."
+    do: "I do not see open work in the connected sources I checked."
 
   defp open_work_count_line(insight_count, todo_count) do
     parts =
@@ -4000,7 +4000,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         "Gmail has newer mail than this summary; search Gmail before treating inbox-backed follow-up as complete."
 
       gmail_not_connected?(source_health) ->
-        "Gmail is not connected, so inbox-backed follow-up is not fully covered."
+        "Inbox-backed follow-up is not fully covered because Gmail is not connected."
 
       gmail_error?(source_health) ->
         "Gmail needs reconnection before this can be treated as a complete inbox review."
@@ -4013,7 +4013,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp local_context_user_gap(source_health) do
     cond do
       local_context_status?(source_health, "stale") ->
-        "Mac companion has not checked in recently, so local iMessage, Notes, reminders, files, and browser context may be incomplete."
+        "The Mac companion has not checked in recently, so local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete."
 
       local_context_status?(source_health, "unknown") and
           local_context_paired_device_count(source_health) > 0 ->
@@ -4021,7 +4021,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       local_context_status?(source_health, "not_connected") and
           local_context_paired_device_count(source_health) > 0 ->
-        "Mac companion is not connected, so local iMessage, Notes, reminders, files, and browser context may be incomplete."
+        "The Mac companion is not connected, so local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete."
 
       true ->
         nil
