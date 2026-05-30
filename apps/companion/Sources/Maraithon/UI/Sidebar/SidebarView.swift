@@ -213,7 +213,7 @@ struct SourceRowCopy {
             }
             return "Set up"
         case .needsAttention, .error:
-            return "Fix"
+            return "Review"
         }
     }
 

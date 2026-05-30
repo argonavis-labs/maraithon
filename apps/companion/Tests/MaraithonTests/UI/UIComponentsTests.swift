@@ -120,7 +120,7 @@ final class UIComponentsTests: XCTestCase {
                 lastSyncAt: nil,
                 now: now
             ),
-            "Fix"
+            "Review"
         )
         XCTAssertEqual(
             SourceRowCopy.trailingStatus(
@@ -129,7 +129,7 @@ final class UIComponentsTests: XCTestCase {
                 lastSyncAt: nil,
                 now: now
             ),
-            "Fix"
+            "Review"
         )
         XCTAssertEqual(
             SourceRowCopy.trailingStatus(
