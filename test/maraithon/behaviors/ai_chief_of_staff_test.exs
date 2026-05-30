@@ -38,6 +38,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     state =
       AIChiefOfStaff.init(%{
         "user_id" => "chief@example.com",
+        "timezone" => "America/Toronto",
+        "timezone_name" => "America/Toronto",
+        "timezone_offset_hours" => "-5",
         "skill_configs" => %{
           "alpha" => %{"next_wakeup_ms" => 900_000},
           "beta" => %{"next_wakeup_ms" => 300_000}
@@ -47,6 +50,9 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert state.enabled_skill_ids == ["alpha", "beta"]
     assert Map.has_key?(state.skill_states, "alpha")
     assert Map.has_key?(state.skill_states, "beta")
+    assert get_in(state.skill_configs, ["alpha", "timezone"]) == "America/Toronto"
+    assert get_in(state.skill_configs, ["alpha", "timezone_name"]) == "America/Toronto"
+    assert get_in(state.skill_configs, ["alpha", "timezone_offset_hours"]) == -5
     assert {:relative, 300_000} = AIChiefOfStaff.next_wakeup(state)
   end
 

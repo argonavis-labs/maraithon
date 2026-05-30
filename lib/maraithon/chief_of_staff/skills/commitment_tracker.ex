@@ -11,6 +11,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   alias Maraithon.Crm
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
   alias Maraithon.Tracing
@@ -101,6 +102,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       user_id: normalize_string(config["user_id"]),
       assistant_behavior: normalize_string(config["assistant_behavior"]) || "ai_chief_of_staff",
+      timezone: normalize_timezone(config["timezone"] || config["timezone_name"]),
       timezone_offset_hours:
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       review_hour:
@@ -132,7 +134,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   def handle_wakeup(state, context) do
     user_id = state.user_id || normalize_string(context[:user_id])
     now = context[:timestamp] || DateTime.utc_now()
-    period_key = local_period_key(now, state.timezone_offset_hours)
+    period_key = local_period_key(now, timezone_offset_hours_at(now, state))
     dedupe_key = "commitment_tracker:#{period_key}"
 
     cond do
@@ -310,7 +312,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   def build_tracker_input(user_id, now, state, context) do
     source_bundle = context[:source_bundle] || %{}
-    offset_hours = state.timezone_offset_hours
+    offset_hours = timezone_offset_hours_at(now, state)
     local_date = local_date(now, offset_hours)
     lookback_start = DateTime.add(now, -state.lookback_hours, :hour)
     calendar_end = Date.add(local_date, state.calendar_forward_days)
@@ -334,6 +336,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
+      "timezone" => timezone_label(state, now),
       "timezone_offset_hours" => offset_hours,
       "lookback_hours" => state.lookback_hours,
       "calendar_forward_days" => state.calendar_forward_days,
@@ -543,7 +546,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
     body =
       [
-        fallback_section("Needs Your Attention", fallback_open_work_lines(open_todos)),
+        fallback_section(
+          "Needs Your Attention",
+          fallback_open_work_lines(open_todos, tracker_input)
+        ),
         fallback_section(
           "Checked",
           fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count)
@@ -594,7 +600,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     end
   end
 
-  defp fallback_open_work_lines(open_todos) do
+  defp fallback_open_work_lines(open_todos, tracker_input) do
     case Enum.take(open_todos, 5) do
       [] ->
         [
@@ -602,11 +608,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         ]
 
       todos ->
-        Enum.map(todos, &fallback_todo_line/1)
+        Enum.map(todos, &fallback_todo_line(&1, tracker_input))
     end
   end
 
-  defp fallback_todo_line(todo) when is_map(todo) do
+  defp fallback_todo_line(todo, tracker_input) when is_map(todo) do
     title = read_string(todo, "title", "Open commitment")
 
     next_action =
@@ -616,7 +622,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         read_string(todo, "summary", "Open the source thread and decide the next action.")
       )
 
-    due = todo |> read_any("due_at") |> fallback_due_label()
+    due = todo |> read_any("due_at") |> fallback_due_label(tracker_input)
     source = read_string(todo, "source_account_label", read_string(todo, "source", nil))
 
     [
@@ -630,7 +636,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     |> Enum.join("")
   end
 
-  defp fallback_todo_line(_todo) do
+  defp fallback_todo_line(_todo, _tracker_input) do
     "- Open commitment. Next: open the source thread and decide the next action."
   end
 
@@ -638,17 +644,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp fallback_due_sentence(""), do: "."
   defp fallback_due_sentence(due), do: ". Due #{due}."
 
-  defp fallback_due_label(%DateTime{} = value) do
-    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p UTC")
+  defp fallback_due_label(%DateTime{} = value, tracker_input) do
+    offset = tracker_input_timezone_offset_hours(tracker_input)
+    label = tracker_input_timezone_label(tracker_input, offset)
+
+    value
+    |> DateTime.add(offset, :hour)
+    |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{label}")
   end
 
-  defp fallback_due_label(%NaiveDateTime{} = value) do
-    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p")
+  defp fallback_due_label(%NaiveDateTime{} = value, _tracker_input) do
+    Calendar.strftime(value, "%b %-d, %Y at %-I:%M %p")
   end
 
-  defp fallback_due_label(%Date{} = value), do: Calendar.strftime(value, "%b %d, %Y")
+  defp fallback_due_label(%Date{} = value, _tracker_input),
+    do: Calendar.strftime(value, "%b %-d, %Y")
 
-  defp fallback_due_label(value) when is_binary(value) do
+  defp fallback_due_label(value, tracker_input) when is_binary(value) do
     value = String.trim(value)
 
     cond do
@@ -657,18 +669,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
       match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
         {:ok, datetime, _offset} = DateTime.from_iso8601(value)
-        fallback_due_label(datetime)
+        fallback_due_label(datetime, tracker_input)
 
       match?({:ok, _}, Date.from_iso8601(value)) ->
         {:ok, date} = Date.from_iso8601(value)
-        fallback_due_label(date)
+        fallback_due_label(date, tracker_input)
 
       true ->
         value
     end
   end
 
-  defp fallback_due_label(_value), do: nil
+  defp fallback_due_label(_value, _tracker_input), do: nil
+
+  defp tracker_input_timezone_offset_hours(tracker_input) when is_map(tracker_input) do
+    case read_any(tracker_input, "timezone_offset_hours") do
+      value when is_integer(value) -> Timezones.normalize_offset(value)
+      value when is_float(value) -> value |> trunc() |> Timezones.normalize_offset()
+      value when is_binary(value) -> Timezones.normalize_offset(value)
+      _ -> @default_timezone_offset_hours
+    end
+  end
+
+  defp tracker_input_timezone_offset_hours(_tracker_input), do: @default_timezone_offset_hours
+
+  defp tracker_input_timezone_label(tracker_input, offset) when is_map(tracker_input) do
+    case read_string(tracker_input, "timezone", nil) do
+      nil ->
+        Timezones.label(nil, offset)
+
+      value ->
+        case Timezones.normalize(value) do
+          normalized when is_binary(normalized) -> Timezones.label(normalized, offset)
+          _ -> value
+        end
+    end
+  end
+
+  defp tracker_input_timezone_label(_tracker_input, offset), do: Timezones.label(nil, offset)
 
   defp fallback_source_phrase(nil), do: "."
   defp fallback_source_phrase(""), do: "."
@@ -985,6 +1023,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       "date" => read_string(input, "date", nil),
       "generated_at" => read_string(input, "generated_at", nil),
+      "timezone" => read_string(input, "timezone", nil),
+      "timezone_offset_hours" => tracker_input_timezone_offset_hours(input),
       "counts" => %{
         "gmail_recent_inbox" => length(get_in(input, ["gmail", "recent_inbox"]) || []),
         "gmail_recent_sent" => length(get_in(input, ["gmail", "recent_sent"]) || []),
@@ -1041,12 +1081,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp llm_finish_reason(_response), do: nil
 
   defp due_now?(now, state) do
-    local_now = DateTime.add(now, state.timezone_offset_hours, :hour)
+    local_now = DateTime.add(now, timezone_offset_hours_at(now, state), :hour)
     local_now.hour >= state.review_hour
   end
 
   defp next_review_occurrence(now, state) do
-    local_now = DateTime.add(now, state.timezone_offset_hours, :hour)
+    offset_hours = timezone_offset_hours_at(now, state)
+    local_now = DateTime.add(now, offset_hours, :hour)
     local_date = DateTime.to_date(local_now)
 
     scheduled_today =
@@ -1061,7 +1102,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         |> DateTime.new!(Time.new!(state.review_hour, 0, 0), "Etc/UTC")
       end
 
-    DateTime.add(target_local, -state.timezone_offset_hours, :hour)
+    DateTime.add(target_local, -local_timezone_offset_hours(target_local, state), :hour)
   end
 
   defp scheduled_trigger?(context) do
@@ -1102,6 +1143,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp local_date_from_value(_value, _offset_hours), do: nil
+
+  defp timezone_offset_hours_at(%DateTime{} = datetime, state) do
+    Timezones.offset_at(Map.get(state, :timezone), datetime, state.timezone_offset_hours)
+  end
+
+  defp local_timezone_offset_hours(%DateTime{} = local_datetime, state) do
+    Timezones.offset_for_local(
+      Map.get(state, :timezone),
+      local_datetime,
+      state.timezone_offset_hours
+    )
+  end
+
+  defp timezone_label(state, %DateTime{} = datetime) do
+    offset = timezone_offset_hours_at(datetime, state)
+    Timezones.label(Map.get(state, :timezone), offset)
+  end
 
   defp decode_json(content) when is_binary(content) do
     content
@@ -1288,6 +1346,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp normalize_timezone(value) when is_binary(value) do
+    case Timezones.normalize(value) do
+      normalized when is_binary(normalized) -> normalized
+      _ -> nil
+    end
+  end
+
+  defp normalize_timezone(_value), do: nil
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map

@@ -31,6 +31,29 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert "commitment_tracker" in Skills.default_enabled_ids()
   end
 
+  test "tracker input uses the active local timezone for named zones", %{user_id: user_id} do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -5
+      })
+
+    input =
+      CommitmentTracker.build_tracker_input(
+        user_id,
+        now,
+        state,
+        %{source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})}
+      )
+
+    assert input["date"] == "2026-05-09"
+    assert input["timezone"] == "ET"
+    assert input["timezone_offset_hours"] == -4
+  end
+
   test "builds a source-backed prompt and persists model-emitted commitment todos", %{
     user_id: user_id,
     agent: agent
@@ -90,6 +113,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     state =
       CommitmentTracker.init(%{
         "user_id" => user_id,
+        "timezone" => "America/Toronto",
         "timezone_offset_hours" => -4,
         "commitment_review_hour_local" => 7
       })
@@ -206,6 +230,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     state =
       CommitmentTracker.init(%{
         "user_id" => user_id,
+        "timezone" => "America/Toronto",
         "timezone_offset_hours" => -4,
         "commitment_review_hour_local" => 7
       })
@@ -266,6 +291,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     state =
       CommitmentTracker.init(%{
         "user_id" => user_id,
+        "timezone" => "America/Toronto",
         "timezone_offset_hours" => -4,
         "commitment_review_hour_local" => 7
       })
@@ -379,6 +405,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     state =
       CommitmentTracker.init(%{
         "user_id" => user_id,
+        "timezone" => "America/Toronto",
         "timezone_offset_hours" => -4,
         "commitment_review_hour_local" => 7
       })
@@ -405,7 +432,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "Start with 1 existing open item"
     assert brief.body =~ "Send Jordan the investor update"
-    assert brief.body =~ "Due May 11, 2026 at 1:00 PM UTC"
+    assert brief.body =~ "Due May 11, 2026 at 9:00 AM ET"
+    refute brief.body =~ "1:00 PM UTC"
     refute brief.body =~ "2026-05-11T13:00:00Z"
     assert brief.body =~ "Next: Reply with the current metrics"
     assert brief.body =~ "Gmail checked: 1 recent inbox message and 0 recent sent messages"
