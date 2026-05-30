@@ -1302,7 +1302,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <% end %>
 
                         <%= if @inspection.recent_logs == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No automation notes captured yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No automation notes yet.</p>
                         <% end %>
                       </div>
                     </section>

@@ -357,7 +357,9 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
 
     assert html =~ "No pending automation work right now."
+    assert html =~ "No automation notes yet."
     refute html =~ "No queued work recorded yet."
+    refute html =~ "captured"
   end
 
   test "chief of staff inspection shows attached skills and edits morning briefing time", %{
