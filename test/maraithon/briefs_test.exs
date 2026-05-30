@@ -99,6 +99,43 @@ defmodule Maraithon.BriefsTest do
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 
+  test "empty briefing fallback copy stays scoped to checked sources", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = default_brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief fallback copy",
+               "body" => "No checked decision needs your attention right now.",
+               "status" => "sent",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:default-copy"
+             })
+
+    assert default_brief.summary == "No priority follow-up surfaced in the checked sources."
+    refute default_brief.summary =~ "yet"
+
+    assert {:ok, %Brief{}} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief legacy fallback copy",
+               "summary" =>
+                 "No clear follow-up needs your attention from the connected sources yet.",
+               "body" => "No checked decision needs your attention right now.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:legacy-default-copy"
+             })
+
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    [message] = sent_messages()
+    assert message.text =~ "No priority follow-up surfaced in the checked sources."
+    refute message.text =~ "connected sources yet"
+    refute message.text =~ "No clear follow-up"
+  end
+
   test "fallback delivery failures store product-safe copy", %{
     user_id: user_id,
     agent: agent
