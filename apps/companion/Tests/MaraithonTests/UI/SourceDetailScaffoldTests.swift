@@ -94,13 +94,32 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check found and synced 4 messages. Maraithon will keep checking in the background. Checked just now."
+            "Last check added 4 messages. Maraithon will keep checking in the background. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("found and synced"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("last check added"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything is current"))
+    }
+
+    func testConnectedSummaryWithoutLastCheckStaysAssistantCentric() {
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 12,
+            lastCheckSynced: 0,
+            lastCheckAlreadySynced: 0,
+            lastCheckNotSynced: 0,
+            lastSyncAt: nil,
+            singular: "message",
+            plural: "messages"
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Maraithon can use 12 messages so far. Check now to look for new messages."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("has synced"))
     }
 
     func testConnectedSummaryExplainsNoNewItems() {
@@ -160,7 +179,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check found and synced 3 notes. 1 note needs attention. Checked just now."
+            "Last check added 3 notes. 1 note needs attention. Checked just now."
         )
     }
 
@@ -191,13 +210,13 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
         XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
-        XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "synced")
+        XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "added")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already known")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
         XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Needs attention")
         XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
-        XCTAssertEqual(SourceDetailCopy.totalSyncedTitle, "Total synced")
-        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "all time")
+        XCTAssertEqual(SourceDetailCopy.totalSyncedTitle, "Available")
+        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "to assistant")
         XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")

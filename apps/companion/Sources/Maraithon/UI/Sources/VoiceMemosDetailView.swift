@@ -25,7 +25,7 @@ struct VoiceMemosDetailView: View {
     private var stats: [SourceStat] {
         let pub = publisher
         return [
-            SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "memos synced"),
+            SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "memos added"),
             SourceStat(id: "total", title: SourceDetailCopy.totalSyncedTitle, value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption),
             SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
             SourceStat(id: "not_synced", title: SourceDetailCopy.notSyncedTitle, value: SourceStat.format(pub?.lastBatchFailed), caption: SourceDetailCopy.notSyncedCaption),

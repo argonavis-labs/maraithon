@@ -224,7 +224,7 @@ struct SourceDetailScaffold: View {
                     }
                     .width(min: 60, ideal: 70)
 
-                    TableColumn("Synced") { row in
+                    TableColumn("Added") { row in
                         Text(String(row.accepted))
                             .monospacedDigit()
                             .foregroundStyle(StatusTone.good.color)

@@ -25,7 +25,7 @@ struct RemindersDetailView: View {
     private var stats: [SourceStat] {
         let pub = publisher
         return [
-            SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "reminders synced"),
+            SourceStat(id: "today", title: "Today", value: SourceStat.format(pub?.acceptedToday), caption: "reminders added"),
             SourceStat(id: "total", title: SourceDetailCopy.totalSyncedTitle, value: SourceStat.format(pub?.totalAccepted), caption: SourceDetailCopy.totalSyncedCaption),
             SourceStat(id: "last", title: SourceDetailCopy.lastCheckTitle, value: SourceStat.format(pub?.lastBatchAccepted), caption: SourceDetailCopy.lastBatchSyncedCaption),
             SourceStat(id: "already_synced", title: SourceDetailCopy.alreadySyncedTitle, value: SourceStat.format(pub?.lastBatchDuplicate), caption: SourceDetailCopy.alreadySyncedCaption),

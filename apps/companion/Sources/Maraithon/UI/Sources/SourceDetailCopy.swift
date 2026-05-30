@@ -10,13 +10,13 @@ enum SourceDetailCopy {
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"
-    static let lastBatchSyncedCaption = "synced"
+    static let lastBatchSyncedCaption = "added"
     static let alreadySyncedTitle = "Already known"
     static let alreadySyncedCaption = "last check"
     static let notSyncedTitle = "Needs attention"
     static let notSyncedCaption = "last check"
-    static let totalSyncedTitle = "Total synced"
-    static let totalSyncedCaption = "all time"
+    static let totalSyncedTitle = "Available"
+    static let totalSyncedCaption = "to assistant"
     static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
@@ -55,7 +55,7 @@ enum SourceDetailCopy {
     ) -> String {
         guard let lastSyncAt else {
             if totalSynced > 0 {
-                return "Maraithon has synced \(countedItem(totalSynced, singular: singular, plural: plural)) so far. Check now to look for new \(plural)."
+                return "Maraithon can use \(countedItem(totalSynced, singular: singular, plural: plural)) so far. Check now to look for new \(plural)."
             }
             return "Check now to start syncing \(displayName)."
         }
@@ -63,7 +63,7 @@ enum SourceDetailCopy {
         var sentences: [String] = []
         let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
-            sentences.append("Last check found and synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
+            sentences.append("Last check added \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
         } else if hasUnfinishedItems {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
             sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) attention.")
