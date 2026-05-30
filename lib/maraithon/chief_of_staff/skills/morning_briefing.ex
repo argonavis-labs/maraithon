@@ -4264,7 +4264,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_prompt_value(value, list_limit, string_limit) when is_map(value) do
     Map.new(value, fn {key, item} ->
-      {key, compact_prompt_value(item, list_limit, string_limit)}
+      {compact_prompt_key(key), compact_prompt_value(item, list_limit, string_limit)}
     end)
   end
 
@@ -4279,7 +4279,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp compact_prompt_value(value, _list_limit, _string_limit), do: value
 
+  defp compact_prompt_key(key) when is_binary(key), do: prompt_safe_string(key)
+  defp compact_prompt_key(key), do: key
+
   defp truncate_prompt_string(value, limit) when is_binary(value) and is_integer(limit) do
+    value = prompt_safe_string(value)
+
     if String.length(value) > limit do
       String.slice(value, 0, limit) <> "\n[truncated #{String.length(value) - limit} chars]"
     else
@@ -4288,6 +4293,38 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp truncate_prompt_string(value, _limit), do: value
+
+  defp prompt_safe_string(value) when is_binary(value) do
+    value
+    |> utf8_or_latin1_string()
+    |> String.replace(~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u, " ")
+  end
+
+  defp utf8_or_latin1_string(value) when is_binary(value) do
+    case :unicode.characters_to_binary(value, :utf8, :utf8) do
+      converted when is_binary(converted) ->
+        converted
+
+      {:error, valid, rest} ->
+        valid <> latin1_head(rest) <> utf8_or_latin1_string(drop_binary_head(rest))
+
+      {:incomplete, valid, rest} ->
+        valid <> latin1_binary(rest)
+    end
+  end
+
+  defp latin1_head(<<byte, _rest::binary>>), do: latin1_binary(<<byte>>)
+  defp latin1_head(_rest), do: ""
+
+  defp latin1_binary(value) when is_binary(value) do
+    case :unicode.characters_to_binary(value, :latin1, :utf8) do
+      converted when is_binary(converted) -> converted
+      _other -> ""
+    end
+  end
+
+  defp drop_binary_head(<<_byte, rest::binary>>), do: rest
+  defp drop_binary_head(_rest), do: ""
 
   defp prioritize_required_prompt_items(items) do
     {required, rest} =

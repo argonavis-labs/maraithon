@@ -616,14 +616,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         read_string(todo, "summary", "Open the source thread and decide the next action.")
       )
 
-    due = read_string(todo, "due_at", nil)
+    due = todo |> read_any("due_at") |> fallback_due_label()
     source = read_string(todo, "source_account_label", read_string(todo, "source", nil))
 
     [
       "- ",
       title,
-      fallback_due_phrase(due),
-      " - Next: ",
+      fallback_due_sentence(due),
+      " Next: ",
       next_action,
       fallback_source_phrase(source)
     ]
@@ -631,16 +631,57 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp fallback_todo_line(_todo) do
-    "- Open commitment - Next: open the source thread and decide the next action."
+    "- Open commitment. Next: open the source thread and decide the next action."
   end
 
-  defp fallback_due_phrase(nil), do: ""
-  defp fallback_due_phrase(""), do: ""
-  defp fallback_due_phrase(due), do: " (due #{due})"
+  defp fallback_due_sentence(nil), do: "."
+  defp fallback_due_sentence(""), do: "."
+  defp fallback_due_sentence(due), do: ". Due #{due}."
+
+  defp fallback_due_label(%DateTime{} = value) do
+    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p UTC")
+  end
+
+  defp fallback_due_label(%NaiveDateTime{} = value) do
+    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p")
+  end
+
+  defp fallback_due_label(%Date{} = value), do: Calendar.strftime(value, "%b %d, %Y")
+
+  defp fallback_due_label(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" ->
+        nil
+
+      match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
+        {:ok, datetime, _offset} = DateTime.from_iso8601(value)
+        fallback_due_label(datetime)
+
+      match?({:ok, _}, Date.from_iso8601(value)) ->
+        {:ok, date} = Date.from_iso8601(value)
+        fallback_due_label(date)
+
+      true ->
+        value
+    end
+  end
+
+  defp fallback_due_label(_value), do: nil
 
   defp fallback_source_phrase(nil), do: "."
   defp fallback_source_phrase(""), do: "."
-  defp fallback_source_phrase(source), do: " Source: #{source}."
+
+  defp fallback_source_phrase(source) do
+    " Source: #{fallback_source_label(source)}."
+  end
+
+  defp fallback_source_label("gmail"), do: "Gmail"
+  defp fallback_source_label("google_calendar"), do: "Calendar"
+  defp fallback_source_label("calendar"), do: "Calendar"
+  defp fallback_source_label("omnifocus"), do: "OmniFocus"
+  defp fallback_source_label(source), do: source
 
   defp fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count) do
     [

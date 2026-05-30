@@ -147,7 +147,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "from" => "SKIMS <no-reply@emails.skims.com>",
             "subject" => "Dive Into SKIMS Swim",
             "snippet" => "Limited time offer.",
-            "text_body" => "Promotional retail offer for swimwear.",
+            "text_body" =>
+              <<"Promotional retail offer in: ", 70, 114, 97, 110, 231, 97, 105, 115, ".">>,
             "body_available" => true,
             "body_status" => "available",
             "internal_date" => now
@@ -236,6 +237,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert params["timeout_ms"] == 1_200_000
 
     prompt = get_in(params, ["messages", Access.at(0), "content"])
+    assert String.valid?(prompt)
+    assert prompt =~ "Français"
     assert prompt =~ "Brief input JSON"
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"

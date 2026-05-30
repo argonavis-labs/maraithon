@@ -335,6 +335,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
           "todo" => "Jordan is waiting for the latest investor metrics before Monday.",
           "summary" => "You owe Jordan the latest investor metrics before Monday.",
           "next_action" => "Reply with the current metrics and flag any missing numbers.",
+          "due_at" => "2026-05-11T13:00:00Z",
           "dedupe_key" => "commitment:jordan:investor-update",
           "priority" => 94
         }
@@ -404,6 +405,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "Start with 1 existing open item"
     assert brief.body =~ "Send Jordan the investor update"
+    assert brief.body =~ "Due May 11, 2026 at 1:00 PM UTC"
+    refute brief.body =~ "2026-05-11T13:00:00Z"
     assert brief.body =~ "Next: Reply with the current metrics"
     assert brief.body =~ "Gmail checked: 1 recent inbox message and 0 recent sent messages"
     assert brief.body =~ "Calendar checked: 1 upcoming event"
