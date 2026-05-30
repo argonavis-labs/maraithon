@@ -130,6 +130,34 @@ defmodule Maraithon.Insights.DetailTest do
     refute summary =~ "2026-03-13T17:00:00Z"
   end
 
+  test "can derive evidence timestamps in a product timezone" do
+    now = ~U[2026-03-12 09:30:00Z]
+    due_at = ~U[2026-03-13 17:00:00Z]
+
+    insight =
+      build_insight(%{
+        source_occurred_at: now,
+        due_at: due_at,
+        metadata: %{
+          "record" => %{
+            "commitment" => "Send the revised pricing doc to Sarah",
+            "person" => "Sarah",
+            "status" => "unresolved"
+          }
+        }
+      })
+
+    detail =
+      Detail.build(insight, [], timezone_info: %{name: "America/Toronto", offset_hours: -5})
+
+    summary = Detail.summary_text(detail, insight)
+
+    assert summary =~ "Source activity: Seen Mar 12, 2026 at 5:30 AM ET"
+    assert summary =~ "Deadline: Due Mar 13, 2026 at 1:00 PM ET"
+    refute summary =~ "9:30 AM UTC"
+    refute summary =~ "5:00 PM UTC"
+  end
+
   test "reports explicit data gaps for sparse insights" do
     insight =
       build_insight(%{

@@ -31,6 +31,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Travel
   alias Maraithon.UserMemory
+  alias MaraithonWeb.LocalTime
 
   require Logger
 
@@ -499,7 +500,9 @@ defmodule Maraithon.TelegramAssistant.Context do
        ) do
     insight = linked_insight || Repo.preload(delivery, :insight).insight
     deliveries = insight_deliveries(insight, delivery.user_id)
-    detail = insight && Detail.build(insight, deliveries)
+
+    detail =
+      insight && Detail.build(insight, deliveries, timezone_info: timezone_info(delivery.user_id))
 
     %{
       delivery: serialize_delivery(delivery),
@@ -526,7 +529,7 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp serialize_linked_item(_delivery, insight, linked_travel, linked_todo, linked_project) do
     deliveries = insight_deliveries(insight, insight.user_id)
-    detail = Detail.build(insight, deliveries)
+    detail = Detail.build(insight, deliveries, timezone_info: timezone_info(insight.user_id))
 
     %{
       delivery: nil,
@@ -539,7 +542,10 @@ defmodule Maraithon.TelegramAssistant.Context do
   end
 
   defp serialize_open_insights(user_id) do
-    Insights.list_open_with_details_for_user(user_id, limit: 6)
+    Insights.list_open_with_details_for_user(user_id,
+      limit: 6,
+      timezone_info: timezone_info(user_id)
+    )
     |> Enum.map(fn %{insight: insight, detail: detail} ->
       %{
         id: insight.id,
@@ -981,6 +987,8 @@ defmodule Maraithon.TelegramAssistant.Context do
     |> order_by([delivery], desc_nulls_last: delivery.sent_at, desc: delivery.inserted_at)
     |> Repo.all()
   end
+
+  defp timezone_info(user_id), do: LocalTime.timezone_info_for_user(user_id)
 
   defp linked_todo(attrs, user_id) do
     chat_id = Map.get(attrs, :chat_id)

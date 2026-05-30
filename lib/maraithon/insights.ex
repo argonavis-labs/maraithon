@@ -27,13 +27,14 @@ defmodule Maraithon.Insights do
   def list_open_with_details_for_user(user_id, opts \\ []) when is_binary(user_id) do
     insights = list_open_for_user(user_id, opts)
     deliveries_by_insight_id = deliveries_by_insight_id(user_id, insights)
+    timezone_info = Keyword.get(opts, :timezone_info)
 
     Enum.map(insights, fn insight ->
       deliveries = Map.get(deliveries_by_insight_id, insight.id, [])
 
       %{
         insight: insight,
-        detail: Detail.build(insight, deliveries)
+        detail: Detail.build(insight, deliveries, timezone_info: timezone_info)
       }
     end)
   end

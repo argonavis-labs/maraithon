@@ -17,6 +17,7 @@ defmodule Maraithon.TelegramRouter do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramInterpreter
   alias Maraithon.TelegramResponder
+  alias MaraithonWeb.LocalTime
 
   require Logger
 
@@ -683,7 +684,11 @@ defmodule Maraithon.TelegramRouter do
     detail =
       insight
       |> insight_deliveries(delivery)
-      |> then(&Detail.build(insight, &1))
+      |> then(
+        &Detail.build(insight, &1,
+          timezone_info: LocalTime.timezone_info_for_user(delivery.user_id)
+        )
+      )
 
     Detail.summary_text(detail, insight, extra_reply: Map.get(interpretation, "assistant_reply"))
   end

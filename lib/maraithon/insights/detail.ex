@@ -15,14 +15,18 @@ defmodule Maraithon.Insights.Detail do
   @delivery_gap "No follow-up delivery has been recorded yet."
   @reason_gap "The reason for follow-up was not saved with this item."
 
-  def build(%Insight{} = insight, deliveries \\ []) when is_list(deliveries) do
+  def build(%Insight{} = insight, deliveries \\ [], opts \\ []) when is_list(deliveries) do
     metadata = stringify_keys(insight.metadata || %{})
     detail_metadata = read_map(metadata, "detail")
     record = read_map(metadata, "record")
+    timezone_info = Keyword.get(opts, :timezone_info)
 
     promise_text = build_promise_text(insight, metadata, detail_metadata, record)
     requested_by = build_requested_by(metadata, detail_metadata, record)
-    evidence_checked = build_evidence_checked(insight, metadata, detail_metadata, record)
+
+    evidence_checked =
+      build_evidence_checked(insight, metadata, detail_metadata, record, timezone_info)
+
     delivery_evidence = build_delivery_evidence(deliveries)
 
     open_loop_reason =
@@ -202,7 +206,7 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp build_evidence_checked(insight, metadata, detail_metadata, record) do
+  defp build_evidence_checked(insight, metadata, detail_metadata, record, timezone_info) do
     source_ref = default_source_ref(insight, metadata, record)
 
     detail_items =
@@ -220,7 +224,7 @@ defmodule Maraithon.Insights.Detail do
     items =
       detail_items ++
         Enum.map(string_evidence, &string_evidence_item(&1, source_ref)) ++
-        supplemental_evidence_items(insight, metadata, record, source_ref)
+        supplemental_evidence_items(insight, metadata, record, source_ref, timezone_info)
 
     dedupe_evidence_items(items)
   end
@@ -254,36 +258,40 @@ defmodule Maraithon.Insights.Detail do
     }
   end
 
-  defp supplemental_evidence_items(insight, metadata, record, source_ref) do
+  defp supplemental_evidence_items(insight, metadata, record, source_ref, timezone_info) do
     []
-    |> maybe_append(source_timestamp_item(insight, source_ref))
-    |> maybe_append(deadline_item(insight, metadata, record))
+    |> maybe_append(source_timestamp_item(insight, source_ref, timezone_info))
+    |> maybe_append(deadline_item(insight, metadata, record, timezone_info))
     |> maybe_append(status_item(metadata, record))
   end
 
-  defp source_timestamp_item(%Insight{source_occurred_at: %DateTime{} = occurred_at}, source_ref) do
+  defp source_timestamp_item(
+         %Insight{source_occurred_at: %DateTime{} = occurred_at},
+         source_ref,
+         timezone_info
+       ) do
     %{
       kind: :source_evidence,
       label: "Source activity",
-      detail: "Seen #{evidence_datetime(occurred_at)}",
+      detail: "Seen #{evidence_datetime(occurred_at, timezone_info)}",
       occurred_at: occurred_at,
       source_ref: source_ref
     }
   end
 
-  defp source_timestamp_item(_insight, _source_ref), do: nil
+  defp source_timestamp_item(_insight, _source_ref, _timezone_info), do: nil
 
-  defp deadline_item(%Insight{due_at: %DateTime{} = due_at}, _metadata, _record) do
+  defp deadline_item(%Insight{due_at: %DateTime{} = due_at}, _metadata, _record, timezone_info) do
     %{
       kind: :deadline,
       label: "Deadline",
-      detail: "Due #{evidence_datetime(due_at)}",
+      detail: "Due #{evidence_datetime(due_at, timezone_info)}",
       occurred_at: due_at,
       source_ref: nil
     }
   end
 
-  defp deadline_item(_insight, metadata, record) do
+  defp deadline_item(_insight, metadata, record, timezone_info) do
     deadline =
       first_present([
         read_string(record, "deadline"),
@@ -295,7 +303,7 @@ defmodule Maraithon.Insights.Detail do
         %{
           kind: :deadline,
           label: "Deadline",
-          detail: "Due #{evidence_datetime(due_at)}",
+          detail: "Due #{evidence_datetime(due_at, timezone_info)}",
           occurred_at: due_at,
           source_ref: nil
         }
@@ -347,7 +355,12 @@ defmodule Maraithon.Insights.Detail do
     end)
   end
 
-  defp evidence_datetime(%DateTime{} = datetime) do
+  defp evidence_datetime(%DateTime{} = datetime, timezone_info)
+       when is_map(timezone_info) do
+    MaraithonWeb.LocalTime.format_datetime(datetime, nil, timezone_info)
+  end
+
+  defp evidence_datetime(%DateTime{} = datetime, _timezone_info) do
     datetime
     |> DateTime.shift_zone!("Etc/UTC")
     |> Calendar.strftime("%b %-d, %Y at %-I:%M %p UTC")
