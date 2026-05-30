@@ -167,8 +167,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         top_items == [] and watching_items == [] ->
-          {"Morning brief: no active work surfaced",
-           "No direct actions or watched threads surfaced in checked sources during this brief window."}
+          {"Morning brief: no active work found",
+           "No direct actions or watched threads found in checked sources during this brief window."}
 
         top_items == [] ->
           count = length(watching_items)
@@ -256,8 +256,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         debt_items == [] and watching_items == [] ->
-          {"End-of-day review: no active work surfaced",
-           "No unresolved action items surfaced for tonight's review."}
+          {"End-of-day review: no active work found",
+           "No unresolved action items found for tonight's review."}
 
         debt_items == [] ->
           count = length(watching_items)
@@ -565,7 +565,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "threads are still in Watching"
           )
         ],
-        "No active work surfaced in connected sources during this brief window."
+        "No active work found in connected sources during this brief window."
       )
 
     """
@@ -573,7 +573,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{morning_guidance(top_items)}
 
     Focus now:
-    #{format_items(top_items, offset_hours, now, "1. No active work surfaced that needs direct action.")}
+    #{format_items(top_items, offset_hours, now, "1. No active work needs direct action.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
@@ -609,7 +609,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "threads are still being watched"
           )
         ],
-        "No active work surfaced for tonight's review."
+        "No active work found for tonight's review."
       )
 
     """
@@ -617,7 +617,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{end_of_day_guidance(debt_items)}
 
     Close or reset:
-    #{format_items(debt_items, offset_hours, now, "1. No active work surfaced that needs action tonight.")}
+    #{format_items(debt_items, offset_hours, now, "1. No active work needs action tonight.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
@@ -646,7 +646,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "items still land today"
           )
         ],
-        "No active work surfaced that warrants an interruption."
+        "No active work warrants an interruption."
       )
 
     """
@@ -654,7 +654,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{check_in_guidance(top_items)}
 
     Move now:
-    #{format_items(top_items, offset_hours, reference_at, "1. No active work surfaced that still needs movement.")}
+    #{format_items(top_items, offset_hours, reference_at, "1. No active work needs movement right now.")}
 
     #{workload}
 
@@ -672,7 +672,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{weekly_guidance(top_open)}
 
     Most important open items:
-    #{format_items(top_open, offset_hours, reference_at, "1. No active work surfaced in this week's review.")}
+    #{format_items(top_open, offset_hours, reference_at, "1. No open work found in this week's review.")}
     """
     |> String.trim()
   end
@@ -700,7 +700,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp watching_section(items, offset_hours, reference_at) do
     """
     Watching, not blocking right now:
-    #{format_items(items, offset_hours, reference_at, "1. No newly changed watched items surfaced.")}
+    #{format_items(items, offset_hours, reference_at, "1. No newly changed watched items found.")}
     """
     |> String.trim()
   end
@@ -742,7 +742,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     ]
     |> Enum.reject(&is_nil/1)
     |> case do
-      [] -> "- No source-backed items surfaced this week"
+      [] -> "- No checked items found this week"
       lines -> Enum.join(lines, "\n")
     end
   end
@@ -835,7 +835,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp weekly_summary(weekly_count, closed_count, open_count) do
     [
-      count_summary(weekly_count, "item surfaced this week", "items surfaced this week"),
+      count_summary(weekly_count, "item reviewed this week", "items reviewed this week"),
       count_summary(closed_count, "was resolved or triaged", "were resolved or triaged"),
       count_summary(open_count, "remains open", "remain open")
     ]
@@ -843,7 +843,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> summary_sentence()
   end
 
-  defp summary_sentence([]), do: "No source-backed items surfaced this week."
+  defp summary_sentence([]), do: "No checked items found this week."
   defp summary_sentence([part]), do: part <> "."
   defp summary_sentence([first, second]), do: "#{first}, and #{second}."
 
@@ -858,7 +858,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp be_verb(1), do: "is"
   defp be_verb(_count), do: "are"
 
-  defp weekly_title(0), do: "Weekly review: no open work surfaced"
+  defp weekly_title(0), do: "Weekly review: no open work found"
 
   defp weekly_title(open_count),
     do: "Weekly review: #{count_phrase(open_count, "item")} still open"
@@ -888,7 +888,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp append_sentence(text, nil), do: text
   defp append_sentence(text, extra), do: text <> ". " <> sentence_case(extra)
 
-  defp morning_guidance([]), do: "No direct action surfaced in this brief window."
+  defp morning_guidance([]), do: "No direct action is waiting in this brief window."
 
   defp morning_guidance(items) do
     if mostly_reply_loops?(items) do
@@ -898,7 +898,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp end_of_day_guidance([]), do: "No direct action surfaced for tonight's review."
+  defp end_of_day_guidance([]), do: "No direct action is waiting for tonight's review."
 
   defp end_of_day_guidance(items) do
     if mostly_reply_loops?(items) do
@@ -908,7 +908,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp check_in_guidance([]), do: "No item surfaced that warrants an interruption."
+  defp check_in_guidance([]), do: "No item warrants an interruption."
 
   defp check_in_guidance(items) do
     if mostly_reply_loops?(items) do

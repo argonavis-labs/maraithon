@@ -127,15 +127,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["morning"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning brief: no active work surfaced"
+    assert brief.title == "Morning brief: no active work found"
 
     assert brief.summary ==
-             "No direct actions or watched threads surfaced in checked sources during this brief window."
+             "No direct actions or watched threads found in checked sources during this brief window."
 
     assert brief.body =~ "Best use of today:"
-    assert brief.body =~ "No direct action surfaced in this brief window."
+    assert brief.body =~ "No direct action is waiting in this brief window."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "No active work surfaced in connected sources during this brief window."
+    assert brief.body =~ "No active work found in connected sources during this brief window."
 
     refute brief.summary =~ "urgent"
     refute brief.body =~ "Pressure:"
@@ -253,12 +253,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["end_of_day"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "End-of-day review: no active work surfaced"
-    assert brief.summary == "No unresolved action items surfaced for tonight's review."
+    assert brief.title == "End-of-day review: no active work found"
+    assert brief.summary == "No unresolved action items found for tonight's review."
     assert brief.body =~ "Tonight's move:"
-    assert brief.body =~ "No direct action surfaced for tonight's review."
+    assert brief.body =~ "No direct action is waiting for tonight's review."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "No active work surfaced for tonight's review."
+    assert brief.body =~ "No active work found for tonight's review."
 
     refute brief.body =~ "Pressure:"
     refute brief.body =~ "0 items"
@@ -634,7 +634,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "weekly_review"
     assert brief.title == "Weekly review: 1 item still open"
-    assert brief.summary == "1 item surfaced this week, and 1 remains open."
+    assert brief.summary == "1 item reviewed this week, and 1 remains open."
     assert brief.body =~ "Week in review:"
     assert brief.body =~ "- 1 Gmail item"
     assert brief.body =~ "Next week's move:"
@@ -690,8 +690,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["weekly_review"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Weekly review: no open work surfaced"
-    assert brief.summary == "No source-backed items surfaced this week."
+    assert brief.title == "Weekly review: no open work found"
+    assert brief.summary == "No checked items found this week."
     assert brief.body =~ "Next week's move:"
     assert brief.body =~ "confirm calendar, source freshness, and any new promises"
     assert brief.body =~ "Most important open items:"

@@ -1038,7 +1038,7 @@ defmodule Maraithon.OpenLoops do
     ]
     |> Enum.reject(&(&1 == ""))
     |> case do
-      [] -> "No open work is currently surfaced."
+      [] -> "No open work found for this context."
       sections -> Enum.join(sections, "\n")
     end
   end

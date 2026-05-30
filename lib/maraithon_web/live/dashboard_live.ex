@@ -953,7 +953,7 @@ defmodule MaraithonWeb.DashboardLive do
               <%= if @open_todo_count > 0 do %>
                 <%= review_ready_label(@open_todo_count) %>
               <% else %>
-                No work is surfaced right now. Maraithon will add items here when connected sources reveal something that needs attention.
+                No work needs attention right now. Maraithon will add items here when connected sources find something actionable.
               <% end %>
             </p>
           </div>

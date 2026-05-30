@@ -48,7 +48,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Memory"
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Automation activity")
-    assert html =~ "No work is surfaced right now."
+    assert html =~ "No work needs attention right now."
     assert html =~ "none failed"
     refute has_element?(view, "h2", "Health")
     refute html =~ "Operational activity"
