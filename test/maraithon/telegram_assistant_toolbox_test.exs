@@ -126,17 +126,19 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.todo_count == 0
     assert result.todos == []
     assert result.summary =~ "Open work: 1 priority."
-    assert result.summary =~ "Start with Reply in the old thread."
+    assert result.summary =~ "Start here: Reply in the old thread."
     assert result.summary =~ "Gmail has newer mail than this summary"
 
     assert result.next_action ==
-             "Search Gmail for the latest inbox first; if nothing supersedes it, start with Reply in the old thread."
+             "Search Gmail for the latest inbox first. If nothing supersedes it, start here: Reply in the old thread."
 
     refute result.summary =~ "open insights"
     refute result.summary =~ "1 insight"
     refute result.summary =~ "1 insight and 1 work item"
     refute result.summary =~ "gmail_search_messages"
     refute result.summary =~ "Tell the user"
+    refute result.summary =~ "Start with Reply"
+    refute result.next_action =~ "start with Reply"
   end
 
   test "get_open_work_summary treats connected empty Gmail as checked" do
@@ -179,12 +181,14 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "No open work appeared in the connected sources checked."
-    assert result.next_action == "No follow-up is pending in the connected sources checked."
+    assert result.summary == "Checked sources do not show pending open work right now."
+    assert result.next_action == "No checked-source follow-up is waiting right now."
 
     refute result.summary =~ "I do not"
     refute result.next_action =~ "I checked"
     refute result.summary =~ "Maraithon did not find"
+    refute result.summary =~ "No open work appeared"
+    refute result.next_action =~ "No follow-up is pending"
     refute result.summary =~ "reconnection"
     refute result.summary =~ "complete inbox review"
     refute result.summary =~ "needs attention"
@@ -244,7 +248,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "No open work appeared in the sources Maraithon could check, but coverage is incomplete."
+             "Checked sources do not show pending open work yet, but coverage is incomplete."
 
     assert result.summary =~ "The Mac companion has not checked in recently"
 
@@ -254,6 +258,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.next_action ==
              "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
 
+    refute result.summary =~ "No open work appeared"
     refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "I do not"
     refute result.summary =~ "companion_devices"
@@ -286,16 +291,18 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              )
 
     assert result.summary =~ "Open work: 1 work item."
-    assert result.summary =~ "Start with Send the concise investor update."
+    assert result.summary =~ "Start here: Send the concise investor update."
 
     assert result.summary =~
              "Inbox-backed follow-up is not fully covered because Gmail is not connected."
 
-    assert result.next_action == "Start with Send the concise investor update."
+    assert result.next_action == "Start here: Send the concise investor update."
 
     refute result.summary =~ "Tell the user"
     refute result.summary =~ "Maraithon cannot currently inspect"
     refute result.summary =~ "gmail_search_messages"
+    refute result.summary =~ "Start with Send"
+    refute result.next_action =~ "Start with Send"
   end
 
   test "list_connected_accounts returns connector status without CRM or todo writes" do
