@@ -3811,12 +3811,17 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp open_work_next_action(insights, todos, source_health) do
+    focus = open_work_focus_item(insights, todos)
+
     cond do
+      gmail_stale?(source_health) and focus ->
+        "Search Gmail for the latest inbox first; if nothing supersedes it, start with #{sentence_fragment(open_work_focus_action(focus))}."
+
+      focus ->
+        "Start with #{sentence_fragment(open_work_focus_action(focus))}."
+
       gmail_stale?(source_health) ->
         "Search Gmail before answering questions about the latest inbox or today's priorities."
-
-      focus = open_work_focus_item(insights, todos) ->
-        "Start with #{sentence_fragment(open_work_focus_action(focus))}."
 
       gmail_not_connected?(source_health) ->
         "Connect Gmail before relying on this as a complete inbox review."
@@ -3858,7 +3863,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   end
 
   defp open_work_focus_line(insights, todos, source_health) when is_map(source_health) do
-    if gmail_stale?(source_health), do: nil, else: open_work_focus_line(insights, todos)
+    open_work_focus_line(insights, todos)
   end
 
   defp open_work_focus_line(insights, todos, _source_health),

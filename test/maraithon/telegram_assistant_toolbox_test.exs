@@ -123,15 +123,13 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "search Gmail"
 
     assert result.summary =~ "Open work: 1 insight"
+    assert result.summary =~ "Start with Reply in the old thread."
     assert result.summary =~ "Gmail has newer mail than this summary"
 
     assert result.next_action ==
-             "Search Gmail before answering questions about the latest inbox or today's priorities."
+             "Search Gmail for the latest inbox first; if nothing supersedes it, start with Reply in the old thread."
 
     refute result.summary =~ "open insights"
-    refute result.next_action =~ "latest-inbox"
-    refute result.summary =~ "Start with Old Gmail insight"
-    refute result.summary =~ "Reply in the old thread"
     refute result.summary =~ "gmail_search_messages"
     refute result.summary =~ "Tell the user"
   end
