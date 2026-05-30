@@ -1099,7 +1099,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       details:
         if(
           ready?,
-          do: "Ready. #{value} exists on the runtime host.",
+          do: "Ready. Maraithon can access #{value}.",
           else: "Missing. Point this field at an existing directory."
         ),
       ready?: ready?,
@@ -1363,9 +1363,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_output_preview("ai_chief_of_staff", _launch) do
     [
       %{
-        title: "Stored records",
+        title: "Saved output",
         body:
-          "The assistant can persist both follow-through insights and travel-related brief artifacts under one automation."
+          "The assistant can save both follow-through insights and travel briefing records under one automation."
       }
     ]
   end
@@ -1373,9 +1373,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_output_preview("inbox_calendar_advisor", _launch) do
     [
       %{
-        title: "Stored records",
+        title: "Saved output",
         body:
-          "Each insight stores a structured commitment record with evidence and next action, unified across Gmail, Calendar, and Slack sources."
+          "Each insight saves a commitment record with evidence and next action across Gmail, Calendar, and Slack."
       }
     ]
   end
@@ -1383,9 +1383,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_output_preview("personal_assistant_agent", _launch) do
     [
       %{
-        title: "Stored records",
+        title: "Saved output",
         body:
-          "Each trip persists a travel itinerary plus normalized flight and hotel items, then routes the prep brief through Telegram."
+          "Each trip saves an itinerary with flight and hotel details, then sends the prep brief through Telegram."
       }
     ]
   end
@@ -1393,27 +1393,26 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_output_preview("slack_followthrough_agent", _launch) do
     [
       %{
-        title: "Stored records",
+        title: "Saved output",
         body:
-          "Each unresolved Slack commitment persists a structured record with commitment, person, source, deadline, status, evidence, and next_action."
+          "Each unresolved Slack commitment saves a record with the person, deadline, evidence, and next action."
       }
     ]
   end
 
   defp dynamic_output_preview("codebase_advisor", launch) do
     [
-      %{title: "Primary artifact", body: "Recommendation report path: #{launch["output_path"]}"}
+      %{title: "Saved output", body: "Recommendations report: #{launch["output_path"]}"}
     ]
   end
 
   defp dynamic_output_preview("repo_planner", launch) do
     [
       %{
-        title: "Primary artifact",
+        title: "Saved output",
         body:
           if(launch["write_plan_files"] == "true",
-            do:
-              "Plans are written into #{launch["output_path"]} and also shown in the in-app activity log.",
+            do: "Saved plans go to #{launch["output_path"]} and also appear in the activity log.",
             else: "Plans remain in the in-app activity log unless you enable plan file writing."
           )
       }

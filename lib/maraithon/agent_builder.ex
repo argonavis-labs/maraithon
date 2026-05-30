@@ -151,8 +151,8 @@ defmodule Maraithon.AgentBuilder do
       ],
       outputs: [
         "Assistant responses",
-        "Structured actions using the selected allowlist",
-        "Long-running context shaped by the memory limit"
+        "Actions using the approved action list",
+        "Recent context limited to the amount you choose"
       ],
       fields: ~w(prompt subscriptions tools memory_limit),
       simple_fields: ~w(prompt subscriptions tools cost_profile),
@@ -161,7 +161,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Start with a narrow prompt and only 2-3 subscriptions so the automation does not drown in noise.",
         "Keep the action list short. Every extra action expands what the automation can affect.",
-        "Use the memory limit to control how much recent context the automation can revisit."
+        "Use the recent context limit to control how much history the automation can revisit."
       ]
     },
     %{
@@ -169,18 +169,18 @@ defmodule Maraithon.AgentBuilder do
       label: "Project Manager",
       category: "Product",
       summary:
-        "Reviews one project like a PM, proposes the next 2-3 backlog tickets from goals, repo state, and open work, then writes them into Maraithon's task surface.",
+        "Reviews one project, recommends the next 2-3 tickets from goals, repository activity, and open tasks, then saves them for review.",
       inputs: [
-        "Project context, goals, open tasks, project memory, and attached repository activity",
+        "Project context, goals, open tasks, saved project notes, and attached repository activity",
         "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
         "The base branch you want reviewed, usually `main`",
         "A weekly wakeup cadence, explicit requests, and GitHub repo events"
       ],
       outputs: [
-        "Stored PM recommendations with titles, summaries, recommended first milestones, and evidence",
-        "Durable todos and project-memory ticket rows that can be reviewed from the existing task surfaces",
-        "Telegram-ready feature suggestions reserved for roadmap moves that deserve same-day attention",
-        "A project PM loop grounded in the current goals, task list, and selected repository"
+        "Saved recommendations with titles, summaries, first milestones, and evidence",
+        "New project tasks and ticket notes ready for review",
+        "Telegram feature suggestions for roadmap moves that deserve same-day attention",
+        "A recurring product review grounded in the current goals, task list, and selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
       simple_fields: ~w(repo_full_name base_branch feature_limit cost_profile),
@@ -292,7 +292,7 @@ defmodule Maraithon.AgentBuilder do
         "Recent sent email and Slack follow-up evidence used to verify whether follow-through already happened"
       ],
       outputs: [
-        "Telegram-ready nudges for unresolved commitments",
+        "Telegram nudges for unresolved commitments",
         "Post-meeting and post-thread reminders when owners and next steps are still missing",
         "Structured commitment records with commitment, person, source, deadline, status, evidence, and next_action",
         "Morning brief, end-of-day review, and weekly review summaries sent to Telegram"
@@ -388,7 +388,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Action-ready unresolved commitment summaries with urgency, evidence, and a next action",
         "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Telegram-ready nudges for Slack commitments that need same-day attention"
+        "Telegram nudges for Slack commitments that need same-day attention"
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
@@ -437,8 +437,8 @@ defmodule Maraithon.AgentBuilder do
         "Walks a repository file by file and writes concrete review recommendations to a markdown report.",
       inputs: [
         "Files discovered under the selected codebase path",
-        "Include and ignore patterns that define the review surface",
-        "A wakeup interval that controls batch review pacing"
+        "Include and ignore patterns that define which files are reviewed",
+        "A review cadence that controls how quickly batches run"
       ],
       outputs: [
         "A `RECOMMENDATIONS.md` report that accumulates review findings",
@@ -461,7 +461,7 @@ defmodule Maraithon.AgentBuilder do
           kind: :directory,
           field: "codebase_path",
           label: "Codebase path",
-          description: "The runtime host must be able to read this directory.",
+          description: "Maraithon must be able to read this directory.",
           required?: true
         },
         %{
@@ -474,7 +474,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Start on one repository root and tighten the ignore patterns before widening the scan surface.",
-        "Use a slower wakeup interval for large repositories so reviews do not pile up too quickly.",
+        "Use a slower check interval for large repositories so reviews do not pile up too quickly.",
         "Point the output path into a tracked workspace if you want to review the markdown report in git."
       ]
     },
@@ -513,7 +513,7 @@ defmodule Maraithon.AgentBuilder do
           kind: :directory,
           field: "codebase_path",
           label: "Codebase path",
-          description: "The runtime host must be able to index this directory.",
+          description: "Maraithon must be able to index this directory.",
           required?: true
         },
         %{
@@ -527,7 +527,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Let the planner finish indexing before sending the first planning request.",
         "Keep plan-writing enabled if you want saved plan files that can be reviewed outside the UI.",
-        "Short wakeup intervals feel responsive, but they also cause the planner to re-check for work more often."
+        "Short check intervals feel responsive, but they also cause the planner to re-check for work more often."
       ]
     },
     %{
@@ -539,7 +539,7 @@ defmodule Maraithon.AgentBuilder do
       inputs: [
         "Scheduled wakeups on the chosen interval",
         "Optional HTTP checks against a single URL",
-        "Current budget state and runtime timing context"
+        "Current activity and timing context"
       ],
       outputs: [
         "Short health and activity summaries",
@@ -557,7 +557,7 @@ defmodule Maraithon.AgentBuilder do
       requirements: [],
       suggestions: [
         "Leave the URL blank if you only want heartbeat summaries.",
-        "A 30-minute wakeup interval is a good default for passive monitoring.",
+        "A 30-minute check interval is a good default for passive monitoring.",
         "Use this template when you want lightweight health notes, not deep analysis."
       ]
     }

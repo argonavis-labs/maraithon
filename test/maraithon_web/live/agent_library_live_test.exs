@@ -19,4 +19,25 @@ defmodule MaraithonWeb.AgentLibraryLiveTest do
     refute html =~ "spin it up"
     refute html =~ "prompt and budgets"
   end
+
+  test "project manager template uses review-focused copy", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/agents/library/github_product_planner")
+
+    assert html =~ "recommends the next 2-3 tickets"
+    assert html =~ "New project tasks and ticket notes ready for review"
+    refute html =~ "task surface"
+    refute html =~ "project-memory"
+    refute html =~ "Durable todos"
+    refute html =~ "PM loop"
+    refute html =~ "Telegram-ready"
+  end
+
+  test "engineering templates avoid runtime host language", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/agents/library/codebase_advisor")
+
+    assert html =~ "which files are reviewed"
+    assert html =~ "slower check interval for large repositories"
+    refute html =~ "runtime host"
+    refute html =~ "Primary artifact"
+  end
 end
