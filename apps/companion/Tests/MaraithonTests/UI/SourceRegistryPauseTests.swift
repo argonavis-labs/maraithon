@@ -218,6 +218,55 @@ final class SourceRegistryPauseTests: XCTestCase {
         XCTAssertEqual(calendar.syncCount, 0)
     }
 
+    func testClearFullDiskAccessBlocksIfGrantedClearsStaleBlocksWithoutSyncing() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        registry.register(imessage)
+        registry.register(notes)
+        registry.register(calendar)
+
+        imessage.statusPublisher.recordHealthyCycle(at: Date())
+        notes.statusPublisher.recordHealthyCycle(at: Date())
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        notes.statusPublisher.update(state: .error(reason: "notes_full_disk_access_required"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+
+        let cleared = registry.clearFullDiskAccessBlocksIfGranted(isGranted: { true })
+
+        XCTAssertTrue(cleared)
+        XCTAssertNil(imessage.statusPublisher.blockingPermissionReason)
+        XCTAssertNil(notes.statusPublisher.blockingPermissionReason)
+        XCTAssertEqual(imessage.statusPublisher.displayedState(), .connected)
+        XCTAssertEqual(notes.statusPublisher.displayedState(), .connected)
+        XCTAssertEqual(calendar.statusPublisher.displayedState(), .error(reason: "calendar_not_authorized"))
+        XCTAssertTrue(registry.fullDiskAccessBlockedSources().isEmpty)
+        XCTAssertEqual(imessage.syncCount, 0)
+        XCTAssertEqual(notes.syncCount, 0)
+        XCTAssertEqual(calendar.syncCount, 0)
+    }
+
+    func testClearFullDiskAccessBlocksIfGrantedKeepsBlocksWhenProbeFails() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        registry.register(imessage)
+
+        imessage.statusPublisher.recordHealthyCycle(at: Date())
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+
+        let cleared = registry.clearFullDiskAccessBlocksIfGranted(isGranted: { false })
+
+        XCTAssertFalse(cleared)
+        XCTAssertEqual(
+            imessage.statusPublisher.displayedState(),
+            .error(reason: "imessage_full_disk_access_required")
+        )
+        XCTAssertEqual(registry.fullDiskAccessBlockedSources().map(\.displayName), ["iMessage"])
+    }
+
     func testSyncUserRecoverablePermissionBlockedSourcesRechecksOnlyNonFullDiskPermissions() async {
         let log = EventLog()
         let registry = SourceRegistry(eventLog: log)

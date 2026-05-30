@@ -146,6 +146,10 @@ final class AppEnvironment {
         )
         registry.register(browserHistory)
 
+        if registry.clearFullDiskAccessBlocksIfGranted() {
+            onboarding.recordFullDiskAccessGranted()
+        }
+
         if Self.shouldAutoStartLiveServices {
             // Kick off the realtime channel. start() loops with backoff until a
             // valid token is available, so calling it pre-sign-in is safe.

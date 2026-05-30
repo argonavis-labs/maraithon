@@ -170,6 +170,32 @@ final class SourceRegistry {
         }
     }
 
+    /// Clear stale Full Disk Access blockers after a relaunch once the
+    /// running app proves the grant is present. This keeps macOS reloads
+    /// from showing old permission copy when TCC is already satisfied.
+    @discardableResult
+    func clearFullDiskAccessBlocksIfGranted(
+        isGranted: () -> Bool = { FullDiskAccessProbe.isGranted() }
+    ) -> Bool {
+        let blockedIDs = Set(fullDiskAccessBlockedSources().map(\.id))
+
+        guard !blockedIDs.isEmpty else { return false }
+        guard isGranted() else { return false }
+
+        eventLog.info(
+            "source_registry.clear_fda_blocks_granted",
+            source: .system,
+            payload: ["count": String(blockedIDs.count)]
+        )
+
+        for source in registered.values where blockedIDs.contains(source.id) {
+            source.statusPublisher.clearFullDiskAccessBlock()
+        }
+
+        refreshStates()
+        return true
+    }
+
     func syncUserRecoverablePermissionBlockedSources() {
         let blockedIDs = Set(userRecoverablePermissionBlockedSources().map(\.id))
 
