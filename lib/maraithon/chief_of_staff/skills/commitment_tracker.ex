@@ -441,7 +441,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "metadata": {
                "commitment_direction": "i_owe | asked_of_me | pending_reply",
                "source_ref": "...",
-               "source_tags": ["runner","gmail"],
+               "source_tags": ["project","gmail"],
                "quote": "...",
                "company": "company or organization when known",
                "relationship_context": "why this person matters or why they are in the thread",

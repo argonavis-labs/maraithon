@@ -79,4 +79,17 @@ defmodule Maraithon.Todos.AttentionRankerTest do
     refute profile["personal_family"]
     assert profile["bucket"] == "business_project_waiting"
   end
+
+  test "does not treat tenant-specific source tags as a generic business signal" do
+    tagged = %{
+      "title" => "Review the note",
+      "summary" => "No durable context was attached.",
+      "next_action" => "Review it later if it still matters.",
+      "metadata" => %{"source_tags" => ["runner"]}
+    }
+
+    profile = AttentionRanker.profile(tagged, now: @now)
+
+    refute profile["business_project"]
+  end
 end

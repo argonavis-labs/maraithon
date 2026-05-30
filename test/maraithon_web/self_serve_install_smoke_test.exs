@@ -102,6 +102,12 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_offset_hours"]) ==
              -8
 
+    config_text = agent.config |> Jason.encode!() |> String.downcase()
+    refute config_text =~ "cogniate"
+    refute config_text =~ "glossier"
+    refute config_text =~ "runner-general"
+    refute config_text =~ "runner.now"
+
     refute "glossier" in (get_in(agent.config, [
                             "skill_configs",
                             "morning_briefing",

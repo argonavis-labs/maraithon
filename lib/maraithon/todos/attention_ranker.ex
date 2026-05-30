@@ -199,7 +199,7 @@ defmodule Maraithon.Todos.AttentionRanker do
       |> Enum.join(" ")
       |> String.downcase()
 
-    String.contains?(tags, "runner") or String.contains?(tags, "customer") or
+    String.contains?(tags, "customer") or
       String.contains?(tags, "project") or
       contains_any?(text, ~w(customer client project launch pricing eta delivery business))
   end

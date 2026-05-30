@@ -155,6 +155,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
              &(&1["email"] == "charlie@runner.now")
            )
 
+    assert Enum.any?(
+             default_meeting["candidate_people_and_orgs"],
+             &(&1["query"] == "Runner")
+           )
+
     configured_result =
       MeetingEnrichment.enrich(user_id, [event],
         max_web_queries: 0,

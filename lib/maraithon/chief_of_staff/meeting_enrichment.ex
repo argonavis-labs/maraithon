@@ -14,7 +14,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   @web_timeout_ms 15_000
 
   @internal_terms ~w(
-    agora calendar chief crm gmail google maraithon meet reclaim runner slack telegram zoom
+    calendar chief crm gmail google maraithon meet reclaim slack telegram zoom
   )
 
   @title_stopwords ~w(
@@ -628,7 +628,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
     text != "" and
       String.contains?(text, [
-        "agora",
         "advisor",
         "client",
         "commercial",
@@ -639,7 +638,6 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
         "investor",
         "partner",
         "pricing",
-        "runner",
         "sales",
         "teammate",
         "vendor",
