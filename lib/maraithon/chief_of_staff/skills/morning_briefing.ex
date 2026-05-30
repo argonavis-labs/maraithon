@@ -1979,6 +1979,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "action_card_and_draft_work_is_named_without_internal_handles",
         "model_todo_next_actions_visible_in_primary_brief",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
+        "brief_ends_with_today_move_directive",
         "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
     }
@@ -2061,6 +2062,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_non_draft_jobs
     )
     |> maybe_finding(
+      generation_mode == "llm" and not todays_move_final_directive_present?(body),
+      :missing_today_move
+    )
+    |> maybe_finding(
       generation_mode == "llm" and Enum.any?(todos, &sparse_person_todo?/1),
       :sparse_person_todo_context
     )
@@ -2082,6 +2087,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
     |> maybe_append_non_draft_jobs(brief_input, findings)
+    |> maybe_append_todays_move(brief_input, findings)
   end
 
   defp maybe_prepend_model_todo_next_actions(brief, findings) do
@@ -2328,6 +2334,43 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp maybe_append_todays_move(brief, brief_input, findings) do
+    if :missing_today_move in findings and
+         not todays_move_final_directive_present?(read_string(brief, "body", "")) do
+      append_body_section(brief, todays_move_directive(brief_input))
+    else
+      brief
+    end
+  end
+
+  defp todays_move_directive(brief_input) do
+    cond do
+      personal_calendar_events(brief_input) != [] ->
+        "Today's move: protect the first personal/family commitment, then use the first desk block for source-backed work."
+
+      calendar_conflicts(brief_input) != [] ->
+        "Today's move: resolve the first calendar conflict before opening lower-signal inbox."
+
+      action_stack_items(brief_input) != [] ->
+        "Today's move: review or clear the pending action-card stack before opening lower-signal inbox."
+
+      commitments_present?(brief_input) ->
+        "Today's move: clear or explicitly keep the first open commitment before lower-signal inbox."
+
+      inbox_triage_items(brief_input) != [] ->
+        "Today's move: answer the highest-leverage body-backed email before opening the rest of inbox."
+
+      slack_triage_items(brief_input) != [] ->
+        "Today's move: resolve the highest-leverage Slack ask before passive channel scanning."
+
+      weekend_brief?(brief_input) ->
+        "Today's move: prep next week's meetings and family logistics before Monday starts."
+
+      true ->
+        "Today's move: use the first focused block to clear the highest-leverage source-backed item above before lower-signal inbox."
+    end
+  end
+
   defp maybe_drop_sparse_person_todos(brief, findings) do
     if :sparse_person_todo_context in findings do
       todos =
@@ -2418,6 +2461,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp needs_attention_present?(_body), do: false
+
+  defp todays_move_final_directive_present?(body) when is_binary(body) do
+    normalized =
+      body
+      |> String.split(~r/\R/u, trim: true)
+      |> List.last()
+      |> normalize_match_text()
+
+    String.starts_with?(normalized, "today s move") or
+      String.starts_with?(normalized, "todays move")
+  end
+
+  defp todays_move_final_directive_present?(_body), do: false
 
   defp schedule_conflict_present?(body) when is_binary(body) do
     normalized = normalize_match_text(body)

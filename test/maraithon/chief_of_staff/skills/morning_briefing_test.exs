@@ -573,8 +573,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert "missing_open_commitments" in verification["initial_findings"]
     assert "missing_action_stack" in verification["initial_findings"]
     assert "missing_non_draft_jobs" in verification["initial_findings"]
+    assert "missing_today_move" in verification["initial_findings"]
     assert verification["final_findings"] == []
     assert "schedule_conflicts_called_out_with_recommendations" in verification["criteria"]
+    assert "brief_ends_with_today_move_directive" in verification["criteria"]
 
     assert "action_card_and_draft_work_is_named_without_internal_handles" in verification[
              "criteria"
@@ -596,6 +598,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "actc_"
     assert revised["body"] =~ "## Not a draft job"
     assert revised["body"] =~ "Pydantic failed payment"
+    assert revised["body"] =~ "Today's move:"
+  end
+
+  test "quality verifier appends the executive today's move directive" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Operational brief",
+      "summary" => "Start with the Acme renewal.",
+      "body" =>
+        "## Needs Your Attention\n- Review the pending action card for the Acme renewal.\n\nToday's move: review Acme first.\n\n## Context\n- Renewal risk is open.",
+      "todos" => []
+    }
+
+    input = %{
+      "open_work" => %{
+        "todos" => [
+          %{
+            "title" => "Acme renewal reply",
+            "summary" => "Draft the enterprise renewal response before the 10am check-in.",
+            "metadata" => %{
+              "action_card_id" => "actc_acme",
+              "work_type" => "draftable"
+            }
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_today_move" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert String.ends_with?(
+             revised["body"],
+             "Today's move: review or clear the pending action-card stack before opening lower-signal inbox."
+           )
+
+    refute revised["body"] =~ "actc_"
   end
 
   test "quality verifier patches dropped required meetings and commercial threads" do
