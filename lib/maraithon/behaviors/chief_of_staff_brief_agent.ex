@@ -672,7 +672,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{weekly_guidance(top_open)}
 
     Most important open items:
-    #{format_items(top_open, offset_hours, reference_at, "1. No open work found in this week's review.")}
+    #{format_items(top_open, offset_hours, reference_at, "1. This week's checked sources did not surface open work.")}
     """
     |> String.trim()
   end
@@ -742,7 +742,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     ]
     |> Enum.reject(&is_nil/1)
     |> case do
-      [] -> "- No checked items found this week"
+      [] -> "- No checked activity surfaced this week"
       lines -> Enum.join(lines, "\n")
     end
   end
@@ -843,7 +843,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> summary_sentence()
   end
 
-  defp summary_sentence([]), do: "No checked items found this week."
+  defp summary_sentence([]), do: "This week's checked sources did not surface open work."
   defp summary_sentence([part]), do: part <> "."
   defp summary_sentence([first, second]), do: "#{first}, and #{second}."
 
@@ -858,7 +858,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp be_verb(1), do: "is"
   defp be_verb(_count), do: "are"
 
-  defp weekly_title(0), do: "Weekly review: no open work found"
+  defp weekly_title(0), do: "Weekly review: no open work surfaced"
 
   defp weekly_title(open_count),
     do: "Weekly review: #{count_phrase(open_count, "item")} still open"

@@ -692,14 +692,19 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["weekly_review"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Weekly review: no open work found"
-    assert brief.summary == "No checked items found this week."
+    assert brief.title == "Weekly review: no open work surfaced"
+    assert brief.summary == "This week's checked sources did not surface open work."
     assert brief.body =~ "Next week's move:"
     assert brief.body =~ "confirm calendar, source freshness, and any new promises"
+    assert brief.body =~ "- No checked activity surfaced this week"
     assert brief.body =~ "Most important open items:"
+    assert brief.body =~ "This week's checked sources did not surface open work."
 
     refute brief.title =~ "0 items"
     refute brief.summary =~ "0"
+    refute brief.title =~ "found"
+    refute brief.summary =~ "found"
+    refute brief.body =~ "No open work found"
   end
 
   test "skips adaptive check-ins when only low-priority work is open", %{
