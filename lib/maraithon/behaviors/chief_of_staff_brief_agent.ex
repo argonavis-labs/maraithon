@@ -1188,21 +1188,29 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
         cond do
           DateTime.compare(due_local, now_local) == :lt ->
-            "Overdue since #{Calendar.strftime(due_local, "%a %-m/%-d %-I:%M %p")}."
+            "Overdue since #{brief_datetime(due_local)}."
 
           due_date == today ->
-            "Due today by #{Calendar.strftime(due_local, "%-I:%M %p")}."
+            "Due today by #{brief_time(due_local)}."
 
           due_date == Date.add(today, 1) ->
-            "Due tomorrow by #{Calendar.strftime(due_local, "%-I:%M %p")}."
+            "Due tomorrow by #{brief_time(due_local)}."
 
           true ->
-            "Due #{Calendar.strftime(due_local, "%a %-m/%-d %-I:%M %p")}."
+            "Due #{brief_datetime(due_local)}."
         end
 
       _ ->
         nil
     end
+  end
+
+  defp brief_datetime(%DateTime{} = datetime) do
+    Calendar.strftime(datetime, "%a, %b %-d at %-I:%M %p")
+  end
+
+  defp brief_time(%DateTime{} = datetime) do
+    Calendar.strftime(datetime, "%-I:%M %p")
   end
 
   defp metadata_for(plan, behavior, insights, context) do

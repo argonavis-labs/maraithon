@@ -416,10 +416,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Waiting on: Growth team"
     assert brief.body =~ "Do: Open the notice now"
     assert brief.body =~ "Why: A blocked or restricted account can stop important work"
+    assert brief.body =~ "Overdue since Wed, Mar 11 at 4:05 PM"
     assert brief.body =~ "Checked: Restriction notice is still active"
     assert is_list(brief.metadata["linked_todo_ids"])
     assert length(brief.metadata["linked_todo_ids"]) == 1
     assert brief.metadata["timezone_offset_hours"] == -5
+    refute Regex.match?(~r/\b\d{1,2}\/\d{1,2}\b/, brief.body)
   end
 
   test "keeps monitor items out of top actions and includes them in Watching", %{

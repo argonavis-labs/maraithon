@@ -264,8 +264,8 @@ defmodule Maraithon.Insights.Detail do
   defp source_timestamp_item(%Insight{source_occurred_at: %DateTime{} = occurred_at}, source_ref) do
     %{
       kind: :source_evidence,
-      label: "Source occurrence recorded",
-      detail: "Occurred at #{DateTime.to_iso8601(occurred_at)}",
+      label: "Source activity",
+      detail: "Seen #{evidence_datetime(occurred_at)}",
       occurred_at: occurred_at,
       source_ref: source_ref
     }
@@ -277,7 +277,7 @@ defmodule Maraithon.Insights.Detail do
     %{
       kind: :deadline,
       label: "Deadline",
-      detail: "Due #{DateTime.to_iso8601(due_at)}",
+      detail: "Due #{evidence_datetime(due_at)}",
       occurred_at: due_at,
       source_ref: nil
     }
@@ -295,7 +295,7 @@ defmodule Maraithon.Insights.Detail do
         %{
           kind: :deadline,
           label: "Deadline",
-          detail: "Due #{DateTime.to_iso8601(due_at)}",
+          detail: "Due #{evidence_datetime(due_at)}",
           occurred_at: due_at,
           source_ref: nil
         }
@@ -345,6 +345,12 @@ defmodule Maraithon.Insights.Detail do
         item.source_ref
       }
     end)
+  end
+
+  defp evidence_datetime(%DateTime{} = datetime) do
+    datetime
+    |> DateTime.shift_zone!("Etc/UTC")
+    |> Calendar.strftime("%b %-d, %Y at %-I:%M %p UTC")
   end
 
   defp build_delivery_evidence(deliveries) do

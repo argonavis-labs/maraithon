@@ -106,9 +106,28 @@ defmodule Maraithon.Insights.DetailTest do
 
     assert detail.requested_by == %{text: "Sarah", origin: :stored}
     assert Enum.any?(detail.evidence_checked, &(&1.kind == :deadline))
+
+    assert Enum.any?(
+             detail.evidence_checked,
+             &(&1.label == "Source activity" and
+                 &1.detail == "Seen Mar 12, 2026 at 9:30 AM UTC")
+           )
+
+    assert Enum.any?(
+             detail.evidence_checked,
+             &(&1.label == "Deadline" and &1.detail == "Due Mar 13, 2026 at 5:00 PM UTC")
+           )
+
     assert detail.open_loop_reason.origin == :derived
     assert detail.open_loop_reason.text =~ "unresolved"
     assert "No follow-up delivery has been recorded yet." in detail.data_gaps
+
+    summary = Detail.summary_text(detail, insight)
+
+    assert summary =~ "Source activity: Seen Mar 12, 2026 at 9:30 AM UTC"
+    assert summary =~ "Deadline: Due Mar 13, 2026 at 5:00 PM UTC"
+    refute summary =~ "2026-03-12T09:30:00Z"
+    refute summary =~ "2026-03-13T17:00:00Z"
   end
 
   test "reports explicit data gaps for sparse insights" do
