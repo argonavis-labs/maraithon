@@ -192,31 +192,31 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def failure_message(:timeout) do
-    "I couldn't complete the full lookup in this turn, so I saved the context gathered so far and avoided guessing from partial evidence."
+    "Maraithon saved the context gathered so far and stopped before relying on incomplete evidence."
   end
 
   def failure_message(:llm_turn_limit) do
-    "I stopped because the reasoning loop was no longer adding useful evidence. I saved the run context and avoided repeating work."
+    "Maraithon saved the run context after the reasoning loop stopped adding useful evidence, avoiding repeated work."
   end
 
   def failure_message(:tool_step_limit) do
-    "I reached the tool budget before a complete answer, so I saved the evidence gathered so far and avoided guessing."
+    "Maraithon saved the evidence gathered so far after reaching the tool budget before a complete answer."
   end
 
   def failure_message({:llm_busy, _retry_after}) do
-    "Model capacity was saturated before I could complete that turn. I saved the request context so the next pass can continue cleanly."
+    "Maraithon saved the request context because model capacity stayed saturated before the turn could finish."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
-    "I stopped after repeated identical results from #{human_tool_name(tool)}. I saved the useful evidence and avoided repeating the same call."
+    "Maraithon saved the useful evidence after repeated identical results from #{human_tool_name(tool)}, avoiding the same call."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count, class, _loop}) do
-    "I stopped after a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}. I saved the useful evidence and avoided repeating the same call."
+    "Maraithon saved the useful evidence after a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}, avoiding the same call."
   end
 
   def failure_message(_reason) do
-    "I couldn't complete that turn cleanly, so I saved the run context and avoided guessing from partial evidence."
+    "Maraithon saved the run context because the turn did not finish cleanly, avoiding guesses from incomplete evidence."
   end
 
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do

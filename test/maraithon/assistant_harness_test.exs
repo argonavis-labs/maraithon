@@ -113,11 +113,15 @@ defmodule Maraithon.AssistantHarnessTest do
     ]
 
     assert Enum.all?(messages, &String.contains?(&1, "saved"))
+    assert Enum.all?(messages, &String.starts_with?(&1, "Maraithon saved"))
 
     refute Enum.any?(messages, fn message ->
              normalized = String.downcase(message)
              Enum.any?(disallowed, &String.contains?(normalized, &1))
            end)
+
+    refute Enum.any?(messages, &String.contains?(&1, "I "))
+    refute Enum.any?(messages, &String.contains?(&1, "partial evidence"))
   end
 
   test "builds model requests with runtime policy instead of prompt text alone" do
