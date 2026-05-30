@@ -28,7 +28,9 @@ extension SourceDetailScaffold {
 
     func issueView(issue: SourceStatusPublisher.IssueEvent) -> some View {
         let isError = issue.severity == .error
-        let title = isError ? "Sync is failing" : "Some items need attention"
+        let title = isError
+            ? SourceDetailCopy.issueErrorTitle
+            : SourceDetailCopy.issueAttentionTitle(plural: syncedItemPlural)
         let symbol = isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill"
         let tone = isError ? StatusTone.error : StatusTone.attention
 
@@ -39,11 +41,15 @@ extension SourceDetailScaffold {
         } description: {
             VStack(alignment: .center, spacing: Tokens.Spacing.medium) {
                 Text(SourceIssueCopy.issue(issue.reason, failedCount: issue.failedCount))
-                Text(issue.failedCount == 1 ? "1 item did not finish syncing." : "\(issue.failedCount.formatted(.number)) items did not finish syncing.")
+                Text(SourceDetailCopy.failedItemsLine(
+                    issue.failedCount,
+                    singular: syncedItemSingular,
+                    plural: syncedItemPlural
+                ))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let last = publisher?.lastSyncAt {
-                    Text("Last successful sync: \(SourceStat.relative(last))")
+                    Text("Last successful check: \(SourceStat.relative(last))")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -64,7 +70,7 @@ extension SourceDetailScaffold {
                     env.sources.resetCursor(id: sourceID)
                     env.sources.syncNow(id: sourceID)
                 } label: {
-                    Label("Start this source over", systemImage: "arrow.counterclockwise")
+                    Label(SourceDetailCopy.resetSourceButtonTitle, systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(.bordered)
             }

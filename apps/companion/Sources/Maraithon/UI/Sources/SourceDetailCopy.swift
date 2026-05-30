@@ -20,6 +20,8 @@ enum SourceDetailCopy {
     static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
+    static let issueErrorTitle = "Last check failed"
+    static let resetSourceButtonTitle = "Check from the beginning"
 
     static func healthyHeadline(
         displayName: String,
@@ -40,6 +42,15 @@ enum SourceDetailCopy {
 
     static func countedItem(_ count: Int, singular: String, plural: String) -> String {
         "\(count.formatted(.number)) \(itemNoun(total: count, singular: singular, plural: plural))"
+    }
+
+    static func issueAttentionTitle(plural: String) -> String {
+        "Some \(plural) need attention"
+    }
+
+    static func failedItemsLine(_ count: Int, singular: String, plural: String) -> String {
+        let verb = count == 1 ? "needs" : "need"
+        return "\(countedItem(count, singular: singular, plural: plural)) \(verb) another check."
     }
 
     static func connectedSummary(

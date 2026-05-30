@@ -247,6 +247,11 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
+        XCTAssertEqual(SourceDetailCopy.issueErrorTitle, "Last check failed")
+        XCTAssertEqual(SourceDetailCopy.resetSourceButtonTitle, "Check from the beginning")
+        XCTAssertEqual(SourceDetailCopy.issueAttentionTitle(plural: "messages"), "Some messages need attention")
+        XCTAssertEqual(SourceDetailCopy.failedItemsLine(1, singular: "message", plural: "messages"), "1 message needs another check.")
+        XCTAssertEqual(SourceDetailCopy.failedItemsLine(3, singular: "message", plural: "messages"), "3 messages need another check.")
     }
 
     func testIMessagesCapabilitiesNameChiefOfStaffOutcomes() {

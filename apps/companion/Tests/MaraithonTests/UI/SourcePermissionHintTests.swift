@@ -97,7 +97,7 @@ final class SourcePermissionHintTests: XCTestCase {
     func testUnknownReasonFallsBackToSanitizedGenericWithoutDeepLink() {
         let hint = SourcePermissionHint.forReason("something_weird")
         XCTAssertEqual(hint.title, "This source needs attention")
-        XCTAssertEqual(hint.body, "This source needs attention. Sync again when ready.")
+        XCTAssertEqual(hint.body, "This source needs attention. Check again when ready.")
         XCTAssertNil(hint.settingsURL)
         XCTAssertEqual(hint.settingsButtonTitle, "Open System Settings")
         XCTAssertNil(hint.followUpNote)

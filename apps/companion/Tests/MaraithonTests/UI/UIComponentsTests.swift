@@ -27,7 +27,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertEqual(attn.subtitle, "Full Disk Access is required.")
 
         let err = SourceStatusBadge.State.error("clientError(status: 401, body: nil)")
-        XCTAssertEqual(err.subtitle, "Reconnect Maraithon to resume sync.")
+        XCTAssertEqual(err.subtitle, "Reconnect Maraithon to keep checking this source.")
 
         XCTAssertNil(SourceStatusBadge.State.connected.subtitle)
     }
@@ -80,8 +80,8 @@ final class UIComponentsTests: XCTestCase {
             lastSyncAt: nil
         )
 
-        XCTAssertEqual(label, "Notes, error, Some items could not finish syncing. Maraithon will keep the last successful data until the next sync.")
-        XCTAssertEqual(tooltip, "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync.")
+        XCTAssertEqual(label, "Notes, error, Some items could not finish. Maraithon will keep the last successful context until the next check.")
+        XCTAssertEqual(tooltip, "Some items could not finish. Maraithon will keep the last successful context until the next check.")
         XCTAssertFalse(label.contains("secret"))
         XCTAssertFalse(tooltip.contains("secret"))
         XCTAssertFalse(label.contains("clientError"))
@@ -189,7 +189,7 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
 
-        XCTAssertTrue(line.contains("Status: Needs review - Maraithon is temporarily unavailable. Sync again shortly."))
+        XCTAssertTrue(line.contains("Status: Needs review - Maraithon is temporarily unavailable. Check again shortly."))
         XCTAssertTrue(line.contains("Last checked: Never"))
         XCTAssertFalse(line.contains("state="))
         XCTAssertFalse(line.contains("clientError"))
