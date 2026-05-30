@@ -767,10 +767,10 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   defp replace_internal_source_labels(text) do
     text
-    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "my morning briefing")
-    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "my commitment review")
-    |> String.replace(~r/\bchief_of_staff_holiday(?:_radar)?\b/i, "my holiday radar")
-    |> String.replace(~r/\bchief_of_staff_weekend\b/i, "my weekend review")
+    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "the morning briefing")
+    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "the open work review")
+    |> String.replace(~r/\bchief_of_staff_holiday(?:_radar)?\b/i, "the holiday review")
+    |> String.replace(~r/\bchief_of_staff_weekend\b/i, "the weekend review")
   end
 
   defp single_line(text) do

@@ -268,15 +268,19 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
       "source" => "chief_of_staff_commitment_tracker",
       "status" => "open",
       "title" => "Reply to Sarah",
-      "summary" => "Sarah is waiting on the deck.",
-      "next_action" => "You should send Sarah the current deck and call out the two open risks."
+      "summary" => "Sarah is waiting on the deck from chief_of_staff_commitment_tracker.",
+      "next_action" =>
+        "You should send Sarah the current deck and call out the two open risks from chief_of_staff_commitment_tracker."
     }
 
     payload = TodoActions.telegram_payload(todo)
 
     assert payload.text =~ "<b>You should send Sarah the current deck"
+    assert payload.text =~ "the open work review"
     refute payload.text =~ "Kent,"
     refute payload.text =~ "Kent"
+    refute payload.text =~ "chief_of_staff"
+    refute payload.text =~ "commitment tracker"
   end
 
   test "todo card source line humanizes local and namespaced source keys" do

@@ -1426,10 +1426,10 @@ defmodule Maraithon.ActionCards do
       ~r/\bquick status check on whether the issue is resolved, who owns it, and whether users or customers were affected\b/i,
       "quick answer on whether it is fixed, who owns the follow-up, and whether any users or customers were affected"
     )
-    |> String.replace(~r/\bChief_of_staff_morning_briefing\b/i, "my morning briefing")
-    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "my morning briefing")
-    |> String.replace(~r/\bChief_of_staff_commitment_tracker\b/i, "my commitment tracker")
-    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "my commitment tracker")
+    |> String.replace(~r/\bChief_of_staff_morning_briefing\b/i, "the morning briefing")
+    |> String.replace(~r/\bchief_of_staff_morning_briefing\b/i, "the morning briefing")
+    |> String.replace(~r/\bChief_of_staff_commitment_tracker\b/i, "the open work review")
+    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "the open work review")
   end
 
   defp clean_title(value) when is_binary(value) do

@@ -152,7 +152,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
       })
 
     assert attrs["summary"] ==
-             "This came from my commitment review after checking the follow-up thread."
+             "This came from the open work review after checking the follow-up thread."
   end
 
   test "rewrites model role labels into direct operator-facing copy" do
