@@ -81,6 +81,10 @@ defmodule Maraithon.Behaviors.GitHubProductPlannerTest do
       assert prompt =~ "Add a roadmap digest agent"
       assert prompt =~ "Build Telegram roadmap summaries"
       assert prompt =~ "README"
+      assert prompt =~ "operator's Product Manager Agent"
+      assert prompt =~ "Return ONLY valid JSON"
+      refute prompt =~ "Cybrus"
+      refute prompt =~ "ProductManagerAgent"
       assert state_after_wakeup.pending_snapshot.repo_full_name == @repo_full_name
 
       assert state_after_wakeup.pending_plan_date ==

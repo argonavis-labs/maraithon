@@ -51,6 +51,22 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "return a `source_gap` object instead of a heuristic itinerary"
   end
 
+  test "product manager skill returns executive-ready ticket JSON" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/product/github_product_planner.md")
+
+    assert skill.id == "github_product_planner"
+    assert skill.name == "Product Manager Agent"
+    assert skill.instructions =~ "operator's Product Manager Agent"
+    assert skill.instructions =~ "Return ONLY valid JSON"
+    assert skill.instructions =~ "\"tickets\""
+    assert skill.instructions =~ "\"insufficiency\""
+    assert skill.instructions =~ "`acceptance_criteria` must be testable"
+    assert skill.instructions =~ "Do not expose internal behavior names"
+    refute skill.instructions =~ "Cybrus"
+    refute skill.instructions =~ "ProductManagerAgent"
+  end
+
   test "loads priv markdown skills through configured runtime priv dir" do
     project_priv_dir = Path.expand("priv")
     previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")

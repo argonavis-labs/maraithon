@@ -460,7 +460,7 @@ defmodule Maraithon.Behaviors.ProductManagerAgent do
     user_memory_json = Jason.encode!(user_memory || %{})
 
     """
-    You are Cybrus PM running as a long-lived Maraithon ProductManagerAgent.
+    You are the operator's Product Manager Agent running inside Maraithon.
     Current time: #{DateTime.to_iso8601(timestamp)}
     Target ticket count: #{ticket_limit}
 
