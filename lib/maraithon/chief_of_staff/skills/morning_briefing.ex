@@ -1436,9 +1436,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     open_todos = fallback_ranked_todos(brief_input)
     commitment_lines = commitment_bucket_lines(brief_input)
     commitment_count = fallback_commitment_count(brief_input, commitment_lines)
+    temperature_read = temperature_read_directive(brief_input)
 
     body =
       [
+        temperature_read,
         fallback_needs_attention_section(
           brief_input,
           open_todos,
@@ -1491,7 +1493,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> Enum.join("\n\n")
 
     %{
-      "title" => "Morning briefing - #{date}",
+      "title" =>
+        fallback_title(
+          date,
+          open_todos,
+          personal_events,
+          today_events,
+          commitment_count,
+          required_threads,
+          brief_input
+        ),
       "summary" =>
         fallback_summary(
           open_todos,
@@ -1549,6 +1560,56 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "No reliable priority stood out; verify calendar and open work before committing the day."
     end
   end
+
+  defp fallback_title(
+         date,
+         open_todos,
+         personal_events,
+         today_events,
+         commitment_count,
+         required_threads,
+         brief_input
+       ) do
+    day = fallback_day_label(date)
+
+    read =
+      cond do
+        personal_events != [] ->
+          "Personal logistics first, then work triage"
+
+        calendar_conflicts(brief_input) != [] ->
+          "Resolve the calendar conflict before work triage"
+
+        commitment_count > 0 ->
+          "Clear open commitments before lower-signal inbox"
+
+        open_todos != [] ->
+          "Clear source-backed follow-ups"
+
+        required_threads != [] ->
+          "Commercial threads need a decision"
+
+        today_events != [] ->
+          "Prep the next calendar item before inbox"
+
+        weekend_brief?(brief_input) ->
+          "Prep the week before Monday starts"
+
+        true ->
+          "Verify the day before committing it"
+      end
+
+    "#{day} - #{read}"
+  end
+
+  defp fallback_day_label(date) when is_binary(date) do
+    case Date.from_iso8601(date) do
+      {:ok, parsed} -> Calendar.strftime(parsed, "%A, %B %-d")
+      _ -> "Morning briefing"
+    end
+  end
+
+  defp fallback_day_label(_date), do: "Morning briefing"
 
   defp fallback_section(_title, []), do: nil
 
@@ -1840,6 +1901,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp fallback_no_source_body(_error_message) do
     """
+    Coverage is unavailable: do not assume the day is clear until the core sources refresh.
+
     ## Needs Your Attention
     - No reliable priority could be checked yet.
 
@@ -1972,6 +2035,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       "initial_findings" => Enum.map(initial_findings, &Atom.to_string/1),
       "final_findings" => Enum.map(final_findings, &Atom.to_string/1),
       "criteria" => [
+        "body_opens_with_temperature_read",
         "personal_and_family_first",
         "newest_and_highest_priority_first",
         "active_waiting_business_objectives_before_intros_and_meetings",
@@ -2014,6 +2078,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     []
     |> maybe_finding(blank?(body), :missing_body)
+    |> maybe_finding(
+      generation_mode == "llm" and not body_temperature_read_present?(body),
+      :missing_temperature_read
+    )
     |> maybe_finding(
       generation_mode == "llm" and not needs_attention_present?(body),
       :missing_needs_attention
@@ -2103,6 +2171,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_non_draft_jobs(brief_input, findings)
     |> maybe_append_source_gaps(brief_input, findings)
     |> maybe_append_todays_move(brief_input, findings)
+    |> maybe_prepend_temperature_read(brief_input, findings)
+  end
+
+  defp maybe_prepend_temperature_read(brief, brief_input, findings) do
+    if :missing_temperature_read in findings and
+         not body_temperature_read_present?(read_string(brief, "body", "")) do
+      prepend_body_section(brief, temperature_read_directive(brief_input))
+    else
+      brief
+    end
   end
 
   defp maybe_prepend_model_todo_next_actions(brief, findings) do
@@ -2408,6 +2486,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp temperature_read_directive(brief_input) do
+    cond do
+      personal_calendar_events(brief_input) != [] ->
+        "This is a personal-first day: protect the first family commitment, then clear source-backed work before inbox drift."
+
+      calendar_conflicts(brief_input) != [] ->
+        "This day has a calendar conflict: resolve the overlap before lower-signal work."
+
+      action_stack_items(brief_input) != [] ->
+        "This is an execution-hygiene morning: clear the pending action-card stack before passive inbox triage."
+
+      commitments_present?(brief_input) ->
+        "The risk is follow-through: clear or explicitly keep the oldest open commitment before new work."
+
+      inbox_triage_items(brief_input) != [] ->
+        "The inbox has body-backed action: answer the highest-leverage thread before clearing lower-signal mail."
+
+      slack_triage_items(brief_input) != [] ->
+        "Slack has an active ask: name the owner, decision, or next unblock step before passive channel scanning."
+
+      source_gap_items(brief_input) != [] ->
+        "Coverage is incomplete: use checked items, but treat missing source rows as unknown."
+
+      weekend_brief?(brief_input) ->
+        "This is a week-prep day: check meetings, family logistics, and unresolved decisions before Monday starts."
+
+      true ->
+        "This is a verification-first morning: scan calendar and open work before committing the day."
+    end
+  end
+
   defp maybe_drop_sparse_person_todos(brief, findings) do
     if :sparse_person_todo_context in findings do
       todos =
@@ -2551,6 +2660,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp needs_attention_present?(_body), do: false
+
+  defp body_temperature_read_present?(body) when is_binary(body) do
+    body
+    |> String.split(~r/\R/u, trim: true)
+    |> Enum.find(&(not blank?(&1)))
+    |> case do
+      nil ->
+        false
+
+      first_line ->
+        line = String.trim(first_line)
+
+        not String.starts_with?(line, ["#", "-", "*", "•"]) and
+          String.contains?(line, [".", ":", "—", "-"])
+    end
+  end
+
+  defp body_temperature_read_present?(_body), do: false
 
   defp todays_move_final_directive_present?(body) when is_binary(body) do
     normalized =

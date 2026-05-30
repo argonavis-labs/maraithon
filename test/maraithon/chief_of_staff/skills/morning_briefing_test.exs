@@ -927,7 +927,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert String.starts_with?(
              revised["body"],
-             "## Needs Your Attention\n- **Prep for Dawn Nguyen**: Review Dawn and Kiln Studio context before the meeting."
+             "This is a verification-first morning: scan calendar and open work before committing the day.\n\n## Needs Your Attention\n- **Prep for Dawn Nguyen**: Review Dawn and Kiln Studio context before the meeting."
            )
 
     assert revised["body"] =~ "## Today's Schedule"
@@ -1022,10 +1022,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         }
       })
 
-    [attention_section | _rest] = String.split(brief["body"], "\n\n")
+    [temperature_read, attention_section | _rest] = String.split(brief["body"], "\n\n")
     attention_lines = attention_section |> String.split("\n") |> tl()
 
-    assert String.starts_with?(brief["body"], "## Needs Your Attention")
+    assert brief["title"] == "Wednesday, May 27 - Personal logistics first, then work triage"
+
+    assert temperature_read ==
+             "This is a personal-first day: protect the first family commitment, then clear source-backed work before inbox drift."
+
+    assert attention_section =~ "## Needs Your Attention"
     assert length(attention_lines) in 4..6
     assert attention_section =~ "School pickup"
     assert attention_section =~ "Schedule conflict"
@@ -1090,7 +1095,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
 
-    assert brief.title == "Morning briefing - 2026-05-07"
+    assert brief.title == "Thursday, May 7 - Clear open commitments before lower-signal inbox"
     assert brief.status == "pending"
     assert brief.error_message =~ "model_response_invalid"
     assert brief.metadata["generation_mode"] == "source_fallback"
@@ -1141,7 +1146,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert payload.error_message =~ "max_output_tokens"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
-    assert brief.title == "Morning briefing - 2026-05-07"
+    assert brief.title == "Thursday, May 7 - Verify the day before committing it"
     assert brief.error_message =~ "max_output_tokens"
     assert brief.metadata["llm_finish_reason"] == "error"
     assert brief.metadata["max_tokens_used"] == 16_000
