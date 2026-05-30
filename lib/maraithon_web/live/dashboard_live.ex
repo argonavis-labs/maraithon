@@ -4241,7 +4241,7 @@ defmodule MaraithonWeb.DashboardLive do
               No open work surfaced in checked sources.
             </p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              When Maraithon surfaces a source-backed commitment, it will appear here.
+              When Maraithon surfaces a checked commitment, it will appear here.
             </p>
           <% else %>
             <p class="text-sm/6 font-medium text-zinc-950">Review complete for now.</p>

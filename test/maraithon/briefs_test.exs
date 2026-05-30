@@ -295,10 +295,11 @@ defmodule Maraithon.BriefsTest do
     assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
 
     assert payload.text =~
-             "No source-backed brief was available from this run, so no recommendation was sent."
+             "Maraithon did not find enough checked detail in this run to send a recommendation."
 
     refute payload.text =~ "I could not"
     refute payload.text =~ "Check connected sources"
+    refute String.contains?(lower_text, "source-backed")
     refute lower_text =~ "authorization"
     refute lower_text =~ "bearer"
     refute lower_text =~ "source_health"
