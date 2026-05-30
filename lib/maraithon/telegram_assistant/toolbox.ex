@@ -3886,13 +3886,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         local_context_next_action(source_health)
 
       true ->
-        "No immediate action is surfaced by connected sources right now."
+        "No action is waiting in connected sources right now."
     end
   end
 
   defp open_work_count_line(0, 0, source_health) do
     if source_coverage_gap?(source_health) do
-      "No open work is surfaced by the sources Maraithon could check right now."
+      "Maraithon did not find open work in the sources it could check right now."
     else
       open_work_count_line(0, 0)
     end
@@ -3902,12 +3902,12 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     do: open_work_count_line(insight_count, todo_count)
 
   defp open_work_count_line(0, 0),
-    do: "No open work is surfaced by connected sources right now."
+    do: "Maraithon did not find open work in connected sources right now."
 
   defp open_work_count_line(insight_count, todo_count) do
     parts =
       [
-        count_phrase(insight_count, "source-backed priority", "source-backed priorities"),
+        count_phrase(insight_count, "priority", "priorities"),
         count_phrase(todo_count, "work item", "work items")
       ]
       |> Enum.reject(&is_nil/1)

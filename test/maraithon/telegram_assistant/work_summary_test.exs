@@ -55,7 +55,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "open_work",
                "label" => "Open work",
-               "summary" => "No open work surfaced."
+               "summary" => "No open work found."
              }
            ] = summary["tool_calls"]
 
@@ -436,7 +436,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert String.starts_with?(
              tool_summary,
-             "Open work: 1 source-backed priority. Start with Reply in the old thread."
+             "Open work: 1 priority. Start with Reply in the old thread."
            )
 
     refute summary["headline"] =~ "Open work: 1 insight"

@@ -1669,7 +1669,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       case lines do
         [] ->
           [
-            "- **Start with source-backed priorities**: only checked data is included; verify calendar and open work before lower-signal inbox."
+            "- **Start with checked priorities**: this brief only uses sources Maraithon could verify; review calendar and open work before lower-signal inbox."
           ]
 
         lines ->
@@ -2227,7 +2227,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         case lines do
           [] ->
             [
-              "- **Start with source-backed priorities**: review the sections below before starting lower-signal inbox work."
+              "- **Start with checked priorities**: review the sections below before starting lower-signal inbox work."
             ]
 
           lines ->

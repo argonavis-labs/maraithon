@@ -431,7 +431,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       Here is the briefing JSON:
 
       ```json
-      {"title":"Thursday, May 7 - Review the launch note","summary":"One source-backed priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before lower-signal inbox.","todos":[]}
+      {"title":"Thursday, May 7 - Review the launch note","summary":"One checked priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before lower-signal inbox.","todos":[]}
       ```
       """
     }
@@ -893,7 +893,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert "missing_needs_attention" in verification["initial_findings"]
     assert verification["final_findings"] == []
-    assert revised["body"] =~ "Start with source-backed priorities"
+    assert revised["body"] =~ "Start with checked priorities"
     refute revised["body"] =~ "Brief shape needs attention"
     refute revised["body"] =~ "original model"
     refute revised["body"] =~ "model output"

@@ -125,7 +125,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.insight_count == 1
     assert result.todo_count == 0
     assert result.todos == []
-    assert result.summary =~ "Open work: 1 source-backed priority."
+    assert result.summary =~ "Open work: 1 priority."
     assert result.summary =~ "Start with Reply in the old thread."
     assert result.summary =~ "Gmail has newer mail than this summary"
 
@@ -179,8 +179,8 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "No open work is surfaced by connected sources right now."
-    assert result.next_action == "No immediate action is surfaced by connected sources right now."
+    assert result.summary == "Maraithon did not find open work in connected sources right now."
+    assert result.next_action == "No action is waiting in connected sources right now."
 
     refute result.summary =~ "reconnection"
     refute result.summary =~ "complete inbox review"
@@ -240,7 +240,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "No open work is surfaced by the sources Maraithon could check right now."
+             "Maraithon did not find open work in the sources it could check right now."
 
     assert result.summary =~ "Mac companion has not checked in recently"
 

@@ -369,8 +369,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     value
     |> replace_result_regex(~r/\bCRM context\b/i, "relationship context")
     |> replace_result_regex(~r/\bCRM\b/i, "relationship data")
-    |> replace_result_regex(~r/\binsights\b/i, "source-backed priorities")
-    |> replace_result_regex(~r/\binsight\b/i, "source-backed priority")
+    |> replace_result_regex(~r/\binsights\b/i, "priorities")
+    |> replace_result_regex(~r/\binsight\b/i, "priority")
     |> replace_result_regex(~r/\btodos\b/i, "work items")
     |> replace_result_regex(~r/\btodo\b/i, "work item")
   end
@@ -406,7 +406,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
     case {singular, count} do
       {"work item", 0} ->
-        "No open work surfaced."
+        "No open work found."
 
       {"work item", count} ->
         "Found #{format_count(count)} open work #{pluralize("item", count)}."
