@@ -751,12 +751,39 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp todo_list_next_move([todo | _todos]) do
-    title = todo |> todo_title() |> safe()
+    focus = todo |> todo_list_focus() |> todo_list_sentence() |> safe()
 
-    "start with the first item: #{title}; close what is done, keep what still matters, and move anything that can wait."
+    "#{focus} Then close what is done, keep what still matters, and defer anything that can wait."
   end
 
-  defp todo_list_next_move(_todos), do: "nothing needs review right now."
+  defp todo_list_next_move(_todos), do: "Nothing needs review right now."
+
+  defp todo_list_sentence(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" -> "Review the first open item."
+      Regex.match?(~r/[.!?]\z/u, value) -> value
+      true -> value <> "."
+    end
+  end
+
+  defp todo_list_focus(todo) do
+    title = todo_title(todo)
+    next_action = todo_next_action(todo)
+
+    cond do
+      is_nil(next_action) -> title
+      generic_list_action?(next_action) -> title
+      true -> next_action
+    end
+  end
+
+  defp generic_list_action?(value) when is_binary(value) do
+    Regex.match?(~r/^(reply|respond)\s+in[-\s]?thread\b/i, String.trim(value))
+  end
+
+  defp generic_list_action?(_value), do: false
 
   defp todo_next_action(todo) do
     next_action = read_string(todo, "next_action")

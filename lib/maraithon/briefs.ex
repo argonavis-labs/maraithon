@@ -606,15 +606,54 @@ defmodule Maraithon.Briefs do
   end
 
   defp todo_digest_next_move([todo | _todos]) do
+    focus = todo |> todo_digest_focus() |> todo_digest_sentence()
+
+    "#{focus} Then close what is done, keep what still matters, and defer anything that can wait."
+  end
+
+  defp todo_digest_next_move(_todos), do: "Nothing needs review right now."
+
+  defp todo_digest_sentence(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" -> "Review the first open item."
+      Regex.match?(~r/[.!?]\z/u, value) -> value
+      true -> value <> "."
+    end
+  end
+
+  defp todo_digest_focus(todo) do
     title =
       todo
       |> read_string("title", "the first open item")
       |> UserFacingCopy.polish_text()
 
-    "start with the first item: #{title}; close what is done, keep what still matters, and move anything that can wait."
+    next_action =
+      case read_string(todo, "next_action", nil) do
+        value when is_binary(value) -> UserFacingCopy.polish_text(value)
+        _other -> nil
+      end
+
+    cond do
+      is_nil(next_action) -> title
+      same_digest_text?(next_action, title) -> title
+      generic_digest_action?(next_action) -> title
+      true -> next_action
+    end
   end
 
-  defp todo_digest_next_move(_todos), do: "nothing needs review right now."
+  defp same_digest_text?(left, right) when is_binary(left) and is_binary(right) do
+    String.downcase(String.trim(left)) == String.downcase(String.trim(right))
+  end
+
+  defp same_digest_text?(_left, _right), do: false
+
+  defp generic_digest_action?(value) when is_binary(value) do
+    Regex.match?(~r/^(reply|respond)\s+in[-\s]?thread\b/i, String.trim(value))
+  end
+
+  defp generic_digest_action?(_value), do: false
 
   defp todo_digest_bucket(%Brief{} = brief, todo) do
     reference_date = todo_digest_reference_date(brief)
