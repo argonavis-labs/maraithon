@@ -3,7 +3,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Maraithon.Memory
+  alias Maraithon.{Agents, Memory, Timezones}
   alias Maraithon.Todos
 
   @user_email "todos-live@example.com"
@@ -121,6 +121,60 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert html =~ "Maraithon"
     refute html =~ "&gt;System&lt;"
     refute html =~ "Unknown"
+  end
+
+  test "renders and filters work dates in the Chief of Staff timezone", %{conn: conn} do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: @user_email,
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
+      })
+
+    local_today = local_today("America/Toronto", -5)
+
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Send the board packet",
+                 "summary" => "The board packet is due before the afternoon review.",
+                 "next_action" => "Send the board packet and confirm the review window.",
+                 "priority" => 90,
+                 "due_at" => ~U[2026-05-30 18:30:00Z],
+                 "dedupe_key" => "todos-live:timezone:board-packet"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Today local follow-up",
+                 "summary" => "This should appear in the local today filter.",
+                 "next_action" => "Handle the local today follow-up.",
+                 "due_at" => local_to_utc(local_today, ~T[10:00:00], "America/Toronto", -5),
+                 "dedupe_key" => "todos-live:timezone:today"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Tomorrow local follow-up",
+                 "summary" => "This should not appear in the local today filter.",
+                 "next_action" => "Handle this tomorrow.",
+                 "due_at" =>
+                   local_to_utc(Date.add(local_today, 1), ~T[10:00:00], "America/Toronto", -5),
+                 "dedupe_key" => "todos-live:timezone:tomorrow"
+               }
+             ])
+
+    {:ok, _view, html} = live(conn, "/todos")
+
+    assert html =~ "May 30, 2026 at 2:30 PM ET"
+    refute html =~ "2026-05-30 18:30 UTC"
+
+    {:ok, _view, today_html} = live(conn, "/todos?due=today")
+
+    assert today_html =~ "Today local follow-up"
+    refute today_html =~ "Tomorrow local follow-up"
   end
 
   test "searches and filters todos through query-backed controls", %{conn: conn} do
@@ -507,5 +561,20 @@ defmodule MaraithonWeb.TodosLiveTest do
     )
 
     on_exit(fn -> Application.put_env(:maraithon, :todos, original) end)
+  end
+
+  defp local_today(timezone_name, fallback_offset) do
+    now = DateTime.utc_now()
+    offset = Timezones.offset_at(timezone_name, now, fallback_offset)
+
+    now
+    |> DateTime.add(offset, :hour)
+    |> DateTime.to_date()
+  end
+
+  defp local_to_utc(date, time, timezone_name, fallback_offset) do
+    local = DateTime.new!(date, time, "Etc/UTC")
+    offset = Timezones.offset_for_local(timezone_name, local, fallback_offset)
+    DateTime.add(local, -offset, :hour)
   end
 end

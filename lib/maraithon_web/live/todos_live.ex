@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.SourceLabels
+  alias Maraithon.{BriefingSchedules, SourceLabels, Timezones}
   alias Maraithon.Todos
   alias Maraithon.Todos.{PublicMetadata, Todo}
   alias MaraithonWeb.TodoActionCopy
@@ -63,7 +63,8 @@ defmodule MaraithonWeb.TodosLive do
        total_count: 0,
        selected_todo_ids: MapSet.new(),
        selected_todo_id: nil,
-       selected_todo: nil
+       selected_todo: nil,
+       timezone_info: default_timezone_info()
      )}
   end
 
@@ -402,10 +403,10 @@ defmodule MaraithonWeb.TodosLive do
                       </.badge>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
-                      <%= format_datetime(todo.due_at, "No due date") %>
+                      <%= format_datetime(todo.due_at, "No due date", @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top text-xs/5 text-zinc-500">
-                      <%= format_datetime(todo.updated_at, "Never") %>
+                      <%= format_datetime(todo.updated_at, "Never", @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="align-top text-right">
                       <div class="flex shrink-0 items-center justify-end gap-1">
@@ -446,7 +447,7 @@ defmodule MaraithonWeb.TodosLive do
               </.table>
             </div>
 
-            <.todo_detail_panel :if={@selected_todo} todo={@selected_todo} filters={@filters} />
+            <.todo_detail_panel :if={@selected_todo} todo={@selected_todo} filters={@filters} timezone_info={@timezone_info} />
           </div>
         </.panel>
       </div>
@@ -456,7 +457,8 @@ defmodule MaraithonWeb.TodosLive do
 
   defp refresh_todos(socket) do
     user_id = current_user_id(socket)
-    query_opts = todo_query_opts(socket.assigns.filters)
+    timezone_info = user_timezone_info(user_id)
+    query_opts = todo_query_opts(socket.assigns.filters, timezone_info)
     todos = Todos.list_for_user(user_id, query_opts)
     total_count = Todos.count_for_user(user_id, Keyword.drop(query_opts, [:limit]))
     visible_ids = todos |> Enum.map(& &1.id) |> MapSet.new()
@@ -468,7 +470,8 @@ defmodule MaraithonWeb.TodosLive do
       total_count: total_count || 0,
       selected_todo_ids: selected_todo_ids,
       selected_todo_id: selected_todo && selected_todo.id,
-      selected_todo: selected_todo
+      selected_todo: selected_todo,
+      timezone_info: timezone_info
     )
   end
 
@@ -551,6 +554,7 @@ defmodule MaraithonWeb.TodosLive do
 
   attr :todo, :any, required: true
   attr :filters, :map, required: true
+  attr :timezone_info, :map, required: true
 
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
@@ -613,7 +617,7 @@ defmodule MaraithonWeb.TodosLive do
       </.form>
 
       <dl class="mt-4 divide-y divide-zinc-950/5">
-        <div :for={field <- todo_detail_fields(@todo, @can_edit_next_action)} class="grid grid-cols-1 gap-1 py-3">
+        <div :for={field <- todo_detail_fields(@todo, @can_edit_next_action, @timezone_info)} class="grid grid-cols-1 gap-1 py-3">
           <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
           <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
         </div>
@@ -760,7 +764,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp selected_visible_todo(_user_id, _todo_id, _visible_ids), do: nil
 
-  defp todo_query_opts(filters) do
+  defp todo_query_opts(filters, timezone_info) do
     [
       limit: @page_limit,
       query: normalize_text(filters["q"]),
@@ -770,7 +774,7 @@ defmodule MaraithonWeb.TodosLive do
       sort_by: filters["sort"],
       sort_dir: filters["dir"]
     ]
-    |> Keyword.merge(due_filter(filters["due"]))
+    |> Keyword.merge(due_filter(filters["due"], timezone_info))
     |> Enum.reject(fn
       {_key, nil} -> true
       {_key, ""} -> true
@@ -792,26 +796,26 @@ defmodule MaraithonWeb.TodosLive do
   defp source_filter(source) when is_binary(source), do: source
   defp source_filter(_source), do: nil
 
-  defp due_filter("overdue"), do: [due_before: DateTime.utc_now()]
+  defp due_filter("overdue", _timezone_info), do: [due_before: DateTime.utc_now()]
 
-  defp due_filter("today") do
-    today = Date.utc_today()
+  defp due_filter("today", timezone_info) do
+    today = local_today(timezone_info)
 
     [
-      due_after: DateTime.new!(today, ~T[00:00:00], "Etc/UTC"),
-      due_before: DateTime.new!(today, ~T[23:59:59], "Etc/UTC")
+      due_after: local_boundary_to_utc(today, ~T[00:00:00], timezone_info),
+      due_before: local_boundary_to_utc(today, ~T[23:59:59], timezone_info)
     ]
   end
 
-  defp due_filter("week") do
+  defp due_filter("week", _timezone_info) do
     now = DateTime.utc_now()
     week_out = now |> DateTime.add(7, :day)
 
     [due_before: week_out]
   end
 
-  defp due_filter("no_due"), do: [due_nil?: true]
-  defp due_filter(_due), do: []
+  defp due_filter("no_due", _timezone_info), do: [due_nil?: true]
+  defp due_filter(_due, _timezone_info), do: []
 
   defp normalize_filters(params) when is_map(params) do
     %{
@@ -896,15 +900,15 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.join(" ")
   end
 
-  defp todo_detail_fields(%Todo{} = todo, next_action_editable?) do
+  defp todo_detail_fields(%Todo{} = todo, next_action_editable?, timezone_info) do
     [
       %{label: "Source", value: todo_source_label(todo.source)},
       %{label: "Account", value: todo_source_account_value(todo)},
       %{label: "Summary", value: todo.summary},
       %{label: "Next action", value: if(next_action_editable?, do: nil, else: todo.next_action)},
-      %{label: "Due", value: format_datetime(todo.due_at, nil)},
-      %{label: "Snoozed until", value: format_datetime(todo.snoozed_until, nil)},
-      %{label: "Updated", value: format_datetime(todo.updated_at, nil)},
+      %{label: "Due", value: format_datetime(todo.due_at, nil, timezone_info)},
+      %{label: "Snoozed until", value: format_datetime(todo.snoozed_until, nil, timezone_info)},
+      %{label: "Updated", value: format_datetime(todo.updated_at, nil, timezone_info)},
       %{label: "Notes", value: todo.notes},
       %{label: "Action plan", value: todo.action_plan}
     ]
@@ -1051,17 +1055,67 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_source_label(_source), do: "Maraithon"
 
-  defp format_datetime(nil, fallback), do: fallback
+  defp format_datetime(nil, fallback, _timezone_info), do: fallback
 
-  defp format_datetime(%DateTime{} = datetime, _fallback) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(%DateTime{} = datetime, _fallback, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    offset = Timezones.offset_at(timezone_info.name, datetime, timezone_info.offset_hours)
+    label = Timezones.label(timezone_info.name, offset)
+
+    datetime
+    |> DateTime.add(offset, :hour)
+    |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{label}")
   end
 
-  defp format_datetime(%NaiveDateTime{} = datetime, _fallback) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M")
+  defp format_datetime(%NaiveDateTime{} = datetime, _fallback, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    label = Timezones.label(timezone_info.name, timezone_info.offset_hours)
+    Calendar.strftime(datetime, "%b %-d, %Y at %-I:%M %p #{label}")
   end
 
-  defp format_datetime(value, _fallback), do: to_string(value)
+  defp format_datetime(value, _fallback, _timezone_info), do: to_string(value)
+
+  defp user_timezone_info(user_id) when is_binary(user_id) do
+    case BriefingSchedules.summarize_for_prompt(user_id) do
+      %{timezone_name: timezone_name, timezone_offset_hours: offset_hours} ->
+        normalize_timezone_info(%{name: timezone_name, offset_hours: offset_hours})
+
+      _other ->
+        default_timezone_info()
+    end
+  rescue
+    _exception -> default_timezone_info()
+  end
+
+  defp user_timezone_info(_user_id), do: default_timezone_info()
+
+  defp normalize_timezone_info(%{name: name, offset_hours: offset_hours}) do
+    %{name: name, offset_hours: Timezones.normalize_offset(offset_hours)}
+  end
+
+  defp normalize_timezone_info(_timezone_info), do: default_timezone_info()
+
+  defp default_timezone_info, do: %{name: nil, offset_hours: -5}
+
+  defp local_today(timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    now = DateTime.utc_now()
+    offset = Timezones.offset_at(timezone_info.name, now, timezone_info.offset_hours)
+
+    now
+    |> DateTime.add(offset, :hour)
+    |> DateTime.to_date()
+  end
+
+  defp local_boundary_to_utc(%Date{} = date, %Time{} = time, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    local_boundary = DateTime.new!(date, time, "Etc/UTC")
+
+    offset =
+      Timezones.offset_for_local(timezone_info.name, local_boundary, timezone_info.offset_hours)
+
+    DateTime.add(local_boundary, -offset, :hour)
+  end
 
   defp label(value) when is_atom(value), do: value |> Atom.to_string() |> label()
 
