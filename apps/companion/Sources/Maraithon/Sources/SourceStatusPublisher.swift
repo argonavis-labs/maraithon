@@ -192,6 +192,13 @@ final class SourceStatusPublisher {
         return display
     }
 
+    var activeBlockingIssue: IssueEvent? {
+        guard let issue = activeIssue, issue.severity == .error else {
+            return nil
+        }
+        return issue
+    }
+
     private func recordIssue(
         at date: Date,
         severity: IssueSeverity,

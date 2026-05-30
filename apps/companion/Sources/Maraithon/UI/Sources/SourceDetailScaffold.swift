@@ -19,7 +19,7 @@ struct SourceDetailScaffold: View {
 
     var body: some View {
         Group {
-            if let issue = activeIssue {
+            if let issue = blockingIssue {
                 issueView(issue: issue)
             } else if let reason = needsAttentionReason {
                 SourceUnblockView(

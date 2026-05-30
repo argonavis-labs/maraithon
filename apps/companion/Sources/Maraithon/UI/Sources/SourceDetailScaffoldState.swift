@@ -38,6 +38,10 @@ extension SourceDetailScaffold {
         publisher?.activeIssue
     }
 
+    var blockingIssue: SourceStatusPublisher.IssueEvent? {
+        publisher?.activeBlockingIssue
+    }
+
     var isWaitingForFirstSync: Bool {
         guard let publisher else {
             return false

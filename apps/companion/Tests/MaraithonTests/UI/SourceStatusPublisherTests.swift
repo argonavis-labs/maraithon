@@ -58,6 +58,7 @@ final class SourceStatusPublisherTests: XCTestCase {
             publisher.displayedState(),
             .needsAttention(reason: "2 messages did not sync.")
         )
+        XCTAssertNil(publisher.activeBlockingIssue)
     }
 
     func testRecordSyncWithTooManyFailuresCreatesErrorIssue() {
@@ -76,6 +77,7 @@ final class SourceStatusPublisherTests: XCTestCase {
             publisher.displayedState(),
             .error(reason: "1 item did not sync.")
         )
+        XCTAssertEqual(publisher.activeBlockingIssue?.reason, "1 item did not sync.")
     }
 
     func testDefaultFailureSummaryAvoidsServerRejectionLanguage() {
