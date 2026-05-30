@@ -87,12 +87,21 @@ enum ChiefOfStaffCopy {
 private extension String {
     var polishingChiefOfStaffRoleLabels: String {
         var text = self
+        let productUserContextPattern = #"account|accounts|dashboard|dashboards|data|email|emails|event|events|experience|feedback|flow|flows|interface|journey|journeys|list|lists|login|message|messages|name|names|onboarding|page|pages|permission|permissions|persona|personas|plan|plans|preference|preferences|profile|profiles|record|records|research|response|responses|role|roles|screen|screens|segment|segments|session|sessions|setting|settings|sign-up|signup|story|stories|test|tests|testing"#
 
         let replacements = [
-            (#"^\s*The user's\b"#, "Your"),
-            (#"\bthe user's\b"#, "your"),
-            (#"^\s*User's\b"#, "Your"),
-            (#"\bUser's\b"#, "your"),
+            (#"^\s*The user's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "Your"),
+            (#"\bthe user's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "your"),
+            (#"^\s*User's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "Your"),
+            (#"\bUser's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "your"),
+            (#"\bneeds a user response\b"#, "needs your reply"),
+            (#"\bneeds user response\b"#, "needs your reply"),
+            (#"\brequires a user response\b"#, "needs your reply"),
+            (#"\bwaiting for a user response\b"#, "waiting on your reply"),
+            (#"\bawaiting a user response\b"#, "waiting on your reply"),
+            (#"\bneeds a user decision\b"#, "needs your decision"),
+            (#"\bneeds user decision\b"#, "needs your decision"),
+            (#"\brequires a user decision\b"#, "needs your decision"),
             (#"^\s*The user committed\b"#, "You committed"),
             (#"\bthe user committed\b"#, "you committed"),
             (#"^\s*The user wants\b"#, "You want"),
@@ -125,7 +134,7 @@ private extension String {
             (#"\bUser asked\b"#, "you asked"),
             (#"^\s*User owes\b"#, "You owe"),
             (#"\bUser owes\b"#, "you owe"),
-            (#"\bthe user\b"#, "you"),
+            (#"\bthe user\b(?!'s)(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "you"),
             (#"\boperator attention\b"#, "your attention"),
             (#"^\s*The operator's\b"#, "Your"),
             (#"\bthe operator's\b"#, "your"),
