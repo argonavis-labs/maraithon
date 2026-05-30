@@ -9,6 +9,7 @@ defmodule Maraithon.Connections do
   alias Maraithon.Connectors.Telegram
   alias Maraithon.OAuth
   alias Maraithon.OAuth.{GitHub, Google, Linear, Notaui, Notion, Slack, Token}
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.TelegramLink
 
   @google_services [
@@ -122,38 +123,43 @@ defmodule Maraithon.Connections do
     google_tokens = Enum.filter(tokens, &google_provider?(&1.provider))
     slack_tokens = Enum.filter(tokens, &slack_provider?(&1.provider))
     telegram_account = ConnectedAccounts.get(user_id, "telegram")
+    timezone_info = LocalTime.timezone_info_for_user(user_id)
 
     telegram_connected? = connected_account?(telegram_account)
 
     providers =
       [
-        telegram_card(user_id, telegram_account, return_to),
-        desktop_card(user_id, return_to),
-        google_card(user_id, google_tokens, account_by_provider, return_to),
+        telegram_card(user_id, telegram_account, return_to, timezone_info),
+        desktop_card(user_id, return_to, timezone_info),
+        google_card(user_id, google_tokens, account_by_provider, return_to, timezone_info),
         github_card(
           user_id,
           token_by_provider["github"],
           account_by_provider["github"],
-          return_to
+          return_to,
+          timezone_info
         ),
-        slack_card(user_id, slack_tokens, account_by_provider, return_to),
+        slack_card(user_id, slack_tokens, account_by_provider, return_to, timezone_info),
         linear_card(
           user_id,
           token_by_provider["linear"],
           account_by_provider["linear"],
-          return_to
+          return_to,
+          timezone_info
         ),
         notion_card(
           user_id,
           token_by_provider["notion"],
           account_by_provider["notion"],
-          return_to
+          return_to,
+          timezone_info
         ),
         notaui_card(
           user_id,
           token_by_provider["notaui"],
           account_by_provider["notaui"],
-          return_to
+          return_to,
+          timezone_info
         )
       ]
       |> Enum.map(&enforce_telegram_first(&1, telegram_connected?))
@@ -272,16 +278,18 @@ defmodule Maraithon.Connections do
   end
 
   defp fallback_snapshot(user_id, return_to, reason) do
+    timezone_info = LocalTime.default_timezone_info()
+
     providers =
       [
-        telegram_card(user_id, nil, return_to),
+        telegram_card(user_id, nil, return_to, timezone_info),
         desktop_unavailable_card(),
-        google_card(user_id, [], %{}, return_to),
-        github_card(user_id, nil, nil, return_to),
-        slack_card(user_id, [], %{}, return_to),
-        linear_card(user_id, nil, nil, return_to),
-        notion_card(user_id, nil, nil, return_to),
-        notaui_card(user_id, nil, nil, return_to)
+        google_card(user_id, [], %{}, return_to, timezone_info),
+        github_card(user_id, nil, nil, return_to, timezone_info),
+        slack_card(user_id, [], %{}, return_to, timezone_info),
+        linear_card(user_id, nil, nil, return_to, timezone_info),
+        notion_card(user_id, nil, nil, return_to, timezone_info),
+        notaui_card(user_id, nil, nil, return_to, timezone_info)
       ]
       |> Enum.map(&enforce_telegram_first(&1, false))
       |> Enum.map(&mark_unavailable/1)
@@ -306,10 +314,13 @@ defmodule Maraithon.Connections do
     do:
       "Maraithon will refresh connection status when the service recovers. You can refresh this page before continuing."
 
-  defp google_card(user_id, tokens, account_by_provider, return_to)
+  defp google_card(user_id, tokens, account_by_provider, return_to, timezone_info)
        when is_list(tokens) and is_map(account_by_provider) do
     configured? = Google.configured?()
-    account_entries = google_account_entries(user_id, tokens, account_by_provider, return_to)
+
+    account_entries =
+      google_account_entries(user_id, tokens, account_by_provider, return_to, timezone_info)
+
     reauth_required? = Enum.any?(account_entries, &(&1.status == :needs_refresh))
 
     services =
@@ -360,7 +371,7 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp github_card(user_id, token, account, return_to) do
+  defp github_card(user_id, token, account, return_to, timezone_info) do
     configured? = GitHub.configured?()
 
     account_entry =
@@ -386,18 +397,22 @@ defmodule Maraithon.Connections do
       disconnect_label: "Disconnect GitHub",
       refresh_token_status: refresh_token_status(token, account_entry),
       details:
-        provider_details(token, [
-          metadata_value(token, ["login"]) && "@#{metadata_value(token, ["login"])}",
-          metadata_value(token, ["email"]),
-          "Scopes: #{Enum.join(token_scopes(token), ", ")}"
-        ]),
+        provider_details(
+          token,
+          [
+            metadata_value(token, ["login"]) && "@#{metadata_value(token, ["login"])}",
+            metadata_value(token, ["email"]),
+            "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+          ],
+          timezone_info
+        ),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
 
-  defp desktop_card(user_id, _return_to) when is_binary(user_id) do
+  defp desktop_card(user_id, _return_to, timezone_info) when is_binary(user_id) do
     device_entries =
       user_id
       |> Devices.list_for_user()
@@ -427,7 +442,7 @@ defmodule Maraithon.Connections do
       connect_url: "/connectors/desktop",
       disconnect_label: "Manage Desktop App",
       refresh_token_status: :not_applicable,
-      details: desktop_details(active_entries, totals),
+      details: desktop_details(active_entries, totals, timezone_info),
       services: desktop_services(totals),
       accounts: desktop_device_accounts(device_entries)
     }
@@ -450,14 +465,14 @@ defmodule Maraithon.Connections do
       connect_url: "/connectors/desktop",
       disconnect_label: "Manage Desktop App",
       refresh_token_status: :unknown,
-      details: desktop_details([], totals),
+      details: desktop_details([], totals, LocalTime.default_timezone_info()),
       services: desktop_services(totals),
       accounts: []
     }
     |> enrich_provider_setup()
   end
 
-  defp slack_card(user_id, tokens, account_by_provider, return_to)
+  defp slack_card(user_id, tokens, account_by_provider, return_to, timezone_info)
        when is_list(tokens) and is_map(account_by_provider) do
     configured? = Slack.configured?()
     bot_token = slack_bot_token(tokens)
@@ -483,15 +498,19 @@ defmodule Maraithon.Connections do
       end
 
     details =
-      provider_details(bot_token, [
-        if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
-        "Bot scopes: #{MapSet.size(bot_scopes)} granted",
-        if(user_tokens != [], do: "Personal Slack access connected for read/write as user."),
-        if(user_tokens == [],
-          do:
-            "Reconnect Slack with user scopes enabled to read private context and send as the user."
-        )
-      ])
+      provider_details(
+        bot_token,
+        [
+          if(workspace_names != [], do: "Workspaces: #{Enum.join(workspace_names, ", ")}"),
+          "Bot scopes: #{MapSet.size(bot_scopes)} granted",
+          if(user_tokens != [], do: "Personal Slack access connected for read/write as user."),
+          if(user_tokens == [],
+            do:
+              "Reconnect Slack with user scopes enabled to read private context and send as the user."
+          )
+        ],
+        timezone_info
+      )
 
     services = [
       %{
@@ -539,7 +558,7 @@ defmodule Maraithon.Connections do
     |> enrich_provider_setup()
   end
 
-  defp linear_card(user_id, token, account, return_to) do
+  defp linear_card(user_id, token, account, return_to, timezone_info) do
     configured? = Linear.configured?()
 
     account_entry =
@@ -581,17 +600,21 @@ defmodule Maraithon.Connections do
       disconnect_label: "Disconnect Linear",
       refresh_token_status: refresh_token_status(token, account_entry),
       details:
-        provider_details(token, [
-          if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
-          "Scopes: #{Enum.join(token_scopes(token), ", ")}"
-        ]),
+        provider_details(
+          token,
+          [
+            if(team_names != [], do: "Teams: #{Enum.join(team_names, ", ")}"),
+            "Scopes: #{Enum.join(token_scopes(token), ", ")}"
+          ],
+          timezone_info
+        ),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
 
-  defp telegram_card(user_id, account, return_to) do
+  defp telegram_card(user_id, account, return_to, timezone_info) do
     configured? = Telegram.configured?()
     metadata = if account, do: account.metadata || %{}, else: %{}
     username = metadata["username"]
@@ -620,7 +643,7 @@ defmodule Maraithon.Connections do
         if account && account.status == "connected" do
           [
             telegram_chat_detail(username),
-            "Last updated #{format_datetime(account.updated_at)}"
+            "Last updated #{format_datetime(account.updated_at, timezone_info)}"
           ]
           |> Enum.reject(&is_nil/1)
         else
@@ -647,14 +670,14 @@ defmodule Maraithon.Connections do
     |> Enum.sum()
   end
 
-  defp desktop_details([], _totals) do
+  defp desktop_details([], _totals, _timezone_info) do
     [
       "No Mac paired yet.",
       "Install the Maraithon Desktop App to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
     ]
   end
 
-  defp desktop_details(active_entries, totals) do
+  defp desktop_details(active_entries, totals, timezone_info) do
     device_count = length(active_entries)
     last_seen = latest_device_seen_at(active_entries)
     source_summary = desktop_source_summary(totals)
@@ -662,7 +685,7 @@ defmodule Maraithon.Connections do
     [
       "#{device_count} #{pluralize("Mac", device_count)} paired",
       source_summary,
-      if(last_seen, do: "Last seen #{format_datetime(last_seen)}")
+      if(last_seen, do: "Last seen #{format_datetime(last_seen, timezone_info)}")
     ]
     |> Enum.reject(&is_nil/1)
   end
@@ -919,7 +942,7 @@ defmodule Maraithon.Connections do
     end
   end
 
-  defp notion_card(user_id, token, account, return_to) do
+  defp notion_card(user_id, token, account, return_to, timezone_info) do
     configured? = Notion.configured?()
 
     account_entry =
@@ -945,18 +968,22 @@ defmodule Maraithon.Connections do
       disconnect_label: "Disconnect Notion",
       refresh_token_status: refresh_token_status(token, account_entry),
       details:
-        provider_details(token, [
-          metadata_value(token, ["workspace_name"]),
-          metadata_value(token, ["workspace_id"]) &&
-            "Workspace ID: #{metadata_value(token, ["workspace_id"])}"
-        ]),
+        provider_details(
+          token,
+          [
+            metadata_value(token, ["workspace_name"]),
+            metadata_value(token, ["workspace_id"]) &&
+              "Workspace ID: #{metadata_value(token, ["workspace_id"])}"
+          ],
+          timezone_info
+        ),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
     }
     |> enrich_provider_setup()
   end
 
-  defp notaui_card(user_id, token, account, return_to) do
+  defp notaui_card(user_id, token, account, return_to, timezone_info) do
     configured? = Notaui.configured?()
 
     account_entry =
@@ -982,7 +1009,7 @@ defmodule Maraithon.Connections do
       connect_url: auth_url("/auth/notaui", user_id, return_to),
       disconnect_label: "Disconnect Notaui",
       refresh_token_status: refresh_token_status(token, account_entry),
-      details: provider_details(token, notaui_details(token, account)),
+      details: provider_details(token, notaui_details(token, account), timezone_info),
       services: [],
       accounts: maybe_single_account_entry(account_entry)
     }
@@ -1053,10 +1080,10 @@ defmodule Maraithon.Connections do
     ["#{length(tokens)} Google #{account_word(length(tokens))} linked"]
   end
 
-  defp provider_details(nil, _items), do: ["Not connected yet."]
+  defp provider_details(nil, _items, _timezone_info), do: ["Not connected yet."]
 
-  defp provider_details(token, items) do
-    connected_at = "Last updated #{format_datetime(token.updated_at)}"
+  defp provider_details(token, items, timezone_info) do
+    connected_at = "Last updated #{format_datetime(token.updated_at, timezone_info)}"
 
     [connected_at | items]
     |> Enum.reject(&is_nil/1)
@@ -1105,7 +1132,7 @@ defmodule Maraithon.Connections do
   defp normalize_list(list) when is_list(list), do: list
   defp normalize_list(_value), do: []
 
-  defp google_account_entries(user_id, tokens, account_by_provider, return_to)
+  defp google_account_entries(user_id, tokens, account_by_provider, return_to, timezone_info)
        when is_binary(user_id) and is_list(tokens) and is_map(account_by_provider) do
     reconnect_url =
       auth_url("/auth/google", user_id, return_to, scopes: "gmail,calendar,contacts")
@@ -1123,7 +1150,7 @@ defmodule Maraithon.Connections do
         status_note: token_account_status_note(token, account_by_provider),
         refresh_token_status: refresh_token_status([token], [%{status: status}]),
         expires_at: token.expires_at,
-        details: google_account_details(token),
+        details: google_account_details(token, timezone_info),
         reconnect_url: reconnect_url,
         needs_reconnect?: status == :needs_refresh
       }
@@ -1140,19 +1167,21 @@ defmodule Maraithon.Connections do
 
   defp google_account_label(_token), do: "Google account"
 
-  defp google_account_details(%Token{} = token) do
+  defp google_account_details(%Token{} = token, timezone_info) do
     scopes = token_scopes(token)
     enabled_services = google_enabled_service_labels(token)
 
     [
       if(enabled_services != [], do: "Enabled: #{Enum.join(enabled_services, ", ")}"),
       if(scopes != [], do: "#{length(scopes)} Google #{permission_word(length(scopes))} granted"),
-      if(token.expires_at, do: "Access expires #{format_datetime(token.expires_at)}")
+      if(token.expires_at,
+        do: "Access expires #{format_datetime(token.expires_at, timezone_info)}"
+      )
     ]
     |> Enum.reject(&is_nil/1)
   end
 
-  defp google_account_details(_token), do: []
+  defp google_account_details(_token, _timezone_info), do: []
 
   defp google_enabled_service_labels(%Token{} = token) do
     @google_services
@@ -2191,9 +2220,13 @@ defmodule Maraithon.Connections do
       {:error, error}
   end
 
-  defp format_datetime(nil), do: "never"
-  defp format_datetime(%DateTime{} = value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(nil, _timezone_info), do: "never"
 
-  defp format_datetime(%NaiveDateTime{} = value),
-    do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(%DateTime{} = value, timezone_info) do
+    LocalTime.format_datetime(value, "never", timezone_info)
+  end
+
+  defp format_datetime(%NaiveDateTime{} = value, timezone_info) do
+    LocalTime.format_datetime(value, "never", timezone_info)
+  end
 end

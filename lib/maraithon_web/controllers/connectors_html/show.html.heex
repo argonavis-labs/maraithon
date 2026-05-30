@@ -94,7 +94,7 @@
                 </.badge>
               </div>
               <p class="mt-0.5 text-xs/5 text-zinc-500">
-                Updated <%= format_datetime(account.updated_at) %>
+                Updated <%= format_datetime(account.updated_at, @timezone_info) %>
               </p>
             </div>
 
@@ -176,9 +176,9 @@
 
           <div class="space-y-2 text-sm/6 text-zinc-600">
             <%= if @token do %>
-              <p><%= connection_token_summary(@token) %></p>
+              <p><%= connection_token_summary(@token, @timezone_info) %></p>
               <p class="text-xs/5 text-zinc-500">
-                Updated <%= format_datetime(@token.updated_at) %>
+                Updated <%= format_datetime(@token.updated_at, @timezone_info) %>
               </p>
             <% else %>
               <p class="text-zinc-500">Connect this account to begin syncing.</p>

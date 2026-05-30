@@ -3,6 +3,7 @@ defmodule MaraithonWeb.ConnectorsController do
 
   alias Maraithon.Connections
   alias Maraithon.SourceLabels
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OAuthFlashCopy
   alias MaraithonWeb.OperationFailureCopy
 
@@ -52,6 +53,8 @@ defmodule MaraithonWeb.ConnectorsController do
         |> redirect(to: ~p"/connectors")
 
       provider_card ->
+        timezone_info = LocalTime.timezone_info_for_user(user_id)
+
         conn =
           conn
           |> maybe_put_oauth_flash(params)
@@ -63,6 +66,7 @@ defmodule MaraithonWeb.ConnectorsController do
           current_user: conn.assigns.current_user,
           provider: provider_card,
           token: token_for_provider(snapshot.raw_tokens, provider),
+          timezone_info: timezone_info,
           telegram_connected: Map.get(snapshot, :telegram_connected?, false),
           connection_errors: snapshot.errors
         )

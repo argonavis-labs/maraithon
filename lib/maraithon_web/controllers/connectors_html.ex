@@ -1,6 +1,8 @@
 defmodule MaraithonWeb.ConnectorsHTML do
   use MaraithonWeb, :html
 
+  alias MaraithonWeb.LocalTime
+
   embed_templates "connectors_html/*"
 
   def provider_detail_path(provider) when is_map(provider),
@@ -256,7 +258,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def env_status_badge_class(false, false),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
 
-  def connection_token_summary(token) when is_map(token) do
+  def connection_token_summary(token, timezone_info \\ nil)
+
+  def connection_token_summary(token, timezone_info) when is_map(token) do
     scopes =
       case Map.get(token, :scopes) || Map.get(token, "scopes") do
         values when is_list(values) and values != [] ->
@@ -268,8 +272,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
     expires =
       case Map.get(token, :expires_at) || Map.get(token, "expires_at") do
-        %DateTime{} = value -> "Access expires #{format_datetime(value)}"
-        %NaiveDateTime{} = value -> "Access expires #{format_datetime(value)}"
+        %DateTime{} = value -> "Access expires #{format_datetime(value, timezone_info)}"
+        %NaiveDateTime{} = value -> "Access expires #{format_datetime(value, timezone_info)}"
         _ -> nil
       end
 
@@ -332,14 +336,27 @@ defmodule MaraithonWeb.ConnectorsHTML do
   defp attention_summary(1, unit), do: "1 #{unit} needs attention"
   defp attention_summary(count, unit), do: "#{count} #{unit}s need attention"
 
-  def format_datetime(nil), do: "never"
-  def format_datetime(%DateTime{} = value), do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
+  def format_datetime(value, timezone_info \\ nil)
 
-  def format_datetime(%NaiveDateTime{} = value),
-    do: Calendar.strftime(value, "%Y-%m-%d %H:%M UTC")
+  def format_datetime(nil, _timezone_info), do: "never"
 
-  def format_datetime(value) when is_binary(value), do: value
-  def format_datetime(_value), do: "unknown"
+  def format_datetime(%DateTime{} = value, timezone_info) when is_map(timezone_info) do
+    LocalTime.format_datetime(value, "never", timezone_info)
+  end
+
+  def format_datetime(%DateTime{} = value, _timezone_info) do
+    Calendar.strftime(value, "%b %-d, %Y at %-I:%M %p UTC")
+  end
+
+  def format_datetime(%NaiveDateTime{} = value, timezone_info) when is_map(timezone_info) do
+    LocalTime.format_datetime(value, "never", timezone_info)
+  end
+
+  def format_datetime(%NaiveDateTime{} = value, _timezone_info),
+    do: Calendar.strftime(value, "%b %-d, %Y at %-I:%M %p UTC")
+
+  def format_datetime(value, _timezone_info) when is_binary(value), do: value
+  def format_datetime(_value, _timezone_info), do: "unknown"
 
   def endpoint_url do
     MaraithonWeb.Endpoint.url()

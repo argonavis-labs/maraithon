@@ -1,12 +1,17 @@
 defmodule MaraithonWeb.NavigationControllerTest do
   use MaraithonWeb.ConnCase, async: true
 
+  import Ecto.Query
+
   alias Maraithon.Accounts
+  alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Agents
   alias Maraithon.Companion.Devices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.LocalMessages
   alias Maraithon.LocalNotes
   alias Maraithon.OAuth
+  alias Maraithon.Repo
 
   describe "tab pages" do
     test "GET /connectors renders the connected apps page", %{conn: conn} do
@@ -351,16 +356,30 @@ defmodule MaraithonWeb.NavigationControllerTest do
       user_id = "telegram-user@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
-      {:ok, _account} =
+      {:ok, _agent} =
+        Agents.create_agent(%{
+          user_id: user_id,
+          behavior: "founder_followthrough_agent",
+          config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
+        })
+
+      {:ok, account} =
         ConnectedAccounts.upsert_manual(user_id, "telegram", %{
           external_account_id: "6114124042",
           metadata: %{"username" => "kentfenwick"}
         })
 
+      Repo.update_all(
+        from(connected_account in ConnectedAccount, where: connected_account.id == ^account.id),
+        set: [updated_at: ~U[2026-05-30 18:30:00Z]]
+      )
+
       conn = conn |> log_in_test_user(user_id) |> get("/connectors/telegram")
       html = html_response(conn, 200)
 
       assert html =~ "Delivery linked to @kentfenwick"
+      assert html =~ "Last updated May 30, 2026 at 2:30 PM ET"
+      refute html =~ "2026-05-30 18:30 UTC"
       refute html =~ "Chat ID 6114124042"
       refute html =~ "6114124042"
       refute html =~ "Linked chat"

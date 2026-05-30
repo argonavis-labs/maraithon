@@ -39,8 +39,23 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
       })
 
     assert summary =~ "Permissions: gmail.readonly"
-    assert summary =~ "Access expires 2026-05-29 12:00 UTC"
+    assert summary =~ "Access expires May 29, 2026 at 12:00 PM UTC"
     refute summary =~ "Scopes"
     refute summary =~ "Expires "
+  end
+
+  test "connection token summary can render in the user's local timezone" do
+    summary =
+      ConnectorsHTML.connection_token_summary(
+        %{
+          scopes: ["gmail.readonly"],
+          expires_at: ~U[2026-05-29 18:00:00Z]
+        },
+        %{name: "America/Toronto", offset_hours: -5}
+      )
+
+    assert summary =~ "Access expires May 29, 2026 at 2:00 PM ET"
+    refute summary =~ "2026-05-29"
+    refute summary =~ "18:00"
   end
 end
