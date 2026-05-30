@@ -4344,12 +4344,12 @@ defmodule MaraithonWeb.DashboardLive do
                   >
                     <.insight_detail_section
                       title="Exact promise"
-                      value={detail_text(detail.promise_text) || "Exact promise not captured for this insight."}
+                      value={detail_text(detail.promise_text) || "No exact promise is available yet."}
                       origin={detail_origin_label(detail.promise_text)}
                     />
                     <.insight_detail_section
                       title="Who asked"
-                      value={detail_text(detail.requested_by) || "Requester not captured for this insight."}
+                      value={detail_text(detail.requested_by) || "No requester is available yet."}
                       origin={detail_origin_label(detail.requested_by)}
                     />
                     <div class="space-y-2">
@@ -4360,7 +4360,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.evidence_checked == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No saved evidence was captured for this item.
+                          No source excerpt is available yet.
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4386,7 +4386,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No follow-up delivery has been recorded yet.
+                          No delivery evidence is available yet.
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4433,7 +4433,7 @@ defmodule MaraithonWeb.DashboardLive do
                         </ul>
                       <% else %>
                         <p class="text-sm/6 text-zinc-600">
-                          Maraithon does not have enough saved context yet to explain why this is still open.
+                          Maraithon needs more context before it can explain why this remains open.
                         </p>
                       <% end %>
                     </div>
