@@ -1004,7 +1004,7 @@ defmodule MaraithonWeb.TodosLive do
         "No work items match this search."
 
       default_filter_view?(filters) ->
-        "No active work right now."
+        "No open work surfaced in checked sources."
 
       true ->
         "No work items match these filters."

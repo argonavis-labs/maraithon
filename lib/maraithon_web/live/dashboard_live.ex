@@ -4237,9 +4237,11 @@ defmodule MaraithonWeb.DashboardLive do
       <% else %>
         <div class="px-4 py-8 sm:px-6">
           <%= if @todos == [] do %>
-            <p class="text-sm/6 font-medium text-zinc-950">No active work right now.</p>
+            <p class="text-sm/6 font-medium text-zinc-950">
+              No open work surfaced in checked sources.
+            </p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              When Maraithon finds a real commitment, it will appear here.
+              When Maraithon surfaces a source-backed commitment, it will appear here.
             </p>
           <% else %>
             <p class="text-sm/6 font-medium text-zinc-950">Review complete for now.</p>

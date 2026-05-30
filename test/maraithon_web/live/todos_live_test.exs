@@ -71,8 +71,9 @@ defmodule MaraithonWeb.TodosLiveTest do
   test "empty work list copy stays user-facing", %{conn: conn} do
     {:ok, view, html} = live(conn, "/todos")
 
-    assert html =~ "No active work right now."
+    assert html =~ "No open work surfaced in checked sources."
     refute html =~ "No work items match these filters."
+    refute html =~ "No active work right now"
     refute html =~ "No todos"
 
     view
