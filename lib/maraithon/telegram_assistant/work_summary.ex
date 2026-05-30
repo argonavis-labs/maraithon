@@ -368,6 +368,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp polish_legacy_product_terms(value) when is_binary(value) do
     value
     |> replace_result_regex(~r/^No open work found\.?$/i, "This check surfaced no open work.")
+    |> replace_result_regex(~r/\bStart with\s+/, "Start here: ")
+    |> replace_result_regex(~r/\bstart with\s+/, "start here: ")
     |> replace_result_regex(
       ~r/^No connected accounts found\.?$/i,
       "No connected accounts are available yet."
@@ -790,7 +792,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp featured_summary_subject(_summary), do: nil
 
   defp open_work_start_subject(summary) do
-    case Regex.run(~r/^Open work:\s+.+?\.\s+Start with\s+(.+?)(?:\.|$)/iu, summary) do
+    case Regex.run(~r/^Open work:\s+.+?\.\s+Start\s+(?:with\s+|here:\s*)(.+?)(?:\.|$)/iu, summary) do
       [_match, subject] -> subject
       _other -> nil
     end

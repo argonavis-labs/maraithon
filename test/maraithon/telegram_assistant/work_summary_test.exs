@@ -460,12 +460,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "open_work_review",
                "label" => "Open work",
                "summary" =>
-                 "Open work: 1 work item. Start with Send investor update. Inbox-backed follow-up is not fully covered because Gmail is not connected."
+                 "Open work: 1 work item. Start here: Send investor update. Inbox-backed follow-up is not fully covered because Gmail is not connected."
              }
            ] = summary["tool_calls"]
 
     refute inspect(summary) =~ "Returned 1 todo"
     refute inspect(summary) =~ "1 todo"
+    refute inspect(summary) =~ "Start with"
   end
 
   test "open work headlines name insight-backed next moves" do
@@ -494,12 +495,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert String.starts_with?(
              tool_summary,
-             "Open work: 1 priority. Start with Reply in the old thread."
+             "Open work: 1 priority. Start here: Reply in the old thread."
            )
 
     refute summary["headline"] =~ "Open work: 1 insight"
     refute summary["headline"] =~ "Gmail has newer mail"
     refute tool_summary =~ "1 insight"
+    refute tool_summary =~ "Start with"
     refute inspect(summary) =~ "1 insight"
   end
 
