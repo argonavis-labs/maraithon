@@ -142,6 +142,61 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assert captured_telegram_events() == []
   end
 
+  test "mobile chat strips assistant diagnostics while preserving useful answer copy", %{
+    conn: conn
+  } do
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        next_step: fn _payload ->
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => """
+             Needs your attention: send Sarah the answer today.
+             confidence_score: 0.91
+             source_health: {"gmail":"connected"}
+             model_name: gpt-test
+             Next action: reply before 3 PM.
+             """,
+             "message_class" => "assistant_reply",
+             "summary" => "Responded through production assistant runtime."
+           }}
+        end
+      )
+    )
+
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-public-answer-copy@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "Please check what I should do about Sarah today."
+        }
+      })
+      |> json_response(200)
+
+    assistant_body = get_in(response, ["thread", "messages", Access.at(1), "body"])
+
+    assert assistant_body =~ "Needs your attention: send Sarah the answer today."
+    assert assistant_body =~ "Next action: reply before 3 PM."
+    refute assistant_body =~ "confidence"
+    refute assistant_body =~ "score"
+    refute assistant_body =~ "source_health"
+    refute assistant_body =~ "model_name"
+    refute assistant_body =~ "gpt-test"
+  end
+
   test "mobile chat exposes assistant work as user-facing summaries", %{conn: conn} do
     Application.put_env(
       :maraithon,
@@ -213,7 +268,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user"},
                  %{
                    "role" => "assistant",
-                   "body" => "I checked your open todos.",
+                   "body" => "I checked your open work.",
                    "structured_data" => assistant_structured_data,
                    "work_summary" =>
                      assistant_work_summary = %{
@@ -233,6 +288,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
 
     assert Enum.any?(steps, &(&1["title"] == "Checked open work"))
     assert assistant_structured_data == %{}
+    refute get_in(response, ["thread", "messages", Access.at(1), "body"]) =~ "todo"
     assert_no_work_summary_implementation_keys(run_work_summary)
     assert_no_work_summary_implementation_keys(assistant_work_summary)
     assert captured_telegram_events() == []

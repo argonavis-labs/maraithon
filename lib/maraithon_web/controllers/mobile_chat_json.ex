@@ -9,6 +9,65 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias MaraithonWeb.{ApiErrorCopy, MobileJSON}
 
   @public_structured_data_keys ~w(calculation)
+  @internal_assistant_markers [
+    "<redacted",
+    "=>",
+    "{",
+    "}",
+    "confidence_score",
+    "quality_score",
+    "priority_score",
+    "urgency_score",
+    "relevance_score",
+    "interrupt_score",
+    "source_health",
+    "quality_verification",
+    "generation_mode",
+    "message_class",
+    "model_name",
+    "model_provider",
+    "model_response",
+    "reasoning_effort",
+    "finish_reason",
+    "max_output_tokens",
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "prompt_snapshot",
+    "system_prompt",
+    "raw_prompt",
+    "tool_call",
+    "tool call",
+    "tool_name",
+    "http_status",
+    "db_timeout",
+    "stacktrace",
+    "postgrex",
+    "ecto.",
+    "phoenix.",
+    "dbconnection",
+    "metadata",
+    "internal_",
+    "token=",
+    "token:",
+    "authorization",
+    "bearer",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "private_key",
+    "api_key",
+    "apikey",
+    "secret=",
+    "secret:"
+  ]
+  @internal_assistant_patterns [
+    ~r/\b(?:confidence|quality|priority|urgency|relevance|interrupt)_score\s*[:=]/,
+    ~r/\bscore\s*[:=]\s*\d/,
+    ~r/\bthreshold\s*[:=]\s*\d/,
+    ~r/\b(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]/,
+    ~r/\b(?:authorization|bearer)\b/
+  ]
   @public_linked_todo_fields [
     {"id", :id},
     {"source", :source},
@@ -131,7 +190,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   defp public_message_body(%Turn{role: "assistant", text: text}) when is_binary(text) do
     text
     |> strip_message_role_prefix()
-    |> reject_technical_message_body()
+    |> public_assistant_message_text()
   end
 
   defp public_message_body(%Turn{text: text}), do: text
@@ -142,13 +201,67 @@ defmodule MaraithonWeb.MobileChatJSON do
     |> String.trim()
   end
 
-  defp reject_technical_message_body(value) do
-    if technical_message_body?(value) do
-      ApiErrorCopy.mobile_chat_run_error(value)
-    else
+  defp public_assistant_message_text(value) do
+    safe_text =
       value
+      |> String.split("\n", trim: false)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&unsafe_assistant_line?/1)
+      |> Enum.map(&product_message_text/1)
+      |> Enum.join("\n")
+      |> String.trim()
+
+    cond do
+      safe_text != "" ->
+        safe_text
+
+      unsafe_assistant_text?(value) ->
+        ApiErrorCopy.mobile_chat_run_error(value)
+
+      true ->
+        value
+        |> product_message_text()
+        |> String.trim()
     end
   end
+
+  defp unsafe_assistant_line?(line) do
+    trimmed = String.trim(line)
+
+    cond do
+      trimmed == "" ->
+        false
+
+      unsafe_assistant_text?(trimmed) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  defp unsafe_assistant_text?(value) when is_binary(value) do
+    lower = String.downcase(value)
+
+    technical_message_body?(value) or
+      Enum.any?(@internal_assistant_markers, &String.contains?(lower, &1)) or
+      Enum.any?(@internal_assistant_patterns, &Regex.match?(&1, lower))
+  end
+
+  defp unsafe_assistant_text?(_value), do: true
+
+  defp product_message_text(value) when is_binary(value) do
+    value
+    |> String.replace(~r/\bopen todos\b/i, "open work")
+    |> String.replace(~r/\bopen todo\b/i, "open work item")
+    |> String.replace(~r/\btodo list\b/i, "open work")
+    |> String.replace(~r/\btodos\b/i, "work items")
+    |> String.replace(~r/\btodo\b/i, "work item")
+    |> String.replace(~r/\bCRM context\b/i, "relationship context")
+    |> String.replace(~r/\bCRM\b/i, "relationship data")
+  end
+
+  defp product_message_text(value), do: value
 
   defp technical_message_body?(value) do
     Regex.match?(
