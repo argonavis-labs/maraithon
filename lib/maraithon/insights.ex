@@ -10,6 +10,7 @@ defmodule Maraithon.Insights do
   alias Maraithon.Insights.Insight
   alias Maraithon.Repo
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
 
   @open_statuses ["new", "snoozed"]
   @attention_modes ["act_now", "monitor"]
@@ -222,17 +223,22 @@ defmodule Maraithon.Insights do
   defp normalize_attrs(attrs, user_id, agent_id) do
     dedupe_key = read_string(attrs, "dedupe_key", Ecto.UUID.generate())
     attention_mode = read_string(attrs, "attention_mode", "act_now")
-    metadata = read_map(attrs, "metadata")
+
+    metadata =
+      attrs
+      |> read_map("metadata")
+      |> normalize_metadata_attention(attention_mode)
+      |> polish_public_metadata()
 
     %{
       "user_id" => user_id,
       "agent_id" => agent_id,
       "source" => read_string(attrs, "source", "system"),
       "category" => read_string(attrs, "category", "general"),
-      "title" => read_string(attrs, "title", "Actionable insight"),
-      "summary" => read_string(attrs, "summary", "Review this item."),
+      "title" => polished_string(attrs, "title", "Actionable insight"),
+      "summary" => polished_string(attrs, "summary", "Review this item."),
       "recommended_action" =>
-        read_string(attrs, "recommended_action", "Review and decide next step"),
+        polished_string(attrs, "recommended_action", "Review and decide next step"),
       "priority" => clamp_integer(read_integer(attrs, "priority", 50), 0, 100),
       "confidence" => clamp_float(read_float(attrs, "confidence", 0.5), 0.0, 1.0),
       "attention_mode" => normalize_attention_mode(attention_mode),
@@ -241,8 +247,14 @@ defmodule Maraithon.Insights do
       "source_occurred_at" => read_datetime(attrs, "source_occurred_at"),
       "dedupe_key" => dedupe_key,
       "tracking_key" => read_string(attrs, "tracking_key", dedupe_key),
-      "metadata" => normalize_metadata_attention(metadata, attention_mode)
+      "metadata" => metadata
     }
+  end
+
+  defp polished_string(attrs, key, default) do
+    attrs
+    |> read_string(key, default)
+    |> UserFacingCopy.polish_text()
   end
 
   defp read_string(attrs, key, default) do
@@ -373,6 +385,17 @@ defmodule Maraithon.Insights do
   defp normalize_metadata_attention(_metadata, attention_mode) do
     normalize_metadata_attention(%{}, attention_mode)
   end
+
+  defp polish_public_metadata(metadata) when is_map(metadata) do
+    Enum.reduce(~w(why_now why_it_matters decision_prompt), metadata, fn key, acc ->
+      case Map.get(acc, key) do
+        value when is_binary(value) -> Map.put(acc, key, UserFacingCopy.polish_text(value))
+        _value -> acc
+      end
+    end)
+  end
+
+  defp polish_public_metadata(metadata), do: metadata
 
   defp ensure_action_draft_metadata(metadata) when is_map(metadata) do
     record = read_map(metadata, "record")

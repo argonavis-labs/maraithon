@@ -1037,6 +1037,8 @@ defmodule Maraithon.InsightNotifications.Actions do
       "owner, current status",
       "exact artifact",
       "artifact or update",
+      "promised update, current status, and timing you can stand behind",
+      "reply with a clear owner and timing",
       "concrete next step, owner",
       "reply now with owner"
     ])

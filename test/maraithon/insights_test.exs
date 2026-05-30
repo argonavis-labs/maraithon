@@ -166,6 +166,36 @@ defmodule Maraithon.InsightsTest do
                "Handled with the finance team."
     end
 
+    test "polishes user-facing insight copy before storing it", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to legal",
+            "summary" => "No later reply was found.",
+            "recommended_action" => "Reply now with owner and ETA.",
+            "metadata" => %{
+              "why_now" => "Michael is waiting and no later reply was found.",
+              "decision_prompt" => "Decide whether to send the campaign owner and ETA."
+            },
+            "dedupe_key" => "copy:polished"
+          }
+        ])
+
+      assert insight.summary == "No later reply clearly closes the loop."
+      assert insight.recommended_action == "Reply with a clear owner and timing."
+
+      assert insight.metadata["why_now"] ==
+               "Michael is waiting; no later reply clearly closes the loop."
+
+      assert insight.metadata["decision_prompt"] ==
+               "Send the campaign update with a clear owner and timing."
+    end
+
     test "insight snooze and dismiss propagate to the mirrored todo", %{
       user_id: user_id,
       agent: agent
@@ -264,6 +294,7 @@ defmodule Maraithon.InsightsTest do
 
       assert Enum.map(Insights.list_open_act_now_for_user(user_id), & &1.id) == [act_now.id]
       assert Enum.map(Insights.list_open_monitor_for_user(user_id), & &1.id) == [monitor.id]
+      assert act_now.recommended_action == "Reply with a clear owner and timing."
     end
   end
 
