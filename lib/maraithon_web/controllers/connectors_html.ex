@@ -14,7 +14,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
     |> Enum.join(" ")
   end
 
-  def provider_subtitle(_provider), do: "Connection details are not available yet."
+  def provider_subtitle(_provider), do: "Connection details unavailable."
 
   def telegram_connected?(providers) when is_list(providers) do
     Enum.any?(providers, fn provider ->

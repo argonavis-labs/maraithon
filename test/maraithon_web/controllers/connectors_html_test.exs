@@ -33,6 +33,8 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
     assert ConnectorsHTML.refresh_token_status_label(:unknown) == "background access not checked"
     assert ConnectorsHTML.setup_status_label(:unexpected) == "setup not checked"
     assert ConnectorsHTML.format_datetime(:unexpected) == "not recorded"
+    assert ConnectorsHTML.provider_subtitle(%{}) == "Connection details unavailable."
+    refute ConnectorsHTML.provider_subtitle(%{}) =~ "not available yet"
     refute ConnectorsHTML.provider_subtitle(%{}) =~ "No details yet"
   end
 
