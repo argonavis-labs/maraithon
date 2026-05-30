@@ -3894,6 +3894,25 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp todo_priority_label(_todo), do: "normal priority"
 
+  defp todo_queue_preview_context(todo, chief_of_staff_schedule) do
+    case display_metadata_value(todo.next_action) do
+      value when is_binary(value) and value != "" ->
+        "Next: #{value}"
+
+      _ ->
+        todo_queue_preview_fallback(todo, chief_of_staff_schedule)
+    end
+  end
+
+  defp todo_queue_preview_fallback(%{due_at: due_at} = todo, chief_of_staff_schedule)
+       when not is_nil(due_at) do
+    "Due #{format_due_datetime(todo.due_at, chief_of_staff_schedule)}"
+  end
+
+  defp todo_queue_preview_fallback(todo, _chief_of_staff_schedule) do
+    "#{todo_source_label(todo.source)} · #{todo_priority_label(todo)}"
+  end
+
   defp public_todo_metadata(%{metadata: metadata}) when is_map(metadata),
     do: PublicMetadata.todo(metadata)
 
@@ -3992,13 +4011,13 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div class="flex flex-wrap items-center gap-2">
-              <h2 class="text-base/7 font-semibold text-zinc-950">Today's work</h2>
+              <h2 class="text-base/7 font-semibold text-zinc-950">Focus queue</h2>
               <.badge color="emerald" class="bg-white">
-                One at a time
+                One commitment at a time
               </.badge>
             </div>
             <p class="mt-1 text-sm/6 text-zinc-600">
-              Decide the next move for each commitment.
+              Choose the next move for each open commitment.
             </p>
           </div>
           <div class="text-right">
@@ -4170,7 +4189,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <li :for={todo <- @queue_preview} class="py-2">
                   <p class="line-clamp-2 text-sm/6 font-medium text-zinc-950"><%= todo.title %></p>
                   <p class="mt-0.5 text-xs/5 text-zinc-500">
-                    <%= todo_source_label(todo.source) %> · <%= todo_priority_label(todo) %>
+                    <%= todo_queue_preview_context(todo, @chief_of_staff_schedule) %>
                   </p>
                 </li>
               </ul>

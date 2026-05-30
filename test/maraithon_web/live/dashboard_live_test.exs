@@ -40,7 +40,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     assert has_element?(view, "h1", "Control Center")
     assert has_element?(view, "h2", "Overview")
-    assert has_element?(view, "h2", "Today's work")
+    assert html =~ "Focus queue"
     assert has_element?(view, "h2", "Today")
     assert has_element?(view, "h2", "Workspace")
     assert has_element?(view, "h2", "Start Chief of Staff")
@@ -854,9 +854,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
 
     assert has_element?(view, "#todo-review")
-    assert has_element?(view, "h2", "Today's work")
-    assert html =~ "One at a time"
-    assert html =~ "Decide the next move for each commitment."
+    assert html =~ "Focus queue"
+    assert html =~ "One commitment at a time"
+    assert html =~ "Choose the next move for each open commitment."
+    refute html =~ "Today's work"
     refute html =~ "Today's cards"
     refute html =~ "Review queue"
     assert html =~ "1 of 2"
@@ -867,6 +868,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Why it matters"
     assert html =~ "Maraithon can draft the reply for approval."
     assert html =~ "Can you confirm whether the UGC campaign materials are ready?"
+    assert html =~ "Next: Write the top three updates and owner for each."
     assert html =~ "Keep active"
     refute html =~ "Why important"
     refute html =~ ">Important<"
