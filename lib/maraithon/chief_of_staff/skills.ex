@@ -169,13 +169,15 @@ defmodule Maraithon.ChiefOfStaff.Skills do
   defp module_label(nil, id), do: humanize_id(id)
 
   defp module_label(module, id) do
-    if function_exported?(module, :label, 0), do: module.label(), else: humanize_id(id)
+    if Code.ensure_loaded?(module) and function_exported?(module, :label, 0),
+      do: module.label(),
+      else: humanize_id(id)
   end
 
   defp module_description(nil), do: "Runs as part of the Chief of Staff cycle."
 
   defp module_description(module) do
-    if function_exported?(module, :description, 0) do
+    if Code.ensure_loaded?(module) and function_exported?(module, :description, 0) do
       module.description()
     else
       "Runs as part of the Chief of Staff cycle."

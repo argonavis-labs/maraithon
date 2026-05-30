@@ -80,6 +80,11 @@ defmodule Maraithon.AgentArchitectureTest do
       briefing = Enum.find(manifest.components, &(&1.kind == :skill and &1.id == "briefing"))
 
       assert followthrough.module == "Maraithon.ChiefOfStaff.Skills.Followthrough"
+      assert followthrough.label == "Follow-through"
+
+      assert followthrough.description ==
+               "Finds commitments, unanswered threads, and replies that need action."
+
       assert followthrough.enabled_by_default?
       refute briefing.enabled_by_default?
     end

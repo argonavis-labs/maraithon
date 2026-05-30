@@ -18,6 +18,21 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "personal or family calendar accounts"
   end
 
+  test "follow-through skill demands executive-grade action output" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/chief_of_staff/followthrough.md")
+
+    assert skill.id == "followthrough"
+    assert skill.name == "Follow-through"
+    assert skill.instructions =~ "Your first job is disqualification, not escalation"
+    assert skill.instructions =~ "Do not create follow-up candidates with keyword rules"
+    assert skill.instructions =~ "Return ONLY valid JSON array"
+    assert skill.instructions =~ "`recommended_action`"
+    assert skill.instructions =~ "`suggested_reply_points`"
+    assert skill.instructions =~ "`attention_mode` to `\"act_now\"` or `\"monitor\"`"
+    assert skill.instructions =~ "Generic phrases such as \"send the follow-up\" are not enough"
+  end
+
   test "loads priv markdown skills through configured runtime priv dir" do
     project_priv_dir = Path.expand("priv")
     previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")

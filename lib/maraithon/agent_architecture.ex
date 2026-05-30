@@ -394,9 +394,10 @@ defmodule Maraithon.AgentArchitecture do
       %{
         kind: :skill,
         id: skill_id,
-        label: humanize_id(skill_id),
+        label: skill_component_label(skill_id),
         module: inspect_module(module),
         enabled_by_default?: skill_id in enabled_ids,
+        description: ChiefOfStaffSkills.description(skill_id),
         requirements: module.requirements(),
         subscriptions: safe_skill_subscriptions(module, config, skill_id)
       }
@@ -404,6 +405,9 @@ defmodule Maraithon.AgentArchitecture do
   end
 
   defp skill_components(_behavior_id, _config), do: []
+
+  defp skill_component_label("followthrough"), do: "Follow-through"
+  defp skill_component_label(skill_id), do: humanize_id(skill_id)
 
   defp safe_skill_subscriptions(module, config, skill_id) do
     user_id = Map.get(config, "user_id") || Map.get(config, :user_id) || "user@example.com"

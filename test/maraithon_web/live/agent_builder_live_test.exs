@@ -91,7 +91,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert html =~ "Operating model"
       assert html =~ "Chief of Staff"
-      assert html =~ "Followthrough"
+      assert html =~ "Follow-through"
       assert html =~ "Commitment Tracker"
       assert html =~ "Travel Logistics"
       assert html =~ "Morning Briefing"
