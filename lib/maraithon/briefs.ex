@@ -437,9 +437,9 @@ defmodule Maraithon.Briefs do
   end
 
   defp maybe_add_list_todos_button(rows, %Brief{} = brief) do
-    case BriefTodoReview.list_button(brief) do
-      nil -> rows
-      button -> rows ++ [[button]]
+    case BriefTodoReview.brief_buttons(brief) do
+      [] -> rows
+      buttons -> rows ++ [buttons]
     end
   end
 

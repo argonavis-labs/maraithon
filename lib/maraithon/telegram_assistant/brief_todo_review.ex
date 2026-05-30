@@ -246,13 +246,26 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   def list_button(_brief), do: nil
 
+  def brief_buttons(%Brief{} = brief) do
+    if reviewable?(brief) do
+      [
+        %{"text" => "Review Open Work", "callback_data" => callback_data(brief.id, "start")},
+        %{"text" => "Show List", "callback_data" => callback_data(brief.id, "list")}
+      ]
+    else
+      []
+    end
+  end
+
+  def brief_buttons(_brief), do: []
+
   def handle_callback(data) when is_map(data) do
     case parse_callback(read_string(data, "data", "")) do
       {:ok, :latest, action} when action in ["start", "list", "cancel"] ->
         handle_latest_callback(data, action)
 
-      {:ok, brief_id, "start"} when is_binary(brief_id) ->
-        start_review(data, brief_id)
+      {:ok, brief_id, action} when is_binary(brief_id) and action in ["start", "list"] ->
+        handle_brief_callback(data, brief_id, action)
 
       {:error, :invalid_callback} ->
         :ignored
@@ -271,7 +284,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   def after_todo_action(_user_id, _chat_id, _todo, _action), do: :ok
 
-  defp start_review(data, brief_id) do
+  defp handle_brief_callback(data, brief_id, action) do
     chat_id = read_id_string(data, "chat_id")
     callback_id = read_string(data, "callback_id")
 
@@ -280,14 +293,22 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id),
          %Brief{} = brief <- Repo.get(Brief, brief_id),
          true <- brief.user_id == user_id do
-      start_review_for_brief(brief, chat_id, callback_id: callback_id)
+      case action do
+        "start" ->
+          start_review_for_brief(brief, chat_id, callback_id: callback_id)
+
+        "list" ->
+          maybe_answer_callback(callback_id, "Sending the open-work list")
+          send_todo_list(chat_id, review_todos(brief), brief_review_choice_markup(brief))
+      end
+
       :ok
     else
       {:error, :invalid_callback} ->
         :ignored
 
       _ ->
-        maybe_answer_callback(callback_id, "I couldn't open that open-work list.")
+        maybe_answer_callback(callback_id, "I couldn't open that open-work action.")
         :ok
     end
   end
@@ -342,7 +363,13 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp send_todo_list_summary(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
     todos = current_review_todos(user_id)
+    send_todo_list(chat_id, todos, maybe_review_choice_markup(todos))
+  end
 
+  defp send_todo_list_summary(_user_id, _chat_id), do: :ignored
+
+  defp send_todo_list(chat_id, todos, reply_markup)
+       when is_binary(chat_id) and is_list(todos) do
     text =
       case todos do
         [] ->
@@ -366,14 +393,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
     case TelegramResponder.send(chat_id, text,
            parse_mode: "HTML",
-           reply_markup: maybe_review_choice_markup(todos)
+           reply_markup: reply_markup
          ) do
       {:ok, _result} -> :ok
       {:error, _reason} -> :ok
     end
   end
 
-  defp send_todo_list_summary(_user_id, _chat_id), do: :ignored
+  defp send_todo_list(_chat_id, _todos, _reply_markup), do: :ignored
 
   defp start_review_for_brief(%Brief{} = brief, chat_id, opts \\ []) do
     todos = review_todos(brief)
@@ -639,6 +666,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     %{
       "inline_keyboard" => [
         [%{"text" => "Review one by one", "callback_data" => latest_callback_data("start")}]
+      ]
+    }
+  end
+
+  defp brief_review_choice_markup(%Brief{} = brief) do
+    %{
+      "inline_keyboard" => [
+        [%{"text" => "Review one by one", "callback_data" => callback_data(brief.id, "start")}]
       ]
     }
   end
@@ -1007,7 +1042,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp parse_callback(value) when is_binary(value) do
     cond do
       match =
-          Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(start)$/i, value,
+          Regex.run(~r/^#{@callback_prefix}:([0-9a-f\-]{36}):(start|list)$/i, value,
             capture: :all_but_first
           ) ->
         [brief_id, action] = match

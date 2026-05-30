@@ -452,6 +452,84 @@ defmodule Maraithon.BriefsTest do
     assert get_in(updated_brief.metadata, ["todo_review", "summary", "done_count"]) == 1
   end
 
+  test "brief action row lets the user scan linked open work before reviewing", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [first_todo, second_todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-scan:first", "Reply to finance about the receipt",
+          priority: 96,
+          source_occurred_at: "2026-04-02T14:00:00Z",
+          summary: "Finance needs the corrected receipt today.",
+          next_action: "Send finance the corrected receipt and confirm reimbursement timing.",
+          notes: "Finance asked for the corrected receipt before the reimbursement cutoff.",
+          metadata: %{
+            "thread_id" => "briefs-scan:first",
+            "subject" => "Reply to finance about the receipt",
+            "why_now" => "Finance needs the corrected receipt today.",
+            "source_evidence" =>
+              "Finance asked for the corrected receipt before the reimbursement cutoff."
+          }
+        ),
+        todo_attrs("briefs-scan:second", "Confirm the shipment ETA",
+          source_occurred_at: "2026-04-02T15:00:00Z",
+          next_action: "Reply with the signed shipment timing before noon."
+        )
+      ])
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: scan before review",
+        "summary" => "Two work items need a decision.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:scan-before-review",
+        "metadata" => %{"linked_todo_ids" => [first_todo.id, second_todo.id]}
+      })
+
+    buttons =
+      brief
+      |> Briefs.telegram_payload()
+      |> get_in([:reply_markup, "inline_keyboard"])
+      |> List.flatten()
+
+    assert Enum.find(buttons, &(&1["text"] == "Review Open Work"))["callback_data"] ==
+             "brftd:#{brief.id}:start"
+
+    assert Enum.find(buttons, &(&1["text"] == "Show List"))["callback_data"] ==
+             "brftd:#{brief.id}:list"
+
+    :ok =
+      BriefTodoReview.handle_callback(%{
+        chat_id: 777_123,
+        callback_id: "cb-scan",
+        data: "brftd:#{brief.id}:list"
+      })
+
+    [message] = sent_messages()
+    assert message.text =~ "<b>Open work</b>"
+    assert message.text =~ "1. #{first_todo.title}"
+    assert message.text =~ "Why now: Finance needs the corrected receipt today."
+    assert message.text =~ "Next: Send finance the corrected receipt"
+    assert message.text =~ "Evidence: Finance asked for the corrected receipt"
+    assert message.text =~ "2. #{second_todo.title}"
+    assert message.text =~ "Best next move: Send finance the corrected receipt"
+
+    review_button =
+      message.opts
+      |> Keyword.fetch!(:reply_markup)
+      |> Map.fetch!("inline_keyboard")
+      |> List.flatten()
+      |> Enum.find(&(&1["text"] == "Review one by one"))
+
+    assert review_button["callback_data"] == "brftd:#{brief.id}:start"
+
+    refute get_in(Repo.get!(Brief, brief.id).metadata || %{}, ["todo_review", "status"]) ==
+             "active"
+  end
+
   test "brief todo review recap keeps next actions on still-open work", %{
     user_id: user_id,
     agent: agent
