@@ -43,6 +43,7 @@ defmodule MaraithonWeb.DashboardLive do
       socket
       |> assign(
         page_title: "Control Center",
+        diagnostics_visible: admin_user?(socket.assigns.current_user),
         behaviors: Behaviors.list() |> Enum.sort(),
         launch: default_launch_params(),
         launch_error: nil,
@@ -114,7 +115,11 @@ defmodule MaraithonWeb.DashboardLive do
     socket =
       if connected?(socket) do
         :timer.send_interval(@refresh_interval, self(), :refresh)
-        send(self(), :load_fly_logs)
+
+        if socket.assigns.diagnostics_visible do
+          send(self(), :load_fly_logs)
+        end
+
         refresh_dashboard(socket)
       else
         socket
@@ -153,7 +158,11 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_info(:load_fly_logs, socket) do
-    {:noreply, refresh_fly_logs(socket)}
+    if socket.assigns.diagnostics_visible do
+      {:noreply, refresh_fly_logs(socket)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -214,8 +223,12 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   def handle_event("refresh_fly_logs", _params, socket) do
-    send(self(), :load_fly_logs)
-    {:noreply, put_flash(socket, :info, "Platform log refresh started")}
+    if socket.assigns.diagnostics_visible do
+      send(self(), :load_fly_logs)
+      {:noreply, put_flash(socket, :info, "Platform log refresh started")}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("disconnect_connection", %{"provider" => provider}, socket) do
@@ -1829,7 +1842,10 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
               </div>
 
-              <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div class={[
+                "mt-4 grid grid-cols-1 gap-4",
+                @diagnostics_visible && "lg:grid-cols-2"
+              ]}>
                 <div>
                   <p class="text-sm/6 font-medium text-zinc-950">
                     Recent updates
@@ -1852,7 +1868,7 @@ defmodule MaraithonWeb.DashboardLive do
                   <% end %>
                 </div>
 
-                <div>
+                <div :if={@diagnostics_visible}>
                   <p class="text-sm/6 font-medium text-zinc-950">
                     Technical notes
                   </p>
@@ -1896,7 +1912,7 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </section>
 
-      <section>
+      <section :if={@diagnostics_visible}>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Health</h2>
           <span class={[health_badge_class(@health.status), "whitespace-nowrap"]}>
@@ -1957,7 +1973,7 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </section>
 
-      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+      <details :if={@diagnostics_visible} class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
             <span>Operational activity</span>
@@ -2035,7 +2051,7 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </details>
 
-      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+      <details :if={@diagnostics_visible} class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
             <span>System logs</span>
@@ -2064,7 +2080,7 @@ defmodule MaraithonWeb.DashboardLive do
         </div>
       </details>
 
-      <details class="group rounded-lg border border-zinc-950/10 bg-white">
+      <details :if={@diagnostics_visible} class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
             <span>Platform logs</span>
@@ -2520,6 +2536,9 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp admin_user?(%{is_admin: true}), do: true
+  defp admin_user?(_current_user), do: false
+
   defp sanitize_fly_logs(snapshot) when is_map(snapshot) do
     errors =
       snapshot
@@ -2786,7 +2805,11 @@ defmodule MaraithonWeb.DashboardLive do
     projects_by_id =
       Map.new(socket.assigns.projects, fn %{project: project} -> {project.id, project.name} end)
 
-    recent_activity_by_agent = Enum.group_by(socket.assigns.recent_activity, & &1.agent_id)
+    recent_activity_by_agent =
+      socket.assigns.recent_activity
+      |> Enum.filter(&agent_overview_activity_visible?(&1, socket.assigns.diagnostics_visible))
+      |> Enum.group_by(& &1.agent_id)
+
     user_id = current_user_id(socket)
     max_concurrency = max(1, min(length(socket.assigns.agents), 4))
 
@@ -2830,6 +2853,16 @@ defmodule MaraithonWeb.DashboardLive do
 
     assign(socket, :agent_overviews, overviews)
   end
+
+  defp agent_overview_activity_visible?(_activity, true), do: true
+
+  defp agent_overview_activity_visible?(%{event_type: event_type}, false)
+       when is_binary(event_type) do
+    normalized = String.downcase(event_type)
+    not String.contains?(normalized, ["fail", "error", "exception"])
+  end
+
+  defp agent_overview_activity_visible?(_activity, false), do: true
 
   defp maybe_start_onboarding_preview(socket, opts) do
     preview = socket.assigns.onboarding_preview

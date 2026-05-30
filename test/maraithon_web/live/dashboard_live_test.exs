@@ -22,7 +22,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
   @user_email "dashboard@example.com"
 
   setup %{conn: conn} do
-    {:ok, conn: log_in_test_user(conn, @user_email)}
+    {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(@user_email)
+    {:ok, user} = Repo.update(Ecto.Changeset.change(user, is_admin: false))
+    {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
+
+    conn =
+      conn
+      |> Phoenix.ConnTest.init_test_session(%{})
+      |> Plug.Conn.put_session("user_session_token", token)
+
+    {:ok, conn: conn}
   end
 
   test "renders control center sections without the old agent management panels", %{conn: conn} do
@@ -39,15 +48,15 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Memory"
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Automation activity")
-    assert has_element?(view, "h2", "Health")
-    assert Regex.scan(~r/<dt[^>]*>\s*Uptime\s*<\/dt>/, html) |> length() == 1
     assert html =~ "No work is surfaced right now."
     assert html =~ "none failed"
-    assert html =~ "Operational activity"
-    assert html =~ "Needs attention"
-    assert html =~ "System logs"
-    assert html =~ "Platform logs"
-    assert html =~ "Platform logs are not configured for this environment."
+    refute has_element?(view, "h2", "Health")
+    refute html =~ "Operational activity"
+    refute html =~ "Needs attention"
+    refute html =~ "System logs"
+    refute html =~ "Platform logs"
+    refute html =~ "Platform logs are not configured for this environment."
+    refute html =~ "Technical notes"
     refute html =~ "Failures &amp; stale work"
     refute html =~ "Raw logs"
     refute html =~ "Fly.io platform logs"
@@ -62,6 +71,33 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "Agent activity"
     refute html =~ "Agent Registry"
     refute html =~ "Agent Details"
+  end
+
+  test "renders operational diagnostics for admins only" do
+    admin_email = "dashboard-admin@example.com"
+
+    {:ok, _agent} =
+      create_agent(%{
+        user_id: admin_email,
+        behavior: "prompt_agent",
+        config: %{},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    conn = build_conn() |> log_in_admin_user(admin_email)
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert has_element?(view, "h2", "Health")
+    assert Regex.scan(~r/<dt[^>]*>\s*Uptime\s*<\/dt>/, html) |> length() == 1
+    assert html =~ "Operational activity"
+    assert html =~ "Needs attention"
+    assert html =~ "System logs"
+    assert html =~ "Platform logs"
+    assert html =~ "Platform logs are not configured for this environment."
+    assert html =~ "Technical notes"
   end
 
   test "renders memory context without internal confidence scoring", %{conn: conn} do
@@ -528,9 +564,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     {:ok, _view, html} = live(conn, "/dashboard")
 
-    assert html =~
+    refute html =~
              "Background job did not complete. Review the latest status before rerunning it."
 
+    refute html =~ "Operational activity"
+    refute html =~ "Needs attention"
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "123456789")
@@ -581,8 +619,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, "/dashboard")
     html = render(view)
 
-    assert html =~ "Recorded a failed action."
-    assert html =~ "Diagnostic details are hidden from this view."
+    refute html =~ "Operational activity"
+    refute html =~ "System logs"
+    refute_html_contains(html, "Recorded a failed action.")
+    refute_html_contains(html, "Diagnostic details are hidden from this view.")
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "secret-token")
