@@ -9,6 +9,8 @@ struct CRMFilteringTests {
         #expect(ContactDetailCopy.contactDetailsSectionTitle == "Contact details")
         #expect(ContactDetailCopy.relationshipSectionTitle == "Relationship status")
         #expect(ContactDetailCopy.lastContactedLabel == "Last reached out")
+        #expect(ContactDetailCopy.actionWarningTitle == "Relationship update was not saved")
+        #expect(ContactDetailCopy.dismissActionWarningAccessibilityLabel == "Dismiss relationship update warning")
         #expect(ContactDetailCopy.logContactSubtitle == "Record that you reached out")
         #expect(ContactDetailCopy.addFollowUpTitle == "Add follow-up")
         #expect(ContactDetailCopy.addFollowUpSubtitle == "Create a linked next move")
@@ -24,6 +26,14 @@ struct CRMFilteringTests {
         #expect(!ContactDetailCopy.visibleLabels.contains("Update the relationship timestamp"))
         #expect(!ContactEditorCopy.visibleLabels.contains("New Person"))
         #expect(!ContactEditorCopy.visibleLabels.contains("Company or context"))
+    }
+
+    @Test
+    func relationshipDetailSaveFailureCopyIsVisibleAndSpecific() {
+        #expect(ContactDetailCopy.localSaveFailedMessage == "Could not save this relationship on this device. Your last change was not kept.")
+        #expect(ContactDetailCopy.remoteSaveFailedMessage == "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile.")
+        #expect(ContactDetailCopy.remoteUpdateFailedMessage(error: URLError(.notConnectedToInternet)) == "Saved on this device, but Maraithon could not update it online. Connection issue. Retry when you are online.")
+        #expect(ContactDetailCopy.saveFailureLabels.count == 5)
     }
 
     @Test

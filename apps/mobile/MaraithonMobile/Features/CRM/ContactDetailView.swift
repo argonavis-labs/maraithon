@@ -7,9 +7,25 @@ struct ContactDetailView: View {
     @Bindable var contact: CRMContact
     @State private var isEditingContact = false
     @State private var isCreatingFollowUp = false
+    @State private var actionErrorMessage: String?
 
     var body: some View {
         Form {
+            if let actionErrorMessage {
+                Section {
+                    SyncIssueBanner(
+                        title: ContactDetailCopy.actionWarningTitle,
+                        message: actionErrorMessage,
+                        buttonTitle: nil,
+                        retry: nil,
+                        dismissAccessibilityLabel: ContactDetailCopy.dismissActionWarningAccessibilityLabel,
+                        dismiss: { self.actionErrorMessage = nil }
+                    )
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                }
+            }
+
             Section {
                 careRecommendation
             }
@@ -198,7 +214,11 @@ struct ContactDetailView: View {
     }
 
     private func save() {
-        try? modelContext.save()
+        actionErrorMessage = nil
+        guard saveLocalRelationshipChange(failureMessage: ContactDetailCopy.localSaveFailedMessage) else {
+            return
+        }
+
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
         let payload = ProductionDataSync.personPayload(
             name: contact.name,
@@ -211,21 +231,40 @@ struct ContactDetailView: View {
             notes: contact.notes,
             lastContactedAt: contact.lastContactedAt
         )
-        Task {
-            let remote = try? await MobileAPIClient().updatePerson(
-                sessionToken: sessionToken,
-                id: contact.id,
-                payload: payload
-            )
-            if let remote {
+
+        Task { @MainActor in
+            do {
+                let remote = try await MobileAPIClient().updatePerson(
+                    sessionToken: sessionToken,
+                    id: contact.id,
+                    payload: payload
+                )
                 ProductionDataSync.apply(remote, to: contact)
-                try? modelContext.save()
+                _ = saveLocalRelationshipChange(failureMessage: ContactDetailCopy.remoteSaveFailedMessage)
+            } catch {
+                actionErrorMessage = ContactDetailCopy.remoteUpdateFailedMessage(error: error)
             }
+        }
+    }
+
+    @discardableResult
+    private func saveLocalRelationshipChange(failureMessage: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = failureMessage
+            return false
         }
     }
 }
 
 enum ContactDetailCopy {
+    static let actionWarningTitle = "Relationship update was not saved"
+    static let dismissActionWarningAccessibilityLabel = "Dismiss relationship update warning"
+    static let localSaveFailedMessage = "Could not save this relationship on this device. Your last change was not kept."
+    static let remoteSaveFailedMessage = "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile."
     static let contactDetailsSectionTitle = "Contact details"
     static let relationshipSectionTitle = "Relationship status"
     static let notesSectionTitle = "Relationship notes"
@@ -239,8 +278,24 @@ enum ContactDetailCopy {
     static let addFollowUpSubtitle = "Create a linked next move"
     static let markContactedAccessibilityLabel = "Mark reached out"
 
+    static func remoteUpdateFailedMessage(error: Error) -> String {
+        "Saved on this device, but Maraithon could not update it online. \(MobileErrorCopy.message(for: error))"
+    }
+
+    static var saveFailureLabels: [String] {
+        [
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
+            localSaveFailedMessage,
+            remoteSaveFailedMessage,
+            remoteUpdateFailedMessage(error: URLError(.notConnectedToInternet))
+        ]
+    }
+
     static var visibleLabels: [String] {
         [
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
             contactDetailsSectionTitle,
             relationshipSectionTitle,
             notesSectionTitle,
