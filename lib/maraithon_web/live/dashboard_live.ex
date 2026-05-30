@@ -4344,12 +4344,15 @@ defmodule MaraithonWeb.DashboardLive do
                   >
                     <.insight_detail_section
                       title="Exact promise"
-                      value={detail_text(detail.promise_text) || "No exact promise is available yet."}
+                      value={
+                        detail_text(detail.promise_text) ||
+                          "This item does not include the exact promise text."
+                      }
                       origin={detail_origin_label(detail.promise_text)}
                     />
                     <.insight_detail_section
                       title="Who asked"
-                      value={detail_text(detail.requested_by) || "No requester is available yet."}
+                      value={detail_text(detail.requested_by) || "This item does not identify who asked."}
                       origin={detail_origin_label(detail.requested_by)}
                     />
                     <div class="space-y-2">
@@ -4360,7 +4363,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.evidence_checked == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No source excerpt is available yet.
+                          This item does not include a source excerpt.
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4386,7 +4389,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No delivery evidence is available yet.
+                          No delivery evidence has been recorded for this item.
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">

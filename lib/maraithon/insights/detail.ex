@@ -9,10 +9,10 @@ defmodule Maraithon.Insights.Detail do
 
   @max_summary_evidence 3
 
-  @exact_promise_gap "No exact promise is available yet."
-  @requester_gap "No requester is available yet."
-  @evidence_gap "No source excerpt is available yet."
-  @delivery_gap "No delivery evidence is available yet."
+  @exact_promise_gap "This item does not include the exact promise text."
+  @requester_gap "This item does not identify who asked."
+  @evidence_gap "This item does not include a source excerpt."
+  @delivery_gap "No delivery evidence has been recorded for this item."
   @reason_gap "Maraithon needs more context before it can explain why this remains open."
 
   def build(%Insight{} = insight, deliveries \\ [], opts \\ []) when is_list(deliveries) do
