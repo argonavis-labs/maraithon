@@ -41,11 +41,24 @@ defmodule Maraithon.CommitmentsTest do
 
     assert id == overdue.id
 
-    bucket = Commitments.bucket_for_brief(user_id, now: now, timezone_offset_hours: -4)
+    bucket =
+      Commitments.bucket_for_brief(user_id,
+        now: now,
+        timezone_offset_hours: -4,
+        timezone_label: "ET"
+      )
 
     assert bucket["source"] == "commitments"
     assert bucket["active_count"] == 1
-    assert [%{"title" => "Send Sarah the final deck", "owed_to" => "Sarah"}] = bucket["overdue"]
+
+    assert [
+             %{
+               "title" => "Send Sarah the final deck",
+               "owed_to" => "Sarah",
+               "display_due" => "May 6, 2026 at 2:00 PM ET"
+             }
+           ] = bucket["overdue"]
+
     assert bucket["due_today"] == []
   end
 end

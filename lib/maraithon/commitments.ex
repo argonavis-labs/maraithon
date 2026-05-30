@@ -92,15 +92,18 @@ defmodule Maraithon.Commitments do
   def bucket_for_brief(user_id, opts) when is_binary(user_id) do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     offset_hours = Keyword.get(opts, :timezone_offset_hours, -5)
+    timezone_label = Keyword.get(opts, :timezone_label, timezone_offset_label(offset_hours))
     commitments = list_open_for_user(user_id, limit: Keyword.get(opts, :limit, 50), now: now)
     fallback? = commitments == []
 
-    items =
+    raw_items =
       if fallback? do
         derived_open_commitments(user_id, now)
       else
         Enum.map(commitments, &commitment_to_map/1)
       end
+
+    items = Enum.map(raw_items, &put_display_due(&1, offset_hours, timezone_label))
 
     %{
       "source" => if(fallback?, do: "derived_open_work", else: "commitments"),
@@ -242,6 +245,19 @@ defmodule Maraithon.Commitments do
     }
   end
 
+  defp put_display_due(item, offset_hours, timezone_label) when is_map(item) do
+    if read_string(item, "display_due", nil) do
+      item
+    else
+      case display_due_label(item["due_at"], offset_hours, timezone_label) do
+        nil -> item
+        label -> Map.put(item, "display_due", label)
+      end
+    end
+  end
+
+  defp put_display_due(item, _offset_hours, _timezone_label), do: item
+
   defp bucket_overdue?(%{"due_at" => nil}, _now, _offset_hours), do: false
 
   defp bucket_overdue?(item, now, offset_hours) do
@@ -286,6 +302,28 @@ defmodule Maraithon.Commitments do
     |> DateTime.add(offset_hours, :hour)
     |> DateTime.to_date()
   end
+
+  defp display_due_label(nil, _offset_hours, _timezone_label), do: nil
+
+  defp display_due_label(value, offset_hours, timezone_label) do
+    case parse_datetime(value) do
+      nil ->
+        nil
+
+      due_at ->
+        due_at
+        |> DateTime.add(offset_hours, :hour)
+        |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{timezone_label}")
+    end
+  end
+
+  defp timezone_offset_label(offset) when is_integer(offset) do
+    sign = if offset < 0, do: "-", else: "+"
+    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
+    "UTC#{sign}#{hours}:00"
+  end
+
+  defp timezone_offset_label(_offset), do: "UTC"
 
   defp maybe_put_resolution_note(metadata, nil, _status, _now), do: metadata
 

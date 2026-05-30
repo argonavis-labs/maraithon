@@ -715,6 +715,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         Commitments.bucket_for_brief(user_id,
           now: now,
           timezone_offset_hours: offset_hours,
+          timezone_label: timezone_label(state, now),
           limit: 50
         ),
       "open_work" => %{
@@ -2997,7 +2998,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.flat_map(&(read_list(commitments, &1) |> Enum.take(limit)))
     |> Enum.take(limit)
     |> Enum.map(fn commitment ->
-      "- **#{commitment_title(commitment)}**: #{commitment_context(commitment)}"
+      "- **#{commitment_title(commitment)}**: #{commitment_context(commitment, brief_input)}"
     end)
   end
 
@@ -3029,7 +3030,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
             []
 
           items ->
-            ["**#{label}**" | Enum.map(Enum.take(items, 8), &("- " <> commitment_line(&1)))]
+            [
+              "**#{label}**"
+              | Enum.map(Enum.take(items, 8), &("- " <> commitment_line(&1, brief_input)))
+            ]
         end
       end)
 
@@ -3037,16 +3041,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.reject(&blank?/1)
   end
 
-  defp commitment_line(commitment) when is_map(commitment) do
+  defp commitment_line(commitment, brief_input)
+
+  defp commitment_line(commitment, brief_input) when is_map(commitment) do
     title = commitment_title(commitment)
-    context = commitment_context(commitment)
+    context = commitment_context(commitment, brief_input)
 
     [title, context]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
 
-  defp commitment_line(_commitment), do: nil
+  defp commitment_line(_commitment, _brief_input), do: nil
 
   defp commitment_title(commitment) when is_map(commitment) do
     read_string(commitment, "title", nil) ||
@@ -3056,19 +3062,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp commitment_title(_commitment), do: "Open commitment"
 
-  defp commitment_context(commitment) when is_map(commitment) do
+  defp commitment_context(commitment, brief_input \\ %{})
+
+  defp commitment_context(commitment, brief_input) when is_map(commitment) do
     owed_to = read_string(commitment, "owed_to", nil) || read_string(commitment, "person", nil)
     project = read_string(commitment, "project", nil)
-    due = commitment_due_label(commitment)
+    due = commitment_due_label(commitment, brief_input)
 
     [owed_to && "for #{owed_to}", project && project, due]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" · ")
   end
 
-  defp commitment_context(_commitment), do: nil
+  defp commitment_context(_commitment, _brief_input), do: nil
 
-  defp commitment_due_label(commitment) when is_map(commitment) do
+  defp commitment_due_label(commitment, brief_input)
+
+  defp commitment_due_label(commitment, brief_input) when is_map(commitment) do
     display_due =
       read_string(commitment, "display_due", nil) ||
         read_string(commitment, "display_due_at", nil) ||
@@ -3085,24 +3095,32 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
       true ->
         due_value
-        |> format_commitment_due()
+        |> format_commitment_due(brief_input)
         |> then(fn due -> due && "due #{due}" end)
     end
   end
 
-  defp commitment_due_label(_commitment), do: nil
+  defp commitment_due_label(_commitment, _brief_input), do: nil
 
-  defp format_commitment_due(%DateTime{} = value) do
-    Calendar.strftime(value, "%b %d, %Y at %-I:%M %p UTC")
+  defp format_commitment_due(value, brief_input)
+
+  defp format_commitment_due(%DateTime{} = value, brief_input) do
+    offset = brief_input_timezone_offset_hours(brief_input)
+    label = brief_input_timezone_label(brief_input, offset)
+
+    value
+    |> DateTime.add(offset, :hour)
+    |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{label}")
   end
 
-  defp format_commitment_due(%NaiveDateTime{} = value) do
+  defp format_commitment_due(%NaiveDateTime{} = value, _brief_input) do
     Calendar.strftime(value, "%b %d, %Y at %-I:%M %p")
   end
 
-  defp format_commitment_due(%Date{} = value), do: Calendar.strftime(value, "%b %d, %Y")
+  defp format_commitment_due(%Date{} = value, _brief_input),
+    do: Calendar.strftime(value, "%b %d, %Y")
 
-  defp format_commitment_due(value) when is_binary(value) do
+  defp format_commitment_due(value, brief_input) when is_binary(value) do
     value = String.trim(value)
 
     cond do
@@ -3111,18 +3129,45 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
       match?({:ok, _, _}, DateTime.from_iso8601(value)) ->
         {:ok, datetime, _offset} = DateTime.from_iso8601(value)
-        format_commitment_due(datetime)
+        format_commitment_due(datetime, brief_input)
 
       match?({:ok, _}, Date.from_iso8601(value)) ->
         {:ok, date} = Date.from_iso8601(value)
-        format_commitment_due(date)
+        format_commitment_due(date, brief_input)
 
       true ->
         value
     end
   end
 
-  defp format_commitment_due(_value), do: nil
+  defp format_commitment_due(_value, _brief_input), do: nil
+
+  defp brief_input_timezone_offset_hours(brief_input) when is_map(brief_input) do
+    case read_any(brief_input, "timezone_offset_hours") do
+      value when is_integer(value) ->
+        value
+
+      value when is_float(value) ->
+        trunc(value)
+
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {parsed, _rest} -> parsed
+          :error -> @default_timezone_offset_hours
+        end
+
+      _ ->
+        @default_timezone_offset_hours
+    end
+  end
+
+  defp brief_input_timezone_offset_hours(_brief_input), do: @default_timezone_offset_hours
+
+  defp brief_input_timezone_label(brief_input, offset) when is_map(brief_input) do
+    read_string(brief_input, "timezone", nil) || timezone_offset_label(offset)
+  end
+
+  defp brief_input_timezone_label(_brief_input, offset), do: timezone_offset_label(offset)
 
   defp action_stack_items(brief_input) when is_map(brief_input) do
     brief_input

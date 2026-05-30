@@ -460,6 +460,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     input = %{
       "date" => "2026-05-27",
+      "timezone" => "ET",
+      "timezone_offset_hours" => -4,
       "calendar" => %{
         "today_events" => [
           %{
@@ -585,7 +587,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Sara Franca"
     assert revised["body"] =~ "## Open Commitments"
     assert revised["body"] =~ "Reply to Renat"
-    assert revised["body"] =~ "due May 20, 2026 at 4:00 PM UTC"
+    assert revised["body"] =~ "due May 20, 2026 at 12:00 PM ET"
     refute revised["body"] =~ "k2_kp3zotvz"
     refute revised["body"] =~ "2026-05-20T16:00:00Z"
     assert revised["body"] =~ "## Action Card Stack"
@@ -841,6 +843,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     brief =
       MorningBriefing.build_compact_fallback_brief(%{
         "date" => "2026-05-27",
+        "timezone" => "ET",
+        "timezone_offset_hours" => -4,
         "calendar" => %{
           "today_events" => [
             %{
@@ -921,7 +925,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute attention_section =~ "actc_"
     assert attention_section =~ "Cogniate Enterprise plan discussion"
     assert brief["body"] =~ "## Personal / Family First"
-    assert brief["body"] =~ "due May 20, 2026 at 4:00 PM UTC"
+    assert brief["body"] =~ "due May 20, 2026 at 12:00 PM ET"
     refute brief["body"] =~ "k2_kp3zotvz"
     refute brief["body"] =~ "2026-05-20T16:00:00Z"
     assert brief["body"] =~ "## Unknowns"
