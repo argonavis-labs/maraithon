@@ -7,6 +7,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
   alias Maraithon.Projects
   alias Maraithon.Runtime
   alias Maraithon.Runtime.Config, as: RuntimeConfig
+  alias Maraithon.Timezones
   alias MaraithonWeb.AgentActionCopy
 
   @tool_provider_requirements %{
@@ -674,7 +675,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   </div>
                 <% end %>
 
-                <%= if field_visible?(@selected_spec, "timezone_offset_hours") or field_visible?(@selected_spec, "morning_brief_hour_local") or field_visible?(@selected_spec, "end_of_day_brief_hour_local") or field_visible?(@selected_spec, "weekly_review_day_local") or field_visible?(@selected_spec, "weekly_review_hour_local") or field_visible?(@selected_spec, "brief_max_items") do %>
+                <%= if field_visible?(@selected_spec, "timezone") or field_visible?(@selected_spec, "timezone_offset_hours") or field_visible?(@selected_spec, "morning_brief_hour_local") or field_visible?(@selected_spec, "end_of_day_brief_hour_local") or field_visible?(@selected_spec, "weekly_review_day_local") or field_visible?(@selected_spec, "weekly_review_hour_local") or field_visible?(@selected_spec, "brief_max_items") do %>
                   <div class="space-y-4 rounded-lg border border-emerald-200 bg-emerald-50/50 p-4">
                     <div>
                       <p class="text-sm font-medium text-emerald-950">Chief-of-Staff Briefing</p>
@@ -684,6 +685,24 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     </div>
 
                     <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      <%= if field_visible?(@selected_spec, "timezone") do %>
+                        <.launch_select
+                          id="launch_timezone"
+                          name="launch[timezone]"
+                          label="Timezone"
+                          value={launch_timezone_value(@launch)}
+                          description="Named timezones keep brief timing correct through daylight-saving changes."
+                        >
+                          <option
+                            :for={option <- timezone_options()}
+                            value={option.value}
+                            selected={option.value == launch_timezone_value(@launch)}
+                          >
+                            <%= option.label %>
+                          </option>
+                        </.launch_select>
+                      <% end %>
+
                       <%= if field_visible?(@selected_spec, "timezone_offset_hours") do %>
                         <.launch_input
                           id="launch_timezone_offset_hours"
@@ -1162,7 +1181,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Brief timing",
         body:
-          "Uses timezone offset #{blank_fallback(launch["timezone_offset_hours"], "-5")} with morning brief #{launch["morning_brief_hour_local"]}:00 and end-of-day brief #{launch["end_of_day_brief_hour_local"]}:00."
+          "Uses #{launch_timezone_label(launch)} with morning brief #{launch["morning_brief_hour_local"]}:00 and end-of-day brief #{launch["end_of_day_brief_hour_local"]}:00."
       }
     ]
   end
@@ -1410,7 +1429,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
           },
           %{
             label: "Timezone",
-            value: blank_fallback(launch["timezone_offset_hours"], "-5")
+            value: launch_timezone_label(launch)
           },
           %{label: "Brief max items", value: launch["brief_max_items"]}
         ]
@@ -1770,6 +1789,38 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp hidden_control_count("advanced"), do: 0
   defp hidden_control_count(_mode), do: 3
+
+  defp timezone_options, do: Timezones.options()
+
+  defp launch_timezone_value(launch) when is_map(launch) do
+    case normalize_blank(Map.get(launch, "timezone")) do
+      nil ->
+        launch
+        |> launch_timezone_offset()
+        |> Timezones.fixed_offset_value()
+
+      timezone ->
+        timezone
+    end
+  end
+
+  defp launch_timezone_label(launch) when is_map(launch) do
+    selected = launch_timezone_value(launch)
+
+    timezone_options()
+    |> Enum.find(&(&1.value == selected))
+    |> case do
+      %{label: label} -> label
+      _ -> Timezones.offset_label(launch_timezone_offset(launch))
+    end
+  end
+
+  defp launch_timezone_offset(launch) when is_map(launch) do
+    case Integer.parse(to_string(Map.get(launch, "timezone_offset_hours", "-5"))) do
+      {offset, ""} when offset in -12..14 -> offset
+      _ -> -5
+    end
+  end
 
   defp cost_profile_label("lean"), do: "Lean"
   defp cost_profile_label("balanced"), do: "Balanced"

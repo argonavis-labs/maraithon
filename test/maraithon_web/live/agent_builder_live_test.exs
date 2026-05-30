@@ -193,7 +193,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
             behavior: "ai_chief_of_staff",
             team_id: "T12345",
             cost_profile: "balanced",
-            timezone_offset_hours: "-5"
+            timezone: "offset:-5"
           }
         )
         |> render_change()
@@ -635,7 +635,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
             behavior: "ai_chief_of_staff",
             name: "chief-of-staff",
             team_id: "T12345",
-            timezone_offset_hours: "-8",
+            timezone: "America/Los_Angeles",
             morning_brief_hour_local: "8",
             end_of_day_brief_hour_local: "18",
             weekly_review_day_local: "5",
@@ -668,6 +668,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["source_policy"] == "all_connected"
       assert agent.config["include_future_sources"] == true
       assert agent.config["team_id"] == "T12345"
+      assert agent.config["timezone"] == "America/Los_Angeles"
+      assert agent.config["timezone_name"] == "America/Los_Angeles"
       assert agent.config["timezone_offset_hours"] == -8
       assert agent.config["wakeup_interval_ms"] == 600_000
 
@@ -695,6 +697,15 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert get_in(agent.config, ["skill_configs", "morning_briefing", "assistant_behavior"]) ==
                "ai_chief_of_staff"
+
+      assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone"]) ==
+               "America/Los_Angeles"
+
+      assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_name"]) ==
+               "America/Los_Angeles"
+
+      assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_offset_hours"]) ==
+               -8
 
       assert get_in(agent.config, [
                "skill_configs",

@@ -9,6 +9,7 @@ defmodule Maraithon.AgentBuilder do
   alias Maraithon.ConnectedAccounts
   alias Maraithon.OAuth
   alias Maraithon.OAuth.Google
+  alias Maraithon.Timezones
 
   @default_prompt "You are a helpful assistant that watches for events and responds thoughtfully."
   @default_tools "read_file,search_files"
@@ -44,6 +45,7 @@ defmodule Maraithon.AgentBuilder do
     "channel_scan_limit" => "",
     "dm_scan_limit" => "",
     "lookback_hours" => "",
+    "timezone" => "",
     "timezone_offset_hours" => "",
     "morning_brief_hour_local" => "",
     "end_of_day_brief_hour_local" => "",
@@ -72,8 +74,8 @@ defmodule Maraithon.AgentBuilder do
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
       ],
       fields:
-        ~w(team_id timezone_offset_hours wakeup_interval_ms morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
-      simple_fields: ~w(team_id timezone_offset_hours wakeup_interval_ms cost_profile),
+        ~w(team_id timezone wakeup_interval_ms morning_brief_hour_local end_of_day_brief_hour_local weekly_review_day_local weekly_review_hour_local brief_max_items),
+      simple_fields: ~w(team_id timezone wakeup_interval_ms cost_profile),
       defaults: %{
         "prompt" => "",
         "tools" => "",
@@ -313,6 +315,7 @@ defmodule Maraithon.AgentBuilder do
         "lookback_hours" => "48",
         "max_insights_per_cycle" => "5",
         "min_confidence" => "0.72",
+        "timezone" => "",
         "timezone_offset_hours" => "-5",
         "morning_brief_hour_local" => "8",
         "end_of_day_brief_hour_local" => "18",
@@ -369,7 +372,7 @@ defmodule Maraithon.AgentBuilder do
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
         "Raise `min_confidence` if you want even fewer Telegram interruptions.",
-        "Set `timezone_offset_hours` to match your working day so morning and end-of-day briefs land at the right time."
+        "Choose a named timezone when possible so morning and end-of-day briefs keep landing at the right local time through daylight-saving changes."
       ]
     },
     %{
@@ -927,6 +930,11 @@ defmodule Maraithon.AgentBuilder do
       "channel_scan_limit" => stringify(config["channel_scan_limit"]),
       "dm_scan_limit" => stringify(config["dm_scan_limit"]),
       "lookback_hours" => stringify(config["lookback_hours"]),
+      "timezone" =>
+        Timezones.selected_value(
+          config["timezone"] || config["timezone_name"],
+          config["timezone_offset_hours"]
+        ),
       "timezone_offset_hours" => stringify(config["timezone_offset_hours"]),
       "morning_brief_hour_local" => stringify(config["morning_brief_hour_local"]),
       "end_of_day_brief_hour_local" => stringify(config["end_of_day_brief_hour_local"]),
@@ -1058,8 +1066,7 @@ defmodule Maraithon.AgentBuilder do
   defp build_behavior_config("ai_chief_of_staff", launch, user_id) do
     enabled_skills = Maraithon.Behaviors.AIChiefOfStaff.default_skill_ids()
 
-    with {:ok, timezone_offset_hours} <-
-           parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
+    with {:ok, timezone_config} <- parse_timezone_config(launch),
          {:ok, morning_brief_hour_local} <-
            parse_integer_in_range(launch["morning_brief_hour_local"], "Morning brief hour", 0, 23),
          {:ok, end_of_day_brief_hour_local} <-
@@ -1148,94 +1155,112 @@ defmodule Maraithon.AgentBuilder do
            ) do
       team_id = empty_to_nil(launch["team_id"])
       source_scope = SourceScope.resolve(user_id)
+      compact_timezone_config = compact_timezone_config(timezone_config)
 
       skill_configs = %{
-        "followthrough" => %{
-          "user_id" => user_id,
-          "source_policy" => "all_connected",
-          "source_scope" => source_scope,
-          "email_scan_limit" => follow_email_scan_limit,
-          "event_scan_limit" => follow_event_scan_limit,
-          "prep_window_hours" => follow_prep_window_hours,
-          "channel_scan_limit" => follow_channel_scan_limit,
-          "dm_scan_limit" => follow_dm_scan_limit,
-          "lookback_hours" => follow_lookback_hours,
-          "max_insights_per_cycle" => follow_max_insights_per_cycle,
-          "min_confidence" => follow_min_confidence,
-          "timezone_offset_hours" => timezone_offset_hours
-        },
-        "travel_logistics" => %{
-          "user_id" => user_id,
-          "source_policy" => "all_connected",
-          "source_scope" => source_scope,
-          "email_scan_limit" => travel_email_scan_limit,
-          "event_scan_limit" => travel_event_scan_limit,
-          "lookback_hours" => travel_lookback_hours,
-          "min_confidence" => travel_min_confidence,
-          "timezone_offset_hours" => timezone_offset_hours,
-          "wakeup_interval_ms" => travel_wakeup_interval_ms
-        },
-        "morning_briefing" => %{
-          "user_id" => user_id,
-          "assistant_behavior" => "ai_chief_of_staff",
-          "source_policy" => "all_connected",
-          "source_scope" => source_scope,
-          "timezone_offset_hours" => timezone_offset_hours,
-          "morning_brief_hour_local" => morning_brief_hour_local,
-          "email_scan_limit" => follow_email_scan_limit,
-          "slack_channel_scan_limit" => follow_channel_scan_limit,
-          "slack_message_scan_limit" => follow_dm_scan_limit,
-          "lookback_hours" => 18
-        },
-        "commitment_tracker" => %{
-          "user_id" => user_id,
-          "assistant_behavior" => "ai_chief_of_staff",
-          "source_policy" => "all_connected",
-          "source_scope" => source_scope,
-          "timezone_offset_hours" => timezone_offset_hours,
-          "commitment_review_hour_local" => 7,
-          "email_scan_limit" => follow_email_scan_limit,
-          "event_scan_limit" => follow_event_scan_limit,
-          "lookback_hours" => 24,
-          "calendar_forward_days" => 7
-        },
-        "briefing" => %{
-          "user_id" => user_id,
-          "assistant_behavior" => "ai_chief_of_staff",
-          "source_policy" => "all_connected",
-          "source_scope" => source_scope,
-          "timezone_offset_hours" => timezone_offset_hours,
-          "morning_brief_hour_local" => morning_brief_hour_local,
-          "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
-          "weekly_review_day_local" => weekly_review_day_local,
-          "weekly_review_hour_local" => weekly_review_hour_local,
-          "brief_max_items" => brief_max_items
-        }
+        "followthrough" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "email_scan_limit" => follow_email_scan_limit,
+              "event_scan_limit" => follow_event_scan_limit,
+              "prep_window_hours" => follow_prep_window_hours,
+              "channel_scan_limit" => follow_channel_scan_limit,
+              "dm_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => follow_lookback_hours,
+              "max_insights_per_cycle" => follow_max_insights_per_cycle,
+              "min_confidence" => follow_min_confidence
+            },
+            compact_timezone_config
+          ),
+        "travel_logistics" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "email_scan_limit" => travel_email_scan_limit,
+              "event_scan_limit" => travel_event_scan_limit,
+              "lookback_hours" => travel_lookback_hours,
+              "min_confidence" => travel_min_confidence,
+              "wakeup_interval_ms" => travel_wakeup_interval_ms
+            },
+            compact_timezone_config
+          ),
+        "morning_briefing" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "morning_brief_hour_local" => morning_brief_hour_local,
+              "email_scan_limit" => follow_email_scan_limit,
+              "slack_channel_scan_limit" => follow_channel_scan_limit,
+              "slack_message_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => 18
+            },
+            compact_timezone_config
+          ),
+        "commitment_tracker" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "commitment_review_hour_local" => 7,
+              "email_scan_limit" => follow_email_scan_limit,
+              "event_scan_limit" => follow_event_scan_limit,
+              "lookback_hours" => 24,
+              "calendar_forward_days" => 7
+            },
+            compact_timezone_config
+          ),
+        "briefing" =>
+          Map.merge(
+            %{
+              "user_id" => user_id,
+              "assistant_behavior" => "ai_chief_of_staff",
+              "source_policy" => "all_connected",
+              "source_scope" => source_scope,
+              "morning_brief_hour_local" => morning_brief_hour_local,
+              "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+              "weekly_review_day_local" => weekly_review_day_local,
+              "weekly_review_hour_local" => weekly_review_hour_local,
+              "brief_max_items" => brief_max_items
+            },
+            compact_timezone_config
+          )
       }
 
       {:ok,
-       %{
-         "name" => launch_name(launch),
-         "user_id" => user_id,
-         "enabled_skills" => enabled_skills,
-         "source_policy" => "all_connected",
-         "include_future_sources" => true,
-         "source_scope" => source_scope,
-         "team_id" => team_id,
-         "wakeup_interval_ms" => wakeup_interval_ms,
-         "timezone_offset_hours" => timezone_offset_hours,
-         "morning_brief_hour_local" => morning_brief_hour_local,
-         "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
-         "weekly_review_day_local" => weekly_review_day_local,
-         "weekly_review_hour_local" => weekly_review_hour_local,
-         "brief_max_items" => brief_max_items,
-         "skill_configs" => skill_configs,
-         "subscribe" =>
-           Enum.uniq(
-             SourceScope.subscriptions(source_scope, user_id) ++
-               ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
-           )
-       }}
+       Map.merge(
+         %{
+           "name" => launch_name(launch),
+           "user_id" => user_id,
+           "enabled_skills" => enabled_skills,
+           "source_policy" => "all_connected",
+           "include_future_sources" => true,
+           "source_scope" => source_scope,
+           "team_id" => team_id,
+           "wakeup_interval_ms" => wakeup_interval_ms,
+           "morning_brief_hour_local" => morning_brief_hour_local,
+           "end_of_day_brief_hour_local" => end_of_day_brief_hour_local,
+           "weekly_review_day_local" => weekly_review_day_local,
+           "weekly_review_hour_local" => weekly_review_hour_local,
+           "brief_max_items" => brief_max_items,
+           "skill_configs" => skill_configs,
+           "subscribe" =>
+             Enum.uniq(
+               SourceScope.subscriptions(source_scope, user_id) ++
+                 ChiefOfStaffSkills.subscriptions(skill_configs, user_id, enabled_skills)
+             )
+         },
+         compact_timezone_config
+       )}
       |> drop_nil_values()
     end
   end
@@ -1430,6 +1455,38 @@ defmodule Maraithon.AgentBuilder do
     end
   end
 
+  defp parse_timezone_config(launch) when is_map(launch) do
+    timezone = launch |> Map.get("timezone", "") |> to_string() |> String.trim()
+
+    cond do
+      timezone != "" ->
+        case Timezones.config_updates(timezone) do
+          %{"timezone_offset_hours" => _offset} = updates ->
+            {:ok, updates}
+
+          _ ->
+            {:error, "Timezone must be one of the listed options"}
+        end
+
+      true ->
+        with {:ok, offset} <-
+               parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14) do
+          {:ok,
+           %{
+             "timezone" => nil,
+             "timezone_name" => nil,
+             "timezone_offset_hours" => offset
+           }}
+        end
+    end
+  end
+
+  defp compact_timezone_config(config) when is_map(config) do
+    config
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
   defp parse_boolean(value, _field_name) when value in ["true", "TRUE", "1"], do: {:ok, true}
   defp parse_boolean(value, _field_name) when value in ["false", "FALSE", "0"], do: {:ok, false}
   defp parse_boolean(_value, field_name), do: {:error, "#{field_name} must be true or false"}
@@ -1585,6 +1642,8 @@ defmodule Maraithon.AgentBuilder do
       "source_scope",
       "team_id",
       "wakeup_interval_ms",
+      "timezone",
+      "timezone_name",
       "timezone_offset_hours",
       "morning_brief_hour_local",
       "end_of_day_brief_hour_local",
