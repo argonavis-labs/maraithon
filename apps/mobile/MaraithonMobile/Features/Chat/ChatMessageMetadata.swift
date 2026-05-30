@@ -87,11 +87,14 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable {
     ) {
         let publicTool = ChatWorkSummaryCopy.publicToolKey(tool)
         let normalizedStatus = ChatWorkSummaryCopy.safeStatus(status)
+        let displayLabel = ChatWorkSummaryCopy.safeLabel(label, fallback: ChatWorkSummaryCopy.toolLabel(for: publicTool))
         self.id = id
         self.tool = publicTool
-        self.label = ChatWorkSummaryCopy.safeLabel(label, fallback: ChatWorkSummaryCopy.toolLabel(for: publicTool))
+        self.label = displayLabel
         self.status = normalizedStatus
-        self.summary = ChatWorkSummaryCopy.safeDetail(summary) ?? ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus)
+        self.summary =
+            ChatWorkSummaryCopy.safeDetail(summary) ??
+            ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus, label: displayLabel)
         self.startedAt = startedAt
         self.finishedAt = finishedAt
     }
@@ -107,7 +110,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable {
         )
         summary =
             ChatWorkSummaryCopy.safeDetail(try container.decodeIfPresent(String.self, forKey: .summary)) ??
-            ChatWorkSummaryCopy.fallbackToolSummary(status: status)
+            ChatWorkSummaryCopy.fallbackToolSummary(status: status, label: label)
         startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
     }
@@ -414,14 +417,37 @@ private enum ChatWorkSummaryCopy {
         legacyLabel(safeText(value, maxLength: 44, rejectIdentifiers: true) ?? fallback)
     }
 
-    static func fallbackToolSummary(status: String?) -> String? {
+    static func fallbackToolSummary(status: String?, label: String) -> String? {
         switch status {
         case "failed":
-            "This check could not finish."
+            failedToolSummary(for: label)
         case "running":
             "Checking now."
         default:
             nil
+        }
+    }
+
+    private static func failedToolSummary(for label: String) -> String {
+        switch label {
+        case "Supporting work":
+            return "Supporting check could not finish."
+        case "Work update":
+            return "Work update could not finish."
+        case "Scheduled task":
+            return "Scheduled task could not finish."
+        case "Draft":
+            return "Draft could not finish."
+        case "Memory update", "Memory":
+            return "Memory update could not finish."
+        case "Preference update", "Preference":
+            return "Preference update could not finish."
+        case "Preferences":
+            return "Preference check could not finish."
+        case "Feedback":
+            return "Feedback update could not finish."
+        default:
+            return "\(label) check could not finish."
         }
     }
 

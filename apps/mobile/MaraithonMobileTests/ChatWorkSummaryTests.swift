@@ -363,7 +363,7 @@ struct ChatWorkSummaryTests {
         #expect(summary.status == "completed")
         #expect(summary.summary == nil)
         #expect(summary.toolCalls[0].label == "Gmail")
-        #expect(summary.toolCalls[0].summary == "This check could not finish.")
+        #expect(summary.toolCalls[0].summary == "Gmail check could not finish.")
         #expect(summary.toolCalls[1].label == "Reviewed open work")
         #expect(summary.toolCalls[1].summary == "3 priorities found")
         #expect(summary.steps[0].displayTitle == "Prepared the answer")
