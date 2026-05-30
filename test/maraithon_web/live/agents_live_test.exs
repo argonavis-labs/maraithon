@@ -1,9 +1,11 @@
 defmodule MaraithonWeb.AgentsLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
+  alias Maraithon.Agents.Agent
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Effects.Effect
   alias Maraithon.OAuth
@@ -63,6 +65,40 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Google Gmail"
     assert html =~ "Slack Channels"
     assert html =~ "Telegram"
+  end
+
+  test "renders automation timestamps in the Chief of Staff timezone", %{conn: conn} do
+    {:ok, _chief_of_staff} =
+      create_agent(%{
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "enabled_skills" => ["morning_briefing"],
+          "timezone" => "America/Toronto",
+          "timezone_offset_hours" => -5
+        },
+        status: "running"
+      })
+
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{"name" => "Time check"},
+        status: "running",
+        started_at: ~U[2026-05-30 18:30:00Z]
+      })
+
+    Maraithon.Repo.update_all(
+      from(agent in Agent, where: agent.id == ^agent.id),
+      set: [updated_at: ~U[2026-05-30 18:45:00Z]]
+    )
+
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
+
+    assert html =~ "May 30, 2026 at 2:30 PM ET"
+    assert html =~ "May 30, 2026 at 2:45 PM ET"
+    refute html =~ "2026-05-30 18:30:00 UTC"
+    refute html =~ "2026-05-30 18:45:00 UTC"
   end
 
   test "selecting an agent opens inspect mode", %{conn: conn} do

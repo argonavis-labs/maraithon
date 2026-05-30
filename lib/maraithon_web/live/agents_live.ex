@@ -15,6 +15,7 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.Runtime
   alias Maraithon.Timezones
   alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OperationFailureCopy
 
   @refresh_interval 5_000
@@ -45,7 +46,8 @@ defmodule MaraithonWeb.AgentsLive do
         route_state: nil,
         library: [],
         marketplace_error: nil,
-        provider_status: %{}
+        provider_status: %{},
+        timezone_info: LocalTime.timezone_info_for_user(current_user_id(socket))
       )
 
     if connected?(socket) do
@@ -521,7 +523,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <.status_badge status={agent.status} />
                     </.table_cell>
                     <.table_cell class="align-top text-xs text-zinc-500">
-                      <%= format_datetime(agent.updated_at) %>
+                      <%= format_datetime(agent.updated_at, @timezone_info) %>
                     </.table_cell>
                     <.table_cell class="align-top">
                       <div class="flex flex-wrap justify-end gap-2">
@@ -969,6 +971,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <.connected_apps_list
                           connected_rows={connected_rows}
                           required_app_rows={required_app_rows}
+                          timezone_info={@timezone_info}
                         />
                       <% end %>
 
@@ -1079,14 +1082,15 @@ defmodule MaraithonWeb.AgentsLive do
                         <.connected_apps_list
                           connected_rows={connected_rows}
                           required_app_rows={required_app_rows}
+                          timezone_info={@timezone_info}
                         />
                       </.panel>
                     <% end %>
 
                     <%= if not chief_of_staff_agent?(@selected_agent) and @selected_panel == :inspect do %>
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                      <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
-                      <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at)} />
+                      <.summary_card title="Started" value={format_datetime(@selected_agent.started_at, @timezone_info)} />
+                      <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at, @timezone_info)} />
                       <.summary_card title="Signals to watch" value={subscriptions_preview(@selected_agent.config)} />
                       <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
                       <.summary_card
@@ -1170,7 +1174,7 @@ defmodule MaraithonWeb.AgentsLive do
                               <div class="mt-1 text-xs/5 text-zinc-500">
                                 attempts <%= effect.attempts %>
                                 <span class="mx-1">•</span>
-                                updated <%= format_time(effect.updated_at) %>
+                                updated <%= format_time(effect.updated_at, @timezone_info) %>
                               </div>
                               <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
                                 <%= effect_preview(effect) %>
@@ -1212,7 +1216,7 @@ defmodule MaraithonWeb.AgentsLive do
                                 <span class={job_status_class(job.status)}><%= humanize_status(job.status) %></span>
                               </div>
                               <div class="mt-1 text-xs/5 text-zinc-500">
-                                scheduled <%= format_datetime(job.fire_at) %>
+                                scheduled <%= format_datetime(job.fire_at, @timezone_info) %>
                                 <span class="mx-1">•</span>
                                 attempts <%= job.attempts %>
                               </div>
@@ -1242,7 +1246,7 @@ defmodule MaraithonWeb.AgentsLive do
                             <div class="flex items-center justify-between gap-3">
                               <span class="font-medium text-cyan-700"><%= work_type_label(event.event_type) %></span>
                             </div>
-                            <div class="mt-1 text-xs/5 text-zinc-500"><%= format_datetime(event.created_at) %></div>
+                            <div class="mt-1 text-xs/5 text-zinc-500"><%= format_datetime(event.created_at, @timezone_info) %></div>
                             <div class="mt-2 rounded-lg bg-zinc-50 px-2 py-1 text-xs/5 text-zinc-600">
                               <%= event_preview(event) %>
                             </div>
@@ -1300,8 +1304,8 @@ defmodule MaraithonWeb.AgentsLive do
                     </summary>
 
                     <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                      <.summary_card title="Started" value={format_datetime(@selected_agent.started_at)} />
-                      <.summary_card title="Last Updated" value={format_datetime(agent_updated_at(@selected_agent))} />
+                      <.summary_card title="Started" value={format_datetime(@selected_agent.started_at, @timezone_info)} />
+                      <.summary_card title="Last Updated" value={format_datetime(agent_updated_at(@selected_agent), @timezone_info)} />
                       <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
                       <.summary_card
                         title="Spend"
@@ -1329,6 +1333,7 @@ defmodule MaraithonWeb.AgentsLive do
 
   attr :connected_rows, :list, required: true
   attr :required_app_rows, :list, required: true
+  attr :timezone_info, :map, required: true
 
   defp connected_apps_list(assigns) do
     ~H"""
@@ -1366,7 +1371,7 @@ defmodule MaraithonWeb.AgentsLive do
             <%= account_status_label(row.status) %>
           </.badge>
           <span class="whitespace-nowrap text-xs/5 text-zinc-500">
-            <%= format_datetime(row.updated_at) %>
+            <%= format_datetime(row.updated_at, @timezone_info) %>
           </span>
         </div>
       </li>
@@ -1505,7 +1510,8 @@ defmodule MaraithonWeb.AgentsLive do
       agents: filtered_agents,
       library: library,
       marketplace_error: marketplace_error,
-      provider_status: provider_status
+      provider_status: provider_status,
+      timezone_info: LocalTime.timezone_info_for_user(user_id)
     )
   end
 
@@ -2773,27 +2779,50 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp log_level_class(_level), do: "text-zinc-300"
 
-  defp format_time(nil), do: "No timestamp"
+  defp format_time(nil, _timezone_info), do: "No timestamp"
 
-  defp format_time(datetime) when is_binary(datetime) do
+  defp format_time(datetime, timezone_info) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
-      {:ok, dt, _offset} -> format_time(dt)
+      {:ok, dt, _offset} -> format_time(dt, timezone_info)
       _ -> datetime
     end
   end
 
-  defp format_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
-  defp format_time(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
+  defp format_time(%DateTime{} = dt, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    offset = Timezones.offset_at(timezone_info.name, dt, timezone_info.offset_hours)
+    label = Timezones.label(timezone_info.name, offset)
 
-  defp format_datetime(nil), do: "No timestamp"
+    dt
+    |> DateTime.add(offset, :hour)
+    |> Calendar.strftime("%-I:%M %p #{label}")
+  end
 
-  defp format_datetime(datetime) when is_binary(datetime) do
+  defp format_time(%NaiveDateTime{} = dt, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    label = Timezones.label(timezone_info.name, timezone_info.offset_hours)
+
+    Calendar.strftime(dt, "%-I:%M %p #{label}")
+  end
+
+  defp format_datetime(nil, _timezone_info), do: "No timestamp"
+
+  defp format_datetime(datetime, timezone_info) when is_binary(datetime) do
     case DateTime.from_iso8601(datetime) do
-      {:ok, dt, _offset} -> format_datetime(dt)
+      {:ok, dt, _offset} -> format_datetime(dt, timezone_info)
       _ -> datetime
     end
   end
 
-  defp format_datetime(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
-  defp format_datetime(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S")
+  defp format_datetime(%DateTime{} = dt, timezone_info),
+    do: LocalTime.format_datetime(dt, "No timestamp", timezone_info)
+
+  defp format_datetime(%NaiveDateTime{} = dt, timezone_info),
+    do: LocalTime.format_datetime(dt, "No timestamp", timezone_info)
+
+  defp normalize_timezone_info(%{name: name, offset_hours: offset_hours}) do
+    %{name: name, offset_hours: Timezones.normalize_offset(offset_hours)}
+  end
+
+  defp normalize_timezone_info(_timezone_info), do: LocalTime.default_timezone_info()
 end
