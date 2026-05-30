@@ -672,7 +672,7 @@ defmodule Maraithon.Connections do
 
   defp desktop_details([], _totals, _timezone_info) do
     [
-      "No Mac paired yet.",
+      "Pair a Mac to start syncing local sources.",
       "Install the Maraithon Desktop App to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
     ]
   end
@@ -740,7 +740,7 @@ defmodule Maraithon.Connections do
   end
 
   defp desktop_device_details(_stats, _revoked?, 0) do
-    ["Paired, but no local sources have synced yet."]
+    ["Paired and waiting for the first local source check."]
   end
 
   defp desktop_device_details(stats, _revoked?, _synced_count) do
@@ -751,7 +751,7 @@ defmodule Maraithon.Connections do
 
   defp desktop_source_summary(totals) do
     case desktop_source_labels(totals) do
-      [] -> "No local sources synced yet."
+      [] -> "Waiting for local sources to finish their first check."
       labels -> "Synced #{Enum.join(labels, ", ")}."
     end
   end
