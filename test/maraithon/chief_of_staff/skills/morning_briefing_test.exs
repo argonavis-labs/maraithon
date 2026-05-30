@@ -430,7 +430,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     brief = %{
       "title" => "Wednesday, May 27 - Generic morning",
       "summary" => "A few things are happening.",
-      "body" => "A short generic brief that misses the operational stack.",
+      "body" =>
+        "A short generic brief that misses the operational stack. Leaked handle actc_c154.",
       "todos" => []
     }
 
@@ -549,7 +550,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert "missing_non_draft_jobs" in verification["initial_findings"]
     assert verification["final_findings"] == []
     assert "schedule_conflicts_called_out_with_recommendations" in verification["criteria"]
-    assert "action_card_and_draft_handles_stay_attached_to_work" in verification["criteria"]
+
+    assert "action_card_and_draft_work_is_named_without_internal_handles" in verification[
+             "criteria"
+           ]
 
     assert revised["body"] =~ "## Needs Your Attention"
     refute revised["body"] =~ "Brief shape needs attention"
@@ -559,7 +563,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "## Open Commitments"
     assert revised["body"] =~ "Reply to Renat"
     assert revised["body"] =~ "## Action Card Stack"
-    assert revised["body"] =~ "actc_c154"
+    assert revised["body"] =~ "Resolve duplicate Sara Franca invite"
+    assert revised["body"] =~ "Lock Google Meet and decline Teams before 11am."
+    refute revised["body"] =~ "actc_"
     assert revised["body"] =~ "## Not a draft job"
     assert revised["body"] =~ "Pydantic failed payment"
   end
@@ -760,7 +766,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert attention_section =~ "School pickup"
     assert attention_section =~ "Schedule conflict"
     assert attention_section =~ "Reply to Renat"
-    assert attention_section =~ "actc_c154"
+    assert attention_section =~ "Resolve duplicate Sara Franca invite"
+    assert attention_section =~ "Choose the canonical invite and decline the duplicate."
+    refute attention_section =~ "actc_"
     assert attention_section =~ "Cogniate Enterprise plan discussion"
     assert brief["body"] =~ "## Personal / Family First"
     assert brief["body"] =~ "## Unknowns"

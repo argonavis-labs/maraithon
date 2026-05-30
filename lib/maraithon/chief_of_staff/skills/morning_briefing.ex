@@ -1905,7 +1905,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   def verify_quality(brief, brief_input, generation_mode \\ "llm")
       when is_map(brief) and is_map(brief_input) do
     initial_findings = morning_brief_findings(brief, brief_input, generation_mode)
-    revised_brief = revise_morning_brief(brief, brief_input, initial_findings)
+
+    revised_brief =
+      brief
+      |> revise_morning_brief(brief_input, initial_findings)
+      |> scrub_morning_brief_internal_handles()
+
     final_findings = morning_brief_findings(revised_brief, brief_input, generation_mode)
     score = morning_brief_score(final_findings)
 
@@ -1924,7 +1929,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "required_commercial_threads_are_covered",
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
-        "action_card_and_draft_handles_stay_attached_to_work",
+        "action_card_and_draft_work_is_named_without_internal_handles",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
         "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
@@ -2261,7 +2266,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     normalized = normalize_match_text(body)
 
     Enum.any?(
-      ["action card", "card stack", "draft", "draft id", "actc", "queued"],
+      ["action card", "card stack", "draft", "draft id", "queued"],
       &String.contains?(normalized, &1)
     )
   end
@@ -2541,13 +2546,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         read_string(item, "name", nil) ||
         read_string(item, "subject", nil) ||
         read_string(item, "summary", nil) ||
-        read_string(item, "text", "Pending action")
+        read_string(item, "text", nil) ||
+        "Pending action"
 
-    handle = action_handle(item)
+    context =
+      read_string(item, "next_action", nil) ||
+        read_string(item, "summary", nil) ||
+        read_string(item, "notes", nil) ||
+        read_string(read_map(item, "metadata"), "why_it_matters", nil) ||
+        commitment_context(item)
 
-    [label, handle && "-> #{handle}"]
+    [label, context]
+    |> Enum.map(&scrub_internal_action_handles/1)
     |> Enum.reject(&blank?/1)
-    |> Enum.join(" ")
+    |> Enum.uniq_by(&normalize_match_text/1)
+    |> Enum.join(": ")
+    |> default_if_blank("Pending action")
     |> truncate_text(220)
   end
 
@@ -2576,6 +2590,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp action_handle_from_text(_text), do: nil
+
+  defp scrub_morning_brief_internal_handles(brief) when is_map(brief) do
+    Map.update(brief, "body", "", &scrub_internal_action_handles/1)
+  end
+
+  defp scrub_morning_brief_internal_handles(brief), do: brief
+
+  defp scrub_internal_action_handles(value) when is_binary(value) do
+    value
+    |> String.replace(~r/^[ \t]*(?:[-*]\s*)?\bactc_[A-Za-z0-9_-]+\b[ \t]*$/im, "")
+    |> String.replace(~r/[ \t]*->[ \t]*\bactc_[A-Za-z0-9_-]+\b/i, "")
+    |> String.replace(~r/\bactc_[A-Za-z0-9_-]+\b/i, "")
+    |> String.replace(~r/[ \t]+([.,;:])/, "\\1")
+    |> String.replace(~r/[ \t]{2,}/, " ")
+    |> String.replace(~r/\n{3,}/, "\n\n")
+    |> String.trim()
+  end
+
+  defp scrub_internal_action_handles(value), do: value
 
   defp non_draft_job_items(brief_input) when is_map(brief_input) do
     brief_input
@@ -4735,6 +4768,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
   defp blank?(_value), do: false
+
+  defp default_if_blank(value, default) when is_binary(value) do
+    if blank?(value), do: default, else: value
+  end
+
+  defp default_if_blank(_value, default), do: default
 
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do
