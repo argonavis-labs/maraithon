@@ -3,6 +3,8 @@ defmodule MaraithonWeb.ApiErrorCopy do
 
   alias Maraithon.RunErrorCopy
 
+  @companion_context_recovery "Maraithon will keep the last successful context until the next check."
+
   @mobile_code_errors ~w(not_found invalid_email invalid_or_expired_code invalid_or_expired_link)a
   @mobile_chat_code_errors ~w(
     not_found
@@ -151,8 +153,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_sync(:missing_items, batch_key) do
     %{
       error: "#{batch_key}_required",
-      message:
-        "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+      message: "The Mac sent an incomplete source check. #{@companion_context_recovery}"
     }
   end
 
@@ -160,7 +161,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "batch_too_large",
       message:
-        "Sync fewer than #{max_batch} items at a time. Maraithon will keep the last successful data until then."
+        "That source check included more than #{max_batch} items. #{@companion_context_recovery}"
     }
   end
 
@@ -175,15 +176,14 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "unknown_event",
       message:
-        "The companion app sent a sync request this server does not support. Update the app, then sync again."
+        "The companion app sent a source check this server does not support. Update the app, then check again."
     }
   end
 
   def companion_sync(_reason, _context) do
     %{
       error: "invalid_batch",
-      message:
-        "Some items did not sync. Sync again from the companion app; Maraithon will keep the last successful data until then."
+      message: "Some items could not finish. #{@companion_context_recovery}"
     }
   end
 

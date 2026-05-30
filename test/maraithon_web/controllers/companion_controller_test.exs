@@ -227,7 +227,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "messages_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
 
@@ -476,7 +476,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "notes_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
 
@@ -564,7 +564,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "voice_memos_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
 
@@ -697,7 +697,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "reminders_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
   end
@@ -814,7 +814,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "calendar_events_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
   end
@@ -875,7 +875,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "files_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
 
@@ -928,7 +928,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "batch_too_large",
                "message" =>
-                 "Sync fewer than 200 items at a time. Maraithon will keep the last successful data until then."
+                 "That source check included more than 200 items. Maraithon will keep the last successful context until the next check."
              }
     end
   end
@@ -1221,7 +1221,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "visits_required",
                "message" =>
-                 "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                 "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
              }
     end
   end

@@ -106,7 +106,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert %{
              error: "invalid_batch",
              message:
-               "Some items did not sync. Sync again from the companion app; Maraithon will keep the last successful data until then."
+               "Some items could not finish. Maraithon will keep the last successful context until the next check."
            } in copies
 
     assert %{
@@ -172,19 +172,39 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.companion_sync(:missing_items, "messages") == %{
              error: "messages_required",
              message:
-               "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+               "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
            }
 
     assert ApiErrorCopy.companion_sync(:too_many_items, 200) == %{
              error: "batch_too_large",
              message:
-               "Sync fewer than 200 items at a time. Maraithon will keep the last successful data until then."
+               "That source check included more than 200 items. Maraithon will keep the last successful context until the next check."
+           }
+
+    assert ApiErrorCopy.companion_sync(:unknown_event, nil) == %{
+             error: "unknown_event",
+             message:
+               "The companion app sent a source check this server does not support. Update the app, then check again."
            }
 
     assert ApiErrorCopy.companion_channel_error(:device_mismatch, nil) == %{
              reason: "device_mismatch",
              message: "This Mac is paired as a different device. Sign out and pair it again."
            }
+
+    recovery_copy =
+      [
+        ApiErrorCopy.companion_sync(:missing_items, "messages"),
+        ApiErrorCopy.companion_sync(:too_many_items, 200),
+        ApiErrorCopy.companion_sync(:unknown_event, nil),
+        ApiErrorCopy.companion_sync(:internal_error, "messages")
+      ]
+      |> Enum.map(& &1.message)
+      |> Enum.join(" ")
+
+    refute recovery_copy =~ "last successful data"
+    refute recovery_copy =~ "sync batch"
+    refute recovery_copy =~ "Sync again"
   end
 
   test "mcp tool errors do not leak raw internal reasons" do

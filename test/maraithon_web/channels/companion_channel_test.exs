@@ -229,7 +229,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
                    %{
                      reason: "messages_required",
                      message:
-                       "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                       "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
                    },
                    @channel_reply_timeout
     end
@@ -253,7 +253,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
                    %{
                      reason: "batch_too_large",
                      message:
-                       "Sync fewer than 500 items at a time. Maraithon will keep the last successful data until then."
+                       "That source check included more than 500 items. Maraithon will keep the last successful context until the next check."
                    },
                    @channel_reply_timeout
 
@@ -453,7 +453,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
                    %{
                      reason: "unknown_event",
                      message:
-                       "The companion app sent a sync request this server does not support. Update the app, then sync again."
+                       "The companion app sent a source check this server does not support. Update the app, then check again."
                    },
                    @channel_reply_timeout
     end
