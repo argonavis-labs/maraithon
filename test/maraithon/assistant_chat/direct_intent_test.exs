@@ -5,7 +5,7 @@ defmodule Maraithon.AssistantChat.DirectIntentTest do
 
   test "classifies tiny social turns as fast chat replies" do
     assert {:ok,
-            %{type: :fast_chat_reply, kind: :greeting, reply: "I'm here. What needs attention?"}} =
+            %{type: :fast_chat_reply, kind: :greeting, reply: "Ready. What needs attention?"}} =
              DirectIntent.classify("Hey")
 
     assert {:ok, %{type: :fast_chat_reply, kind: :acknowledgement, reply: "Got it."}} =

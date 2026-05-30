@@ -284,7 +284,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
             [
               "Needs your call: #{scope_question(project.name, life_domain)}",
               scope_guess_sentence(project.name, life_domain, reasoning),
-              "Reply with `home` or `work` and I'll update the project and related work."
+              "Reply with `home` or `work` to update the project and related work."
             ]
             |> Enum.reject(&is_nil/1)
             |> Enum.join("\n\n"),
@@ -325,13 +325,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
 
   defp scope_guess_sentence(_project_name, nil, reasoning) do
     reason = safe_reason_sentence(reasoning) || "this affects how related work is grouped"
-    "Why I am asking: #{reason}."
+    "Why this needs a call: #{reason}."
   end
 
   defp scope_guess_sentence(project_name, life_domain, reasoning) do
     case safe_reason_sentence(reasoning) do
       nil ->
-        "Current read: #{project_name} looks like #{life_domain}, but I want your call before I group related work."
+        "Current read: #{project_name} looks like #{life_domain}. Your call controls how related work is grouped."
 
       text ->
         "Current read: #{project_name} looks like #{life_domain}. Evidence: #{text}."

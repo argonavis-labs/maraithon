@@ -79,7 +79,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user", "body" => "Hey"},
                  %{
                    "role" => "assistant",
-                   "body" => "I'm here. What needs attention?",
+                   "body" => "Ready. What needs attention?",
                    "run_id" => run_id,
                    "structured_data" => assistant_structured_data
                  }

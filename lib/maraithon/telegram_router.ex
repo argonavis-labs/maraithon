@@ -43,7 +43,7 @@ defmodule Maraithon.TelegramRouter do
         send_ephemeral_reply(
           chat_id,
           source_message_id,
-          "I’m catching up with the last few messages. Reply to the exact item you want me to act on, or wait a moment before sending more."
+          "Still catching up with the last few messages. Reply to the exact item to act on, or wait a moment before sending more."
         )
       else
         {:ok, conversation} =
@@ -400,7 +400,7 @@ defmodule Maraithon.TelegramRouter do
     reply =
       Map.get(interpretation, "assistant_reply") ||
         Map.get(interpretation, "clarifying_question") ||
-        "I’m not sure yet. Can you clarify what you want me to learn or do?"
+        "Not sure yet. Can you clarify what should be learned or done?"
 
     {:ok, reply, []}
   end

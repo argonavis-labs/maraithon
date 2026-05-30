@@ -16,8 +16,7 @@ defmodule Maraithon.TelegramInterpreter do
     "scope" => "thread_local",
     "needs_clarification" => false,
     "clarifying_question" => nil,
-    "assistant_reply" =>
-      "I’m not fully sure what you mean yet. Can you clarify what you want me to change or do?",
+    "assistant_reply" => "Not fully clear yet. Can you clarify what should change or happen?",
     "candidate_rules" => [],
     "candidate_action" => nil,
     "feedback_target" => %{"delivery_id" => nil, "insight_id" => nil},

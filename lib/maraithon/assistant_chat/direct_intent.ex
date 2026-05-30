@@ -22,7 +22,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   ]
 
   @fast_chat_replies %{
-    greeting: "I'm here. What needs attention?",
+    greeting: "Ready. What needs attention?",
     acknowledgement: "Got it.",
     thanks: "Anytime."
   }
