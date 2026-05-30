@@ -168,7 +168,20 @@ defmodule Maraithon.ActionCards do
 
     cond do
       blocking != [] ->
-        "Could not fully check #{source_gap_labels(blocking)} before sending this."
+        blocked_sources = source_gap_sources(blocking)
+
+        checked_without_blockers =
+          Enum.reject(checked, &(normalize_source(&1) in blocked_sources))
+
+        [
+          if(checked_without_blockers != [],
+            do: "Checked #{source_list(checked_without_blockers)}."
+          ),
+          source_gap_note(blocking, blocked_sources),
+          source_setup_action(blocked_sources)
+        ]
+        |> Enum.reject(&blank?/1)
+        |> Enum.join(" ")
 
       checked != [] ->
         "Checked #{source_list(checked)}."
@@ -1046,6 +1059,48 @@ defmodule Maraithon.ActionCards do
   end
 
   defp source_gap_label(_value), do: nil
+
+  defp source_gap_note(gaps, blocked_sources) do
+    other_gaps =
+      Enum.reject(gaps, fn gap ->
+        source_gap_source(gap) == "desktop"
+      end)
+
+    [
+      if(MapSet.member?(blocked_sources, "desktop"),
+        do: "Local context from the Mac companion was not checked."
+      ),
+      if(other_gaps != [],
+        do: "Could not fully check #{source_gap_labels(other_gaps)} before sending this."
+      )
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp source_gap_sources(gaps) do
+    gaps
+    |> Enum.map(&source_gap_source/1)
+    |> Enum.reject(&blank?/1)
+    |> MapSet.new()
+  end
+
+  defp source_gap_source(value) when is_binary(value) do
+    [source | _reason] = String.split(value, ":", parts: 2)
+
+    case safe_source_name(source) do
+      nil -> nil
+      safe_source -> normalize_source(safe_source)
+    end
+  end
+
+  defp source_gap_source(_value), do: nil
+
+  defp source_setup_action(blocked_sources) do
+    if MapSet.member?(blocked_sources, "desktop") do
+      "Open the Mac companion app to reconnect it."
+    end
+  end
 
   defp source_list(sources) do
     sources

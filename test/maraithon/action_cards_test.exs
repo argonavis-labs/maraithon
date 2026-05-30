@@ -124,6 +124,22 @@ defmodule Maraithon.ActionCardsTest do
     refute ActionCards.source_health_note(card) =~ "_"
   end
 
+  test "source health copy distinguishes checked inbox from missing Mac companion" do
+    card = %{
+      "source_health" => %{
+        "checked_sources" => ["gmail", "desktop"],
+        "blocking_gaps" => ["desktop: not connected"],
+        "setup_suggestion" =>
+          "Connect the Maraithon Desktop App to include iMessage, Apple Notes, files, reminders, and local context securely."
+      }
+    }
+
+    assert ActionCards.source_health_note(card) ==
+             "Checked Gmail. Local context from the Mac companion was not checked. Open the Mac companion app to reconnect it."
+
+    refute ActionCards.source_health_note(card) =~ "Could not fully check Desktop App"
+  end
+
   test "filters model and scoring metadata out of visible card copy", %{user_id: user_id} do
     todo = %Todo{
       id: Ecto.UUID.generate(),
