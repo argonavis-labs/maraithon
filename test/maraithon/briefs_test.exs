@@ -13,6 +13,7 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramConversations
   alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
 
   setup do
     original_assistant = Application.get_env(:maraithon, :telegram_assistant, [])
@@ -566,6 +567,61 @@ defmodule Maraithon.BriefsTest do
 
     refute get_in(Repo.get!(Brief, brief.id).metadata || %{}, ["todo_review", "status"]) ==
              "active"
+  end
+
+  test "brief open work list polishes legacy todo copy before display", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    legacy_todo =
+      Repo.insert!(%Todo{
+        user_id: user_id,
+        owner_user_id: user_id,
+        source: "gmail",
+        kind: "gmail_triage",
+        attention_mode: "act_now",
+        title: "User committed to follow-up with Finance; follow-up not yet sent.",
+        summary: "This thread still needs a reply from the user.",
+        next_action:
+          "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+        priority: 91,
+        status: "open",
+        source_item_id: "briefs-legacy-copy-thread",
+        dedupe_key: "briefs-legacy-copy",
+        metadata: %{
+          "subject" => "Corrected receipt",
+          "why_now" => "The user needs this before noon.",
+          "source_evidence" => "The user asked for the corrected receipt.",
+          "record" => %{"person" => "Finance", "commitment" => "Corrected receipt"}
+        }
+      })
+
+    {:ok, %Brief{} = brief} =
+      Briefs.record(user_id, agent.id, %{
+        "cadence" => "morning",
+        "title" => "Morning brief: legacy copy",
+        "summary" => "One item needs review.",
+        "body" => "Review the list.",
+        "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+        "dedupe_key" => "brief:morning:legacy-copy",
+        "metadata" => %{"linked_todo_ids" => [legacy_todo.id]}
+      })
+
+    :ok =
+      BriefTodoReview.handle_callback(%{
+        chat_id: 777_123,
+        callback_id: "cb-legacy-copy-list",
+        data: "brftd:#{brief.id}:list"
+      })
+
+    [message] = sent_messages()
+
+    assert message.text =~ "Follow up with Finance about Corrected receipt"
+    assert message.text =~ "Why now: You need this before noon."
+    assert message.text =~ "Evidence: You asked for the corrected receipt."
+    refute message.text =~ "User committed"
+    refute message.text =~ "the user"
+    refute message.text =~ "owner, ETA"
   end
 
   test "brief todo review recap keeps next actions on still-open work", %{

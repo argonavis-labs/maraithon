@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramResponder
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.Todo
 
   @callback_prefix "brftd"
@@ -769,6 +770,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp todo_review_line(todo, marker) do
+    todo = UserFacingCopy.polish_attrs(todo)
     title = todo_title(todo)
 
     [
@@ -782,7 +784,9 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp todo_title(todo) do
-    read_string(todo, "title", "Open work")
+    todo
+    |> read_string("title", "Open work")
+    |> UserFacingCopy.polish_text()
   end
 
   defp todo_list_next_move([todo | _todos]) do
@@ -804,6 +808,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp todo_list_focus(todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
     title = todo_title(todo)
     next_action = todo_next_action(todo)
 
@@ -821,7 +826,11 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp generic_list_action?(_value), do: false
 
   defp todo_next_action(todo) do
-    next_action = read_string(todo, "next_action")
+    next_action =
+      todo
+      |> read_string("next_action")
+      |> UserFacingCopy.polish_text()
+
     title = todo_title(todo)
 
     cond do
@@ -903,6 +912,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     value =
       value
       |> Maraithon.Redaction.redact_string()
+      |> UserFacingCopy.polish_text()
       |> String.trim()
 
     if value != "" and public_review_metadata_text?(value), do: value
