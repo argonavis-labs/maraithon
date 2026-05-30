@@ -36,12 +36,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Permission readiness"
       assert html =~ "Chief of Staff"
       assert html =~ "Focused setup"
+      assert html =~ "email:you@example.com"
       refute html =~ "Advanced JSON overrides"
       refute html =~ "scan limits"
       refute html =~ "Memory limit"
       refute html =~ "Input subscriptions"
       refute html =~ "Maraithon Agent Service"
       refute html =~ "OTP Agent Runtime"
+      refute html =~ "operator@example.com"
       refute html =~ "http_get"
     end
 
@@ -85,14 +87,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff"
-      assert html =~ "operators who want broader follow-through coverage"
+      assert html =~ "executives who want broader follow-through coverage"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
       assert html =~ "Resolve the highlighted blockers before launch."
-      refute html =~ "founders who want"
+      refute html =~ "operators who want"
     end
 
     test "shows blockers when AI Chief of Staff permissions are missing", %{conn: conn} do
@@ -106,14 +108,14 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Chief of Staff"
-      assert html =~ "operators who want one proactive operating layer"
+      assert html =~ "executives who want one proactive operating layer"
       assert html =~ "Google Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
-      refute html =~ "founders who want"
+      refute html =~ "operators who want"
     end
 
     test "shows blockers when github product planner permissions are missing", %{conn: conn} do

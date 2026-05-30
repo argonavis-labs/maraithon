@@ -835,7 +835,7 @@ defmodule MaraithonWeb.AgentsLive do
                               type="text"
                               name="launch[subscriptions]"
                               value={@launch["subscriptions"]}
-                              placeholder="github:owner/repo,email:operator@example.com"
+                              placeholder="github:owner/repo,email:you@example.com"
                             />
                           </.field>
 
@@ -2129,7 +2129,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp agent_job_summary(agent) do
     agent
     |> behavior_spec()
-    |> Map.get(:summary, "Runs the saved automation behavior for this operator.")
+    |> Map.get(:summary, "Runs this saved automation for you.")
   end
 
   defp agent_connector_requirements(agent) do
