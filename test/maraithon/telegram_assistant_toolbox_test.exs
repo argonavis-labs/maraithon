@@ -4,11 +4,13 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
   alias Maraithon.Agents
+  alias Maraithon.Companion.Devices, as: CompanionDevices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Insights
   alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
   alias Maraithon.Projects
+  alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.{PreparedAction, Toolbox}
   alias Maraithon.TelegramConversations
@@ -181,6 +183,73 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute result.summary =~ "complete inbox review"
     refute result.summary =~ "needs attention"
     refute result.next_action =~ "needs action"
+  end
+
+  test "get_open_work_summary caveats stale Mac companion context" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    user_id = "toolbox-stale-companion-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, %{device: device}} =
+      CompanionDevices.register(user_id, Ecto.UUID.generate(), device_name: "Executive Mac")
+
+    stale_seen_at = DateTime.add(DateTime.utc_now(), -49 * 60 * 60, :second)
+
+    device
+    |> Ecto.Changeset.change(last_seen_at: stale_seen_at)
+    |> Repo.update!()
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:empty-local@example.com", %{
+               access_token: "toolbox-local-token",
+               refresh_token: "toolbox-local-refresh",
+               metadata: %{"account_email" => "empty-local@example.com"}
+             })
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      ["Bearer toolbox-local-token"] = Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "maxResults=1"
+      assert conn.query_string =~ "labelIds=INBOX"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+    end)
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert get_in(result, [:source_health, :gmail, :status]) == "ok"
+    assert get_in(result, [:source_health, :local_context, :status]) == "stale"
+    assert get_in(result, [:source_health, :local_context, :paired_device_count]) == 1
+    assert get_in(result, [:source_health, :local_context, :active_device_count]) == 1
+
+    assert get_in(result, [:source_health, :local_context, :recommended_next_step]) =~
+             "Open the Mac companion app"
+
+    assert result.summary =~
+             "No open work is surfaced by the sources Maraithon could check right now."
+
+    assert result.summary =~ "Mac companion has not checked in recently"
+
+    assert result.summary =~
+             "local iMessage, Notes, reminders, files, and browser context may be incomplete"
+
+    assert result.next_action ==
+             "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+
+    refute result.summary =~ "companion_devices"
+    refute result.summary =~ "last_seen_at"
+    refute result.next_action =~ "source_health"
   end
 
   test "get_open_work_summary returns executive-ready summary when Gmail is missing" do

@@ -8,6 +8,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   alias Maraithon.Agents
   alias Maraithon.ActionLedger
   alias Maraithon.BriefingSchedules
+  alias Maraithon.Companion.Devices, as: CompanionDevices
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connectors.Gmail
   alias Maraithon.Connectors.Linear
@@ -36,6 +37,16 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   @immediate_agent_actions ~w(start stop restart)
   @gmail_insight_stale_threshold_hours 72
+  @local_context_stale_threshold_hours 24
+  @local_context_stat_labels [
+    messages_count: "iMessage",
+    notes_count: "Notes",
+    reminders_count: "reminders",
+    files_count: "files",
+    browser_visits_count: "browser",
+    calendar_events_count: "calendar",
+    voice_memos_count: "voice memos"
+  ]
   @source_health_issue_statuses ~w(stale reauth_required error unknown never_synced)
   @preview_label_max_chars 72
   @automation_behavior_labels %{
@@ -3612,9 +3623,84 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         recommended_next_step:
           gmail_recommended_next_step(gmail_status, insights_stale, freshest_visible_email_at),
         accounts: gmail_accounts
-      }
+      },
+      local_context: local_context_health(user_id)
     }
   end
+
+  defp local_context_health(user_id) do
+    devices = CompanionDevices.list_for_user(user_id)
+    active_devices = Enum.filter(devices, &is_nil(&1.revoked_at))
+    latest_seen_at = active_devices |> Enum.map(& &1.last_seen_at) |> most_recent_datetime()
+    enriched_devices = CompanionDevices.enrich_with_stats(active_devices)
+    status = local_context_status(devices, active_devices, latest_seen_at)
+
+    %{
+      status: status,
+      paired_device_count: length(devices),
+      active_device_count: length(active_devices),
+      latest_device_seen_at: datetime_to_iso8601(latest_seen_at),
+      sources_with_data: local_context_sources_with_data(enriched_devices),
+      item_count: local_context_item_count(enriched_devices),
+      recommended_next_step: local_context_recommended_next_step(status, length(devices))
+    }
+  end
+
+  defp local_context_status([], _active_devices, _latest_seen_at), do: "not_connected"
+  defp local_context_status(_devices, [], _latest_seen_at), do: "not_connected"
+  defp local_context_status(_devices, _active_devices, nil), do: "unknown"
+
+  defp local_context_status(_devices, _active_devices, %DateTime{} = latest_seen_at) do
+    if DateTime.diff(DateTime.utc_now(), latest_seen_at, :hour) >
+         @local_context_stale_threshold_hours do
+      "stale"
+    else
+      "ok"
+    end
+  end
+
+  defp local_context_sources_with_data(enriched_devices) do
+    enriched_devices
+    |> Enum.flat_map(fn {_device, stats} ->
+      @local_context_stat_labels
+      |> Enum.filter(fn {stat_key, _label} -> local_context_stat_count(stats, stat_key) > 0 end)
+      |> Enum.map(fn {_stat_key, label} -> label end)
+    end)
+    |> Enum.uniq()
+  end
+
+  defp local_context_item_count(enriched_devices) do
+    Enum.reduce(enriched_devices, 0, fn {_device, stats}, total ->
+      Enum.reduce(@local_context_stat_labels, total, fn {stat_key, _label}, acc ->
+        acc + local_context_stat_count(stats, stat_key)
+      end)
+    end)
+  end
+
+  defp local_context_stat_count(stats, stat_key) when is_map(stats) do
+    case Map.get(stats, stat_key) || Map.get(stats, to_string(stat_key)) do
+      count when is_integer(count) and count > 0 -> count
+      _other -> 0
+    end
+  end
+
+  defp local_context_stat_count(_stats, _stat_key), do: 0
+
+  defp local_context_recommended_next_step("stale", _paired_device_count) do
+    "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+  end
+
+  defp local_context_recommended_next_step("unknown", paired_device_count)
+       when paired_device_count > 0 do
+    "Open the Mac companion app so Maraithon can verify local context freshness."
+  end
+
+  defp local_context_recommended_next_step("not_connected", paired_device_count)
+       when paired_device_count > 0 do
+    "Open or re-pair the Mac companion app before relying on local context."
+  end
+
+  defp local_context_recommended_next_step(_status, _paired_device_count), do: nil
 
   defp gmail_account_health(user_id, account) do
     provider = account.provider
@@ -3706,11 +3792,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp gmail_recommended_next_step("ok", _insights_stale, _freshest_visible_email_at), do: nil
 
   defp open_work_summary(insights, todos, source_health) do
-    count_line = open_work_count_line(length(insights), length(todos))
+    count_line = open_work_count_line(length(insights), length(todos), source_health)
     focus_line = open_work_focus_line(insights, todos, source_health)
-    source_line = gmail_user_gap(source_health)
 
-    [count_line, focus_line, source_line]
+    source_lines = [
+      gmail_user_gap(source_health),
+      local_context_user_gap(source_health)
+    ]
+
+    [count_line, focus_line | source_lines]
     |> Enum.reject(&blank_string?/1)
     |> Enum.join(" ")
   end
@@ -3729,10 +3819,24 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       gmail_error?(source_health) ->
         "Reconnect Gmail before relying on this as a complete inbox review."
 
+      local_context_issue?(source_health) ->
+        local_context_next_action(source_health)
+
       true ->
         "No immediate action is surfaced by connected sources right now."
     end
   end
+
+  defp open_work_count_line(0, 0, source_health) do
+    if source_coverage_gap?(source_health) do
+      "No open work is surfaced by the sources Maraithon could check right now."
+    else
+      open_work_count_line(0, 0)
+    end
+  end
+
+  defp open_work_count_line(insight_count, todo_count, _source_health),
+    do: open_work_count_line(insight_count, todo_count)
 
   defp open_work_count_line(0, 0),
     do: "No open work is surfaced by connected sources right now."
@@ -3841,6 +3945,59 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       true ->
         nil
     end
+  end
+
+  defp local_context_user_gap(source_health) do
+    cond do
+      local_context_status?(source_health, "stale") ->
+        "Mac companion has not checked in recently, so local iMessage, Notes, reminders, files, and browser context may be incomplete."
+
+      local_context_status?(source_health, "unknown") and
+          local_context_paired_device_count(source_health) > 0 ->
+        "Mac companion freshness is unknown, so local context may be incomplete."
+
+      local_context_status?(source_health, "not_connected") and
+          local_context_paired_device_count(source_health) > 0 ->
+        "Mac companion is not connected, so local iMessage, Notes, reminders, files, and browser context may be incomplete."
+
+      true ->
+        nil
+    end
+  end
+
+  defp source_coverage_gap?(source_health) do
+    gmail_stale?(source_health) or gmail_not_connected?(source_health) or
+      gmail_error?(source_health) or
+      local_context_issue?(source_health)
+  end
+
+  defp local_context_issue?(source_health) do
+    local_context_paired_device_count(source_health) > 0 and
+      local_context_field(source_health, :status) in ["stale", "unknown", "not_connected"]
+  end
+
+  defp local_context_next_action(source_health) do
+    local_context_field(source_health, :recommended_next_step) ||
+      "Open the Mac companion app before relying on this as a complete local-context review."
+  end
+
+  defp local_context_status?(source_health, status),
+    do: local_context_field(source_health, :status) == status
+
+  defp local_context_paired_device_count(source_health) do
+    case local_context_field(source_health, :paired_device_count) do
+      count when is_integer(count) -> count
+      _other -> 0
+    end
+  end
+
+  defp local_context_field(source_health, field) do
+    local_context =
+      Map.get(source_health || %{}, :local_context) ||
+        Map.get(source_health || %{}, "local_context") ||
+        %{}
+
+    Map.get(local_context, field) || Map.get(local_context, to_string(field))
   end
 
   defp gmail_stale?(source_health),
