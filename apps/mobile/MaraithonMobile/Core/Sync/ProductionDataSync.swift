@@ -273,11 +273,7 @@ enum ProductionDataSync {
     }
 
     private static func cleanedText(_ value: String?) -> String? {
-        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            return nil
-        }
-
-        return text
+        ChiefOfStaffCopy.clean(value)
     }
 
     private static func sameText(_ lhs: String, _ rhs: String?) -> Bool {

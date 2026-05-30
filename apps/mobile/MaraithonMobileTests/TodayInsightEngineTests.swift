@@ -185,6 +185,32 @@ struct TodayInsightEngineTests {
     }
 
     @Test
+    func focusQueuePolishesSyncedChiefOfStaffCopy() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let todo = TodoItem(
+            title: "Finance reply",
+            nextAction: "User should send the ETA.",
+            priority: .high,
+            decisionPrompt: "The user needs to approve the finance reply.",
+            whyNow: "This needs operator attention before noon.",
+            sourceContext: "source_context: Checked Gmail\ntelegram_fit_score: 0.94"
+        )
+
+        let queue = TodayInsightEngine.focusQueue(
+            todos: [todo],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(queue.first?.subtitle == "You need to approve the finance reply.")
+        #expect(queue.first?.detail == "Why now: This needs your attention before noon. Checked Gmail")
+        #expect(queue.first?.detail?.localizedCaseInsensitiveContains("telegram_fit_score") == false)
+    }
+
+    @Test
     func focusQueueExplainsRelationshipCareRecency() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

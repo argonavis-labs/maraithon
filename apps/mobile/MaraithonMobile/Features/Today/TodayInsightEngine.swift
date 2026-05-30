@@ -254,7 +254,7 @@ enum TodayInsightEngine {
             return decisionPrompt
         }
 
-        guard let nextAction = todo.displayNextAction else {
+        guard let nextAction = cleanedText(todo.displayNextAction) else {
             return fallback
         }
 
@@ -320,12 +320,7 @@ enum TodayInsightEngine {
     }
 
     private static func cleanedText(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else {
-            return nil
-        }
-
-        return value
+        ChiefOfStaffCopy.clean(value)
     }
 }
 

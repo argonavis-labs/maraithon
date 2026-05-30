@@ -87,6 +87,27 @@ struct TodoRowCopyTests {
     }
 
     @Test
+    func decisionContextPolishesChiefOfStaffCopyBeforeDisplay() {
+        let todo = TodoItem(
+            title: "Finance reply",
+            notes: "The user needs to approve the finance reply.",
+            nextAction: "User should send the ETA.",
+            decisionPrompt: "The user needs to approve the finance reply.",
+            whyNow: "This needs operator attention before noon.",
+            sourceContext: "source_context: Checked Gmail\nconfidence_score: 0.94",
+            nextBestAction: "User should send the ETA.",
+            evidenceExcerpt: "The operator's last message asked for timing."
+        )
+
+        let context = TodoDecisionContext(todo: todo)
+
+        #expect(context.rowContext == "You need to approve the finance reply.")
+        #expect(context.rowReason == "Why now: This needs your attention before noon. Checked Gmail")
+        #expect(context.rowMove == "You should send the ETA.")
+        #expect(context.evidence == "Your last message asked for timing.")
+    }
+
+    @Test
     func decisionContextFallsBackToCleanNotesAndNextActionWithoutActionCard() {
         let todo = TodoItem(
             title: "Review customer plan",

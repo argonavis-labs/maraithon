@@ -108,7 +108,7 @@ struct TodoDecisionContext: Equatable {
     init(todo: TodoItem) {
         let title = Self.cleanedText(todo.title)
         let notes = Self.cleanedText(todo.notes)
-        let nextAction = todo.displayNextAction
+        let nextAction = Self.cleanedText(todo.displayNextAction)
         let decisionPrompt = Self.uniqueText(
             todo.decisionPrompt,
             excluding: [title, notes, nextAction]
@@ -138,7 +138,7 @@ struct TodoDecisionContext: Equatable {
             .compactMap { $0 }
             .joined(separator: " ")
 
-        return Self.cleanedText(reason)
+        return reason.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
     }
 
     var hasChiefOfStaffContext: Bool {
@@ -159,11 +159,14 @@ struct TodoDecisionContext: Equatable {
     }
 
     private static func cleanedText(_ value: String?) -> String? {
-        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
-            return nil
-        }
+        ChiefOfStaffCopy.clean(value)
+    }
+}
 
-        return text
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

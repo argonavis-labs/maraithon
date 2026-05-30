@@ -230,6 +230,27 @@ struct ProductionDataSyncTests {
         #expect(todo.evidenceExcerpt == "Can you send the next update?")
     }
 
+    @Test
+    func remoteTodoDecisionCardCopyIsSanitizedBeforePersistence() {
+        let remote = remoteTodo(
+            actionCard: MobileAPIClient.RemoteActionCard(
+                decisionPrompt: "The user needs to approve the finance reply.",
+                whyNow: "This needs operator attention before noon.",
+                sourceContext: "source_context: Checked Gmail\npriority_score: 97",
+                nextBestAction: "User should send the ETA.",
+                evidenceExcerpt: "The operator's last message asked for timing."
+            )
+        )
+
+        let todo = ProductionDataSync.todo(from: remote, id: UUID())
+
+        #expect(todo.decisionPrompt == "You need to approve the finance reply.")
+        #expect(todo.whyNow == "This needs your attention before noon.")
+        #expect(todo.sourceContext == "Checked Gmail")
+        #expect(todo.nextBestAction == "You should send the ETA.")
+        #expect(todo.evidenceExcerpt == "Your last message asked for timing.")
+    }
+
     private func todoPayloadPriority(_ priority: TodoPriority) -> Int? {
         ProductionDataSync.todoPayload(
             title: "Send investor update",
