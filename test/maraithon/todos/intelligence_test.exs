@@ -147,6 +147,7 @@ defmodule Maraithon.Todos.IntelligenceTest do
       assert prompt =~ "Work item title, summary, next_action, notes, and action_plan"
       assert prompt =~ "Use product language for user-facing fields"
       assert prompt =~ "do not write `todo` or `CRM`"
+      assert prompt =~ "Family relationship policy is an admission rule"
 
       refute prompt =~ "Maraithon's built-in todo intelligence layer"
       refute prompt =~ "Include CRM enrichment whenever source evidence identifies people"
@@ -267,6 +268,165 @@ defmodule Maraithon.Todos.IntelligenceTest do
     assert result.todos == []
     assert result.skipped_count == 1
     assert hd(result.skipped).reasoning =~ memory.id
+  end
+
+  test "ingest_many blocks generic family check-ins when policy is logistics-only" do
+    user_id = unique_user_email("todo-intelligence-family-block")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "proactive",
+        "title" => "Check in with Jack Fenwick",
+        "summary" => "No recent contact with Jack Fenwick.",
+        "next_action" => "Reach out to Jack.",
+        "dedupe_key" => "family:jack-check-in",
+        "metadata" => %{
+          "relationship_domain" => "family",
+          "family_member" => true,
+          "family_role" => "child",
+          "todo_policy" => "family_logistics_only",
+          "sensitivity" => "child_family"
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one family check-in.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "family:jack-check-in",
+                 "reasoning" => "Model thought a check-in was useful.",
+                 "todo" => hd(candidates)
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert result.todos == []
+    assert result.skipped_count == 1
+    assert [%{action: "skip", candidate_index: 0, reasoning: reasoning}] = result.skipped
+    assert reasoning =~ "family logistics-only policy"
+    assert [] = Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many allows source-backed family logistics with logistics-only policy" do
+    user_id = unique_user_email("todo-intelligence-family-logistics")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "gmail",
+        "kind" => "gmail_triage",
+        "title" => "Return Emma permission form",
+        "summary" => "A school email says Emma's permission form is due Friday.",
+        "next_action" => "Send the signed permission form back to school.",
+        "dedupe_key" => "gmail:thread:emma-permission",
+        "metadata" => %{
+          "relationship_domain" => "family",
+          "family_member" => true,
+          "family_role" => "child",
+          "todo_policy" => "family_logistics_only",
+          "sensitivity" => "child_family"
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one parent logistics work item.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "gmail:thread:emma-permission",
+                 "reasoning" => "Permission form is source-backed family logistics.",
+                 "todo" => hd(candidates)
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert [%{title: "Return Emma permission form"}] = result.todos
+    assert result.skipped_count == 0
+    assert [%{title: "Return Emma permission form"}] = Todos.list_for_user(user_id, limit: 10)
+  end
+
+  test "ingest_many allows explicitly opted-in family relationship rhythms" do
+    user_id = unique_user_email("todo-intelligence-family-opt-in")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    candidates = [
+      %{
+        "source" => "telegram",
+        "title" => "Plan Sunday one-on-one time with Jack Fenwick",
+        "summary" => "You asked to be reminded to plan one-on-one time with Jack on Sunday.",
+        "next_action" => "Choose a Sunday plan and block time for it.",
+        "dedupe_key" => "family:jack-sunday-rhythm",
+        "metadata" => %{
+          "relationship_domain" => "family",
+          "family_member" => true,
+          "family_role" => "child",
+          "todo_policy" => "opt_in_rhythm",
+          "user_requested" => true,
+          "sensitivity" => "child_family"
+        }
+      }
+    ]
+
+    llm_complete = fn _prompt ->
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one opted-in family rhythm.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "family:jack-sunday-rhythm",
+                 "reasoning" => "The user explicitly opted into this rhythm.",
+                 "todo" => hd(candidates)
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             Todos.ingest_many(user_id, candidates,
+               llm_complete: llm_complete,
+               source: "test"
+             )
+
+    assert [%{title: "Plan Sunday one-on-one time with Jack Fenwick"}] = result.todos
+    assert result.skipped_count == 0
+
+    assert [%{title: "Plan Sunday one-on-one time with Jack Fenwick"}] =
+             Todos.list_for_user(user_id, limit: 10)
   end
 
   defp unique_user_email(prefix) do

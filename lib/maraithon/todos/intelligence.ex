@@ -18,6 +18,50 @@ defmodule Maraithon.Todos.Intelligence do
   @required_todo_fields ~w(source title summary next_action dedupe_key)
   @default_max_tokens 64_000
   @default_timeout_ms 1_200_000
+  @family_guard_policies ~w(family_logistics_only quiet_relationship_support)
+  @family_opt_in_policies ~w(opt_in_rhythm)
+  @family_relationship_phrases [
+    "check in with",
+    "catch up with",
+    "reach out to",
+    "touch base",
+    "reconnect with",
+    "send a note to",
+    "no recent contact",
+    "not heard from",
+    "haven't heard from",
+    "has been quiet",
+    "went quiet",
+    "gone quiet",
+    "relationship drift",
+    "relationship maintenance"
+  ]
+  @family_logistics_terms ~w(
+    appointment book calendar cancel carpool deadline dentist doctor dropoff due flight form
+    medication medicine pack paperwork pay permission pickup practice registration reschedule
+    return rsvp sign submit teacher travel tuition worksheet
+  )
+  @family_logistics_phrases [
+    "drop off",
+    "pick up",
+    "permission form",
+    "school form",
+    "parent teacher",
+    "parent-teacher",
+    "proxy pickup",
+    "pickup change",
+    "direct ask",
+    "asked you",
+    "can you",
+    "could you",
+    "please"
+  ]
+  @family_user_requested_phrases [
+    "remind me",
+    "i want to",
+    "help me remember",
+    "set a reminder"
+  ]
 
   def sentinel, do: @sentinel
 
@@ -113,10 +157,18 @@ defmodule Maraithon.Todos.Intelligence do
        - Use source bodies and metadata when available. Do not infer finance, tax,
          urgency, or relationship context from an ambiguous subject token alone.
        - For school, classroom, child, camp, or family logistics, identify the
-         child/person from People or memory when possible and write the next_action
-         as the concrete thing the user needs to do.
+       child/person from People or memory when possible and write the next_action
+       as the concrete thing the user needs to do.
+       - Family relationship policy is an admission rule, not a ranking signal.
+       If metadata says `todo_policy: "family_logistics_only"`, create or update
+       only source-backed logistics, deadlines, direct asks, forms, appointments,
+       pickup/dropoff, school/camp actions, travel, or user-requested reminders.
+       If metadata says `todo_policy: "quiet_relationship_support"`, do not
+       create standalone check-in/reach-out work items. Only an explicit
+       `opt_in_rhythm` policy or user-requested reminder should create family
+       relationship-rhythm work.
        - Work item title, summary, next_action, notes, and action_plan are user-facing
-         in Telegram and should read like the operator's human chief of staff wrote them.
+       in Telegram and should read like the operator's human chief of staff wrote them.
          Use `you`, never `the user` or a hardcoded person name. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
@@ -392,6 +444,12 @@ defmodule Maraithon.Todos.Intelligence do
     candidate = if is_integer(candidate_index), do: Enum.at(candidates, candidate_index)
     reasoning = read_string(decision, "reasoning", nil)
     existing_todo_id = read_string(decision, "existing_todo_id", nil)
+    proposed_todo_attrs = proposed_todo_attrs(decision)
+
+    family_policy_skip_reason =
+      if is_map(candidate) and is_map(proposed_todo_attrs) do
+        family_policy_skip_reason(candidate, proposed_todo_attrs)
+      end
 
     cond do
       not is_integer(candidate_index) or is_nil(candidate) ->
@@ -407,6 +465,16 @@ defmodule Maraithon.Todos.Intelligence do
            candidate_index: candidate_index,
            existing_todo_id: existing_todo_id,
            reasoning: reasoning,
+           todo_attrs: nil
+         }}
+
+      is_binary(family_policy_skip_reason) ->
+        {:ok,
+         %{
+           action: "skip",
+           candidate_index: candidate_index,
+           existing_todo_id: nil,
+           reasoning: family_policy_skip_reason,
            todo_attrs: nil
          }}
 
@@ -427,6 +495,185 @@ defmodule Maraithon.Todos.Intelligence do
   defp normalize_decision(_decision, _candidates, _existing_by_id, _summary, _opts) do
     {:error, :todo_intelligence_invalid_decision}
   end
+
+  defp proposed_todo_attrs(decision) do
+    decision
+    |> fetch_attr("todo")
+    |> case do
+      attrs when is_map(attrs) -> stringify_top_level_keys(attrs)
+      _other -> %{}
+    end
+  end
+
+  defp family_policy_skip_reason(candidate, proposed_todo_attrs) do
+    maps = nested_maps([candidate, proposed_todo_attrs])
+    text = text_for_family_policy(candidate, proposed_todo_attrs)
+    policy = family_todo_policy(maps)
+
+    cond do
+      policy in @family_opt_in_policies ->
+        nil
+
+      policy not in @family_guard_policies ->
+        nil
+
+      not family_context?(maps) ->
+        nil
+
+      user_requested_family_rhythm?(maps, text) ->
+        nil
+
+      family_logistics_evidence?(maps, text) ->
+        nil
+
+      generic_family_relationship_work?(text) ->
+        family_policy_reason(policy)
+
+      true ->
+        nil
+    end
+  end
+
+  defp family_policy_reason("family_logistics_only") do
+    "Skipped by family logistics-only policy: this looks like relationship maintenance, not source-backed family logistics or an explicit reminder."
+  end
+
+  defp family_policy_reason("quiet_relationship_support") do
+    "Skipped by quiet family support policy: standalone check-in work items require an explicit opt-in rhythm or reminder."
+  end
+
+  defp family_policy_reason(_policy), do: "Skipped by family relationship policy."
+
+  defp family_todo_policy(maps) do
+    Enum.find_value(maps, fn map ->
+      map
+      |> read_string("todo_policy", nil)
+      |> normalize_family_policy()
+    end)
+  end
+
+  defp normalize_family_policy(policy) when is_binary(policy) do
+    policy =
+      policy
+      |> String.downcase()
+      |> String.replace("-", "_")
+      |> String.trim()
+
+    if policy in @family_guard_policies or policy in @family_opt_in_policies do
+      policy
+    end
+  end
+
+  defp normalize_family_policy(_policy), do: nil
+
+  defp family_context?(maps) do
+    Enum.any?(maps, fn map ->
+      read_string(map, "relationship_domain", nil) == "family" or
+        read_string(map, "family_role", nil) not in [nil, ""] or
+        read_string(map, "sensitivity", nil) in ["child_family", "family"] or
+        truthy?(fetch_attr(map, "family_member")) or
+        truthy?(fetch_attr(map, "dependent_context"))
+    end)
+  end
+
+  defp user_requested_family_rhythm?(maps, text) do
+    Enum.any?(maps, fn map ->
+      truthy?(fetch_attr(map, "user_requested")) or
+        truthy?(fetch_attr(map, "explicit_reminder")) or
+        truthy?(fetch_attr(map, "opt_in_rhythm"))
+    end) or contains_any_phrase?(text, @family_user_requested_phrases)
+  end
+
+  defp family_logistics_evidence?(maps, text) do
+    Enum.any?(maps, fn map ->
+      truthy?(fetch_attr(map, "direct_ask")) or
+        truthy?(fetch_attr(map, "family_logistics"))
+    end) or
+      contains_any_phrase?(text, @family_logistics_phrases) or
+      contains_any_word?(text, @family_logistics_terms)
+  end
+
+  defp generic_family_relationship_work?(text) do
+    contains_any_phrase?(text, @family_relationship_phrases)
+  end
+
+  defp text_for_family_policy(candidate, proposed_todo_attrs) do
+    [candidate, proposed_todo_attrs]
+    |> Enum.flat_map(&collect_text/1)
+    |> Enum.join(" ")
+    |> String.downcase()
+  end
+
+  defp collect_text(%_struct{}), do: []
+
+  defp collect_text(value) when is_map(value) do
+    value
+    |> stringify_top_level_keys()
+    |> Enum.flat_map(fn
+      {key, nested} when key in ["title", "summary", "next_action", "notes", "action_plan"] ->
+        collect_text(nested)
+
+      {key, nested}
+      when key in [
+             "metadata",
+             "record",
+             "person_context",
+             "crm_people",
+             "people",
+             "relationship_memories"
+           ] ->
+        collect_text(nested)
+
+      _other ->
+        []
+    end)
+  end
+
+  defp collect_text(value) when is_list(value), do: Enum.flat_map(value, &collect_text/1)
+
+  defp collect_text(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: [], else: [value]
+  end
+
+  defp collect_text(_value), do: []
+
+  defp nested_maps(value) when is_list(value), do: Enum.flat_map(value, &nested_maps/1)
+
+  defp nested_maps(%_struct{}), do: []
+
+  defp nested_maps(value) when is_map(value) do
+    map = stringify_top_level_keys(value)
+
+    [map | map |> Map.values() |> Enum.flat_map(&nested_maps/1)]
+  end
+
+  defp nested_maps(_value), do: []
+
+  defp contains_any_phrase?(text, phrases) when is_binary(text) do
+    Enum.any?(phrases, &String.contains?(text, &1))
+  end
+
+  defp contains_any_phrase?(_text, _phrases), do: false
+
+  defp contains_any_word?(text, words) when is_binary(text) do
+    Enum.any?(words, fn word ->
+      Regex.match?(~r/(^|[^a-z0-9_])#{Regex.escape(word)}($|[^a-z0-9_])/, text)
+    end)
+  end
+
+  defp contains_any_word?(_text, _words), do: false
+
+  defp truthy?(value) when value in [true, 1], do: true
+
+  defp truthy?(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> then(&(&1 in ["true", "yes", "1"]))
+  end
+
+  defp truthy?(_value), do: false
 
   defp normalize_persist_decision(
          decision,
