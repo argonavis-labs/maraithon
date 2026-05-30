@@ -12,7 +12,11 @@ struct ChatResponderTests {
         )
 
         #expect(response.contains("4 open work items"))
+        #expect(response.contains("Next move:"))
+        #expect(response.localizedCaseInsensitiveContains("owner"))
+        #expect(response.localizedCaseInsensitiveContains("due date"))
         #expect(!response.localizedCaseInsensitiveContains("todo"))
+        #expect(!response.localizedCaseInsensitiveContains("I would"))
     }
 
     @Test
@@ -24,5 +28,37 @@ struct ChatResponderTests {
         )
 
         #expect(response.contains("5 people") || response.contains("relationship"))
+        #expect(response.contains("Next move:"))
+        #expect(response.localizedCaseInsensitiveContains("last-contact evidence"))
+        #expect(!response.localizedCaseInsensitiveContains("I can"))
+    }
+
+    @Test
+    func emptyMessageAsksForOperationalInputs() {
+        let response = ChatResponder.response(
+            to: "   ",
+            openTodoCount: 2,
+            contactCount: 3
+        )
+
+        #expect(response.localizedCaseInsensitiveContains("thread"))
+        #expect(response.localizedCaseInsensitiveContains("person"))
+        #expect(response.localizedCaseInsensitiveContains("desired outcome"))
+        #expect(!response.localizedCaseInsensitiveContains("I can"))
+    }
+
+    @Test
+    func defaultResponseKeepsTheDecisionFrame() {
+        let response = ChatResponder.response(
+            to: "Mark mentioned the launch delay",
+            openTodoCount: 2,
+            contactCount: 3
+        )
+
+        #expect(response.localizedCaseInsensitiveContains("work item"))
+        #expect(response.localizedCaseInsensitiveContains("relationship note"))
+        #expect(response.localizedCaseInsensitiveContains("draft"))
+        #expect(response.localizedCaseInsensitiveContains("owner"))
+        #expect(response.localizedCaseInsensitiveContains("timing"))
     }
 }
