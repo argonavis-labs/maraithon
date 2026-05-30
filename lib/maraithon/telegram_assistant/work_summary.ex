@@ -1271,8 +1271,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "list_connected_accounts" -> "Checking connected accounts"
       "list_todos" -> "Checking open work"
       "get_open_work_summary" -> "Reviewing open work"
-      "get_open_loops" -> "Reviewing open loops"
-      "inspect_open_insight" -> "Inspecting the linked item"
+      "get_open_loops" -> "Reviewing follow-through"
+      "inspect_open_insight" -> "Checking the selected item"
       "explain_action_ledger" -> "Reviewing action history"
       "update_briefing_schedule" -> "Updating the briefing schedule"
       "list_scheduled_tasks" -> "Reviewing scheduled follow-ups"
@@ -1295,7 +1295,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "crm_context" -> "Checking relationship context"
       "relationship_context" -> "Checking relationship context"
       "review_connected_context" -> "Checking connected sources"
-      "learn_relationship_context" -> "Learning relationship context"
+      "learn_relationship_context" -> "Updating relationship notes"
       "calendar_list_events" -> "Checking calendar"
       "calendar_events_for_person" -> "Checking calendar"
       "calendar_events_around" -> "Checking calendar"
@@ -1355,7 +1355,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "browser_history_search" -> "Checking browser history"
       "browser_history_get" -> "Checking browser history"
       "recall_anywhere" -> "Checking local sources"
-      _other -> "Doing supporting work"
+      _other -> "Working"
     end
   end
 

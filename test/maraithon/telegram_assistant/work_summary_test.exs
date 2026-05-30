@@ -572,6 +572,46 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     assert WorkSummary.for_run(run)["headline"] == "Checking relationship context"
   end
 
+  test "running tool headlines avoid internal workflow language" do
+    headline_for = fn tool ->
+      run = %Run{
+        status: "running",
+        model_name: "gpt-test",
+        steps: [
+          %Step{
+            sequence: 1,
+            step_type: "tool_call",
+            status: "running",
+            request_payload: %{"tool" => tool}
+          }
+        ]
+      }
+
+      WorkSummary.for_run(run)["headline"]
+    end
+
+    headlines = [
+      headline_for.("get_open_loops"),
+      headline_for.("inspect_open_insight"),
+      headline_for.("learn_relationship_context"),
+      headline_for.("llm_trace_debug")
+    ]
+
+    assert headlines == [
+             "Reviewing follow-through",
+             "Checking the selected item",
+             "Updating relationship notes",
+             "Working"
+           ]
+
+    visible_text = Enum.join(headlines, " ")
+    refute visible_text =~ "open loops"
+    refute visible_text =~ "linked item"
+    refute visible_text =~ "Learning relationship"
+    refute visible_text =~ "supporting work"
+    refute visible_text =~ "llm_trace_debug"
+  end
+
   test "direct answer steps avoid model implementation jargon" do
     run = %Run{
       status: "completed",
