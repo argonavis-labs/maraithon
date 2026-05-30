@@ -307,9 +307,57 @@ struct TodayInsightEngineTests {
         let brief = TodayInsightEngine.brief(todos: [completed, open], contacts: [])
 
         #expect(brief.title == "Triage open work")
-        #expect(brief.subtitle == "1 open work item needs a date, next action, or close decision.")
+        #expect(brief.subtitle == "Send partner recap needs a date, next action, or close decision.")
         #expect(brief.actionTitle == "Review open work")
         #expect(brief.destination == .todos(.open))
+    }
+
+    @Test
+    func briefNamesTheHighestSignalWorkItem() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let investorReply = TodoItem(
+            title: "Investor reply",
+            nextAction: "Send the revised terms before the board packet closes",
+            priority: .critical,
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60)
+        )
+        let vendorRenewal = TodoItem(
+            title: "Vendor renewal",
+            priority: .medium,
+            dueDate: now.addingTimeInterval(-5 * 24 * 60 * 60)
+        )
+
+        let brief = TodayInsightEngine.brief(
+            todos: [vendorRenewal, investorReply],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(brief.subtitle == "2 past-due work items are still open. Start with Investor reply.")
+    }
+
+    @Test
+    func briefUsesConcreteNextMoveForSingleDueItem() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = TodoItem(
+            title: "Customer support plan",
+            nextAction: "Reply with the owner and next review date",
+            dueDate: now.addingTimeInterval(60)
+        )
+
+        let brief = TodayInsightEngine.brief(
+            todos: [today],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(brief.subtitle == "Customer support plan is due today. Reply with the owner and next review date.")
     }
 
     @Test
@@ -358,7 +406,7 @@ struct TodayInsightEngineTests {
         #expect(metrics.atRiskContacts == peopleFilter.count)
         #expect(brief.destination == .people(.atRisk))
         #expect(brief.title == "Relationship follow-ups")
-        #expect(brief.subtitle == "1 person needs a follow-up or status update.")
+        #expect(brief.subtitle == "Ada Chen at Northstar needs a follow-up or status update.")
         #expect(brief.actionTitle == "Review people")
     }
 
@@ -375,16 +423,16 @@ struct TodayInsightEngineTests {
             calendar: calendar
         )
         #expect(lateBrief.title == "Resolve past-due work")
-        #expect(lateBrief.subtitle == "1 past-due work item is still open. Handle, move, or dismiss it.")
+        #expect(lateBrief.subtitle == "Overdue is past due. Handle, move, or dismiss it.")
         #expect(lateBrief.actionTitle == "Review past-due work")
 
         let todayBrief = TodayInsightEngine.brief(
-            todos: [TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))],
+            todos: [TodoItem(title: "Board packet", dueDate: now.addingTimeInterval(60))],
             contacts: [],
             now: now,
             calendar: calendar
         )
-        #expect(todayBrief.subtitle == "1 work item is due today.")
+        #expect(todayBrief.subtitle == "Board packet is due today. Move it before tomorrow or reschedule it.")
         #expect(todayBrief.title == "Handle today's commitments")
         #expect(todayBrief.actionTitle == "Review today's work")
     }

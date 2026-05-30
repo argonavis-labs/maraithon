@@ -64,11 +64,23 @@ enum TodayInsightEngine {
         calendar: Calendar = .current
     ) -> TodayBrief {
         let metrics = metrics(todos: todos, contacts: contacts, now: now, calendar: calendar)
+        let overdueTodos = TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar)
+        let dueTodayTodos = TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar)
+        let atRiskContacts = CRMFiltering.filter(
+            contacts,
+            statusFilter: .atRisk,
+            now: now,
+            calendar: calendar
+        )
+        let openTodos = TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar)
 
         if metrics.overdueTodos > 0 {
             return TodayBrief(
                 title: "Resolve past-due work",
-                subtitle: "\(metrics.overdueTodos) past-due \(plural("work item", metrics.overdueTodos)) \(isVerb(metrics.overdueTodos)) still open. Handle, move, or dismiss \(objectPronoun(metrics.overdueTodos)).",
+                subtitle: overdueBriefSubtitle(
+                    count: metrics.overdueTodos,
+                    lead: topTodo(overdueTodos)
+                ),
                 actionTitle: "Review past-due work",
                 systemImage: "clock.badge.exclamationmark",
                 destination: .todos(.overdue)
@@ -78,7 +90,10 @@ enum TodayInsightEngine {
         if metrics.dueTodayTodos > 0 {
             return TodayBrief(
                 title: "Handle today's commitments",
-                subtitle: "\(metrics.dueTodayTodos) \(plural("work item", metrics.dueTodayTodos)) \(isVerb(metrics.dueTodayTodos)) due today.",
+                subtitle: dueTodayBriefSubtitle(
+                    count: metrics.dueTodayTodos,
+                    lead: topTodo(dueTodayTodos)
+                ),
                 actionTitle: "Review today's work",
                 systemImage: "calendar.badge.clock",
                 destination: .todos(.today)
@@ -88,7 +103,10 @@ enum TodayInsightEngine {
         if metrics.atRiskContacts > 0 {
             return TodayBrief(
                 title: "Relationship follow-ups",
-                subtitle: "\(metrics.atRiskContacts) \(plural("person", metrics.atRiskContacts, plural: "people")) \(needsVerb(metrics.atRiskContacts)) a follow-up or status update.",
+                subtitle: relationshipBriefSubtitle(
+                    count: metrics.atRiskContacts,
+                    lead: topRelationship(atRiskContacts)
+                ),
                 actionTitle: "Review people",
                 systemImage: "person.crop.circle.badge.exclamationmark",
                 destination: .people(.atRisk)
@@ -98,7 +116,10 @@ enum TodayInsightEngine {
         if metrics.openTodos > 0 {
             return TodayBrief(
                 title: "Triage open work",
-                subtitle: "\(metrics.openTodos) open \(plural("work item", metrics.openTodos)) \(needsVerb(metrics.openTodos)) a date, next action, or close decision.",
+                subtitle: openWorkBriefSubtitle(
+                    count: metrics.openTodos,
+                    lead: topTodo(openTodos)
+                ),
                 actionTitle: "Review open work",
                 systemImage: "tray.full",
                 destination: .todos(.open)
@@ -245,6 +266,114 @@ enum TodayInsightEngine {
         }
     }
 
+    private static func overdueBriefSubtitle(count: Int, lead: TodoItem?) -> String {
+        guard let title = briefTitle(for: lead) else {
+            return "\(count) past-due \(plural("work item", count)) \(isVerb(count)) still open. Handle, move, or dismiss \(objectPronoun(count))."
+        }
+
+        if count == 1 {
+            return "\(title) is past due. \(briefMove(for: lead) ?? "Handle, move, or dismiss it.")"
+        }
+
+        return "\(count) past-due work items are still open. Start with \(title)."
+    }
+
+    private static func dueTodayBriefSubtitle(count: Int, lead: TodoItem?) -> String {
+        guard let title = briefTitle(for: lead) else {
+            return "\(count) \(plural("work item", count)) \(isVerb(count)) due today."
+        }
+
+        if count == 1 {
+            return "\(title) is due today. \(briefMove(for: lead) ?? "Move it before tomorrow or reschedule it.")"
+        }
+
+        return "\(count) work items are due today. Start with \(title)."
+    }
+
+    private static func relationshipBriefSubtitle(count: Int, lead: CRMContact?) -> String {
+        guard let subject = relationshipBriefSubject(for: lead) else {
+            return "\(count) \(plural("person", count, plural: "people")) \(needsVerb(count)) a follow-up or status update."
+        }
+
+        if count == 1 {
+            return "\(subject) needs a follow-up or status update."
+        }
+
+        return "\(count) relationships need attention. Start with \(subject)."
+    }
+
+    private static func openWorkBriefSubtitle(count: Int, lead: TodoItem?) -> String {
+        guard let title = briefTitle(for: lead) else {
+            return "\(count) open \(plural("work item", count)) \(needsVerb(count)) a date, next action, or close decision."
+        }
+
+        if count == 1 {
+            return "\(title) needs a date, next action, or close decision."
+        }
+
+        return "\(count) open work items need triage. Start with \(title)."
+    }
+
+    private static func topTodo(_ todos: [TodoItem]) -> TodoItem? {
+        todos.sorted {
+            if $0.priority != $1.priority {
+                return priorityWeight(for: $0.priority) > priorityWeight(for: $1.priority)
+            }
+
+            switch ($0.dueDate, $1.dueDate) {
+            case (.some(let lhs), .some(let rhs)) where lhs != rhs:
+                return lhs < rhs
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            default:
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        }.first
+    }
+
+    private static func topRelationship(_ contacts: [CRMContact]) -> CRMContact? {
+        contacts.sorted {
+            switch ($0.lastContactedAt, $1.lastContactedAt) {
+            case (.none, .some):
+                return true
+            case (.some, .none):
+                return false
+            case (.some(let lhs), .some(let rhs)) where lhs != rhs:
+                return lhs < rhs
+            default:
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+        }.first
+    }
+
+    private static func briefTitle(for todo: TodoItem?) -> String? {
+        cleanedText(todo?.title)
+    }
+
+    private static func briefMove(for todo: TodoItem?) -> String? {
+        let move = cleanedText(todo?.displayNextAction) ?? cleanedText(todo?.decisionPrompt)
+        return move.map(sentence)
+    }
+
+    private static func relationshipBriefSubject(for contact: CRMContact?) -> String? {
+        guard let contact else { return nil }
+        let name = cleanedText(contact.name)
+        let company = cleanedText(contact.company)
+
+        switch (name, company) {
+        case (.some(let name), .some(let company)):
+            return "\(name) at \(company)"
+        case (.some(let name), .none):
+            return name
+        case (.none, .some(let company)):
+            return company
+        default:
+            return nil
+        }
+    }
+
     private static func todoFocusSubtitle(
         for todo: TodoItem,
         fallback: String,
@@ -321,6 +450,15 @@ enum TodayInsightEngine {
 
     private static func cleanedText(_ value: String?) -> String? {
         ChiefOfStaffCopy.clean(value)
+    }
+
+    private static func sentence(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        if trimmed.hasSuffix(".") || trimmed.hasSuffix("!") || trimmed.hasSuffix("?") {
+            return trimmed
+        }
+        return "\(trimmed)."
     }
 }
 
