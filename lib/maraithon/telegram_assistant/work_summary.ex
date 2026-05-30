@@ -367,7 +367,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp polish_legacy_product_terms(value) when is_binary(value) do
     value
-    |> replace_result_regex(~r/^No open work found\.?$/i, "This check returned no open work.")
+    |> replace_result_regex(~r/^No open work found\.?$/i, "This check surfaced no open work.")
     |> replace_result_regex(
       ~r/^No connected accounts found\.?$/i,
       "No connected accounts are available yet."
@@ -415,7 +415,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
     case {singular, count} do
       {"work item", 0} ->
-        "This check returned no open work."
+        "This check surfaced no open work."
 
       {"work item", count} ->
         "Found #{format_count(count)} open work #{pluralize("item", count)}."
@@ -815,7 +815,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp generic_result_summary?(summary) when is_binary(summary) do
     Regex.match?(
-      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check returned\b|This check could not finish\.?$|.* could not finish\.?$)/i,
+      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check (?:returned|surfaced)\b|This check could not finish\.?$|.* could not finish\.?$)/i,
       summary
     )
   end

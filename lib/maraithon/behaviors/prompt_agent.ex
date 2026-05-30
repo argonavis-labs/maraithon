@@ -503,7 +503,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     total = Map.get(totals, "open_todos") || Map.get(totals, :open_todos) || 0
 
     if total == 0 do
-      "No open work found for this context."
+      "No open work surfaced in checked context."
     else
       rendered =
         [
@@ -517,12 +517,12 @@ defmodule Maraithon.Behaviors.PromptAgent do
         |> Enum.join("\n")
 
       if rendered == "",
-        do: "No open work found for this context.",
+        do: "No open work surfaced in checked context.",
         else: rendered
     end
   end
 
-  defp format_open_loops(_snapshot), do: "No open work found for this context."
+  defp format_open_loops(_snapshot), do: "No open work surfaced in checked context."
 
   defp format_open_loop_bucket(_label, []), do: ""
 

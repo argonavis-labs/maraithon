@@ -57,11 +57,11 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
              %{
                "tool" => "open_work",
                "label" => "Open work",
-               "summary" => "This check returned no open work."
+               "summary" => "This check surfaced no open work."
              }
            ] = summary["tool_calls"]
 
-    assert inspect(summary) =~ "This check returned no open work."
+    assert inspect(summary) =~ "This check surfaced no open work."
     refute inspect(summary) =~ "No open work found"
     refute inspect(summary) =~ "all clear"
     refute inspect(summary) =~ "needs attention"
@@ -79,7 +79,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
-    assert [%{"summary" => "This check returned no open work."}] = summary["tool_calls"]
+    assert [%{"summary" => "This check surfaced no open work."}] = summary["tool_calls"]
     refute inspect(summary) =~ "No open work found"
     refute inspect(summary) =~ "all clear"
   end
