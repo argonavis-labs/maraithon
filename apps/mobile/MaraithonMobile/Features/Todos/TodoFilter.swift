@@ -45,48 +45,48 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
         if !hasAnyWork {
             return TodoEmptyState(
-                title: "No work yet",
+                title: "No work captured yet",
                 systemImage: "checklist",
-                description: "Add a follow-up or ask Maraithon to capture next actions from Chat."
+                description: "Add a follow-up or ask Maraithon to turn chat, messages, or notes into next actions."
             )
         }
 
         switch self {
         case .all:
             return TodoEmptyState(
-                title: "No work found",
+                title: "No work in this view",
                 systemImage: "checklist",
-                description: "No saved work matches this filter. Reset filters or add the next follow-up."
+                description: "Reset filters or add the next follow-up Maraithon should keep visible."
             )
         case .open:
             return TodoEmptyState(
                 title: "No open work",
                 systemImage: "checklist",
-                description: "All saved work is completed. Add a follow-up when something should stay visible."
+                description: "No open work is visible in this filter. Capture the next commitment when it should stay on your radar."
             )
         case .today:
             return TodoEmptyState(
                 title: "No work due today",
                 systemImage: "calendar",
-                description: "Use this view for commitments that need to move before tomorrow."
+                description: "No saved work in this filter is due today. Pull one open item into today when it needs movement before tomorrow."
             )
         case .overdue:
             return TodoEmptyState(
                 title: "No past-due work",
                 systemImage: "clock.badge.checkmark",
-                description: "No saved work is past due in this list."
+                description: "No saved work is past due in this filter. Keep using Today for work that still needs a move."
             )
         case .upcoming:
             return TodoEmptyState(
                 title: "No upcoming work",
                 systemImage: "calendar.badge.clock",
-                description: "Future-dated commitments will appear here."
+                description: "Future-dated commitments appear here once a due date is set."
             )
         case .completed:
             return TodoEmptyState(
                 title: "No completed work",
                 systemImage: "checkmark.circle",
-                description: "Completed items will appear here after you close them."
+                description: "Closed items appear here after you mark work done."
             )
         }
     }

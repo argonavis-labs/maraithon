@@ -42,7 +42,7 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
 
         if !hasAnyPeople {
             return PeopleEmptyState(
-                title: "No people yet",
+                title: "No relationships captured yet",
                 systemImage: "person.crop.circle.badge.plus",
                 description: "Add someone important so Maraithon can remember context, cadence, and follow-up history."
             )
@@ -51,21 +51,21 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all:
             return PeopleEmptyState(
-                title: "No people found",
+                title: "No people in this view",
                 systemImage: "person.2",
-                description: "No saved people match this filter. Reset filters or add the relationship to keep context."
+                description: "Reset filters or add the relationship Maraithon should remember."
             )
         case .lead:
             return PeopleEmptyState(
                 title: "No new relationships",
                 systemImage: "person.badge.plus",
-                description: "People you are still qualifying will appear here."
+                description: "People you are still qualifying appear here once added."
             )
         case .active:
             return PeopleEmptyState(
-                title: "No active relationships",
+                title: "No active relationships in this view",
                 systemImage: "person.2",
-                description: "Current relationships that are not overdue for care will appear here."
+                description: "Relationships that are current and not flagged for care appear here."
             )
         case .atRisk:
             return PeopleEmptyState(
@@ -75,9 +75,9 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
             )
         case .closed:
             return PeopleEmptyState(
-                title: "No archived people",
+                title: "No archived relationships",
                 systemImage: "archivebox",
-                description: "Archived relationships will appear here when they are no longer active."
+                description: "Archived relationships appear here when you no longer need them active."
             )
         }
     }
