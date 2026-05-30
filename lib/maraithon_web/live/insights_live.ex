@@ -455,7 +455,7 @@ defmodule MaraithonWeb.InsightsLive do
              "performed_by" => "operator_insights",
              "evidence" => evidence_summary,
              "model_rationale" =>
-               "Maraithon suggested this duplicate group from People cleanup and the user confirmed Merge contacts from Insights."
+               "Maraithon suggested this duplicate group from People cleanup, and Merge contacts was confirmed in Insights."
            }) do
         {:ok, _result} -> {:cont, {:ok, count + 1}}
         {:error, reason} -> {:halt, {:error, reason}}

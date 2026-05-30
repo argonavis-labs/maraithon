@@ -5,7 +5,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Crm
+  alias Maraithon.Crm.PersonMerge
   alias Maraithon.Memory
+  alias Maraithon.Repo
 
   @user_email "people-live@example.com"
 
@@ -327,6 +329,19 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert merged.merged_into_id == canonical.id
     assert "christina.giannone@gmail.com" in survivor.contact_details["emails"]
     assert "cgiannone@framgroup.com" in survivor.contact_details["emails"]
+
+    assert %PersonMerge{} =
+             audit =
+             Repo.get_by(PersonMerge,
+               user_id: @user_email,
+               surviving_person_id: canonical.id,
+               merged_person_id: duplicate.id
+             )
+
+    assert audit.model_rationale ==
+             "Kept the selected canonical People row and merged the selected duplicate rows."
+
+    refute audit.model_rationale =~ "The user"
 
     html = render(view)
     assert html =~ "Merged 1 duplicate into Christina Giannone."

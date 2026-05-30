@@ -165,7 +165,7 @@ defmodule MaraithonWeb.MobilePeopleController do
       "model_rationale" =>
         text_param(params, "model_rationale") ||
           text_param(params, "rationale") ||
-          "The user chose one person record to keep and another duplicate to merge."
+          "Kept one person record and merged the duplicate from mobile."
     }
   end
 

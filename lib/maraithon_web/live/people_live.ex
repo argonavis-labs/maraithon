@@ -1864,7 +1864,7 @@ defmodule MaraithonWeb.PeopleLive do
              "performed_by" => "operator_people",
              "evidence" => "Manual bulk duplicate merge from the People index.",
              "model_rationale" =>
-               "The user selected multiple visible People rows and chose the canonical person to keep."
+               "Kept the selected canonical People row and merged the selected duplicate rows."
            }) do
         {:ok, _result} -> {:cont, {:ok, count + 1}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -1887,9 +1887,8 @@ defmodule MaraithonWeb.PeopleLive do
          {:ok, _result} <-
            Crm.merge_people(user_id, surviving.id, merged.id, %{
              "performed_by" => "operator_people",
-             "evidence" => "Manual duplicate merge from the People operator table.",
-             "model_rationale" =>
-               "The user selected the canonical People row and the duplicate row to collapse."
+             "evidence" => "Manual duplicate merge from the People table.",
+             "model_rationale" => "Kept the selected People row and merged the duplicate row."
            }) do
       {:ok, surviving, merged}
     else

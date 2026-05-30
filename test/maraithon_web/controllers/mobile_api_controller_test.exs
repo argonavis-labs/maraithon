@@ -628,6 +628,8 @@ defmodule MaraithonWeb.MobileApiControllerTest do
 
     assert merge.performed_by == "mobile"
     assert merge.evidence == "Merged from mobile."
+    assert merge.model_rationale == "Kept one person record and merged the duplicate from mobile."
+    refute merge.model_rationale =~ "The user"
 
     {:ok, disposable} =
       Crm.create_person(user.id, %{
