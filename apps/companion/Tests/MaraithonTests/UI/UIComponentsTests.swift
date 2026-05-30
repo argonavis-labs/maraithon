@@ -374,6 +374,18 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("serverError"))
     }
 
+    func testRecallNoMatchCopyStaysScopedToCheckedSources() {
+        let copy = RecallCopy.noMatchesDescription(for: "  agenda from Dana  ")
+
+        XCTAssertEqual(
+            copy,
+            "No source-backed matches for “agenda from Dana” yet. Try a person, thread, or phrase from sources Maraithon has already checked."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("nothing"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("all sources"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything"))
+    }
+
     @MainActor
     func testCompanionMenuBarCopyReflectsSignedInSourceState() {
         let account = DeviceAuth.Account(email: "kent@example.com", deviceName: "Kent's Mac")

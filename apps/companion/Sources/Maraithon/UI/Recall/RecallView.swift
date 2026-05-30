@@ -43,7 +43,7 @@ struct RecallView: View {
                 ContentUnavailableView(
                     "No matches",
                     systemImage: "magnifyingglass",
-                    description: Text("Nothing in your synced sources matched “\(lastQuery)”.")
+                    description: Text(RecallCopy.noMatchesDescription(for: lastQuery))
                 )
             } else if results.isEmpty {
                 placeholder
@@ -218,6 +218,12 @@ enum RecallCopy {
 
     static func searchError(_ error: Error) -> String {
         "Search could not finish. \(CompanionErrorCopy.message(for: error))"
+    }
+
+    static func noMatchesDescription(for query: String) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = trimmed.isEmpty ? "No source-backed matches yet." : "No source-backed matches for “\(trimmed)” yet."
+        return "\(prefix) Try a person, thread, or phrase from sources Maraithon has already checked."
     }
 
     static func resultTitle(for hit: RecallResult) -> String {
