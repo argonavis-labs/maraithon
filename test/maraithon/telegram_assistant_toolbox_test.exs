@@ -296,13 +296,80 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~
              "Inbox-backed follow-up is not fully covered because Gmail is not connected."
 
-    assert result.next_action == "Start here: Send the concise investor update."
+    assert result.next_action ==
+             "Start here: Send the concise investor update. Connect Gmail before relying on this as a complete inbox review."
 
     refute result.summary =~ "Tell the user"
     refute result.summary =~ "Maraithon cannot currently inspect"
     refute result.summary =~ "gmail_search_messages"
     refute result.summary =~ "Start with Send"
     refute result.next_action =~ "Start with Send"
+  end
+
+  test "get_open_work_summary next action keeps Mac companion caveat when work is present" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    user_id = "toolbox-stale-companion-focus-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, %{device: device}} =
+      CompanionDevices.register(user_id, Ecto.UUID.generate(), device_name: "Executive Mac")
+
+    stale_seen_at = DateTime.add(DateTime.utc_now(), -49 * 60 * 60, :second)
+
+    device
+    |> Ecto.Changeset.change(last_seen_at: stale_seen_at)
+    |> Repo.update!()
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:empty-local-focus@example.com", %{
+               access_token: "toolbox-local-focus-token",
+               refresh_token: "toolbox-local-focus-refresh",
+               metadata: %{"account_email" => "empty-local-focus@example.com"}
+             })
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      ["Bearer toolbox-local-focus-token"] = Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "maxResults=1"
+      assert conn.query_string =~ "labelIds=INBOX"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+    end)
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "Confirm pickup plan",
+          "summary" => "The Tuesday pickup plan needs a final answer.",
+          "next_action" => "Confirm the Tuesday pickup plan.",
+          "priority" => 91,
+          "dedupe_key" => "toolbox-stale-companion-focus:pickup"
+        }
+      ])
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.summary =~ "Open work: 1 work item."
+    assert result.summary =~ "The Mac companion has not checked in recently"
+
+    assert result.next_action ==
+             "Start here: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+
+    refute result.next_action =~ "source_health"
+    refute result.next_action =~ "last_seen_at"
   end
 
   test "list_connected_accounts returns connector status without CRM or todo writes" do

@@ -3870,6 +3870,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       gmail_stale?(source_health) and focus ->
         "Search Gmail for the latest inbox first. If nothing supersedes it, start here: #{sentence_fragment(open_work_focus_action(focus))}."
 
+      gmail_not_connected?(source_health) and focus ->
+        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. Connect Gmail before relying on this as a complete inbox review."
+
+      gmail_error?(source_health) and focus ->
+        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. Reconnect Gmail before relying on this as a complete inbox review."
+
+      local_context_issue?(source_health) and focus ->
+        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. #{local_context_next_action(source_health)}"
+
       focus ->
         "Start here: #{sentence_fragment(open_work_focus_action(focus))}."
 
