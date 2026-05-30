@@ -100,4 +100,19 @@ struct SourcePermissionHint: Equatable {
             )
         }
     }
+
+    static func hasFocusedUnblock(for reason: String) -> Bool {
+        switch reason {
+        case "calendar_not_authorized",
+             "reminders_not_authorized",
+             "imessage_full_disk_access_required",
+             "notes_full_disk_access_required",
+             "voice_memos_speech_disabled",
+             "voice_memos_speech_not_authorized",
+             "voice_memos_full_disk_access_required":
+            return true
+        default:
+            return false
+        }
+    }
 }

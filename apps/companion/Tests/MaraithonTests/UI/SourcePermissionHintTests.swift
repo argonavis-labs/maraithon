@@ -83,4 +83,21 @@ final class SourcePermissionHintTests: XCTestCase {
         XCTAssertNil(hint.followUpNote)
         XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
+
+    func testFocusedUnblockReasonsMatchPermissionScreens() {
+        for reason in [
+            "calendar_not_authorized",
+            "reminders_not_authorized",
+            "imessage_full_disk_access_required",
+            "notes_full_disk_access_required",
+            "voice_memos_speech_disabled",
+            "voice_memos_speech_not_authorized",
+            "voice_memos_full_disk_access_required"
+        ] {
+            XCTAssertTrue(SourcePermissionHint.hasFocusedUnblock(for: reason), reason)
+            XCTAssertNotNil(SourcePermissionHint.forReason(reason).settingsURL, reason)
+        }
+
+        XCTAssertFalse(SourcePermissionHint.hasFocusedUnblock(for: "network down"))
+    }
 }

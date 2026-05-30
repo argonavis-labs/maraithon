@@ -226,6 +226,61 @@ final class SourceStatusPublisherTests: XCTestCase {
         }
     }
 
+    func testPersistentPublisherRestoresBlockingPermissionUntilHealthyCycle() {
+        let defaults = makeDefaults()
+        let now = Date()
+        let reason = "imessage_full_disk_access_required"
+        let publisher = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        publisher.recordHealthyCycle(at: now)
+        publisher.update(state: .needsAttention(reason: reason))
+
+        let restored = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertEqual(restored.blockingPermissionReason, reason)
+        XCTAssertEqual(restored.displayedState(), .error(reason: reason))
+
+        // Source start-up is optimistic; it should not erase a durable
+        // permission block until the app proves it can read the source.
+        restored.update(state: .connected)
+        XCTAssertEqual(restored.displayedState(), .error(reason: reason))
+
+        restored.recordHealthyCycle(at: now.addingTimeInterval(60))
+        restored.update(state: .connected)
+        XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertEqual(restored.displayedState(), .connected)
+    }
+
+    func testPersistentPublisherDoesNotRestoreNonBlockingAttention() {
+        let defaults = makeDefaults()
+        let reason = "voice_memos_speech_not_authorized"
+        let publisher = SourceStatusPublisher(
+            sourceID: "voice_memos",
+            state: .connected,
+            defaults: defaults
+        )
+
+        publisher.recordSync(at: Date(), accepted: 1, duplicate: 0)
+        publisher.update(state: .needsAttention(reason: reason))
+
+        let restored = SourceStatusPublisher(
+            sourceID: "voice_memos",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertEqual(restored.displayedState(), .connected)
+    }
+
     func testDisplayedStateKeepsPartialVoiceMemoTranscriptIssueYellowAfterSync() {
         let publisher = SourceStatusPublisher(state: .connected)
         publisher.recordSync(at: Date(), accepted: 1, duplicate: 0)

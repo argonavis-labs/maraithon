@@ -21,6 +21,10 @@ extension SourceDetailScaffold {
         if case .needsAttention(let reason) = publisher.state {
             return reason
         }
+        if case .error(let reason) = publisher.displayedState(),
+           SourcePermissionHint.hasFocusedUnblock(for: reason) {
+            return reason
+        }
         return nil
     }
 

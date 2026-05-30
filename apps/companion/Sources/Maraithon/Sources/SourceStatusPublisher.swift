@@ -21,6 +21,7 @@ final class SourceStatusPublisher {
     private(set) var recentBatches: [BatchEvent] = []
     private(set) var activeIssue: IssueEvent?
     private(set) var recentIssues: [IssueEvent] = []
+    private(set) var blockingPermissionReason: String?
     private let persistenceKey: String?
     private let defaults: UserDefaults?
     private static let persistencePrefix = "source_status."
@@ -86,7 +87,13 @@ final class SourceStatusPublisher {
         }
     }
 
-    func update(state: SourceState) { self.state = state }
+    func update(state: SourceState) {
+        self.state = state
+        if let reason = Self.blockingReason(from: state) {
+            blockingPermissionReason = reason
+        }
+        persist()
+    }
 
     /// Records a successful cycle that had nothing new to ship.
     func recordHealthyCycle(at date: Date) {
@@ -97,6 +104,7 @@ final class SourceStatusPublisher {
         self.consecutiveFailureCount = 0
         self.lastFailureAt = nil
         self.lastFailureReason = nil
+        self.blockingPermissionReason = nil
         if activeIssue?.severity == .error {
             activeIssue = nil
         }
@@ -121,6 +129,7 @@ final class SourceStatusPublisher {
         self.consecutiveFailureCount = 0
         self.lastFailureAt = nil
         self.lastFailureReason = nil
+        self.blockingPermissionReason = nil
         let bucket = calendar.startOfDay(for: date)
         if bucket != acceptedTodayBucket {
             acceptedToday = 0
@@ -169,10 +178,15 @@ final class SourceStatusPublisher {
         consecutiveFailureCount = 0
         lastFailureAt = nil
         lastFailureReason = nil
+        blockingPermissionReason = nil
         persist()
     }
 
     func displayedState() -> SourceState {
+        if let blockingPermissionReason {
+            return .error(reason: blockingPermissionReason)
+        }
+
         if let issue = activeIssue {
             switch issue.severity {
             case .warning:
@@ -238,6 +252,15 @@ final class SourceStatusPublisher {
         }
     }
 
+    private static func blockingReason(from state: SourceState) -> String? {
+        switch state {
+        case .needsAttention(let reason), .error(let reason):
+            return isBlockingAttentionReason(reason) ? reason : nil
+        default:
+            return nil
+        }
+    }
+
     private func persist() {
         guard let defaults, let persistenceKey else { return }
         guard let data = try? JSONEncoder().encode(snapshot()) else { return }
@@ -257,7 +280,8 @@ final class SourceStatusPublisher {
             acceptedTodayBucket: acceptedTodayBucket,
             recentBatches: recentBatches,
             activeIssue: activeIssue,
-            recentIssues: recentIssues
+            recentIssues: recentIssues,
+            blockingPermissionReason: blockingPermissionReason
         )
     }
 
@@ -274,6 +298,7 @@ final class SourceStatusPublisher {
         recentBatches = Array(snapshot.recentBatches.prefix(20))
         activeIssue = snapshot.activeIssue
         recentIssues = Array(snapshot.recentIssues.prefix(20))
+        blockingPermissionReason = snapshot.blockingPermissionReason
         resetAcceptedTodayIfNeeded()
     }
 
@@ -302,5 +327,6 @@ final class SourceStatusPublisher {
         let recentBatches: [BatchEvent]
         let activeIssue: IssueEvent?
         let recentIssues: [IssueEvent]
+        let blockingPermissionReason: String?
     }
 }
