@@ -1176,7 +1176,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       _ ->
         case final_text(response, prepared_action_id) do
           "I finished that step." ->
-            "I refreshed the current work list. Each item is ready for a decision."
+            "The current work list is refreshed. Each item is ready for a decision."
 
           value ->
             value
@@ -1190,7 +1190,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
     intro =
       cond do
         todo_bullet_list?(value) ->
-          "I found the current open items. Each one has the context needed for a decision."
+          "Here are the current open items. Each one has the context needed for a decision."
 
         process_todo_digest_intro?(value) ->
           value
@@ -1210,6 +1210,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
       end
 
     UserFacingCopy.open_work_language(intro)
+    |> polish_todo_digest_first_person_intro()
   end
 
   defp process_todo_digest_intro?(value) when is_binary(value) do
@@ -1217,6 +1218,29 @@ defmodule Maraithon.TelegramAssistant.Runner do
       value,
       ~r/\b(sending\s+(the\s+)?actionable\s+items\s+one\s+by\s+one|sending\s+each\s+with\s+context)\b/iu
     )
+  end
+
+  defp polish_todo_digest_first_person_intro(value) when is_binary(value) do
+    value
+    |> then(fn copy ->
+      Regex.replace(~r/^\s*I refreshed ([^.]+)\.\s*/iu, copy, fn _, subject ->
+        "#{capitalize_sentence_start(subject)} is refreshed. "
+      end)
+    end)
+    |> String.replace(
+      ~r/^\s*I found the current open work items\.?/iu,
+      "Here are the current open work items."
+    )
+    |> String.trim()
+  end
+
+  defp polish_todo_digest_first_person_intro(value), do: value
+
+  defp capitalize_sentence_start(value) when is_binary(value) do
+    case String.trim(value) do
+      <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest
+      "" -> ""
+    end
   end
 
   defp todo_digest_status(

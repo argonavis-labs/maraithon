@@ -437,6 +437,34 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     refute result.message =~ "confirmation_required"
   end
 
+  test "explain_action_ledger fallback avoids internal ledger language" do
+    user_id = "toolbox-explain-fallback-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "12345"})
+
+    {:ok, action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "tool.executed",
+        status: "completed"
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "explain_action_ledger",
+               %{"action_id" => action.id},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.message =~ "That action is recorded, but it does not include a summary yet."
+    refute result.message =~ "I found"
+    refute result.message =~ "ledger"
+    refute result.message =~ "model summary"
+  end
+
   test "explain_action_ledger describes source health in user language" do
     user_id = "toolbox-explain-source-copy-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

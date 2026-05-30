@@ -869,6 +869,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.at(initial_sends, 0).text =~ "Each item is ready for a decision"
     refute Enum.at(initial_sends, 0).text =~ "ready to clear"
     refute Enum.at(initial_sends, 0).text =~ "sending the actionable items one by one"
+    refute Enum.at(initial_sends, 0).text =~ "I found"
+    refute Enum.at(initial_sends, 0).text =~ "I refreshed"
 
     billing_message = Enum.at(initial_sends, 1)
     oauth_message = Enum.at(initial_sends, 2)

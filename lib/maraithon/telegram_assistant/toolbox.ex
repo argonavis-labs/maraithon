@@ -2435,7 +2435,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     summary =
       explanation.model_summary ||
         explanation.message ||
-        "I found the ledger entry, but it did not include a model summary."
+        "That action is recorded, but it does not include a summary yet."
 
     [
       summary,
