@@ -56,15 +56,12 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
     }
 
-    func testHealthyHeadlineLeadsWithUserUsefulCount() {
+    func testHealthyHeadlineExplainsBackgroundValue() {
         XCTAssertEqual(
-            SourceDetailCopy.healthyHeadline(totalSynced: 12, singular: "message", plural: "messages"),
-            "12 messages synced"
+            SourceDetailCopy.healthyHeadline(displayName: "iMessage"),
+            "Maraithon is keeping iMessage current"
         )
-        XCTAssertEqual(
-            SourceDetailCopy.healthyHeadline(totalSynced: 0, singular: "message", plural: "messages"),
-            "No messages synced yet"
-        )
+        XCTAssertFalse(SourceDetailCopy.healthyHeadline(displayName: "iMessage").contains("messages synced"))
     }
 
     func testConnectedSummaryExplainsLastCheckOutcome() {
@@ -83,12 +80,12 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check synced 4 messages. Maraithon will keep checking in the background. Checked just now."
+            "Last check found and synced 4 messages. Maraithon will keep checking in the background. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("Last check synced"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("found and synced"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything is current"))
     }
 
@@ -149,7 +146,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check synced 3 notes. 1 note needs attention. Checked just now."
+            "Last check found and synced 3 notes. 1 note needs attention. Checked just now."
         )
     }
 

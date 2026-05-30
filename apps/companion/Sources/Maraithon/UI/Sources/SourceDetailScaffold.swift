@@ -82,7 +82,7 @@ struct SourceDetailScaffold: View {
                     env.sources.syncNow(id: sourceID)
                 }
             } label: {
-                Label(isPaused ? "Resume sync" : "Sync now", systemImage: isPaused ? "play.fill" : "arrow.clockwise")
+                Label(isPaused ? "Resume sync" : "Check now", systemImage: isPaused ? "play.fill" : "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut("r", modifiers: .command)
@@ -111,11 +111,7 @@ struct SourceDetailScaffold: View {
         case .syncing:
             return "Checking \(displayName)"
         case .connected:
-            return SourceDetailCopy.healthyHeadline(
-                totalSynced: publisher.totalAccepted,
-                singular: syncedItemSingular,
-                plural: syncedItemPlural
-            )
+            return SourceDetailCopy.healthyHeadline(displayName: displayName)
         case .paused:
             return "\(displayName) sync is paused"
         case .needsAttention:

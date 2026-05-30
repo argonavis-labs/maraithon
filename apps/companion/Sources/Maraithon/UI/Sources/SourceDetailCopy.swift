@@ -23,12 +23,8 @@ enum SourceDetailCopy {
         "\(total.formatted(.number)) \(itemNoun(total: total, singular: singular, plural: plural)) synced"
     }
 
-    static func healthyHeadline(totalSynced: Int, singular: String, plural: String) -> String {
-        guard totalSynced > 0 else {
-            return "No \(plural) synced yet"
-        }
-
-        return syncedHeadline(total: totalSynced, singular: singular, plural: plural)
+    static func healthyHeadline(displayName: String) -> String {
+        "Maraithon is keeping \(displayName) current"
     }
 
     static func itemNoun(total: Int, singular: String, plural: String) -> String {
@@ -52,15 +48,15 @@ enum SourceDetailCopy {
     ) -> String {
         guard let lastSyncAt else {
             if totalSynced > 0 {
-                return "\(syncedHeadline(total: totalSynced, singular: singular, plural: plural)) so far. Sync now to check \(displayName) again."
+                return "Maraithon has synced \(countedItem(totalSynced, singular: singular, plural: plural)) so far. Check now to look for new \(plural)."
             }
-            return "Sync now to start checking \(displayName)."
+            return "Check now to start syncing \(displayName)."
         }
 
         var sentences: [String] = []
         let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
-            sentences.append("Last check synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
+            sentences.append("Last check found and synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("No new \(plural) found.")
         } else {
