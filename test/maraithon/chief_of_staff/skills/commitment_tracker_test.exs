@@ -365,6 +365,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
           "next_action" => "Reply with the current metrics and flag any missing numbers.",
           "due_at" => "2026-05-11T13:00:00Z",
           "dedupe_key" => "commitment:jordan:investor-update",
+          "source_account_label" => "kent@runner.now",
           "priority" => 94
         }
       ])
@@ -438,6 +439,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute brief.body =~ "1:00 PM UTC"
     refute brief.body =~ "2026-05-11T13:00:00Z"
     assert brief.body =~ "Next: Reply with the current metrics"
+    assert brief.body =~ "From Gmail (kent@runner.now)."
+    refute brief.body =~ "Source: kent@runner.now"
     assert brief.body =~ "Gmail checked: 1 recent inbox message and 0 recent sent messages"
     assert brief.body =~ "Calendar checked: 1 upcoming event"
     assert brief.body =~ "Existing open work checked: 1 open item"
@@ -456,5 +459,54 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [todo] = Todos.list_for_user(user_id, limit: 5)
     assert todo.id == existing_todo.id
+  end
+
+  test "fallback open-work lines humanize local source names", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "voice_memos",
+          "kind" => "local_voice_memo",
+          "title" => "Review the launch voice note",
+          "summary" => "The launch note includes a pricing follow-up.",
+          "next_action" => "Extract the pricing follow-up and decide who owns it.",
+          "dedupe_key" => "commitment:voice-note:launch-pricing",
+          "priority" => 78
+        }
+      ])
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -4,
+        "commitment_review_hour_local" => 7
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: now,
+      trigger: %{type: :wakeup},
+      source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now}),
+      assistant_cycle_id: "cycle-local-source-fallback"
+    }
+
+    {:effect, {:llm_call, _params}, state} = CommitmentTracker.handle_wakeup(state, context)
+
+    {:emit, {:briefs_recorded, _payload}, _state} =
+      CommitmentTracker.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+
+    assert brief.body =~ "Review the launch voice note"
+    assert brief.body =~ "From Voice Memos."
+    refute brief.body =~ "voice_memos"
+    refute brief.body =~ "Source:"
   end
 end

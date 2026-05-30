@@ -11,6 +11,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   alias Maraithon.Crm
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.SourceLabels
   alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -719,7 +720,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       )
 
     due = todo |> read_any("due_at") |> fallback_due_label(tracker_input)
-    source = read_string(todo, "source_account_label", read_string(todo, "source", nil))
+    source = read_string(todo, "source", nil)
+    source_account = read_string(todo, "source_account_label", nil)
 
     [
       "- ",
@@ -727,7 +729,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       fallback_due_sentence(due),
       " Next: ",
       next_action,
-      fallback_source_phrase(source)
+      fallback_source_phrase(source, source_account)
     ]
     |> Enum.join("")
   end
@@ -804,18 +806,33 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp tracker_input_timezone_label(_tracker_input, offset), do: Timezones.label(nil, offset)
 
-  defp fallback_source_phrase(nil), do: "."
-  defp fallback_source_phrase(""), do: "."
+  defp fallback_source_phrase(source, account) do
+    label = fallback_source_label(source)
+    account = fallback_account_label(account, label)
 
-  defp fallback_source_phrase(source) do
-    " Source: #{fallback_source_label(source)}."
+    cond do
+      blank?(label) and blank?(account) -> "."
+      blank?(label) -> " From #{account}."
+      blank?(account) -> " From #{label}."
+      true -> " From #{label} (#{account})."
+    end
   end
 
-  defp fallback_source_label("gmail"), do: "Gmail"
-  defp fallback_source_label("google_calendar"), do: "Calendar"
-  defp fallback_source_label("calendar"), do: "Calendar"
-  defp fallback_source_label("omnifocus"), do: "OmniFocus"
-  defp fallback_source_label(source), do: source
+  defp fallback_source_label(nil), do: nil
+  defp fallback_source_label(""), do: nil
+  defp fallback_source_label(source), do: SourceLabels.label(source, fallback: nil)
+
+  defp fallback_account_label(account, source_label) when is_binary(account) do
+    account = String.trim(account)
+
+    cond do
+      account == "" -> nil
+      String.downcase(account) == String.downcase(to_string(source_label || "")) -> nil
+      true -> account
+    end
+  end
+
+  defp fallback_account_label(_account, _source_label), do: nil
 
   defp fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count) do
     [
