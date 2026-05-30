@@ -185,12 +185,46 @@ companion_designated_requirement() {
   codesign -dr - "${app_path}" 2>&1 | sed -n 's/^designated => //p'
 }
 
-reset_stale_companion_tcc_if_needed() {
+companion_tcc_marker_path() {
+  printf '%s\n' "${HOME}/Library/Application Support/Maraithon/companion-dev-designated-requirement.txt"
+}
+
+read_companion_tcc_marker() {
+  local marker_path="$1"
+  local marker_header previous_version previous_requirement
+
+  marker_header="$(head -n 1 "${marker_path}" 2>/dev/null || true)"
+  case "${marker_header}" in
+    tcc-requirement-version=* | tcc-reset-version=*)
+      previous_version="${marker_header#*=}"
+      previous_requirement="$(tail -n +2 "${marker_path}" 2>/dev/null || true)"
+      ;;
+    *)
+      previous_version=""
+      previous_requirement="$(cat "${marker_path}" 2>/dev/null || true)"
+      ;;
+  esac
+
+  printf '%s\n%s\n' "${previous_version}" "${previous_requirement}"
+}
+
+write_companion_tcc_marker() {
+  local marker_path="$1"
+  local marker_version="$2"
+  local requirement="$3"
+
+  mkdir -p "$(dirname "${marker_path}")"
+  {
+    printf 'tcc-requirement-version=%s\n' "${marker_version}"
+    printf '%s\n' "${requirement}"
+  } > "${marker_path}"
+}
+
+record_companion_tcc_requirement() {
   local app_path="$1"
-  local marker_dir="${HOME}/Library/Application Support/Maraithon"
-  local marker_path="${marker_dir}/companion-dev-designated-requirement.txt"
-  local requirement previous_requirement previous_reset_version marker_header
-  local reset_marker_version="2"
+  local marker_path
+  local requirement previous_requirement previous_marker_version
+  local marker_version="3"
 
   requirement="$(companion_designated_requirement "${app_path}")"
   if [[ -z "${requirement}" ]]; then
@@ -203,34 +237,46 @@ reset_stale_companion_tcc_if_needed() {
     return
   fi
 
-  marker_header="$(head -n 1 "${marker_path}" 2>/dev/null || true)"
-  if [[ "${marker_header}" == "tcc-reset-version=${reset_marker_version}" ]]; then
-    previous_reset_version="${reset_marker_version}"
-    previous_requirement="$(tail -n +2 "${marker_path}" 2>/dev/null || true)"
-  else
-    previous_reset_version=""
-    previous_requirement="$(cat "${marker_path}" 2>/dev/null || true)"
-  fi
+  marker_path="$(companion_tcc_marker_path)"
+  {
+    IFS= read -r previous_marker_version || true
+    previous_requirement="$(cat || true)"
+  } < <(read_companion_tcc_marker "${marker_path}")
 
-  if [[ "${previous_requirement}" == "${requirement}" && "${previous_reset_version}" == "${reset_marker_version}" ]]; then
+  if [[ "${previous_requirement}" == "${requirement}" ]]; then
+    if [[ "${previous_marker_version}" != "${marker_version}" ]]; then
+      write_companion_tcc_marker "${marker_path}" "${marker_version}" "${requirement}"
+    fi
     return
   fi
 
-  reset_companion_full_disk_access_entries
-
   if [[ -z "${previous_requirement}" ]]; then
-    echo "Reset existing Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
-  elif [[ "${previous_requirement}" == "${requirement}" ]]; then
-    echo "Reset legacy Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+    echo "Recorded companion signing requirement for persistent Full Disk Access."
   else
-    echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+    echo "Companion signing requirement changed; Full Disk Access was not reset."
+    echo "If macOS still denies access, run make reset-companion-fda once, then grant ${app_path}."
   fi
 
-  mkdir -p "${marker_dir}"
-  {
-    printf 'tcc-reset-version=%s\n' "${reset_marker_version}"
-    printf '%s\n' "${requirement}"
-  } > "${marker_path}"
+  write_companion_tcc_marker "${marker_path}" "${marker_version}" "${requirement}"
+}
+
+reset_companion_full_disk_access_for_app() {
+  local app_path="$1"
+  local marker_path
+  local requirement
+  local marker_version="3"
+
+  requirement="$(companion_designated_requirement "${app_path}")"
+  if [[ -z "${requirement}" ]]; then
+    echo "Unable to read companion code-signing requirement; refusing to reset Full Disk Access." >&2
+    exit 1
+  fi
+
+  reset_companion_full_disk_access_entries
+  marker_path="$(companion_tcc_marker_path)"
+  write_companion_tcc_marker "${marker_path}" "${marker_version}" "${requirement}"
+  echo "Reset Full Disk Access entries for ${COMPANION_BUNDLE_ID}."
+  echo "Grant the stable app at ${app_path}; normal reloads will not reset it."
 }
 
 reset_companion_full_disk_access_entries() {

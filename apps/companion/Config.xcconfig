@@ -15,5 +15,7 @@
 // need Full Disk Access to persist across rebuilds, run:
 //   make setup-companion-signing
 //   make run-companion
+// If macOS is stuck on an old dev app row, run:
+//   make reset-companion-fda
 
 #include? "Config.local.xcconfig"

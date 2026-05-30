@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
+
+install_app="${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
+
+if [[ ! -d "${install_app}" ]]; then
+  echo "Stable companion app is not installed at ${install_app}." >&2
+  echo "Run make run-companion first, then retry make reset-companion-fda." >&2
+  exit 1
+fi
+
+quit_running_companion_app
+reset_companion_full_disk_access_for_app "${install_app}"
+
+if [[ -x "${LSREGISTER}" ]]; then
+  "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
+fi
+
+open -R "${install_app}"

@@ -1,4 +1,4 @@
-.PHONY: setup setup-companion-signing run-companion \
+.PHONY: setup setup-companion-signing reset-companion-fda run-companion \
 	generate generate-native generate-companion generate-mobile \
 	build build-web build-api build-static build-assets build-native build-companion build-mobile \
 	test test-web test-api test-native test-companion test-mobile \
@@ -11,6 +11,9 @@ setup:
 
 setup-companion-signing:
 	apps/companion/scripts/create_dev_signing_identity.sh
+
+reset-companion-fda:
+	scripts/monorepo/reset-companion-fda
 
 run-companion:
 	scripts/monorepo/run companion

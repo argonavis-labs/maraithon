@@ -43,7 +43,7 @@ if selected_component "${component}" "companion"; then
     unregister_stale_companion_apps "${install_app}"
     "${LSREGISTER}" -f "${install_app}" >/dev/null 2>&1 || true
   fi
-  reset_stale_companion_tcc_if_needed "${install_app}"
+  record_companion_tcc_requirement "${install_app}"
 
   echo
   echo "Installed companion dev app at ${install_app}"

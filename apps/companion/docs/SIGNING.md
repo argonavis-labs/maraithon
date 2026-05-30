@@ -34,26 +34,21 @@ multiple indistinguishable development builds.
 You can still run `make setup-companion-signing` explicitly to prepare signing
 without launching the app.
 
-The first `make run-companion` after signing is configured also records the
-installed app's designated code-signing requirement and resets existing Full
-Disk Access rows for `com.maraithon.companion` once. That avoids macOS keeping
-an enabled row for an old DerivedData or ad-hoc-signed copy. Grant the stable
-`~/Applications/Maraithon.app` copy after that reset. Future reloads with the
-same signing requirement do not reset TCC and should preserve the grant.
+`make run-companion` records the installed app's designated code-signing
+requirement, but it does **not** reset Full Disk Access during a normal reload.
+That keeps a valid grant from disappearing just because the app was rebuilt.
 
-If Full Disk Access still does not apply after that switch, reset the stale TCC
-row and grant the stable installed app again:
+If Full Disk Access still does not apply after switching to the stable app,
+reset the stale TCC row explicitly and grant the stable installed app again:
 
 ```sh
-tccutil reset SystemPolicyAllFiles com.maraithon.companion
-open -R ~/Applications/Maraithon.app
-make run-companion
+make reset-companion-fda
 ```
 
 Then open System Settings -> Privacy & Security -> Full Disk Access and add
 or enable the revealed `~/Applications/Maraithon.app` copy. Future
 `make run-companion` reloads preserve that bundle path and remove stale
-DerivedData copies before launching.
+DerivedData copies before launching without resetting Full Disk Access.
 
 ## Apple Developer setup
 

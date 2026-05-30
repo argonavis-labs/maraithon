@@ -43,6 +43,16 @@ make run-companion
 It installs the Debug app at `~/Applications/Maraithon.app` with stable local
 signing so macOS privacy grants survive rebuilds and reloads.
 
+If macOS keeps pointing Full Disk Access at an old development copy, reset the
+stale privacy row once:
+
+```sh
+make reset-companion-fda
+```
+
+Then grant the revealed `~/Applications/Maraithon.app` copy. Normal
+`make run-companion` reloads do not reset Full Disk Access.
+
 The `.xcodeproj` is **not** committed — it's regenerated from
 [`project.yml`](project.yml) every time. Treat `project.yml` as the source
 of truth; never hand-edit the generated project.

@@ -185,7 +185,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
           "messages" => [sample_message("g1"), sample_message("g2")]
         })
 
-      assert_reply ref, :ok, %{accepted: 2, duplicate: 0, invalid: 0}
+      assert_reply ref, :ok, %{accepted: 2, duplicate: 0, invalid: 0}, @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -209,10 +209,10 @@ defmodule MaraithonWeb.CompanionChannelTest do
       messages = [sample_message("g1"), sample_message("g2")]
 
       ref1 = push(socket, "ingest:messages", %{"messages" => messages})
-      assert_reply ref1, :ok, %{accepted: 2, duplicate: 0}
+      assert_reply ref1, :ok, %{accepted: 2, duplicate: 0}, @channel_reply_timeout
 
       ref2 = push(socket, "ingest:messages", %{"messages" => messages})
-      assert_reply ref2, :ok, %{accepted: 0, duplicate: 2}
+      assert_reply ref2, :ok, %{accepted: 0, duplicate: 2}, @channel_reply_timeout
     end
 
     test "replies with error when messages array is missing" do
@@ -224,11 +224,14 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
       ref = push(socket, "ingest:messages", %{})
 
-      assert_reply ref, :error, %{
-        reason: "messages_required",
-        message:
-          "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
-      }
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "messages_required",
+                     message:
+                       "The Mac sent an incomplete sync batch. Sync again from the companion app; Maraithon will keep the last successful data until then."
+                   },
+                   @channel_reply_timeout
     end
 
     test "rejects oversized realtime batches before ingesting" do
@@ -252,7 +255,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
                      message:
                        "Sync fewer than 500 items at a time. Maraithon will keep the last successful data until then."
                    },
-                   1000
+                   @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -276,7 +279,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
         subscribe_and_join(socket, CompanionChannel, "companion:device:#{device.device_id}")
 
       ref = push(socket, "ingest:notes", %{"notes" => [sample_note("n1"), sample_note("n2")]})
-      assert_reply ref, :ok, %{accepted: 2}
+      assert_reply ref, :ok, %{accepted: 2}, @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -304,7 +307,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
           "reminders" => [sample_reminder("r1"), sample_reminder("r2")]
         })
 
-      assert_reply ref, :ok, %{accepted: 2, invalid: 0}
+      assert_reply ref, :ok, %{accepted: 2, invalid: 0}, @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -380,7 +383,10 @@ defmodule MaraithonWeb.CompanionChannelTest do
           "visits" => [sample_visit("g1"), sample_visit("g2")]
         })
 
-      assert_reply ref, :ok, %{accepted: 2, duplicate: 0, invalid: 0, filtered: 0}
+      assert_reply ref,
+                   :ok,
+                   %{accepted: 2, duplicate: 0, invalid: 0, filtered: 0},
+                   @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -414,7 +420,10 @@ defmodule MaraithonWeb.CompanionChannelTest do
           ]
         })
 
-      assert_reply ref, :ok, %{accepted: 1, duplicate: 0, invalid: 1, filtered: 0}
+      assert_reply ref,
+                   :ok,
+                   %{accepted: 1, duplicate: 0, invalid: 1, filtered: 0},
+                   @channel_reply_timeout
 
       count =
         Repo.aggregate(
@@ -439,11 +448,14 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
       ref = push(socket, "ingest:bogus", %{})
 
-      assert_reply ref, :error, %{
-        reason: "unknown_event",
-        message:
-          "The companion app sent a sync request this server does not support. Update the app, then sync again."
-      }
+      assert_reply ref,
+                   :error,
+                   %{
+                     reason: "unknown_event",
+                     message:
+                       "The companion app sent a sync request this server does not support. Update the app, then sync again."
+                   },
+                   @channel_reply_timeout
     end
   end
 end
