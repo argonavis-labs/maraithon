@@ -1196,10 +1196,20 @@ defmodule Maraithon.TelegramAssistant.Context do
 
   defp contains_any?(text, terms) when is_binary(text) and is_list(terms) do
     normalized = String.downcase(text)
-    Enum.any?(terms, &String.contains?(normalized, &1))
+    Enum.any?(terms, &term_present?(normalized, &1))
   end
 
   defp contains_any?(_text, _terms), do: false
+
+  defp term_present?(text, term) when is_binary(term) do
+    if String.match?(term, ~r/^[a-z0-9_]+$/) do
+      Regex.match?(~r/(^|[^a-z0-9_])#{Regex.escape(term)}($|[^a-z0-9_])/, text)
+    else
+      String.contains?(text, term)
+    end
+  end
+
+  defp term_present?(_text, _term), do: false
 
   defp normalize_text(value) when is_binary(value) do
     value

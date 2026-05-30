@@ -3,6 +3,7 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.LocalCalendar
   alias Maraithon.OAuth
   alias Maraithon.TelegramAssistant.Context
 
@@ -82,6 +83,49 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
   end
 
   describe "calendar source status" do
+    test "does not classify business campaign calendar events as family camp logistics" do
+      user_id = "context-calendar-personal-#{System.unique_integer([:positive])}@example.com"
+      device_id = Ecto.UUID.generate()
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      start_at =
+        DateTime.utc_now()
+        |> DateTime.add(2, :hour)
+        |> DateTime.truncate(:second)
+
+      end_at = DateTime.add(start_at, 30, :minute)
+
+      {:ok, _result} =
+        LocalCalendar.ingest_batch(user_id, device_id, [
+          calendar_event("campaign-review", start_at, end_at, %{
+            "calendar_name" => "Work",
+            "title" => "Starteryou UGC Campaign Review",
+            "notes" => "Review campaign materials and asset ownership."
+          }),
+          calendar_event(
+            "camp-pickup",
+            DateTime.add(start_at, 1, :hour),
+            DateTime.add(end_at, 1, :hour),
+            %{
+              "calendar_name" => "Work",
+              "title" => "Emma camp pickup",
+              "notes" => "Confirm pickup window with the camp coordinator."
+            }
+          )
+        ])
+
+      context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
+
+      upcoming_summaries = Enum.map(context.calendar.upcoming_events, & &1.summary)
+      personal_summaries = Enum.map(context.calendar.personal_events, & &1.summary)
+
+      assert "Starteryou UGC Campaign Review" in upcoming_summaries
+      assert "Emma camp pickup" in upcoming_summaries
+      refute "Starteryou UGC Campaign Review" in personal_summaries
+      assert "Emma camp pickup" in personal_summaries
+      assert context.calendar.counts.personal == 1
+    end
+
     test "uses user-safe copy when Google Calendar is not connected" do
       user_id = "context-calendar-status-#{System.unique_integer([:positive])}@example.com"
       {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
@@ -170,5 +214,28 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
   defp calendar_status_text(context) do
     context.calendar.source_status
     |> inspect()
+  end
+
+  defp calendar_event(guid, start_at, end_at, overrides) do
+    Map.merge(
+      %{
+        "local_id" => "evt:#{guid}",
+        "guid" => guid,
+        "calendar_name" => "Work",
+        "title" => "Planning review",
+        "notes" => nil,
+        "location" => nil,
+        "start_at" => DateTime.to_iso8601(start_at),
+        "end_at" => DateTime.to_iso8601(end_at),
+        "is_all_day" => false,
+        "is_recurring" => false,
+        "organizer_email" => "kent@example.com",
+        "attendees_count" => 1,
+        "attendee_emails" => ["kent@example.com"],
+        "created_at" => DateTime.to_iso8601(DateTime.add(start_at, -1, :day)),
+        "modified_at" => DateTime.to_iso8601(DateTime.add(start_at, -1, :hour))
+      },
+      overrides
+    )
   end
 end
