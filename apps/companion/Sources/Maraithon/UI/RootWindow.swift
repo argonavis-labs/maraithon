@@ -137,14 +137,22 @@ struct FullDiskAccessRequiredBanner: View {
                 Text(Self.detailText(blockedSourceNames: blockedSourceNames))
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let installHint = FullDiskAccessInstallHint.currentMessage() {
-                    Text(installHint)
+                if let installHint = FullDiskAccessInstallHint.current() {
+                    Text(installHint.message)
                         .font(.caption)
                         .foregroundStyle(StatusTone.attention.color)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
+            if let installHint = FullDiskAccessInstallHint.current(),
+               installHint.stableAppInstalled {
+                Button("Show stable app") {
+                    revealStableApp(installHint.stableAppURL)
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+            }
             Button("Check again") {
                 checkAgain()
             }
@@ -200,6 +208,17 @@ struct FullDiskAccessRequiredBanner: View {
         #if canImport(AppKit)
         NSWorkspace.shared.open(url)
         #endif
+    }
+
+    private func revealStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        NSWorkspace.shared.activateFileViewerSelecting([appURL])
+        #endif
+        env.eventLog.info(
+            "root_window.fda_banner.show_stable_app",
+            source: .ui,
+            payload: ["path": appURL.path]
+        )
     }
 
     private func checkAgain() {

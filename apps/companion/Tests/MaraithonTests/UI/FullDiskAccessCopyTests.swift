@@ -43,9 +43,11 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         let message = FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home)
 
-        XCTAssertTrue(message?.contains("temporary development build") == true)
+        XCTAssertTrue(message?.contains("temporary Maraithon copy") == true)
         XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
-        XCTAssertTrue(message?.contains("make run-companion") == true)
+        XCTAssertFalse(message?.contains("make run-companion") == true)
+        XCTAssertFalse(message?.contains("xcodebuild") == true)
+        XCTAssertFalse(message?.contains("DerivedData") == true)
     }
 
     func testInstallHintFlagsRepoLocalAppBundles() {
@@ -75,5 +77,55 @@ final class FullDiskAccessCopyTests: XCTestCase {
             .appendingPathComponent("Maraithon.app", isDirectory: true)
 
         XCTAssertNil(FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home))
+    }
+
+    func testInstallHintIncludesStableAppStatusAndURL() throws {
+        let fileManager = FileManager.default
+        let home = fileManager.temporaryDirectory
+            .appendingPathComponent("maraithon-fda-hint-\(UUID().uuidString)", isDirectory: true)
+        let stableApp = home
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+        let bundle = home
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Developer", isDirectory: true)
+            .appendingPathComponent("Xcode", isDirectory: true)
+            .appendingPathComponent("DerivedData", isDirectory: true)
+            .appendingPathComponent("Maraithon", isDirectory: true)
+            .appendingPathComponent("Build", isDirectory: true)
+            .appendingPathComponent("Products", isDirectory: true)
+            .appendingPathComponent("Debug", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+
+        try fileManager.createDirectory(at: stableApp, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: home) }
+
+        let detail = FullDiskAccessInstallHint.detail(
+            for: bundle,
+            homeDirectory: home,
+            fileManager: fileManager
+        )
+
+        XCTAssertEqual(detail?.stableAppURL.path, stableApp.standardizedFileURL.path)
+        XCTAssertTrue(detail?.stableAppInstalled == true)
+        XCTAssertTrue(detail?.message.contains("Use the stable app") == true)
+    }
+
+    func testInstallHintMarksStableAppMissing() {
+        let fileManager = FileManager.default
+        let home = URL(fileURLWithPath: "/Users/operator", isDirectory: true)
+        let bundle = URL(
+            fileURLWithPath: "/Users/operator/Library/Developer/Xcode/DerivedData/Maraithon/Build/Products/Debug/Maraithon.app",
+            isDirectory: true
+        )
+
+        let detail = FullDiskAccessInstallHint.detail(
+            for: bundle,
+            homeDirectory: home,
+            fileManager: fileManager
+        )
+
+        XCTAssertFalse(detail?.stableAppInstalled == true)
+        XCTAssertTrue(detail?.message.contains("Install the stable app") == true)
     }
 }

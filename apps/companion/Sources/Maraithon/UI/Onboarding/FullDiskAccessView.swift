@@ -60,9 +60,9 @@ struct FullDiskAccessView: View {
 
             statusIndicator
 
-            if let installHint = FullDiskAccessInstallHint.currentMessage() {
+            if let installHint = FullDiskAccessInstallHint.current() {
                 Label {
-                    Text(installHint)
+                    Text(installHint.message)
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -76,6 +76,18 @@ struct FullDiskAccessView: View {
             }
 
             VStack(spacing: Tokens.Spacing.small) {
+                if let installHint = FullDiskAccessInstallHint.current(),
+                   installHint.stableAppInstalled {
+                    Button {
+                        revealStableApp(installHint.stableAppURL)
+                    } label: {
+                        Label("Show stable app", systemImage: "app.dashed")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
+                }
+
                 Button {
                     openSystemSettings()
                 } label: {
@@ -157,6 +169,17 @@ struct FullDiskAccessView: View {
         NSWorkspace.shared.open(url)
         #endif
         env.eventLog.info("onboarding.full_disk_access.open_settings", source: .ui)
+    }
+
+    private func revealStableApp(_ appURL: URL) {
+        #if canImport(AppKit)
+        NSWorkspace.shared.activateFileViewerSelecting([appURL])
+        #endif
+        env.eventLog.info(
+            "onboarding.full_disk_access.show_stable_app",
+            source: .ui,
+            payload: ["path": appURL.path]
+        )
     }
 
     private func startPolling() {

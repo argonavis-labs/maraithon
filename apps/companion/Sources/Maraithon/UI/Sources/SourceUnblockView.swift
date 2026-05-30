@@ -33,7 +33,7 @@ struct SourceUnblockView: View {
                 }
                 if let installHint = fullDiskAccessInstallHint {
                     Label {
-                        Text(installHint)
+                        Text(installHint.message)
                             .fixedSize(horizontal: false, vertical: true)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -50,6 +50,16 @@ struct SourceUnblockView: View {
             .frame(maxWidth: 480)
         } actions: {
             VStack(spacing: Tokens.Spacing.small) {
+                if let installHint = fullDiskAccessInstallHint,
+                   installHint.stableAppInstalled {
+                    Button {
+                        revealStableApp(installHint.stableAppURL)
+                    } label: {
+                        Label("Show stable app", systemImage: "app.dashed")
+                    }
+                    .buttonStyle(.bordered)
+                }
+
                 if let url = hint.settingsURL {
                     Button {
                         NSWorkspace.shared.open(url)
@@ -89,8 +99,17 @@ struct SourceUnblockView: View {
         }
     }
 
-    private var fullDiskAccessInstallHint: String? {
+    private func revealStableApp(_ appURL: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([appURL])
+        env.eventLog.info(
+            "\(sourceID).show_stable_app",
+            source: .ui,
+            payload: ["path": appURL.path]
+        )
+    }
+
+    private var fullDiskAccessInstallHint: FullDiskAccessInstallHint.Detail? {
         guard hint.requiresStableFullDiskAccessApp else { return nil }
-        return FullDiskAccessInstallHint.currentMessage()
+        return FullDiskAccessInstallHint.current()
     }
 }
