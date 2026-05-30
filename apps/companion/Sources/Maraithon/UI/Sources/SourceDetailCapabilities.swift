@@ -169,4 +169,52 @@ extension SourceDetailCopy {
             ]
         }
     }
+
+    static func privacyNotes(for sourceID: String, displayName: String) -> [SourceCapability] {
+        switch sourceID {
+        case "imessage":
+            return [
+                SourceCapability(
+                    id: "local_filtering",
+                    title: "Local filtering",
+                    description: "Blocked phone numbers and emails are filtered on this Mac before anything syncs.",
+                    systemImage: "hand.raised"
+                ),
+                SourceCapability(
+                    id: "encrypted_sync",
+                    title: "Encrypted sync",
+                    description: "Message content is encrypted on this Mac before upload when encryption is enabled.",
+                    systemImage: "lock.shield"
+                ),
+                SourceCapability(
+                    id: "device_control",
+                    title: "Device control",
+                    description: "Revoke this Mac or delete synced Messages data without changing Messages on this Mac.",
+                    systemImage: "macbook.and.iphone"
+                )
+            ]
+
+        default:
+            return [
+                SourceCapability(
+                    id: "local_data_stays",
+                    title: "Local data stays put",
+                    description: "\(displayName) stays on this Mac; Maraithon only syncs the records this source is allowed to read.",
+                    systemImage: "externaldrive"
+                ),
+                SourceCapability(
+                    id: "encrypted_sync",
+                    title: "Encrypted sync",
+                    description: "Content is encrypted on this Mac before upload when encryption is enabled.",
+                    systemImage: "lock.shield"
+                ),
+                SourceCapability(
+                    id: "device_control",
+                    title: "Device control",
+                    description: "Revoke this Mac or delete synced \(displayName) data without changing local files or apps.",
+                    systemImage: "macbook.and.iphone"
+                )
+            ]
+        }
+    }
 }

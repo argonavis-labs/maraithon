@@ -6,6 +6,7 @@ import Foundation
 /// sync-engine vocabulary like "accepted" or "duplicates."
 enum SourceDetailCopy {
     static let capabilitiesSectionTitle = "Assistant coverage"
+    static let privacySectionTitle = "Privacy guardrails"
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"

@@ -187,6 +187,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
     func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
         XCTAssertEqual(SourceDetailCopy.capabilitiesSectionTitle, "Assistant coverage")
+        XCTAssertEqual(SourceDetailCopy.privacySectionTitle, "Privacy guardrails")
         XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
         XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
@@ -215,6 +216,36 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertTrue(text.localizedCaseInsensitiveContains("source evidence"))
         XCTAssertTrue(text.localizedCaseInsensitiveContains("approval loop"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("this session"))
+    }
+
+    func testIMessagesPrivacyNotesExplainUserControl() {
+        let notes = SourceDetailCopy.privacyNotes(for: "imessage", displayName: "iMessage")
+        let text = notes.map { "\($0.title) \($0.description)" }.joined(separator: " ")
+
+        XCTAssertEqual(notes.count, 3)
+        XCTAssertEqual(notes.map(\.title), [
+            "Local filtering",
+            "Encrypted sync",
+            "Device control"
+        ])
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("filtered on this Mac"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("encrypted on this Mac"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("delete synced Messages data"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("server"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("database"))
+    }
+
+    func testKnownSourcePrivacyNotesStayUserFacing() {
+        for sourceID in ["calendar", "notes", "reminders", "voice_memos", "files", "browser_history"] {
+            let notes = SourceDetailCopy.privacyNotes(for: sourceID, displayName: sourceID)
+            let text = notes.map { "\($0.title) \($0.description)" }.joined(separator: " ")
+
+            XCTAssertEqual(notes.count, 3, sourceID)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("this Mac"), sourceID)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("delete synced"), sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("server"), sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("database"), sourceID)
+        }
     }
 
     func testKnownSourceCapabilitiesStayOutcomeOriented() {

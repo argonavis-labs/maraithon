@@ -47,6 +47,8 @@ struct SourceDetailScaffold: View {
                 Divider()
                 capabilitiesSection
                 Divider()
+                privacySection
+                Divider()
                 statsSection
                 Divider()
                 activitySection
@@ -114,6 +116,21 @@ struct SourceDetailScaffold: View {
             VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
                 ForEach(capabilityItems) { capability in
                     SourceCapabilityRow(capability: capability)
+                }
+            }
+        }
+    }
+
+    var privacyItems: [SourceCapability] {
+        SourceDetailCopy.privacyNotes(for: sourceID, displayName: displayName)
+    }
+
+    var privacySection: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+            SectionHeader(SourceDetailCopy.privacySectionTitle)
+            VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
+                ForEach(privacyItems) { item in
+                    SourceCapabilityRow(capability: item)
                 }
             }
         }
