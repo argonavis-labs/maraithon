@@ -1,4 +1,4 @@
-defmodule Maraithon.TelegramAssistant.SecretRequestGuard do
+defmodule Maraithon.AssistantChat.SecretRequestGuard do
   @moduledoc false
 
   @credential_terms ~r/\b(api\s*key|apikey|access\s*key|private\s*key|bearer\s*token|refresh\s*token|access\s*token|token|secret|password|credential|credentials)\b/i
@@ -33,8 +33,9 @@ defmodule Maraithon.TelegramAssistant.SecretRequestGuard do
 
   def response(text, runtime \\ runtime_config())
 
-  def response(text, runtime) when is_binary(text) and is_list(runtime) do
+  def response(text, runtime) when is_binary(text) do
     if disclosure_request?(text) do
+      runtime = normalize_runtime(runtime)
       provider = provider_for(text, runtime)
       configured? = credentials_configured?(provider, runtime)
 
@@ -50,6 +51,9 @@ defmodule Maraithon.TelegramAssistant.SecretRequestGuard do
   end
 
   def response(_text, _runtime), do: :pass
+
+  defp normalize_runtime(runtime) when is_list(runtime), do: runtime
+  defp normalize_runtime(_runtime), do: []
 
   def disclosure_request?(text) when is_binary(text) do
     Regex.match?(@disclosure_terms, text) and secret_reference?(text)

@@ -19,11 +19,11 @@ defmodule Maraithon.TelegramAssistant do
     PushReceipt,
     Run,
     Runner,
-    SecretRequestGuard,
     Step,
     TodoActions
   }
 
+  alias Maraithon.AssistantChat.SecretRequestGuard
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder

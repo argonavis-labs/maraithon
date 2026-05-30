@@ -1,7 +1,7 @@
-defmodule Maraithon.TelegramAssistant.SecretRequestGuardTest do
+defmodule Maraithon.AssistantChat.SecretRequestGuardTest do
   use ExUnit.Case, async: true
 
-  alias Maraithon.TelegramAssistant.SecretRequestGuard
+  alias Maraithon.AssistantChat.SecretRequestGuard
 
   @openrouter_key "sk-or-v1-test-secret-openrouter-key-value"
 

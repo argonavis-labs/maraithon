@@ -4,7 +4,7 @@ defmodule Maraithon.AssistantChat do
   """
 
   alias Maraithon.Repo
-  alias Maraithon.AssistantChat.DirectIntent
+  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ModelRouting
   alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
@@ -159,8 +159,8 @@ defmodule Maraithon.AssistantChat do
 
   defp insert_message_and_run(%Conversation{} = conversation, body, client_message_id) do
     now = DateTime.utc_now()
-    direct_intent = DirectIntent.classify(body)
-    route_profile = route_profile_for(body, direct_intent)
+    local_intent = local_intent_for(body)
+    route_profile = route_profile_for(body, local_intent)
 
     with {:ok, {updated_conversation, user_turn}} <-
            TelegramConversations.append_turn(conversation, %{
@@ -182,7 +182,7 @@ defmodule Maraithon.AssistantChat do
              "title" => mobile_title(updated_conversation, body)
            }),
          {:ok, run} <-
-           dispatch_user_message(updated_conversation, run, user_turn, body, direct_intent) do
+           dispatch_user_message(updated_conversation, run, user_turn, body, local_intent) do
       {:ok,
        %{
          thread: reload_thread(updated_conversation),
@@ -190,6 +190,69 @@ defmodule Maraithon.AssistantChat do
          message: user_turn,
          duplicate?: false
        }}
+    end
+  end
+
+  defp local_intent_for(body) do
+    case SecretRequestGuard.response(body) do
+      {:ok, reply, structured_data} ->
+        {:ok,
+         %{
+           type: :credential_disclosure_guard,
+           reply: reply,
+           structured_data: structured_data
+         }}
+
+      :pass ->
+        DirectIntent.classify(body)
+    end
+  end
+
+  defp dispatch_user_message(
+         %Conversation{} = conversation,
+         %Run{} = run,
+         %Turn{} = user_turn,
+         _body,
+         {:ok,
+          %{
+            type: :credential_disclosure_guard,
+            reply: reply,
+            structured_data: structured_data
+          }}
+       ) do
+    with {:ok, _conversation, _turn, _delivery} <-
+           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+             conversation,
+             conversation.chat_id,
+             reply,
+             intent: "credential_disclosure_guard",
+             confidence: 1.0,
+             turn_kind: "assistant_reply",
+             origin_type: "system",
+             origin_id: user_turn.id,
+             structured_data:
+               Map.merge(structured_data, %{
+                 "surface" => "mobile",
+                 "run_id" => run.id,
+                 "message_class" => "assistant_reply",
+                 "direct_intent" => "credential_disclosure_guard"
+               })
+           ) do
+      TelegramAssistant.complete_run(run, %{
+        status: "completed",
+        result_summary: %{
+          surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "secret_request_guard",
+          model_reasoning_effort: "none",
+          task_class: "credential_disclosure_guard",
+          route_reason: "direct_intent:credential_disclosure_guard",
+          message_class: "assistant_reply",
+          direct_intent: "credential_disclosure_guard",
+          tool_steps: 0,
+          llm_turns: 0
+        }
+      })
     end
   end
 
