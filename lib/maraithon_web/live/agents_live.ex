@@ -809,9 +809,9 @@ defmodule MaraithonWeb.AgentsLive do
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <.field label="Template" for="launch_behavior">
                             <.c_select id="launch_behavior" name="launch[behavior]">
-                              <%= for behavior <- behaviors() do %>
-                                <option value={behavior} selected={behavior == @launch["behavior"]}>
-                                  <%= behavior %>
+                              <%= for behavior <- behavior_options() do %>
+                                <option value={behavior.id} selected={behavior.id == @launch["behavior"]}>
+                                  <%= behavior.label %>
                                 </option>
                               <% end %>
                             </.c_select>
@@ -1797,10 +1797,10 @@ defmodule MaraithonWeb.AgentsLive do
     do:
       "inline-flex items-center border-b-2 border-transparent px-1 pb-2 text-sm/6 font-medium text-zinc-500 hover:text-zinc-950"
 
-  defp behaviors do
+  defp behavior_options do
     AgentBuilder.behavior_specs()
-    |> Enum.map(& &1.id)
-    |> Enum.sort()
+    |> Enum.map(fn spec -> %{id: spec.id, label: spec.label} end)
+    |> Enum.sort_by(&String.downcase(&1.label))
   end
 
   defp marketplace_library(user_id) do

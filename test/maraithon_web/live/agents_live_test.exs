@@ -113,6 +113,9 @@ defmodule MaraithonWeb.AgentsLiveTest do
     html = render(view)
     assert html =~ "Instructions"
     assert html =~ "Save changes"
+    assert html =~ ~r/<option[^>]*value="prompt_agent"[^>]*>\s*Custom Automation\s*<\/option>/
+    assert html =~ ~r/<option[^>]*value="ai_chief_of_staff"[^>]*>\s*Chief of Staff\s*<\/option>/
+    refute html =~ ~r/<option[^>]*>\s*prompt_agent\s*<\/option>/
   end
 
   test "start action updates the visible status", %{conn: conn} do
