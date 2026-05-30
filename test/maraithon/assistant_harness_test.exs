@@ -153,6 +153,7 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "Use product language in final text"
     assert prompt =~ "say `open work`, `work item`, `People`, or `relationship context`"
     assert prompt =~ "do not say `todo` or `CRM` unless quoting the operator"
+    assert prompt =~ "Never reveal, quote, transform, summarize, or display API keys"
 
     assert prompt =~
              "Persist actionable work as durable work items through the internal todo tools"

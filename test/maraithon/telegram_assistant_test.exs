@@ -238,6 +238,60 @@ defmodule Maraithon.TelegramAssistantTest do
     assert %Profile{} = Repo.get_by(Profile, user_id: user_id)
   end
 
+  test "assistant refuses to display provider credentials without calling the model", %{
+    user_id: user_id
+  } do
+    secret = "sk-or-v1-test-secret-openrouter-key-value"
+    runtime = Application.get_env(:maraithon, Maraithon.Runtime, [])
+
+    Application.put_env(
+      :maraithon,
+      Maraithon.Runtime,
+      Keyword.merge(runtime,
+        llm_provider_name: "openrouter",
+        llm_api_key: secret,
+        openrouter_api_key: secret
+      )
+    )
+
+    parent = self()
+
+    set_assistant(fn _payload ->
+      send(parent, :assistant_called)
+      {:error, :unexpected_model_call}
+    end)
+
+    InsightNotifications.handle_telegram_event(%{
+      type: "message",
+      data: %{chat_id: 12345, message_id: 91013, text: "what's our open router API key?"}
+    })
+
+    reply = last_telegram_message(:send)
+
+    assert reply.text =~ "OpenRouter is configured"
+    assert reply.text =~ "won't display API keys, tokens, passwords, or other credentials"
+    assert reply.text =~ "deployment secrets or Settings"
+    refute reply.text =~ secret
+    refute reply.text =~ "OPENROUTER_API_KEY"
+    refute reply.text =~ "sk-or"
+
+    refute_received :assistant_called
+    refute Enum.any?(telegram_events(), &(&1.type == :chat_action))
+    refute Repo.exists?(from run in Run, where: run.user_id == ^user_id)
+
+    guard_turn =
+      Repo.one!(
+        from turn in Turn,
+          join: conversation in assoc(turn, :conversation),
+          where:
+            conversation.user_id == ^user_id and
+              turn.intent == "credential_disclosure_guard"
+      )
+
+    assert guard_turn.structured_data["provider"] == "openrouter"
+    assert guard_turn.structured_data["credential_status"] == "configured"
+  end
+
   test "assistant can learn a durable preference and confirm it with plain text", %{
     user_id: user_id
   } do

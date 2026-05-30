@@ -19,6 +19,7 @@ defmodule Maraithon.TelegramAssistant do
     PushReceipt,
     Run,
     Runner,
+    SecretRequestGuard,
     Step,
     TodoActions
   }
@@ -89,14 +90,51 @@ defmodule Maraithon.TelegramAssistant do
 
   def handle_inbound(attrs) when is_map(attrs) do
     if enabled?() do
-      case BriefTodoReview.handle_text_request(attrs) do
-        :ok -> :ok
-        :ignored -> Runner.run_inbound(attrs)
+      case maybe_handle_secret_request(attrs) do
+        :ok ->
+          :ok
+
+        :pass ->
+          case BriefTodoReview.handle_text_request(attrs) do
+            :ok -> :ok
+            :ignored -> Runner.run_inbound(attrs)
+          end
       end
     else
       {:fallback, :disabled}
     end
   end
+
+  defp maybe_handle_secret_request(attrs) do
+    case SecretRequestGuard.reply(attrs) do
+      {:ok, text, structured_data} ->
+        send_secret_guard_reply(attrs, text, structured_data)
+
+      :pass ->
+        :pass
+    end
+  end
+
+  defp send_secret_guard_reply(
+         %{conversation: %Conversation{} = conversation, chat_id: chat_id} = attrs,
+         text,
+         structured_data
+       )
+       when is_binary(chat_id) do
+    _ =
+      send_turn(conversation, chat_id, text,
+        reply_to_message_id: Map.get(attrs, :source_message_id),
+        intent: "credential_disclosure_guard",
+        confidence: 1.0,
+        turn_kind: "assistant_reply",
+        origin_type: "system",
+        structured_data: structured_data
+      )
+
+    :ok
+  end
+
+  defp send_secret_guard_reply(_attrs, _text, _structured_data), do: :ok
 
   def handle_callback_query(data) when is_map(data) do
     with true <- enabled?(),
