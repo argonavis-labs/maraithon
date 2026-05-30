@@ -683,6 +683,7 @@ defmodule Maraithon.Agents do
       |> deep_merge(stringify_keys(config_overrides))
       |> Map.put_new("name", package.name)
       |> Map.put("agent_package_version_id", version.id)
+      |> sync_schedule_config_into_skill_configs()
 
     %{
       user_id: user_id,
@@ -763,6 +764,43 @@ defmodule Maraithon.Agents do
   end
 
   defp deep_merge(_left, right), do: right
+
+  defp sync_schedule_config_into_skill_configs(config) when is_map(config) do
+    schedule_updates =
+      config
+      |> Map.take([
+        "timezone_offset_hours",
+        "morning_brief_hour_local",
+        "morning_brief_minute_local",
+        "end_of_day_brief_hour_local",
+        "end_of_day_brief_minute_local",
+        "weekly_review_day_local",
+        "weekly_review_hour_local",
+        "weekly_review_minute_local"
+      ])
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    case {schedule_updates, Map.get(config, "skill_configs")} do
+      {updates, skill_configs} when updates != %{} and is_map(skill_configs) ->
+        Map.put(config, "skill_configs", merge_skill_schedule_config(skill_configs, updates))
+
+      _ ->
+        config
+    end
+  end
+
+  defp sync_schedule_config_into_skill_configs(config), do: config
+
+  defp merge_skill_schedule_config(skill_configs, schedule_updates) do
+    Map.new(skill_configs, fn
+      {skill_id, skill_config} when is_map(skill_config) ->
+        {skill_id, Map.merge(skill_config, schedule_updates)}
+
+      entry ->
+        entry
+    end)
+  end
 
   defp source_behavior(%{"source_behavior" => behavior})
        when is_binary(behavior) and behavior != "",

@@ -341,6 +341,7 @@ defmodule MaraithonWeb.DashboardLive do
   def handle_event("install_chief_of_staff", params, socket) do
     user_id = current_user_id(socket)
     project_id = Map.get(params, "project_id") || first_project_id(socket.assigns.projects)
+    schedule_config = chief_of_staff_install_config(params)
 
     cond do
       is_nil(project_id) ->
@@ -349,7 +350,8 @@ defmodule MaraithonWeb.DashboardLive do
       true ->
         case Runtime.install_chief_of_staff(user_id,
                project_id: project_id,
-               delivery_policy: %{"telegram" => "enabled"}
+               delivery_policy: %{"telegram" => "enabled"},
+               config: schedule_config
              ) do
           {:ok, %{install_status: "setup_required"} = agent} ->
             {:noreply,
@@ -1070,7 +1072,7 @@ defmodule MaraithonWeb.DashboardLive do
 
             <div class="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
               <%= cond do %>
-                <% @chief_of_staff_agent -> %>
+                <% @chief_of_staff_agent && @chief_of_staff_agent.install_status != "setup_required" -> %>
                   <.button navigate={"/agents?id=#{@chief_of_staff_agent.id}&panel=inspect"} variant="outline">
                     Open
                   </.button>
@@ -1078,24 +1080,54 @@ defmodule MaraithonWeb.DashboardLive do
                   <.button type="button" disabled>
                     Create project first
                   </.button>
-                <% chief_of_staff_missing_readiness(@chief_of_staff_readiness) != [] -> %>
-                  <.button
-                    type="button"
-                    phx-click="install_chief_of_staff"
-                    phx-value-project_id={first_project_id(@projects)}
-                    variant="outline"
-                  >
-                    Setup required
-                  </.button>
                 <% true -> %>
-                  <.button
-                    type="button"
-                    phx-click="install_chief_of_staff"
-                    phx-value-project_id={first_project_id(@projects)}
-                    phx-disable-with="Installing..."
+                  <form
+                    id="chief-of-staff-install-form"
+                    phx-submit="install_chief_of_staff"
+                    class="grid grid-cols-2 items-end gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(0,10rem)_auto]"
                   >
-                    Install Chief of Staff
-                  </.button>
+                    <input
+                      type="hidden"
+                      name="project_id"
+                      value={chief_of_staff_project_id(@chief_of_staff_agent, @projects)}
+                    />
+                    <.field label="Brief time" for="chief_of_staff_morning_brief_hour">
+                      <.c_select
+                        id="chief_of_staff_morning_brief_hour"
+                        name="schedule[morning_brief_hour_local]"
+                      >
+                        <option
+                          :for={option <- chief_of_staff_morning_hour_options()}
+                          value={option.value}
+                          selected={option.value == chief_of_staff_install_hour(@chief_of_staff_agent, @chief_of_staff_schedule)}
+                        >
+                          <%= option.label %>
+                        </option>
+                      </.c_select>
+                    </.field>
+                    <.field label="Timezone" for="chief_of_staff_timezone_offset_hours">
+                      <.c_select
+                        id="chief_of_staff_timezone_offset_hours"
+                        name="schedule[timezone_offset_hours]"
+                      >
+                        <option
+                          :for={option <- chief_of_staff_timezone_options()}
+                          value={option.value}
+                          selected={option.value == chief_of_staff_install_timezone_offset(@chief_of_staff_agent, @chief_of_staff_schedule)}
+                        >
+                          <%= option.label %>
+                        </option>
+                      </.c_select>
+                    </.field>
+                    <.button
+                      type="submit"
+                      phx-disable-with="Installing..."
+                      variant={if chief_of_staff_missing_readiness(@chief_of_staff_readiness) == [], do: "solid", else: "outline"}
+                      class="col-span-2 sm:col-span-1"
+                    >
+                      <%= chief_of_staff_install_button_label(@chief_of_staff_agent, @chief_of_staff_readiness) %>
+                    </.button>
+                  </form>
               <% end %>
             </div>
           </div>
@@ -2927,6 +2959,14 @@ defmodule MaraithonWeb.DashboardLive do
     "Daily briefing, follow-through, commitment tracking, and Telegram delivery for one project."
   end
 
+  defp chief_of_staff_install_state(%{install_status: "setup_required"}, readiness, _projects) do
+    if chief_of_staff_missing_readiness(readiness) == [] do
+      "Ready to enable"
+    else
+      "Setup required"
+    end
+  end
+
   defp chief_of_staff_install_state(%{install_status: install_status}, _readiness, _projects),
     do: install_status_label(install_status)
 
@@ -2954,6 +2994,85 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp chief_of_staff_missing_readiness(_readiness), do: []
 
+  defp chief_of_staff_install_config(params) when is_map(params) do
+    schedule = Map.get(params, "schedule") || %{}
+
+    %{}
+    |> maybe_put_integer_config(
+      "morning_brief_hour_local",
+      Map.get(schedule, "morning_brief_hour_local"),
+      &clamp_hour/1
+    )
+    |> maybe_put_integer_config(
+      "timezone_offset_hours",
+      Map.get(schedule, "timezone_offset_hours"),
+      &clamp_timezone_offset/1
+    )
+  end
+
+  defp chief_of_staff_install_config(_params), do: %{}
+
+  defp chief_of_staff_project_id(%{project_id: project_id}, _projects) when is_binary(project_id),
+    do: project_id
+
+  defp chief_of_staff_project_id(_agent, projects), do: first_project_id(projects)
+
+  defp chief_of_staff_install_button_label(%{install_status: "setup_required"}, readiness) do
+    if chief_of_staff_missing_readiness(readiness) == [] do
+      "Finish setup"
+    else
+      "Open setup"
+    end
+  end
+
+  defp chief_of_staff_install_button_label(_agent, readiness) do
+    if chief_of_staff_missing_readiness(readiness) == [] do
+      "Install Chief of Staff"
+    else
+      "Install for later"
+    end
+  end
+
+  defp chief_of_staff_install_hour(%{config: config}, _schedule) when is_map(config) do
+    config
+    |> Map.get("morning_brief_hour_local")
+    |> parse_integer(8)
+    |> clamp_hour()
+  end
+
+  defp chief_of_staff_install_hour(_agent, %{morning: %{hour_local: hour}})
+       when is_integer(hour) do
+    clamp_hour(hour)
+  end
+
+  defp chief_of_staff_install_hour(_agent, _schedule), do: 8
+
+  defp chief_of_staff_install_timezone_offset(%{config: config}, _schedule) when is_map(config) do
+    config
+    |> Map.get("timezone_offset_hours")
+    |> parse_integer(-5)
+    |> clamp_timezone_offset()
+  end
+
+  defp chief_of_staff_install_timezone_offset(_agent, %{timezone_offset_hours: offset})
+       when is_integer(offset) do
+    clamp_timezone_offset(offset)
+  end
+
+  defp chief_of_staff_install_timezone_offset(_agent, _schedule), do: -5
+
+  defp chief_of_staff_morning_hour_options do
+    Enum.map(0..23, fn hour ->
+      %{value: hour, label: display_time(hour, 0)}
+    end)
+  end
+
+  defp chief_of_staff_timezone_options do
+    Enum.map(-12..14, fn offset ->
+      %{value: offset, label: timezone_label(offset)}
+    end)
+  end
+
   defp connector_chip_class(%{connected?: true}) do
     "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
   end
@@ -2979,6 +3098,53 @@ defmodule MaraithonWeb.DashboardLive do
   defp install_status_label("removed"), do: "Removed"
   defp install_status_label(status) when is_binary(status), do: status
   defp install_status_label(_status), do: "unknown"
+
+  defp maybe_put_integer_config(config, _key, nil, _normalizer), do: config
+  defp maybe_put_integer_config(config, _key, "", _normalizer), do: config
+
+  defp maybe_put_integer_config(config, key, value, normalizer)
+       when is_binary(key) and is_function(normalizer, 1) do
+    case parse_integer(value, nil) do
+      nil -> config
+      integer -> Map.put(config, key, normalizer.(integer))
+    end
+  end
+
+  defp parse_integer(value, _default) when is_integer(value), do: value
+
+  defp parse_integer(value, default) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {integer, ""} -> integer
+      _ -> default
+    end
+  end
+
+  defp parse_integer(_value, default), do: default
+
+  defp clamp_hour(nil), do: 8
+  defp clamp_hour(hour) when hour < 0, do: 0
+  defp clamp_hour(hour) when hour > 23, do: 23
+  defp clamp_hour(hour), do: hour
+
+  defp clamp_timezone_offset(nil), do: -5
+  defp clamp_timezone_offset(offset) when offset < -12, do: -12
+  defp clamp_timezone_offset(offset) when offset > 14, do: 14
+  defp clamp_timezone_offset(offset), do: offset
+
+  defp display_time(hour, minute) when is_integer(hour) and is_integer(minute) do
+    suffix = if hour < 12, do: "AM", else: "PM"
+    display_hour = rem(hour, 12)
+    display_hour = if display_hour == 0, do: 12, else: display_hour
+
+    "#{display_hour}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")} #{suffix}"
+  end
+
+  defp timezone_label(offset) when is_integer(offset) do
+    sign = if offset < 0, do: "-", else: "+"
+    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
+
+    "UTC#{sign}#{hours}:00"
+  end
 
   defp show_onboarding_preview?(eligible?, agents), do: eligible? and agents == []
 
