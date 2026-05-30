@@ -143,6 +143,11 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
              message: "Could not remove that Mac. Refresh the device list before removing it."
            }
 
+    assert ApiErrorCopy.companion_device(:unsupported_source) == %{
+             error: "unsupported_source",
+             message: "Choose an available source before deleting synced data."
+           }
+
     assert ApiErrorCopy.companion_device_key(:missing_key_id) == %{
              error: "missing_key_id",
              message:

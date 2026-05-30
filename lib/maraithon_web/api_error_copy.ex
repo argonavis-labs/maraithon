@@ -110,6 +110,13 @@ defmodule MaraithonWeb.ApiErrorCopy do
     }
   end
 
+  def companion_device(:unsupported_source) do
+    %{
+      error: "unsupported_source",
+      message: "Choose an available source before deleting synced data."
+    }
+  end
+
   def companion_device(_reason) do
     %{
       error: "device_request_failed",

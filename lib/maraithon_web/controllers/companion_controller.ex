@@ -371,6 +371,36 @@ defmodule MaraithonWeb.CompanionController do
   end
 
   @doc """
+  DELETE /api/v1/companion/devices/:id/data
+  DELETE /api/v1/companion/devices/:id/data/:source
+
+  Deletes synced source data for the currently authenticated Mac without
+  revoking or removing the device pairing. The endpoint is intentionally
+  scoped to the bearer token's own device so a stolen token cannot delete
+  historical data for another paired Mac.
+  """
+  def purge_device_data(conn, %{"id" => id} = params) do
+    device = conn.assigns.current_device
+    user_id = conn.assigns.current_user_id
+
+    if current_device_id?(device, id) do
+      case Devices.purge_data(user_id, device.device_id, Map.get(params, "source")) do
+        {:ok, deleted} ->
+          json(conn, %{deleted: deleted})
+
+        {:error, :unsupported_source} ->
+          conn
+          |> put_status(:bad_request)
+          |> json(ApiErrorCopy.companion_device(:unsupported_source))
+      end
+    else
+      conn
+      |> put_status(:not_found)
+      |> json(ApiErrorCopy.companion_device(:not_found))
+    end
+  end
+
+  @doc """
   DELETE /api/v1/companion/devices/:id/messages
 
   Purges all local messages for a given device row id. The device must
@@ -382,8 +412,8 @@ defmodule MaraithonWeb.CompanionController do
     user_id = conn.assigns.current_user_id
 
     cond do
-      id == device.id or id == device.device_id ->
-        {:ok, %{deleted: deleted}} = LocalMessages.purge_device(user_id, device.device_id)
+      current_device_id?(device, id) ->
+        {:ok, %{messages: deleted}} = Devices.purge_data(user_id, device.device_id, "messages")
         json(conn, %{deleted: deleted})
 
       true ->
@@ -496,6 +526,8 @@ defmodule MaraithonWeb.CompanionController do
       _ -> {:error, :missing_public_key}
     end
   end
+
+  defp current_device_id?(device, id), do: id == device.id or id == device.device_id
 
   defp extract_batch(params) do
     source = params["source"] || "imessage"

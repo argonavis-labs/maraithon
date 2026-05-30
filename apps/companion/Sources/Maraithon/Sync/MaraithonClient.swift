@@ -74,6 +74,24 @@ struct MaraithonClient: Sendable {
         try Self.validate(response: response, data: data)
     }
 
+    /// Deletes synced data for the current Mac without unpairing it.
+    /// Passing `nil` deletes every supported source; passing a source id
+    /// such as `notes` deletes only that source.
+    func purgeDeviceData(deviceId: UUID, source: String? = nil) async throws -> DeviceDataPurgeResponse {
+        var path = "/api/v1/companion/devices/\(deviceId.uuidString)/data"
+        if let source, !source.isEmpty {
+            path += "/\(source)"
+        }
+        let request = try await makeRequest(
+            method: "DELETE",
+            path: path,
+            body: nil
+        )
+        let (data, response) = try await transport(request)
+        try Self.validate(response: response, data: data)
+        return try JSONDecoder().decode(DeviceDataPurgeResponse.self, from: data)
+    }
+
     /// Lists every device paired to the calling user. Used by the
     /// `Devices` settings tab to render the row-per-Mac table and to
     /// surface per-source counts so the user can audit what each device
@@ -235,6 +253,14 @@ struct IngestResponse: Codable, Sendable {
         accepted = try container.decode(Int.self, forKey: .accepted)
         duplicate = try container.decode(Int.self, forKey: .duplicate)
         invalid = try container.decodeIfPresent(Int.self, forKey: .invalid) ?? 0
+    }
+}
+
+struct DeviceDataPurgeResponse: Codable, Sendable, Hashable {
+    let deleted: [String: Int]
+
+    var totalDeleted: Int {
+        deleted.values.reduce(0, +)
     }
 }
 

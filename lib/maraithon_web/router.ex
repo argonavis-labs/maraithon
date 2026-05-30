@@ -219,8 +219,10 @@ defmodule MaraithonWeb.Router do
     get "/whoami", CompanionController, :whoami
     get "/devices", CompanionController, :list_devices
     post "/devices/:id/revoke", CompanionController, :revoke_device
-    delete "/devices/:id", CompanionController, :delete_device
+    delete "/devices/:id/data", CompanionController, :purge_device_data
+    delete "/devices/:id/data/:source", CompanionController, :purge_device_data
     delete "/devices/:id/messages", CompanionController, :purge_messages
+    delete "/devices/:id", CompanionController, :delete_device
   end
 
   # Hosted MCP endpoint for tool-capable clients.

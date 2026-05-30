@@ -328,6 +328,98 @@ defmodule MaraithonWeb.CompanionControllerTest do
     end
   end
 
+  describe "DELETE /api/v1/companion/devices/:id/data" do
+    test "purges all synced source data for the current Mac without removing pairing", %{
+      conn: conn
+    } do
+      %{user: user, device: device, token: token} = pair_device()
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user.id, device.device_id, [
+          sample_message("data-all-m1"),
+          sample_message("data-all-m2")
+        ])
+
+      {:ok, _} =
+        Maraithon.LocalNotes.ingest_batch(user.id, device.device_id, [
+          sample_note("data-all-n1"),
+          sample_note("data-all-n2")
+        ])
+
+      assert message_count(user.id, device.device_id) == 2
+      assert note_count(user.id, device.device_id) == 2
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{device.device_id}/data")
+
+      body = json_response(conn, 200)
+      assert body["deleted"]["messages"] == 2
+      assert body["deleted"]["notes"] == 2
+      assert message_count(user.id, device.device_id) == 0
+      assert note_count(user.id, device.device_id) == 0
+      assert Devices.get(user.id, device.id)
+    end
+
+    test "purges only the selected source", %{conn: conn} do
+      %{user: user, device: device, token: token} = pair_device()
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user.id, device.device_id, [
+          sample_message("data-notes-m1")
+        ])
+
+      {:ok, _} =
+        Maraithon.LocalNotes.ingest_batch(user.id, device.device_id, [
+          sample_note("data-notes-n1"),
+          sample_note("data-notes-n2")
+        ])
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{device.id}/data/notes")
+
+      assert json_response(conn, 200) == %{"deleted" => %{"notes" => 2}}
+      assert message_count(user.id, device.device_id) == 1
+      assert note_count(user.id, device.device_id) == 0
+      assert Devices.get(user.id, device.id)
+    end
+
+    test "400 uses product copy for unsupported sources", %{conn: conn} do
+      %{device: device, token: token} = pair_device()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{device.id}/data/slack")
+
+      assert json_response(conn, 400) == %{
+               "error" => "unsupported_source",
+               "message" => "Choose an available source before deleting synced data."
+             }
+    end
+
+    test "404 when the requested device is not current", %{conn: conn} do
+      %{user: user, token: token} = pair_device()
+
+      {:ok, %{device: other_device}} =
+        Devices.register(user.id, Ecto.UUID.generate(), device_name: "Old Mac")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{token}")
+        |> delete("/api/v1/companion/devices/#{other_device.id}/data")
+
+      assert json_response(conn, 404) == %{
+               "error" => "device_not_found",
+               "message" =>
+                 "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+             }
+    end
+  end
+
   describe "POST /api/v1/companion/notes" do
     test "401 without bearer token", %{conn: conn} do
       conn = post(conn, "/api/v1/companion/notes", %{notes: []})

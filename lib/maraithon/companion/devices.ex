@@ -20,15 +20,46 @@ defmodule Maraithon.Companion.Devices do
   alias Maraithon.LocalVoiceMemos.LocalVoiceMemo
   alias Maraithon.Repo
 
-  @stat_sources [
-    {LocalMessage, :messages_count},
-    {LocalNote, :notes_count},
-    {LocalVoiceMemo, :voice_memos_count},
-    {LocalEvent, :calendar_events_count},
-    {LocalReminder, :reminders_count},
-    {LocalFile, :files_count},
-    {LocalVisit, :browser_visits_count}
+  @data_sources [
+    %{
+      schema: LocalMessage,
+      stat_key: :messages_count,
+      table_key: :messages,
+      aliases: ~w(messages imessage)
+    },
+    %{schema: LocalNote, stat_key: :notes_count, table_key: :notes, aliases: ~w(notes)},
+    %{
+      schema: LocalVoiceMemo,
+      stat_key: :voice_memos_count,
+      table_key: :voice_memos,
+      aliases: ~w(voice_memos voice-memos)
+    },
+    %{
+      schema: LocalEvent,
+      stat_key: :calendar_events_count,
+      table_key: :calendar_events,
+      aliases: ~w(calendar calendar_events calendar-events)
+    },
+    %{
+      schema: LocalReminder,
+      stat_key: :reminders_count,
+      table_key: :reminders,
+      aliases: ~w(reminders)
+    },
+    %{schema: LocalFile, stat_key: :files_count, table_key: :files, aliases: ~w(files)},
+    %{
+      schema: LocalVisit,
+      stat_key: :browser_visits_count,
+      table_key: :browser_visits,
+      aliases: ~w(browser_history browser-history browser_visits browser-visits visits)
+    }
   ]
+
+  @stat_sources Enum.map(@data_sources, &{&1.schema, &1.stat_key})
+
+  @source_by_alias Enum.reduce(@data_sources, %{}, fn source, acc ->
+                     Enum.reduce(source.aliases, acc, &Map.put(&2, &1, source))
+                   end)
 
   @empty_stats Enum.into(@stat_sources, %{}, fn {_schema, key} -> {key, 0} end)
 
@@ -125,12 +156,37 @@ defmodule Maraithon.Companion.Devices do
         {:error, :not_found}
 
       %Device{} = device ->
-        deleted = purge_device_data(user_id, device.device_id)
+        deleted = purge_all_device_data(user_id, device.device_id)
 
         case Repo.delete(device) do
           {:ok, deleted_device} -> {:ok, %{device: deleted_device, deleted: deleted}}
           error -> error
         end
+    end
+  end
+
+  @doc """
+  Purges synced source data for a `(user_id, device_id)` pair without
+  removing the companion device registration.
+
+  Pass `nil`, `""`, or `"all"` to delete every supported source. Pass a
+  source id such as `"notes"` or `"browser_history"` to delete only that
+  source. Returns `{:ok, counts}` where `counts` maps table keys to the
+  number of rows deleted, or `{:error, :unsupported_source}`.
+  """
+  def purge_data(user_id, device_id, source \\ nil)
+
+  def purge_data(user_id, device_id, source)
+      when is_binary(user_id) and is_binary(device_id) do
+    case normalize_source(source) do
+      :all ->
+        {:ok, purge_all_device_data(user_id, device_id)}
+
+      %{schema: schema, table_key: table_key} ->
+        {:ok, %{table_key => purge_source_rows(schema, user_id, device_id)}}
+
+      :unsupported ->
+        {:error, :unsupported_source}
     end
   end
 
@@ -194,25 +250,37 @@ defmodule Maraithon.Companion.Devices do
       select: {row.device_id, count(row.id)}
   end
 
-  defp purge_device_data(user_id, device_id) do
-    Enum.into(@stat_sources, %{}, fn {schema, key} ->
-      {count, _} =
-        Repo.delete_all(
-          from row in schema,
-            where: row.user_id == ^user_id and row.device_id == ^device_id
-        )
-
-      {stat_key_to_table_key(key), count}
+  defp purge_all_device_data(user_id, device_id) do
+    Enum.into(@data_sources, %{}, fn %{schema: schema, table_key: table_key} ->
+      {table_key, purge_source_rows(schema, user_id, device_id)}
     end)
   end
 
-  defp stat_key_to_table_key(:messages_count), do: :messages
-  defp stat_key_to_table_key(:notes_count), do: :notes
-  defp stat_key_to_table_key(:voice_memos_count), do: :voice_memos
-  defp stat_key_to_table_key(:calendar_events_count), do: :calendar_events
-  defp stat_key_to_table_key(:reminders_count), do: :reminders
-  defp stat_key_to_table_key(:files_count), do: :files
-  defp stat_key_to_table_key(:browser_visits_count), do: :browser_visits
+  defp purge_source_rows(schema, user_id, device_id) do
+    {count, _} =
+      Repo.delete_all(
+        from row in schema,
+          where: row.user_id == ^user_id and row.device_id == ^device_id
+      )
+
+    count
+  end
+
+  defp normalize_source(nil), do: :all
+  defp normalize_source(""), do: :all
+
+  defp normalize_source(source) when is_binary(source) do
+    source
+    |> String.trim()
+    |> String.downcase()
+    |> case do
+      "" -> :all
+      "all" -> :all
+      source -> Map.get(@source_by_alias, source, :unsupported)
+    end
+  end
+
+  defp normalize_source(_source), do: :unsupported
 
   @doc """
   Verifies a plaintext bearer token. Returns the device if it exists,

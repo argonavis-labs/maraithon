@@ -203,6 +203,49 @@ final class MaraithonClientTests: XCTestCase {
         XCTAssertEqual(req.httpMethod, "DELETE")
         XCTAssertEqual(req.url?.path, "/api/v1/companion/devices/\(id.uuidString)/messages")
     }
+
+    func testPurgeDeviceDataSendsDeleteAndDecodesReceipt() async throws {
+        let captured = CapturedRequests()
+        let client = MaraithonClient(
+            baseURL: URL(string: "https://example.com")!,
+            tokenProvider: { "tok" },
+            transport: { req in
+                await captured.record(req)
+                return (Data(#"{"deleted":{"messages":2,"notes":1}}"#.utf8), http(200))
+            }
+        )
+        let id = UUID()
+        let receipt = try await client.purgeDeviceData(deviceId: id)
+
+        XCTAssertEqual(receipt.deleted["messages"], 2)
+        XCTAssertEqual(receipt.deleted["notes"], 1)
+        XCTAssertEqual(receipt.totalDeleted, 3)
+        let last = await captured.last
+        let req = try XCTUnwrap(last)
+        XCTAssertEqual(req.httpMethod, "DELETE")
+        XCTAssertEqual(req.url?.path, "/api/v1/companion/devices/\(id.uuidString)/data")
+    }
+
+    func testPurgeDeviceDataCanTargetOneSource() async throws {
+        let captured = CapturedRequests()
+        let client = MaraithonClient(
+            baseURL: URL(string: "https://example.com")!,
+            tokenProvider: { "tok" },
+            transport: { req in
+                await captured.record(req)
+                return (Data(#"{"deleted":{"notes":4}}"#.utf8), http(200))
+            }
+        )
+        let id = UUID()
+        let receipt = try await client.purgeDeviceData(deviceId: id, source: "notes")
+
+        XCTAssertEqual(receipt.deleted, ["notes": 4])
+        XCTAssertEqual(receipt.totalDeleted, 4)
+        let last = await captured.last
+        let req = try XCTUnwrap(last)
+        XCTAssertEqual(req.httpMethod, "DELETE")
+        XCTAssertEqual(req.url?.path, "/api/v1/companion/devices/\(id.uuidString)/data/notes")
+    }
 }
 
 /// Actor wrapper so the mock transport closure can store the last request

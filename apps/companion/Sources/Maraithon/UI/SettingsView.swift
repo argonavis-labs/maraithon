@@ -33,6 +33,8 @@ struct SettingsView: View {
 private struct DataSettingsView: View {
     @Environment(AppEnvironment.self) private var env
     @State private var pendingClear: PendingClear? = nil
+    @State private var deletionNotice: DataDeletionNotice? = nil
+    @State private var isDeleting: Bool = false
 
     var body: some View {
         Form {
@@ -40,12 +42,18 @@ private struct DataSettingsView: View {
                 Text(DataSettingsCopy.intro)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                if let deletionNotice {
+                    Label(deletionNotice.message, systemImage: deletionNotice.symbol)
+                        .font(.footnote)
+                        .foregroundStyle(deletionNotice.tone.color)
+                }
             }
             Section("Per source") {
                 ForEach(env.sources.sources.filter { !$0.comingSoon }) { source in
                     DataRow(
                         title: source.displayName,
                         symbol: source.symbol,
+                        isDeleting: isDeleting,
                         onReset: { env.sources.resetCursor(id: source.id) },
                         onClear: { pendingClear = .source(id: source.id, name: source.displayName) }
                     )
@@ -59,6 +67,7 @@ private struct DataSettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(.red)
+                .disabled(isDeleting)
                 Text(DataSettingsCopy.deleteAllDescription)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -73,22 +82,64 @@ private struct DataSettingsView: View {
                 ),
                 description: pending.description,
                 onConfirmClearCloud: {
-                    switch pending {
-                    case .source(let id, _):
-                        env.eventLog.warning(
-                            "\(id).clear_cloud_data.confirmed",
-                            source: .ui
-                        )
-                    case .all:
-                        env.eventLog.warning(
-                            "settings.clear_all_cloud_data.confirmed",
-                            source: .ui
-                        )
-                    }
+                    deleteSyncedData(pending)
                 },
                 onResetLocalCursor: nil
             )
         }
+    }
+
+    private func deleteSyncedData(_ pending: PendingClear) {
+        guard !isDeleting else { return }
+
+        let auth = env.deviceAuth
+        let deviceId = auth.deviceId
+        let sourceID = pending.sourceID
+        let sourceName = pending.sourceName
+        let client = defaultClient(auth: auth)
+
+        isDeleting = true
+        deletionNotice = .working(DataSettingsCopy.deleteStarted(sourceName: sourceName))
+
+        Task { @MainActor in
+            do {
+                let response = try await client.purgeDeviceData(deviceId: deviceId, source: sourceID)
+                isDeleting = false
+                deletionNotice = .success(
+                    DataSettingsCopy.deleteSuccess(
+                        sourceName: sourceName,
+                        deletedCount: response.totalDeleted
+                    )
+                )
+                env.eventLog.info(
+                    "settings.synced_data_deleted",
+                    source: .ui,
+                    payload: [
+                        "source_id": sourceID ?? "all",
+                        "deleted_count": "\(response.totalDeleted)"
+                    ]
+                )
+            } catch {
+                isDeleting = false
+                deletionNotice = .failure(
+                    DataSettingsCopy.deleteFailure(sourceName: sourceName, error: error)
+                )
+                env.eventLog.warning(
+                    "settings.synced_data_delete_failed",
+                    source: .ui,
+                    payload: [
+                        "source_id": sourceID ?? "all",
+                        "error": String(describing: error)
+                    ]
+                )
+            }
+        }
+    }
+
+    private func defaultClient(auth: DeviceAuth) -> MaraithonClient {
+        MaraithonClient(tokenProvider: { [weak auth] in
+            await MainActor.run { [auth] in auth?.currentToken }
+        })
     }
 
     private enum PendingClear: Identifiable, Hashable {
@@ -110,11 +161,52 @@ private struct DataSettingsView: View {
                 return DataSettingsCopy.deleteAllConfirmation
             }
         }
+
+        var sourceID: String? {
+            switch self {
+            case .source(let id, _): return id
+            case .all: return nil
+            }
+        }
+
+        var sourceName: String? {
+            switch self {
+            case .source(_, let name): return name
+            case .all: return nil
+            }
+        }
+    }
+
+    private struct DataDeletionNotice {
+        let message: String
+        let symbol: String
+        let tone: StatusTone
+
+        static func working(_ message: String) -> DataDeletionNotice {
+            DataDeletionNotice(
+                message: message,
+                symbol: "arrow.triangle.2.circlepath",
+                tone: .neutral
+            )
+        }
+
+        static func success(_ message: String) -> DataDeletionNotice {
+            DataDeletionNotice(message: message, symbol: "checkmark.circle.fill", tone: .good)
+        }
+
+        static func failure(_ message: String) -> DataDeletionNotice {
+            DataDeletionNotice(
+                message: message,
+                symbol: "exclamationmark.triangle.fill",
+                tone: .attention
+            )
+        }
     }
 
     private struct DataRow: View {
         let title: String
         let symbol: String
+        let isDeleting: Bool
         let onReset: () -> Void
         let onClear: () -> Void
 
@@ -128,12 +220,14 @@ private struct DataSettingsView: View {
                 Button(DataSettingsCopy.resyncTitle, action: onReset)
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .disabled(isDeleting)
                 Button(role: .destructive) { onClear() } label: {
                     Text(DataSettingsCopy.deleteTitle)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(.red)
+                .disabled(isDeleting)
             }
         }
     }
@@ -149,6 +243,42 @@ enum DataSettingsCopy {
 
     static func sourceDeleteConfirmation(sourceName: String) -> String {
         "This deletes every \(sourceName) record Maraithon has synced from this Mac. Local data on your device is not affected."
+    }
+
+    static func deleteStarted(sourceName: String?) -> String {
+        if let sourceName {
+            return "Deleting synced \(sourceName) data…"
+        }
+
+        return "Deleting synced data…"
+    }
+
+    static func deleteSuccess(sourceName: String?, deletedCount: Int) -> String {
+        if deletedCount == 0 {
+            if let sourceName {
+                return "No synced \(sourceName) records were stored in Maraithon. Local data on this Mac was not changed."
+            }
+
+            return "No synced records were stored in Maraithon. Local data on this Mac was not changed."
+        }
+
+        if let sourceName {
+            return "Deleted \(recordCount(deletedCount)) of synced \(sourceName) data from Maraithon. Local data on this Mac was not changed."
+        }
+
+        return "Deleted \(recordCount(deletedCount)) from Maraithon. Local data on this Mac was not changed."
+    }
+
+    static func deleteFailure(sourceName: String?, error: Error) -> String {
+        if let sourceName {
+            return "Could not delete synced \(sourceName) data. \(CompanionErrorCopy.message(for: error))"
+        }
+
+        return "Could not delete synced data. \(CompanionErrorCopy.message(for: error))"
+    }
+
+    private static func recordCount(_ count: Int) -> String {
+        count == 1 ? "1 record" : "\(count.formatted()) records"
     }
 }
 

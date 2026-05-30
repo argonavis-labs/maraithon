@@ -231,11 +231,21 @@ final class UIComponentsTests: XCTestCase {
             DataSettingsCopy.deleteAllTitle,
             DataSettingsCopy.deleteAllDescription,
             DataSettingsCopy.deleteAllConfirmation,
-            DataSettingsCopy.sourceDeleteConfirmation(sourceName: "iMessage")
+            DataSettingsCopy.sourceDeleteConfirmation(sourceName: "iMessage"),
+            DataSettingsCopy.deleteStarted(sourceName: "iMessage"),
+            DataSettingsCopy.deleteSuccess(sourceName: "iMessage", deletedCount: 2),
+            DataSettingsCopy.deleteSuccess(sourceName: nil, deletedCount: 0),
+            DataSettingsCopy.deleteFailure(
+                sourceName: "iMessage",
+                error: MaraithonClientError.unauthorized
+            )
         ].joined(separator: " ")
 
         XCTAssertTrue(publicCopy.contains("Re-sync"))
         XCTAssertTrue(publicCopy.contains("Delete"))
+        XCTAssertTrue(publicCopy.contains("Deleted 2 records of synced iMessage data"))
+        XCTAssertTrue(publicCopy.contains("Local data on this Mac was not changed"))
+        XCTAssertTrue(publicCopy.contains("Reconnect Maraithon to continue"))
         XCTAssertFalse(publicCopy.lowercased().contains("clear cloud"))
         XCTAssertFalse(publicCopy.lowercased().contains("wipes"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
