@@ -14,24 +14,24 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
 
     consequence =
       if length(labels) == 1 do
-        "Future triage will apply it automatically."
+        "Maraithon will apply it when ranking future work."
       else
-        "Future triage will apply them automatically."
+        "Maraithon will apply them when ranking future work."
       end
 
     "#{subject} #{consequence}"
   end
 
   def local_only_text do
-    "Kept as local feedback. No saved preference rule added."
+    "Got it. This stays in the conversation and will not be saved as a standing preference."
   end
 
   def no_pending_text do
-    "No pending preference to reject."
+    "There is no pending preference to approve or dismiss."
   end
 
   def failed_text do
-    "Could not turn that into a saved preference yet. Try /prefer with a broader rule."
+    "Could not turn that into a clear standing preference yet. Send /prefer with the rule you want remembered."
   end
 
   def text(rules, opts \\ []) do
@@ -40,8 +40,8 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
 
     heading =
       case length(rules) do
-        1 -> "Save this preference?"
-        _ -> "Save these preferences?"
+        1 -> "Remember this for future triage?"
+        _ -> "Remember these for future triage?"
       end
 
     body =
@@ -50,7 +50,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
       |> Enum.map(&format_rule(&1, format))
       |> Enum.join("\n")
 
-    [heading, "", body, more_line(length(rules)), "", reply_instruction(format)]
+    [heading, "", body, more_line(length(rules)), "", reply_instruction(format, length(rules))]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
   end
@@ -82,12 +82,15 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
 
   defp more_suffix(_items), do: ""
 
-  defp reply_instruction(:html) do
-    "Reply <code>yes</code> to save, or <code>no</code> to keep this local only."
+  defp reply_instruction(:html, count) do
+    object = if count == 1, do: "it", else: "them"
+
+    "Reply <code>yes</code> to remember #{object}, or <code>no</code> to keep this in the conversation only."
   end
 
-  defp reply_instruction(_format) do
-    "Reply `yes` to save, or `no` to keep this local only."
+  defp reply_instruction(_format, count) do
+    object = if count == 1, do: "it", else: "them"
+    "Reply `yes` to remember #{object}, or `no` to keep this in the conversation only."
   end
 
   defp render_text(value, :html), do: value |> to_string() |> escape_html()

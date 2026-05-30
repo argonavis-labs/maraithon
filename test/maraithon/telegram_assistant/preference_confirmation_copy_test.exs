@@ -13,11 +13,12 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopyTest do
         }
       ])
 
-    assert text =~ "Save this preference?"
+    assert text =~ "Remember this for future triage?"
     assert text =~ "Treat investors as urgent"
-    assert text =~ "Reply `yes` to save"
+    assert text =~ "Reply `yes` to remember it"
     refute text =~ "I think"
     refute text =~ "durable memory"
+    refute text =~ "preference rule"
   end
 
   test "renders saved and local-only outcome copy" do
@@ -29,12 +30,18 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopyTest do
 
     assert saved =~ "Preferences saved:"
     assert saved =~ "Treat investors as urgent"
-    assert saved =~ "Future triage will apply them automatically."
+    assert saved =~ "Maraithon will apply them when ranking future work."
     refute saved =~ "Understood"
     refute saved =~ "I'll"
 
     assert PreferenceConfirmationCopy.local_only_text() ==
-             "Kept as local feedback. No saved preference rule added."
+             "Got it. This stays in the conversation and will not be saved as a standing preference."
+
+    assert PreferenceConfirmationCopy.no_pending_text() ==
+             "There is no pending preference to approve or dismiss."
+
+    assert PreferenceConfirmationCopy.failed_text() ==
+             "Could not turn that into a clear standing preference yet. Send /prefer with the rule you want remembered."
   end
 
   test "escapes HTML in assistant approval prompts" do
@@ -52,6 +59,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopyTest do
     assert text =~ "VIP &lt;investors&gt;"
     assert text =~ "A&amp;B"
     assert text =~ "<code>yes</code>"
+    assert text =~ "remember it"
     refute text =~ "<investors>"
   end
 end

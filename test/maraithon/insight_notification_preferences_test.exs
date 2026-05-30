@@ -110,7 +110,7 @@ defmodule Maraithon.InsightNotificationPreferencesTest do
     message = last_telegram_message(:send)
     assert message.chat_id == "12345"
     assert message.text =~ "Preference saved: Ignore receipt-style notifications."
-    assert message.text =~ "Future triage will apply it automatically."
+    assert message.text =~ "Maraithon will apply it when ranking future work."
     refute message.text =~ "Understood"
     refute message.text =~ "I'll"
   end

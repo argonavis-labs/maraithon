@@ -291,7 +291,7 @@ defmodule Maraithon.TelegramAssistantTest do
          %{
            "status" => "final",
            "assistant_message" =>
-             "I think this should become durable memory. Reply `yes` to save it, or `no` to keep it local only.",
+             "I think this should become durable memory. Reply `yes` to remember it it, or `no` to keep it local only.",
            "message_class" => "approval_prompt",
            "tool_calls" => [],
            "summary" => "Ask for confirmation."
@@ -325,7 +325,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     prompt_reply = last_telegram_message(:send)
     assert prompt_reply.opts[:parse_mode] == "HTML"
-    assert prompt_reply.text =~ "Save this preference?"
+    assert prompt_reply.text =~ "Remember this for future triage?"
     assert prompt_reply.text =~ "Treat investors as urgent"
     assert prompt_reply.text =~ "Reply <code>yes</code>"
     refute prompt_reply.text =~ "I think"
@@ -344,7 +344,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     confirmation_reply = last_telegram_message(:send)
     assert confirmation_reply.text =~ "Preference saved: Treat investors as urgent."
-    assert confirmation_reply.text =~ "Future triage will apply it automatically."
+    assert confirmation_reply.text =~ "Maraithon will apply it when ranking future work."
     refute confirmation_reply.text =~ "saved that as a durable rule"
   end
 

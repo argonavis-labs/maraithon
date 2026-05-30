@@ -256,7 +256,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "list_preferences",
-        "List the linked user's durable preference rules, operator memory summaries, and learned user profile.",
+        "List the linked user's standing preferences, operator memory summaries, and learned user profile.",
         %{
           "type" => "object",
           "properties" => %{}
@@ -264,7 +264,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "remember_preferences",
-        "Persist one or more durable operator preference rules inferred from conversation.",
+        "Persist one or more standing preferences inferred from conversation.",
         %{
           "type" => "object",
           "required" => ["rules"],

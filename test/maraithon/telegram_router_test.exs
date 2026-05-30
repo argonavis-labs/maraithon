@@ -191,7 +191,7 @@ defmodule Maraithon.TelegramRouterTest do
 
     reply = last_telegram_message(:send)
     assert reply.text =~ "Preference saved: Ignore routine receipts."
-    assert reply.text =~ "Future triage will apply it automatically."
+    assert reply.text =~ "Maraithon will apply it when ranking future work."
     refute reply.text =~ "Understood"
     refute reply.text =~ "I'll"
     refute button_labels(reply.opts) |> Enum.member?("Remember This")
@@ -247,9 +247,9 @@ defmodule Maraithon.TelegramRouterTest do
              PreferenceMemory.pending_rules(user_id)
 
     confirmation_prompt = last_telegram_message(:send)
-    assert confirmation_prompt.text =~ "Save this preference?"
+    assert confirmation_prompt.text =~ "Remember this for future triage?"
     assert confirmation_prompt.text =~ "Treat investors as urgent"
-    assert confirmation_prompt.text =~ "Reply <code>yes</code> to save"
+    assert confirmation_prompt.text =~ "Reply <code>yes</code> to remember it"
     refute confirmation_prompt.text =~ "I think"
     refute confirmation_prompt.text =~ "Should I save that rule?"
     assert button_labels(confirmation_prompt.opts) |> Enum.member?("Remember This")
@@ -282,7 +282,7 @@ defmodule Maraithon.TelegramRouterTest do
 
     reply = last_telegram_message(:send)
     assert reply.text =~ "Preference saved: Treat investors as urgent."
-    assert reply.text =~ "Future triage will apply it automatically."
+    assert reply.text =~ "Maraithon will apply it when ranking future work."
     refute reply.text =~ "Understood"
     refute reply.text =~ "durable rule"
   end

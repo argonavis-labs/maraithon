@@ -467,7 +467,7 @@ defmodule Maraithon.TelegramRouter do
                 "metadata" => %{"pending_rule_ids" => []}
               })
 
-            TelegramResponder.answer_callback(callback_id, "Preference saved")
+            TelegramResponder.answer_callback(callback_id, "Preference remembered")
 
             send_assistant_turn(
               conversation,
@@ -489,7 +489,7 @@ defmodule Maraithon.TelegramRouter do
                 "metadata" => %{"pending_rule_ids" => []}
               })
 
-            TelegramResponder.answer_callback(callback_id, "Kept local only")
+            TelegramResponder.answer_callback(callback_id, "Kept in this conversation")
 
             send_assistant_turn(
               conversation,
