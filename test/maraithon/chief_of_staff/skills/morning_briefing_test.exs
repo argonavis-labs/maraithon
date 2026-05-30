@@ -1051,6 +1051,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief["body"] =~ "Today's move:"
   end
 
+  test "no-source fallback avoids first-person assistant copy" do
+    brief = MorningBriefing.build_compact_fallback_brief(nil, "provider unavailable")
+
+    assert brief["title"] == "Morning briefing"
+    assert brief["summary"] == "No priority has been verified yet."
+    assert brief["body"] =~ "Core sources were not verified for this briefing."
+    assert brief["body"] =~ "Calendar, open work, inbox, Slack, and local sources"
+    assert brief["body"] =~ "Today's move: verify the day"
+    refute brief["body"] =~ "I could not"
+    refute brief["body"] =~ "I "
+    refute brief["body"] =~ "provider unavailable"
+  end
+
   test "invalid model output records a compact checked fallback briefing",
        %{
          user_id: user_id,

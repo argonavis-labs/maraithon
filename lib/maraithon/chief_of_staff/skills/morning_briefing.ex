@@ -1423,7 +1423,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   def build_compact_fallback_brief(_brief_input, error_message) do
-    source_backed_fallback_brief(%{}, error_message)
+    source_backed_fallback_brief(:no_source_input, error_message)
   end
 
   defp source_backed_fallback_brief(brief_input, _error_message) when is_map(brief_input) do
@@ -1902,13 +1902,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp fallback_no_source_body(_error_message) do
     """
-    I could not verify the core sources for this briefing. Do not assume the day is clear yet.
+    Core sources were not verified for this briefing. Do not assume the day is clear yet.
 
     ## Needs Your Attention
     - No priority has been verified yet.
 
     ## Unknowns
-    Calendar, open work, inbox, Slack, and local sources still need a fresh pass.
+    Calendar, open work, inbox, Slack, and local sources still need a fresh pass before this can be treated as a real daily read.
 
     Today's move: verify the day before committing to lower-priority work.
     """

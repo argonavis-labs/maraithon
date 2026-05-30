@@ -193,7 +193,9 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       {:emit, {:agent_response, payload}, _state} =
         PromptAgent.handle_effect_result({:llm_call, response}, state, @context)
 
-      assert payload.response =~ "not available to me"
+      assert payload.response == "Action unavailable: read_file is not enabled for this agent."
+      refute payload.response =~ "I "
+      refute payload.response =~ "me"
     end
 
     test "ignores freeform text that does not follow the model response contract" do

@@ -604,7 +604,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
       if tool in allowed_tools do
         {:tool_call, tool, args}
       else
-        {:respond, "I wanted to use #{tool} but it's not available to me."}
+        {:respond, "Action unavailable: #{tool} is not enabled for this agent."}
       end
     else
       :observe
