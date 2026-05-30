@@ -91,9 +91,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadarTest do
           "holiday_id" => "mothers_day_2026",
           "phase_key" => "book_brunch",
           "should_notify" => true,
-          "title" => "Mother's Day planning",
-          "summary" =>
-            "Mother's Day is close enough that brunch reservations and a small gift should get locked now.",
+          "title" => "90% confidence: Mother's Day planning",
+          "summary" => "Model score says Mother's Day needs a proactive nudge now.",
           "body" =>
             "90% confidence this matters.\n\nWhy now: restaurants and flowers tighten closer to Mother's Day.\n\nDo: Book brunch and decide the gift this week.",
           "priority" => 84,
@@ -103,8 +102,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadarTest do
           "attention_mode" => "act_now",
           "create_todo" => true,
           "todo" => %{
-            "title" => "Book Mother's Day brunch",
-            "summary" => "Get the brunch reservation and gift decision locked in.",
+            "title" => "85% confidence: book Mother's Day brunch",
+            "summary" => "Model reasoning says the brunch reservation should be locked.",
             "next_action" => "Pick the restaurant and decide the gift today.",
             "priority" => 84,
             "attention_mode" => "act_now"
@@ -134,13 +133,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadarTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "holiday_radar"
-    assert brief.title == "Mother's Day planning"
+    assert brief.title == "Mother's Day: Pick the restaurant and decide the gift today"
+    assert brief.summary == "restaurants and flowers tighten closer to Mother's Day"
 
     assert brief.body =~
              "Action needed for Mother's Day: Pick the restaurant and decide the gift today."
 
-    assert brief.body =~ "Why now: Mother's Day is close enough"
-    assert brief.body =~ "Context: restaurants and flowers tighten closer to Mother's Day."
+    assert brief.body =~ "Why now: restaurants and flowers tighten closer to Mother's Day."
+    refute brief.body =~ "Context: Model"
+    refute brief.body =~ "Context: Book brunch"
+    refute brief.title =~ "confidence"
+    refute brief.summary =~ "Model"
+    refute brief.summary =~ "score"
     refute String.starts_with?(brief.body, "Why now")
     refute brief.body =~ "90%"
     refute brief.body =~ "confidence"
@@ -148,8 +152,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadarTest do
     assert brief.metadata["holiday_confidence"] == 0.9
 
     [holiday_todo] = Todos.list_for_user(user_id, source: "chief_of_staff_holiday", limit: 5)
-    assert holiday_todo.title == "Book Mother's Day brunch"
-    assert holiday_todo.next_action == "Pick the restaurant and decide the gift today."
+    assert holiday_todo.title == "Mother's Day: Pick the restaurant and decide the gift today"
+    assert holiday_todo.summary == "restaurants and flowers tighten closer to Mother's Day"
+    assert holiday_todo.next_action == "Pick the restaurant and decide the gift today"
+    refute holiday_todo.title =~ "confidence"
+    refute holiday_todo.summary =~ "Model"
     assert holiday_todo.metadata["holiday_phase_key"] == "book_brunch"
     assert holiday_todo.metadata["holiday_id"] == "mothers_day_2026"
   end

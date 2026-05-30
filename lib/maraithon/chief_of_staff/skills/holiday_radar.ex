@@ -305,6 +305,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       reasoning = normalize_string(Map.get(attrs, "reasoning"))
       attention_mode = normalize_attention_mode(Map.get(attrs, "attention_mode")) || "act_now"
       next_action = holiday_next_action(attrs, body)
+      title = holiday_user_title(title, holiday_name, next_action)
+      summary = holiday_user_summary(summary, body, next_action)
 
       metadata =
         %{
@@ -373,9 +375,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       "kind" => "general",
       "attention_mode" =>
         normalize_attention_mode(Map.get(todo_map, "attention_mode")) || fallback_attention_mode,
-      "title" => normalize_string(Map.get(todo_map, "title")) || fallback_title,
-      "summary" => normalize_string(Map.get(todo_map, "summary")) || fallback_summary,
-      "next_action" => normalize_string(Map.get(todo_map, "next_action")) || fallback_next_action,
+      "title" => safe_user_sentence(Map.get(todo_map, "title")) || fallback_title,
+      "summary" => safe_user_sentence(Map.get(todo_map, "summary")) || fallback_summary,
+      "next_action" =>
+        safe_user_sentence(Map.get(todo_map, "next_action")) || fallback_next_action,
       "priority" => normalize_priority(Map.get(todo_map, "priority"), fallback_priority),
       "source_occurred_at" => reviewed_at,
       "dedupe_key" => "holiday:#{holiday["id"]}:#{phase_key}",
@@ -577,9 +580,40 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
     todo_map = Map.get(attrs, "todo")
     todo_map = if is_map(todo_map), do: todo_map, else: %{}
 
-    normalize_string(Map.get(todo_map, "next_action")) ||
+    safe_user_sentence(Map.get(todo_map, "next_action")) ||
       extracted_action_line(body) ||
       "Review the holiday plan and lock the next concrete step."
+  end
+
+  defp holiday_user_title(title, holiday_name, next_action) do
+    safe_user_sentence(title) ||
+      holiday_fallback_title(holiday_name, next_action)
+  end
+
+  defp holiday_fallback_title(holiday_name, next_action) do
+    holiday_name = normalize_string(holiday_name)
+    action = safe_user_sentence(next_action)
+
+    cond do
+      holiday_name && action ->
+        truncate_user_text("#{holiday_name}: #{String.trim_trailing(action, ".")}", 90)
+
+      holiday_name ->
+        "#{holiday_name} planning"
+
+      action ->
+        truncate_user_text(action, 90)
+
+      true ->
+        "Holiday planning"
+    end
+  end
+
+  defp holiday_user_summary(summary, body, next_action) do
+    safe_user_sentence(summary) ||
+      first_context_line(body) ||
+      safe_user_sentence(next_action) ||
+      "Review the holiday plan and lock the next concrete step"
   end
 
   defp holiday_brief_body(holiday_name, summary, body, next_action) do
@@ -587,7 +621,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
 
     context_line =
       body
-      |> user_body_lines()
+      |> context_body_lines()
       |> Enum.find(fn line ->
         not same_sentence?(line, why_now) and not same_sentence?(line, next_action)
       end)
@@ -621,6 +655,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
     |> List.first()
   end
 
+  defp context_body_lines(body) do
+    body
+    |> raw_body_lines()
+    |> Enum.reject(&action_line?/1)
+    |> Enum.map(&strip_user_label/1)
+    |> Enum.map(&safe_user_sentence/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
   defp user_body_lines(body) do
     body
     |> raw_body_lines()
@@ -637,6 +680,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
       text -> String.split(text, ~r/\n+/u, trim: true)
     end
   end
+
+  defp action_line?(line) when is_binary(line) do
+    Regex.match?(~r/^\s*(?:do|action|next|suggested next step)\s*:/iu, line)
+  end
+
+  defp action_line?(_line), do: false
 
   defp strip_user_label(line) do
     String.replace(
@@ -667,10 +716,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
   defp internal_process_line?(line) do
     normalized = String.downcase(line)
 
-    Enum.any?(
-      ["confidence", "score", "threshold", "model", "json", "heuristic", "classified"],
-      &String.contains?(normalized, &1)
-    )
+    Regex.match?(~r/\b\d{1,3}%/u, normalized) or
+      Enum.any?(
+        [
+          "confidence",
+          "score",
+          "threshold",
+          "model",
+          "json",
+          "heuristic",
+          "classified",
+          "reasoning",
+          "llm",
+          "radar pass"
+        ],
+        &String.contains?(normalized, &1)
+      )
   end
 
   defp same_sentence?(_left, nil), do: false
@@ -693,6 +754,21 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadar do
     |> case do
       nil -> ""
       text -> String.trim_trailing(text, ".") <> "."
+    end
+  end
+
+  defp truncate_user_text(nil, _max), do: nil
+
+  defp truncate_user_text(text, max) when is_binary(text) and is_integer(max) do
+    text = String.trim(text)
+
+    if String.length(text) <= max do
+      text
+    else
+      text
+      |> String.slice(0, max - 3)
+      |> String.trim()
+      |> Kernel.<>("...")
     end
   end
 
