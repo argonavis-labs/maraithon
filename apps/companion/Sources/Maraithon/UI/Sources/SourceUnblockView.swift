@@ -86,7 +86,7 @@ struct SourceUnblockView: View {
                             source: .ui
                         )
                     } label: {
-                        Label("Open System Settings", systemImage: "gear")
+                        Label(hint.settingsButtonTitle, systemImage: "gear")
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)

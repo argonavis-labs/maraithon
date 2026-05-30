@@ -142,6 +142,32 @@ final class SourceRegistryPauseTests: XCTestCase {
         XCTAssertTrue(registry.fullDiskAccessBlockedSources().isEmpty)
     }
 
+    func testUserRecoverablePermissionBlockedSourcesExcludeFullDiskAccess() {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let voiceMemos = FakeSource(id: "voice_memos", displayName: "Voice Memos", symbol: "waveform")
+        let reminders = FakeSource(id: "reminders", displayName: "Reminders", symbol: "list.bullet")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        let files = FakeSource(id: "files", displayName: "Files", symbol: "folder")
+        registry.register(calendar)
+        registry.register(files)
+        registry.register(imessage)
+        registry.register(reminders)
+        registry.register(voiceMemos)
+
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        voiceMemos.statusPublisher.update(state: .needsAttention(reason: "voice_memos_speech_not_authorized"))
+        reminders.statusPublisher.update(state: .needsAttention(reason: "reminders_not_authorized"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+        files.statusPublisher.update(state: .error(reason: "serverError(status: 503)"))
+
+        XCTAssertEqual(
+            registry.userRecoverablePermissionBlockedSources().map(\.displayName),
+            ["Voice Memos", "Reminders", "Calendar"]
+        )
+    }
+
     func testSyncFullDiskAccessBlockedSourcesRechecksEveryBlockedLocalSource() async {
         let log = EventLog()
         let registry = SourceRegistry(eventLog: log)
@@ -190,6 +216,40 @@ final class SourceRegistryPauseTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 20_000_000)
         XCTAssertEqual(imessage.syncCount, 1)
         XCTAssertEqual(calendar.syncCount, 0)
+    }
+
+    func testSyncUserRecoverablePermissionBlockedSourcesRechecksOnlyNonFullDiskPermissions() async {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let voiceMemos = FakeSource(id: "voice_memos", displayName: "Voice Memos", symbol: "waveform")
+        let reminders = FakeSource(id: "reminders", displayName: "Reminders", symbol: "list.bullet")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        let files = FakeSource(id: "files", displayName: "Files", symbol: "folder")
+        registry.register(imessage)
+        registry.register(notes)
+        registry.register(voiceMemos)
+        registry.register(reminders)
+        registry.register(calendar)
+        registry.register(files)
+
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        notes.statusPublisher.update(state: .error(reason: "notes_full_disk_access_required"))
+        voiceMemos.statusPublisher.update(state: .needsAttention(reason: "voice_memos_speech_disabled"))
+        reminders.statusPublisher.update(state: .needsAttention(reason: "reminders_not_authorized"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+        files.statusPublisher.update(state: .error(reason: "serverError(status: 503)"))
+
+        registry.syncUserRecoverablePermissionBlockedSources()
+        try? await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(imessage.syncCount, 0)
+        XCTAssertEqual(notes.syncCount, 0)
+        XCTAssertEqual(voiceMemos.syncCount, 1)
+        XCTAssertEqual(reminders.syncCount, 1)
+        XCTAssertEqual(calendar.syncCount, 1)
+        XCTAssertEqual(files.syncCount, 0)
     }
 }
 

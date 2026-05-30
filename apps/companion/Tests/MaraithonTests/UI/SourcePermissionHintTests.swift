@@ -12,6 +12,8 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Calendar Settings")
+        XCTAssertTrue(hint.body.contains("separate from Full Disk Access"))
         XCTAssertNotNil(hint.followUpNote)
     }
 
@@ -22,6 +24,8 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Reminders Settings")
+        XCTAssertTrue(hint.body.contains("separate from Full Disk Access"))
     }
 
     func testVoiceMemosFullDiskAccessReasonHasSettingsDeepLink() {
@@ -31,6 +35,7 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Full Disk Access")
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
         XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
@@ -44,6 +49,7 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Full Disk Access")
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
         XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
@@ -57,6 +63,7 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Full Disk Access")
         XCTAssertEqual(hint.followUpNote, FullDiskAccessCopy.unblockFollowUp)
         XCTAssertTrue(hint.requiresStableFullDiskAccessApp)
     }
@@ -71,7 +78,19 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.Siri-Settings.extension"
         )
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Siri Settings")
         XCTAssertNotNil(hint.followUpNote)
+        XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
+    }
+
+    func testVoiceMemosSpeechPermissionUsesFocusedButtonCopy() {
+        let hint = SourcePermissionHint.forReason("voice_memos_speech_not_authorized")
+        XCTAssertEqual(hint.title, "Speech Recognition access needed")
+        XCTAssertEqual(hint.settingsButtonTitle, "Open Speech Settings")
+        XCTAssertEqual(
+            hint.settingsURL?.absoluteString,
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
+        )
         XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
 
@@ -80,6 +99,7 @@ final class SourcePermissionHintTests: XCTestCase {
         XCTAssertEqual(hint.title, "This source needs attention")
         XCTAssertEqual(hint.body, "This source needs attention. Sync again when ready.")
         XCTAssertNil(hint.settingsURL)
+        XCTAssertEqual(hint.settingsButtonTitle, "Open System Settings")
         XCTAssertNil(hint.followUpNote)
         XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }

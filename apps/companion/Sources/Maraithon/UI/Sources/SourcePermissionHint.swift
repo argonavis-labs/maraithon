@@ -16,6 +16,10 @@ struct SourcePermissionHint: Equatable {
     /// `x-apple.systempreferences:` URL that opens the right Privacy
     /// pane. `nil` when no deep link applies (rare).
     let settingsURL: URL?
+    /// User-facing label for the settings deep link. Keep this specific
+    /// so a Calendar block does not look like another Full Disk Access
+    /// prompt.
+    let settingsButtonTitle: String
     /// Optional follow-up note for the recovery path after the user
     /// changes a macOS permission.
     let followUpNote: String?
@@ -27,12 +31,14 @@ struct SourcePermissionHint: Equatable {
         title: String,
         body: String,
         settingsURL: URL?,
+        settingsButtonTitle: String = "Open System Settings",
         followUpNote: String?,
         requiresStableFullDiskAccessApp: Bool = false
     ) {
         self.title = title
         self.body = body
         self.settingsURL = settingsURL
+        self.settingsButtonTitle = settingsButtonTitle
         self.followUpNote = followUpNote
         self.requiresStableFullDiskAccessApp = requiresStableFullDiskAccessApp
     }
@@ -42,22 +48,25 @@ struct SourcePermissionHint: Equatable {
         case "calendar_not_authorized":
             return SourcePermissionHint(
                 title: "Calendar access needed",
-                body: "Maraithon needs permission to read your calendar events. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
+                body: "Calendar access is separate from Full Disk Access. Maraithon needs Calendars Full Access to read your events on this Mac. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"),
-                followUpNote: "If Maraithon is already listed, toggle it off and back on. macOS may ask you to relaunch the app — quit and reopen, then tap Check again."
+                settingsButtonTitle: "Open Calendar Settings",
+                followUpNote: "After enabling Maraithon, return here; Check again rechecks Calendar immediately. If Maraithon is already listed, toggle it off and back on."
             )
         case "reminders_not_authorized":
             return SourcePermissionHint(
                 title: "Reminders access needed",
-                body: "Maraithon needs permission to read your reminders. Open System Settings → Privacy & Security → Reminders, then enable Maraithon.",
+                body: "Reminders access is separate from Full Disk Access. Maraithon needs Reminders Full Access to read reminders on this Mac. Open System Settings → Privacy & Security → Reminders, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"),
-                followUpNote: "If Maraithon is already listed, toggle it off and back on. macOS may ask you to relaunch the app — quit and reopen, then tap Check again."
+                settingsButtonTitle: "Open Reminders Settings",
+                followUpNote: "After enabling Maraithon, return here; Check again rechecks Reminders immediately. If Maraithon is already listed, toggle it off and back on."
             )
         case "imessage_full_disk_access_required":
             return SourcePermissionHint(
                 title: "iMessage access needed",
                 body: "Maraithon needs Full Disk Access to read your local iMessage history on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+                settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true
             )
@@ -66,6 +75,7 @@ struct SourcePermissionHint: Equatable {
                 title: "Notes access needed",
                 body: "Maraithon needs Full Disk Access to read your local Notes on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+                settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true
             )
@@ -74,6 +84,7 @@ struct SourcePermissionHint: Equatable {
                 title: "Siri or Dictation is off",
                 body: "Voice Memos still sync, but macOS is refusing local transcription because Siri or Dictation is disabled. Open System Settings → Apple Intelligence & Siri and turn Siri on, or open Keyboard → Dictation and turn Dictation on.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension"),
+                settingsButtonTitle: "Open Siri Settings",
                 followUpNote: "After enabling Siri or Dictation, tap Check again. New voice memos will get transcripts on the next sync; existing memos pick up transcripts when their audio re-flows."
             )
         case "voice_memos_speech_not_authorized":
@@ -81,6 +92,7 @@ struct SourcePermissionHint: Equatable {
                 title: "Speech Recognition access needed",
                 body: "Voice Memos sync, but transcripts need Speech Recognition permission. Open System Settings → Privacy & Security → Speech Recognition, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"),
+                settingsButtonTitle: "Open Speech Settings",
                 followUpNote: "After enabling, tap Check again. New voice memos will get transcripts on the next sync."
             )
         case "voice_memos_full_disk_access_required":
@@ -88,6 +100,7 @@ struct SourcePermissionHint: Equatable {
                 title: "Voice Memos access needed",
                 body: "Maraithon needs Full Disk Access to read your local Voice Memos and audio files on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
+                settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
                 requiresStableFullDiskAccessApp: true
             )
@@ -102,17 +115,6 @@ struct SourcePermissionHint: Equatable {
     }
 
     static func hasFocusedUnblock(for reason: String) -> Bool {
-        switch reason {
-        case "calendar_not_authorized",
-             "reminders_not_authorized",
-             "imessage_full_disk_access_required",
-             "notes_full_disk_access_required",
-             "voice_memos_speech_disabled",
-             "voice_memos_speech_not_authorized",
-             "voice_memos_full_disk_access_required":
-            return true
-        default:
-            return false
-        }
+        SourceState.isUserRecoverablePermissionReason(reason)
     }
 }

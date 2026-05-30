@@ -13,6 +13,15 @@ final class SourceRegistry {
 
     private var registered: [String: any SourceProtocol] = [:]
     private let eventLog: EventLog
+    private static let sourceOrder = [
+        "imessage": 0,
+        "notes": 1,
+        "voice_memos": 2,
+        "reminders": 3,
+        "calendar": 4,
+        "files": 5,
+        "browser_history": 6
+    ]
 
     init(eventLog: EventLog) {
         self.eventLog = eventLog
@@ -54,8 +63,6 @@ final class SourceRegistry {
     /// the main window banner so a permissions regression after
     /// onboarding is visible without making the user inspect each source.
     func fullDiskAccessBlockedSources() -> [SourceDescriptor] {
-        let sourceOrder = ["imessage": 0, "notes": 1, "voice_memos": 2]
-
         return sources
             .filter { descriptor in
                 guard !descriptor.comingSoon,
@@ -65,14 +72,34 @@ final class SourceRegistry {
                 }
                 return publisher.displayedState().requiresFullDiskAccess
             }
-            .sorted {
-                let left = sourceOrder[$0.id] ?? Int.max
-                let right = sourceOrder[$1.id] ?? Int.max
-                if left == right {
-                    return $0.displayName < $1.displayName
+            .sorted(by: Self.sortByProductOrder)
+    }
+
+    /// Sources with focused macOS permission screens other than Full
+    /// Disk Access. Rechecked when the app returns active so Calendar
+    /// and Reminders clear quickly after the user grants access in
+    /// System Settings.
+    func userRecoverablePermissionBlockedSources() -> [SourceDescriptor] {
+        sources
+            .filter { descriptor in
+                guard !descriptor.comingSoon,
+                      let publisher = registered[descriptor.id]?.statusPublisher
+                else {
+                    return false
                 }
-                return left < right
+
+                let reason: String
+                switch publisher.displayedState() {
+                case .needsAttention(let stateReason), .error(let stateReason):
+                    reason = stateReason
+                default:
+                    return false
+                }
+
+                return SourceState.isUserRecoverablePermissionReason(reason)
+                    && !SourceState.isFullDiskAccessReason(reason)
             }
+            .sorted(by: Self.sortByProductOrder)
     }
 
     /// Pull the latest state from every registered source's status
@@ -135,6 +162,35 @@ final class SourceRegistry {
                 } catch {
                     eventLog.error(
                         "source_registry.sync_fda_blocked_failed",
+                        source: .system,
+                        payload: ["id": source.id, "error": String(describing: error)]
+                    )
+                }
+            }
+        }
+    }
+
+    func syncUserRecoverablePermissionBlockedSources() {
+        let blockedIDs = Set(userRecoverablePermissionBlockedSources().map(\.id))
+
+        guard !blockedIDs.isEmpty else {
+            eventLog.info("source_registry.sync_permission_blocked_none", source: .system)
+            return
+        }
+
+        eventLog.info(
+            "source_registry.sync_permission_blocked",
+            source: .system,
+            payload: ["count": String(blockedIDs.count)]
+        )
+
+        for source in registered.values where blockedIDs.contains(source.id) {
+            Task { @MainActor in
+                do {
+                    try await source.syncNow()
+                } catch {
+                    eventLog.error(
+                        "source_registry.sync_permission_blocked_failed",
                         source: .system,
                         payload: ["id": source.id, "error": String(describing: error)]
                     )
@@ -244,6 +300,18 @@ final class SourceRegistry {
             }
         }
     }
+
+    private static func sortByProductOrder(
+        _ left: SourceDescriptor,
+        _ right: SourceDescriptor
+    ) -> Bool {
+        let leftOrder = sourceOrder[left.id] ?? Int.max
+        let rightOrder = sourceOrder[right.id] ?? Int.max
+        if leftOrder == rightOrder {
+            return left.displayName < right.displayName
+        }
+        return leftOrder < rightOrder
+    }
 }
 
 /// Lightweight view-facing description of a source. UI binds to this; the
@@ -277,6 +345,21 @@ enum SourceState: Hashable, Sendable {
         switch reason {
         case "imessage_full_disk_access_required",
              "notes_full_disk_access_required",
+             "voice_memos_full_disk_access_required":
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func isUserRecoverablePermissionReason(_ reason: String) -> Bool {
+        switch reason {
+        case "calendar_not_authorized",
+             "reminders_not_authorized",
+             "imessage_full_disk_access_required",
+             "notes_full_disk_access_required",
+             "voice_memos_speech_disabled",
+             "voice_memos_speech_not_authorized",
              "voice_memos_full_disk_access_required":
             return true
         default:

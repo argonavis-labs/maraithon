@@ -47,11 +47,11 @@ struct RootWindow: View {
         .animation(.default, value: env.onboarding.current)
         .onAppear {
             BatterySettings.shared.bind(sources: env.sources, eventLog: env.eventLog)
-            refreshFullDiskAccessIfNeeded()
+            refreshPermissionsIfNeeded()
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
-            refreshFullDiskAccessIfNeeded()
+            refreshPermissionsIfNeeded()
         }
         .onChange(of: env.deviceAuth.state) { _, newState in
             // Re-enter onboarding if the user signs out mid-flow before
@@ -66,12 +66,19 @@ struct RootWindow: View {
         }
     }
 
-    private func refreshFullDiskAccessIfNeeded() {
+    private func refreshPermissionsIfNeeded() {
+        let ranGlobalRefresh = refreshFullDiskAccessIfNeeded()
+        if !ranGlobalRefresh {
+            env.sources.syncUserRecoverablePermissionBlockedSources()
+        }
+    }
+
+    private func refreshFullDiskAccessIfNeeded() -> Bool {
         let needsRefresh = env.onboarding.isFullDiskAccessSkipped
             || !env.sources.fullDiskAccessBlockedSources().isEmpty
 
         guard needsRefresh else {
-            return
+            return false
         }
 
         if FullDiskAccessProbe.isGranted() {
@@ -79,7 +86,9 @@ struct RootWindow: View {
             env.sources.syncFullDiskAccessBlockedSources()
         } else {
             env.sources.syncNow()
+            return true
         }
+        return false
     }
 
     @ViewBuilder
