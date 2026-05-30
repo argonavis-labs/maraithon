@@ -335,7 +335,7 @@ defmodule Maraithon.CrmTest do
     assert card =~ "*Dana Lee*"
     assert card =~ "Relationship: Customer sponsor"
     assert card =~ "Preferred: slack"
-    assert card =~ "Open loops: 1"
+    assert card =~ "Open follow-ups: 1"
     assert card =~ "Sources: slack (1)"
     refute card =~ "|"
     assert String.length(card) < 600

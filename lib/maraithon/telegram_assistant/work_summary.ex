@@ -835,8 +835,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     "connected_accounts" => "Connected accounts",
     "open_work" => "Open work",
     "open_work_review" => "Open work",
-    "open_loops" => "Open loops",
-    "linked_item" => "Linked item",
+    "open_loops" => "Follow-through",
+    "linked_item" => "Selected item",
     "action_history" => "Action history",
     "briefing_schedule" => "Briefing schedule",
     "scheduled_followups" => "Scheduled follow-ups",
@@ -849,7 +849,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     "people_update" => "People update",
     "relationship_context" => "Relationship context",
     "connected_sources" => "Connected sources",
-    "relationship_learning" => "Relationship learning",
+    "relationship_learning" => "Relationship notes",
     "calendar" => "Calendar",
     "gmail" => "Gmail",
     "slack" => "Slack",
@@ -989,8 +989,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "list_connected_accounts" -> "Connected accounts"
       "list_todos" -> "Open work"
       "get_open_work_summary" -> "Open work"
-      "get_open_loops" -> "Open loops"
-      "inspect_open_insight" -> "Linked item"
+      "get_open_loops" -> "Follow-through"
+      "inspect_open_insight" -> "Selected item"
       "explain_action_ledger" -> "Action history"
       "update_briefing_schedule" -> "Briefing schedule"
       "list_scheduled_tasks" -> "Scheduled follow-ups"
@@ -1013,7 +1013,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "crm_context" -> "Relationship context"
       "relationship_context" -> "Relationship context"
       "review_connected_context" -> "Connected sources"
-      "learn_relationship_context" -> "Relationship learning"
+      "learn_relationship_context" -> "Relationship notes"
       "calendar_list_events" -> "Calendar"
       "calendar_events_for_person" -> "Calendar"
       "calendar_events_around" -> "Calendar"
@@ -1085,10 +1085,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "open_work" -> "checked open work"
       "get_open_work_summary" -> "reviewed open work"
       "open_work_review" -> "reviewed open work"
-      "get_open_loops" -> "reviewed open loops"
-      "open_loops" -> "reviewed open loops"
-      "inspect_open_insight" -> "inspected the linked item"
-      "linked_item" -> "inspected the linked item"
+      "get_open_loops" -> "reviewed follow-through"
+      "open_loops" -> "reviewed follow-through"
+      "inspect_open_insight" -> "checked the selected item"
+      "linked_item" -> "checked the selected item"
       "explain_action_ledger" -> "reviewed action history"
       "action_history" -> "reviewed action history"
       "update_briefing_schedule" -> "updated the briefing schedule"
@@ -1116,8 +1116,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       "relationship_context" -> "checked relationship context"
       "review_connected_context" -> "checked connected sources"
       "connected_sources" -> "checked connected sources"
-      "learn_relationship_context" -> "learned relationship context"
-      "relationship_learning" -> "learned relationship context"
+      "learn_relationship_context" -> "updated relationship notes"
+      "relationship_learning" -> "updated relationship notes"
       "calendar_list_events" -> "checked calendar"
       "calendar_events_for_person" -> "checked calendar"
       "calendar_events_around" -> "checked calendar"

@@ -303,9 +303,9 @@ private enum ChatWorkSummaryCopy {
         case "open_work", "open_work_review":
             "Open work"
         case "open_loops":
-            "Open loops"
+            "Follow-through"
         case "linked_item":
-            "Linked item"
+            "Selected item"
         case "action_history":
             "Action history"
         case "briefing_schedule":
@@ -323,7 +323,7 @@ private enum ChatWorkSummaryCopy {
         case "connected_sources":
             "Connected sources"
         case "relationship_learning":
-            "Relationship learning"
+            "Relationship notes"
         case "calendar":
             "Calendar"
         case "gmail":

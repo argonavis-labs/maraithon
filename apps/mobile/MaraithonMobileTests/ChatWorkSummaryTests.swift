@@ -171,6 +171,55 @@ struct ChatWorkSummaryTests {
     }
 
     @Test
+    func decodingKeepsFollowThroughLabelsUserFacing() throws {
+        let data = Data(
+            """
+            {
+              "headline": "Checked follow-through before replying",
+              "status": "completed",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "tool": "get_open_loops",
+                  "label": "get_open_loops",
+                  "status": "completed",
+                  "summary": "Reviewed current follow-through."
+                },
+                {
+                  "id": "tool-2",
+                  "tool": "inspect_open_insight",
+                  "label": "inspect_open_insight",
+                  "status": "completed",
+                  "summary": "Checked selected work."
+                },
+                {
+                  "id": "tool-3",
+                  "tool": "learn_relationship_context",
+                  "label": "learn_relationship_context",
+                  "status": "completed",
+                  "summary": "Updated relationship notes."
+                }
+              ],
+              "steps": []
+            }
+            """.utf8
+        )
+
+        let summary = try JSONDecoder().decode(ChatWorkSummary.self, from: data)
+        let encoded = try JSONEncoder().encode(summary)
+        let visiblePayload = String(data: encoded, encoding: .utf8) ?? ""
+
+        #expect(summary.toolCalls.map(\.tool) == ["open_loops", "linked_item", "relationship_learning"])
+        #expect(summary.toolCalls.map(\.label) == ["Follow-through", "Selected item", "Relationship notes"])
+        #expect(visiblePayload.contains("Open loops") == false)
+        #expect(visiblePayload.contains("Linked item") == false)
+        #expect(visiblePayload.contains("Relationship learning") == false)
+        #expect(visiblePayload.contains("get_open_loops") == false)
+        #expect(visiblePayload.contains("inspect_open_insight") == false)
+        #expect(visiblePayload.contains("learn_relationship_context") == false)
+    }
+
+    @Test
     func decodingPreservesSpecificChiefOfStaffToolLabels() throws {
         let data = Data(
             """

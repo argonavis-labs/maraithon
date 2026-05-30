@@ -38,7 +38,7 @@ defmodule Maraithon.Crm.Serializer do
       labeled("Relationship", person.relationship),
       labeled("Preferred", preferred_channel(person, links)),
       labeled("Last touch", format_date(person.last_interaction_at)),
-      "Open loops: #{open_todo_count}",
+      "Open follow-ups: #{open_todo_count}",
       labeled("Sources", source_summary(links))
     ]
     |> Enum.reject(&blank?/1)

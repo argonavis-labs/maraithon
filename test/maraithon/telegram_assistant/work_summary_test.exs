@@ -139,6 +139,43 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "todo_update"
   end
 
+  test "follow-through tools do not expose internal loop language" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "get_open_loops",
+            "result" => %{"summary" => "Reviewed current follow-through."}
+          },
+          %{
+            "tool" => "inspect_open_insight",
+            "result" => %{"summary" => "Checked selected work."}
+          },
+          %{
+            "tool" => "learn_relationship_context",
+            "result" => %{"message" => "Updated relationship notes."}
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert summary["headline"] ==
+             "Reviewed follow-through, checked the selected item, updated relationship notes, and replied"
+
+    assert [
+             %{"tool" => "open_loops", "label" => "Follow-through"},
+             %{"tool" => "linked_item", "label" => "Selected item"},
+             %{"tool" => "relationship_learning", "label" => "Relationship notes"}
+           ] = summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "Open loops"
+    refute visible_text =~ "Linked item"
+    refute visible_text =~ "Relationship learning"
+  end
+
   test "completed message work summary names the concrete source result" do
     turn = %Turn{
       structured_data: %{
@@ -661,7 +698,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     assert [
              %{
                "tool" => "relationship_learning",
-               "label" => "Relationship learning",
+               "label" => "Relationship notes",
                "summary" => "Updated Matthew's relationship notes."
              }
            ] = summary["tool_calls"]
