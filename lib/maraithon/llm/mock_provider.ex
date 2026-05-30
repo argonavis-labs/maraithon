@@ -71,10 +71,9 @@ defmodule Maraithon.LLM.MockProvider do
 
       true ->
         """
-        Mock response generated at #{DateTime.utc_now() |> DateTime.to_iso8601()}.
+        I can help with that.
 
-        This is a placeholder response from the mock LLM provider.
-        In production, this would be a real response from Claude.
+        Share the decision, source material, or action you want Maraithon to handle, and I'll turn it into a concise next step.
         """
     end
   end

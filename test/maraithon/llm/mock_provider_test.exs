@@ -56,7 +56,10 @@ defmodule Maraithon.LLM.MockProviderTest do
 
       {:ok, response} = MockProvider.complete(params)
 
-      assert String.contains?(response.content, "Mock response")
+      assert String.contains?(response.content, "I can help with that")
+      refute String.contains?(response.content, "Mock response")
+      refute String.contains?(response.content, "placeholder")
+      refute String.contains?(response.content, "Claude")
     end
 
     test "handles empty messages" do
