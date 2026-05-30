@@ -2046,6 +2046,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "required_commercial_threads_are_covered",
         "scoped_inbox_triage_covers_body_backed_actionable_email",
         "scoped_slack_triage_covers_actionable_threads",
+        "brief_uses_executive_voice_without_first_person_assistant_framing",
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
         "action_card_and_draft_work_is_named_without_internal_handles",
@@ -2116,6 +2117,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_slack_triage
     )
     |> maybe_finding(
+      generation_mode == "llm" and assistant_first_person_copy_present?(body),
+      :assistant_first_person_copy
+    )
+    |> maybe_finding(
       generation_mode == "llm" and calendar_conflicts != [] and
         not schedule_conflict_present?(body),
       :missing_schedule_conflicts
@@ -2172,6 +2177,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_non_draft_jobs(brief_input, findings)
     |> maybe_append_source_gaps(brief_input, findings)
     |> maybe_append_todays_move(brief_input, findings)
+    |> maybe_scrub_assistant_first_person_copy(findings)
     |> maybe_prepend_temperature_read(brief_input, findings)
   end
 
@@ -2459,6 +2465,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp maybe_scrub_assistant_first_person_copy(brief, findings) do
+    if :assistant_first_person_copy in findings do
+      Map.update(brief, "body", "", &scrub_assistant_first_person_copy/1)
+    else
+      brief
+    end
+  end
+
   defp todays_move_directive(brief_input) do
     cond do
       personal_calendar_events(brief_input) != [] ->
@@ -2679,6 +2693,64 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp body_temperature_read_present?(_body), do: false
+
+  defp assistant_first_person_copy_present?(body) when is_binary(body) do
+    body
+    |> String.split(~r/\R/u)
+    |> Enum.any?(&assistant_first_person_line?/1)
+  end
+
+  defp assistant_first_person_copy_present?(_body), do: false
+
+  defp assistant_first_person_line?(line) when is_binary(line) do
+    line = String.trim(line)
+
+    not blank?(line) and narrative_brief_line?(line) and
+      Regex.match?(
+        ~r/\bI\s+(?:found|noticed|saw|think|recommend|would|can|can't|cannot|could not|couldn't|will|am|don't see|do not see)\b|\bI'm\s+seeing\b/i,
+        line
+      )
+  end
+
+  defp narrative_brief_line?(line) when is_binary(line) do
+    not String.starts_with?(line, ["#", "-", "*", ">", "`", "\"", "'"])
+  end
+
+  defp scrub_assistant_first_person_copy(body) when is_binary(body) do
+    body
+    |> String.split(~r/\R/u, trim: false)
+    |> Enum.map(&scrub_assistant_first_person_line/1)
+    |> Enum.join("\n")
+  end
+
+  defp scrub_assistant_first_person_copy(body), do: body
+
+  defp scrub_assistant_first_person_line(line) when is_binary(line) do
+    trimmed = String.trim(line)
+
+    if narrative_brief_line?(trimmed) do
+      line
+      |> String.replace(~r/\bI\s+would\s+start\s+with\b/i, "Start with")
+      |> String.replace(~r/\bI\s+(?:found|noticed|saw)\b/i, "The briefing shows")
+      |> String.replace(~r/\bI\s+(?:think|recommend)\b/i, "Recommendation:")
+      |> String.replace(~r/\bI\s+would\b/i, "Recommended move:")
+      |> String.replace(
+        ~r/\bI\s+(?:can't|cannot|could not|couldn't)\s+verify\b/i,
+        "Could not verify"
+      )
+      |> String.replace(~r/\bI\s+(?:can't|cannot|could not|couldn't)\b/i, "Could not")
+      |> String.replace(
+        ~r/\bI\s+(?:don't|do not)\s+see\b/i,
+        "No checked source shows"
+      )
+      |> String.replace(~r/\b(?:I\s+am|I'm)\s+seeing\b/i, "The briefing shows")
+      |> String.replace(~r/\bI\s+am\b/i, "The read is")
+      |> String.replace(~r/\bI\s+can\s+/i, "Available action: ")
+      |> String.replace(~r/\bI\s+will\s+/i, "Maraithon will ")
+    else
+      line
+    end
+  end
 
   defp todays_move_final_directive_present?(body) when is_binary(body) do
     normalized =

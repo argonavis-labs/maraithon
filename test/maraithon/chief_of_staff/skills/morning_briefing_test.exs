@@ -639,6 +639,32 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "actc_"
   end
 
+  test "quality verifier removes first-person assistant framing from narrative prose" do
+    brief = %{
+      "title" => "Tuesday, May 12 - Follow-through day",
+      "summary" => "Start with the board reply.",
+      "body" =>
+        "I found a follow-through day: the board reply is the real risk.\n\n## Needs Your Attention\n- **Board reply**: Send the answer before the thread goes stale.\n- Suggested reply: \"I can send the updated deck by noon.\"\n\nToday's move: send the board reply before opening routine inbox.",
+      "todos" => []
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "assistant_first_person_copy" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~
+             "The briefing shows a follow-through day: the board reply is the real risk."
+
+    assert revised["body"] =~ "Suggested reply: \"I can send the updated deck by noon.\""
+    refute revised["body"] =~ "I found"
+
+    assert "brief_uses_executive_voice_without_first_person_assistant_framing" in verification[
+             "criteria"
+           ]
+  end
+
   test "quality verifier surfaces stale or unavailable sources before the final directive" do
     brief = %{
       "title" => "Saturday, May 30 - Operational brief",
