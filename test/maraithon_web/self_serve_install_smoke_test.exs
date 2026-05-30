@@ -73,7 +73,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
         project_id: project.id,
         schedule: %{
           morning_brief_hour_local: "9",
-          timezone_offset_hours: "-8"
+          timezone: "America/Los_Angeles"
         }
       )
       |> render_submit()
@@ -89,10 +89,15 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.delivery_policy == %{"telegram" => "enabled"}
     assert agent.config["source_behavior"] == "ai_chief_of_staff"
     assert agent.config["morning_brief_hour_local"] == 9
+    assert agent.config["timezone"] == "America/Los_Angeles"
+    assert agent.config["timezone_name"] == "America/Los_Angeles"
     assert agent.config["timezone_offset_hours"] == -8
 
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "morning_brief_hour_local"]) ==
              9
+
+    assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone"]) ==
+             "America/Los_Angeles"
 
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_offset_hours"]) ==
              -8
@@ -103,8 +108,11 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
                             "commercial_thread_terms"
                           ]) || [])
 
-    due_agents = BriefingSchedules.list_due_morning_agents(~U[2026-05-08 17:05:00Z])
-    assert Enum.any?(due_agents, &(&1.agent_id == agent.id))
+    due_agents = BriefingSchedules.list_due_morning_agents(~U[2026-05-08 16:05:00Z])
+    due_agent = Enum.find(due_agents, &(&1.agent_id == agent.id))
+    assert due_agent
+    assert due_agent.timezone_name == "America/Los_Angeles"
+    assert due_agent.timezone_offset_hours == -7
 
     stop_agent_process(agent.id)
   end
@@ -128,7 +136,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
         project_id: project.id,
         schedule: %{
           morning_brief_hour_local: "7",
-          timezone_offset_hours: "1"
+          timezone: "offset:1"
         }
       )
       |> render_submit()
@@ -141,6 +149,8 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.install_status == "setup_required"
     assert agent.status == "stopped"
     assert agent.config["morning_brief_hour_local"] == 7
+    assert is_nil(agent.config["timezone"])
+    assert is_nil(agent.config["timezone_name"])
     assert agent.config["timezone_offset_hours"] == 1
 
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "morning_brief_hour_local"]) ==
@@ -195,7 +205,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
         project_id: project.id,
         schedule: %{
           morning_brief_hour_local: "10",
-          timezone_offset_hours: "-4"
+          timezone: "America/Toronto"
         }
       )
       |> render_submit()
@@ -207,16 +217,23 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     assert agent.install_status == "enabled"
     assert agent.status == "running"
     assert agent.config["morning_brief_hour_local"] == 10
-    assert agent.config["timezone_offset_hours"] == -4
+    assert agent.config["timezone"] == "America/Toronto"
+    assert agent.config["timezone_offset_hours"] == -5
 
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "morning_brief_hour_local"]) ==
              10
 
+    assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone"]) ==
+             "America/Toronto"
+
     assert get_in(agent.config, ["skill_configs", "morning_briefing", "timezone_offset_hours"]) ==
-             -4
+             -5
 
     due_agents = BriefingSchedules.list_due_morning_agents(~U[2026-05-08 14:05:00Z])
-    assert Enum.any?(due_agents, &(&1.agent_id == agent.id))
+    due_agent = Enum.find(due_agents, &(&1.agent_id == agent.id))
+    assert due_agent
+    assert due_agent.timezone_name == "America/Toronto"
+    assert due_agent.timezone_offset_hours == -4
 
     stop_agent_process(agent.id)
   end

@@ -469,7 +469,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   def build_brief_input(user_id, now, state, context) do
     source_bundle = context[:source_bundle] || %{}
-    offset_hours = state.timezone_offset_hours
+    offset_hours = timezone_offset_hours_at(now, state)
     local_date = local_date(now, state)
     local_day_start = local_day_start_utc(local_date, state)
     tomorrow = Date.add(local_date, 1)

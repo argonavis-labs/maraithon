@@ -23,7 +23,8 @@ defmodule Maraithon.Runtime.BriefingCronTest do
         status: "running",
         config: %{
           "enabled_skills" => ["morning_briefing"],
-          "timezone_offset_hours" => -4,
+          "timezone" => "America/Toronto",
+          "timezone_offset_hours" => -5,
           "morning_brief_hour_local" => 8,
           "news_enabled" => true,
           "news_feeds" => [%{"name" => "Test", "url" => "https://example.com/rss.xml"}]
@@ -59,6 +60,8 @@ defmodule Maraithon.Runtime.BriefingCronTest do
     assert job.payload["dedupe_key"] == "morning_briefing:2026-05-08"
     assert job.payload["local_date"] == "2026-05-08"
 
+    assert job.payload["timezone"] == "America/Toronto"
+    assert job.payload["timezone_name"] == "America/Toronto"
     assert job.payload["timezone_offset_hours"] == -4
   end
 

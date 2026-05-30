@@ -58,11 +58,15 @@ defmodule Maraithon.Runtime.BriefingCron do
     BriefingSchedules.list_due_morning_agents(now)
     |> Enum.filter(&telegram_deliverable?/1)
     |> Enum.reduce(%{scheduled: 0, skipped: 0}, fn due, acc ->
+      timezone_name = Map.get(due, :timezone_name)
+
       payload = %{
         "source" => "briefing_cron",
         "cadence" => "morning",
         "dedupe_key" => due.dedupe_key,
         "local_date" => Date.to_iso8601(due.local_date),
+        "timezone" => timezone_name,
+        "timezone_name" => timezone_name,
         "timezone_offset_hours" => due.timezone_offset_hours,
         "morning_brief_hour_local" => due.morning_brief_hour_local,
         "morning_brief_minute_local" => due.morning_brief_minute_local

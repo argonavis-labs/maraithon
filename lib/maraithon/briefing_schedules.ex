@@ -8,6 +8,7 @@ defmodule Maraithon.BriefingSchedules do
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.Skills
   alias Maraithon.Runtime
+  alias Maraithon.Timezones
 
   @briefing_behaviors ["ai_chief_of_staff", "founder_followthrough_agent"]
   @default_timezone_offset_hours -5
@@ -24,10 +25,8 @@ defmodule Maraithon.BriefingSchedules do
     agents = list_briefing_agents(user_id)
     primary_agent = List.first(agents)
 
-    timezone_offset_hours =
-      primary_agent
-      |> config_value("timezone_offset_hours")
-      |> parse_integer(@default_timezone_offset_hours)
+    timezone_name = timezone_name(primary_agent)
+    timezone_offset_hours = timezone_offset_hours(primary_agent)
 
     morning_hour =
       primary_agent
@@ -66,8 +65,9 @@ defmodule Maraithon.BriefingSchedules do
 
     %{
       configured: agents != [],
+      timezone_name: timezone_name,
       timezone_offset_hours: timezone_offset_hours,
-      local_timezone: timezone_label(timezone_offset_hours),
+      local_timezone: Timezones.label(timezone_name, timezone_offset_hours),
       morning: %{
         hour_local: morning_hour,
         minute_local: morning_minute,
@@ -150,10 +150,15 @@ defmodule Maraithon.BriefingSchedules do
              display_time_local:
                display_time_label(normalized.local_hour, normalized.local_minute),
              local_timezone:
-               if(is_integer(normalized.timezone_offset_hours),
-                 do: timezone_label(normalized.timezone_offset_hours),
+               if(normalized.timezone_name || is_integer(normalized.timezone_offset_hours),
+                 do:
+                   Timezones.label(
+                     normalized.timezone_name,
+                     normalized.timezone_offset_hours || refreshed.timezone_offset_hours
+                   ),
                  else: refreshed.local_timezone
                ),
+             timezone_name: normalized.timezone_name || refreshed.timezone_name,
              timezone_offset_hours:
                normalized.timezone_offset_hours || refreshed.timezone_offset_hours,
              weekly_review_day_local:
@@ -193,10 +198,11 @@ defmodule Maraithon.BriefingSchedules do
   end
 
   defp morning_due_entry(%Agent{user_id: user_id} = agent, now) when is_binary(user_id) do
+    timezone_name = timezone_name(agent)
+    configured_timezone_offset_hours = timezone_offset_hours(agent)
+
     timezone_offset_hours =
-      agent
-      |> config_value("timezone_offset_hours")
-      |> parse_integer(@default_timezone_offset_hours)
+      Timezones.offset_at(timezone_name, now, configured_timezone_offset_hours)
 
     morning_hour =
       agent
@@ -222,6 +228,7 @@ defmodule Maraithon.BriefingSchedules do
         dedupe_key: dedupe_key,
         local_date: local_date,
         timezone_offset_hours: timezone_offset_hours,
+        timezone_name: timezone_name,
         morning_brief_hour_local: morning_hour,
         morning_brief_minute_local: morning_minute
       }
@@ -248,13 +255,7 @@ defmodule Maraithon.BriefingSchedules do
              59,
              :invalid_local_minute
            ),
-         {:ok, timezone_offset_hours} <-
-           parse_optional_integer_in_range(
-             Map.get(attrs, "timezone_offset_hours") || Map.get(attrs, :timezone_offset_hours),
-             -12,
-             14,
-             :invalid_timezone_offset_hours
-           ),
+         {:ok, timezone_updates} <- normalize_timezone_update(attrs),
          {:ok, weekly_review_day_local} <-
            parse_weekly_review_day(
              briefing_kind,
@@ -274,7 +275,7 @@ defmodule Maraithon.BriefingSchedules do
         %{}
         |> Map.put(field, local_hour)
         |> Map.put(minute_field, local_minute)
-        |> maybe_put("timezone_offset_hours", timezone_offset_hours)
+        |> Map.merge(timezone_updates)
         |> maybe_put("weekly_review_day_local", weekly_review_day_local)
 
       {:ok,
@@ -283,7 +284,8 @@ defmodule Maraithon.BriefingSchedules do
          local_hour: local_hour,
          local_minute: local_minute,
          minute_field: minute_field,
-         timezone_offset_hours: timezone_offset_hours,
+         timezone_name: Map.get(timezone_updates, "timezone"),
+         timezone_offset_hours: Map.get(timezone_updates, "timezone_offset_hours"),
          weekly_review_day_local: weekly_review_day_local,
          config_updates: config_updates
        }}
@@ -294,6 +296,37 @@ defmodule Maraithon.BriefingSchedules do
   defp normalize_briefing_kind("end_of_day"), do: {:ok, "end_of_day"}
   defp normalize_briefing_kind("weekly_review"), do: {:ok, "weekly_review"}
   defp normalize_briefing_kind(_value), do: {:error, :invalid_briefing_kind}
+
+  defp normalize_timezone_update(attrs) when is_map(attrs) do
+    timezone_value =
+      Map.get(attrs, "timezone") ||
+        Map.get(attrs, :timezone) ||
+        Map.get(attrs, "timezone_name") ||
+        Map.get(attrs, :timezone_name)
+
+    timezone_updates = Timezones.config_updates(to_string(timezone_value || ""))
+
+    if timezone_value in [nil, ""] do
+      with {:ok, timezone_offset_hours} <-
+             parse_optional_integer_in_range(
+               Map.get(attrs, "timezone_offset_hours") || Map.get(attrs, :timezone_offset_hours),
+               -12,
+               14,
+               :invalid_timezone_offset_hours
+             ) do
+        {:ok,
+         if(is_nil(timezone_offset_hours),
+           do: %{},
+           else: %{"timezone_offset_hours" => timezone_offset_hours}
+         )}
+      end
+    else
+      case timezone_updates do
+        updates when map_size(updates) > 0 -> {:ok, updates}
+        _updates -> {:error, :invalid_timezone_offset_hours}
+      end
+    end
+  end
 
   defp parse_weekly_review_day("weekly_review", nil, agents) do
     {:ok,
@@ -393,16 +426,15 @@ defmodule Maraithon.BriefingSchedules do
       current_time_local: current_time_local,
       previous_display_time_local: previous_display_time_local,
       current_display_time_local: current_display_time_local,
+      timezone_name: current.timezone_name,
       timezone_offset_hours: current.timezone_offset_hours,
       local_timezone: current.local_timezone
     }
   end
 
   defp serialize_agent_schedule(%Agent{} = agent) do
-    timezone_offset_hours =
-      agent
-      |> config_value("timezone_offset_hours")
-      |> parse_integer(@default_timezone_offset_hours)
+    timezone_name = timezone_name(agent)
+    timezone_offset_hours = timezone_offset_hours(agent)
 
     morning_hour =
       agent
@@ -443,8 +475,9 @@ defmodule Maraithon.BriefingSchedules do
       id: agent.id,
       name: agent_name(agent),
       behavior: agent.behavior,
+      timezone_name: timezone_name,
       timezone_offset_hours: timezone_offset_hours,
-      local_timezone: timezone_label(timezone_offset_hours),
+      local_timezone: Timezones.label(timezone_name, timezone_offset_hours),
       morning_brief_hour_local: morning_hour,
       morning_brief_minute_local: morning_minute,
       morning_time_local: time_label(morning_hour, morning_minute),
@@ -470,6 +503,20 @@ defmodule Maraithon.BriefingSchedules do
   end
 
   defp config_value(_agent, _key), do: nil
+
+  defp timezone_name(%Agent{} = agent) do
+    config_value(agent, "timezone") || config_value(agent, "timezone_name")
+  end
+
+  defp timezone_name(_agent), do: nil
+
+  defp timezone_offset_hours(%Agent{} = agent) do
+    agent
+    |> config_value("timezone_offset_hours")
+    |> parse_integer(@default_timezone_offset_hours)
+  end
+
+  defp timezone_offset_hours(_agent), do: @default_timezone_offset_hours
 
   defp parse_integer(value, _default) when is_integer(value), do: value
 
@@ -546,14 +593,6 @@ defmodule Maraithon.BriefingSchedules do
   defp weekday_label(7), do: "Sunday"
   defp weekday_label(_value), do: "Friday"
 
-  defp timezone_label(offset_hours) when is_integer(offset_hours) and offset_hours >= 0 do
-    "UTC+#{String.pad_leading(Integer.to_string(offset_hours), 2, "0")}:00"
-  end
-
-  defp timezone_label(offset_hours) when is_integer(offset_hours) do
-    "UTC-#{String.pad_leading(Integer.to_string(abs(offset_hours)), 2, "0")}:00"
-  end
-
   defp normalize_error(reason) when is_binary(reason), do: reason
   defp normalize_error(reason), do: inspect(reason)
 
@@ -587,8 +626,9 @@ defmodule Maraithon.BriefingSchedules do
   defp default_summary do
     %{
       configured: false,
+      timezone_name: nil,
       timezone_offset_hours: @default_timezone_offset_hours,
-      local_timezone: timezone_label(@default_timezone_offset_hours),
+      local_timezone: Timezones.offset_label(@default_timezone_offset_hours),
       morning: %{
         hour_local: @default_morning_hour,
         minute_local: @default_morning_minute,

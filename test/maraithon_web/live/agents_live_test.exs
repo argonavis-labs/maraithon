@@ -311,6 +311,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
           "name" => "Chief of Staff",
           "enabled_skills" => ["followthrough", "morning_briefing", "travel_logistics"],
           "morning_brief_hour_local" => 8,
+          "timezone" => "America/Toronto",
           "timezone_offset_hours" => -5
         },
         status: "stopped"
@@ -333,15 +334,21 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Attached Skills"
     assert html =~ "Morning briefing"
     assert html =~ "Send each morning at"
+    assert html =~ "Eastern Time"
     assert has_element?(view, "#morning-brief-time-form")
 
     view
-    |> form("#morning-brief-time-form", %{"schedule" => %{"local_hour" => "9"}})
+    |> form("#morning-brief-time-form", %{
+      "schedule" => %{"local_hour" => "9", "timezone" => "America/Los_Angeles"}
+    })
     |> render_submit()
 
     updated = Agents.get_agent!(agent.id)
     assert updated.config["morning_brief_hour_local"] == 9
+    assert updated.config["timezone"] == "America/Los_Angeles"
+    assert updated.config["timezone_offset_hours"] == -8
     assert render(view) =~ "9:00 AM"
+    assert render(view) =~ "PT"
   end
 
   test "morning briefing schedule errors use product copy", %{conn: conn} do

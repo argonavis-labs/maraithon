@@ -13,6 +13,7 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.Connections
   alias Maraithon.RunErrorCopy
   alias Maraithon.Runtime
+  alias Maraithon.Timezones
   alias MaraithonWeb.AgentActionCopy
   alias MaraithonWeb.OperationFailureCopy
 
@@ -1065,6 +1066,21 @@ defmodule MaraithonWeb.AgentsLive do
                                         </option>
                                       </.c_select>
                                     </.field>
+                                    <.field label="Timezone" for="morning-brief-timezone" class="min-w-48">
+                                      <.c_select
+                                        id="morning-brief-timezone"
+                                        name="schedule[timezone]"
+                                        class="min-w-44"
+                                      >
+                                        <option
+                                          :for={option <- morning_brief_timezone_options()}
+                                          value={option.value}
+                                          selected={option.value == schedule.timezone}
+                                        >
+                                          <%= option.label %>
+                                        </option>
+                                      </.c_select>
+                                    </.field>
                                     <.button
                                       type="submit"
                                       phx-disable-with="Saving..."
@@ -1985,18 +2001,26 @@ defmodule MaraithonWeb.AgentsLive do
   defp morning_brief_schedule(%{config: config}) when is_map(config) do
     hour = config |> Map.get("morning_brief_hour_local") |> parse_integer(8) |> clamp_hour()
     minute = config |> Map.get("morning_brief_minute_local") |> parse_integer(0) |> clamp_minute()
+    timezone_name = Map.get(config, "timezone") || Map.get(config, "timezone_name")
     timezone_offset = config |> Map.get("timezone_offset_hours") |> parse_integer(-5)
 
     %{
       hour: hour,
       minute: minute,
       display_time_local: display_time(hour, minute),
-      local_timezone: timezone_label(timezone_offset)
+      timezone: Timezones.selected_value(timezone_name, timezone_offset),
+      local_timezone: Timezones.label(timezone_name, timezone_offset)
     }
   end
 
   defp morning_brief_schedule(_agent) do
-    %{hour: 8, minute: 0, display_time_local: "8:00 AM", local_timezone: "UTC-05:00"}
+    %{
+      hour: 8,
+      minute: 0,
+      display_time_local: "8:00 AM",
+      timezone: Timezones.selected_value(nil, -5),
+      local_timezone: "UTC-05:00"
+    }
   end
 
   defp morning_brief_hour_options do
@@ -2011,6 +2035,8 @@ defmodule MaraithonWeb.AgentsLive do
       %{value: minute, label: minute |> Integer.to_string() |> String.pad_leading(2, "0")}
     end)
   end
+
+  defp morning_brief_timezone_options, do: Timezones.options()
 
   defp parse_integer(value, _default) when is_integer(value), do: value
 
@@ -2041,13 +2067,6 @@ defmodule MaraithonWeb.AgentsLive do
     display_hour = if display_hour == 0, do: 12, else: display_hour
 
     "#{display_hour}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")} #{suffix}"
-  end
-
-  defp timezone_label(offset) when is_integer(offset) do
-    sign = if offset < 0, do: "-", else: "+"
-    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
-
-    "UTC#{sign}#{hours}:00"
   end
 
   defp agent_prompt(config),

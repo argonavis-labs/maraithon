@@ -769,6 +769,8 @@ defmodule Maraithon.Agents do
     schedule_updates =
       config
       |> Map.take([
+        "timezone",
+        "timezone_name",
         "timezone_offset_hours",
         "morning_brief_hour_local",
         "morning_brief_minute_local",

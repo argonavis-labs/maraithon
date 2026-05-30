@@ -53,6 +53,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert "intro" in state.commercial_thread_terms
   end
 
+  test "brief input uses the active daylight offset for a named timezone", %{user_id: user_id} do
+    now = ~U[2026-05-15 14:00:00Z]
+
+    state =
+      MorningBriefing.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -5
+      })
+
+    input =
+      MorningBriefing.build_brief_input(user_id, now, state, %{
+        source_bundle: SourceBundle.empty(%{trigger: %{type: :wakeup}, timestamp: now})
+      })
+
+    assert input["timezone"] == "ET"
+    assert input["timezone_offset_hours"] == -4
+  end
+
   test "builds a source-backed input and records an LLM synthesized brief", %{
     user_id: user_id,
     agent: agent

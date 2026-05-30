@@ -20,6 +20,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Runtime
   alias Maraithon.RunErrorCopy
   alias Maraithon.SourceLabels
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.PublicMetadata
   alias Maraithon.UserMemory
@@ -1105,15 +1106,15 @@ defmodule MaraithonWeb.DashboardLive do
                         </option>
                       </.c_select>
                     </.field>
-                    <.field label="Timezone" for="chief_of_staff_timezone_offset_hours">
+                    <.field label="Timezone" for="chief_of_staff_timezone">
                       <.c_select
-                        id="chief_of_staff_timezone_offset_hours"
-                        name="schedule[timezone_offset_hours]"
+                        id="chief_of_staff_timezone"
+                        name="schedule[timezone]"
                       >
                         <option
                           :for={option <- chief_of_staff_timezone_options()}
                           value={option.value}
-                          selected={option.value == chief_of_staff_install_timezone_offset(@chief_of_staff_agent, @chief_of_staff_schedule)}
+                          selected={option.value == chief_of_staff_install_timezone(@chief_of_staff_agent, @chief_of_staff_schedule)}
                         >
                           <%= option.label %>
                         </option>
@@ -3008,6 +3009,7 @@ defmodule MaraithonWeb.DashboardLive do
       Map.get(schedule, "timezone_offset_hours"),
       &clamp_timezone_offset/1
     )
+    |> Map.merge(Timezones.config_updates(Map.get(schedule, "timezone") || ""))
   end
 
   defp chief_of_staff_install_config(_params), do: %{}
@@ -3047,19 +3049,29 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp chief_of_staff_install_hour(_agent, _schedule), do: 8
 
-  defp chief_of_staff_install_timezone_offset(%{config: config}, _schedule) when is_map(config) do
-    config
-    |> Map.get("timezone_offset_hours")
-    |> parse_integer(-5)
-    |> clamp_timezone_offset()
+  defp chief_of_staff_install_timezone(%{config: config}, _schedule) when is_map(config) do
+    timezone_name = Map.get(config, "timezone") || Map.get(config, "timezone_name")
+
+    offset =
+      config |> Map.get("timezone_offset_hours") |> parse_integer(-5) |> clamp_timezone_offset()
+
+    Timezones.selected_value(timezone_name, offset)
   end
 
-  defp chief_of_staff_install_timezone_offset(_agent, %{timezone_offset_hours: offset})
+  defp chief_of_staff_install_timezone(_agent, %{
+         timezone_name: timezone_name,
+         timezone_offset_hours: offset
+       })
        when is_integer(offset) do
-    clamp_timezone_offset(offset)
+    Timezones.selected_value(timezone_name, clamp_timezone_offset(offset))
   end
 
-  defp chief_of_staff_install_timezone_offset(_agent, _schedule), do: -5
+  defp chief_of_staff_install_timezone(_agent, %{timezone_offset_hours: offset})
+       when is_integer(offset) do
+    Timezones.selected_value(nil, clamp_timezone_offset(offset))
+  end
+
+  defp chief_of_staff_install_timezone(_agent, _schedule), do: Timezones.selected_value(nil, -5)
 
   defp chief_of_staff_morning_hour_options do
     Enum.map(0..23, fn hour ->
@@ -3067,11 +3079,7 @@ defmodule MaraithonWeb.DashboardLive do
     end)
   end
 
-  defp chief_of_staff_timezone_options do
-    Enum.map(-12..14, fn offset ->
-      %{value: offset, label: timezone_label(offset)}
-    end)
-  end
+  defp chief_of_staff_timezone_options, do: Timezones.options()
 
   defp connector_chip_class(%{connected?: true}) do
     "inline-flex rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-700"
@@ -3137,13 +3145,6 @@ defmodule MaraithonWeb.DashboardLive do
     display_hour = if display_hour == 0, do: 12, else: display_hour
 
     "#{display_hour}:#{minute |> Integer.to_string() |> String.pad_leading(2, "0")} #{suffix}"
-  end
-
-  defp timezone_label(offset) when is_integer(offset) do
-    sign = if offset < 0, do: "-", else: "+"
-    hours = offset |> abs() |> Integer.to_string() |> String.pad_leading(2, "0")
-
-    "UTC#{sign}#{hours}:00"
   end
 
   defp show_onboarding_preview?(eligible?, agents), do: eligible? and agents == []
