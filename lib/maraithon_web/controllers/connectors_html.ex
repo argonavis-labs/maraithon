@@ -80,8 +80,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_grant_panels_visible?(_provider), do: false
 
-  def provider_oauth_setup_visible?(%{provider: "desktop"}), do: false
-  def provider_oauth_setup_visible?(_provider), do: true
+  def provider_oauth_setup_visible?(%{is_admin: true}, %{provider: "desktop"}), do: false
+  def provider_oauth_setup_visible?(%{is_admin: true}, _provider), do: true
+  def provider_oauth_setup_visible?(_user, _provider), do: false
 
   def refresh_token_badge_visible?(%{provider: "desktop"}), do: false
   def refresh_token_badge_visible?(_provider), do: true

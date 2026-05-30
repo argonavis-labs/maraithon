@@ -214,11 +214,23 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Apps"
       assert html =~ "GitHub"
-      assert html =~ "Connection Setup"
+      refute html =~ "Connection Setup"
+      refute html =~ "Return URLs"
+      refute html =~ "Setup Checklist"
     end
 
-    test "GET /connectors/slack renders slack setup details", %{conn: conn} do
+    test "GET /connectors/slack hides setup details for standard users", %{conn: conn} do
       conn = conn |> log_in_test_user() |> get("/connectors/slack")
+      html = html_response(conn, 200)
+
+      assert html =~ "Slack"
+      refute html =~ "Connection Setup"
+      refute html =~ "SLACK_SIGNING_SECRET"
+      refute html =~ "/webhooks/slack"
+    end
+
+    test "GET /connectors/slack renders setup details for admins", %{conn: conn} do
+      conn = conn |> log_in_admin_user() |> get("/connectors/slack")
       html = html_response(conn, 200)
 
       assert html =~ "Slack"

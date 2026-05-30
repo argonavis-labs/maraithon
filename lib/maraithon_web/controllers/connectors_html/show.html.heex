@@ -232,7 +232,7 @@
       </section>
     <% end %>
 
-    <%= if provider_oauth_setup_visible?(@provider) do %>
+    <%= if provider_oauth_setup_visible?(@current_user, @provider) do %>
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
           <h2 class="text-base/7 font-semibold text-zinc-950">Connection Setup</h2>
