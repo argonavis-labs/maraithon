@@ -59,7 +59,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
       {:error, "DBConnection.ConnectionError token=secret stacktrace"},
       %{reason: :timeout, query: "select * from oauth_tokens"},
       "linear_lookup_failed: %{token: \"secret\" => :timeout}",
-      "missing_project_name"
+      "missing_user_id"
     ]
 
     for reason <- reasons do
@@ -72,9 +72,54 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
       refute copy =~ "token=secret"
       refute copy =~ "oauth_tokens"
       refute copy =~ "linear_lookup_failed"
-      refute copy =~ "missing_project_name"
+      refute copy =~ "missing_user_id"
       refute String.contains?(String.downcase(copy), "try again")
     end
+  end
+
+  test "tool errors keep common recoverable input failures actionable" do
+    assert ActionFailureCopy.tool_error("missing_project_name") ==
+             "Give the project a name before saving it."
+
+    assert ActionFailureCopy.tool_error("missing_project_attrs") ==
+             "Choose what should change on that project before saving."
+
+    assert ActionFailureCopy.tool_error("invalid_snooze_until") ==
+             "Choose a valid snooze time for that work item."
+
+    assert ActionFailureCopy.tool_error("invalid_local_hour") ==
+             "Choose a valid morning briefing time."
+
+    for reason <- [
+          "missing_project_name",
+          "missing_project_attrs",
+          "invalid_snooze_until",
+          "invalid_local_hour"
+        ] do
+      refute ActionFailureCopy.tool_error(reason) =~ reason
+    end
+  end
+
+  test "tool errors translate policy decisions without leaking policy tuples" do
+    confirmation_copy =
+      ActionFailureCopy.tool_error(
+        {:tool_policy_needs_confirmation,
+         %{"reason_code" => "confirmation_required", "message" => "Confirm first."}}
+      )
+
+    denied_copy =
+      ActionFailureCopy.tool_error(
+        {:tool_policy_denied,
+         %{"reason_code" => "unknown_tool", "message" => "Action is not available."}}
+      )
+
+    assert confirmation_copy == "Confirm this action before Maraithon continues."
+
+    assert denied_copy ==
+             "That assistant action is not available. Refresh the message before asking again."
+
+    refute confirmation_copy =~ "tool_policy"
+    refute denied_copy =~ "unknown_tool"
   end
 
   test "linear lookup and prepared action copy hide raw persistence failures" do

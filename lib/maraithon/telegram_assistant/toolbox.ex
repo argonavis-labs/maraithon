@@ -1370,6 +1370,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     ToolPolicy.enforce(policy_context, fn ->
       do_execute(tool_name, args, runtime_context)
     end)
+    |> normalize_tool_result()
   end
 
   defp do_execute(tool_name, args, runtime_context) do

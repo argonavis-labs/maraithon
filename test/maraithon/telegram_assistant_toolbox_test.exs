@@ -643,6 +643,29 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
 
     assert action_copy == "Action drafting is not enabled."
     refute action_copy =~ "write_tools_disabled"
+
+    assert {:error, unknown_copy} =
+             Toolbox.execute(
+               "unknown_private_tool",
+               %{},
+               %{user_id: user_id, context: %{}}
+             )
+
+    assert unknown_copy ==
+             "That assistant action is not available. Refresh the message before asking again."
+
+    refute unknown_copy =~ "unknown_private_tool"
+    refute unknown_copy =~ "unknown_tool"
+
+    assert {:error, confirmation_copy} =
+             Toolbox.execute(
+               "gmail_drafts",
+               %{"action" => "send", "draft_id" => "draft-123"},
+               %{user_id: user_id, context: %{}}
+             )
+
+    assert confirmation_copy == "Confirm this action before Maraithon continues."
+    refute confirmation_copy =~ "tool_policy"
   end
 
   test "prepare_agent_action uses automation copy in confirmations" do

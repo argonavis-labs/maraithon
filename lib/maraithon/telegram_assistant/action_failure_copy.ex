@@ -7,6 +7,62 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   @generic_todo_failure "Could not update that work item. Refresh the latest work message before using this action."
   @generic_tool_failure "Could not complete that check. Open the latest message or review Maraithon before continuing."
 
+  @known_tool_error_copy %{
+    "action_not_found" => "That action is no longer available. Review the latest action history.",
+    "briefing_agent_not_found" =>
+      "Select an active Chief of Staff setup before changing the schedule.",
+    "calendar_event_not_found" => "That calendar event is no longer available.",
+    "file_not_found" => "That file is no longer available.",
+    "implementation_run_not_found" =>
+      "That implementation run is no longer available. Refresh projects.",
+    "insight_not_found" => "That insight is no longer available. Refresh insights.",
+    "invalid_args" => "Review the request details before asking again.",
+    "invalid_briefing_kind" => "Choose a supported briefing schedule.",
+    "invalid_implementation_run_metadata" =>
+      "Review the implementation run details before saving.",
+    "invalid_implementation_run_status" => "Choose a valid implementation status.",
+    "invalid_life_domain" => "Choose a valid life domain for that project.",
+    "invalid_local_hour" => "Choose a valid morning briefing time.",
+    "invalid_local_minute" => "Choose a valid morning briefing time.",
+    "invalid_recommendation_decision" =>
+      "Choose whether to accept or dismiss that recommendation.",
+    "invalid_recommendation_decision_note" => "Keep the recommendation note brief before saving.",
+    "invalid_repo_grant_status" => "Review the repository access details before saving.",
+    "invalid_repo_provider" => "Review the repository access details before saving.",
+    "invalid_repo_scope" => "Review the repository access details before saving.",
+    "invalid_rules" => "Review the preference details before saving.",
+    "invalid_snooze_until" => "Choose a valid snooze time for that work item.",
+    "invalid_timezone_offset_hours" => "Choose a valid timezone for the morning briefing.",
+    "invalid_todos" => "Review the work items before saving them.",
+    "memory_not_found" => "That memory is no longer available. Refresh memory.",
+    "message_not_found" => "That message is no longer available.",
+    "missing_implementation_run_update" =>
+      "Choose what changed on that implementation run before saving.",
+    "missing_project_attrs" => "Choose what should change on that project before saving.",
+    "missing_project_name" => "Give the project a name before saving it.",
+    "missing_recommendation_id" => "Choose a project recommendation before deciding.",
+    "missing_repo_full_name" => "Choose a GitHub repository before granting access.",
+    "missing_rules" => "Review the preference details before saving.",
+    "missing_snooze_until" => "Choose when that work item should come back.",
+    "no_briefing_agents" =>
+      "Install Chief of Staff before changing the morning briefing schedule.",
+    "note_not_found" => "That note is no longer available.",
+    "person_link_not_found" => "That linked detail is no longer available. Refresh people.",
+    "person_not_found" => "That person is no longer available. Refresh people.",
+    "preference_not_found" => "That preference is no longer available. Refresh preferences.",
+    "project_not_found" => "That project is no longer available. Refresh projects.",
+    "recommendation_not_found" =>
+      "That project recommendation is no longer available. Refresh projects.",
+    "reminder_not_found" => "That reminder is no longer available.",
+    "todo_not_found" => "That work item is no longer available. Refresh open work.",
+    "unknown_telegram_tool" =>
+      "That assistant action is not available. Refresh the message before asking again.",
+    "unsupported_person_link_operation" => "That person update is not available.",
+    "unsupported_todo_status" => "That work item update is not available.",
+    "visit_not_found" => "That browser visit is no longer available.",
+    "voice_memo_not_found" => "That voice memo is no longer available."
+  }
+
   @technical_message_markers [
     "access_token",
     "authorization",
@@ -151,18 +207,82 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   defp tool_error_for_code(reason) when is_binary(reason) do
     cond do
-      technical_message?(reason) -> @generic_tool_failure
-      code_like?(reason) -> @generic_tool_failure
-      true -> reason
+      copy = Map.get(@known_tool_error_copy, reason) ->
+        copy
+
+      String.starts_with?(reason, "unknown_telegram_tool") ->
+        Map.fetch!(@known_tool_error_copy, "unknown_telegram_tool")
+
+      technical_message?(reason) ->
+        @generic_tool_failure
+
+      code_like?(reason) ->
+        @generic_tool_failure
+
+      true ->
+        reason
     end
   end
 
   defp tool_error_for_code(_reason), do: @generic_tool_failure
 
+  defp normalize_reason({policy_reason, decision})
+       when policy_reason in [:tool_policy_denied, :tool_policy_needs_confirmation] do
+    policy_decision_copy(policy_reason, decision)
+  end
+
   defp normalize_reason({:error, reason}), do: normalize_reason(reason)
   defp normalize_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_reason(reason) when is_binary(reason), do: String.trim(reason)
   defp normalize_reason(_reason), do: @generic_tool_failure
+
+  defp policy_decision_copy(:tool_policy_needs_confirmation, _decision) do
+    "Confirm this action before Maraithon continues."
+  end
+
+  defp policy_decision_copy(:tool_policy_denied, decision) do
+    case decision_value(decision, :reason_code) do
+      "agent_tool_denied" ->
+        "That automation is not allowed to use this action."
+
+      "agent_tool_not_allowed" ->
+        "That automation is not allowed to use this action."
+
+      "invalid_policy_context" ->
+        "Maraithon could not verify the action context, so nothing changed."
+
+      "invalid_user_context" ->
+        "Sign in again so Maraithon can confirm the account."
+
+      "missing_tool_name" ->
+        "Choose an action before continuing."
+
+      "unknown_tool" ->
+        Map.fetch!(@known_tool_error_copy, "unknown_telegram_tool")
+
+      _ ->
+        policy_decision_message(decision) || @generic_tool_failure
+    end
+  end
+
+  defp policy_decision_message(decision) do
+    case decision_value(decision, :message) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp decision_value(decision, key) when is_map(decision) and is_atom(key) do
+    Map.get(decision, key) || Map.get(decision, Atom.to_string(key))
+  end
+
+  defp decision_value(_decision, _key), do: nil
 
   defp technical_message?(message) do
     lower = String.downcase(message)
