@@ -367,6 +367,15 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp polish_legacy_product_terms(value) when is_binary(value) do
     value
+    |> replace_result_regex(~r/^No open work found\.?$/i, "This check returned no open work.")
+    |> replace_result_regex(
+      ~r/^No connected accounts found\.?$/i,
+      "No connected accounts are available yet."
+    )
+    |> replace_result_regex(
+      ~r/^No connected sources found\.?$/i,
+      "No connected sources are available yet."
+    )
     |> replace_result_regex(~r/\bCRM context\b/i, "relationship context")
     |> replace_result_regex(~r/\bCRM\b/i, "relationship data")
     |> replace_result_regex(~r/\binsights\b/i, "priorities")
@@ -406,16 +415,16 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
     case {singular, count} do
       {"work item", 0} ->
-        "No open work found."
+        "This check returned no open work."
 
       {"work item", count} ->
         "Found #{format_count(count)} open work #{pluralize("item", count)}."
 
       {"connected account", 0} ->
-        "No connected accounts found."
+        "No connected accounts are available yet."
 
       {"connected source", 0} ->
-        "No connected sources found."
+        "No connected sources are available yet."
 
       {_singular, 0} ->
         "No #{pluralize(singular, 2, plural)} found."
@@ -806,7 +815,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp generic_result_summary?(summary) when is_binary(summary) do
     Regex.match?(
-      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check could not finish\.?$|.* could not finish\.?$)/i,
+      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check returned\b|This check could not finish\.?$|.* could not finish\.?$)/i,
       summary
     )
   end

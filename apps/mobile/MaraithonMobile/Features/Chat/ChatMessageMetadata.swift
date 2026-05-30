@@ -536,7 +536,7 @@ private enum ChatWorkSummaryCopy {
 
         switch rawNoun {
         case "todo", "todos":
-            return count == 0 ? "No open work found." : "Found \(count) open work \(displayNoun(for: count, singular: "item"))."
+            return count == 0 ? "This check returned no open work." : "Found \(count) open work \(displayNoun(for: count, singular: "item"))."
         case "result", "results":
             return count == 0 ? "No results found." : "Found \(count) \(displayNoun(for: count, singular: "result"))."
         case "person", "people":
@@ -558,6 +558,9 @@ private enum ChatWorkSummaryCopy {
 
     private static func legacyProductTerms(_ value: String) -> String {
         value
+            .replacingOccurrences(of: #"(?i)^No open work found\.?$"#, with: "This check returned no open work.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^No connected accounts found\.?$"#, with: "No connected accounts are available yet.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^No connected sources found\.?$"#, with: "No connected sources are available yet.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm context\b"#, with: "relationship context", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm\b"#, with: "relationship data", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\btodos\b"#, with: "work items", options: .regularExpression)

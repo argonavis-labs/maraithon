@@ -131,6 +131,46 @@ struct ChatWorkSummaryTests {
     }
 
     @Test
+    func decodingScopesEmptyOpenWorkToTheCurrentCheck() throws {
+        let data = Data(
+            """
+            {
+              "headline": "Checked open work and replied",
+              "status": "completed",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "tool": "list_todos",
+                  "label": "Open work",
+                  "status": "completed",
+                  "summary": "Returned 0 todos"
+                },
+                {
+                  "id": "tool-2",
+                  "tool": "get_open_work_summary",
+                  "label": "Open work",
+                  "status": "completed",
+                  "summary": "No open work found."
+                }
+              ],
+              "steps": []
+            }
+            """.utf8
+        )
+
+        let summary = try JSONDecoder().decode(ChatWorkSummary.self, from: data)
+        let summaries = summary.toolCalls.compactMap(\.summary)
+        let visibleText = summaries.joined(separator: " ")
+
+        #expect(summaries == [
+            "This check returned no open work.",
+            "This check returned no open work."
+        ])
+        #expect(visibleText.localizedCaseInsensitiveContains("No open work found") == false)
+        #expect(visibleText.localizedCaseInsensitiveContains("all clear") == false)
+    }
+
+    @Test
     func decodingNormalizesLegacyProductVocabulary() throws {
         let data = Data(
             """

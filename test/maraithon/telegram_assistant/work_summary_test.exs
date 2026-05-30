@@ -51,16 +51,37 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
+    assert summary["headline"] == "Checked open work and replied"
+
     assert [
              %{
                "tool" => "open_work",
                "label" => "Open work",
-               "summary" => "No open work found."
+               "summary" => "This check returned no open work."
              }
            ] = summary["tool_calls"]
 
+    assert inspect(summary) =~ "This check returned no open work."
+    refute inspect(summary) =~ "No open work found"
     refute inspect(summary) =~ "all clear"
     refute inspect(summary) =~ "needs attention"
+  end
+
+  test "legacy no-open-work summaries are scoped to the current check" do
+    run = %Run{
+      status: "completed",
+      model_name: "gpt-test",
+      result_summary: %{"tool_steps" => 1},
+      steps: [
+        tool_step("get_open_work_summary", %{"summary" => "No open work found."})
+      ]
+    }
+
+    summary = WorkSummary.for_run(run)
+
+    assert [%{"summary" => "This check returned no open work."}] = summary["tool_calls"]
+    refute inspect(summary) =~ "No open work found"
+    refute inspect(summary) =~ "all clear"
   end
 
   test "list tool summaries name the returned work instead of only counting it" do
