@@ -60,10 +60,13 @@ struct LogEntry: Identifiable, Hashable, Sendable {
 ///
 /// Persistence target: `~/Library/Logs/Maraithon/companion.log`, rotated
 /// at 10MB × 5 files (rotation is a follow-up; v1 ships append-only).
+/// XCTest runs default to memory-only logs so fixture events do not pollute
+/// the user's real companion log.
 @Observable
 @MainActor
 final class EventLog {
     private(set) var entries: [LogEntry] = []
+    private(set) var logFileURL: URL?
     private let capacity: Int
     private let fileHandle: FileHandle?
     private let dateFormatter: ISO8601DateFormatter
@@ -71,11 +74,13 @@ final class EventLog {
 
     private static let subsystem = "com.maraithon.companion"
 
-    init(capacity: Int = 5_000) {
+    init(capacity: Int = 5_000, persistence: EventLogPersistence = .automatic) {
         self.capacity = capacity
         self.dateFormatter = ISO8601DateFormatter()
         self.dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        self.fileHandle = Self.openLogFile()
+        let resolvedLogFileURL = Self.logFileURL(for: persistence)
+        self.logFileURL = resolvedLogFileURL
+        self.fileHandle = resolvedLogFileURL.flatMap(Self.openLogFile(at:))
         self.loggers = Dictionary(
             uniqueKeysWithValues: LogSource.allCases.map { source in
                 (source, Logger(subsystem: Self.subsystem, category: source.rawValue))
@@ -166,20 +171,45 @@ final class EventLog {
         }
     }
 
-    private static func openLogFile() -> FileHandle? {
+    private static func logFileURL(for persistence: EventLogPersistence) -> URL? {
+        switch persistence {
+        case .automatic:
+            guard !isRunningUnderXCTest else { return nil }
+            return defaultLogFileURL()
+        case .disabled:
+            return nil
+        case .file(let url):
+            return url
+        }
+    }
+
+    private static var isRunningUnderXCTest: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+            || Bundle.main.bundlePath.hasSuffix(".xctest")
+            || NSClassFromString("XCTestCase") != nil
+            || NSClassFromString("XCTest.XCTestCase") != nil
+    }
+
+    private static func defaultLogFileURL() -> URL? {
         let fm = FileManager.default
         guard let logsDir = fm.urls(for: .libraryDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Logs", isDirectory: true)
             .appendingPathComponent("Maraithon", isDirectory: true)
         else { return nil }
+        return logsDir.appendingPathComponent("companion.log")
+    }
 
+    private static func openLogFile(at fileURL: URL) -> FileHandle? {
+        let fm = FileManager.default
+        let logsDir = fileURL.deletingLastPathComponent()
         do {
             try fm.createDirectory(at: logsDir, withIntermediateDirectories: true)
         } catch {
             return nil
         }
 
-        let fileURL = logsDir.appendingPathComponent("companion.log")
         if !fm.fileExists(atPath: fileURL.path) {
             fm.createFile(atPath: fileURL.path, contents: nil)
         }

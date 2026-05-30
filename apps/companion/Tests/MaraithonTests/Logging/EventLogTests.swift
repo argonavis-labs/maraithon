@@ -3,6 +3,36 @@ import XCTest
 
 @MainActor
 final class EventLogTests: XCTestCase {
+    func testAutomaticPersistenceIsMemoryOnlyUnderXCTest() {
+        let log = EventLog(capacity: 10)
+
+        log.info("event_log.test_marker", source: .system)
+
+        XCTAssertNil(log.logFileURL)
+        XCTAssertEqual(log.entries.last?.message, "event_log.test_marker")
+    }
+
+    func testExplicitFilePersistenceWritesRedactedLines() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("event-log-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let fileURL = tempDir.appendingPathComponent("companion.log")
+        let log = EventLog(capacity: 10, persistence: .file(fileURL))
+
+        log.error(
+            "event_log.persist token=file-secret",
+            source: .system,
+            payload: ["authorization": "Authorization: Bearer bearer-secret"]
+        )
+
+        let rendered = try String(contentsOf: fileURL, encoding: .utf8)
+        XCTAssertTrue(rendered.contains("event_log.persist"))
+        XCTAssertFalse(rendered.contains("file-secret"))
+        XCTAssertFalse(rendered.contains("bearer-secret"))
+        XCTAssertTrue(rendered.contains("token=[redacted]"))
+        XCTAssertTrue(rendered.contains("Bearer [redacted]"))
+    }
+
     func testAppendRedactsSensitiveTokensBeforeStoringEntries() {
         let log = EventLog(capacity: 10)
         let raw = """
