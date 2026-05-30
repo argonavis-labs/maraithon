@@ -6,6 +6,7 @@ enum ChatSyncError: LocalizedError, Equatable {
     case emptyMessage
     case emptyThreadTitle
     case pollingTimedOut
+    case failedMessageStateNotSaved
     case assistantResponseFailed(String?)
 
     var errorDescription: String? {
@@ -18,6 +19,8 @@ enum ChatSyncError: LocalizedError, Equatable {
             return "Enter a chat name before saving."
         case .pollingTimedOut:
             return "Maraithon is still working. Refresh this chat in a moment."
+        case .failedMessageStateNotSaved:
+            return "Message was not sent, and Maraithon could not save the failed state. Refresh this chat before sending again."
         case .assistantResponseFailed(let message):
             return MobileErrorCopy.assistantRunFailureMessage(for: message)
         }
@@ -158,7 +161,11 @@ struct ChatSyncService {
             userMessage.deliveryState = .failed
             thread.syncStatus = .failed
             thread.updatedAt = now()
-            try? modelContext.save()
+            do {
+                try modelContext.save()
+            } catch {
+                throw ChatSyncError.failedMessageStateNotSaved
+            }
             throw error
         }
 
