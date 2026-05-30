@@ -147,22 +147,24 @@ struct FullDiskAccessRequiredBanner: View {
             Spacer()
             if let installHint = FullDiskAccessInstallHint.current(),
                installHint.stableAppInstalled {
-                Button("Open stable app") {
+                Button(FullDiskAccessInstallHint.switchToStableAppButtonTitle) {
                     switchToStableApp(installHint.stableAppURL)
                 }
                 .controlSize(.small)
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
             }
             Button("Check again") {
                 checkAgain()
             }
             .controlSize(.small)
             .buttonStyle(.bordered)
-            Button("Open System Settings") {
-                openFullDiskAccess()
+            if FullDiskAccessInstallHint.current()?.stableAppInstalled != true {
+                Button("Open System Settings") {
+                    openFullDiskAccess()
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
             }
-            .controlSize(.small)
-            .buttonStyle(.bordered)
         }
         .padding(.horizontal, Tokens.Spacing.medium)
         .padding(.vertical, Tokens.Spacing.small)

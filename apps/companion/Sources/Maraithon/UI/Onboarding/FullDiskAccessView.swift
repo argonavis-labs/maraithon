@@ -81,21 +81,26 @@ struct FullDiskAccessView: View {
                     Button {
                         switchToStableApp(installHint.stableAppURL)
                     } label: {
-                        Label("Open stable app", systemImage: "app.dashed")
+                        Label(
+                            FullDiskAccessInstallHint.switchToStableAppButtonTitle,
+                            systemImage: "app.dashed"
+                        )
                             .frame(maxWidth: .infinity)
                     }
                     .controlSize(.large)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 }
 
-                Button {
-                    openSystemSettings()
-                } label: {
-                    Label(FullDiskAccessCopy.openSettingsButton, systemImage: "gearshape")
-                        .frame(maxWidth: .infinity)
+                if FullDiskAccessInstallHint.current()?.stableAppInstalled != true {
+                    Button {
+                        openSystemSettings()
+                    } label: {
+                        Label(FullDiskAccessCopy.openSettingsButton, systemImage: "gearshape")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
                 }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
 
                 Button {
                     onContinue()

@@ -108,7 +108,9 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         XCTAssertEqual(detail?.stableAppURL.path, stableApp.standardizedFileURL.path)
         XCTAssertTrue(detail?.stableAppInstalled == true)
-        XCTAssertTrue(detail?.message.contains("Use the stable app") == true)
+        XCTAssertEqual(FullDiskAccessInstallHint.switchToStableAppButtonTitle, "Switch to stable app")
+        XCTAssertTrue(detail?.message.contains("Switch to the stable app") == true)
+        XCTAssertTrue(detail?.message.contains("before opening System Settings") == true)
     }
 
     func testInstallHintMarksStableAppMissing() {

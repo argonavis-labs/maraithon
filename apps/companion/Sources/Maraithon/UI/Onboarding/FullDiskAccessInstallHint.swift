@@ -16,6 +16,7 @@ enum FullDiskAccessInstallHint {
     }
 
     static let stableDevelopmentAppDisplayPath = "~/Applications/Maraithon.app"
+    static let switchToStableAppButtonTitle = "Switch to stable app"
 
     static func current(
         bundleURL: URL = Bundle.main.bundleURL,
@@ -55,10 +56,10 @@ enum FullDiskAccessInstallHint {
             atPath: stableAppURL.path,
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
-        let stableAppAction = stableAppInstalled ? "Use" : "Install"
+        let stableAppAction = stableAppInstalled ? "Switch to" : "Install"
 
         return Detail(
-            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to an exact app copy, so this one can lose access after reloads. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath) before granting access.",
+            message: "You're running a temporary Maraithon copy. Full Disk Access is granted to an exact app copy, so access can disappear after reloads. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath) before opening System Settings.",
             stableAppURL: stableAppURL,
             stableAppInstalled: stableAppInstalled
         )

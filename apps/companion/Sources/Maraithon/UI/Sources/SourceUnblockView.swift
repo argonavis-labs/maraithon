@@ -55,12 +55,17 @@ struct SourceUnblockView: View {
                     Button {
                         switchToStableApp(installHint.stableAppURL)
                     } label: {
-                        Label("Open stable app", systemImage: "app.dashed")
+                        Label(
+                            FullDiskAccessInstallHint.switchToStableAppButtonTitle,
+                            systemImage: "app.dashed"
+                        )
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                 }
 
-                if let url = hint.settingsURL {
+                if fullDiskAccessInstallHint?.stableAppInstalled != true,
+                   let url = hint.settingsURL {
                     Button {
                         NSWorkspace.shared.open(url)
                         env.eventLog.info(
