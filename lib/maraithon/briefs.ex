@@ -16,6 +16,7 @@ defmodule Maraithon.Briefs do
   alias Maraithon.TelegramAssistant.BriefTodoReview
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Travel
 
   require Logger
@@ -550,6 +551,7 @@ defmodule Maraithon.Briefs do
 
   defp product_brief_text(value) when is_binary(value) do
     value
+    |> UserFacingCopy.polish_text()
     |> String.replace(~r/\btodo list\b/i, "open work")
     |> String.replace(~r/\btodos\b/i, "work items")
     |> String.replace(~r/\btodo\b/i, "work item")

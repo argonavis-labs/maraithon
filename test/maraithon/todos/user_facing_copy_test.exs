@@ -155,6 +155,13 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "This came from my commitment review after checking the follow-up thread."
   end
 
+  test "rewrites model role labels into direct operator-facing copy" do
+    assert UserFacingCopy.polish_text(
+             "The operator's queue needs operator attention because User should review it."
+           ) ==
+             "your queue needs your attention because you should review it."
+  end
+
   test "todo upsert applies copy polish before persistence" do
     user_id = "copy-polish-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

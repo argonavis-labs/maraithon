@@ -269,6 +269,39 @@ defmodule Maraithon.BriefsTest do
     refute Enum.any?(buttons, &(&1["text"] == "Tune Agent"))
   end
 
+  test "telegram payload speaks directly instead of exposing model role labels", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief for the operator",
+               "summary" => "The user needs to approve the finance reply.",
+               "body" => """
+               The operator's next move is to review the todo list.
+               User should confirm the invoice status.
+               This needs operator attention before noon.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:direct-user-copy"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+
+    assert payload.text =~ "Morning brief for you"
+    assert payload.text =~ "You need to approve the finance reply."
+    assert payload.text =~ "your next move is to review the open work."
+    assert payload.text =~ "You should confirm the invoice status."
+    assert payload.text =~ "This needs your attention before noon."
+
+    refute lower_text =~ "the user"
+    refute lower_text =~ "the operator"
+    refute lower_text =~ "operator attention"
+    refute lower_text =~ "todo list"
+  end
+
   test "terminal missing-chat failures are not retried", %{user_id: user_id, agent: agent} do
     scheduled_for = DateTime.utc_now()
 
