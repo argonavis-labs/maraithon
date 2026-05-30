@@ -791,7 +791,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     "#{focus} Then review the list one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
   end
 
-  defp todo_list_next_move(_todos), do: "Nothing needs review right now."
+  defp todo_list_next_move(_todos), do: "No decision is needed right now."
 
   defp todo_list_sentence(value) when is_binary(value) do
     value = String.trim(value)

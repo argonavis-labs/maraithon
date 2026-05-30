@@ -22,8 +22,10 @@ defmodule Maraithon.Briefs do
   require Logger
 
   @brief_title_fallback "Chief of staff brief"
-  @brief_summary_fallback "A brief is ready for review."
-  @brief_body_fallback "Open Maraithon to review the latest follow-through summary."
+  @brief_summary_default "No clear follow-up needs your attention from the connected sources yet."
+  @brief_body_default "I did not find a source-backed decision that needs your attention right now."
+  @brief_summary_fallback "I kept the usable action items and left out diagnostics."
+  @brief_body_fallback "I could not produce a usable brief from this run. Check connected sources before acting."
   @internal_brief_markers [
     "<redacted",
     "=>",
@@ -336,10 +338,9 @@ defmodule Maraithon.Briefs do
       "user_id" => user_id,
       "agent_id" => agent_id,
       "cadence" => read_string(attrs, "cadence", "morning"),
-      "title" => read_string(attrs, "title", "Chief of staff brief"),
-      "summary" => read_string(attrs, "summary", "Review the latest loop summary."),
-      "body" =>
-        read_string(attrs, "body", "Open Maraithon to review the latest follow-through summary."),
+      "title" => read_string(attrs, "title", @brief_title_fallback),
+      "summary" => read_string(attrs, "summary", @brief_summary_default),
+      "body" => read_string(attrs, "body", @brief_body_default),
       "status" => read_string(attrs, "status", "pending"),
       "scheduled_for" => read_datetime(attrs, "scheduled_for") || DateTime.utc_now(),
       "dedupe_key" => read_string(attrs, "dedupe_key", Ecto.UUID.generate()),
@@ -623,7 +624,7 @@ defmodule Maraithon.Briefs do
     "#{focus} Then review the rest one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
   end
 
-  defp todo_digest_next_move(_todos), do: "Nothing needs review right now."
+  defp todo_digest_next_move(_todos), do: "No decision is needed right now."
 
   defp todo_digest_sentence(value) when is_binary(value) do
     value = String.trim(value)

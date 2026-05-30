@@ -222,7 +222,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "A brief is ready for review."
+    assert payload.text =~ "I kept the usable action items and left out diagnostics."
     assert payload.text =~ "Lead with the CFO ask."
     assert payload.text =~ "Next action: Send the revised answer today."
 
@@ -234,6 +234,42 @@ defmodule Maraithon.BriefsTest do
     refute lower_text =~ "bearer"
     refute lower_text =~ "token"
     refute payload.text =~ "abc123"
+  end
+
+  test "telegram payload uses a decision-safe fallback when all brief copy is unsafe", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "api_key=sk-test",
+               "summary" => "Authorization: Bearer abc123",
+               "body" => """
+               source_health: {"gmail": "connected"}
+               model_name: gpt-5.4
+               confidence_score: 0.91
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:unsafe-fallback"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+
+    assert payload.text =~ "Chief of staff brief"
+    assert payload.text =~ "I kept the usable action items and left out diagnostics."
+
+    assert payload.text =~
+             "I could not produce a usable brief from this run. Check connected sources before acting."
+
+    refute lower_text =~ "authorization"
+    refute lower_text =~ "bearer"
+    refute lower_text =~ "source_health"
+    refute lower_text =~ "model_name"
+    refute lower_text =~ "confidence"
+    refute lower_text =~ "api_key"
+    refute payload.text =~ "Open Maraithon to review"
   end
 
   test "telegram payload externalizes task-app terms in delivered brief copy", %{
