@@ -20,21 +20,17 @@ enum SourceDetailCopy {
     static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
 
-    static func syncedHeadline(total: Int, singular: String, plural: String) -> String {
-        "\(total.formatted(.number)) \(itemNoun(total: total, singular: singular, plural: plural)) synced"
-    }
-
     static func healthyHeadline(
         displayName: String,
         totalSynced: Int,
-        singular: String,
-        plural: String
+        singular _: String,
+        plural _: String
     ) -> String {
         if totalSynced > 0 {
-            return syncedHeadline(total: totalSynced, singular: singular, plural: plural)
+            return "Maraithon can use \(displayName)"
         }
 
-        return "Maraithon is keeping \(displayName) current"
+        return "Maraithon is checking \(displayName)"
     }
 
     static func itemNoun(total: Int, singular: String, plural: String) -> String {

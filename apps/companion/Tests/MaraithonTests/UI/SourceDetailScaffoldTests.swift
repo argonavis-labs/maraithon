@@ -45,18 +45,18 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertNotEqual(a.id, b.id)
     }
 
-    func testSourceDetailHeadlineUsesItemNounInsteadOfSourceName() {
+    func testSourceDetailCountedItemUsesCorrectNoun() {
         XCTAssertEqual(
-            SourceDetailCopy.syncedHeadline(total: 1, singular: "message", plural: "messages"),
-            "1 message synced"
+            SourceDetailCopy.countedItem(1, singular: "message", plural: "messages"),
+            "1 message"
         )
         XCTAssertEqual(
-            SourceDetailCopy.syncedHeadline(total: 12, singular: "message", plural: "messages"),
-            "12 messages synced"
+            SourceDetailCopy.countedItem(12, singular: "message", plural: "messages"),
+            "12 messages"
         )
     }
 
-    func testHealthyHeadlineLeadsWithOutcomeCount() {
+    func testHealthyHeadlineLeadsWithAssistantReadiness() {
         XCTAssertEqual(
             SourceDetailCopy.healthyHeadline(
                 displayName: "iMessage",
@@ -64,17 +64,18 @@ final class SourceDetailScaffoldTests: XCTestCase {
                 singular: "message",
                 plural: "messages"
             ),
-            "Maraithon is keeping iMessage current"
+            "Maraithon is checking iMessage"
         )
-        XCTAssertEqual(
-            SourceDetailCopy.healthyHeadline(
-                displayName: "iMessage",
-                totalSynced: 4,
-                singular: "message",
-                plural: "messages"
-            ),
-            "4 messages synced"
+        let headline = SourceDetailCopy.healthyHeadline(
+            displayName: "iMessage",
+            totalSynced: 4,
+            singular: "message",
+            plural: "messages"
         )
+
+        XCTAssertEqual(headline, "Maraithon can use iMessage")
+        XCTAssertFalse(headline.localizedCaseInsensitiveContains("messages synced"))
+        XCTAssertFalse(headline.localizedCaseInsensitiveContains("this session"))
     }
 
     func testConnectedSummaryExplainsLastCheckOutcome() {
