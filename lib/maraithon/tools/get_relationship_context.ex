@@ -1,6 +1,6 @@
 defmodule Maraithon.Tools.GetRelationshipContext do
   @moduledoc """
-  Fetch relationship context for a person, including linked todos.
+  Fetch relationship context for a person, including linked work items.
   """
 
   import Maraithon.Tools.ActionHelpers

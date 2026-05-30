@@ -1,6 +1,6 @@
 defmodule Maraithon.Tools.ListTodos do
   @moduledoc """
-  Built-in todo list tool for MCP and runtime tool callers.
+  Built-in open work item list tool for MCP and runtime tool callers.
   """
 
   import Maraithon.Tools.ActionHelpers

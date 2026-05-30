@@ -38,7 +38,7 @@ defmodule Maraithon.Todos.PublicMetadataTest do
 
       assert PublicMetadata.todo(metadata) == %{
                "why_now" =>
-                 "You need to approve the finance reply. Your next move is to review the todo list.",
+                 "You need to approve the finance reply. Your next move is to review the open work.",
                "source_quote" => "You asked for a corrected receipt."
              }
     end

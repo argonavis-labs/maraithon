@@ -1021,7 +1021,7 @@ defmodule Maraithon.TelegramAssistantTest do
         }
       })
 
-    assert last_telegram_message(:send).text =~ "Added that to your todo list"
+    assert last_telegram_message(:send).text =~ "Added that to your open work"
 
     [saved_todo] = Todos.list_open_for_user(user_id, kind: "general")
     assert saved_todo.title == "Renew the domain this week"
@@ -1038,9 +1038,9 @@ defmodule Maraithon.TelegramAssistantTest do
       |> Enum.filter(&(&1.type == :send))
 
     assert Enum.count(sends) == 3
-    assert Enum.at(sends, 1).text =~ "Here is the full open todo list"
+    assert Enum.at(sends, 1).text =~ "Here is the full open work"
     assert List.last(sends).text =~ "Renew the domain and confirm it is done."
-    assert List.last(sends).text =~ "You want this tracked as an ongoing todo."
+    assert List.last(sends).text =~ "You want this tracked as an ongoing work item."
     refute List.last(sends).text =~ "Renew the domain this week"
     refute List.last(sends).text =~ "Maraithon Todo"
     refute List.last(sends).text =~ "you wants"

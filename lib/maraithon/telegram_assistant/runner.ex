@@ -23,6 +23,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.SurfaceQuality
   alias Maraithon.Tools
   alias Maraithon.Tracing
@@ -1186,26 +1187,29 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp polished_todo_digest_intro(value) when is_binary(value) do
     value = String.trim(value)
 
-    cond do
-      todo_bullet_list?(value) ->
-        "I found the current open items. Each one has the context needed for a decision."
+    intro =
+      cond do
+        todo_bullet_list?(value) ->
+          "I found the current open items. Each one has the context needed for a decision."
 
-      process_todo_digest_intro?(value) ->
-        value
-        |> String.replace(
-          ~r/\s*(I'm|I am)\s+sending\s+(the\s+)?actionable\s+items\s+one\s+by\s+one\.?/iu,
-          " Each item is ready for a decision."
-        )
-        |> String.replace(
-          ~r/\s*(I'm|I am)\s+sending\s+each\s+with\s+context\.?/iu,
-          " Each item has the context needed for a decision."
-        )
-        |> String.replace(~r/\s+/, " ")
-        |> String.trim()
+        process_todo_digest_intro?(value) ->
+          value
+          |> String.replace(
+            ~r/\s*(I'm|I am)\s+sending\s+(the\s+)?actionable\s+items\s+one\s+by\s+one\.?/iu,
+            " Each item is ready for a decision."
+          )
+          |> String.replace(
+            ~r/\s*(I'm|I am)\s+sending\s+each\s+with\s+context\.?/iu,
+            " Each item has the context needed for a decision."
+          )
+          |> String.replace(~r/\s+/, " ")
+          |> String.trim()
 
-      true ->
-        value
-    end
+        true ->
+          value
+      end
+
+    UserFacingCopy.open_work_language(intro)
   end
 
   defp process_todo_digest_intro?(value) when is_binary(value) do
@@ -1240,16 +1244,16 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
     cond do
       assistant_message != "" ->
-        assistant_message
+        UserFacingCopy.open_work_language(assistant_message)
 
       is_binary(prepared_action_id) ->
         case TelegramAssistant.get_prepared_action(prepared_action_id) do
-          %{preview_text: preview_text} -> preview_text
-          _ -> "I prepared the requested action."
+          %{preview_text: preview_text} -> UserFacingCopy.open_work_language(preview_text)
+          _ -> UserFacingCopy.open_work_language("I prepared the requested action.")
         end
 
       true ->
-        "I finished that step."
+        UserFacingCopy.open_work_language("I finished that step.")
     end
   end
 

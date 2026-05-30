@@ -162,6 +162,17 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "Your queue needs your attention because you should review it."
   end
 
+  test "uses open work language for todo-facing copy" do
+    assert UserFacingCopy.polish_text("Here is the full open todo list.") ==
+             "Here is the full open work."
+
+    assert UserFacingCopy.polish_text("Added that to your todo list.") ==
+             "Added that to your open work."
+
+    assert UserFacingCopy.polish_text("You want this tracked as an ongoing todo.") ==
+             "You want this tracked as an ongoing work item."
+  end
+
   test "todo upsert applies copy polish before persistence" do
     user_id = "copy-polish-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

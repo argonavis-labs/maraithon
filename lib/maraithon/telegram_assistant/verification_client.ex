@@ -212,20 +212,20 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
 
       String.contains?(normalized, "todo list") ->
         final(
-          "Your open todos include Emma's dentist appointment, Matthew Raue setup/pricing, and the verification passport renewal."
+          "Your open work includes Emma's dentist appointment, Matthew Raue setup/pricing, and the verification passport renewal."
         )
 
       String.contains?(normalized, "add renew the verification passport") ->
-        final("Added the passport renewal todo for Friday.", "assistant_reply")
+        final("Added the passport renewal work item for Friday.", "assistant_reply")
 
       String.contains?(normalized, "change this todo") ->
-        final("Updated the linked todo with the new priority and next action.")
+        final("Updated the linked work item with the new priority and next action.")
 
       String.contains?(normalized, "mark this done") ->
-        final("Done. I marked the linked todo complete.")
+        final("Done. I marked the linked work item complete.")
 
       String.contains?(normalized, "dismiss this todo") ->
-        final("Dismissed the linked todo as no longer relevant.")
+        final("Dismissed the linked work item as no longer relevant.")
 
       String.contains?(normalized, "merge crm person") ->
         final("Merged the duplicate CRM person into the surviving relationship record.")

@@ -96,7 +96,7 @@ defmodule Maraithon.ActionCards do
   )
 
   @doc """
-  Returns ranked action cards for open todos.
+  Returns ranked action cards for open work items.
   """
   def list_for_user(user_id, opts \\ [])
 

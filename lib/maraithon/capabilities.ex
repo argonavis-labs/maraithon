@@ -133,24 +133,24 @@ defmodule Maraithon.Capabilities do
     "list_connected_accounts" =>
       "List connected accounts, freshness, connector status, and MCP tool coverage for a user.",
     "get_open_loops" =>
-      "Fetch the built-in open-loop snapshot across todos, CRM relationships, and deep memory.",
-    "get_todo" => "Get one built-in persistent todo by id, or the best query match.",
-    "list_todos" => "List the built-in persistent todo list for a user.",
+      "Fetch the built-in open-loop snapshot across work items, CRM relationships, and deep memory.",
+    "get_todo" => "Get one built-in persistent work item by id, or the best query match.",
+    "list_todos" => "List the built-in persistent open work items for a user.",
     "upsert_todos" =>
-      "Use model-level todo intelligence to create, update, or skip built-in persistent todos.",
+      "Use model-level work-item intelligence to create, update, or skip built-in persistent work items.",
     "update_todo" =>
-      "Patch one built-in persistent todo by id without rerunning model-level ingestion.",
-    "resolve_todo" => "Mark one built-in persistent todo done, dismissed, or snoozed.",
-    "delete_todo" => "Dismiss one built-in persistent todo as no longer relevant.",
+      "Patch one built-in persistent work item by id without rerunning model-level ingestion.",
+    "resolve_todo" => "Mark one built-in persistent work item done, dismissed, or snoozed.",
+    "delete_todo" => "Dismiss one built-in persistent work item as no longer relevant.",
     "list_people" => "List CRM people and relationship metadata for a user.",
     "get_person" => "Get one CRM person by id, query, or contact detail.",
     "upsert_person" => "Create or update one CRM person with contact and relationship details.",
     "delete_person" => "Delete one CRM person and its CRM links.",
     "link_person_data" =>
-      "Attach or detach a CRM person from a todo or another user-owned data object.",
+      "Attach or detach a CRM person from a work item or another user-owned data object.",
     "merge_people" => "Merge two CRM people into one surviving record with an audit trail.",
     "get_relationship_context" =>
-      "Fetch CRM relationship context for a person, including linked todos.",
+      "Fetch CRM relationship context for a person, including linked work items.",
     "learn_relationship_context" =>
       "Use model-level relationship intelligence to learn CRM people, memories, and links from source observations.",
     "list_memories" => "List built-in durable deep memories for a user.",

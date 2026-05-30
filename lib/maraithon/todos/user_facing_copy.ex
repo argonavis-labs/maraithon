@@ -88,10 +88,24 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/^\s*The operator\b/i, "You")
     |> String.replace(~r/\bthe operator\b/i, "you")
     |> String.replace(~r/\bKent's\b/i, "your")
+    |> replace_todo_language()
     |> single_line()
   end
 
   def polish_text(value), do: value
+
+  def open_work_language(value) when is_binary(value), do: replace_todo_language(value)
+  def open_work_language(value), do: value
+
+  defp replace_todo_language(value) do
+    value
+    |> String.replace(~r/\bopen todo list\b/i, "open work")
+    |> String.replace(~r/\bopen todos\b/i, "open work")
+    |> String.replace(~r/\bopen todo\b/i, "open work item")
+    |> String.replace(~r/\btodo list\b/i, "open work")
+    |> String.replace(~r/\btodos\b/i, "work items")
+    |> String.replace(~r/\btodo\b/i, "work item")
+  end
 
   defp maybe_rewrite_generic_commitment_copy(attrs) do
     summary = read_string(attrs, "summary")

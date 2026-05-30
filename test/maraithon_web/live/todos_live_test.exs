@@ -262,10 +262,10 @@ defmodule MaraithonWeb.TodosLiveTest do
              ])
 
     {:ok, _view, asc_html} = live(conn, "/todos?sort=priority&dir=asc")
-    assert String.match?(asc_html, ~r/Low priority todo.*High priority todo/s)
+    assert String.match?(asc_html, ~r/Low priority work item.*High priority work item/s)
 
     {:ok, _view, desc_html} = live(conn, "/todos?sort=priority&dir=desc")
-    assert String.match?(desc_html, ~r/High priority todo.*Low priority todo/s)
+    assert String.match?(desc_html, ~r/High priority work item.*Low priority work item/s)
   end
 
   test "bulk marks selected todos done", %{conn: conn} do
@@ -395,8 +395,8 @@ defmodule MaraithonWeb.TodosLiveTest do
       |> render()
 
     assert has_element?(view, "#todo-detail")
-    assert detail_html =~ "Review detail todo"
-    assert detail_html =~ "This todo should show a fuller detail view."
+    assert detail_html =~ "Review detail work item"
+    assert detail_html =~ "This work item should show a fuller detail view."
     assert detail_html =~ "Open the thread and reply."
     assert detail_html =~ "Keep the answer short."
     assert detail_html =~ "Context"
@@ -417,7 +417,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> render_click()
 
     assert_patch(click_view, "/todos?todo_id=#{todo.id}")
-    assert render(click_view) =~ "Review detail todo"
+    assert render(click_view) =~ "Review detail work item"
   end
 
   test "detail panel edits the next action without losing context", %{conn: conn} do

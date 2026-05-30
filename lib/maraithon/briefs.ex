@@ -552,9 +552,6 @@ defmodule Maraithon.Briefs do
   defp product_brief_text(value) when is_binary(value) do
     value
     |> UserFacingCopy.polish_text()
-    |> String.replace(~r/\btodo list\b/i, "open work")
-    |> String.replace(~r/\btodos\b/i, "work items")
-    |> String.replace(~r/\btodo\b/i, "work item")
     |> String.replace(~r/\bCRM context\b/i, "relationship context")
   end
 

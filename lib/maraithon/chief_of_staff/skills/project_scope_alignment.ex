@@ -412,17 +412,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
     Active projects JSON:
     #{projects_json}
 
-    Open todos JSON:
+    Open work items JSON:
     #{todos_json}
 
     Task:
     - Decide whether each active project is primarily `work` or `home`.
-    - Suggest which open todos belong to which project when the match is strong enough to be useful.
-    - Use intelligence, memory, project context, todo content, and the operating context already present in the data.
+    - Suggest which open work items belong to which project when the match is strong enough to be useful.
+    - Use intelligence, memory, project context, work-item content, and the operating context already present in the data.
     - Do not rely on hard-coded rules or deterministic heuristics. Make an AI judgment from the actual evidence.
     - Default to making the best reasonable guess. Only ask the user when uncertainty remains material enough that the wrong domain would cause bad sorting.
     - Keep reasoning short and concrete.
-    - Never invent projects or todos.
+    - Never invent projects or work items.
 
     Return ONLY valid JSON shaped like:
     {

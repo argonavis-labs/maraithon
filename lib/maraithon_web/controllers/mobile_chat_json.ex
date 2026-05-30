@@ -4,7 +4,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias Maraithon.TelegramAssistant.{PreparedAction, Run}
   alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
-  alias Maraithon.Todos.Todo
+  alias Maraithon.Todos.{Todo, UserFacingCopy}
   alias Maraithon.Repo
   alias MaraithonWeb.{ApiErrorCopy, MobileJSON}
 
@@ -252,11 +252,7 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp product_message_text(value) when is_binary(value) do
     value
-    |> String.replace(~r/\bopen todos\b/i, "open work")
-    |> String.replace(~r/\bopen todo\b/i, "open work item")
-    |> String.replace(~r/\btodo list\b/i, "open work")
-    |> String.replace(~r/\btodos\b/i, "work items")
-    |> String.replace(~r/\btodo\b/i, "work item")
+    |> UserFacingCopy.open_work_language()
     |> String.replace(~r/\bCRM context\b/i, "relationship context")
     |> String.replace(~r/\bCRM\b/i, "relationship data")
   end
