@@ -94,7 +94,10 @@ defmodule Maraithon.Connections do
   def safe_dashboard_snapshot(user_id, opts \\ []) when is_binary(user_id) do
     return_to = Keyword.get(opts, :return_to, "/")
 
-    case safe_fetch(fn -> dashboard_snapshot(user_id, return_to: return_to) end) do
+    fetcher =
+      Keyword.get(opts, :fetcher, fn -> dashboard_snapshot(user_id, return_to: return_to) end)
+
+    case safe_fetch(fetcher) do
       {:ok, snapshot} ->
         {:ok, snapshot}
 
@@ -272,7 +275,7 @@ defmodule Maraithon.Connections do
     providers =
       [
         telegram_card(user_id, nil, return_to),
-        desktop_card(user_id, return_to),
+        desktop_unavailable_card(),
         google_card(user_id, [], %{}, return_to),
         github_card(user_id, nil, nil, return_to),
         slack_card(user_id, [], %{}, return_to),
@@ -299,11 +302,9 @@ defmodule Maraithon.Connections do
     }
   end
 
-  defp connection_inventory_error_detail(:database_unavailable),
-    do: "Connection status will refresh when the database is available again."
-
   defp connection_inventory_error_detail(_reason),
-    do: "Refresh this page before continuing."
+    do:
+      "Maraithon will refresh connection status when the service recovers. You can refresh this page before continuing."
 
   defp google_card(user_id, tokens, account_by_provider, return_to)
        when is_list(tokens) and is_map(account_by_provider) do
@@ -429,6 +430,29 @@ defmodule Maraithon.Connections do
       details: desktop_details(active_entries, totals),
       services: desktop_services(totals),
       accounts: desktop_device_accounts(device_entries)
+    }
+    |> enrich_provider_setup()
+  end
+
+  defp desktop_unavailable_card do
+    totals = desktop_totals([])
+
+    %{
+      id: "desktop",
+      provider: "desktop",
+      label: "Maraithon Desktop App",
+      description:
+        "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
+      status: :unknown,
+      configured?: true,
+      updated_at: nil,
+      disconnectable?: false,
+      connect_url: "/connectors/desktop",
+      disconnect_label: "Manage Desktop App",
+      refresh_token_status: :unknown,
+      details: desktop_details([], totals),
+      services: desktop_services(totals),
+      accounts: []
     }
     |> enrich_provider_setup()
   end
@@ -1690,7 +1714,7 @@ defmodule Maraithon.Connections do
     |> Map.put(:status, :unknown)
     |> Map.put(:refresh_token_status, :unknown)
     |> Map.update!(:details, fn details ->
-      ["Token store temporarily unavailable." | details]
+      ["Connection status is temporarily unavailable." | details]
     end)
     |> Map.update!(:services, fn services ->
       Enum.map(services, &Map.put(&1, :status, :unknown))
