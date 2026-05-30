@@ -140,6 +140,80 @@ defmodule Maraithon.ActionCardsTest do
     refute missing_context =~ "CRM"
   end
 
+  test "cards do not surface unknown or unclear state filler", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "github",
+      kind: "general",
+      attention_mode: "act_now",
+      title: "Review the design note",
+      summary: "The design note needs review before this week's planning.",
+      next_action: "Review the design note and choose whether it belongs this week.",
+      source_item_id: "github-issue-design-note",
+      dedupe_key: "action-card:no-state-filler",
+      priority: 72,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "The design note asks for input before planning."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    refute Enum.any?(
+             ActionCards.context_items(card),
+             &(&1.label in ["State", "Thread state", "Owed", "Responsibility"])
+           )
+
+    assert "thread_or_owed_state" in card["product_score"]["missing"]
+    refute rendered =~ "State:"
+    refute rendered =~ "Unknown"
+    refute rendered =~ "Unclear"
+  end
+
+  test "waiting state copy uses operator-facing language instead of raw state keys",
+       %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to Michael Berlingo about Starteryou UGC Campaigns",
+      summary: "Michael asked for the next Starteryou UGC campaign update.",
+      next_action: "Reply to Michael with the campaign update and next timing.",
+      source_item_id: "gmail-thread-michael-state",
+      dedupe_key: "action-card:waiting-state-copy",
+      priority: 88,
+      status: "open",
+      metadata: %{
+        "thread_state" => "waiting_on_kent",
+        "source_evidence" => "Michael asked for the next Starteryou UGC campaign update.",
+        "record" => %{
+          "person" => "Michael Berlingo",
+          "company" => "Starteryou",
+          "relationship_context" => "UGC campaign contact"
+        }
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert %{label: "State", value: "Waiting on you"} in ActionCards.context_items(card)
+    assert rendered =~ "State: Waiting on you"
+    refute rendered =~ "waiting_on_kent"
+    refute rendered =~ "Kent"
+    refute rendered =~ "Unknown"
+    refute rendered =~ "Unclear"
+  end
+
   test "source health copy humanizes local source names" do
     card = %{
       "source_health" => %{

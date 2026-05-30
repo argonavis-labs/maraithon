@@ -258,10 +258,9 @@ defmodule Maraithon.ActionCards do
     [
       %{label: "Person", value: people_label(read_field(context, "people"))},
       %{label: "Project", value: read_field(context, "project_or_topic")},
-      %{label: "Relationship", value: read_field(context, "relationship_context")},
-      %{label: "Thread state", value: humanize(read_field(context, "thread_state"))},
-      %{label: "Owed", value: humanize(read_field(context, "owed_direction"))}
+      %{label: "Relationship", value: read_field(context, "relationship_context")}
     ]
+    |> Kernel.++(state_context_items(context))
     |> Enum.reject(fn item -> blank?(item.value) end)
   end
 
@@ -301,8 +300,8 @@ defmodule Maraithon.ActionCards do
        present?(read_field(context, "project_or_topic")) or
          present?(read_field(context, "summary"))},
       {"thread_or_owed_state",
-       present?(read_field(context, "thread_state")) or
-         present?(read_field(context, "owed_direction"))},
+       meaningful_state?(read_field(context, "thread_state")) or
+         meaningful_state?(read_field(context, "owed_direction"))},
       {"source_evidence", source_evidence_present?(context)},
       {"source_health", source_health_present?(source_health)},
       {"next_best_action", present?(read_field(card, "next_best_action"))},
@@ -739,8 +738,7 @@ defmodule Maraithon.ActionCards do
       read_string(conversation_context, "momentum_state"),
       read_string(conversation_context, "notification_posture"),
       read_string(metadata, "thread_state"),
-      if(read_field(profile, "stale_confirmation_candidate") == true, do: "stale"),
-      "unknown"
+      if(read_field(profile, "stale_confirmation_candidate") == true, do: "stale")
     ])
   end
 
@@ -748,8 +746,7 @@ defmodule Maraithon.ActionCards do
     first_present([
       read_string(metadata, "commitment_direction"),
       read_string(read_map(metadata, "record"), "commitment_direction"),
-      if(read_field(profile, "actively_waiting") == true, do: "user_owes"),
-      "unclear"
+      if(read_field(profile, "actively_waiting") == true, do: "user_owes")
     ])
   end
 
@@ -953,15 +950,21 @@ defmodule Maraithon.ActionCards do
 
   defp telegram_thread_line(card) do
     context = read_map(card, "context_pack")
-    thread_state = humanize(read_field(context, "thread_state"))
-    owed = humanize(read_field(context, "owed_direction"))
+    thread_state = state_label(read_field(context, "thread_state"))
+    owed = owed_label(read_field(context, "owed_direction"))
 
     cond do
+      present?(thread_state) and thread_state == owed ->
+        "State: #{safe(thread_state)}"
+
       present?(thread_state) and present?(owed) ->
         "State: #{safe(thread_state)} · #{safe(owed)}"
 
       present?(thread_state) ->
         "State: #{safe(thread_state)}"
+
+      present?(owed) ->
+        "State: #{safe(owed)}"
 
       true ->
         nil
@@ -1384,6 +1387,68 @@ defmodule Maraithon.ActionCards do
   defp source_label(source) when is_binary(source), do: SourceLabels.label(source)
   defp source_label(_source), do: "Maraithon"
 
+  defp state_context_items(context) do
+    thread_state = state_label(read_field(context, "thread_state"))
+    owed = owed_label(read_field(context, "owed_direction"))
+
+    cond do
+      present?(thread_state) and thread_state == owed ->
+        [%{label: "State", value: thread_state}]
+
+      present?(thread_state) and present?(owed) ->
+        [%{label: "State", value: thread_state}, %{label: "Responsibility", value: owed}]
+
+      present?(thread_state) ->
+        [%{label: "State", value: thread_state}]
+
+      present?(owed) ->
+        [%{label: "State", value: owed}]
+
+      true ->
+        []
+    end
+  end
+
+  defp meaningful_state?(value), do: present?(state_label(value))
+
+  defp state_label(value) when is_binary(value) do
+    normalized =
+      value
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "_")
+      |> String.trim("_")
+
+    case normalized do
+      "" -> nil
+      "unknown" -> nil
+      "unclear" -> nil
+      "none" -> nil
+      "na" -> nil
+      "n_a" -> nil
+      "not_applicable" -> nil
+      "waiting_on_kent" -> "Waiting on you"
+      "waiting_on_user" -> "Waiting on you"
+      "waiting_on_me" -> "Waiting on you"
+      "user_owes" -> "Waiting on you"
+      "i_owe" -> "Waiting on you"
+      "asked_of_me" -> "Waiting on you"
+      "pending_reply" -> "Waiting on you"
+      "waiting_on_them" -> "Waiting on them"
+      "they_owe" -> "Waiting on them"
+      "stale" -> "Older item"
+      "active" -> "Active thread"
+      "open" -> "Open"
+      "resolved" -> "Handled"
+      "completed" -> "Handled"
+      "done" -> "Handled"
+      _ -> titleize_state(normalized)
+    end
+  end
+
+  defp state_label(_value), do: nil
+
+  defp owed_label(value), do: state_label(value)
+
   defp humanize(nil), do: nil
   defp humanize(""), do: nil
 
@@ -1394,6 +1459,13 @@ defmodule Maraithon.ActionCards do
   end
 
   defp humanize(value), do: to_string(value)
+
+  defp titleize_state(value) when is_binary(value) do
+    value
+    |> humanize()
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
 
   defp naturalize_action_copy(value) when is_binary(value) do
     value
