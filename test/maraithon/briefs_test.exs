@@ -223,10 +223,11 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "I kept the usable action items and left out diagnostics."
+    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
     assert payload.text =~ "Lead with the CFO ask."
     assert payload.text =~ "Next action: Send the revised answer today."
 
+    refute payload.text =~ "I kept"
     refute lower_text =~ "confidence"
     refute lower_text =~ "score"
     refute lower_text =~ "source_health"
@@ -259,11 +260,13 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "I kept the usable action items and left out diagnostics."
+    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
 
     assert payload.text =~
-             "I could not produce a usable brief from this run. Check connected sources before acting."
+             "No source-backed brief was available from this run, so no recommendation was sent."
 
+    refute payload.text =~ "I could not"
+    refute payload.text =~ "Check connected sources"
     refute lower_text =~ "authorization"
     refute lower_text =~ "bearer"
     refute lower_text =~ "source_health"

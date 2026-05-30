@@ -23,9 +23,9 @@ defmodule Maraithon.Briefs do
 
   @brief_title_fallback "Chief of staff brief"
   @brief_summary_default "No clear follow-up needs your attention from the connected sources yet."
-  @brief_body_default "I did not find a source-backed decision that needs your attention right now."
-  @brief_summary_fallback "I kept the usable action items and left out diagnostics."
-  @brief_body_fallback "I could not produce a usable brief from this run. Check connected sources before acting."
+  @brief_body_default "No source-backed decision needs your attention right now."
+  @brief_summary_fallback "Maraithon kept the usable action items and removed diagnostics."
+  @brief_body_fallback "No source-backed brief was available from this run, so no recommendation was sent."
   @internal_brief_markers [
     "<redacted",
     "=>",
