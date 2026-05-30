@@ -207,7 +207,7 @@ struct SourceDetailScaffold: View {
             SectionHeader(SourceDetailCopy.recentChecksSectionTitle)
             if activity.isEmpty {
                 ContentUnavailableView(
-                    "No checks yet",
+                    SourceDetailCopy.recentChecksEmptyTitle,
                     systemImage: "clock.arrow.circlepath",
                     description: Text(emptyDescription)
                 )

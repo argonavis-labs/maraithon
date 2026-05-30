@@ -110,9 +110,10 @@ final class UIComponentsTests: XCTestCase {
         )
 
         XCTAssertEqual(label, "iMessage, waiting for first check")
-        XCTAssertEqual(tooltip, "No checks yet")
+        XCTAssertEqual(tooltip, "Waiting for first check")
         XCTAssertFalse(label.localizedCaseInsensitiveContains("sync"))
         XCTAssertFalse(tooltip.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(tooltip.localizedCaseInsensitiveContains("no checks"))
     }
 
     @MainActor

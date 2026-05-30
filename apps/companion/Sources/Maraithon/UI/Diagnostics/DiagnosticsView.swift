@@ -69,9 +69,9 @@ struct DiagnosticsView: View {
                 SectionHeader("Last checked per source")
                 if visibleSources.isEmpty {
                     ContentUnavailableView(
-                        "No sources yet",
+                        "Waiting for sources",
                         systemImage: "tray",
-                        description: Text("Sources will appear here as soon as they register.")
+                        description: Text("Sources appear here after the companion registers them.")
                     )
                     .frame(minHeight: 120)
                 } else {

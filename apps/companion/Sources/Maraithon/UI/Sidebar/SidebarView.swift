@@ -165,7 +165,7 @@ struct SourceRowCopy {
                 let recency = abbrev == "now" ? "just now" : "\(abbrev) ago"
                 return "\(sourceName), \(stateWord), last checked \(recency)"
             }
-            return "\(sourceName), \(stateWord), no checks yet"
+            return "\(sourceName), \(stateWord), waiting for first check"
         }
     }
 
@@ -188,7 +188,7 @@ struct SourceRowCopy {
         if case .error(let reason) = state {
             return SourceIssueCopy.status(reason)
         }
-        guard let last = lastSyncAt else { return "No checks yet" }
+        guard let last = lastSyncAt else { return SourceDetailCopy.recentChecksEmptyTitle }
         return "Last checked \(SourceDetailCopy.relativeSyncTime(last, relativeTo: now))"
     }
 

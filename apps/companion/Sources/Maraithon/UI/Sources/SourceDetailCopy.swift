@@ -9,6 +9,7 @@ enum SourceDetailCopy {
     static let privacySectionTitle = "Privacy guardrails"
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
+    static let recentChecksEmptyTitle = "Waiting for first check"
     static let checkNowButtonTitle = "Check now"
     static let resumeUpdatesButtonTitle = "Resume updates"
     static let pauseUpdatesButtonTitle = "Pause updates"
