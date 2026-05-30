@@ -15,7 +15,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
     copy = ActionFailureCopy.insight_action({:db, :timeout})
 
     assert copy ==
-             "Action did not complete. Open the latest message or review it in Maraithon before deciding."
+             "Action did not complete. No change was made; use the latest message before deciding."
 
     refute copy =~ ":db"
     refute copy =~ "timeout"
@@ -27,7 +27,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
     copy = ActionFailureCopy.todo_callback({:stale_row, :not_found})
 
     assert copy ==
-             "Could not update that work item. Refresh the latest work message before using this action."
+             "Work item was not updated. No change was made; use the latest open-work message."
 
     refute copy =~ "stale_row"
     refute copy =~ ":not_found"
@@ -37,10 +37,21 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
 
   test "keeps stale todo callback states specific" do
     assert ActionFailureCopy.todo_callback(:not_found) ==
-             "That work item is no longer available. Refresh the latest work message."
+             "That work item is no longer available. Use the latest open-work message."
 
     assert ActionFailureCopy.todo_callback(:chat_mismatch) ==
-             "This work item is not linked to this chat anymore. Refresh the latest work message."
+             "This work item is not linked to this chat anymore. Use the latest open-work message."
+  end
+
+  test "todo connector failures point to the account recovery path" do
+    assert ActionFailureCopy.todo_callback("google_account_reauth_required") =~
+             "Reconnect Google before updating this work item"
+
+    assert ActionFailureCopy.todo_callback("google_account_reauth_required") =~
+             "/connectors/google"
+
+    assert ActionFailureCopy.todo_callback("slack_workspace_reauth_required") =~
+             "/connectors/slack"
   end
 
   test "tool errors keep known recovery states actionable" do
@@ -66,7 +77,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
       copy = ActionFailureCopy.tool_error(reason)
 
       assert copy ==
-               "Could not complete that check. Open the latest message or review Maraithon before continuing."
+               "Check did not complete. No result was saved; use the latest message before continuing."
 
       refute copy =~ "DBConnection"
       refute copy =~ "token=secret"
@@ -113,7 +124,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
          %{"reason_code" => "unknown_tool", "message" => "Action is not available."}}
       )
 
-    assert confirmation_copy == "Confirm this action before Maraithon continues."
+    assert confirmation_copy == "Confirm this action before it runs."
 
     assert denied_copy ==
              "That assistant action is not available. Refresh the message before asking again."
@@ -130,7 +141,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
              "Could not check Linear right now. Refresh the Linear connection before checking that issue."
 
     assert prepared_copy ==
-             "Could not prepare that action. Refresh the latest message before deciding."
+             "Could not prepare that action. No change was made; use the latest message before deciding."
 
     refute linear_copy =~ "DBConnection"
     refute prepared_copy =~ "changeset"

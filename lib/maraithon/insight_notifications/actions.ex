@@ -1367,8 +1367,12 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp callback_error_text({:telegram_edit_failed, _}),
     do: "Action ran, but Telegram refresh failed"
 
-  defp callback_error_text("google_account_reauth_required"), do: "Reconnect Google in Maraithon"
-  defp callback_error_text("slack_workspace_reauth_required"), do: "Reconnect Slack in Maraithon"
+  defp callback_error_text("google_account_reauth_required"),
+    do: "Reconnect Google before using this action"
+
+  defp callback_error_text("slack_workspace_reauth_required"),
+    do: "Reconnect Slack before using this action"
+
   defp callback_error_text("google_account_not_connected"), do: "Connect Google first"
   defp callback_error_text("slack_workspace_not_connected"), do: "Connect Slack first"
   defp callback_error_text(reason), do: ActionFailureCopy.insight_action(reason)

@@ -3,9 +3,9 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   alias Maraithon.AppUrl
 
-  @generic_action_failure "Action did not complete. Open the latest message or review it in Maraithon before deciding."
-  @generic_todo_failure "Could not update that work item. Refresh the latest work message before using this action."
-  @generic_tool_failure "Could not complete that check. Open the latest message or review Maraithon before continuing."
+  @generic_action_failure "Action did not complete. No change was made; use the latest message before deciding."
+  @generic_todo_failure "Work item was not updated. No change was made; use the latest open-work message."
+  @generic_tool_failure "Check did not complete. No result was saved; use the latest message before continuing."
 
   @known_tool_error_copy %{
     "action_not_found" => "That action is no longer available. Review the latest action history.",
@@ -107,15 +107,19 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   def insight_action(_reason), do: @generic_action_failure
 
   def todo_callback(reason) when reason in [:not_found, "not_found"] do
-    "That work item is no longer available. Refresh the latest work message."
+    "That work item is no longer available. Use the latest open-work message."
   end
 
   def todo_callback(reason) when reason in [:chat_mismatch, "chat_mismatch"] do
-    "This work item is not linked to this chat anymore. Refresh the latest work message."
+    "This work item is not linked to this chat anymore. Use the latest open-work message."
   end
 
-  def todo_callback("google_account_reauth_required"), do: "Reconnect Google in Maraithon."
-  def todo_callback("slack_workspace_reauth_required"), do: "Reconnect Slack in Maraithon."
+  def todo_callback("google_account_reauth_required"),
+    do: "Reconnect Google before updating this work item: #{connector_url("google")}"
+
+  def todo_callback("slack_workspace_reauth_required"),
+    do: "Reconnect Slack before updating this work item: #{connector_url("slack")}"
+
   def todo_callback("google_account_not_connected"), do: "Connect Google first."
   def todo_callback("slack_workspace_not_connected"), do: "Connect Slack first."
   def todo_callback(_reason), do: @generic_todo_failure
@@ -178,7 +182,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "Could not prepare that action. Review the action details before asking again."
 
       _ ->
-        "Could not prepare that action. Refresh the latest message before deciding."
+        "Could not prepare that action. No change was made; use the latest message before deciding."
     end
   end
 
@@ -237,7 +241,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   defp normalize_reason(_reason), do: @generic_tool_failure
 
   defp policy_decision_copy(:tool_policy_needs_confirmation, _decision) do
-    "Confirm this action before Maraithon continues."
+    "Confirm this action before it runs."
   end
 
   defp policy_decision_copy(:tool_policy_denied, decision) do
@@ -249,10 +253,10 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         "That automation is not allowed to use this action."
 
       "invalid_policy_context" ->
-        "Maraithon could not verify the action context, so nothing changed."
+        "The action context could not be verified, so nothing changed."
 
       "invalid_user_context" ->
-        "Sign in again so Maraithon can confirm the account."
+        "Sign in again so the account can be confirmed."
 
       "missing_tool_name" ->
         "Choose an action before continuing."

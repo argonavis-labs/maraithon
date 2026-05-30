@@ -28,7 +28,7 @@ defmodule Maraithon.Tools.SlackHelpers do
       do: {:error, "slack_workspace_reauth_required"}
 
   def normalize_error({:slack_error, "missing_scope"}),
-    do: {:error, "Slack is missing the permissions it needs. Reconnect Slack in Maraithon."}
+    do: {:error, "Slack is missing required permissions. Reconnect Slack before continuing."}
 
   def normalize_error({:slack_error, "channel_not_found"}),
     do: {:error, "Slack could not find that channel."}

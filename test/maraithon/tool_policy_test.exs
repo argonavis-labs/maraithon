@@ -43,7 +43,7 @@ defmodule Maraithon.ToolPolicyTest do
 
       assert decision.status == :deny
       assert decision.reason_code == "invalid_user_context"
-      assert decision.message == "Sign in again so Maraithon can confirm the account."
+      assert decision.message == "Sign in again so the account can be confirmed."
     end
 
     test "requires confirmation for external sends on model-controlled surfaces" do
@@ -56,7 +56,7 @@ defmodule Maraithon.ToolPolicyTest do
 
       assert decision.status == :needs_confirmation
       assert decision.reason_code == "confirmation_required"
-      assert decision.message == "Confirm this action before Maraithon continues."
+      assert decision.message == "Confirm this action before it runs."
       refute decision.message =~ "tool call"
     end
 
@@ -90,7 +90,7 @@ defmodule Maraithon.ToolPolicyTest do
                )
 
       assert decision["reason_code"] == "confirmation_required"
-      assert decision["message"] == "Confirm this action before Maraithon continues."
+      assert decision["message"] == "Confirm this action before it runs."
 
       [entry] = ActionLedger.list_recent(user_id, limit: 1)
       assert entry.event_type == "tool.needs_confirmation"

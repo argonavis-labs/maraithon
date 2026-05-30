@@ -24,7 +24,7 @@ defmodule Maraithon.ToolPolicy do
       context.user_required? and not valid_user_id?(context.user_id) ->
         deny(
           "invalid_user_context",
-          "Sign in again so Maraithon can confirm the account.",
+          "Sign in again so the account can be confirmed.",
           context
         )
 
@@ -36,7 +36,7 @@ defmodule Maraithon.ToolPolicy do
         Decision.new(
           :needs_confirmation,
           "confirmation_required",
-          "Confirm this action before Maraithon continues.",
+          "Confirm this action before it runs.",
           decision_metadata(context)
         )
 

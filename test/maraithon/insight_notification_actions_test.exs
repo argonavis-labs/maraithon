@@ -339,7 +339,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     callback = last_telegram_message(:callback)
 
     assert callback.opts[:text] ==
-             "Action did not complete. Open the latest message or review it in Maraithon before deciding."
+             "Action did not complete. No change was made; use the latest message before deciding."
 
     refute callback.opts[:text] =~ "Req.TransportError"
     refute callback.opts[:text] =~ "token"

@@ -412,7 +412,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
         policy_decision: %{
           "status" => "needs_confirmation",
           "reason_code" => "confirmation_required",
-          "message" => "Confirm this action before Maraithon continues."
+          "message" => "Confirm this action before it runs."
         },
         model_summary: "Maraithon prepared a reply but did not send it."
       })
@@ -668,7 +668,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
                %{user_id: user_id, context: %{}}
              )
 
-    assert confirmation_copy == "Confirm this action before Maraithon continues."
+    assert confirmation_copy == "Confirm this action before it runs."
     refute confirmation_copy =~ "tool_policy"
   end
 

@@ -490,7 +490,7 @@ defmodule Maraithon.AssistantChat do
     do: "Linear is not connected."
 
   defp prepared_action_failure_detail(:linear_reauth_required),
-    do: "Linear needs to be reconnected before Maraithon can use it."
+    do: "Linear needs to be reconnected before this action can run."
 
   defp prepared_action_failure_detail(reason) when is_binary(reason) do
     reason
@@ -517,10 +517,10 @@ defmodule Maraithon.AssistantChat do
         "The agent it referenced is no longer available."
 
       String.contains?(reason, "invalid_user_context") ->
-        "Sign in again so Maraithon can confirm the account."
+        "Sign in again so the account can be confirmed."
 
       String.contains?(reason, "reauth") ->
-        "The required account needs to be reconnected before Maraithon can use it."
+        "The required account needs to be reconnected before this action can run."
 
       String.contains?(reason, "gmail") or String.contains?(reason, "google_account") ->
         "Gmail is not connected."
