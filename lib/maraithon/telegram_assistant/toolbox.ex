@@ -3907,8 +3907,8 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp open_work_count_line(insight_count, todo_count) do
     parts =
       [
-        count_phrase(insight_count, "insight"),
-        count_phrase(todo_count, "work item")
+        count_phrase(insight_count, "source-backed priority", "source-backed priorities"),
+        count_phrase(todo_count, "work item", "work items")
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -4078,9 +4078,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     Map.get(gmail, field) || Map.get(gmail, to_string(field))
   end
 
-  defp count_phrase(0, _word), do: nil
-  defp count_phrase(1, word), do: "1 #{word}"
-  defp count_phrase(count, word), do: "#{count} #{word}s"
+  defp count_phrase(0, _singular, _plural), do: nil
+  defp count_phrase(1, singular, _plural), do: "1 #{singular}"
+  defp count_phrase(count, _singular, plural), do: "#{count} #{plural}"
 
   defp normalize_priority(value) when is_number(value), do: value
   defp normalize_priority(_value), do: 0

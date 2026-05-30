@@ -431,8 +431,18 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert summary["headline"] == "Open work: Reply in the old thread"
 
+    assert [%{"tool" => "open_work_review", "summary" => tool_summary}] =
+             summary["tool_calls"]
+
+    assert String.starts_with?(
+             tool_summary,
+             "Open work: 1 source-backed priority. Start with Reply in the old thread."
+           )
+
     refute summary["headline"] =~ "Open work: 1 insight"
     refute summary["headline"] =~ "Gmail has newer mail"
+    refute tool_summary =~ "1 insight"
+    refute inspect(summary) =~ "1 insight"
   end
 
   test "running tool headline is action-oriented" do
