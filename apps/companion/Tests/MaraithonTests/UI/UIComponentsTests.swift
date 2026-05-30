@@ -151,7 +151,7 @@ final class UIComponentsTests: XCTestCase {
                 displayedState: .disconnected,
                 lastSyncAt: nil
             ),
-            "Files, not available yet"
+            "Files, unavailable"
         )
 
         XCTAssertEqual(
@@ -161,7 +161,7 @@ final class UIComponentsTests: XCTestCase {
                 activeIssueReason: nil,
                 lastSyncAt: nil
             ),
-            "Source not available yet"
+            "Source unavailable"
         )
     }
 
@@ -226,12 +226,13 @@ final class UIComponentsTests: XCTestCase {
     }
 
     func testUnavailableSourceDetailCopyAvoidsRoadmapLanguage() {
-        XCTAssertEqual(SourceAvailabilityCopy.unavailableTitle, "Source not available yet")
-        XCTAssertEqual(SourceAvailabilityCopy.unavailableNavigationTitle, "Not available yet")
-        XCTAssertEqual(SourceAvailabilityCopy.unavailableBadge, "Soon")
+        XCTAssertEqual(SourceAvailabilityCopy.unavailableTitle, "Source unavailable")
+        XCTAssertEqual(SourceAvailabilityCopy.unavailableNavigationTitle, "Unavailable")
+        XCTAssertEqual(SourceAvailabilityCopy.unavailableBadge, "Unavailable")
         XCTAssertTrue(SourceAvailabilityCopy.unavailableDescription.contains("supported source"))
         XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("iMessage is stable"))
         XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("coming soon"))
+        XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("not available yet"))
     }
 
     @MainActor
