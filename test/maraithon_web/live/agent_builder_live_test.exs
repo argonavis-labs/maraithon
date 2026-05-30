@@ -50,9 +50,10 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
     test "renders cadences as product copy instead of raw milliseconds", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=github_product_planner")
 
-      assert html =~ "Wakeup cadence"
+      assert html =~ "Check cadence"
       assert html =~ "1 week"
       refute html =~ "604800000 ms"
+      refute html =~ "Wakeup cadence"
     end
 
     test "updates the operating model preview for modular chief of staff agents", %{conn: conn} do

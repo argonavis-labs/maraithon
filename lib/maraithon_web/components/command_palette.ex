@@ -472,7 +472,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         priority: 95
       ),
       command("Review work one by one", "/dashboard#todos", :todos, "Chief of Staff",
-        description: "Use the card review surface for decisions, done, and dismiss.",
+        description: "Review one item at a time and mark each one done, important, or dismissed.",
         keywords: "work review one at a time done dismiss important",
         priority: 100
       ),

@@ -241,7 +241,7 @@ defmodule MaraithonWeb.TodosLive do
       <div class="space-y-6">
         <.page_header
           title="Open Work"
-          subtitle="A fast command surface for triaging open obligations, follow-ups that need confirmation, personal commitments, and completed work."
+          subtitle="A fast place to triage open obligations, follow-ups that need confirmation, personal commitments, and completed work."
         >
           <:actions>
             <.button navigate="/dashboard" variant="outline">Dashboard</.button>

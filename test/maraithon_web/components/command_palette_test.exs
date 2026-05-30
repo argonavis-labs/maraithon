@@ -27,6 +27,7 @@ defmodule MaraithonWeb.Components.CommandPaletteTest do
     refute html =~ "todo table"
     refute html =~ "Open full todo list"
     refute html =~ "agent runtime"
+    refute html =~ "card review surface"
     refute html =~ "Create an agent"
     assert html =~ "Connect Google account"
     refute html =~ "Admin dashboard"

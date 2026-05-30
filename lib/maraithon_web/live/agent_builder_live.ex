@@ -524,7 +524,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[feature_limit]"
                         label="Daily feature limit"
                         value={@launch["feature_limit"]}
-                        description="How many roadmap opportunities the planner should surface in each daily batch."
+                        description="How many roadmap opportunities the planner should show in each daily review."
                       >
                           <option value="2" selected={@launch["feature_limit"] == "2"}>2</option>
                           <option value="3" selected={@launch["feature_limit"] == "3"}>3</option>
@@ -576,7 +576,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[max_insights_per_cycle]"
                         label="Max items per check"
                         value={@launch["max_insights_per_cycle"]}
-                        description="Caps how many follow-up items Maraithon can surface at once."
+                        description="Caps how many follow-up items Maraithon can show at once."
                       />
                     <% end %>
 
@@ -667,7 +667,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_wakeup_interval_ms"
                         name="launch[wakeup_interval_ms]"
-                        label="Wakeup cadence"
+                        label="Check cadence"
                         value={@launch["wakeup_interval_ms"]}
                         placeholder="30m"
                         description="How often this automation checks in. Use 30m, 1h, 1d, or a custom millisecond value."
@@ -829,7 +829,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-950/10 pt-5">
                   <div class="text-sm text-zinc-500">
                     <%= if @blockers == [] do %>
-                      Ready to create. Maraithon will persist the automation and start it right away.
+                      Ready to create. Maraithon will save the automation and start it right away.
                     <% else %>
                       Resolve the highlighted blockers before launch.
                     <% end %>
@@ -1038,7 +1038,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{
         label: "Optional URL check",
-        description: "The watchdog will probe the configured endpoint every sixth wakeup.",
+        description:
+          "The watchdog will check the configured endpoint every sixth scheduled check.",
         details: "Configured URL: #{url}",
         ready?: true,
         required?: false
@@ -1269,7 +1270,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     [
       %{title: "Repository scope", body: "Indexing files under #{launch["codebase_path"]}"},
       %{
-        title: "Plan persistence",
+        title: "Plan files",
         body:
           if(launch["write_plan_files"] == "true",
             do: "Plans will also be written to #{launch["output_path"]}",
@@ -1282,8 +1283,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
   defp dynamic_input_preview("watchdog_summarizer", launch) do
     [
       %{
-        title: "Heartbeat cadence",
-        body: "Wakes up every #{format_cadence(launch["wakeup_interval_ms"])} to emit summaries."
+        title: "Check cadence",
+        body: "Checks every #{format_cadence(launch["wakeup_interval_ms"])} to write summaries."
       },
       %{
         title: "URL check",
@@ -1500,7 +1501,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "codebase_advisor" ->
         [
           %{label: "Codebase path", value: launch["codebase_path"]},
-          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])},
+          %{label: "Check cadence", value: format_cadence(launch["wakeup_interval_ms"])},
           %{label: "Output path", value: launch["output_path"]}
         ]
 
@@ -1511,12 +1512,12 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Write plan files",
             value: if(launch["write_plan_files"] == "true", do: "Yes", else: "No")
           },
-          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])}
+          %{label: "Check cadence", value: format_cadence(launch["wakeup_interval_ms"])}
         ]
 
       "watchdog_summarizer" ->
         [
-          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])},
+          %{label: "Check cadence", value: format_cadence(launch["wakeup_interval_ms"])},
           %{
             label: "Optional URL",
             value: if(launch["check_url"] == "", do: "None", else: launch["check_url"])
@@ -1535,7 +1536,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
             label: "Daily shortlist",
             value: blank_fallback(launch["feature_limit"], "3") <> " features"
           },
-          %{label: "Wakeup cadence", value: format_cadence(launch["wakeup_interval_ms"])}
+          %{label: "Check cadence", value: format_cadence(launch["wakeup_interval_ms"])}
         ]
 
       _ ->
@@ -1912,8 +1913,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "Lower memory and lower budgets. Best when you want a lightweight helper, not a constantly reasoning automation."
 
   defp cost_profile_summary("prompt_agent", "balanced"),
-    do:
-      "Keeps enough memory and budget for steady reasoning without overspending on every wakeup."
+    do: "Keeps enough memory and budget for steady reasoning without overspending on every check."
 
   defp cost_profile_summary("prompt_agent", "thorough"),
     do:
@@ -1960,10 +1960,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("slack_followthrough_agent", "thorough"),
     do:
-      "Broader Slack coverage, faster wakeups, and more budget when Slack is where most team work happens."
+      "Broader Slack coverage, faster checks, and more budget when Slack is where most team work happens."
 
   defp cost_profile_summary(_behavior, "lean"),
-    do: "Lower spend with tighter scans and fewer wakeups."
+    do: "Lower spend with tighter scans and fewer checks."
 
   defp cost_profile_summary(_behavior, "balanced"),
     do: "Default spend and coverage for most teams."

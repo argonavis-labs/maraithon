@@ -36,7 +36,7 @@ defmodule MaraithonWeb.HowItWorksController do
       %{
         title: "Learn from your calls",
         description:
-          "Dismissals, completions, and saved preferences teach Maraithon what to surface next."
+          "Dismissals, completions, and saved preferences teach Maraithon what to show next."
       }
     ]
   end
