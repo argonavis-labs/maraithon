@@ -56,6 +56,17 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
     }
 
+    func testHealthyHeadlineLeadsWithUserUsefulCount() {
+        XCTAssertEqual(
+            SourceDetailCopy.healthyHeadline(totalSynced: 12, singular: "message", plural: "messages"),
+            "12 messages synced"
+        )
+        XCTAssertEqual(
+            SourceDetailCopy.healthyHeadline(totalSynced: 0, singular: "message", plural: "messages"),
+            "No messages synced yet"
+        )
+    }
+
     func testConnectedSummaryExplainsLastCheckOutcome() {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let copy = SourceDetailCopy.connectedSummary(

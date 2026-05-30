@@ -23,6 +23,14 @@ enum SourceDetailCopy {
         "\(total.formatted(.number)) \(itemNoun(total: total, singular: singular, plural: plural)) synced"
     }
 
+    static func healthyHeadline(totalSynced: Int, singular: String, plural: String) -> String {
+        guard totalSynced > 0 else {
+            return "No \(plural) synced yet"
+        }
+
+        return syncedHeadline(total: totalSynced, singular: singular, plural: plural)
+    }
+
     static func itemNoun(total: Int, singular: String, plural: String) -> String {
         total == 1 ? singular : plural
     }
