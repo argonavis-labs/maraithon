@@ -50,8 +50,8 @@ struct SourceStatusBadge: View {
             case .syncing: return "Checking"
             case .paused: return "Paused"
             case .needsAttention: return "Needs attention"
-            case .disconnected: return "Not syncing"
-            case .error: return "Error"
+            case .disconnected: return "Not updating"
+            case .error: return "Needs review"
             }
         }
 

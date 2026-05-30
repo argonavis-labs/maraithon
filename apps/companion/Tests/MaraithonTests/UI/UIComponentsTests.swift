@@ -45,6 +45,8 @@ final class UIComponentsTests: XCTestCase {
     func testHealthySourceCopyUsesOutcomeLanguage() {
         XCTAssertEqual(SourceStatusBadge.State.connected.label, "Assistant ready")
         XCTAssertEqual(SourceStatusBadge.State.syncing.label, "Checking")
+        XCTAssertEqual(SourceStatusBadge.State.disconnected.label, "Not updating")
+        XCTAssertEqual(SourceStatusBadge.State.error("serverError(status: 503)").label, "Needs review")
 
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let label = SourceRowCopy.accessibilityLabel(
@@ -60,6 +62,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(label.localizedCaseInsensitiveContains("connected"))
         XCTAssertFalse(label.localizedCaseInsensitiveContains("up to date"))
         XCTAssertFalse(SourceStatusBadge.State.syncing.label.localizedCaseInsensitiveContains("syncing"))
+        XCTAssertFalse(SourceStatusBadge.State.disconnected.label.localizedCaseInsensitiveContains("sync"))
     }
 
     @MainActor
@@ -91,6 +94,28 @@ final class UIComponentsTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceRowWaitingCopyUsesCheckLanguage() {
+        let label = SourceRowCopy.accessibilityLabel(
+            sourceName: "iMessage",
+            comingSoon: false,
+            rawState: .connected,
+            displayedState: .connected,
+            lastSyncAt: nil
+        )
+        let tooltip = SourceRowCopy.tooltip(
+            comingSoon: false,
+            state: .connected,
+            activeIssueReason: nil,
+            lastSyncAt: nil
+        )
+
+        XCTAssertEqual(label, "iMessage, waiting for first check")
+        XCTAssertEqual(tooltip, "No checks yet")
+        XCTAssertFalse(label.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(tooltip.localizedCaseInsensitiveContains("sync"))
+    }
+
+    @MainActor
     func testSourceRowAssistiveCopyDoesNotLeakRawIssueDetails() {
         let raw = "clientError(status: 400, body: Optional(\"{\\\"error\\\":\\\"invalid_batch\\\",\\\"secret\\\":\\\"abc\\\"}\"))"
 
@@ -108,7 +133,7 @@ final class UIComponentsTests: XCTestCase {
             lastSyncAt: nil
         )
 
-        XCTAssertEqual(label, "Notes, error, Some items could not finish. Maraithon will keep the last successful context until the next check.")
+        XCTAssertEqual(label, "Notes, needs review, Some items could not finish. Maraithon will keep the last successful context until the next check.")
         XCTAssertEqual(tooltip, "Some items could not finish. Maraithon will keep the last successful context until the next check.")
         XCTAssertFalse(label.contains("secret"))
         XCTAssertFalse(tooltip.contains("secret"))

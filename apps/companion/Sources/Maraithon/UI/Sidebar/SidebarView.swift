@@ -148,11 +148,11 @@ struct SourceRowCopy {
         }
 
         // A source that's connected at the source layer but has no
-        // successful sync yet reads as "waiting for first sync" so
+        // successful check yet reads as waiting for the first check so
         // VoiceOver doesn't say "disconnected" when the user just hasn't
         // had a first batch land yet.
         if case .connected = rawState, lastSyncAt == nil {
-            return "\(sourceName), waiting for first sync"
+            return "\(sourceName), waiting for first check"
         }
 
         let stateWord = statePhrase(displayedState)
@@ -165,7 +165,7 @@ struct SourceRowCopy {
                 let recency = abbrev == "now" ? "just now" : "\(abbrev) ago"
                 return "\(sourceName), \(stateWord), last checked \(recency)"
             }
-            return "\(sourceName), \(stateWord), not yet synced"
+            return "\(sourceName), \(stateWord), no checks yet"
         }
     }
 
@@ -188,7 +188,7 @@ struct SourceRowCopy {
         if case .error(let reason) = state {
             return SourceIssueCopy.status(reason)
         }
-        guard let last = lastSyncAt else { return "Not yet synced" }
+        guard let last = lastSyncAt else { return "No checks yet" }
         return "Last checked \(SourceDetailCopy.relativeSyncTime(last, relativeTo: now))"
     }
 
@@ -225,11 +225,11 @@ struct SourceRowCopy {
         case .connected: return "assistant ready"
         case .syncing: return "checking"
         case .paused: return "paused"
-        case .disconnected: return "disconnected"
+        case .disconnected: return "not updating"
         case .needsAttention(let reason):
             return "needs attention, \(SourceIssueCopy.status(reason))"
         case .error(let reason):
-            return "error, \(SourceIssueCopy.status(reason))"
+            return "needs review, \(SourceIssueCopy.status(reason))"
         }
     }
 }
