@@ -93,7 +93,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable {
         self.label = displayLabel
         self.status = normalizedStatus
         self.summary =
-            ChatWorkSummaryCopy.safeDetail(summary) ??
+            ChatWorkSummaryCopy.safeToolSummary(summary, tool: publicTool, label: displayLabel) ??
             ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus, label: displayLabel)
         self.startedAt = startedAt
         self.finishedAt = finishedAt
@@ -102,15 +102,22 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        tool = ChatWorkSummaryCopy.publicToolKey(try container.decode(String.self, forKey: .tool))
-        status = ChatWorkSummaryCopy.safeStatus(try container.decodeIfPresent(String.self, forKey: .status))
-        label = ChatWorkSummaryCopy.safeLabel(
+        let publicTool = ChatWorkSummaryCopy.publicToolKey(try container.decode(String.self, forKey: .tool))
+        let normalizedStatus = ChatWorkSummaryCopy.safeStatus(try container.decodeIfPresent(String.self, forKey: .status))
+        let displayLabel = ChatWorkSummaryCopy.safeLabel(
             try container.decodeIfPresent(String.self, forKey: .label),
-            fallback: ChatWorkSummaryCopy.toolLabel(for: tool)
+            fallback: ChatWorkSummaryCopy.toolLabel(for: publicTool)
         )
+        tool = publicTool
+        status = normalizedStatus
+        label = displayLabel
         summary =
-            ChatWorkSummaryCopy.safeDetail(try container.decodeIfPresent(String.self, forKey: .summary)) ??
-            ChatWorkSummaryCopy.fallbackToolSummary(status: status, label: label)
+            ChatWorkSummaryCopy.safeToolSummary(
+                try container.decodeIfPresent(String.self, forKey: .summary),
+                tool: publicTool,
+                label: displayLabel
+            ) ??
+            ChatWorkSummaryCopy.fallbackToolSummary(status: normalizedStatus, label: displayLabel)
         startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
         finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
     }
@@ -413,6 +420,14 @@ private enum ChatWorkSummaryCopy {
         return polishLegacyDetail(detail)
     }
 
+    static func safeToolSummary(_ value: String?, tool: String, label: String) -> String? {
+        guard let detail = safeText(value, maxLength: maxDetailLength, rejectIdentifiers: false) else {
+            return nil
+        }
+
+        return polishLegacyToolDetail(detail, tool: tool, label: label)
+    }
+
     static func safeLabel(_ value: String?, fallback: String) -> String {
         legacyLabel(safeText(value, maxLength: 44, rejectIdentifiers: true) ?? fallback)
     }
@@ -513,7 +528,20 @@ private enum ChatWorkSummaryCopy {
         }
     }
 
-    private static func returnedSummary(_ value: String) -> String? {
+    private static func polishLegacyToolDetail(_ value: String, tool: String, label: String) -> String {
+        switch value.lowercased() {
+        case "completed":
+            return "Completed the check."
+        case "running":
+            return "Checking now."
+        default:
+            return returnedSummary(value, tool: tool) ??
+                foundResultsSummary(value, tool: tool, label: label) ??
+                legacyProductTerms(value)
+        }
+    }
+
+    private static func returnedSummary(_ value: String, tool: String? = nil) -> String? {
         let pattern = #"^Returned\s+([0-9,]+)\s+(.+?)\.?$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return nil
@@ -536,19 +564,123 @@ private enum ChatWorkSummaryCopy {
 
         switch rawNoun {
         case "todo", "todos":
-            return count == 0 ? "This check returned no open work." : "Found \(count) open work \(displayNoun(for: count, singular: "item"))."
+            return count == 0 ? "This check returned no open work." : "Checked \(count) open work \(displayNoun(for: count, singular: "item"))."
         case "result", "results":
-            return count == 0 ? "No results found." : "Found \(count) \(displayNoun(for: count, singular: "result"))."
+            if let tool {
+                return toolCountSummary(count: count, tool: tool)
+            }
+            return count == 0 ? "This check returned no results." : "Checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
         case "person", "people":
-            return count == 0 ? "No people found." : "Found \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
+            return count == 0 ? "This check returned no people." : "Reviewed \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
         case "message", "messages":
-            return count == 0 ? "No messages found." : "Found \(count) \(displayNoun(for: count, singular: "message"))."
+            return count == 0 ? "This check returned no messages." : "Checked \(count) \(displayNoun(for: count, singular: "message"))."
         case "event", "events":
-            return count == 0 ? "No events found." : "Found \(count) \(displayNoun(for: count, singular: "event"))."
+            if tool == "calendar" {
+                return count == 0 ? "This check returned no calendar events." : "Checked \(count) calendar \(displayNoun(for: count, singular: "event"))."
+            }
+            return count == 0 ? "This check returned no events." : "Checked \(count) \(displayNoun(for: count, singular: "event"))."
         default:
             let singular = rawNoun.hasSuffix("s") ? String(rawNoun.dropLast()) : rawNoun
             let plural = rawNoun.hasSuffix("s") ? rawNoun : "\(rawNoun)s"
-            return count == 0 ? "No \(plural) found." : "Found \(count) \(displayNoun(for: count, singular: singular, plural: plural))."
+            return count == 0 ? "This check returned no \(plural)." : "Checked \(count) \(displayNoun(for: count, singular: singular, plural: plural))."
+        }
+    }
+
+    private static func foundResultsSummary(_ value: String, tool: String, label: String) -> String? {
+        if value.range(of: #"(?i)^No results? found\.?$"#, options: .regularExpression) != nil {
+            return toolCountSummary(count: 0, tool: tool)
+        }
+
+        let pattern = #"^Found\s+([0-9,]+)\s+results?\.?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard
+            let match = regex.firstMatch(in: value, options: [], range: range),
+            match.numberOfRanges == 2,
+            let countRange = Range(match.range(at: 1), in: value),
+            let count = Int(value[countRange].replacingOccurrences(of: ",", with: ""))
+        else {
+            return nil
+        }
+
+        if tool == "supporting_work" {
+            return count == 0
+                ? "\(label) returned no relevant items."
+                : "\(label) checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
+        }
+
+        return toolCountSummary(count: count, tool: tool)
+    }
+
+    private static func toolCountSummary(count: Int, tool: String) -> String {
+        switch publicToolKey(tool) {
+        case "connected_accounts":
+            return count == 0
+                ? "No connected accounts are available yet."
+                : "\(count) connected \(displayNoun(for: count, singular: "account")) available."
+        case "connected_sources":
+            return count == 0
+                ? "No connected sources are available yet."
+                : "\(count) connected \(displayNoun(for: count, singular: "source")) available."
+        case "open_work", "open_work_review":
+            return count == 0
+                ? "This check returned no open work."
+                : "Checked \(count) open work \(displayNoun(for: count, singular: "item"))."
+        case "people", "people_update", "relationship_context", "relationship_learning":
+            return count == 0
+                ? "This check returned no people."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
+        case "gmail":
+            return count == 0
+                ? "This Gmail check returned no messages."
+                : "Checked \(count) Gmail \(displayNoun(for: count, singular: "message"))."
+        case "slack":
+            return count == 0
+                ? "This Slack check returned no messages."
+                : "Checked \(count) Slack \(displayNoun(for: count, singular: "message"))."
+        case "messages":
+            return count == 0
+                ? "This Messages check returned no messages."
+                : "Checked \(count) \(displayNoun(for: count, singular: "message"))."
+        case "calendar":
+            return count == 0
+                ? "This check returned no calendar events."
+                : "Checked \(count) calendar \(displayNoun(for: count, singular: "event"))."
+        case "notes":
+            return count == 0
+                ? "This Notes check returned no notes."
+                : "Checked \(count) \(displayNoun(for: count, singular: "note"))."
+        case "voice_memos":
+            return count == 0
+                ? "This Voice Memos check returned no memos."
+                : "Checked \(count) voice \(displayNoun(for: count, singular: "memo"))."
+        case "files":
+            return count == 0
+                ? "This Files check returned no files."
+                : "Checked \(count) \(displayNoun(for: count, singular: "file"))."
+        case "reminders":
+            return count == 0
+                ? "This Reminders check returned no reminders."
+                : "Checked \(count) \(displayNoun(for: count, singular: "reminder"))."
+        case "browser_history":
+            return count == 0
+                ? "This browser history check returned no items."
+                : "Checked \(count) browser history \(displayNoun(for: count, singular: "item"))."
+        case "preferences", "preference":
+            return count == 0
+                ? "This check returned no preferences."
+                : "Checked \(count) \(displayNoun(for: count, singular: "preference"))."
+        case "memory_check", "memory":
+            return count == 0
+                ? "This memory check returned no memories."
+                : "Checked \(count) \(displayNoun(for: count, singular: "memory", plural: "memories"))."
+        default:
+            return count == 0
+                ? "This check returned no relevant items."
+                : "Checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
         }
     }
 

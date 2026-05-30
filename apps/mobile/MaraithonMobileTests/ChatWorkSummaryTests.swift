@@ -37,7 +37,7 @@ struct ChatWorkSummaryTests {
 
         #expect(visiblePayload.contains("list_todos") == false)
         #expect(visiblePayload.contains("Returned") == false)
-        #expect(visiblePayload.contains("Found 2 open work items.") == true)
+        #expect(visiblePayload.contains("Checked 2 open work items.") == true)
         #expect(object["model_name"] == nil)
         #expect(object["model_tier"] == nil)
         #expect(object["model_reasoning_effort"] == nil)
@@ -118,7 +118,7 @@ struct ChatWorkSummaryTests {
         let visiblePayload = String(data: encoded, encoding: .utf8) ?? ""
 
         #expect(summary.toolCalls.map(\.tool) == ["open_work", "supporting_work"])
-        #expect(summary.toolCalls[0].summary == "Found 1 open work item.")
+        #expect(summary.toolCalls[0].summary == "Checked 1 open work item.")
         #expect(summary.toolCalls[1].summary == "Completed the check.")
         #expect(summary.steps.map(\.type) == ["answer_preparation", "supporting_work"])
         #expect(summary.steps.first?.displayTitle == "Prepared the answer")
@@ -318,6 +318,54 @@ struct ChatWorkSummaryTests {
         #expect(visiblePayload.contains("list_people") == false)
         #expect(visiblePayload.contains("messages_search") == false)
         #expect(visiblePayload.contains("slack_get_thread_context") == false)
+    }
+
+    @Test
+    func decodingTurnsGenericResultCountsIntoSourceSpecificBriefs() throws {
+        let data = Data(
+            """
+            {
+              "headline": "Checked connected context before replying",
+              "status": "completed",
+              "tool_calls": [
+                {
+                  "id": "tool-1",
+                  "tool": "list_connected_accounts",
+                  "label": "Connected accounts",
+                  "status": "completed",
+                  "summary": "Found 2 results."
+                },
+                {
+                  "id": "tool-2",
+                  "tool": "messages_search",
+                  "label": "Messages",
+                  "status": "completed",
+                  "summary": "Returned 1 message"
+                },
+                {
+                  "id": "tool-3",
+                  "tool": "calendar_search",
+                  "label": "Calendar",
+                  "status": "completed",
+                  "summary": "Returned 0 events"
+                }
+              ],
+              "steps": []
+            }
+            """.utf8
+        )
+
+        let summary = try JSONDecoder().decode(ChatWorkSummary.self, from: data)
+        let visibleText = summary.toolCalls.compactMap(\.summary).joined(separator: " ")
+
+        #expect(summary.toolCalls.map(\.summary) == [
+            "2 connected accounts available.",
+            "Checked 1 message.",
+            "This check returned no calendar events."
+        ])
+        #expect(visibleText.localizedCaseInsensitiveContains("found 2 results") == false)
+        #expect(visibleText.localizedCaseInsensitiveContains("returned 1 message") == false)
+        #expect(visibleText.localizedCaseInsensitiveContains("no events found") == false)
     }
 
     @Test
