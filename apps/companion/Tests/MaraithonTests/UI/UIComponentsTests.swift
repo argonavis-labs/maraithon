@@ -238,11 +238,14 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.batchLine(event)
 
-        XCTAssertEqual(line, "Synced 7 | Already known 2 | Needs attention 1 | 42 ms")
+        XCTAssertEqual(line, "7 new · 2 already known · 1 needs attention · checked in under 1 sec")
         XCTAssertFalse(line.contains("accepted="))
         XCTAssertFalse(line.contains("dup="))
         XCTAssertFalse(line.contains("failed="))
         XCTAssertFalse(line.contains("lat="))
+        XCTAssertFalse(line.contains(" ms"))
+        XCTAssertFalse(line.contains("|"))
+        XCTAssertFalse(line.contains("Synced"))
         XCTAssertFalse(line.contains("Accepted"))
         XCTAssertFalse(line.contains("Duplicates"))
         XCTAssertFalse(line.contains("Not synced"))

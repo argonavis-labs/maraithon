@@ -394,7 +394,16 @@ enum DiagnosticsSettingsCopy {
     }
 
     static func batchLine(_ event: SourceStatusPublisher.BatchEvent) -> String {
-        "Synced \(event.accepted) | Already known \(event.duplicate) | Needs attention \(event.failed) | \(event.latencyMS) ms"
+        "\(event.accepted) new · \(event.duplicate) already known · \(event.failed) needs attention · \(durationDescription(milliseconds: event.latencyMS))"
+    }
+
+    private static func durationDescription(milliseconds: Int) -> String {
+        guard milliseconds >= 1_000 else {
+            return "checked in under 1 sec"
+        }
+
+        let seconds = Double(milliseconds) / 1_000
+        return "checked in \(seconds.formatted(.number.precision(.fractionLength(1)))) sec"
     }
 }
 
