@@ -57,6 +57,9 @@ enum SourceDetailCopy {
         let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
             sentences.append("Last check found and synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
+        } else if hasUnfinishedItems {
+            let verb = lastCheckNotSynced == 1 ? "needs" : "need"
+            sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) attention.")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("No new \(plural) found.")
         } else {
@@ -64,8 +67,12 @@ enum SourceDetailCopy {
         }
 
         if hasUnfinishedItems {
-            let verb = lastCheckNotSynced == 1 ? "needs" : "need"
-            sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention.")
+            if lastCheckSynced > 0 {
+                let verb = lastCheckNotSynced == 1 ? "needs" : "need"
+                sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention.")
+            } else {
+                sentences.append("Maraithon will retry on the next check.")
+            }
         } else {
             sentences.append("Maraithon will keep checking in the background.")
         }

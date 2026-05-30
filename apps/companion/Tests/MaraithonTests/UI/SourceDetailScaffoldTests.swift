@@ -150,6 +150,27 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
     }
 
+    func testConnectedSummaryDoesNotClaimNothingWasFoundWhenOnlyFailuresNeedAttention() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 12,
+            lastCheckSynced: 0,
+            lastCheckAlreadySynced: 4,
+            lastCheckNotSynced: 1,
+            lastSyncAt: now,
+            singular: "message",
+            plural: "messages",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Last check found 1 message that needs attention. Maraithon will retry on the next check. Checked just now."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages found"))
+    }
+
     func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
         XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
         XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
