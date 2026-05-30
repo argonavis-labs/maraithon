@@ -250,6 +250,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "second briefing"
     assert prompt =~ "Fresh external commercial threads from close teammates"
     assert prompt =~ "Treat gmail.commercial_threads as a coverage list"
+    assert prompt =~ "Inbox and Slack triage contract"
     assert prompt =~ "Required external meetings are a hard coverage contract"
     assert prompt =~ "Use display_start and display_end exactly"
     assert prompt =~ "Keep the JSON executive-grade and complete"
@@ -634,6 +635,90 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "## Decisions / Follow-ups"
     assert revised["body"] =~ "Cogniate Enterprise plan discussion"
     assert revised["body"] =~ "Charlie Feng"
+  end
+
+  test "quality verifier patches omitted body-backed inbox and Slack triage" do
+    brief = %{
+      "title" => "Tuesday, May 12 - Generic morning",
+      "summary" => "A generic priority.",
+      "body" => "## Needs Your Attention\n- Protect the work block before lower-signal inbox.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-12",
+      "gmail" => %{
+        "recent_unread" => [
+          %{
+            "message_id" => "msg-security",
+            "thread_id" => "thread-security",
+            "account" => "kent@runner.now",
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "Instagram security alert",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "Instagram reported a new login from an unknown device."
+          }
+        ],
+        "recent_inbox" => [
+          %{
+            "message_id" => "msg-security",
+            "thread_id" => "thread-security",
+            "account" => "kent@runner.now",
+            "from" => "Instagram <security@mail.instagram.com>",
+            "subject" => "Instagram security alert",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "Instagram reported a new login from an unknown device."
+          },
+          %{
+            "message_id" => "msg-retail",
+            "thread_id" => "thread-retail",
+            "account" => "kent@runner.now",
+            "from" => "SKIMS <no-reply@emails.skims.com>",
+            "subject" => "Dive into swim sale",
+            "body_available" => true,
+            "body_status" => "available",
+            "body" => "A promotional swim sale with no obligation."
+          }
+        ],
+        "counts" => %{"recent_unread" => 1, "recent_inbox" => 2}
+      },
+      "slack" => %{
+        "key_threads" => [
+          %{
+            "team_name" => "Runner",
+            "channel_name" => "runner-general",
+            "user" => "Charlie",
+            "ts" => "1778162400.000000",
+            "text" => "Can Kent review the launch note before noon?"
+          }
+        ],
+        "mentions" => [],
+        "counts" => %{"recent_messages" => 1, "mentions" => 0}
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert "missing_inbox_triage" in verification["initial_findings"]
+    assert "missing_slack_triage" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert "scoped_inbox_triage_covers_body_backed_actionable_email" in verification[
+             "criteria"
+           ]
+
+    assert "scoped_slack_triage_covers_actionable_threads" in verification["criteria"]
+
+    assert revised["body"] =~ "## Inbox Triage"
+    assert revised["body"] =~ "Instagram security alert"
+    assert revised["body"] =~ "Confirm whether the security notice is expected"
+    refute revised["body"] =~ "Dive into swim sale"
+
+    assert revised["body"] =~ "## Slack Triage"
+    assert revised["body"] =~ "#runner-general"
+    assert revised["body"] =~ "Can Kent review the launch note before noon?"
   end
 
   test "quality verifier drops person-only todo cards without memory-jogging context" do

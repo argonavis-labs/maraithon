@@ -88,6 +88,43 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   @device_stale_seconds 2 * 60 * 60
   @telegram_chunk_limit 3_300
   @personal_calendar_terms ~w(appointment birthday camp child children dad dentist doctor daughter emma family home jack kid kids medical mom parent personal practice rsvp school soccer son spouse wife husband)
+  @triage_action_terms [
+    "action required",
+    "approval",
+    "approve",
+    "blocked",
+    "bug",
+    "confirm",
+    "contract",
+    "customer",
+    "deadline",
+    "decision",
+    "due",
+    "enterprise",
+    "escalation",
+    "follow up",
+    "follow-up",
+    "invoice",
+    "intro",
+    "login",
+    "need",
+    "needs",
+    "outage",
+    "payment",
+    "pricing",
+    "prospect",
+    "question",
+    "reply",
+    "request",
+    "requested",
+    "respond",
+    "review",
+    "security",
+    "sign",
+    "signature",
+    "urgent",
+    "waiting"
+  ]
   @todo_ingest_retry_delays_ms [1_500, 5_000, 12_000]
 
   @impl true
@@ -1237,6 +1274,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        deciding what belongs in the executive brief, and use source_health/counts to call out
        connector gaps or truncation risk when it affects confidence.
 
+       Inbox and Slack triage contract:
+       If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
+       body/text-backed items that change action, include scoped Inbox Triage and/or Slack Triage
+       sections. Do not list promotional email, sender-only guesses, or email with missing body
+       evidence. Name account or channel counts only when those counts change what the operator
+       should do.
+
        Meeting enrichment rule:
        The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
        before public web context. Use web snippets only as fallback evidence for attendees
@@ -1927,6 +1971,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "person_company_relationship_context_for_non-obvious_people",
         "required_external_meetings_are_covered",
         "required_commercial_threads_are_covered",
+        "scoped_inbox_triage_covers_body_backed_actionable_email",
+        "scoped_slack_triage_covers_actionable_threads",
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
         "action_card_and_draft_work_is_named_without_internal_handles",
@@ -1949,6 +1995,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     calendar_conflicts = calendar_conflicts(brief_input)
     action_stack_items = action_stack_items(brief_input)
     non_draft_items = non_draft_job_items(brief_input)
+    inbox_triage_items = inbox_triage_items(brief_input)
+    slack_triage_items = slack_triage_items(brief_input)
     missing_required_meetings = missing_required_schedule_meetings(body, brief_input)
     missing_required_threads = missing_required_commercial_threads(body, brief_input)
 
@@ -1975,6 +2023,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_finding(
       generation_mode == "llm" and missing_required_threads != [],
       :missing_required_commercial_threads
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and inbox_triage_items != [] and
+        not inbox_triage_present?(body, inbox_triage_items),
+      :missing_inbox_triage
+    )
+    |> maybe_finding(
+      generation_mode == "llm" and slack_triage_items != [] and
+        not slack_triage_present?(body, slack_triage_items),
+      :missing_slack_triage
     )
     |> maybe_finding(
       generation_mode == "llm" and calendar_conflicts != [] and
@@ -2010,6 +2068,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_week_prep(brief_input, findings)
     |> maybe_append_required_meetings(brief_input, findings)
     |> maybe_append_required_commercial_threads(brief_input, findings)
+    |> maybe_append_inbox_triage(brief_input, findings)
+    |> maybe_append_slack_triage(brief_input, findings)
     |> maybe_append_schedule_conflicts(brief_input, findings)
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
@@ -2124,6 +2184,55 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         brief
       else
         append_body_section(brief, "## Decisions / Follow-ups\n" <> Enum.join(lines, "\n"))
+      end
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_inbox_triage(brief, brief_input, findings) do
+    if :missing_inbox_triage in findings do
+      items = inbox_triage_items(brief_input)
+      include_account? = inbox_triage_account_count(items) > 1
+
+      lines =
+        [
+          inbox_triage_count_line(brief_input, items),
+          items
+          |> Enum.take(6)
+          |> Enum.map(&inbox_triage_line(&1, include_account?))
+        ]
+        |> List.flatten()
+        |> Enum.reject(&blank?/1)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section(brief, "## Inbox Triage\n" <> Enum.join(lines, "\n"))
+      end
+    else
+      brief
+    end
+  end
+
+  defp maybe_append_slack_triage(brief, brief_input, findings) do
+    if :missing_slack_triage in findings do
+      items = slack_triage_items(brief_input)
+
+      lines =
+        [
+          slack_triage_count_line(brief_input, items),
+          items
+          |> Enum.take(6)
+          |> Enum.map(&slack_triage_line/1)
+        ]
+        |> List.flatten()
+        |> Enum.reject(&blank?/1)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section(brief, "## Slack Triage\n" <> Enum.join(lines, "\n"))
       end
     else
       brief
@@ -2281,6 +2390,406 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp non_draft_jobs_present?(_body), do: false
+
+  defp inbox_triage_present?(body, items) when is_binary(body) and is_list(items) do
+    normalized = normalize_match_text(body)
+
+    section_present? =
+      Enum.any?(["inbox triage", "gmail", "inbox", "email"], &String.contains?(normalized, &1))
+
+    section_present? and
+      Enum.any?(items, &body_mentions_coverage_item?(body, inbox_triage_labels(&1)))
+  end
+
+  defp inbox_triage_present?(_body, _items), do: false
+
+  defp slack_triage_present?(body, items) when is_binary(body) and is_list(items) do
+    normalized = normalize_match_text(body)
+
+    section_present? =
+      Enum.any?(["slack triage", "slack", "channel"], &String.contains?(normalized, &1)) or
+        String.contains?(body, "#")
+
+    section_present? and
+      Enum.any?(items, &body_mentions_coverage_item?(body, slack_triage_labels(&1)))
+  end
+
+  defp slack_triage_present?(_body, _items), do: false
+
+  defp inbox_triage_items(brief_input) when is_map(brief_input) do
+    gmail = read_map(brief_input, "gmail")
+
+    [
+      read_list(gmail, "recent_unread"),
+      read_list(gmail, "recent_inbox")
+    ]
+    |> List.flatten()
+    |> Enum.filter(&is_map/1)
+    |> Enum.filter(&inbox_triage_item?/1)
+    |> Enum.uniq_by(&inbox_triage_identity/1)
+  end
+
+  defp inbox_triage_items(_brief_input), do: []
+
+  defp inbox_triage_item?(item) when is_map(item) do
+    gmail_message_body_backed?(item) and
+      triage_actionable_text?(gmail_triage_text(item))
+  end
+
+  defp inbox_triage_item?(_item), do: false
+
+  defp gmail_message_body_backed?(item) when is_map(item) do
+    body = read_string(item, "body", nil)
+    body_status = read_string(item, "body_status", nil)
+
+    body_available? =
+      truthy?(read_any(item, "body_available")) or
+        is_nil(body_status) or body_status in ["available", "available_truncated"]
+
+    body_available? and not blank?(body)
+  end
+
+  defp gmail_message_body_backed?(_item), do: false
+
+  defp gmail_triage_text(item) when is_map(item) do
+    [
+      read_string(item, "subject", nil),
+      read_string(item, "body", nil),
+      read_string(item, "snippet", nil)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp gmail_triage_text(_item), do: ""
+
+  defp inbox_triage_identity(item) when is_map(item) do
+    read_string(item, "thread_id", nil) ||
+      read_string(item, "message_id", nil) ||
+      [
+        read_string(item, "subject", nil),
+        read_string(item, "from", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+      |> Enum.join(":")
+      |> normalize_match_text()
+  end
+
+  defp inbox_triage_identity(item), do: inspect(item)
+
+  defp inbox_triage_labels(item) when is_map(item) do
+    [
+      read_string(item, "subject", nil),
+      email_identity_labels(read_string(item, "from", nil)),
+      read_string(item, "account", nil)
+    ]
+    |> List.flatten()
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp inbox_triage_labels(_item), do: []
+
+  defp inbox_triage_account_count(items) when is_list(items) do
+    items
+    |> Enum.map(&read_string(&1, "account", nil))
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq_by(&normalize_match_text/1)
+    |> length()
+  end
+
+  defp inbox_triage_account_count(_items), do: 0
+
+  defp inbox_triage_count_line(brief_input, items) do
+    counts =
+      brief_input
+      |> read_map("gmail")
+      |> read_map("counts")
+
+    unread = read_integer(counts, "recent_unread", 0)
+    accounts = inbox_triage_account_count(items)
+
+    facts =
+      [
+        count_phrase(unread, "recent unread", "recent unread"),
+        if(accounts > 1, do: count_phrase(accounts, "mailbox", "mailboxes"), else: nil)
+      ]
+      |> Enum.reject(&blank?/1)
+
+    if facts == [] do
+      nil
+    else
+      "- Scope: #{Enum.join(facts, " · ")}. Review the body-backed items below before clearing lower-signal email."
+    end
+  end
+
+  defp inbox_triage_line(item, include_account?) when is_map(item) do
+    subject = read_string(item, "subject", "Email thread") |> scrub_internal_action_handles()
+    from = item |> read_string("from", nil) |> email_display_label()
+    account = read_string(item, "account", nil)
+    account_label = if include_account? and not blank?(account), do: "(#{account})"
+    evidence = item |> message_evidence_text() |> scrub_internal_action_handles()
+    action = triage_next_move(gmail_triage_text(item), :gmail)
+
+    [
+      "- **#{subject}**",
+      from && "from #{from}",
+      account_label,
+      "- #{action}.",
+      evidence && "Evidence: #{evidence}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp inbox_triage_line(_item, _include_account?), do: nil
+
+  defp slack_triage_items(brief_input) when is_map(brief_input) do
+    slack = read_map(brief_input, "slack")
+
+    mention_items =
+      slack
+      |> read_list("mentions")
+      |> Enum.filter(&slack_message_text_present?/1)
+
+    thread_items =
+      slack
+      |> read_list("key_threads")
+      |> Enum.filter(&slack_triage_thread_item?/1)
+
+    (mention_items ++ thread_items)
+    |> Enum.filter(&is_map/1)
+    |> Enum.uniq_by(&slack_triage_identity/1)
+  end
+
+  defp slack_triage_items(_brief_input), do: []
+
+  defp slack_message_text_present?(item) when is_map(item) do
+    not blank?(slack_message_text(item))
+  end
+
+  defp slack_message_text_present?(_item), do: false
+
+  defp slack_triage_thread_item?(item) when is_map(item) do
+    slack_message_text_present?(item) and triage_actionable_text?(slack_message_text(item))
+  end
+
+  defp slack_triage_thread_item?(_item), do: false
+
+  defp slack_message_text(item) when is_map(item) do
+    [
+      read_string(item, "text", nil),
+      read_string(item, "summary", nil),
+      read_string(item, "body", nil)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp slack_message_text(_item), do: ""
+
+  defp slack_triage_identity(item) when is_map(item) do
+    [
+      read_string(item, "team_name", nil),
+      read_string(item, "channel_id", nil) || read_string(item, "channel_name", nil),
+      read_string(item, "thread_ts", nil) || read_string(item, "ts", nil),
+      slack_message_text(item)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(":")
+    |> normalize_match_text()
+  end
+
+  defp slack_triage_identity(item), do: inspect(item)
+
+  defp slack_triage_labels(item) when is_map(item) do
+    [
+      read_string(item, "channel_name", nil),
+      read_string(item, "channel", nil),
+      read_string(item, "team_name", nil),
+      slack_message_text(item)
+    ]
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp slack_triage_labels(_item), do: []
+
+  defp slack_triage_count_line(brief_input, items) do
+    counts =
+      brief_input
+      |> read_map("slack")
+      |> read_map("counts")
+
+    mentions = read_integer(counts, "mentions", 0)
+    channel_count = slack_triage_channel_count(items)
+
+    facts =
+      [
+        count_phrase(mentions, "mention", "mentions"),
+        if(channel_count > 1, do: count_phrase(channel_count, "channel", "channels"), else: nil)
+      ]
+      |> Enum.reject(&blank?/1)
+
+    if facts == [] do
+      nil
+    else
+      "- Scope: #{Enum.join(facts, " · ")}. Items below need a reply, decision, or delegation."
+    end
+  end
+
+  defp slack_triage_channel_count(items) when is_list(items) do
+    items
+    |> Enum.map(&(read_string(&1, "channel_name", nil) || read_string(&1, "channel", nil)))
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq_by(&normalize_match_text/1)
+    |> length()
+  end
+
+  defp slack_triage_channel_count(_items), do: 0
+
+  defp slack_triage_line(item) when is_map(item) do
+    channel = slack_channel_label(item)
+    user = read_string(item, "user", nil)
+    source_ref = slack_source_ref(item)
+    evidence = item |> slack_message_text() |> truncate_prompt_string(180)
+    action = triage_next_move(slack_message_text(item), :slack)
+
+    [
+      "- **#{channel}**",
+      user && "from #{user}",
+      source_ref && "(#{source_ref})",
+      "- #{action}.",
+      "Evidence: #{scrub_internal_action_handles(evidence)}"
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp slack_triage_line(_item), do: nil
+
+  defp slack_channel_label(item) when is_map(item) do
+    channel =
+      read_string(item, "channel_name", nil) ||
+        read_string(item, "channel", nil) ||
+        read_string(item, "channel_id", nil) ||
+        "Slack thread"
+
+    if String.starts_with?(channel, "#"), do: channel, else: "##{channel}"
+  end
+
+  defp slack_channel_label(_item), do: "#Slack thread"
+
+  defp slack_source_ref(item) when is_map(item) do
+    ts = read_string(item, "thread_ts", nil) || read_string(item, "ts", nil)
+    if blank?(ts), do: nil, else: "ts #{ts}"
+  end
+
+  defp slack_source_ref(_item), do: nil
+
+  defp triage_actionable_text?(text) when is_binary(text) do
+    normalized = normalize_match_text(text)
+    words = String.split(normalized, " ", trim: true)
+
+    Enum.any?(@triage_action_terms, fn term ->
+      normalized_term = normalize_match_text(term)
+
+      cond do
+        blank?(normalized_term) -> false
+        String.contains?(normalized_term, " ") -> String.contains?(normalized, normalized_term)
+        true -> normalized_term in words
+      end
+    end)
+  end
+
+  defp triage_actionable_text?(_text), do: false
+
+  defp triage_next_move(text, :gmail) do
+    normalized = normalize_match_text(text)
+
+    cond do
+      triage_any_term?(normalized, ["security", "login"]) ->
+        "Confirm whether the security notice is expected, then secure the account or dismiss it"
+
+      triage_any_term?(normalized, ["payment", "invoice"]) ->
+        "Pay, update the card, or delegate the owner"
+
+      triage_any_term?(normalized, ["pricing", "enterprise", "customer", "prospect", "contract"]) ->
+        "Decide the commercial answer or owner before the thread goes stale"
+
+      triage_any_term?(normalized, ["approval", "approve", "review", "sign", "signature"]) ->
+        "Review and answer with approval, edits, or a clear owner"
+
+      true ->
+        "Decide whether to reply, delegate, or dismiss"
+    end
+  end
+
+  defp triage_next_move(text, :slack) do
+    normalized = normalize_match_text(text)
+
+    cond do
+      triage_any_term?(normalized, ["blocked", "bug", "outage"]) ->
+        "Name the owner and next debug step"
+
+      triage_any_term?(normalized, ["approval", "approve", "review", "decision"]) ->
+        "Give the decision, approval, or edit path"
+
+      triage_any_term?(normalized, ["customer", "prospect", "enterprise", "pricing"]) ->
+        "Give guidance before the commercial thread drifts"
+
+      true ->
+        "Reply, delegate, or close the loop"
+    end
+  end
+
+  defp triage_next_move(_text, _source), do: "Decide the next move"
+
+  defp triage_any_term?(normalized, terms) when is_binary(normalized) and is_list(terms) do
+    words = String.split(normalized, " ", trim: true)
+
+    Enum.any?(terms, fn term ->
+      normalized_term = normalize_match_text(term)
+
+      if String.contains?(normalized_term, " ") do
+        String.contains?(normalized, normalized_term)
+      else
+        normalized_term in words
+      end
+    end)
+  end
+
+  defp triage_any_term?(_normalized, _terms), do: false
+
+  defp message_evidence_text(item) when is_map(item) do
+    [
+      read_string(item, "body", nil),
+      read_string(item, "snippet", nil)
+    ]
+    |> Enum.find(&(not blank?(&1)))
+    |> case do
+      nil -> nil
+      text -> truncate_prompt_string(text, 180)
+    end
+  end
+
+  defp message_evidence_text(_item), do: nil
+
+  defp email_display_label(value) when is_binary(value) do
+    value
+    |> email_identity_labels()
+    |> List.first()
+    |> case do
+      nil ->
+        value
+        |> String.replace(~r/<[^>]+>/, "")
+        |> String.trim()
+        |> default_if_blank(nil)
+
+      label ->
+        label
+    end
+  end
+
+  defp email_display_label(_value), do: nil
 
   defp calendar_conflicts(brief_input) when is_map(brief_input) do
     events =
