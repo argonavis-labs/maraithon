@@ -64,7 +64,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
                 singular: "message",
                 plural: "messages"
             ),
-            "Maraithon is checking iMessage"
+            "Checking iMessage for assistant context"
         )
         let headline = SourceDetailCopy.healthyHeadline(
             displayName: "iMessage",
@@ -73,9 +73,10 @@ final class SourceDetailScaffoldTests: XCTestCase {
             plural: "messages"
         )
 
-        XCTAssertEqual(headline, "Maraithon can use iMessage")
+        XCTAssertEqual(headline, "iMessage is available to your assistant")
         XCTAssertFalse(headline.localizedCaseInsensitiveContains("messages synced"))
         XCTAssertFalse(headline.localizedCaseInsensitiveContains("this session"))
+        XCTAssertFalse(headline.localizedCaseInsensitiveContains("connected"))
     }
 
     func testConnectedSummaryExplainsLastCheckOutcome() {
@@ -94,12 +95,14 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check added 4 messages. Maraithon will keep checking in the background. Checked just now."
+            "Last check added 4 messages, bringing 12 messages into assistant context. Your assistant will keep this context current. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
         XCTAssertTrue(copy.localizedCaseInsensitiveContains("last check added"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("assistant context"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything is current"))
     }
 
@@ -117,9 +120,10 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Maraithon can use 12 messages so far. Check now to look for new messages."
+            "Your assistant has 12 messages available. Check now to look for anything new."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("has synced"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("Maraithon can use"))
     }
 
     func testConnectedSummaryExplainsNoNewItems() {
@@ -138,7 +142,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages found. Maraithon will keep checking in the background. Checked just now."
+            "No new messages since the last check. Your assistant will keep this context current. Checked just now."
         )
     }
 
@@ -158,7 +162,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages found. Maraithon will keep checking in the background. Checked just now."
+            "No new messages since the last check. Your assistant will keep this context current. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
     }
@@ -179,7 +183,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check added 3 notes. 1 note needs attention. Checked just now."
+            "Last check added 3 notes, bringing 8 notes into assistant context. 1 note needs attention. Checked just now."
         )
     }
 
@@ -210,13 +214,13 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
         XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
-        XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "added")
+        XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "new this check")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already known")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
         XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Needs attention")
         XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
-        XCTAssertEqual(SourceDetailCopy.totalSyncedTitle, "Available")
-        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "to assistant")
+        XCTAssertEqual(SourceDetailCopy.totalSyncedTitle, "Assistant context")
+        XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "available now")
         XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")

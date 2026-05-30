@@ -87,15 +87,13 @@
 # -------------
 # - Maraithon.Runtime (the module being tested)
 # - Maraithon.Agents (database operations)
-# - Maraithon.Runtime.Scheduler (for agent wakeups)
 # - Ecto SQL Sandbox (for database isolation)
 #
 # Setup Requirements:
 # -------------------
-# This test uses `async: false` because:
-# 1. The Scheduler is a named GenServer (only one instance can run)
-# 2. Tests need to start/stop the Scheduler
-# 3. Agent processes need database sandbox access
+# This test keeps process-heavy runtime coverage out of the facade checks.
+# Agent process and scheduler behavior is covered in the runtime process tests,
+# where spawned processes are explicitly granted sandbox access.
 #
 # ==============================================================================
 
@@ -104,27 +102,8 @@ defmodule Maraithon.RuntimeTest do
 
   alias Maraithon.Runtime
   alias Maraithon.Agents
-
-  # ----------------------------------------------------------------------------
-  # Test Setup
-  # ----------------------------------------------------------------------------
-  #
-  # Sets up a fresh Scheduler for each test. The Scheduler is required for
-  # agent operations but we don't want it from the application supervisor
-  # because it won't have database sandbox access.
-  # ----------------------------------------------------------------------------
-  setup do
-    # Stop any existing scheduler
-    case Process.whereis(Maraithon.Runtime.Scheduler) do
-      nil -> :ok
-      pid -> GenServer.stop(pid, :normal)
-    end
-
-    scheduler_pid = start_supervised!({Maraithon.Runtime.Scheduler, []})
-    Ecto.Adapters.SQL.Sandbox.allow(Maraithon.Repo, self(), scheduler_pid)
-
-    %{scheduler_pid: scheduler_pid}
-  end
+  alias Maraithon.Agents.Agent
+  alias Maraithon.Repo
 
   # ============================================================================
   # STATUS QUERY TESTS
@@ -406,6 +385,8 @@ defmodule Maraithon.RuntimeTest do
     This is the base case - no agents to resume.
     """
     test "returns ok when no agents to resume" do
+      Repo.delete_all(Agent)
+
       # Don't create any resumable agents - just verify the function works
       # with no agents to resume
       assert :ok = Runtime.resume_all_agents()
@@ -416,6 +397,8 @@ defmodule Maraithon.RuntimeTest do
     Only agents with status = "running" should be resumed.
     """
     test "returns ok even with stopped agents" do
+      Repo.delete_all(Agent)
+
       # Create a stopped agent (won't be resumed)
       {:ok, agent} =
         Agents.create_agent(%{

@@ -10,13 +10,13 @@ enum SourceDetailCopy {
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"
-    static let lastBatchSyncedCaption = "added"
+    static let lastBatchSyncedCaption = "new this check"
     static let alreadySyncedTitle = "Already known"
     static let alreadySyncedCaption = "last check"
     static let notSyncedTitle = "Needs attention"
     static let notSyncedCaption = "last check"
-    static let totalSyncedTitle = "Available"
-    static let totalSyncedCaption = "to assistant"
+    static let totalSyncedTitle = "Assistant context"
+    static let totalSyncedCaption = "available now"
     static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
     static let firstSyncTitle = "Ready for first sync"
@@ -28,10 +28,10 @@ enum SourceDetailCopy {
         plural _: String
     ) -> String {
         if totalSynced > 0 {
-            return "Maraithon can use \(displayName)"
+            return "\(displayName) is available to your assistant"
         }
 
-        return "Maraithon is checking \(displayName)"
+        return "Checking \(displayName) for assistant context"
     }
 
     static func itemNoun(total: Int, singular: String, plural: String) -> String {
@@ -55,20 +55,26 @@ enum SourceDetailCopy {
     ) -> String {
         guard let lastSyncAt else {
             if totalSynced > 0 {
-                return "Maraithon can use \(countedItem(totalSynced, singular: singular, plural: plural)) so far. Check now to look for new \(plural)."
+                return "Your assistant has \(countedItem(totalSynced, singular: singular, plural: plural)) available. Check now to look for anything new."
             }
-            return "Check now to start syncing \(displayName)."
+            return "Check now to make \(displayName) available to your assistant."
         }
 
         var sentences: [String] = []
         let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
-            sentences.append("Last check added \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
+            let added = countedItem(lastCheckSynced, singular: singular, plural: plural)
+            if totalSynced > lastCheckSynced {
+                let total = countedItem(totalSynced, singular: singular, plural: plural)
+                sentences.append("Last check added \(added), bringing \(total) into assistant context.")
+            } else {
+                sentences.append("Last check added \(added) to assistant context.")
+            }
         } else if hasUnfinishedItems {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
             sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) attention.")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
-            sentences.append("No new \(plural) found.")
+            sentences.append("No new \(plural) since the last check.")
         } else {
             sentences.append("No \(plural) found yet.")
         }
@@ -81,7 +87,7 @@ enum SourceDetailCopy {
                 sentences.append("Maraithon will retry on the next check.")
             }
         } else {
-            sentences.append("Maraithon will keep checking in the background.")
+            sentences.append("Your assistant will keep this context current.")
         }
 
         sentences.append("Checked \(relativeSyncTime(lastSyncAt, relativeTo: now)).")

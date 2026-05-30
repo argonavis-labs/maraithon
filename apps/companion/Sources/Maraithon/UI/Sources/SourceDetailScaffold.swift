@@ -45,13 +45,13 @@ struct SourceDetailScaffold: View {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xlarge) {
                 overviewSection
                 Divider()
-                capabilitiesSection
-                Divider()
-                privacySection
-                Divider()
                 statsSection
                 Divider()
                 activitySection
+                Divider()
+                capabilitiesSection
+                Divider()
+                privacySection
             }
             .padding(Tokens.Spacing.xlarge)
             .frame(maxWidth: .infinity, alignment: .topLeading)

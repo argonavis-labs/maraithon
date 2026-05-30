@@ -79,8 +79,8 @@ struct StatCard: View {
     return LazyVGrid(columns: columns, spacing: Tokens.Spacing.medium) {
         StatCard(title: "Today", value: "47", trend: .up("+12"))
         StatCard(title: "This week", value: "318", caption: "across 14 chats")
-        StatCard(title: "Total", value: "12,408")
-        StatCard(title: "Cursor", value: "p:218,402", caption: "rowid")
+        StatCard(title: "Assistant context", value: "12,408")
+        StatCard(title: "Last checked", value: "2m", caption: "successful check")
     }
     .padding(Tokens.Spacing.large)
     .frame(width: 640)
