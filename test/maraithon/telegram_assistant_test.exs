@@ -2180,10 +2180,11 @@ defmodule Maraithon.TelegramAssistantTest do
     assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 1_000
     assert progress_text == "Still checking what I know about Charlie."
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
-    assert timeout_text =~ "I saved the question about Charlie"
-    assert timeout_text =~ "relationship context plus connected sources"
+    assert timeout_text =~ "Question about Charlie is saved."
+    assert timeout_text =~ "relationship context and connected sources"
     refute timeout_text =~ "CRM"
     refute timeout_text =~ "partial evidence"
+    refute timeout_text =~ "I "
 
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
@@ -2251,8 +2252,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert_receive {:assistant_waiting, run_pid}, 3_000
     assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
-    assert timeout_text =~ "I saved this request"
+    assert timeout_text =~ "Request saved."
     refute timeout_text =~ "taking longer than it should"
+    refute timeout_text =~ "I "
     send(run_pid, {:release_assistant, run_pid})
     assert :ok = Task.await(task, 2_000)
 
