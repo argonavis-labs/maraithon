@@ -42,7 +42,7 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
 
         if !hasAnyPeople {
             return PeopleEmptyState(
-                title: "No relationships captured yet",
+                title: "No relationships yet",
                 systemImage: "person.crop.circle.badge.plus",
                 description: "Add someone important so Maraithon can remember context, cadence, and follow-up history."
             )

@@ -170,7 +170,7 @@ struct CRMFilteringTests {
     @Test
     func emptyStateCopyMatchesSelectedPeopleFilter() {
         #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: false) == PeopleEmptyState(
-            title: "No relationships captured yet",
+            title: "No relationships yet",
             systemImage: "person.crop.circle.badge.plus",
             description: "Add someone important so Maraithon can remember context, cadence, and follow-up history."
         ))
@@ -211,5 +211,6 @@ struct CRMFilteringTests {
         #expect(!copy.contains("you are clear"))
         #expect(!copy.contains("all clear"))
         #expect(!copy.contains("no saved people match"))
+        #expect(!copy.contains("captured"))
     }
 }

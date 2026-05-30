@@ -45,9 +45,9 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
 
         if !hasAnyWork {
             return TodoEmptyState(
-                title: "No work captured yet",
+                title: "No work yet",
                 systemImage: "checklist",
-                description: "Add a follow-up or ask Maraithon to turn chat, messages, or notes into next actions."
+                description: "Add a follow-up or ask Maraithon to turn messages, notes, and meetings into next actions."
             )
         }
 
@@ -62,7 +62,7 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             return TodoEmptyState(
                 title: "No open work",
                 systemImage: "checklist",
-                description: "No open work is visible in this filter. Capture the next commitment when it should stay on your radar."
+                description: "No open work is visible in this filter. Add the next commitment when it should stay on your radar."
             )
         case .today:
             return TodoEmptyState(

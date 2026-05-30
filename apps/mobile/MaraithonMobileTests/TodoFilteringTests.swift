@@ -95,9 +95,9 @@ struct TodoFilteringTests {
         #expect(TodoFilter.completed.navigationTitle == "Completed")
 
         #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: false) == TodoEmptyState(
-            title: "No work captured yet",
+            title: "No work yet",
             systemImage: "checklist",
-            description: "Add a follow-up or ask Maraithon to turn chat, messages, or notes into next actions."
+            description: "Add a follow-up or ask Maraithon to turn messages, notes, and meetings into next actions."
         ))
 
         #expect(TodoFilter.overdue.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
@@ -108,7 +108,7 @@ struct TodoFilteringTests {
 
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work in this view")
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Reset filters or add the next follow-up Maraithon should keep visible.")
-        #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "No open work is visible in this filter. Capture the next commitment when it should stay on your radar.")
+        #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "No open work is visible in this filter. Add the next commitment when it should stay on your radar.")
         #expect(TodoFilter.today.emptyState(searchText: "", hasAnyWork: true).title == "No work due today")
         #expect(TodoFilter.upcoming.emptyState(searchText: "", hasAnyWork: true).title == "No upcoming work")
         #expect(TodoFilter.completed.emptyState(searchText: "", hasAnyWork: true).title == "No completed work")
@@ -134,6 +134,7 @@ struct TodoFilteringTests {
         #expect(!copy.contains("needs action right now"))
         #expect(!copy.contains("you are clear"))
         #expect(!copy.contains("all saved work is completed"))
+        #expect(!copy.contains("captured"))
     }
 
     @Test
