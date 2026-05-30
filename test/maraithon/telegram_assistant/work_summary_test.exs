@@ -282,6 +282,56 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute inspect(summary) =~ "messages_search"
   end
 
+  test "list summaries translate raw status codes before display" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "list_connected_accounts",
+            "result" => %{
+              "connected_accounts" => [
+                %{"account_label" => "kent@example.com", "status" => "needs_refresh"},
+                %{"account_label" => "Calendar", "status" => "missing_scope"}
+              ]
+            }
+          },
+          %{
+            "tool" => "list_agents",
+            "result" => %{
+              "agents" => [
+                %{"name" => "Morning brief", "status" => "setup_required"},
+                %{"name" => "Deep research", "status" => "in_progress"}
+              ]
+            }
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert [
+             %{
+               "tool" => "connected_accounts",
+               "label" => "Connected accounts",
+               "summary" =>
+                 "2 connected accounts: kent@example.com (reconnect needed); Calendar (needs permission)"
+             },
+             %{
+               "tool" => "automations",
+               "label" => "Automations",
+               "summary" =>
+                 "2 automations: Morning brief (setup needed); Deep research (in progress)"
+             }
+           ] = summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "needs_refresh"
+    refute visible_text =~ "missing_scope"
+    refute visible_text =~ "setup_required"
+    refute visible_text =~ "in_progress"
+  end
+
   test "pre-normalized public tool keys keep specific labels" do
     turn = %Turn{
       structured_data: %{

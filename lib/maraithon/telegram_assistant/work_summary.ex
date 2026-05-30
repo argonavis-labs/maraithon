@@ -695,7 +695,23 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp append_status(nil, _status), do: nil
   defp append_status(label, status) when status in [nil, "", "connected", "completed"], do: label
-  defp append_status(label, status), do: "#{label} (#{status})"
+  defp append_status(label, status), do: "#{label} (#{status_label(status)})"
+
+  defp status_label("needs_refresh"), do: "reconnect needed"
+  defp status_label("missing_scope"), do: "needs permission"
+  defp status_label("not_configured"), do: "setup needed"
+  defp status_label("setup_required"), do: "setup needed"
+  defp status_label("partially_configured"), do: "partially set up"
+  defp status_label("in_progress"), do: "in progress"
+  defp status_label("awaiting_confirmation"), do: "awaiting approval"
+  defp status_label(status) when is_binary(status), do: humanize_status(status)
+  defp status_label(status), do: status |> to_string() |> humanize_status()
+
+  defp humanize_status(status) when is_binary(status) do
+    status
+    |> String.replace(~r/[_-]+/, " ")
+    |> String.trim()
+  end
 
   defp append_context(nil, _context), do: nil
   defp append_context(label, context) when context in [nil, ""], do: label
