@@ -59,4 +59,24 @@ defmodule Maraithon.Todos.AttentionRankerTest do
     assert profile["bucket"] == "strong_relationship_waiting"
     assert profile["relationship_strength"] == 88
   end
+
+  test "does not classify business campaigns as family camp logistics" do
+    campaign = %{
+      "title" => "Reply to Michael about Starteryou UGC Campaigns",
+      "summary" => "Michael is waiting on UGC campaign materials.",
+      "next_action" => "Send the campaign owner and next artifact.",
+      "priority" => 88,
+      "metadata" => %{
+        "record" => %{
+          "company" => "Starteryou",
+          "relationship_context" => "UGC campaign contact"
+        }
+      }
+    }
+
+    profile = AttentionRanker.profile(campaign, now: @now)
+
+    refute profile["personal_family"]
+    assert profile["bucket"] == "business_project_waiting"
+  end
 end

@@ -205,10 +205,20 @@ defmodule Maraithon.Todos.AttentionRanker do
   end
 
   defp contains_any?(text, terms) when is_binary(text) do
-    Enum.any?(terms, fn term -> String.contains?(text, term) end)
+    Enum.any?(terms, &term_present?(text, &1))
   end
 
   defp contains_any?(_text, _terms), do: false
+
+  defp term_present?(text, term) when is_binary(term) do
+    if String.match?(term, ~r/^[a-z0-9_]+$/) do
+      Regex.match?(~r/(^|[^a-z0-9_])#{Regex.escape(term)}($|[^a-z0-9_])/, text)
+    else
+      String.contains?(text, term)
+    end
+  end
+
+  defp term_present?(_text, _term), do: false
 
   defp relationship_strength(todo, metadata) do
     [

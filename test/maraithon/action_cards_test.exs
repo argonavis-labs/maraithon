@@ -140,6 +140,92 @@ defmodule Maraithon.ActionCardsTest do
     refute ActionCards.source_health_note(card) =~ "Could not fully check Desktop App"
   end
 
+  test "business inbox cards do not promote the Mac companion when local context is not relevant",
+       %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+      summary: "Michael Berlingo is waiting on Starteryou UGC campaign next steps.",
+      next_action:
+        "Reply with the recommended campaign next step and ask which asset he wants first.",
+      source_item_id: "gmail-thread-michael-starteryou",
+      dedupe_key: "action-card:michael-starteryou-source-gap",
+      priority: 88,
+      status: "open",
+      metadata: %{
+        "subject" => "Starteryou UGC Campaigns",
+        "source_evidence" => "Michael asked for Starteryou UGC campaign next steps and timing.",
+        "record" => %{
+          "person" => "Michael Berlingo",
+          "company" => "Starteryou",
+          "relationship_context" => "UGC campaign contact"
+        }
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    opts = [
+      include_disconnected: true,
+      source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
+    ]
+
+    card = ActionCards.for_todo(todo, opts)
+    rendered = ActionCards.render_telegram_todo(todo, opts)
+
+    assert ActionCards.source_health_note(card) == "Checked Gmail."
+    assert get_in(card, ["source_health", "missing_sources"]) == []
+    refute rendered =~ "Mac companion"
+    refute rendered =~ "Local context"
+  end
+
+  test "personal logistics cards surface the Mac companion gap when local context would help",
+       %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to school about Tuesday pickup change",
+      summary: "The school asked whether Tuesday pickup should move to 4 PM.",
+      next_action: "Confirm the Tuesday pickup plan with the school.",
+      source_item_id: "gmail-thread-school-pickup",
+      dedupe_key: "action-card:school-pickup-source-gap",
+      priority: 92,
+      status: "open",
+      metadata: %{
+        "life_domain" => "family",
+        "source_evidence" => "The school asked whether Tuesday pickup should move to 4 PM.",
+        "record" => %{
+          "person" => "Oak Street School",
+          "relationship_context" => "school logistics"
+        }
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    opts = [
+      include_disconnected: true,
+      source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
+    ]
+
+    card = ActionCards.for_todo(todo, opts)
+
+    assert get_in(card, ["source_health", "missing_sources"]) == ["desktop"]
+
+    assert ActionCards.source_health_note(card) ==
+             "Checked Gmail. Local context from the Mac companion was not checked. Open the Mac companion app to reconnect it."
+
+    assert ActionCards.render_telegram_todo(todo, opts) =~
+             "Local context from the Mac companion was not checked."
+  end
+
   test "filters model and scoring metadata out of visible card copy", %{user_id: user_id} do
     todo = %Todo{
       id: Ecto.UUID.generate(),

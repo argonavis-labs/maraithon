@@ -41,6 +41,59 @@ defmodule Maraithon.ActionCards do
     token
   )
 
+  @local_context_terms [
+    "apple notes",
+    "apple reminders",
+    "birthday",
+    "browser history",
+    "calendar_local",
+    "camp",
+    "child",
+    "children",
+    "daughter",
+    "dentist",
+    "doctor",
+    "dropoff",
+    "drop-off",
+    "family",
+    "flight",
+    "health",
+    "home",
+    "household",
+    "husband",
+    "imessage",
+    "kid",
+    "kids",
+    "local context",
+    "local file",
+    "local files",
+    "medical",
+    "medication",
+    "parent",
+    "personal",
+    "pickup",
+    "pick-up",
+    "reservation",
+    "rsvp",
+    "school",
+    "son",
+    "spouse",
+    "teacher",
+    "text message",
+    "travel",
+    "voice memo",
+    "wife"
+  ]
+
+  @local_context_boolean_keys ~w(
+    companion_context_relevant
+    desktop_context_relevant
+    include_local_sources
+    local_context_relevant
+    mac_context_relevant
+    needs_local_context
+  )
+
   @doc """
   Returns ranked action cards for open todos.
   """
@@ -70,7 +123,7 @@ defmodule Maraithon.ActionCards do
     quality = SurfaceQuality.assess(todo)
     context_pack = context_pack(todo, metadata, profile)
     attention_mode = card_attention_mode(todo, profile)
-    source_health = source_health_snapshot(todo.user_id, todo.source, opts)
+    source_health = source_health_snapshot(todo.user_id, todo, profile, opts)
 
     card =
       %{
@@ -506,10 +559,11 @@ defmodule Maraithon.ActionCards do
     }
   end
 
-  defp source_health_snapshot(nil, _source, _opts), do: empty_source_health()
+  defp source_health_snapshot(nil, _todo, _profile, _opts), do: empty_source_health()
 
-  defp source_health_snapshot(user_id, source, opts) do
+  defp source_health_snapshot(user_id, %Todo{} = todo, profile, opts) do
     include_disconnected? = Keyword.get(opts, :include_disconnected, true)
+    source = todo.source
 
     snapshots =
       Keyword.get_lazy(opts, :source_health_snapshots, fn ->
@@ -526,7 +580,7 @@ defmodule Maraithon.ActionCards do
         &(read_field(&1, "status") in ~w(stale error reauth_required never_synced))
       )
 
-    missing = missing_relevant_sources(source, snapshots, include_disconnected?)
+    missing = missing_relevant_sources(todo, profile, snapshots, include_disconnected?)
 
     %{
       "checked_sources" => checked_sources,
@@ -749,7 +803,7 @@ defmodule Maraithon.ActionCards do
     end)
   end
 
-  defp missing_relevant_sources(source, snapshots, include_disconnected?) do
+  defp missing_relevant_sources(%Todo{} = todo, profile, snapshots, include_disconnected?) do
     providers =
       snapshots
       |> Enum.map(&normalize_source(read_field(&1, "provider")))
@@ -758,9 +812,14 @@ defmodule Maraithon.ActionCards do
 
     relevant =
       cond do
-        source in ["gmail", "calendar"] -> ["desktop"]
-        source in ["manual", "telegram"] -> []
-        true -> []
+        todo.source in ["gmail", "calendar"] and local_context_relevant?(todo, profile) ->
+          ["desktop"]
+
+        todo.source in ["manual", "telegram"] ->
+          []
+
+        true ->
+          []
       end
 
     if include_disconnected? do
@@ -769,6 +828,66 @@ defmodule Maraithon.ActionCards do
       []
     end
   end
+
+  defp local_context_relevant?(%Todo{} = todo, profile) do
+    metadata = todo.metadata || %{}
+
+    read_field(profile, "personal_family") == true or
+      explicit_local_context?(metadata) or
+      local_context_text(todo, metadata)
+      |> String.downcase()
+      |> contains_any?(@local_context_terms)
+  end
+
+  defp explicit_local_context?(metadata) when is_map(metadata) do
+    Enum.any?(@local_context_boolean_keys, fn key ->
+      truthy?(read_field(metadata, key))
+    end)
+  end
+
+  defp explicit_local_context?(_metadata), do: false
+
+  defp local_context_text(%Todo{} = todo, metadata) do
+    record = read_map(metadata, "record")
+
+    [
+      todo.title,
+      todo.summary,
+      todo.next_action,
+      todo.notes,
+      read_field(metadata, "source_tags"),
+      read_string(metadata, "life_domain"),
+      read_string(metadata, "suggested_life_domain"),
+      read_string(metadata, "omni_project"),
+      read_string(metadata, "source_health_missing"),
+      read_string(metadata, "context"),
+      read_string(metadata, "context_brief"),
+      read_string(metadata, "topic"),
+      read_string(metadata, "project"),
+      read_string(metadata, "project_name"),
+      read_string(record, "person"),
+      read_string(record, "relationship_context"),
+      read_string(record, "summary"),
+      read_string(record, "commitment")
+    ]
+    |> Enum.flat_map(&local_context_text_values/1)
+    |> Enum.reject(&blank?/1)
+    |> Enum.join(" ")
+  end
+
+  defp local_context_text_values(value) when is_binary(value), do: [value]
+
+  defp local_context_text_values(values) when is_list(values) do
+    Enum.flat_map(values, &local_context_text_values/1)
+  end
+
+  defp local_context_text_values(%{} = map) do
+    map
+    |> Map.values()
+    |> Enum.flat_map(&local_context_text_values/1)
+  end
+
+  defp local_context_text_values(_value), do: []
 
   defp blocking_gaps(stale, missing) do
     stale_gaps =
@@ -1344,6 +1463,33 @@ defmodule Maraithon.ActionCards do
   rescue
     ArgumentError -> nil
   end
+
+  defp contains_any?(text, terms) when is_binary(text) do
+    Enum.any?(terms, &term_present?(text, &1))
+  end
+
+  defp contains_any?(_text, _terms), do: false
+
+  defp term_present?(text, term) when is_binary(term) do
+    if String.match?(term, ~r/^[a-z0-9_]+$/) do
+      Regex.match?(~r/(^|[^a-z0-9_])#{Regex.escape(term)}($|[^a-z0-9_])/, text)
+    else
+      String.contains?(text, term)
+    end
+  end
+
+  defp term_present?(_text, _term), do: false
+
+  defp truthy?(true), do: true
+
+  defp truthy?(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> then(&(&1 in ["1", "true", "yes", "y"]))
+  end
+
+  defp truthy?(_value), do: false
 
   defp first_present(values), do: Enum.find(values, &present?/1)
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
