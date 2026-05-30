@@ -928,6 +928,7 @@ defmodule MaraithonWeb.DashboardLive do
         todo_review_index={@todo_review_index}
         todo_review_session={@todo_review_session}
         todo_review_decided_ids={@todo_review_decided_ids}
+        chief_of_staff_schedule={@chief_of_staff_schedule}
       />
 
       <section id="todos">
@@ -1746,12 +1747,14 @@ defmodule MaraithonWeb.DashboardLive do
             subtitle="Threads that currently need a direct decision or reply."
             cards={@act_now_insights}
             expanded_insight_ids={@expanded_insight_ids}
+            chief_of_staff_schedule={@chief_of_staff_schedule}
           />
           <.insight_group
             title="Watching"
             subtitle="Important threads Maraithon is tracking without asking you to act right now."
             cards={@monitor_insights}
             expanded_insight_ids={@expanded_insight_ids}
+            chief_of_staff_schedule={@chief_of_staff_schedule}
           />
 
           <%= if @insights == [] do %>
@@ -3692,7 +3695,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp clamp_review_index(_index, count), do: clamp_review_index(0, count)
 
-  defp todo_context_items(card, todo) do
+  defp todo_context_items(card, todo, chief_of_staff_schedule) do
     card_items =
       card
       |> ActionCards.context_items()
@@ -3700,7 +3703,7 @@ defmodule MaraithonWeb.DashboardLive do
         %{label: Map.get(item, :label), value: Map.get(item, :value)}
       end)
 
-    fallback_items = fallback_todo_context_items(todo)
+    fallback_items = fallback_todo_context_items(todo, chief_of_staff_schedule)
 
     (card_items ++ fallback_items)
     |> Enum.reject(fn item -> blank_metadata?(item.value) end)
@@ -3708,10 +3711,10 @@ defmodule MaraithonWeb.DashboardLive do
     |> Enum.take(6)
   end
 
-  defp todo_why_important(card, todo) do
+  defp todo_why_important(card, todo, chief_of_staff_schedule) do
     case Map.get(card, "why_now") do
       value when is_binary(value) and value != "" -> value
-      _ -> fallback_todo_why_important(todo)
+      _ -> fallback_todo_why_important(todo, chief_of_staff_schedule)
     end
   end
 
@@ -3749,7 +3752,7 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp fallback_todo_context_items(todo) do
+  defp fallback_todo_context_items(todo, chief_of_staff_schedule) do
     metadata = public_todo_metadata(todo)
 
     [
@@ -3774,20 +3777,23 @@ defmodule MaraithonWeb.DashboardLive do
         value: todo_metadata_text(metadata, ~w(project project_name omni_project topic))
       },
       %{label: "Account", value: todo_source_account_value(todo)},
-      %{label: "Due", value: todo.due_at && format_datetime(todo.due_at)}
+      %{
+        label: "Due",
+        value: todo.due_at && format_due_datetime(todo.due_at, chief_of_staff_schedule)
+      }
     ]
   end
 
-  defp fallback_todo_why_important(todo) do
+  defp fallback_todo_why_important(todo, chief_of_staff_schedule) do
     metadata = public_todo_metadata(todo)
 
     todo_metadata_text(metadata, ~w(why_now why_it_matters))
     |> case do
       nil when not is_nil(todo.due_at) ->
-        "Due #{format_datetime(todo.due_at)}."
+        "Due #{format_due_datetime(todo.due_at, chief_of_staff_schedule)}."
 
       nil ->
-        todo_updated_why_text(todo)
+        todo_updated_why_text(todo, chief_of_staff_schedule)
 
       value ->
         value
@@ -3822,11 +3828,11 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
-  defp todo_updated_why_text(todo) do
+  defp todo_updated_why_text(todo, chief_of_staff_schedule) do
     base =
       "#{attention_mode_label(todo.attention_mode)} item from #{todo_source_label(todo.source)}."
 
-    case format_datetime(todo.updated_at) do
+    case format_due_datetime(todo.updated_at, chief_of_staff_schedule) do
       nil -> base
       timestamp -> "#{base} Last updated #{timestamp}."
     end
@@ -3915,6 +3921,7 @@ defmodule MaraithonWeb.DashboardLive do
   attr :todo_review_index, :integer, required: true
   attr :todo_review_session, :map, required: true
   attr :todo_review_decided_ids, :any, required: true
+  attr :chief_of_staff_schedule, :any, required: true
 
   defp todo_review_board(assigns) do
     review_todos = reviewable_todos(assigns.todos, assigns.todo_review_decided_ids)
@@ -3971,7 +3978,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <%= todo_source_label(@current_todo.source) %>
               </span>
               <span :if={@current_todo.due_at} class="text-xs/5 font-medium text-amber-700">
-                Due <%= format_datetime(@current_todo.due_at) %>
+                Due <%= format_due_datetime(@current_todo.due_at, @chief_of_staff_schedule) %>
               </span>
             </div>
 
@@ -3990,8 +3997,8 @@ defmodule MaraithonWeb.DashboardLive do
               </p>
             </div>
 
-            <dl :if={todo_context_items(@current_todo_card, @current_todo) != []} class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-              <div :for={item <- todo_context_items(@current_todo_card, @current_todo)} class="border-l border-zinc-950/10 pl-3">
+            <dl :if={todo_context_items(@current_todo_card, @current_todo, @chief_of_staff_schedule) != []} class="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+              <div :for={item <- todo_context_items(@current_todo_card, @current_todo, @chief_of_staff_schedule)} class="border-l border-zinc-950/10 pl-3">
                 <dt class="text-xs/5 font-medium text-zinc-500"><%= item.label %></dt>
                 <dd class="mt-0.5 text-sm/6 text-zinc-800"><%= item.value %></dd>
               </div>
@@ -4000,7 +4007,7 @@ defmodule MaraithonWeb.DashboardLive do
             <div class="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 lg:grid-cols-2">
               <div class="border-l border-zinc-950/10 pl-3">
                 <p class="text-xs/5 font-medium text-zinc-500">Why it matters</p>
-                <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo_card, @current_todo) %></p>
+                <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_why_important(@current_todo_card, @current_todo, @chief_of_staff_schedule) %></p>
               </div>
               <div class="border-l border-zinc-950/10 pl-3">
                 <p class="text-xs/5 font-medium text-zinc-500">Suggested next step</p>
@@ -4150,6 +4157,7 @@ defmodule MaraithonWeb.DashboardLive do
   attr :subtitle, :string, default: nil
   attr :cards, :list, required: true
   attr :expanded_insight_ids, :any, required: true
+  attr :chief_of_staff_schedule, :any, required: true
 
   defp insight_group(assigns) do
     ~H"""
@@ -4185,7 +4193,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <%= insight_priority_label(insight) %>
                   </span>
                   <span :if={insight.due_at} class="text-xs/5 text-amber-700">
-                    due <%= format_datetime(insight.due_at) %>
+                    due <%= format_due_datetime(insight.due_at, @chief_of_staff_schedule) %>
                   </span>
                 </div>
                 <p class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= insight.title %></p>
@@ -4765,6 +4773,54 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp format_time(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp format_time(%NaiveDateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
+
+  defp format_due_datetime(nil, _chief_of_staff_schedule), do: nil
+
+  defp format_due_datetime(datetime, chief_of_staff_schedule) when is_binary(datetime) do
+    case DateTime.from_iso8601(datetime) do
+      {:ok, dt, _} -> format_due_datetime(dt, chief_of_staff_schedule)
+      _ -> datetime
+    end
+  end
+
+  defp format_due_datetime(%DateTime{} = dt, chief_of_staff_schedule) do
+    timezone = dashboard_timezone(chief_of_staff_schedule)
+    offset_hours = Timezones.offset_at(timezone.name, dt, timezone.offset_hours)
+    display_time = DateTime.add(dt, offset_hours, :hour)
+    timezone_label = Timezones.label(timezone.name, offset_hours)
+
+    "#{Calendar.strftime(display_time, "%b %-d, %-I:%M %p")} #{timezone_label}"
+  end
+
+  defp format_due_datetime(%NaiveDateTime{} = dt, chief_of_staff_schedule) do
+    timezone = dashboard_timezone(chief_of_staff_schedule)
+    timezone_label = Timezones.label(timezone.name, timezone.offset_hours)
+
+    "#{Calendar.strftime(dt, "%b %-d, %-I:%M %p")} #{timezone_label}"
+  end
+
+  defp dashboard_timezone(schedule) when is_map(schedule) do
+    timezone_name = fetch_map_value(schedule, "timezone_name")
+    offset_hours = fetch_map_value(schedule, "timezone_offset_hours")
+
+    normalize_dashboard_timezone(timezone_name, offset_hours)
+  end
+
+  defp dashboard_timezone(_schedule), do: normalize_dashboard_timezone(nil, -5)
+
+  defp normalize_dashboard_timezone(timezone_name, offset_hours) do
+    case Timezones.normalize(to_string(timezone_name || "")) do
+      "offset:" <> offset ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset)}
+
+      normalized when is_binary(normalized) ->
+        fallback = offset_hours || Timezones.standard_offset(normalized)
+        %{name: normalized, offset_hours: Timezones.normalize_offset(fallback)}
+
+      _other ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset_hours)}
+    end
+  end
 
   defp format_datetime(nil), do: nil
 

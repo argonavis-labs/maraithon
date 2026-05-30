@@ -378,6 +378,55 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Write down the two risks you need covered on the call."
   end
 
+  test "dashboard due dates use the Chief of Staff timezone", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    due_at = ~U[2026-05-30 18:30:00Z]
+
+    assert {:ok, [_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Send the board packet",
+                 "summary" => "The board packet is due before the afternoon review.",
+                 "next_action" => "Send the board packet and confirm the review window.",
+                 "priority" => 90,
+                 "due_at" => due_at,
+                 "dedupe_key" => "dashboard:todo:local-due-time"
+               }
+             ])
+
+    {:ok, _insights} =
+      Insights.record_many(@user_email, agent.id, [
+        %{
+          "source" => "calendar",
+          "category" => "event_prep_needed",
+          "title" => "Prep the board review",
+          "summary" => "The board review needs a short prep pass.",
+          "recommended_action" => "Review the packet and confirm open asks.",
+          "priority" => 88,
+          "confidence" => 0.9,
+          "due_at" => due_at,
+          "dedupe_key" => "dashboard:insight:local-due-time"
+        }
+      ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "May 30, 2:30 PM ET"
+    assert html =~ "Due May 30 at 2:30 PM ET."
+    refute html =~ "2026-05-30 18:30:00 UTC"
+    refute html =~ "6:30 PM UTC"
+  end
+
   test "dashboard delivery evidence hides raw provider failure details", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{
