@@ -185,6 +185,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
     }
 
     func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
+        XCTAssertEqual(SourceDetailCopy.capabilitiesSectionTitle, "Assistant coverage")
         XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
         XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
@@ -198,6 +199,33 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
         XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
+    }
+
+    func testIMessagesCapabilitiesNameChiefOfStaffOutcomes() {
+        let capabilities = SourceDetailCopy.capabilities(for: "imessage", displayName: "iMessage")
+        let text = capabilities.map { "\($0.title) \($0.description)" }.joined(separator: " ")
+
+        XCTAssertEqual(capabilities.count, 3)
+        XCTAssertEqual(capabilities.map(\.title), [
+            "People and threads",
+            "Reply obligations",
+            "Reply prep"
+        ])
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("source evidence"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("approval loop"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("this session"))
+    }
+
+    func testKnownSourceCapabilitiesStayOutcomeOriented() {
+        for sourceID in ["calendar", "notes", "reminders", "voice_memos", "files", "browser_history"] {
+            let capabilities = SourceDetailCopy.capabilities(for: sourceID, displayName: sourceID)
+            let text = capabilities.map { "\($0.title) \($0.description)" }.joined(separator: " ")
+
+            XCTAssertEqual(capabilities.count, 3, sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("accepted"), sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("duplicate"), sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("batch"), sourceID)
+        }
     }
 
     func testFirstSyncCopyDoesNotClaimDisconnectedSourcesAreConnected() {

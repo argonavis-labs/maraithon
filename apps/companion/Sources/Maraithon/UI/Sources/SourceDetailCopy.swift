@@ -5,6 +5,7 @@ import Foundation
 /// Keeps user-facing source metrics in outcome language instead of
 /// sync-engine vocabulary like "accepted" or "duplicates."
 enum SourceDetailCopy {
+    static let capabilitiesSectionTitle = "Assistant coverage"
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"

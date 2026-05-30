@@ -164,7 +164,7 @@ final class IMessageSource: SourceProtocol {
         }
         lastTickAt = ContinuousClock().now
         do {
-            try await runCycle()
+            try await runCycle(suppressIfPaused: true)
         } catch {
             markCycleFailed(error, event: "imessage.cycle_failed")
         }
@@ -176,7 +176,7 @@ final class IMessageSource: SourceProtocol {
     ///   2. If none, pull rows with `rowid < backfillFrom` (DESC) —
     ///      walk history backward.
     /// Cursor pointers advance only after the ingest succeeds.
-    func runCycle() async throws {
+    func runCycle(suppressIfPaused: Bool = false) async throws {
         statusPublisher.update(state: .syncing)
         let newestSeenBefore = cursor.newestSeen
         let backfillFromBefore = cursor.backfillFrom
@@ -202,6 +202,8 @@ final class IMessageSource: SourceProtocol {
 
         let filtered = filterBlocked(built)
         if filtered.isEmpty {
+            if shouldSuppressPollOutcome(suppressIfPaused) { return }
+
             eventLog.debug(
                 "imessage.cycle_empty",
                 source: .imessage,
@@ -225,6 +227,8 @@ final class IMessageSource: SourceProtocol {
         let rowIDs = filtered.map(\.envelopeRowID)
         if let maxRow = rowIDs.max() { cursor.advanceNewest(to: maxRow) }
         if let minRow = rowIDs.min() { cursor.advanceBackfill(to: minRow) }
+
+        if shouldSuppressPollOutcome(suppressIfPaused) { return }
 
         statusPublisher.recordSync(
             at: Date(),
@@ -250,6 +254,10 @@ final class IMessageSource: SourceProtocol {
                 "backfill_from": String(cursor.backfillFrom)
             ]
         )
+    }
+
+    private func shouldSuppressPollOutcome(_ suppressIfPaused: Bool) -> Bool {
+        suppressIfPaused && (isPaused || Task.isCancelled)
     }
 
     private static func syncIssueSummary(count: Int, singular: String, plural: String) -> String {

@@ -11,6 +11,7 @@ struct SourceDetailScaffold: View {
     let displayName: String
     let stats: [SourceStat]
     let activity: [SourceActivityRow]
+    var capabilities: [SourceCapability] = []
     var syncedItemSingular: String = "item"
     var syncedItemPlural: String = "items"
     var emptyDescription: String = "After the first check, this view shows recent activity and recent checks."
@@ -43,6 +44,8 @@ struct SourceDetailScaffold: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xlarge) {
                 overviewSection
+                Divider()
+                capabilitiesSection
                 Divider()
                 statsSection
                 Divider()
@@ -94,6 +97,24 @@ struct SourceDetailScaffold: View {
                     Label("Pause", systemImage: "pause.fill")
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    var capabilityItems: [SourceCapability] {
+        if capabilities.isEmpty {
+            return SourceDetailCopy.capabilities(for: sourceID, displayName: displayName)
+        }
+        return capabilities
+    }
+
+    var capabilitiesSection: some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
+            SectionHeader(SourceDetailCopy.capabilitiesSectionTitle)
+            VStack(alignment: .leading, spacing: Tokens.Spacing.medium) {
+                ForEach(capabilityItems) { capability in
+                    SourceCapabilityRow(capability: capability)
+                }
             }
         }
     }
