@@ -87,7 +87,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
 
       assert html =~ "Chief of Staff"
-      assert html =~ "executives who want broader follow-through coverage"
+      assert html =~ "executives who want fewer missed loops"
       assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
@@ -230,15 +230,18 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "Advanced JSON overrides"
       refute html =~ "scan limits"
 
-      html =
+      _html =
         view
         |> element("button[phx-click=set_builder_mode][phx-value-mode=\"advanced\"]")
         |> render_click()
 
+      html = render(view)
+
       assert html =~ "Chief-of-Staff Briefing"
       assert html =~ "Email review limit"
       assert html =~ "Max items per check"
-      assert html =~ "Interruption bar"
+      assert html =~ "Notification selectivity"
+      assert html =~ "Standard - balanced follow-through"
       assert html =~ "Custom configuration"
       refute html =~ "Advanced JSON overrides"
       refute html =~ "Memory limit"
@@ -249,6 +252,27 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "higher confidence"
       refute html =~ "lower confidence"
       refute html =~ "clearest open loops"
+      refute html =~ "Interruption bar"
+      refute html =~ "Current bar"
+      refute html =~ "confidence threshold"
+      refute html =~ "scored for urgency and confidence"
+      refute html =~ "high-confidence"
+    end
+
+    test "keeps setup copy product-facing instead of scoring-focused", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new?behavior=slack_followthrough_agent")
+
+      html = render(view)
+
+      assert html =~ "Action-ready unresolved commitment summaries"
+      assert html =~ "clear and still actionable"
+      refute html =~ "Actionable unresolved commitment insights scored for urgency and confidence"
+      refute html =~ "scored for whether they are worth interrupting you"
+      refute html =~ "confidence threshold"
+      refute html =~ "high-confidence"
+      refute html =~ "Raise `min_confidence`"
+      refute html =~ "Interruption bar"
+      refute html =~ "Current bar"
     end
   end
 

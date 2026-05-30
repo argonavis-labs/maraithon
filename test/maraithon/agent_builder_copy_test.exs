@@ -10,13 +10,17 @@ defmodule Maraithon.AgentBuilderCopyTest do
       |> Enum.reject(&is_nil/1)
       |> Enum.join("\n")
 
-    assert visible_copy =~ "Shared preferences that shape interruption policy"
+    assert visible_copy =~ "Shared preferences that shape notification policy"
     assert visible_copy =~ "turns requested work into implementation plans"
     assert visible_copy =~ "calendar context, People, and memory"
     assert visible_copy =~ "Daily deduped commitment work items"
     refute visible_copy =~ ~r/\boperator\b/i
     refute visible_copy =~ ~r/\bCRM\b/
     refute visible_copy =~ "commitment todos"
+    refute visible_copy =~ "interruption policy"
+    refute visible_copy =~ "scored for"
+    refute visible_copy =~ "confidence threshold"
+    refute visible_copy =~ "min_confidence"
   end
 
   defp visible_spec_copy(spec) do

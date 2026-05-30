@@ -581,13 +581,27 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <% end %>
 
                     <%= if field_visible?(@selected_spec, "min_confidence") do %>
-                      <.launch_input
+                      <.launch_select
                         id="launch_min_confidence"
                         name="launch[min_confidence]"
-                        label="Interruption bar"
+                        label="Notification selectivity"
                         value={@launch["min_confidence"]}
-                        description="Higher values mean fewer, clearer interruptions."
-                      />
+                        description="Choose how selective Maraithon should be before it sends a notification."
+                      >
+                        <option
+                          :for={
+                            option <-
+                              notification_selectivity_options(
+                                @selected_spec.id,
+                                @launch["min_confidence"]
+                              )
+                          }
+                          value={option.value}
+                          selected={@launch["min_confidence"] == option.value}
+                        >
+                          <%= option.label %>
+                        </option>
+                      </.launch_select>
                     <% end %>
                   </div>
                 <% end %>
@@ -680,7 +694,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                     <div>
                       <p class="text-sm font-medium text-emerald-950">Chief-of-Staff Briefing</p>
                       <p class="mt-1 text-xs text-emerald-900/80">
-                        Configure the daily and weekly summary cadence that lands in Telegram in addition to interrupt-driven nudges.
+                        Configure the daily and weekly summary cadence that lands in Telegram alongside timely follow-through nudges.
                       </p>
                     </div>
 
@@ -1152,7 +1166,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Insight tuning",
         body:
-          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Up to #{launch["max_insights_per_cycle"]} items per check; interruption bar #{launch["min_confidence"]}."
+          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Surfaces up to #{launch["max_insights_per_cycle"]} action-ready items per check with #{notification_selectivity_phrase("inbox_calendar_advisor", launch["min_confidence"])} notifications."
       }
     ]
   end
@@ -1210,7 +1224,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Escalation tuning",
         body:
-          "Up to #{launch["max_insights_per_cycle"]} items per check; interruption bar #{launch["min_confidence"]}."
+          "Surfaces up to #{launch["max_insights_per_cycle"]} unresolved Slack loops per check with #{notification_selectivity_phrase("slack_followthrough_agent", launch["min_confidence"])} notifications."
       }
     ]
   end
@@ -1299,9 +1313,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
           "Computes the send window from the trip start time, then delivers the day-before brief in your local offset (#{blank_fallback(launch["timezone_offset_hours"], "-5")})."
       },
       %{
-        title: "Interruption bar",
+        title: "Notification selectivity",
         body:
-          "Only interrupts for clearly recognized itineraries. Current bar: #{launch["min_confidence"]}."
+          "Only sends travel briefs when trip details are clear enough. Current setting: #{notification_selectivity_label("personal_assistant_agent", launch["min_confidence"])}."
       }
     ]
   end
@@ -1411,7 +1425,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Telegram push behavior",
         body:
-          "Roadmap suggestions worth interrupting you for are saved for #{blank_fallback(launch["repo_full_name"], "the selected repository")} and sent in Telegram."
+          "Roadmap suggestions that need same-day attention are saved for #{blank_fallback(launch["repo_full_name"], "the selected repository")} and sent in Telegram."
       }
     ]
   end
@@ -1466,7 +1480,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
           %{label: "Email review limit", value: launch["email_scan_limit"]},
           %{label: "Calendar review limit", value: launch["event_scan_limit"]},
           %{label: "Lookback window", value: launch["lookback_hours"] <> " hours"},
-          %{label: "Interruption bar", value: launch["min_confidence"]}
+          %{
+            label: "Notification selectivity",
+            value:
+              notification_selectivity_label("personal_assistant_agent", launch["min_confidence"])
+          }
         ]
 
       "slack_followthrough_agent" ->
@@ -1776,6 +1794,69 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp field_visible?(spec, field), do: field in spec.fields
 
+  defp notification_selectivity_options("personal_assistant_agent", current_value) do
+    [
+      %{value: "0.86", label: "Selective - confirmed trips only"},
+      %{value: "0.8", label: "Standard - clear trips and material changes"},
+      %{value: "0.74", label: "Broad - catch more itinerary changes"}
+    ]
+    |> include_current_selectivity_option(current_value)
+  end
+
+  defp notification_selectivity_options("inbox_calendar_advisor", current_value) do
+    [
+      %{value: "0.8", label: "Selective - only clear, action-ready items"},
+      %{value: "0.72", label: "Standard - balanced follow-through"},
+      %{value: "0.66", label: "Broad - catch more possible loops"}
+    ]
+    |> include_current_selectivity_option(current_value)
+  end
+
+  defp notification_selectivity_options("slack_followthrough_agent", current_value) do
+    [
+      %{value: "0.82", label: "Selective - only explicit Slack commitments"},
+      %{value: "0.75", label: "Standard - balanced Slack follow-through"},
+      %{value: "0.68", label: "Broad - catch more possible Slack loops"}
+    ]
+    |> include_current_selectivity_option(current_value)
+  end
+
+  defp notification_selectivity_options(_behavior, current_value) do
+    []
+    |> include_current_selectivity_option(current_value)
+  end
+
+  defp include_current_selectivity_option(options, current_value) do
+    current_value = to_string(current_value || "")
+
+    cond do
+      current_value == "" ->
+        options
+
+      Enum.any?(options, &(&1.value == current_value)) ->
+        options
+
+      true ->
+        options ++ [%{value: current_value, label: "Custom - current saved setting"}]
+    end
+  end
+
+  defp notification_selectivity_label(behavior, value) do
+    behavior
+    |> notification_selectivity_options(value)
+    |> Enum.find(&(&1.value == to_string(value || "")))
+    |> case do
+      %{label: label} -> label |> String.split(" - ") |> List.first()
+      _ -> "Standard"
+    end
+  end
+
+  defp notification_selectivity_phrase(behavior, value) do
+    behavior
+    |> notification_selectivity_label(value)
+    |> String.downcase()
+  end
+
   defp spec_requirement_summary(%{requirements: []}), do: "No connected apps required."
 
   defp spec_requirement_summary(%{requirements: requirements}) do
@@ -1849,8 +1930,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     do: "Checks more frequently with a larger planning budget for fast-moving repositories."
 
   defp cost_profile_summary("ai_chief_of_staff", "lean"),
-    do:
-      "Smaller follow-through scans, a stricter travel interruption bar, and lower assistant-wide spend."
+    do: "Smaller follow-through scans, selective travel alerts, and lower assistant-wide spend."
 
   defp cost_profile_summary("ai_chief_of_staff", "balanced"),
     do:
@@ -1861,18 +1941,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
       "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for executives who want one proactive operating layer."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
-    do: "Tighter Gmail, Calendar, and Slack scans so only the clearest commitments interrupt you."
+    do:
+      "Tighter Gmail, Calendar, and Slack scans so only clear action-ready commitments reach you."
 
   defp cost_profile_summary("inbox_calendar_advisor", "balanced"),
     do:
-      "Good default coverage across inbox, meetings, and Slack with moderate spend and a practical interruption bar."
+      "Good default coverage across inbox, meetings, and Slack with moderate spend and standard notification selectivity."
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
-      "Deeper cross-channel scans, a lower interruption bar, and more budget for executives who want broader follow-through coverage."
+      "Deeper cross-channel scans and broader follow-through coverage for executives who want fewer missed loops."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
-    do: "Smaller channel and DM scans with fewer interrupts and the lowest recurring cost."
+    do: "Smaller channel and DM scans with fewer Slack alerts and the lowest recurring cost."
 
   defp cost_profile_summary("slack_followthrough_agent", "balanced"),
     do:

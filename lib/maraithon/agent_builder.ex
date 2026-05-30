@@ -65,7 +65,7 @@ defmodule Maraithon.AgentBuilder do
       inputs: [
         "Gmail, Calendar, and Slack activity relevant to commitments, unanswered replies, and travel logistics",
         "Connected Telegram delivery for proactive nudges, travel briefs, and recurring summaries",
-        "Shared preferences that shape interruption policy across all built-in skills"
+        "Shared preferences that shape notification policy across all built-in skills"
       ],
       outputs: [
         "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
@@ -180,7 +180,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Stored PM recommendations with titles, summaries, recommended first milestones, and evidence",
         "Durable todos and project-memory ticket rows that can be reviewed from the existing task surfaces",
-        "Telegram-ready feature suggestions scored for whether they are worth interrupting you about",
+        "Telegram-ready feature suggestions reserved for roadmap moves that deserve same-day attention",
         "A project PM loop grounded in the current goals, task list, and selected repository"
       ],
       fields: ~w(repo_full_name base_branch feature_limit wakeup_interval_ms),
@@ -277,7 +277,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Keep the timezone aligned to your working day so day-before travel briefs land when you still have time to react.",
         "Use the balanced profile first. It keeps scan volume high enough for travel confirmations without turning every inbox scan into a deep crawl.",
-        "Raise the confidence threshold if you only want the clearest travel briefs and change alerts."
+        "Use selective notifications if you only want confirmed travel briefs and material change alerts."
       ]
     },
     %{
@@ -371,7 +371,7 @@ defmodule Maraithon.AgentBuilder do
         "Use focused review depth so the automation escalates only the strongest unresolved commitments.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per executive workflow.",
         "Use `prep_window_hours` as a meeting follow-up window for how far back to inspect unresolved actions.",
-        "Raise `min_confidence` if you want even fewer Telegram interruptions.",
+        "Use selective notifications if you want Telegram reserved for the clearest action-ready items.",
         "Choose a named timezone when possible so morning and end-of-day briefs keep landing at the right local time through daylight-saving changes."
       ]
     },
@@ -380,16 +380,16 @@ defmodule Maraithon.AgentBuilder do
       label: "Slack Follow-through",
       category: "Workflow",
       summary:
-        "Tracks open loops from Slack channels and DMs, then escalates only high-confidence unresolved commitments.",
+        "Tracks open loops from Slack channels and DMs, then escalates unresolved commitments that are clear and still actionable.",
       inputs: [
         "Slack channel and thread messages where commitments or deadlines were explicitly stated",
         "Personal DM and group DM messages that indicate you owe a reply or promised a follow-up",
         "Recent follow-up evidence in the same channel/thread to verify whether the loop is already closed"
       ],
       outputs: [
-        "Actionable unresolved commitment insights scored for urgency and confidence",
+        "Action-ready unresolved commitment summaries with urgency, evidence, and a next action",
         "Structured records with commitment, person, source, deadline, status, evidence, and next_action",
-        "Telegram-ready nudges for unresolved loops that should interrupt you now"
+        "Telegram-ready nudges for unresolved loops that need same-day attention"
       ],
       fields:
         ~w(team_id channel_scan_limit dm_scan_limit lookback_hours max_insights_per_cycle min_confidence wakeup_interval_ms),
@@ -427,7 +427,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Use focused Slack review depth so only the strongest unresolved commitments are escalated.",
         "Choose one Slack workspace when multiple workspaces are connected and you want one workspace per automation.",
-        "Raise `min_confidence` if you want fewer interruptions and only the clearest open loops."
+        "Use selective notifications if you want Telegram reserved for explicit Slack commitments."
       ]
     },
     %{
@@ -800,7 +800,7 @@ defmodule Maraithon.AgentBuilder do
       %{
         id: "lean",
         label: "Lean",
-        description: "Lowest spend. Tight scans and fewer interrupts."
+        description: "Lowest spend. Tight scans and fewer alerts."
       },
       %{
         id: "balanced",
@@ -1122,7 +1122,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, follow_min_confidence} <-
            parse_float_in_range(
              launch["follow_min_confidence"],
-             "Chief of Staff followthrough minimum confidence",
+             "Chief of Staff follow-through notification selectivity",
              0.0,
              1.0
            ),
@@ -1144,7 +1144,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, travel_min_confidence} <-
            parse_float_in_range(
              launch["travel_min_confidence"],
-             "Chief of Staff travel minimum confidence",
+             "Chief of Staff travel notification selectivity",
              0.0,
              1.0
            ),
@@ -1274,7 +1274,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, lookback_hours} <-
            parse_positive_integer(launch["lookback_hours"], "Lookback window"),
          {:ok, min_confidence} <-
-           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
          {:ok, timezone_offset_hours} <-
            parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
          {:ok, wakeup_interval_ms} <-
@@ -1310,7 +1310,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, max_insights_per_cycle} <-
            parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
          {:ok, min_confidence} <-
-           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
          {:ok, timezone_offset_hours} <-
            parse_integer_in_range(launch["timezone_offset_hours"], "Timezone offset", -12, 14),
          {:ok, morning_brief_hour_local} <-
@@ -1362,7 +1362,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, max_insights_per_cycle} <-
            parse_positive_integer(launch["max_insights_per_cycle"], "Max insights per cycle"),
          {:ok, min_confidence} <-
-           parse_float_in_range(launch["min_confidence"], "Minimum confidence", 0.0, 1.0),
+           parse_float_in_range(launch["min_confidence"], "Notification selectivity", 0.0, 1.0),
          {:ok, wakeup_interval_ms} <-
            parse_duration_ms(launch["wakeup_interval_ms"], "Wakeup cadence") do
       {:ok,
