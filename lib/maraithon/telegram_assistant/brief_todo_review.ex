@@ -309,7 +309,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
         :ignored
 
       _ ->
-        maybe_answer_callback(callback_id, "I couldn't open that open-work action.")
+        maybe_answer_callback(callback_id, "That open work review is no longer available.")
         :ok
     end
   end
@@ -323,8 +323,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            ConnectedAccounts.get_connected_by_external_account("telegram", chat_id) do
       case action do
         "start" ->
-          maybe_answer_callback(callback_id, "Sending the first work item")
-          start_latest_review(user_id, chat_id)
+          start_latest_review(user_id, chat_id, callback_id: callback_id)
 
         "list" ->
           maybe_answer_callback(callback_id, "Sending a quick list")
@@ -336,31 +335,36 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       end
     else
       _ ->
-        maybe_answer_callback(callback_id, "I couldn't match that to this chat.")
+        maybe_answer_callback(callback_id, "This open work review is not linked to this chat.")
         :ok
     end
   end
 
-  defp start_latest_review(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
+  defp start_latest_review(user_id, chat_id, opts \\ [])
+
+  defp start_latest_review(user_id, chat_id, opts)
+       when is_binary(user_id) and is_binary(chat_id) do
     case active_review_for_chat(user_id, chat_id) do
       %Brief{} = brief ->
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "Resuming open work review")
         resume_review(brief, chat_id)
         :ok
 
       nil ->
         case current_open_work_review_brief(user_id) || latest_reviewable_brief(user_id) do
           %Brief{} = brief ->
-            start_review_for_brief(brief, chat_id)
+            start_review_for_brief(brief, chat_id, callback_id: Keyword.get(opts, :callback_id))
             :ok
 
           nil ->
+            maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work to review")
             send_no_todos(chat_id)
             :ok
         end
     end
   end
 
-  defp start_latest_review(_user_id, _chat_id), do: :ignored
+  defp start_latest_review(_user_id, _chat_id, _opts), do: :ignored
 
   defp send_todo_list_summary(user_id, chat_id) when is_binary(user_id) and is_binary(chat_id) do
     todos = current_review_todos(user_id)
@@ -374,7 +378,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     text =
       case todos do
         [] ->
-          "I don't see any open work ready to review right now."
+          "No open work is ready for review right now."
 
         todos ->
           lines =
@@ -403,7 +407,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
   defp send_todo_list(_chat_id, _todos, _reply_markup), do: :ignored
 
-  defp start_review_for_brief(%Brief{} = brief, chat_id, opts \\ []) do
+  defp start_review_for_brief(%Brief{} = brief, chat_id, opts) do
     todos = review_todos(brief)
 
     review =
@@ -425,7 +429,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
       nil ->
         brief = complete_review!(brief)
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work")
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work to review")
         send_summary(chat_id, brief)
     end
   end
@@ -587,7 +591,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_no_todos(chat_id) do
-    text = "I don't see any open work ready to review right now."
+    text = "No open work is ready for review right now."
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
@@ -596,9 +600,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_review_canceled(chat_id) when is_binary(chat_id) do
-    case TelegramResponder.send(chat_id, "Okay, I won't start the open work review.",
-           parse_mode: "HTML"
-         ) do
+    case TelegramResponder.send(chat_id, "Open work review canceled.", parse_mode: "HTML") do
       {:ok, _result} -> :ok
       {:error, _reason} -> :ok
     end

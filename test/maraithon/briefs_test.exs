@@ -822,6 +822,47 @@ defmodule Maraithon.BriefsTest do
              Enum.sort([old_todo.id, new_todo.id])
   end
 
+  test "quick todo list empty state uses product copy" do
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: "777123",
+               callback_id: "cb-empty-quick-list",
+               data: "brftd:latest:list"
+             })
+
+    [message] = sent_messages()
+    assert message.text == "No open work is ready for review right now."
+    refute message.text =~ "I "
+    refute message.text =~ "don't"
+  end
+
+  test "latest review empty state answers with accurate callback copy" do
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: "777123",
+               callback_id: "cb-empty-start",
+               data: "brftd:latest:start"
+             })
+
+    [callback] = callback_events()
+    assert Keyword.fetch!(callback.opts, :text) == "No open work to review"
+
+    [message] = sent_messages()
+    assert message.text == "No open work is ready for review right now."
+  end
+
+  test "unavailable brief review callback uses product copy" do
+    assert :ok =
+             BriefTodoReview.handle_callback(%{
+               chat_id: "777123",
+               callback_id: "cb-missing-review",
+               data: "brftd:00000000-0000-0000-0000-000000000000:start"
+             })
+
+    [callback] = callback_events()
+    assert Keyword.fetch!(callback.opts, :text) == "That open work review is no longer available."
+  end
+
   test "quick todo list includes the next action for each item", %{user_id: user_id} do
     {:ok, [todo]} =
       Todos.upsert_many(user_id, [
@@ -962,5 +1003,11 @@ defmodule Maraithon.BriefsTest do
     :capturing_telegram_recorder
     |> Agent.get(&Enum.reverse/1)
     |> Enum.filter(&(&1.type == :send))
+  end
+
+  defp callback_events do
+    :capturing_telegram_recorder
+    |> Agent.get(&Enum.reverse/1)
+    |> Enum.filter(&(&1.type == :callback))
   end
 end
