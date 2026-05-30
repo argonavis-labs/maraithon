@@ -222,7 +222,7 @@ enum RecallCopy {
 
     static func noMatchesDescription(for query: String) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = trimmed.isEmpty ? "No source-backed matches yet." : "No source-backed matches for “\(trimmed)” yet."
+        let prefix = trimmed.isEmpty ? "Nothing matched your search." : "Nothing matched “\(trimmed)”."
         return "\(prefix) Try a person, thread, or phrase from sources Maraithon has already checked."
     }
 

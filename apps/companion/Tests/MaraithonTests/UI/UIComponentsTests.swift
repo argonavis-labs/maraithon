@@ -437,9 +437,9 @@ final class UIComponentsTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No source-backed matches for “agenda from Dana” yet. Try a person, thread, or phrase from sources Maraithon has already checked."
+            "Nothing matched “agenda from Dana”. Try a person, thread, or phrase from sources Maraithon has already checked."
         )
-        XCTAssertFalse(copy.localizedCaseInsensitiveContains("nothing"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("source-backed"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("all sources"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything"))
     }
