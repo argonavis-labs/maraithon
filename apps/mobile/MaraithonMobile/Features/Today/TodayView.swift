@@ -379,21 +379,25 @@ private struct TodayBriefCard: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
-                }
 
-                Spacer(minLength: 8)
+                    HStack(spacing: 4) {
+                        Text(brief.actionTitle)
+                            .lineLimit(1)
 
-                Image(systemName: "chevron.right")
+                        Image(systemName: "chevron.right")
+                            .imageScale(.small)
+                    }
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.top, 2)
+                }
             }
             .padding(14)
             .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(brief.title). \(brief.subtitle)")
-        .accessibilityHint(brief.actionTitle)
+        .accessibilityLabel("\(brief.title). \(brief.subtitle). \(brief.actionTitle).")
     }
 }
 
