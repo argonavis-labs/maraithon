@@ -5,7 +5,6 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
-  alias Maraithon.SourceLabels
   alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
   alias MaraithonWeb.ApiErrorCopy
 
@@ -142,44 +141,12 @@ defmodule MaraithonWeb.MobileJSON do
   end
 
   defp source_context(card) when is_map(card) do
-    source_health = Map.get(card, "source_health") || %{}
-
-    blocking =
-      source_health
-      |> Map.get("blocking_gaps")
-      |> List.wrap()
-      |> Enum.reject(&blank?/1)
-
-    checked =
-      source_health
-      |> Map.get("checked_sources")
-      |> List.wrap()
-      |> Enum.reject(&blank?/1)
-
-    cond do
-      blocking != [] ->
-        "Needs source access: #{Enum.join(blocking, "; ")}"
-
-      checked != [] ->
-        "Checked #{checked |> Enum.map(&source_label/1) |> Enum.join(", ")}"
-
-      true ->
-        nil
-    end
+    ActionCards.source_health_note(card)
   end
 
   defp source_context(_card), do: nil
 
-  defp source_label(source) when is_binary(source),
-    do: SourceLabels.label(source, fallback: "Source")
-
-  defp source_label(source), do: to_string(source)
-
   def public_todo_metadata(metadata), do: PublicMetadata.todo(metadata)
-
-  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
-  defp blank?(nil), do: true
-  defp blank?(_value), do: false
 
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp json_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)
