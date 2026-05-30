@@ -180,7 +180,7 @@ defmodule Maraithon.MemoryTest do
   end
 
   test "records relevance feedback as durable memory" do
-    user_id = "memory-feedback-#{System.unique_integer([:positive])}@example.com"
+    user_id = "memory-feedback-#{Ecto.UUID.generate()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     assert {:ok, memory} =
@@ -194,6 +194,11 @@ defmodule Maraithon.MemoryTest do
 
     assert memory.kind == "relevance_feedback"
     assert memory.polarity == "negative"
+
+    assert memory.content ==
+             "Marked Generic VC newsletter as not relevant. Reason: It is broad market commentary with no Runner implication."
+
+    refute memory.content =~ "The user"
     assert "not_relevant" in memory.tags
     assert memory.metadata["feedback"] == "not_relevant"
 

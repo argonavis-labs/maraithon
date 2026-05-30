@@ -42,6 +42,24 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     refute html =~ "97%"
   end
 
+  test "renders relevance feedback without role-label copy", %{conn: conn} do
+    subject = "Generic VC newsletter #{Ecto.UUID.generate()}"
+
+    {:ok, memory} =
+      Memory.record_relevance_feedback(@user_email, %{
+        "subject" => subject,
+        "feedback" => "not_relevant",
+        "reason" => "No concrete Runner or customer implication."
+      })
+
+    {:ok, _view, html} = live(conn, "/operator/memories?id=#{memory.id}")
+
+    assert html =~ "Marked #{subject} as not relevant."
+    assert html =~ "Reason: No concrete Runner or customer implication."
+    refute html =~ "The user"
+    refute html =~ "not_relevant"
+  end
+
   test "filters, displays supersession chain, and archives an active memory", %{conn: conn} do
     {:ok, old} =
       Memory.write(@user_email, %{

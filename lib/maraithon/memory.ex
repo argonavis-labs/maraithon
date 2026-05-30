@@ -220,7 +220,7 @@ defmodule Maraithon.Memory do
 
     content =
       [
-        "The user marked #{subject} as #{feedback}.",
+        "Marked #{subject} as #{feedback_label(feedback)}.",
         if(reason, do: "Reason: #{reason}", else: nil)
       ]
       |> Enum.reject(&is_nil/1)
@@ -872,6 +872,9 @@ defmodule Maraithon.Memory do
   end
 
   defp normalize_feedback(_value), do: "relevant"
+
+  defp feedback_label("not_relevant"), do: "not relevant"
+  defp feedback_label(_feedback), do: "relevant"
 
   defp maybe_put_dedupe_key(attrs, fallback) do
     if read_string(attrs, "dedupe_key", nil) do
