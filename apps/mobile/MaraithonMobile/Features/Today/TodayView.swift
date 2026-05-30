@@ -54,16 +54,18 @@ struct TodayView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
                 .listRowSeparator(.hidden)
 
-                Section("Ask Maraithon") {
-                    ChiefOfStaffPromptShelf(prompts: ChiefOfStaffPrompt.today) { prompt in
-                        appNavigation.showChat(prompt: prompt.message)
-                    }
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
-                    .listRowSeparator(.hidden)
-                }
-
-                Section(TodayViewCopy.snapshotSectionTitle) {
+                Section(TodayViewCopy.actionSectionTitle) {
                     VStack(spacing: 1) {
+                        CommandRow(
+                            title: TodayViewCopy.askMaraithonTitle,
+                            subtitle: TodayViewCopy.askMaraithonSubtitle,
+                            value: "",
+                            systemImage: "sparkles",
+                            tint: .purple
+                        ) {
+                            appNavigation.showChat(prompt: ChiefOfStaffPrompt.planDay.message)
+                        }
+                        Divider().padding(.leading, 48)
                         CommandRow(
                             title: TodayViewCopy.openWorkTitle,
                             subtitle: TodayViewCopy.openWorkSubtitle,
@@ -260,9 +262,11 @@ struct TodayView: View {
 }
 
 enum TodayViewCopy {
-    static let snapshotSectionTitle = "Priority Snapshot"
+    static let actionSectionTitle = "Next actions"
     static let focusSectionTitle = "Today's focus"
     static let recentChatsSectionTitle = "Recent chats"
+    static let askMaraithonTitle = "Ask Maraithon"
+    static let askMaraithonSubtitle = "Plan, draft, or prioritize"
     static let openWorkTitle = "Open work"
     static let openWorkSubtitle = "Unfinished items"
     static let overdueTitle = "Past due"
@@ -278,11 +282,13 @@ enum TodayViewCopy {
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
 
-    static var snapshotLabels: [String] {
+    static var actionLabels: [String] {
         [
-            snapshotSectionTitle,
+            actionSectionTitle,
             focusSectionTitle,
             recentChatsSectionTitle,
+            askMaraithonTitle,
+            askMaraithonSubtitle,
             openWorkTitle,
             openWorkSubtitle,
             overdueTitle,
@@ -298,55 +304,6 @@ enum TodayViewCopy {
             emptyRecentChatsTitle,
             emptyRecentChatsDescription
         ]
-    }
-}
-
-private struct ChiefOfStaffPromptShelf: View {
-    let prompts: [ChiefOfStaffPrompt]
-    let action: (ChiefOfStaffPrompt) -> Void
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 10) {
-                ForEach(prompts) { prompt in
-                    Button {
-                        action(prompt)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Image(systemName: prompt.systemImage)
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(prompt.tint)
-                                .frame(width: 32, height: 32)
-                                .background(prompt.tint.opacity(0.12), in: Circle())
-
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(prompt.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-
-                                Text(prompt.subtitle)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                        }
-                        .frame(width: 182, alignment: .leading)
-                        .padding(12)
-                        .background(.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .stroke(Color(uiColor: .separator).opacity(0.18), lineWidth: 1)
-                        }
-                        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(prompt.title). \(prompt.subtitle)")
-                }
-            }
-            .padding(.horizontal, 16)
-        }
-        .scrollIndicators(.hidden)
     }
 }
 

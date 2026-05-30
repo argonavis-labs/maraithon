@@ -4,10 +4,12 @@ import Testing
 @Suite("Today View Copy")
 struct TodayViewCopyTests {
     @Test
-    func prioritySnapshotUsesConcreteOperationalLabels() {
-        #expect(TodayViewCopy.snapshotSectionTitle == "Priority Snapshot")
+    func nextActionsUsesConcreteOperationalLabels() {
+        #expect(TodayViewCopy.actionSectionTitle == "Next actions")
         #expect(TodayViewCopy.focusSectionTitle == "Today's focus")
         #expect(TodayViewCopy.recentChatsSectionTitle == "Recent chats")
+        #expect(TodayViewCopy.askMaraithonTitle == "Ask Maraithon")
+        #expect(TodayViewCopy.askMaraithonSubtitle == "Plan, draft, or prioritize")
         #expect(TodayViewCopy.openWorkTitle == "Open work")
         #expect(TodayViewCopy.overdueTitle == "Past due")
         #expect(TodayViewCopy.overdueSubtitle == "Needs action")
@@ -24,10 +26,12 @@ struct TodayViewCopyTests {
     }
 
     @Test
-    func prioritySnapshotAvoidsGenericOrMisleadingLanguage() {
-        let exactCopy = TodayViewCopy.snapshotLabels.joined(separator: " ")
+    func nextActionsAvoidsGenericOrMisleadingLanguage() {
+        let exactCopy = TodayViewCopy.actionLabels.joined(separator: " ")
         let copy = exactCopy.lowercased()
 
+        #expect(!copy.contains("priority snapshot"))
+        #expect(!copy.contains("dashboard"))
         #expect(!copy.contains("command center"))
         #expect(!copy.contains("needs a decision"))
         #expect(!copy.contains("outstanding work"))
