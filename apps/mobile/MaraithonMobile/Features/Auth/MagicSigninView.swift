@@ -1,12 +1,13 @@
 import SwiftUI
 
 enum MagicSigninCopy {
+    static let sendCodeButton = "Send sign-in code"
     static let localCodeLabel = "One-time sign-in code"
-    static let useLocalCodeButton = "Use This Code"
+    static let useLocalCodeButton = "Use this code"
     static let localCodeAccessibilityIdentifier = "one-time-sign-in-code"
 
     static var localCodeVisibleStrings: [String] {
-        [localCodeLabel, useLocalCodeButton]
+        [sendCodeButton, localCodeLabel, useLocalCodeButton]
     }
 }
 
@@ -88,7 +89,7 @@ struct MagicSigninView: View {
             Button {
                 submitEmail()
             } label: {
-                Label("Email Me a Code", systemImage: "paperplane.fill")
+                Label(MagicSigninCopy.sendCodeButton, systemImage: "paperplane.fill")
                     .frame(maxWidth: .infinity)
             }
             .appProminentGlassActionStyle()

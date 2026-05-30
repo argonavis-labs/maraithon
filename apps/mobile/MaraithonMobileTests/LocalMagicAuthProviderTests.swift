@@ -127,13 +127,16 @@ struct LocalMagicAuthProviderTests {
 struct MagicSigninCopyTests {
     @Test
     func localCodeCopyDoesNotExposeImplementationLanguage() {
+        #expect(MagicSigninCopy.sendCodeButton == "Send sign-in code")
         #expect(MagicSigninCopy.localCodeLabel == "One-time sign-in code")
-        #expect(MagicSigninCopy.useLocalCodeButton == "Use This Code")
+        #expect(MagicSigninCopy.useLocalCodeButton == "Use this code")
         #expect(MagicSigninCopy.localCodeAccessibilityIdentifier == "one-time-sign-in-code")
 
         for visibleString in MagicSigninCopy.localCodeVisibleStrings {
             #expect(!visibleString.localizedCaseInsensitiveContains("development"))
             #expect(!visibleString.localizedCaseInsensitiveContains("debug"))
+            #expect(!visibleString.contains("Email Me"))
+            #expect(!visibleString.contains("Use This"))
         }
     }
 }
