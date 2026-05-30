@@ -8,4 +8,5 @@ enum SourceAvailabilityCopy {
     static let unavailableNavigationTitle = "Unavailable"
     static let unavailableBadge = "Unavailable"
     static let unavailableAccessibilityState = "unavailable"
+    static let unavailableSystemImage = "xmark.circle"
 }

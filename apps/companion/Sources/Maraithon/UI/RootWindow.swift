@@ -109,7 +109,7 @@ struct RootWindow: View {
         case .source(let id) where id == "browser_history":
             BrowserHistoryDetailView()
         case .source:
-            ComingSoonDetailView()
+            UnavailableSourceDetailView()
         case .logs:
             LogsView()
         case .diagnostics:

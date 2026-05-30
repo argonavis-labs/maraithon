@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Placeholder detail pane for source descriptors that are listed before
-/// their sync implementation is installed.
-struct ComingSoonDetailView: View {
+/// Detail pane for source descriptors that are listed but unsupported in
+/// this companion build.
+struct UnavailableSourceDetailView: View {
     var body: some View {
         ContentUnavailableView(
             SourceAvailabilityCopy.unavailableTitle,
-            systemImage: "clock.badge.questionmark",
+            systemImage: SourceAvailabilityCopy.unavailableSystemImage,
             description: Text(SourceAvailabilityCopy.unavailableDescription)
         )
         .navigationTitle(SourceAvailabilityCopy.unavailableNavigationTitle)

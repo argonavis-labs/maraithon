@@ -229,10 +229,12 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertEqual(SourceAvailabilityCopy.unavailableTitle, "Source unavailable")
         XCTAssertEqual(SourceAvailabilityCopy.unavailableNavigationTitle, "Unavailable")
         XCTAssertEqual(SourceAvailabilityCopy.unavailableBadge, "Unavailable")
+        XCTAssertEqual(SourceAvailabilityCopy.unavailableSystemImage, "xmark.circle")
         XCTAssertTrue(SourceAvailabilityCopy.unavailableDescription.contains("supported source"))
         XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("iMessage is stable"))
         XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("coming soon"))
         XCTAssertFalse(SourceAvailabilityCopy.unavailableDescription.localizedCaseInsensitiveContains("not available yet"))
+        XCTAssertFalse(SourceAvailabilityCopy.unavailableSystemImage.localizedCaseInsensitiveContains("clock"))
     }
 
     @MainActor
