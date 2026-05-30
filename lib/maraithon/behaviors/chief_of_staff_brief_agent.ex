@@ -167,8 +167,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         top_items == [] and watching_items == [] ->
-          {"Morning brief: no active work found",
-           "No direct actions or watched threads found in checked sources during this brief window."}
+          {"Morning brief: no direct action surfaced",
+           "Checked sources did not surface direct actions or watched threads during this brief window."}
 
         top_items == [] ->
           count = length(watching_items)
@@ -256,8 +256,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     {title, summary} =
       cond do
         debt_items == [] and watching_items == [] ->
-          {"End-of-day review: no active work found",
-           "No unresolved action items found for tonight's review."}
+          {"End-of-day review: no unresolved work surfaced",
+           "Checked sources did not surface unresolved action items for tonight's review."}
 
         debt_items == [] ->
           count = length(watching_items)
@@ -565,7 +565,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "threads are still in Watching"
           )
         ],
-        "No active work found in connected sources during this brief window."
+        "Checked sources did not surface direct action during this brief window."
       )
 
     """
@@ -573,7 +573,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{morning_guidance(top_items)}
 
     Focus now:
-    #{format_items(top_items, offset_hours, now, "1. No active work needs direct action.")}
+    #{format_items(top_items, offset_hours, now, "1. No direct action surfaced for this brief window.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
@@ -609,7 +609,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "threads are still being watched"
           )
         ],
-        "No active work found for tonight's review."
+        "Checked sources did not surface unresolved work for tonight's review."
       )
 
     """
@@ -617,7 +617,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{end_of_day_guidance(debt_items)}
 
     Close or reset:
-    #{format_items(debt_items, offset_hours, now, "1. No active work needs action tonight.")}
+    #{format_items(debt_items, offset_hours, now, "1. No unresolved item surfaced for tonight's review.")}
 
     #{watching_section(watching_items, offset_hours, now)}
 
@@ -888,7 +888,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp append_sentence(text, nil), do: text
   defp append_sentence(text, extra), do: text <> ". " <> sentence_case(extra)
 
-  defp morning_guidance([]), do: "No direct action is waiting in this brief window."
+  defp morning_guidance([]), do: "No direct action surfaced in this brief window."
 
   defp morning_guidance(items) do
     if mostly_reply_loops?(items) do
@@ -898,7 +898,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp end_of_day_guidance([]), do: "No direct action is waiting for tonight's review."
+  defp end_of_day_guidance([]), do: "No direct action surfaced for tonight's review."
 
   defp end_of_day_guidance(items) do
     if mostly_reply_loops?(items) do

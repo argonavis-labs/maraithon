@@ -127,20 +127,23 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["morning"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning brief: no active work found"
+    assert brief.title == "Morning brief: no direct action surfaced"
 
     assert brief.summary ==
-             "No direct actions or watched threads found in checked sources during this brief window."
+             "Checked sources did not surface direct actions or watched threads during this brief window."
 
     assert brief.body =~ "Best use of today:"
-    assert brief.body =~ "No direct action is waiting in this brief window."
+    assert brief.body =~ "No direct action surfaced in this brief window."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "No active work found in connected sources during this brief window."
+    assert brief.body =~ "Checked sources did not surface direct action during this brief window."
 
     refute brief.summary =~ "urgent"
+    refute brief.title =~ "found"
+    refute brief.summary =~ "found"
     refute brief.body =~ "Pressure:"
     refute brief.body =~ "0 items"
     refute brief.body =~ "Gmail, Calendar"
+    refute brief.body =~ "No active work found"
     refute brief.body =~ "Nothing needs"
     refute brief.title =~ "clean slate"
   end
@@ -253,15 +256,21 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["end_of_day"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "End-of-day review: no active work found"
-    assert brief.summary == "No unresolved action items found for tonight's review."
+    assert brief.title == "End-of-day review: no unresolved work surfaced"
+
+    assert brief.summary ==
+             "Checked sources did not surface unresolved action items for tonight's review."
+
     assert brief.body =~ "Tonight's move:"
-    assert brief.body =~ "No direct action is waiting for tonight's review."
+    assert brief.body =~ "No direct action surfaced for tonight's review."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "No active work found for tonight's review."
+    assert brief.body =~ "Checked sources did not surface unresolved work for tonight's review."
 
     refute brief.body =~ "Pressure:"
     refute brief.body =~ "0 items"
+    refute brief.title =~ "found"
+    refute brief.summary =~ "found"
+    refute brief.body =~ "No active work found"
     refute brief.body =~ "Nothing important"
     refute brief.title =~ "all clear"
   end
