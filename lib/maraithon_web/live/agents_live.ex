@@ -960,55 +960,15 @@ defmodule MaraithonWeb.AgentsLive do
 
                       <%= if @selected_panel == :apps do %>
                         <% connected_rows = connected_app_account_rows(@current_user.id, @selected_agent) %>
-                        <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
-                          <li
-                            :for={row <- connected_rows}
-                            class="grid grid-cols-1 gap-3 px-4 py-3 sm:px-6 lg:grid-cols-12 lg:items-start"
-                          >
-                            <div class="flex items-center gap-2 lg:col-span-3">
-                              <img
-                                src={connector_logo_src(row.logo_provider)}
-                                alt={row.app}
-                                class="size-5 shrink-0 object-contain"
-                              />
-                              <span class="truncate text-sm/6 font-semibold text-zinc-950">
-                                <%= row.app %>
-                              </span>
-                            </div>
+                        <% required_app_rows =
+                          @selected_agent
+                          |> agent_connector_requirements()
+                          |> Enum.reject(&(&1.provider == "generic")) %>
 
-                            <div class="lg:col-span-3">
-                              <p class="truncate text-sm/6 font-medium text-zinc-950">
-                                <%= row.account %>
-                              </p>
-                              <p :if={row.note} class="mt-0.5 text-xs/5 text-zinc-500">
-                                <%= row.note %>
-                              </p>
-                            </div>
-
-                            <p class="text-sm/6 text-zinc-600 lg:col-span-4">
-                              <%= row.access %>
-                            </p>
-
-                            <div class="flex flex-wrap items-center gap-3 lg:col-span-2 lg:justify-end">
-                              <.badge
-                                color={account_status_color(row.status)}
-                                class="whitespace-nowrap"
-                              >
-                                <%= account_status_label(row.status) %>
-                              </.badge>
-                              <span class="whitespace-nowrap text-xs/5 text-zinc-500">
-                                <%= format_datetime(row.updated_at) %>
-                              </span>
-                            </div>
-                          </li>
-
-                          <li
-                            :if={connected_rows == []}
-                            class="px-4 py-8 text-center text-sm/6 text-zinc-500 sm:px-6"
-                          >
-                            No connected accounts found for this automation yet.
-                          </li>
-                        </ul>
+                        <.connected_apps_list
+                          connected_rows={connected_rows}
+                          required_app_rows={required_app_rows}
+                        />
                       <% end %>
 
                       <.panel :if={@selected_panel == :skills} body_class="p-0">
@@ -1097,6 +1057,28 @@ defmodule MaraithonWeb.AgentsLive do
                             </div>
                           <% end %>
                         </div>
+                      </.panel>
+                    <% end %>
+
+                    <%= if not chief_of_staff_agent?(@selected_agent) and @selected_panel == :apps do %>
+                      <% connected_rows = connected_app_account_rows(@current_user.id, @selected_agent) %>
+                      <% required_app_rows =
+                        @selected_agent
+                        |> agent_connector_requirements()
+                        |> Enum.reject(&(&1.provider == "generic")) %>
+
+                      <.panel body_class="p-0">
+                        <:header>
+                          <.heading level={3} class="text-base/7">Connected apps</.heading>
+                          <.text class="mt-1">
+                            Accounts this automation can inspect or act through.
+                          </.text>
+                        </:header>
+
+                        <.connected_apps_list
+                          connected_rows={connected_rows}
+                          required_app_rows={required_app_rows}
+                        />
                       </.panel>
                     <% end %>
 
@@ -1331,6 +1313,65 @@ defmodule MaraithonWeb.AgentsLive do
     </Layouts.app>
     """
   end
+
+  attr :connected_rows, :list, required: true
+  attr :required_app_rows, :list, required: true
+
+  defp connected_apps_list(assigns) do
+    ~H"""
+    <ul role="list" class="divide-y divide-zinc-950/5 overflow-hidden rounded-lg border border-zinc-950/10 bg-white">
+      <li
+        :for={row <- @connected_rows}
+        class="grid grid-cols-1 gap-3 px-4 py-3 sm:px-6 lg:grid-cols-12 lg:items-start"
+      >
+        <div class="flex items-center gap-2 lg:col-span-3">
+          <img
+            src={connector_logo_src(row.logo_provider)}
+            alt={row.app}
+            class="size-5 shrink-0 object-contain"
+          />
+          <span class="truncate text-sm/6 font-semibold text-zinc-950">
+            <%= row.app %>
+          </span>
+        </div>
+
+        <div class="lg:col-span-3">
+          <p class="truncate text-sm/6 font-medium text-zinc-950">
+            <%= row.account %>
+          </p>
+          <p :if={row.note} class="mt-0.5 text-xs/5 text-zinc-500">
+            <%= row.note %>
+          </p>
+        </div>
+
+        <p class="text-sm/6 text-zinc-600 lg:col-span-4">
+          <%= row.access %>
+        </p>
+
+        <div class="flex flex-wrap items-center gap-3 lg:col-span-2 lg:justify-end">
+          <.badge color={account_status_color(row.status)} class="whitespace-nowrap">
+            <%= account_status_label(row.status) %>
+          </.badge>
+          <span class="whitespace-nowrap text-xs/5 text-zinc-500">
+            <%= format_datetime(row.updated_at) %>
+          </span>
+        </div>
+      </li>
+
+      <li
+        :if={@connected_rows == []}
+        class="px-4 py-8 text-center text-sm/6 text-zinc-500 sm:px-6"
+      >
+        <%= connected_apps_empty_copy(@required_app_rows) %>
+      </li>
+    </ul>
+    """
+  end
+
+  defp connected_apps_empty_copy([]), do: "No connected apps required for this automation."
+
+  defp connected_apps_empty_copy(_required_app_rows),
+    do: "Connect the required apps before this automation can check those sources."
 
   attr :title, :string, required: true
   attr :value, :string, required: true
@@ -2149,6 +2190,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp agent_connector_logo_items(agent) do
     agent
     |> agent_connector_requirements()
+    |> Enum.reject(&(&1.provider == "generic"))
     |> Enum.uniq_by(& &1.provider)
   end
 
@@ -2276,13 +2318,13 @@ defmodule MaraithonWeb.AgentsLive do
       }
     end)
     |> case do
-      [] -> [%{provider: "generic", label: "No connector dependency"}]
+      [] -> [%{provider: "generic", label: "No connected apps required"}]
       values -> values
     end
   end
 
   defp inferred_subscription_connectors(_config),
-    do: [%{provider: "generic", label: "No connector dependency"}]
+    do: [%{provider: "generic", label: "No connected apps required"}]
 
   defp connected_app_account_rows(user_id, agent) when is_binary(user_id) do
     requirements =

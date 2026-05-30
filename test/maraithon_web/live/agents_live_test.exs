@@ -78,6 +78,22 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "inspect-me"
   end
 
+  test "apps panel distinguishes no requirements from missing accounts", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{"name" => "local-only"},
+        status: "stopped"
+      })
+
+    {:ok, view, _html} = live(conn, "/agents?id=#{agent.id}&panel=apps")
+    html = render(view)
+
+    assert html =~ "No connected apps required for this automation."
+    refute html =~ "No connected accounts found"
+    refute html =~ "connector dependency"
+  end
+
   test "edit opens edit mode for the selected agent", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{
