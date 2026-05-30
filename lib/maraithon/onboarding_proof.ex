@@ -301,6 +301,8 @@ defmodule Maraithon.OnboardingProof do
     - Prefer concrete counterparties, artifacts, owners, or follow-up obligations.
     - Text fields are shown directly in the product. Do not mention confidence,
       model scores, heuristics, classification, JSON, prompts, or internal reasoning.
+    - Do not describe the evidence as a sample, test, or demo. Refer to it as
+      connected activity.
     - Suggested behavior must be one of:
       founder_followthrough_agent, inbox_calendar_advisor, slack_followthrough_agent
 
@@ -378,6 +380,7 @@ defmodule Maraithon.OnboardingProof do
     |> Enum.reject(&(&1 == "" or internal_output_text?(&1)))
     |> Enum.map(&strip_output_label/1)
     |> Enum.join(" ")
+    |> replace_preview_sample_terms()
     |> case do
       "" -> fallback
       clean -> clean
@@ -392,6 +395,27 @@ defmodule Maraithon.OnboardingProof do
       value,
       ""
     )
+  end
+
+  defp replace_preview_sample_terms(value) do
+    value
+    |> replace_preview_phrase(~r/\brecent sample\b/iu, "recent activity")
+    |> replace_preview_phrase(~r/\binbox sample\b/iu, "inbox activity")
+    |> replace_preview_phrase(~r/\bconnected data sample\b/iu, "connected activity")
+    |> replace_preview_phrase(~r/\bactivity sample\b/iu, "recent activity")
+    |> replace_preview_phrase(~r/\bdata sample\b/iu, "connected activity")
+    |> replace_preview_phrase(
+      ~r/\bthe sample(?=\s+(?:does|doesn't|does not|shows?|contains|includes|suggests|indicates|has|lacks)\b)/iu,
+      "the connected activity"
+    )
+    |> replace_preview_phrase(
+      ~r/\bthis sample(?=\s+(?:does|doesn't|does not|shows?|contains|includes|suggests|indicates|has|lacks)\b)/iu,
+      "this connected activity"
+    )
+  end
+
+  defp replace_preview_phrase(value, pattern, replacement) do
+    Regex.replace(pattern, value, replacement)
   end
 
   defp internal_output_text?(value) do

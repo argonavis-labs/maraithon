@@ -1647,7 +1647,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </.badge>
                 </div>
                 <.text class="mt-1">
-                  Real examples from your connected accounts. This is a lightweight proof-of-value scan, not a full always-on run.
+                  Real signals from your connected accounts. This quick scan shows what Maraithon can watch continuously once you start an automation.
                 </.text>
               </div>
               <.button
@@ -1667,12 +1667,12 @@ defmodule MaraithonWeb.DashboardLive do
                 <div class="px-4 py-6 sm:px-6">
                   <p class="text-sm/6 font-medium text-zinc-950">Scanning your connected data...</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    Maraithon is pulling a small recent slice from your linked accounts and selecting the highest-signal examples.
+                    Maraithon is checking recent activity from your linked accounts and selecting the highest-signal examples.
                   </p>
                 </div>
               <% :ready when @onboarding_preview.items == [] -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 font-medium text-zinc-950">Nothing high-signal surfaced in the recent sample.</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">No high-signal follow-through risks surfaced in the recent scan.</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
                     That is a good sign. Once you start an automation, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
                   </p>
@@ -1729,7 +1729,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
               <% _ -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 text-zinc-600">Connect Gmail, Calendar, or Slack to see a proof-of-value preview.</p>
+                  <p class="text-sm/6 text-zinc-600">Connect Gmail, Calendar, or Slack to preview what Maraithon can catch for you.</p>
                 </div>
             <% end %>
           </div>

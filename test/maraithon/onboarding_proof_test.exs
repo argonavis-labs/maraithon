@@ -119,6 +119,10 @@ defmodule Maraithon.OnboardingProofTest do
     assert length(preview.items) == 3
     assert Enum.at(preview.items, 0).title == "You promised the deck to Sarah"
     assert Enum.at(preview.items, 1).source == "slack"
+
+    assert Enum.at(preview.items, 2).summary ==
+             "The inbox activity contains a direct ask that looks unresolved."
+
     assert Enum.at(preview.items, 2).suggested_behavior == "inbox_calendar_advisor"
     assert preview.sources == ["Gmail · kent@voteagora.com", "Slack · Agora"]
   end
@@ -163,13 +167,17 @@ defmodule Maraithon.OnboardingProofTest do
 
     [item] = preview.items
     assert item.confidence == 0.97
-    assert item.rationale == "Sarah asked for the deck and the sample does not show delivery."
+
+    assert item.rationale ==
+             "Sarah asked for the deck and the connected activity does not show delivery."
+
     assert item.recommended_action == "Check the thread and send the deck if it is still missing."
 
     visible_copy =
       Enum.join([item.title, item.summary, item.rationale, item.recommended_action], " ")
 
     refute visible_copy =~ "90%"
+    refute String.contains?(String.downcase(visible_copy), "sample")
     refute String.contains?(String.downcase(visible_copy), "confidence")
     refute String.contains?(String.downcase(visible_copy), "model")
     refute String.contains?(String.downcase(visible_copy), "score")

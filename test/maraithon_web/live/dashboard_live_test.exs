@@ -122,7 +122,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           %{
             title: "Deck follow-up for Sarah",
             summary: "The Sarah thread still needs a promised deck.",
-            rationale: "Sarah asked for the deck and the recent sample does not show delivery.",
+            rationale: "Sarah asked for the deck and recent activity does not show delivery.",
             recommended_action: "Check the thread and send the deck if it is still missing.",
             source: "gmail",
             account_label: "preview@example.com",
@@ -148,6 +148,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "3 things Maraithon would have caught this week"
     assert html =~ "Deck follow-up for Sarah"
     assert html =~ "Sarah asked for the deck"
+    refute_html_contains(html, "recent sample")
+    refute_html_contains(html, "proof-of-value scan")
+    refute_html_contains(html, "proof-of-value preview")
     refute_html_contains(html, "confidence 99")
     refute_html_contains(html, "99.0%")
   end
