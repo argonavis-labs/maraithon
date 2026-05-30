@@ -1731,7 +1731,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
     open_insights = Insights.list_open_for_user(user_id, limit: max(limit, 20))
 
-    insights =
+    visible_insights =
       open_insights
       |> Enum.take(limit)
       |> Enum.map(fn insight ->
@@ -1745,8 +1745,14 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       end)
 
     source_health = source_health_summary(user_id, open_insights)
-    todos = Todos.list_open_for_user(user_id, limit: limit)
-    summary = open_work_summary(insights, todos, source_health)
+    todo_scan_limit = max(limit * 2, limit + length(open_insights))
+
+    todos =
+      Todos.list_open_for_user(user_id, limit: todo_scan_limit)
+      |> reject_insight_backed_todos(open_insights)
+      |> Enum.take(limit)
+
+    summary = open_work_summary(visible_insights, todos, source_health)
 
     agents =
       Agents.list_agents(user_id: user_id)
@@ -1762,9 +1768,9 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     {:ok,
      %{
        summary: summary,
-       next_action: open_work_next_action(insights, todos, source_health),
-       insight_count: length(insights),
-       top_insights: insights,
+       next_action: open_work_next_action(visible_insights, todos, source_health),
+       insight_count: length(visible_insights),
+       top_insights: visible_insights,
        todo_count: length(todos),
        todos: Enum.map(todos, &serialize_todo_summary/1),
        source_health: source_health,
@@ -1773,6 +1779,52 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
        project_count: length(get_in(runtime_context.context, [:projects]) || []),
        projects: get_in(runtime_context.context, [:projects]) || []
      }}
+  end
+
+  defp reject_insight_backed_todos(todos, insights) do
+    refs = insight_ref_sets(insights)
+
+    Enum.reject(todos, &insight_backed_todo?(&1, refs))
+  end
+
+  defp insight_ref_sets(insights) do
+    Enum.reduce(
+      insights,
+      %{ids: MapSet.new(), dedupe_keys: MapSet.new(), tracking_keys: MapSet.new()},
+      fn
+        insight, acc ->
+          acc
+          |> add_ref(:ids, Map.get(insight, :id) || Map.get(insight, "id"))
+          |> add_ref(
+            :dedupe_keys,
+            Map.get(insight, :dedupe_key) || Map.get(insight, "dedupe_key")
+          )
+          |> add_ref(
+            :tracking_keys,
+            Map.get(insight, :tracking_key) || Map.get(insight, "tracking_key")
+          )
+      end
+    )
+  end
+
+  defp add_ref(acc, _key, value) when value in [nil, ""], do: acc
+
+  defp add_ref(acc, key, value) when is_binary(value) do
+    Map.update!(acc, key, &MapSet.put(&1, value))
+  end
+
+  defp add_ref(acc, _key, _value), do: acc
+
+  defp insight_backed_todo?(todo, refs) do
+    metadata = Map.get(todo, :metadata) || Map.get(todo, "metadata") || %{}
+
+    source_insight_id = Map.get(metadata, "source_insight_id")
+    source_insight_dedupe_key = Map.get(metadata, "source_insight_dedupe_key")
+    source_insight_tracking_key = Map.get(metadata, "source_insight_tracking_key")
+
+    MapSet.member?(refs.ids, source_insight_id) or
+      MapSet.member?(refs.dedupe_keys, source_insight_dedupe_key) or
+      MapSet.member?(refs.tracking_keys, source_insight_tracking_key)
   end
 
   defp list_connected_accounts(runtime_context, args) do
