@@ -56,6 +56,29 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "Wakeup cadence"
     end
 
+    test "coverage level copy avoids spend and budget framing", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=ai_chief_of_staff")
+
+      assert html =~ "quieter assistant"
+      assert html =~ "one proactive assistant"
+      refute html =~ "assistant-wide spend"
+      refute html =~ "assistant-wide budget"
+
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=github_product_planner")
+
+      assert html =~ "lightweight planning"
+      assert html =~ "larger planning window"
+      refute html =~ "daily spend"
+      refute html =~ "planning budget"
+
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=slack_followthrough_agent")
+
+      assert html =~ "fewer Slack alerts"
+      assert html =~ "faster checks"
+      refute html =~ "lowest recurring cost"
+      refute html =~ "more budget"
+    end
+
     test "updates the operating model preview for modular chief of staff agents", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new")
 

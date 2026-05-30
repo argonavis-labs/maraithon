@@ -1910,26 +1910,25 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("prompt_agent", "lean"),
     do:
-      "Lower memory and lower budgets. Best when you want a lightweight helper, not a constantly reasoning automation."
+      "Lower memory and lighter checks. Best when you want a focused helper, not a constantly reasoning automation."
 
   defp cost_profile_summary("prompt_agent", "balanced"),
-    do: "Keeps enough memory and budget for steady reasoning without overspending on every check."
+    do: "Keeps enough memory for steady reasoning while staying selective on each check."
 
   defp cost_profile_summary("prompt_agent", "thorough"),
-    do:
-      "Uses deeper memory and higher budgets for richer reasoning across longer-running conversations."
+    do: "Uses deeper memory for richer reasoning across longer-running conversations."
 
   defp cost_profile_summary("github_product_planner", "lean"),
-    do: "Reviews the repo less often and keeps the shortlist tight to minimize daily spend."
+    do: "Reviews the repo less often and keeps the shortlist tight for lightweight planning."
 
   defp cost_profile_summary("github_product_planner", "balanced"),
-    do: "Daily planning pass with enough budget to catch meaningful roadmap changes."
+    do: "Daily planning pass with enough context to catch meaningful roadmap changes."
 
   defp cost_profile_summary("github_product_planner", "thorough"),
-    do: "Checks more frequently with a larger planning budget for fast-moving repositories."
+    do: "Checks more frequently with a larger planning window for fast-moving repositories."
 
   defp cost_profile_summary("ai_chief_of_staff", "lean"),
-    do: "Smaller follow-through scans, selective travel alerts, and lower assistant-wide spend."
+    do: "Smaller follow-through scans and selective travel alerts for a quieter assistant."
 
   defp cost_profile_summary("ai_chief_of_staff", "balanced"),
     do:
@@ -1937,7 +1936,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("ai_chief_of_staff", "thorough"),
     do:
-      "Broader follow-through coverage, faster travel checks, and higher assistant-wide budget for executives who want one proactive assistant."
+      "Broader follow-through coverage and faster travel checks for executives who want one proactive assistant."
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
     do:
@@ -1945,31 +1944,30 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("inbox_calendar_advisor", "balanced"),
     do:
-      "Good default coverage across inbox, meetings, and Slack with moderate spend and standard notification selectivity."
+      "Good default coverage across inbox, meetings, and Slack with standard notification selectivity."
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
       "Deeper cross-channel scans and broader follow-through coverage for executives who want fewer missed follow-ups."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
-    do: "Smaller channel and DM scans with fewer Slack alerts and the lowest recurring cost."
+    do: "Smaller channel and DM scans with fewer Slack alerts."
 
   defp cost_profile_summary("slack_followthrough_agent", "balanced"),
     do:
       "Good default Slack coverage with moderate scanning depth and practical urgency filtering."
 
   defp cost_profile_summary("slack_followthrough_agent", "thorough"),
-    do:
-      "Broader Slack coverage, faster checks, and more budget when Slack is where most team work happens."
+    do: "Broader Slack coverage and faster checks when Slack is where most team work happens."
 
   defp cost_profile_summary(_behavior, "lean"),
-    do: "Lower spend with tighter scans and fewer checks."
+    do: "Tighter scans and fewer checks."
 
   defp cost_profile_summary(_behavior, "balanced"),
-    do: "Default spend and coverage for most teams."
+    do: "Default coverage for most teams."
 
   defp cost_profile_summary(_behavior, "thorough"),
-    do: "Higher spend for deeper coverage and more proactive behavior."
+    do: "Deeper coverage and more proactive behavior."
 
   defp parse_csv(""), do: []
 
