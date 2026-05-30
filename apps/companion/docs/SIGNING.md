@@ -25,9 +25,9 @@ only when needed. The setup pins the full signing identity in gitignored
 `Config.local.xcconfig`, which makes future companion builds keep the same TCC
 identity instead of letting Xcode choose a different local certificate.
 `make run-companion` also installs the Debug app at
-`~/Applications/Maraithon.app` before launching it, preserving that app bundle
-directory across reloads so Full Disk Access is granted to one stable app path
-instead of an Xcode DerivedData bundle. It removes generated DerivedData
+`~/Applications/Maraithon.app` before launching it, refreshing the existing app
+bundle in place across reloads so Full Disk Access is granted to one stable app
+path instead of an Xcode DerivedData bundle. It removes generated DerivedData
 `Maraithon.app` copies after installation so System Settings does not show
 multiple indistinguishable development builds.
 
@@ -47,7 +47,7 @@ make reset-companion-fda
 
 Then open System Settings -> Privacy & Security -> Full Disk Access and add
 or enable the revealed `~/Applications/Maraithon.app` copy. Future
-`make run-companion` reloads preserve that bundle path and remove stale
+`make run-companion` reloads update that bundle in place and remove stale
 DerivedData copies before launching without resetting Full Disk Access.
 
 ## Apple Developer setup
