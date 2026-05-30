@@ -583,9 +583,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp fallback_check_in_summary(check_in_input) do
-    case primary_todo_title(check_in_input) do
+    case primary_todo_move(check_in_input) do
       nil -> "Use the opening for the most important reply or meeting prep."
-      title -> "Use the opening to handle #{title}."
+      move -> "Best use: #{sentence(move)}"
     end
   end
 
@@ -597,9 +597,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       end
 
     next_move =
-      case primary_todo_title(check_in_input) do
+      case primary_todo_move(check_in_input) do
         nil -> "Use it to clear the most important reply or prep the next meeting."
-        title -> "Use it to handle #{title}."
+        move -> "Best use: #{sentence(move)}"
       end
 
     "#{opening} #{next_move}"
@@ -623,16 +623,38 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     end
   end
 
-  defp primary_todo_title(check_in_input) do
+  defp primary_todo_move(check_in_input) do
+    check_in_input
+    |> primary_todo()
+    |> case do
+      todo when is_map(todo) ->
+        read_string(todo, "next_action", nil) ||
+          read_string(todo, "summary", nil) ||
+          read_string(todo, "title", nil)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp primary_todo(check_in_input) do
     check_in_input
     |> read_map("open_work")
     |> read_list("todos")
     |> List.first()
-    |> case do
-      todo when is_map(todo) -> read_string(todo, "title", nil)
-      _ -> nil
+  end
+
+  defp sentence(value) when is_binary(value) do
+    value = String.trim(value)
+
+    if String.ends_with?(value, [".", "!", "?"]) do
+      value
+    else
+      value <> "."
     end
   end
+
+  defp sentence(_value), do: ""
 
   defp clock_label(nil), do: nil
 

@@ -6,6 +6,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
   alias Maraithon.Briefs.Brief
   alias Maraithon.ChiefOfStaff.Skills.CalendarCheckIn
   alias Maraithon.Repo
+  alias Maraithon.Todos
 
   setup do
     user_id = "calendar-checkin-test@example.com"
@@ -186,6 +187,59 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     refute brief.body =~ "confidence"
     refute brief.body =~ "Reasoning"
     refute brief.body =~ "model"
+  end
+
+  test "fallback check-in copy uses the concrete next action for open work",
+       %{state: state} = ctx do
+    {:ok, [_todo]} =
+      Todos.upsert_many(ctx.user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply to Alex about pricing",
+          "summary" => "Alex is waiting for pricing guidance before the afternoon follow-up.",
+          "next_action" => "Send Alex the revised enterprise price before the 2 PM follow-up.",
+          "dedupe_key" => "calendar-checkin:alex-pricing",
+          "priority" => 98
+        }
+      ])
+
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context(ctx, events))
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "decision" => "send",
+          "title" => "95% confidence: interrupt now",
+          "summary" => "Model score says the calendar gap is worth a Telegram check-in.",
+          "body" => "95% confidence this should send.\n\nReasoning: model saw one open todo.",
+          "reason" => "Model confidence was high."
+        })
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _final_state} =
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
+
+    brief = Repo.get!(Brief, payload.brief_id)
+
+    assert brief.summary ==
+             "Best use: Send Alex the revised enterprise price before the 2 PM follow-up."
+
+    assert brief.body =~ "You have 10:00-11:00 open."
+
+    assert brief.body =~
+             "Best use: Send Alex the revised enterprise price before the 2 PM follow-up."
+
+    refute brief.body =~ "handle Reply to Alex about pricing"
+    refute String.downcase(brief.body) =~ "model"
+    refute String.downcase(brief.summary) =~ "confidence"
   end
 
   test "holds without recording when the model decides not to interrupt", %{state: state} = ctx do
