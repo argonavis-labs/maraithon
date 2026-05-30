@@ -32,6 +32,11 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
 
     ENABLE_HARDENED_RUNTIME: YES
+    # Keep the Debug app as a normal signed executable. Xcode's debug
+    # dylib mode moves app code into Maraithon.debug.dylib, which can
+    # make macOS privacy grants behave like they are tied to a changing
+    # debug artifact instead of the stable app bundle.
+    ENABLE_DEBUG_DYLIB: NO
     # App Sandbox is OFF: chat.db access requires Full Disk Access, which
     # the sandbox blocks. Hardened Runtime + Developer ID notarization
     # are still in place.

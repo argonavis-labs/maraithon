@@ -31,6 +31,12 @@ path instead of an Xcode DerivedData bundle. It removes generated DerivedData
 `Maraithon.app` copies after installation so System Settings does not show
 multiple indistinguishable development builds.
 
+The companion Debug target also disables Xcode's debug dylib mode. That keeps
+the code that reads protected local stores in the app's main signed executable
+instead of a rebuild-specific `Maraithon.debug.dylib`, which makes Full Disk
+Access behave like a grant to the stable app rather than a changing debug
+artifact.
+
 You can still run `make setup-companion-signing` explicitly to prepare signing
 without launching the app.
 
