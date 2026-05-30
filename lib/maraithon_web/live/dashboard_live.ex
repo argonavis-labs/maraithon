@@ -328,7 +328,7 @@ defmodule MaraithonWeb.DashboardLive do
            )
          )
          |> refresh_dashboard()
-         |> put_flash(:info, "Project memory saved")}
+         |> put_flash(:info, "Project context saved")}
 
       {:error, :project_not_found} ->
         {:noreply,
@@ -1009,7 +1009,7 @@ defmodule MaraithonWeb.DashboardLive do
             cta="Connected Apps"
           />
           <.workspace_summary
-            label="Memory"
+            label="Saved context"
             value={length(@memory_rules)}
             unit="rules"
             description={
@@ -1018,7 +1018,7 @@ defmodule MaraithonWeb.DashboardLive do
                 else: "No confirmed preferences yet."
             }
             href="#memory-detail"
-            cta="View memory"
+            cta="View context"
           />
           <.workspace_summary
             label="Projects"
@@ -1215,7 +1215,7 @@ defmodule MaraithonWeb.DashboardLive do
         id="memory-detail"
       >
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Memory</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Saved context</h2>
         </div>
         <div class="mt-4 space-y-4">
           <p
@@ -1274,7 +1274,7 @@ defmodule MaraithonWeb.DashboardLive do
       <details class="group rounded-lg border border-zinc-950/10 bg-white">
         <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm/6 font-medium text-zinc-950 sm:px-6">
           <span class="flex items-center gap-2">
-            <span>Add to project memory</span>
+            <span>Add to project context</span>
             <span class="text-xs/5 text-zinc-500">notes · decisions · grants</span>
           </span>
           <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -1422,7 +1422,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <div class="space-y-3">
                   <div class="flex items-center justify-between gap-3">
                     <p class="text-sm/6 font-medium text-zinc-950">
-                      Project memory
+                      Project context
                     </p>
                   </div>
                   <%= if project_card.items == [] do %>

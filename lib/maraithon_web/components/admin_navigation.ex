@@ -19,7 +19,7 @@ defmodule MaraithonWeb.AdminNavigation do
     %{label: "Automations", path: "/agents", icon: :agents},
     %{label: "Apps", path: "/connectors", icon: :connectors},
     %{label: "People", path: "/operator/people", icon: :people},
-    %{label: "Memory", path: "/operator/memories", icon: :memory},
+    %{label: "Saved Context", path: "/operator/memories", icon: :memory},
     %{label: "How it works", path: "/how-it-works", icon: :book}
   ]
 

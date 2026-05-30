@@ -18,7 +18,7 @@ defmodule MaraithonWeb.MemoriesLive do
   def mount(_params, _session, socket) do
     {:ok,
      assign(socket,
-       page_title: "Memory",
+       page_title: "Saved Context",
        current_path: "/operator/memories",
        filters: @default_filters,
        filter_form: to_form(@default_filters, as: :filters),
@@ -66,13 +66,13 @@ defmodule MaraithonWeb.MemoriesLive do
       {:ok, _item} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Memory archived")
+         |> put_flash(:info, "Saved context archived")
          |> refresh_memories(nil)}
 
       {:error, :memory_not_found} ->
         {:noreply,
          socket
-         |> put_flash(:error, "Memory not found")
+         |> put_flash(:error, "Saved context not found")
          |> refresh_memories(nil)}
 
       {:error, reason} ->

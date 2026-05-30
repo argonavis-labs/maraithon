@@ -31,6 +31,8 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
 
     assert "Could not create that project. Review the highlighted fields before saving." in copies
 
+    assert "Could not save that project context. Review the highlighted fields before saving." in copies
+
     assert "Could not start that delivery work. Refresh the dashboard before starting it." in copies
 
     Enum.each(copies, &refute_leaks_internal_reason/1)
@@ -72,6 +74,8 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
     ]
 
     assert "Could not fetch platform logs right now. Refresh logs before reviewing incidents." in copies
+
+    assert "Could not archive that saved context. Refresh saved context before archiving it." in copies
 
     Enum.each(copies, &refute_leaks_internal_reason/1)
     Enum.each(copies, &refute_try_again/1)

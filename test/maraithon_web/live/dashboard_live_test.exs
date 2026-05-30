@@ -45,7 +45,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "h2", "Workspace")
     assert has_element?(view, "h2", "Start Chief of Staff")
     assert html =~ "New project"
-    assert html =~ "Memory"
+    assert html =~ "Saved context"
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Automation coverage")
     assert html =~ "No work needs attention right now."
@@ -124,7 +124,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute_html_contains(html, "sarah@example.com")
   end
 
-  test "renders memory context without internal confidence scoring", %{conn: conn} do
+  test "renders saved context without internal confidence scoring", %{conn: conn} do
     Repo.insert!(%UserMemoryProfile{
       user_id: @user_email,
       summary: "Use concise founder-style status updates.",
@@ -217,7 +217,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute_html_contains(html, "99.0%")
   end
 
-  test "creates a project and project memory from the dashboard", %{conn: conn} do
+  test "creates a project and project context from the dashboard", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/dashboard")
 
     _html =

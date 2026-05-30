@@ -15,7 +15,7 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
-  test "renders memory rows and highlights the Memory nav", %{conn: conn} do
+  test "renders memory rows and highlights the Saved Context nav", %{conn: conn} do
     {:ok, memory} =
       Memory.write(@user_email, %{
         "kind" => "preference",
@@ -36,7 +36,13 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     assert html =~ "Learned from Telegram"
     assert html =~ "Linked message available"
     assert html =~ "What Maraithon remembers"
-    assert has_element?(view, "a[href='/operator/memories'][aria-current='page']", "Memory")
+
+    assert has_element?(
+             view,
+             "a[href='/operator/memories'][aria-current='page']",
+             "Saved Context"
+           )
+
     refute html =~ "Durable memories"
     refute html =~ "Provenance"
     refute html =~ "Importance"
@@ -154,6 +160,6 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     |> render_click()
 
     assert Memory.get_item_for_user(@user_email, replacement.id).status == "archived"
-    assert render(view) =~ "Memory archived"
+    assert render(view) =~ "Saved context archived"
   end
 end

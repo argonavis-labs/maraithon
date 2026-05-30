@@ -371,7 +371,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         priority: 145
       ),
       command(
-        "Open relationship memory",
+        "Open relationship context",
         "/operator/memories?kind=relationship",
         :memory,
         "Suggested",
@@ -384,17 +384,21 @@ defmodule MaraithonWeb.Components.CommandPalette do
 
   defp context_commands("/operator/memories") do
     [
-      command("Active memory", "/operator/memories?status=active", :memory, "Suggested",
+      command("Active saved context", "/operator/memories?status=active", :memory, "Suggested",
         description: "Show facts currently used by Maraithon.",
         keywords: "active memory facts",
         priority: 145
       ),
-      command("Relationship memory", "/operator/memories?kind=relationship", :memory, "Suggested",
+      command(
+        "Relationship context",
+        "/operator/memories?kind=relationship",
+        :memory,
+        "Suggested",
         description: "Show context about people and relationship handling.",
         keywords: "relationship people crm memory",
         priority: 140
       ),
-      command("Corrections memory", "/operator/memories?kind=correction", :memory, "Suggested",
+      command("Saved corrections", "/operator/memories?kind=correction", :memory, "Suggested",
         description: "Show feedback Maraithon should honor next time.",
         keywords: "correction feedback learn memory",
         priority: 135
@@ -477,7 +481,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         priority: 100
       ),
       command(
-        "Open memory corrections",
+        "Open saved corrections",
         "/operator/memories?kind=correction",
         :memory,
         "Chief of Staff",
@@ -535,7 +539,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
         keywords: "relationship family business customer investor vendor friend label",
         priority: 82
       ),
-      command("Relationship memory", "/operator/memories?kind=relationship", :memory, "People",
+      command("Relationship context", "/operator/memories?kind=relationship", :memory, "People",
         description: "Review relationship facts used by the assistant.",
         keywords: "relationship memory people facts context",
         priority: 78
@@ -626,8 +630,8 @@ defmodule MaraithonWeb.Components.CommandPalette do
         shortcut: "G P",
         priority: 58
       ),
-      command("Memory", "/operator/memories", :memory, "Navigate",
-        description: "Facts, preferences, corrections, and relationship memory.",
+      command("Saved Context", "/operator/memories", :memory, "Navigate",
+        description: "Facts, preferences, corrections, and relationship context.",
         keywords: "memory facts preferences corrections relationship",
         shortcut: "G M",
         priority: 55

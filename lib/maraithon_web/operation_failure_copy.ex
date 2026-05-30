@@ -65,14 +65,14 @@ defmodule MaraithonWeb.OperationFailureCopy do
 
   def project(:memory, %Ecto.Changeset{} = changeset) do
     with_detail(
-      "Could not save that project memory.",
+      "Could not save that project context.",
       validation_detail(changeset),
       "Review the highlighted fields before saving."
     )
   end
 
   def project(:memory, _reason) do
-    "Could not save that project memory. Review the highlighted fields before saving."
+    "Could not save that project context. Review the highlighted fields before saving."
   end
 
   def project(:recommendation_decision, _reason) do
@@ -108,7 +108,7 @@ defmodule MaraithonWeb.OperationFailureCopy do
   end
 
   def memory(:archive, _reason) do
-    "Could not archive that memory. Refresh memory before archiving it."
+    "Could not archive that saved context. Refresh saved context before archiving it."
   end
 
   def briefing_schedule(:morning, :invalid_local_hour) do
