@@ -22,8 +22,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
   setup do
     # Crashing an agent and waiting for a supervisor-spawned replacement means
     # we can't pre-`allow` the replacement's pid before its `:recovering` event
-    # runs. Shared sandbox mode lets every process talk to the same DB owner.
-    Ecto.Adapters.SQL.Sandbox.mode(Maraithon.Repo, {:shared, self()})
+    # runs. `DataCase, async: false` starts the SQL sandbox owner in shared mode.
 
     case Process.whereis(Scheduler) do
       nil -> :ok

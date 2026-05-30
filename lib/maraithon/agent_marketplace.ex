@@ -10,45 +10,6 @@ defmodule Maraithon.AgentMarketplace do
   alias Maraithon.LLM
 
   @chief_of_staff_slug "ai_chief_of_staff"
-  @primary_admin_chief_of_staff_config %{
-    "skill_configs" => %{
-      "morning_briefing" => %{
-        "commercial_thread_terms" => [
-          "glossier"
-        ],
-        "commercial_gmail_queries" => [
-          "newer_than:7d Cogniate",
-          "newer_than:7d Glossier",
-          "newer_than:7d \"team plan\"",
-          "newer_than:7d \"Ultra plan\"",
-          "newer_than:7d Enterprise",
-          "newer_than:7d discount",
-          "newer_than:7d intro",
-          "newer_than:7d availability"
-        ],
-        "commercial_counterparty_domain_markers" => [
-          "cogniate",
-          "glossier",
-          "represent",
-          "sandwich.co"
-        ],
-        "commercial_teammate_domains" => ["runner.now"],
-        "slack_key_channels" => [
-          "runner-general",
-          "runner-leads",
-          "runner-gtm",
-          "runner-user-feedback",
-          "gtm-leads",
-          "general",
-          "eng-general",
-          "exec-agora-gov-mgmt-w-dash",
-          "jeff",
-          "charlie",
-          "yitong"
-        ]
-      }
-    }
-  }
 
   @doc """
   Ensure built-in agent packages exist in the marketplace tables.
@@ -209,7 +170,10 @@ defmodule Maraithon.AgentMarketplace do
   end
 
   defp default_install_config(@chief_of_staff_slug, :primary_admin),
-    do: @primary_admin_chief_of_staff_config
+    do:
+      :maraithon
+      |> Application.get_env(__MODULE__, [])
+      |> Keyword.get(:primary_admin_chief_of_staff_config, %{})
 
   defp default_install_config(_slug, _install_source), do: %{}
 

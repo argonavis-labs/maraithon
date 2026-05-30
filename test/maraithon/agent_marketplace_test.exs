@@ -172,15 +172,64 @@ defmodule Maraithon.AgentMarketplaceTest do
       assert agent.user_id == user_id
       assert agent.status == "running"
 
-      commercial_terms =
-        get_in(agent.config, [
-          "skill_configs",
-          "morning_briefing",
-          "commercial_thread_terms"
-        ])
+      morning_briefing = get_in(agent.config, ["skill_configs", "morning_briefing"])
 
-      assert is_list(commercial_terms)
-      assert "glossier" in commercial_terms
+      assert Map.get(morning_briefing, "commercial_thread_terms", []) == []
+      assert Map.get(morning_briefing, "commercial_gmail_queries", []) == []
+      assert Map.get(morning_briefing, "commercial_counterparty_domain_markers", []) == []
+      assert Map.get(morning_briefing, "commercial_teammate_domains", []) == []
+      refute inspect(agent.config) =~ "glossier"
+      refute inspect(agent.config) =~ "runner.now"
+    end
+
+    test "primary admin custom briefing rules come from runtime config, not code defaults" do
+      previous_primary_admin = System.get_env("PRIMARY_ADMIN_EMAIL")
+      previous_marketplace_config = Application.get_env(:maraithon, AgentMarketplace, [])
+
+      user_id = "marketplace-primary-config-#{Ecto.UUID.generate()}@example.com"
+
+      System.put_env("PRIMARY_ADMIN_EMAIL", user_id)
+
+      Application.put_env(
+        :maraithon,
+        AgentMarketplace,
+        Keyword.put(previous_marketplace_config, :primary_admin_chief_of_staff_config, %{
+          "skill_configs" => %{
+            "morning_briefing" => %{
+              "commercial_thread_terms" => ["board packet"],
+              "commercial_teammate_domains" => ["company.example"]
+            }
+          }
+        })
+      )
+
+      on_exit(fn ->
+        case previous_primary_admin do
+          nil -> System.delete_env("PRIMARY_ADMIN_EMAIL")
+          value -> System.put_env("PRIMARY_ADMIN_EMAIL", value)
+        end
+
+        Application.put_env(:maraithon, AgentMarketplace, previous_marketplace_config)
+      end)
+
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, _telegram} =
+        ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "998877"})
+
+      assert {:ok, [agent]} = AgentMarketplace.ensure_default_installations()
+
+      assert get_in(agent.config, [
+               "skill_configs",
+               "morning_briefing",
+               "commercial_thread_terms"
+             ]) == ["board packet"]
+
+      assert get_in(agent.config, [
+               "skill_configs",
+               "morning_briefing",
+               "commercial_teammate_domains"
+             ]) == ["company.example"]
     end
   end
 end

@@ -28,7 +28,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     msn.com outlook.com proton.me protonmail.com yahoo.com
   )
 
-  @internal_email_domains ~w(runner.now voteagora.com agora.xyz)
+  @default_internal_email_domains []
 
   @personal_calendar_terms [
     "anniversary",
@@ -61,6 +61,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   def enrich(user_id, events, opts \\ [])
 
   def enrich(user_id, events, opts) when is_binary(user_id) and is_list(events) do
+    internal_email_domains =
+      opts
+      |> Keyword.get(:internal_email_domains, @default_internal_email_domains)
+      |> normalize_domain_list()
+
     max_web_queries =
       opts
       |> Keyword.get(:max_web_queries, @max_web_queries)
@@ -68,9 +73,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
     {indexed_meetings, _remaining_queries} =
       events
-      |> prioritize_meeting_events()
+      |> prioritize_meeting_events(internal_email_domains)
       |> Enum.reduce({[], max_web_queries}, fn {event, index}, {meeting_acc, remaining_queries} ->
-        {meeting, next_remaining} = enrich_event(user_id, event, opts, remaining_queries)
+        {meeting, next_remaining} =
+          enrich_event(user_id, event, opts, remaining_queries, internal_email_domains)
+
         {[{index, meeting} | meeting_acc], next_remaining}
       end)
 
@@ -110,15 +117,15 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     }
   end
 
-  defp enrich_event(user_id, event, opts, remaining_queries) do
-    core = event_core(event)
+  defp enrich_event(user_id, event, opts, remaining_queries, internal_email_domains) do
+    core = event_core(event, internal_email_domains)
     personal_logistics? = personal_logistics_event?(event)
 
     candidates =
       if personal_logistics? do
         []
       else
-        event |> candidates_for_event()
+        candidates_for_event(event, internal_email_domains)
       end
 
     {crm_contexts, unmatched_candidates} =
@@ -306,9 +313,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     end)
   end
 
-  defp candidates_for_event(event) when is_map(event) do
+  defp candidates_for_event(event, internal_email_domains) when is_map(event) do
     event
-    |> participant_candidates()
+    |> participant_candidates(internal_email_domains)
     |> Kernel.++(summary_candidates(read_string(event, "summary")))
     |> Enum.map(&normalize_candidate/1)
     |> Enum.reject(&is_nil/1)
@@ -316,26 +323,26 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     |> Enum.uniq_by(&candidate_dedupe_key/1)
   end
 
-  defp candidates_for_event(_event), do: []
+  defp candidates_for_event(_event, _internal_email_domains), do: []
 
-  defp participant_candidates(event) do
+  defp participant_candidates(event, internal_email_domains) do
     attendee_candidates =
       event
       |> read_list("attendees")
-      |> Enum.flat_map(&attendee_candidates/1)
+      |> Enum.flat_map(&attendee_candidates(&1, internal_email_domains))
 
     organizer_candidates =
       event
       |> read_string("organizer")
       |> case do
         nil -> []
-        organizer -> attendee_candidates(organizer)
+        organizer -> attendee_candidates(organizer, internal_email_domains)
       end
 
     attendee_candidates ++ organizer_candidates
   end
 
-  defp attendee_candidates(attendee) when is_map(attendee) do
+  defp attendee_candidates(attendee, internal_email_domains) when is_map(attendee) do
     email = read_string(attendee, "email")
     domain = email_domain(email)
 
@@ -347,11 +354,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
     [
       %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
-      company_candidate_from_email(email)
+      company_candidate_from_email(email, internal_email_domains)
     ]
   end
 
-  defp attendee_candidates(attendee) when is_binary(attendee) do
+  defp attendee_candidates(attendee, internal_email_domains) when is_binary(attendee) do
     email = extract_email(attendee)
     domain = email_domain(email)
     name = attendee |> String.replace(~r/<[^>]+>/, "") |> normalize_string()
@@ -370,11 +377,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
     [
       %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
-      company_candidate_from_email(email)
+      company_candidate_from_email(email, internal_email_domains)
     ]
   end
 
-  defp attendee_candidates(_attendee), do: []
+  defp attendee_candidates(_attendee, _internal_email_domains), do: []
 
   defp summary_candidates(nil), do: []
 
@@ -392,21 +399,25 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     end)
   end
 
-  defp company_candidate_from_email(nil), do: nil
+  defp company_candidate_from_email(nil, _internal_email_domains), do: nil
 
-  defp company_candidate_from_email(email) when is_binary(email) do
+  defp company_candidate_from_email(email, internal_email_domains) when is_binary(email) do
     case email_domain(email) do
       domain when domain in @free_email_domains ->
         nil
 
       domain when is_binary(domain) ->
-        domain
-        |> String.split(".")
-        |> List.first()
-        |> humanize_domain_label()
-        |> then(
-          &%{query: &1, kind: "organization", source: "attendee_email_domain", domain: domain}
-        )
+        if domain in internal_email_domains do
+          nil
+        else
+          domain
+          |> String.split(".")
+          |> List.first()
+          |> humanize_domain_label()
+          |> then(
+            &%{query: &1, kind: "organization", source: "attendee_email_domain", domain: domain}
+          )
+        end
 
       _ ->
         nil
@@ -493,9 +504,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     end
   end
 
-  defp event_core(event) when is_map(event) do
-    external_attendees = external_attendee_details(event)
-    schedule_required? = executive_external_meeting?(event, external_attendees)
+  defp event_core(event, internal_email_domains) when is_map(event) do
+    external_attendees = external_attendee_details(event, internal_email_domains)
+
+    schedule_required? =
+      executive_external_meeting?(event, external_attendees, internal_email_domains)
 
     %{
       "event_id" => read_string(event, "event_id"),
@@ -541,22 +554,22 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp meeting_like?(_event), do: false
 
-  defp prioritize_meeting_events(events) do
+  defp prioritize_meeting_events(events, internal_email_domains) do
     events
     |> Enum.with_index()
     |> Enum.filter(fn {event, _index} -> meeting_like?(event) end)
     |> Enum.sort_by(fn {event, index} ->
-      {meeting_priority(event), event_start_sort_key(event), index}
+      {meeting_priority(event, internal_email_domains), event_start_sort_key(event), index}
     end)
   end
 
-  defp meeting_priority(event) do
+  defp meeting_priority(event, internal_email_domains) do
     attendees = read_list(event, "attendees")
-    external_attendees = external_attendee_details(event)
+    external_attendees = external_attendee_details(event, internal_email_domains)
 
     cond do
-      executive_external_meeting?(event, external_attendees) -> 0
-      external_attendees?(attendees) -> 1
+      executive_external_meeting?(event, external_attendees, internal_email_domains) -> 0
+      external_attendees?(attendees, internal_email_domains) -> 1
       attendees != [] -> 1
       read_string(event, "organizer") != nil -> 2
       true -> 3
@@ -568,14 +581,14 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp web_budget_for_event(_core, _remaining_queries), do: 0
 
-  defp executive_external_meeting?(_event, []), do: false
+  defp executive_external_meeting?(_event, [], _internal_email_domains), do: false
 
-  defp executive_external_meeting?(event, external_attendees) do
+  defp executive_external_meeting?(event, external_attendees, internal_email_domains) do
     cond do
       personal_logistics_event?(event) ->
         false
 
-      Enum.any?(external_attendees, &business_attendee?/1) ->
+      Enum.any?(external_attendees, &business_attendee?(&1, internal_email_domains)) ->
         true
 
       true ->
@@ -649,34 +662,34 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     text != "" and Enum.any?(@personal_calendar_terms, &String.contains?(text, &1))
   end
 
-  defp business_attendee?(%{"domain" => domain}) when is_binary(domain),
-    do: business_domain?(domain)
+  defp business_attendee?(%{"domain" => domain}, internal_email_domains) when is_binary(domain),
+    do: business_domain?(domain, internal_email_domains)
 
-  defp business_attendee?(_attendee), do: false
+  defp business_attendee?(_attendee, _internal_email_domains), do: false
 
-  defp business_domain?(domain) when is_binary(domain),
-    do: domain not in @free_email_domains and domain not in @internal_email_domains
+  defp business_domain?(domain, internal_email_domains) when is_binary(domain),
+    do: domain not in @free_email_domains and domain not in internal_email_domains
 
-  defp business_domain?(_domain), do: false
+  defp business_domain?(_domain, _internal_email_domains), do: false
 
-  defp external_attendees?(attendees) do
+  defp external_attendees?(attendees, internal_email_domains) do
     Enum.any?(attendees, fn attendee ->
       attendee
       |> attendee_email()
-      |> external_email?()
+      |> external_email?(internal_email_domains)
     end)
   end
 
-  defp external_attendee_details(event) do
+  defp external_attendee_details(event, internal_email_domains) do
     event
     |> read_list("attendees")
-    |> Enum.flat_map(&external_attendee_detail/1)
+    |> Enum.flat_map(&external_attendee_detail(&1, internal_email_domains))
   end
 
-  defp external_attendee_detail(%{} = attendee) do
+  defp external_attendee_detail(%{} = attendee, internal_email_domains) do
     email = attendee_email(attendee)
 
-    if external_email?(email) do
+    if external_email?(email, internal_email_domains) do
       [
         %{
           "display_name" =>
@@ -694,10 +707,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     end
   end
 
-  defp external_attendee_detail(attendee) when is_binary(attendee) do
+  defp external_attendee_detail(attendee, internal_email_domains) when is_binary(attendee) do
     email = attendee_email(attendee)
 
-    if external_email?(email) do
+    if external_email?(email, internal_email_domains) do
       name =
         attendee
         |> String.replace(~r/<[^>]+>/, "")
@@ -716,7 +729,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
     end
   end
 
-  defp external_attendee_detail(_attendee), do: []
+  defp external_attendee_detail(_attendee, _internal_email_domains), do: []
 
   defp compact_attendee(%{} = attendee) do
     email = attendee_email(attendee)
@@ -741,17 +754,14 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp attendee_email(attendee) when is_binary(attendee), do: extract_email(attendee)
   defp attendee_email(_attendee), do: nil
 
-  defp external_email?(email) when is_binary(email) do
+  defp external_email?(email, internal_email_domains) when is_binary(email) do
     case email_domain(email) do
       nil -> false
-      "runner.now" -> false
-      "voteagora.com" -> false
-      "agora.xyz" -> false
-      _domain -> true
+      domain -> domain not in internal_email_domains
     end
   end
 
-  defp external_email?(_email), do: false
+  defp external_email?(_email, _internal_email_domains), do: false
 
   defp event_start_sort_key(event) when is_map(event) do
     event
@@ -972,6 +982,22 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
       _ -> nil
     end
   end
+
+  defp normalize_domain_list(values) when is_list(values) do
+    values
+    |> Enum.flat_map(&normalize_domain_list/1)
+    |> Enum.uniq()
+  end
+
+  defp normalize_domain_list(value) when is_binary(value) do
+    value
+    |> String.split(~r/[,;\s]+/, trim: true)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp normalize_domain_list(_value), do: []
 
   defp titleize_token(token) when is_binary(token) do
     token

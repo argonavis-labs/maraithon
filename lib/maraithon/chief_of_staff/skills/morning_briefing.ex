@@ -606,7 +606,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     meeting_prep =
       MeetingEnrichment.enrich(user_id, today_events,
         now: now,
-        max_web_queries: 100
+        max_web_queries: 100,
+        internal_email_domains: Map.get(state, :commercial_teammate_domains, [])
       )
 
     schedule_coverage = schedule_coverage_contract(meeting_prep)

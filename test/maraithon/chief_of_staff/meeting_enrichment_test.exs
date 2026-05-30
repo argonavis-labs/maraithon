@@ -116,7 +116,10 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     }
 
     result =
-      MeetingEnrichment.enrich(user_id, reminder_blocks ++ [dawn_meeting], max_web_queries: 0)
+      MeetingEnrichment.enrich(user_id, reminder_blocks ++ [dawn_meeting],
+        max_web_queries: 0,
+        internal_email_domains: ["runner.now"]
+      )
 
     summaries = Enum.map(result["meetings"], & &1["summary"])
 
@@ -129,6 +132,39 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
                meeting["schedule_required"] == true and
                Enum.any?(meeting["external_attendees"], &(&1["email"] == "dawn@kilnstudio.io"))
            end)
+  end
+
+  test "does not bake tenant-specific internal domains into meeting prep", %{user_id: user_id} do
+    event = %{
+      "event_id" => "evt-runner",
+      "summary" => "Charlie Feng planning",
+      "start" => "2026-05-11T19:00:00Z",
+      "end" => "2026-05-11T19:30:00Z",
+      "attendees" => [
+        %{"display_name" => "Charlie Feng", "email" => "charlie@runner.now"}
+      ]
+    }
+
+    default_result = MeetingEnrichment.enrich(user_id, [event], max_web_queries: 0)
+    [default_meeting] = default_result["meetings"]
+
+    assert default_meeting["schedule_required"] == true
+
+    assert Enum.any?(
+             default_meeting["external_attendees"],
+             &(&1["email"] == "charlie@runner.now")
+           )
+
+    configured_result =
+      MeetingEnrichment.enrich(user_id, [event],
+        max_web_queries: 0,
+        internal_email_domains: ["runner.now"]
+      )
+
+    [configured_meeting] = configured_result["meetings"]
+
+    assert configured_meeting["schedule_required"] == false
+    assert Map.get(configured_meeting, "external_attendees", []) == []
   end
 
   test "spends scarce public prep budget on the earliest required external meeting while preserving calendar order",
@@ -313,7 +349,8 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
       MeetingEnrichment.enrich(user_id, [school_meet, dawn_meeting, soccer_practice],
         web_search_fun: web_search,
         web_page_fetch_fun: page_fetch,
-        max_web_queries: 8
+        max_web_queries: 8,
+        internal_email_domains: ["runner.now"]
       )
 
     assert get_in(result, ["counts", "required_schedule_meetings"]) == 1
