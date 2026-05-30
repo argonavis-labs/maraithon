@@ -9,6 +9,7 @@ struct ChatThreadsCopyTests {
         let banner = SyncIssueBanner(message: "Could not refresh.", dismiss: {})
 
         #expect(banner.title == "Latest data may be out of date")
+        #expect(banner.dismissAccessibilityLabel == "Dismiss warning")
         #expect(!banner.title.localizedCaseInsensitiveContains("stale"))
     }
 
@@ -17,6 +18,16 @@ struct ChatThreadsCopyTests {
         #expect(ChatThreadsCopy.refreshWarningTitle == "Chat list may be out of date")
         #expect(ChatThreadsCopy.refreshButtonTitle == "Refresh")
         #expect(!ChatThreadsCopy.refreshWarningTitle.localizedCaseInsensitiveContains("stale"))
+    }
+
+    @Test
+    func localChatMutationsSurfaceSaveFailures() {
+        #expect(ChatThreadsCopy.actionWarningTitle == "Chat update was not saved")
+        #expect(ChatThreadsCopy.createFailedMessage == "Could not start a new chat. Your chat list stayed unchanged.")
+        #expect(ChatThreadsCopy.deleteFailedMessage(count: 1) == "Could not delete that chat. Your chat list stayed unchanged.")
+        #expect(ChatThreadsCopy.deleteFailedMessage(count: 2) == "Could not delete those chats. Your chat list stayed unchanged.")
+        #expect(ChatThreadsCopy.dismissActionWarningAccessibilityLabel == "Dismiss chat update warning")
+        #expect(ChatThreadsCopy.localSaveFailureLabels.count == 5)
     }
 
     @Test

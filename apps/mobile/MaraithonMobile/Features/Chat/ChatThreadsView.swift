@@ -9,6 +9,7 @@ struct ChatThreadsView: View {
     @State private var path: [UUID] = []
     @State private var searchText = ""
     @State private var errorMessage: String?
+    @State private var actionErrorMessage: String?
     @State private var pendingPromptByThreadID: [UUID: PendingChatPrompt] = [:]
 
     private let chatSyncService = ChatSyncService()
@@ -28,6 +29,21 @@ struct ChatThreadsView: View {
                             buttonTitle: ChatThreadsCopy.refreshButtonTitle,
                             retry: { Task { await refreshThreads() } },
                             dismiss: { self.errorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+
+                if let actionErrorMessage {
+                    Section {
+                        SyncIssueBanner(
+                            title: ChatThreadsCopy.actionWarningTitle,
+                            message: actionErrorMessage,
+                            buttonTitle: nil,
+                            retry: nil,
+                            dismissAccessibilityLabel: ChatThreadsCopy.dismissActionWarningAccessibilityLabel,
+                            dismiss: { self.actionErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
@@ -138,14 +154,25 @@ struct ChatThreadsView: View {
 
     private func consumeRequestedPromptIfNeeded() {
         guard let prompt = appNavigation.requestedChatPrompt else { return }
-        appNavigation.requestedChatPrompt = nil
-        createThread(initialPrompt: prompt, shouldAutoSend: true)
+        if createThread(initialPrompt: prompt, shouldAutoSend: true) {
+            appNavigation.requestedChatPrompt = nil
+        }
     }
 
-    private func createThread(initialPrompt: String? = nil, shouldAutoSend: Bool = false) {
+    @discardableResult
+    private func createThread(initialPrompt: String? = nil, shouldAutoSend: Bool = false) -> Bool {
+        actionErrorMessage = nil
         let thread = ChatThread(title: ChatThreadNaming.defaultTitle)
         modelContext.insert(thread)
-        try? modelContext.save()
+
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = ChatThreadsCopy.createFailedMessage
+            return false
+        }
+
         if let initialPrompt {
             pendingPromptByThreadID[thread.id] = PendingChatPrompt(
                 message: initialPrompt,
@@ -153,19 +180,30 @@ struct ChatThreadsView: View {
             )
         }
         path.append(thread.id)
+        return true
     }
 
     private func deleteThreads(at offsets: IndexSet) {
+        actionErrorMessage = nil
         for offset in offsets {
             modelContext.delete(filteredThreads[offset])
         }
-        try? modelContext.save()
+
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = ChatThreadsCopy.deleteFailedMessage(count: offsets.count)
+        }
     }
 }
 
 enum ChatThreadsCopy {
     static let refreshWarningTitle = "Chat list may be out of date"
     static let refreshButtonTitle = "Refresh"
+    static let actionWarningTitle = "Chat update was not saved"
+    static let dismissActionWarningAccessibilityLabel = "Dismiss chat update warning"
+    static let createFailedMessage = "Could not start a new chat. Your chat list stayed unchanged."
     static let emptyChatsTitle = "No chats yet"
     static let emptyChatsDescription = "Start a chat to plan the day, draft a follow-up, or turn loose notes into next actions."
     static let noMatchingChatsTitle = "No chats match"
@@ -173,6 +211,22 @@ enum ChatThreadsCopy {
     static let deletedChatTitle = "Chat unavailable"
     static let deletedChatDescription = "This conversation was deleted or is no longer on this device."
     static let newChatButtonTitle = "New chat"
+
+    static func deleteFailedMessage(count: Int) -> String {
+        count == 1
+            ? "Could not delete that chat. Your chat list stayed unchanged."
+            : "Could not delete those chats. Your chat list stayed unchanged."
+    }
+
+    static var localSaveFailureLabels: [String] {
+        [
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
+            createFailedMessage,
+            deleteFailedMessage(count: 1),
+            deleteFailedMessage(count: 2)
+        ]
+    }
 
     static var emptyStateLabels: [String] {
         [

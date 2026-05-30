@@ -5,6 +5,7 @@ struct SyncIssueBanner: View {
     let message: String
     let buttonTitle: String?
     let retry: (() -> Void)?
+    let dismissAccessibilityLabel: String
     let dismiss: () -> Void
 
     init(
@@ -12,12 +13,14 @@ struct SyncIssueBanner: View {
         message: String,
         buttonTitle: String? = "Retry",
         retry: (() -> Void)? = nil,
+        dismissAccessibilityLabel: String = "Dismiss warning",
         dismiss: @escaping () -> Void
     ) {
         self.title = title
         self.message = message
         self.buttonTitle = buttonTitle
         self.retry = retry
+        self.dismissAccessibilityLabel = dismissAccessibilityLabel
         self.dismiss = dismiss
     }
 
@@ -54,7 +57,7 @@ struct SyncIssueBanner: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .accessibilityLabel("Dismiss refresh warning")
+            .accessibilityLabel(dismissAccessibilityLabel)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
