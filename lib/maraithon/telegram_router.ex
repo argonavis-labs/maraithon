@@ -536,7 +536,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp send_model_unavailable_turn(conversation, chat_id, reply_to_message_id, reason) do
     text =
-      "Message saved. No source-backed answer is available from connected sources right now, so no guess was sent."
+      "Message saved. Maraithon did not find a checked answer in connected sources, so it did not guess."
 
     send_assistant_turn(
       conversation,

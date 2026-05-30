@@ -776,9 +776,10 @@ defmodule Maraithon.TelegramRouterTest do
 
     reply = last_telegram_message(:send)
     assert reply.text =~ "Message saved."
-    assert reply.text =~ "No source-backed answer is available"
-    assert reply.text =~ "no guess was sent."
+    assert reply.text =~ "checked answer"
+    assert reply.text =~ "did not guess"
     refute reply.text =~ "I "
+    refute String.contains?(String.downcase(reply.text), "source-backed")
     refute String.contains?(String.downcase(reply.text), "model")
     refute String.contains?(String.downcase(reply.text), "local rules")
     refute String.contains?(String.downcase(reply.text), "try again")
