@@ -118,6 +118,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Platform logs are not configured for this environment."
     assert html =~ "Technical notes"
     assert html =~ "Maraithon could not finish this step. Review the latest automation status."
+    refute html =~ "captured"
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "123456789")

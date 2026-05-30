@@ -1874,7 +1874,7 @@ defmodule MaraithonWeb.DashboardLive do
                     Technical notes
                   </p>
                   <%= if overview.inspection.recent_logs == [] do %>
-                    <p class="mt-2 text-sm/6 text-zinc-500">No technical notes captured.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No technical notes yet.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
@@ -2076,7 +2076,7 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
           <% end %>
           <%= if @recent_logs == [] do %>
-            <p class="font-sans text-sm/6 text-zinc-500">No logs captured yet.</p>
+            <p class="font-sans text-sm/6 text-zinc-500">No system logs yet.</p>
           <% end %>
         </div>
       </details>
