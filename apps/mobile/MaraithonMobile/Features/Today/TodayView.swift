@@ -261,7 +261,7 @@ struct TodayView: View {
 
 enum TodayViewCopy {
     static let snapshotSectionTitle = "Priority Snapshot"
-    static let focusSectionTitle = "Focus queue"
+    static let focusSectionTitle = "Today's focus"
     static let recentChatsSectionTitle = "Recent chats"
     static let openWorkTitle = "Open work"
     static let openWorkSubtitle = "Unfinished items"
@@ -273,8 +273,8 @@ enum TodayViewCopy {
     static let peopleSubtitle = "Relationships tracked"
     static let followUpTitle = "Needs follow-up"
     static let followUpSubtitle = "Relationships need attention"
-    static let emptyFocusTitle = "No focus items surfaced"
-    static let emptyFocusDescription = "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for the rest."
+    static let emptyFocusTitle = "Nothing urgent for today"
+    static let emptyFocusDescription = "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for everything else."
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
 

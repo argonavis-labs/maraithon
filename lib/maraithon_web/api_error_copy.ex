@@ -176,7 +176,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "invalid_batch",
       message:
-        "Some items were not accepted. Sync again from the companion app; Maraithon will keep the last successful data until then."
+        "Some items did not sync. Sync again from the companion app; Maraithon will keep the last successful data until then."
     }
   end
 

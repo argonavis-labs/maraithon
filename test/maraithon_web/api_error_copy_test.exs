@@ -104,7 +104,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert %{
              error: "invalid_batch",
              message:
-               "Some items were not accepted. Sync again from the companion app; Maraithon will keep the last successful data until then."
+               "Some items did not sync. Sync again from the companion app; Maraithon will keep the last successful data until then."
            } in copies
 
     assert %{
@@ -122,6 +122,12 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
       refute_leaks_internal_reason(copy.error)
       if Map.has_key?(copy, :message), do: refute_leaks_internal_reason(copy.message)
       refute Map.has_key?(copy, :reason)
+    end)
+
+    Enum.each(copies, fn copy ->
+      if Map.has_key?(copy, :message) do
+        refute copy.message =~ "accepted"
+      end
     end)
   end
 

@@ -6,7 +6,7 @@ struct TodayViewCopyTests {
     @Test
     func prioritySnapshotUsesConcreteOperationalLabels() {
         #expect(TodayViewCopy.snapshotSectionTitle == "Priority Snapshot")
-        #expect(TodayViewCopy.focusSectionTitle == "Focus queue")
+        #expect(TodayViewCopy.focusSectionTitle == "Today's focus")
         #expect(TodayViewCopy.recentChatsSectionTitle == "Recent chats")
         #expect(TodayViewCopy.openWorkTitle == "Open work")
         #expect(TodayViewCopy.overdueTitle == "Past due")
@@ -17,8 +17,8 @@ struct TodayViewCopyTests {
 
     @Test
     func emptyStatesReadLikeExecutiveBriefs() {
-        #expect(TodayViewCopy.emptyFocusTitle == "No focus items surfaced")
-        #expect(TodayViewCopy.emptyFocusDescription == "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for the rest.")
+        #expect(TodayViewCopy.emptyFocusTitle == "Nothing urgent for today")
+        #expect(TodayViewCopy.emptyFocusDescription == "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for everything else.")
         #expect(TodayViewCopy.emptyRecentChatsTitle == "No recent chats")
         #expect(TodayViewCopy.emptyRecentChatsDescription == "Start a chat when you need a draft, summary, or prioritization pass.")
     }
@@ -32,8 +32,7 @@ struct TodayViewCopyTests {
         #expect(!copy.contains("needs a decision"))
         #expect(!copy.contains("outstanding work"))
         #expect(!copy.contains("stale active relationships"))
-        #expect(!copy.contains("nothing urgent"))
+        #expect(!copy.contains("queue"))
         #expect(!exactCopy.contains("No Recent Chats"))
-        #expect(!exactCopy.contains("Nothing Urgent"))
     }
 }
