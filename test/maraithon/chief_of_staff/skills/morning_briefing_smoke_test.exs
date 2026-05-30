@@ -233,10 +233,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingSmokeTest do
     assert message.opts[:parse_mode] == "HTML"
     assert message.text =~ "<b>Today's Schedule</b>"
     assert message.text =~ "• <b>Prep for Dawn Nguyen</b>"
+    assert message.text =~ "Review Dawn and Kiln Studio context"
     refute message.text =~ "## Today's Schedule"
     refute message.text =~ "**Prep"
 
-    refute Enum.any?(messages, &String.contains?(&1.text, "Review Dawn and Kiln Studio context"))
+    assert Enum.any?(messages, &String.contains?(&1.text, "Review Dawn and Kiln Studio context"))
 
     keyboard = get_in(List.last(messages).opts, [:reply_markup, "inline_keyboard"]) || []
     assert keyboard |> List.flatten() |> Enum.any?(&(&1["text"] == "Review Open Work"))

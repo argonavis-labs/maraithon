@@ -797,6 +797,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "model output"
   end
 
+  test "quality verifier puts model todo next actions into the primary brief" do
+    brief = %{
+      "title" => "Monday, May 11 - Schedule prep",
+      "summary" => "One external meeting needs prep.",
+      "body" => "## Today's Schedule\n- **Prep for Dawn Nguyen** and Charlie Feng.",
+      "todos" => [
+        %{
+          "source" => "calendar",
+          "title" => "Prep for Dawn Nguyen",
+          "summary" =>
+            "Dawn Nguyen at Kiln Studio is evaluating the Runner design partner workflow.",
+          "next_action" => "Review Dawn and Kiln Studio context before the meeting.",
+          "dedupe_key" => "calendar:dawn-nguyen-prep",
+          "metadata" => %{
+            "relationship_context" => "Runner design partner evaluator",
+            "why_it_matters" => "Meeting prep affects the partner workflow decision."
+          }
+        }
+      ]
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, %{}, "llm")
+
+    assert "missing_model_todo_next_actions" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert String.starts_with?(
+             revised["body"],
+             "## Needs Your Attention\n- **Prep for Dawn Nguyen**: Review Dawn and Kiln Studio context before the meeting."
+           )
+
+    assert revised["body"] =~ "## Today's Schedule"
+
+    assert "model_todo_next_actions_visible_in_primary_brief" in verification[
+             "criteria"
+           ]
+  end
+
   test "source-backed fallback opens with ranked executive attention items" do
     brief =
       MorningBriefing.build_compact_fallback_brief(%{

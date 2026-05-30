@@ -1976,6 +1976,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
         "action_card_and_draft_work_is_named_without_internal_handles",
+        "model_todo_next_actions_visible_in_primary_brief",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
         "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
@@ -2050,6 +2051,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_action_stack
     )
     |> maybe_finding(
+      generation_mode == "llm" and model_todo_next_action_lines(brief, body) != [],
+      :missing_model_todo_next_actions
+    )
+    |> maybe_finding(
       generation_mode == "llm" and non_draft_items != [] and
         not non_draft_jobs_present?(body),
       :missing_non_draft_jobs
@@ -2063,6 +2068,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp revise_morning_brief(brief, brief_input, findings) do
     brief
+    |> maybe_drop_sparse_person_todos(findings)
+    |> maybe_prepend_model_todo_next_actions(findings)
     |> maybe_append_needs_attention(brief_input, findings)
     |> maybe_append_personal_calendar_context(brief_input, findings)
     |> maybe_append_week_prep(brief_input, findings)
@@ -2074,11 +2081,31 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
     |> maybe_append_non_draft_jobs(brief_input, findings)
-    |> maybe_drop_sparse_person_todos(findings)
+  end
+
+  defp maybe_prepend_model_todo_next_actions(brief, findings) do
+    if :missing_model_todo_next_actions in findings do
+      body = read_string(brief, "body", "")
+      lines = model_todo_next_action_lines(brief, body)
+
+      if lines == [] do
+        brief
+      else
+        heading =
+          if needs_attention_present?(body),
+            do: "## Next Actions",
+            else: "## Needs Your Attention"
+
+        prepend_body_section(brief, heading <> "\n" <> Enum.join(lines, "\n"))
+      end
+    else
+      brief
+    end
   end
 
   defp maybe_append_needs_attention(brief, brief_input, findings) do
-    if :missing_needs_attention in findings do
+    if :missing_needs_attention in findings and
+         not needs_attention_present?(read_string(brief, "body", "")) do
       lines =
         [
           calendar_conflicts(brief_input)
@@ -2313,6 +2340,47 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp model_todo_next_action_lines(brief, body) when is_map(brief) and is_binary(body) do
+    normalized_body = normalize_match_text(body)
+
+    brief
+    |> read_list("todos")
+    |> Enum.filter(&is_map/1)
+    |> Enum.map(&model_todo_next_action_line(&1, normalized_body))
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq_by(&normalize_match_text/1)
+    |> Enum.take(4)
+  end
+
+  defp model_todo_next_action_lines(_brief, _body), do: []
+
+  defp model_todo_next_action_line(todo, normalized_body) when is_map(todo) do
+    title =
+      todo
+      |> read_string("title", nil)
+      |> scrub_internal_action_handles()
+      |> truncate_text(120)
+
+    next_action =
+      todo
+      |> read_string("next_action", nil)
+      |> scrub_internal_action_handles()
+      |> truncate_text(220)
+
+    cond do
+      blank?(title) or blank?(next_action) ->
+        nil
+
+      String.contains?(normalized_body, normalize_match_text(next_action)) ->
+        nil
+
+      true ->
+        "- **#{title}**: #{next_action}"
+    end
+  end
+
+  defp model_todo_next_action_line(_todo, _normalized_body), do: nil
+
   defp append_body_section(brief, section) when is_map(brief) and is_binary(section) do
     body = read_string(brief, "body", "")
 
@@ -2320,6 +2388,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       brief
     else
       Map.put(brief, "body", [body, section] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
+    end
+  end
+
+  defp prepend_body_section(brief, section) when is_map(brief) and is_binary(section) do
+    body = read_string(brief, "body", "")
+
+    if blank?(section) or String.contains?(body, section) do
+      brief
+    else
+      Map.put(brief, "body", [section, body] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
     end
   end
 
