@@ -4649,7 +4649,7 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp event_preview(%{event_type: event_type}), do: event_type_summary(event_type)
-  defp event_preview(_activity), do: "Recorded Maraithon activity."
+  defp event_preview(_activity), do: "Maraithon updated this workspace."
 
   defp event_type_label(event_type) when is_binary(event_type) do
     normalized = String.downcase(event_type)
@@ -4671,11 +4671,11 @@ defmodule MaraithonWeb.DashboardLive do
         "Action updated"
 
       true ->
-        "Maraithon activity"
+        "Workspace update"
     end
   end
 
-  defp event_type_label(_event_type), do: "Maraithon activity"
+  defp event_type_label(_event_type), do: "Workspace update"
 
   defp product_payload_message(payload) when is_map(payload) do
     Enum.find_value(["message", "summary", "title", "description", "status", "action"], fn key ->
@@ -4693,20 +4693,26 @@ defmodule MaraithonWeb.DashboardLive do
 
     cond do
       String.contains?(normalized, ["fail", "error"]) ->
-        "Recorded a failed action."
+        "Maraithon could not finish this step. Review the latest automation status."
 
       String.contains?(normalized, ["complete", "success", "finish"]) ->
-        "Recorded completed work."
+        "Maraithon finished this update."
 
       String.contains?(normalized, ["start", "run", "claim"]) ->
-        "Recorded work in progress."
+        "Maraithon is working on this now."
+
+      String.contains?(normalized, "insight") ->
+        "Maraithon updated an insight."
+
+      String.contains?(normalized, ["effect", "action"]) ->
+        "Maraithon updated an action."
 
       true ->
-        "Recorded Maraithon activity."
+        "Maraithon updated this workspace."
     end
   end
 
-  defp event_type_summary(_event_type), do: "Recorded Maraithon activity."
+  defp event_type_summary(_event_type), do: "Maraithon updated this workspace."
 
   defp failure_details_preview(failure), do: RunErrorCopy.runtime_failure(failure)
 

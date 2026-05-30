@@ -85,7 +85,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
   test "renders operational diagnostics for admins only" do
     admin_email = "dashboard-admin@example.com"
 
-    {:ok, _agent} =
+    {:ok, agent} =
       create_agent(%{
         user_id: admin_email,
         behavior: "prompt_agent",
@@ -93,6 +93,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
         status: "running",
         started_at: DateTime.utc_now()
       })
+
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 1,
+      event_type: "tool_failed",
+      payload: %{
+        "message" =>
+          "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+      }
+    })
 
     conn = build_conn() |> log_in_admin_user(admin_email)
 
@@ -107,6 +117,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Platform logs"
     assert html =~ "Platform logs are not configured for this environment."
     assert html =~ "Technical notes"
+    assert html =~ "Maraithon could not finish this step. Review the latest automation status."
+    refute_html_contains(html, "DBConnection")
+    refute_html_contains(html, "token=secret")
+    refute_html_contains(html, "123456789")
+    refute_html_contains(html, "sarah@example.com")
   end
 
   test "renders memory context without internal confidence scoring", %{conn: conn} do
@@ -692,6 +707,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "Operational activity"
     refute html =~ "System logs"
     refute_html_contains(html, "Recorded a failed action.")
+    refute_html_contains(html, "Recorded Maraithon activity.")
     refute_html_contains(html, "Diagnostic details are hidden from this view.")
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
@@ -719,12 +735,24 @@ defmodule MaraithonWeb.DashboardLiveTest do
       payload: %{"summary" => "Prepared the renewal follow-up for review."}
     })
 
+    Repo.insert!(%Event{
+      agent_id: agent.id,
+      sequence_num: 2,
+      event_type: "effect_completed",
+      payload: %{
+        "message" =>
+          "DBConnection.ConnectionError token=secret chat_id=123456789 sarah@example.com stacktrace"
+      }
+    })
+
     {:ok, _view, html} = live(conn, "/dashboard")
 
     assert html =~ "Automation coverage"
     assert html =~ "Completed work"
     assert html =~ "Prepared the renewal follow-up for review."
+    assert html =~ "Maraithon finished this update."
     refute html =~ "effect_completed"
+    refute html =~ "Recorded completed work."
     refute html =~ "Automation activity"
   end
 
