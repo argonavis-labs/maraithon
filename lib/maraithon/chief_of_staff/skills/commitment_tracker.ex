@@ -698,7 +698,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     if length(open_todos) > 0 do
       "Open work review: check existing work"
     else
-      "Open work review needs source review"
+      "Open work review: fresh source check needed"
     end
   end
 
@@ -708,13 +708,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
     cond do
       open_count > 0 ->
-        "Start with #{count_phrase(open_count, "existing open item", "existing open items")}; no new commitments were saved from this pass."
+        "Start with #{count_phrase(open_count, "existing open item", "existing open items")} already in open work; this pass did not add a new commitment."
 
       checked_count > 0 ->
-        "No new commitments were saved from this pass; review the checked source threads before assuming open work is clear."
+        "Checked sources did not show a new commitment clearly enough to save; keep existing open work as the source of truth."
 
       true ->
-        "No reliable commitment review was available; refresh Gmail and Calendar, then check the most urgent thread."
+        "Maraithon did not complete a fresh source check for this review, so it did not clear or create open work."
     end
   end
 
@@ -722,7 +722,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     case Enum.take(open_todos, 5) do
       [] ->
         [
-          "- No existing open commitment is already saved in open work. Do not treat that as clear; check the specific thread before assuming nothing is owed."
+          "- No open commitment is already saved. Treat this review as incomplete until a fresh source check covers the relevant thread."
         ]
 
       todos ->
@@ -869,9 +869,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     [
       "- No new commitments were saved because the checked source evidence did not clearly show a new promise.",
       if(checked_count > 0,
-        do: "- Anything outside the checked Gmail, Calendar, and existing open work is unknown.",
-        else:
-          "- Gmail, Calendar, and source threads still need a fresh pass before you rely on open work."
+        do:
+          "- Anything outside the checked Gmail, Calendar, and existing open work still needs review.",
+        else: "- Gmail, Calendar, and source threads were not freshly checked in this review."
       )
     ]
   end
@@ -888,7 +888,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "Today's move: review the next meeting for promises you owe before the day gets busy."
 
       true ->
-        "Today's move: refresh Gmail and Calendar, then check the one thread most likely to contain a promise."
+        "Today's move: run a fresh source check before clearing open work for the day."
     end
   end
 

@@ -281,15 +281,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Open work review - 2026-05-09"
-    assert brief.summary =~ "No reliable commitment review was available"
+    assert brief.summary =~ "did not complete a fresh source check"
     assert brief.body =~ "## Checked"
     assert brief.body =~ "## Unknowns"
-    assert brief.body =~ "Today's move: refresh Gmail and Calendar"
+    assert brief.body =~ "Today's move: run a fresh source check"
     assert brief.metadata["generation_mode"] == "llm"
     refute brief.error_message
-    refute brief.body =~ "Open work review needs source review"
+    refute brief.body =~ "Open work review: fresh source check needed"
     refute brief.body =~ "Commitment Tracker"
     refute brief.summary =~ "No new commitments were found"
+    refute brief.summary =~ "No reliable commitment review"
+    refute brief.body =~ "refresh Gmail"
   end
 
   test "invalid model output records a checked fallback without heuristic todo creation", %{
@@ -327,21 +329,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute payload.error_message =~ "model synthesis"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Open work review needs source review"
+    assert brief.title == "Open work review: fresh source check needed"
     assert brief.cadence == "commitment_tracker"
     assert brief.error_message =~ "checked-source fallback"
     assert brief.error_message =~ "model_response_invalid"
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
-    assert brief.summary =~ "No reliable commitment review was available"
+    assert brief.summary =~ "did not complete a fresh source check"
     assert brief.body =~ "## Needs Your Attention"
     assert brief.body =~ "## Unknowns"
-    assert brief.body =~ "No existing open commitment is already saved in open work"
+    assert brief.body =~ "No open commitment is already saved"
+    assert brief.body =~ "Treat this review as incomplete"
     assert brief.body =~ "Today's move:"
 
     assert brief.body =~
              "No new commitments were saved because the checked source evidence did not clearly show a new promise"
 
+    refute brief.summary =~ "No reliable commitment review"
+    refute brief.body =~ "refresh Gmail"
     refute brief.body =~ "your list"
 
     refute brief.body =~ "classified safely"
@@ -448,6 +453,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.title == "Open work review: check existing work"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "Start with 1 existing open item"
+    assert brief.summary =~ "already in open work"
     assert brief.body =~ "Send Jordan the investor update"
     assert brief.body =~ "Due May 11, 2026 at 9:00 AM ET"
     refute brief.body =~ "1:00 PM UTC"
