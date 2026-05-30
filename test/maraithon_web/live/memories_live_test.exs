@@ -64,6 +64,27 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     refute html =~ "not_relevant"
   end
 
+  test "renders memory filter labels without internal scope language", %{conn: conn} do
+    {:ok, memory} =
+      Memory.write(@user_email, %{
+        "kind" => "system_note",
+        "scope" => "agent",
+        "title" => "Briefing cadence",
+        "content" => "Use the workday briefing cadence for this person.",
+        "source" => "runtime"
+      })
+
+    {:ok, _view, html} =
+      live(conn, "/operator/memories?status=all&kind=system_note&scope=agent&id=#{memory.id}")
+
+    assert html =~ ~r/<option value="agent">\s*Automation\s*<\/option>/
+    assert html =~ ~r/<option value="system">\s*Maraithon\s*<\/option>/
+    assert html =~ ~r/<option value="system_note">\s*Maraithon note\s*<\/option>/
+    refute html =~ ~r/<option value="agent">\s*Agent\s*<\/option>/
+    refute html =~ ~r/<option value="system">\s*System\s*<\/option>/
+    refute html =~ ~r/<option value="system_note">\s*System note\s*<\/option>/
+  end
+
   test "renders memory timestamps in the Chief of Staff timezone", %{conn: conn} do
     {:ok, _agent} =
       Agents.create_agent(%{

@@ -411,6 +411,12 @@ defmodule MaraithonWeb.MemoriesLive do
   defp kind_color("correction"), do: "purple"
   defp kind_color(_kind), do: "zinc"
 
+  defp label("agent"), do: "Automation"
+  defp label("system"), do: "Maraithon"
+  defp label("user"), do: "You"
+  defp label("relevance_feedback"), do: "Feedback"
+  defp label("system_note"), do: "Maraithon note"
+
   defp label(value) when is_binary(value) do
     value
     |> String.replace("_", " ")
