@@ -135,4 +135,16 @@ struct TodoFilteringTests {
         #expect(!copy.contains("you are clear"))
         #expect(!copy.contains("all saved work is completed"))
     }
+
+    @Test
+    func workListSaveFailureCopyIsVisibleAndSpecific() {
+        #expect(TodosViewCopy.actionWarningTitle == "Work item update was not saved")
+        #expect(TodosViewCopy.dismissActionWarningAccessibilityLabel == "Dismiss work item warning")
+        #expect(TodosViewCopy.localUpdateFailedMessage == "Could not update the work item on this device. Your work list stayed unchanged.")
+        #expect(TodosViewCopy.localDeleteFailedMessage == "Could not delete the work item on this device. Your work list stayed unchanged.")
+        #expect(TodosViewCopy.remoteUpdateSaveFailedMessage == "Maraithon updated the work item, but this device could not save the latest copy. Refresh work to reconcile.")
+        #expect(TodosViewCopy.remoteDeleteSaveFailedMessage == "Maraithon deleted the work item, but this device could not remove the local copy. Refresh work to reconcile.")
+        #expect(TodosViewCopy.restoreFailedMessage == "Could not restore the work item on this device. Refresh work to reconcile.")
+        #expect(TodosViewCopy.localSaveFailureLabels.count == 7)
+    }
 }

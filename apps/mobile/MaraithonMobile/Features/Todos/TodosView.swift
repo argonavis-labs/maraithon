@@ -40,35 +40,14 @@ struct TodosView: View {
                 }
 
                 if let actionErrorMessage {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .padding(.top, 3)
-
-                        Text(actionErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.primary)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Spacer(minLength: 8)
-
-                        Button {
-                            self.actionErrorMessage = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("Dismiss work item error")
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground))
-                    .overlay(alignment: .bottom) {
-                        Divider()
-                    }
+                    SyncIssueBanner(
+                        title: TodosViewCopy.actionWarningTitle,
+                        message: actionErrorMessage,
+                        buttonTitle: nil,
+                        retry: nil,
+                        dismissAccessibilityLabel: TodosViewCopy.dismissActionWarningAccessibilityLabel,
+                        dismiss: { self.actionErrorMessage = nil }
+                    )
                 }
 
                 List {
@@ -169,10 +148,12 @@ struct TodosView: View {
         let completed = !todo.isCompleted
         actionErrorMessage = nil
         todo.setCompleted(completed)
-        try? modelContext.save()
+        guard saveLocalWorkChange(failureMessage: TodosViewCopy.localUpdateFailedMessage) else {
+            return
+        }
 
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
-        Task {
+        Task { @MainActor in
             do {
                 let remote = try await MobileAPIClient().updateTodo(
                     sessionToken: sessionToken,
@@ -180,11 +161,12 @@ struct TodosView: View {
                     payload: ["status": completed ? "done" : "open"]
                 )
                 ProductionDataSync.apply(remote, to: todo)
-                try? modelContext.save()
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)
             } catch {
                 todo.setCompleted(!completed)
-                try? modelContext.save()
-                actionErrorMessage = todoActionMessage("Could not update work item.", error: error)
+                if saveLocalWorkChange(failureMessage: TodosViewCopy.restoreFailedMessage) {
+                    actionErrorMessage = todoActionMessage("Could not update work item.", error: error)
+                }
             }
         }
     }
@@ -199,18 +181,18 @@ struct TodosView: View {
 
         guard let sessionToken = sessionStore.user?.sessionToken else {
             modelContext.delete(todo)
-            try? modelContext.save()
+            _ = saveLocalWorkChange(failureMessage: TodosViewCopy.localDeleteFailedMessage)
             return
         }
 
-        Task {
+        Task { @MainActor in
             do {
                 _ = try await MobileAPIClient().deleteTodo(sessionToken: sessionToken, id: todo.id)
                 modelContext.delete(todo)
-                try? modelContext.save()
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteDeleteSaveFailedMessage)
             } catch let error as MobileAPIError where error.isNotFound {
                 modelContext.delete(todo)
-                try? modelContext.save()
+                _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteDeleteSaveFailedMessage)
             } catch {
                 actionErrorMessage = todoActionMessage("Could not delete work item.", error: error)
             }
@@ -225,5 +207,39 @@ struct TodosView: View {
 
     private func todoActionMessage(_ prefix: String, error: Error) -> String {
         "\(prefix) \(MobileErrorCopy.message(for: error))"
+    }
+
+    @discardableResult
+    private func saveLocalWorkChange(failureMessage: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = failureMessage
+            return false
+        }
+    }
+}
+
+enum TodosViewCopy {
+    static let actionWarningTitle = "Work item update was not saved"
+    static let dismissActionWarningAccessibilityLabel = "Dismiss work item warning"
+    static let localUpdateFailedMessage = "Could not update the work item on this device. Your work list stayed unchanged."
+    static let localDeleteFailedMessage = "Could not delete the work item on this device. Your work list stayed unchanged."
+    static let remoteUpdateSaveFailedMessage = "Maraithon updated the work item, but this device could not save the latest copy. Refresh work to reconcile."
+    static let remoteDeleteSaveFailedMessage = "Maraithon deleted the work item, but this device could not remove the local copy. Refresh work to reconcile."
+    static let restoreFailedMessage = "Could not restore the work item on this device. Refresh work to reconcile."
+
+    static var localSaveFailureLabels: [String] {
+        [
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
+            localUpdateFailedMessage,
+            localDeleteFailedMessage,
+            remoteUpdateSaveFailedMessage,
+            remoteDeleteSaveFailedMessage,
+            restoreFailedMessage
+        ]
     }
 }

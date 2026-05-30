@@ -15,6 +15,8 @@ struct CRMFilteringTests {
         #expect(ContactEditorCopy.contextPlaceholder == "Company, role, or context")
         #expect(ContactEditorCopy.notesPlaceholder == "What matters about this relationship")
         #expect(ContactEditorCopy.newNavigationTitle == "New person")
+        #expect(CRMViewCopy.actionWarningTitle == "Relationship update was not saved")
+        #expect(CRMViewCopy.dismissActionWarningAccessibilityLabel == "Dismiss relationship update warning")
         #expect(CRMViewCopy.reachedOutActionTitle == "Reached out")
         #expect(CRMViewCopy.addPersonAccessibilityLabel == "Add person")
         #expect(!ContactDetailCopy.visibleLabels.contains("Reach"))
@@ -22,6 +24,14 @@ struct CRMFilteringTests {
         #expect(!ContactDetailCopy.visibleLabels.contains("Update the relationship timestamp"))
         #expect(!ContactEditorCopy.visibleLabels.contains("New Person"))
         #expect(!ContactEditorCopy.visibleLabels.contains("Company or context"))
+    }
+
+    @Test
+    func relationshipListSaveFailureCopyIsVisibleAndSpecific() {
+        #expect(CRMViewCopy.localSaveFailedMessage == "Could not save the relationship update on this device. Your people list stayed unchanged.")
+        #expect(CRMViewCopy.remoteSaveFailedMessage == "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile.")
+        #expect(CRMViewCopy.restoreFailedMessage == "Could not restore this relationship on this device. Refresh people to reconcile.")
+        #expect(CRMViewCopy.localSaveFailureLabels.count == 5)
     }
 
     @Test

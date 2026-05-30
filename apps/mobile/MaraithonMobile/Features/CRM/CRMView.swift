@@ -44,10 +44,11 @@ struct CRMView: View {
                 if let actionErrorMessage {
                     Section {
                         SyncIssueBanner(
-                            title: "Relationship update was not saved",
+                            title: CRMViewCopy.actionWarningTitle,
                             message: actionErrorMessage,
                             buttonTitle: nil,
                             retry: nil,
+                            dismissAccessibilityLabel: CRMViewCopy.dismissActionWarningAccessibilityLabel,
                             dismiss: { self.actionErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
@@ -156,11 +157,13 @@ struct CRMView: View {
         let snapshot = CRMContactSnapshot(contact: contact)
         actionErrorMessage = nil
         action.apply(to: contact)
-        try? modelContext.save()
+        guard saveLocalRelationshipChange(failureMessage: CRMViewCopy.localSaveFailedMessage) else {
+            return
+        }
 
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
 
-        Task {
+        Task { @MainActor in
             do {
                 let remote = try await MobileAPIClient().updatePerson(
                     sessionToken: sessionToken,
@@ -168,11 +171,12 @@ struct CRMView: View {
                     payload: ProductionDataSync.personPayload(from: contact)
                 )
                 ProductionDataSync.apply(remote, to: contact)
-                try? modelContext.save()
+                _ = saveLocalRelationshipChange(failureMessage: CRMViewCopy.remoteSaveFailedMessage)
             } catch {
                 snapshot.restore(to: contact)
-                try? modelContext.save()
-                actionErrorMessage = "\(action.failurePrefix) \(MobileErrorCopy.message(for: error))"
+                if saveLocalRelationshipChange(failureMessage: CRMViewCopy.restoreFailedMessage) {
+                    actionErrorMessage = "\(action.failurePrefix) \(MobileErrorCopy.message(for: error))"
+                }
             }
         }
     }
@@ -208,9 +212,36 @@ struct CRMView: View {
         statusFilter = requestedFilter
         appNavigation.requestedPeopleFilter = nil
     }
+
+    @discardableResult
+    private func saveLocalRelationshipChange(failureMessage: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = failureMessage
+            return false
+        }
+    }
 }
 
 enum CRMViewCopy {
+    static let actionWarningTitle = "Relationship update was not saved"
+    static let dismissActionWarningAccessibilityLabel = "Dismiss relationship update warning"
+    static let localSaveFailedMessage = "Could not save the relationship update on this device. Your people list stayed unchanged."
+    static let remoteSaveFailedMessage = "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile."
+    static let restoreFailedMessage = "Could not restore this relationship on this device. Refresh people to reconcile."
     static let reachedOutActionTitle = "Reached out"
     static let addPersonAccessibilityLabel = "Add person"
+
+    static var localSaveFailureLabels: [String] {
+        [
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
+            localSaveFailedMessage,
+            remoteSaveFailedMessage,
+            restoreFailedMessage
+        ]
+    }
 }
