@@ -972,19 +972,19 @@ defmodule MaraithonWeb.DashboardLive do
             note={automation_status_note(@agents)}
           />
           <.overview_stat
-            label="Assistant work"
-            value={@total_spend.llm_calls}
-            note="last 30 days"
+            label="Open work"
+            value={@open_todo_count}
+            note={open_work_status_note(@open_todo_count)}
           />
           <.overview_stat
-            label="Spend"
-            value={"$#{Float.round(@total_spend.total_cost, 2)}"}
-            note="last 30 days"
+            label="Connected services"
+            value={@connected_provider_count}
+            note={connected_services_note(@connected_provider_count)}
           />
           <.overview_stat
-            label="Queued actions"
-            value={@queue_metrics.effects.pending}
-            note={queued_action_note(@queue_metrics.effects.failed)}
+            label="Projects"
+            value={length(@projects)}
+            note={projects_status_note(@projects)}
           />
         </dl>
       </section>
@@ -3391,9 +3391,17 @@ defmodule MaraithonWeb.DashboardLive do
     "#{active} active · #{needs_attention} need attention"
   end
 
-  defp queued_action_note(0), do: "none failed"
-  defp queued_action_note(1), do: "1 failed"
-  defp queued_action_note(count), do: "#{count} failed"
+  defp open_work_status_note(0), do: "nothing waiting"
+  defp open_work_status_note(1), do: "1 item ready to review"
+  defp open_work_status_note(count), do: "#{count} items ready to review"
+
+  defp connected_services_note(0), do: "connect apps for context"
+  defp connected_services_note(1), do: "1 service feeding context"
+  defp connected_services_note(count), do: "#{count} services feeding context"
+
+  defp projects_status_note([]), do: "add project context"
+  defp projects_status_note([_project]), do: "1 active context"
+  defp projects_status_note(projects), do: "#{length(projects)} active contexts"
 
   defp automation_status_label("running"), do: "active"
   defp automation_status_label("degraded"), do: "needs attention"

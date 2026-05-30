@@ -52,7 +52,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "collect context and recommend next work"
     assert html =~ "No open follow-ups yet."
     assert html =~ "begin monitoring your work"
-    assert html =~ "none failed"
+    assert html =~ "nothing waiting"
+    refute html =~ "none failed"
     refute has_element?(view, "h2", "Health")
     refute html =~ "Operational activity"
     refute html =~ "Needs attention"
@@ -776,10 +777,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Automations"
     assert html =~ "active"
     assert html =~ "need attention"
-    assert html =~ "Assistant work"
+    assert html =~ "Open work"
+    assert html =~ "nothing waiting"
+    assert html =~ "Connected services"
+    assert html =~ "connect apps for context"
+    assert html =~ "Projects"
+    assert html =~ "add project context"
+    refute html =~ "Assistant work"
     refute html =~ "LLM calls"
-    assert html =~ "Spend"
-    assert html =~ "Queued actions"
+    refute html =~ "Spend"
+    refute html =~ "Queued actions"
     assert html =~ "Prompt automation"
     refute html =~ "Pending effects"
     refute html =~ "Prompt agent"
@@ -805,6 +812,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
     assert html =~ "Reply to billing thread"
     assert html =~ "1 open work item is ready to review."
+    assert html =~ "1 item ready to review"
     refute html =~ "open cards"
     assert has_element?(view, "a[href='/todos']", "Open Work")
 
