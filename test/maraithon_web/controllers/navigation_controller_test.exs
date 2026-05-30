@@ -226,6 +226,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Apps"
       assert html =~ "GitHub"
+      assert html =~ "No accounts connected."
+      refute html =~ "No connected accounts yet."
       refute html =~ "Connection Setup"
       refute html =~ "Return URLs"
       refute html =~ "Setup Checklist"
