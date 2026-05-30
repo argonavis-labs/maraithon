@@ -173,7 +173,7 @@ defmodule Maraithon.BriefsTest do
     refute Enum.any?(Briefs.list_pending(10), &(&1.id == updated.id))
   end
 
-  test "source-backed fallback briefs keep executive action buttons", %{
+  test "checked fallback briefs keep executive action buttons", %{
     user_id: user_id,
     agent: agent
   } do
@@ -184,7 +184,7 @@ defmodule Maraithon.BriefsTest do
                "summary" => "Start with 2 open follow-ups; anything absent here is unknown.",
                "body" => "## Active Follow-Ups\n- **Reply to board deck thread**",
                "scheduled_for" => DateTime.utc_now(),
-               "dedupe_key" => "brief:morning:source-fallback-buttons",
+               "dedupe_key" => "brief:morning:checked-fallback-buttons",
                "error_message" => "llm_call_failed: {:incomplete_response, :max_output_tokens}",
                "metadata" => %{"generation_mode" => "source_fallback"}
              })

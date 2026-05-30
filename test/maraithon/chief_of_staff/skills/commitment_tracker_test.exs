@@ -54,7 +54,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert input["timezone_offset_hours"] == -4
   end
 
-  test "builds a source-backed prompt and persists model-emitted commitment work items", %{
+  test "builds a checked prompt and persists model-emitted commitment work items", %{
     user_id: user_id,
     agent: agent
   } do
@@ -259,7 +259,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     response = %{
       content: """
-      Here is the source-backed commitment report.
+      Here is the checked commitment report.
 
       ```json
       #{report_json}
@@ -286,7 +286,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute brief.summary =~ "No new commitments were found"
   end
 
-  test "invalid model output records a source-backed fallback without heuristic todo creation", %{
+  test "invalid model output records a checked fallback without heuristic todo creation", %{
     user_id: user_id,
     agent: agent
   } do

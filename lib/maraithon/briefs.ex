@@ -469,7 +469,7 @@ defmodule Maraithon.Briefs do
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other
 
-  # A source-backed fallback is still a usable brief. It can carry diagnostic
+  # A checked-source fallback is still a usable brief. It can carry diagnostic
   # context for operators without losing the executive's follow-up actions.
   defp failed_brief?(%Brief{} = brief) do
     case read_string(brief.metadata || %{}, "generation_mode", nil) do

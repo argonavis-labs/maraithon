@@ -114,7 +114,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.HolidayRadarTest do
 
     response = %{
       content: """
-      Here is the source-backed holiday radar pass.
+      Here is the checked holiday radar pass.
 
       ```json
       #{Jason.encode!(radar_payload)}

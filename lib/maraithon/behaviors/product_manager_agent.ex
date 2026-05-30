@@ -477,7 +477,7 @@ defmodule Maraithon.Behaviors.ProductManagerAgent do
     #{snapshot_json}
 
     Task:
-    - Propose the next #{ticket_limit} highest-leverage backlog tickets for this project.
+    - Propose the next #{ticket_limit} highest-impact backlog tickets for this project.
     - Think like a PM, not an implementation planner: prioritize user value, proof of product progress, adoption, workflow leverage, and dogfood loops.
     - Use the goals doc, project memory, open tasks, README, root structure, recent commits, open issues, and open pull requests as evidence.
     - Avoid duplicates of existing tasks or in-flight issues unless the existing item is too vague and should be replaced by a clearer ticket.

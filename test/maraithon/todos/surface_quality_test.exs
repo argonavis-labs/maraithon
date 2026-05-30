@@ -33,7 +33,7 @@ defmodule Maraithon.Todos.SurfaceQualityTest do
     assert "generic_copy" in quality["warnings"]
   end
 
-  test "personalized source-backed copy remains surfaceable" do
+  test "personalized checked copy remains surfaceable" do
     quality =
       SurfaceQuality.assess(%{
         "id" => "todo-alex",

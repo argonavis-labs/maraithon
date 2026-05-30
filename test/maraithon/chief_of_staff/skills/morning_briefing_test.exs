@@ -72,7 +72,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert input["timezone_offset_hours"] == -4
   end
 
-  test "builds a source-backed input and records an LLM synthesized brief", %{
+  test "builds a checked input and records an LLM synthesized brief", %{
     user_id: user_id,
     agent: agent
   } do
@@ -431,7 +431,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       Here is the briefing JSON:
 
       ```json
-      {"title":"Thursday, May 7 - Review the launch note","summary":"One checked priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before lower-signal inbox.","todos":[]}
+      {"title":"Thursday, May 7 - Review the launch note","summary":"One checked priority is ready.","body":"## Needs Your Attention\\n- Review the Runner launch note before inbox triage.","todos":[]}
       ```
       """
     }
@@ -633,7 +633,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert String.ends_with?(
              revised["body"],
-             "Today's move: review or clear the pending action-card stack before opening lower-signal inbox."
+             "Today's move: review or clear the pending action stack before inbox triage."
            )
 
     refute revised["body"] =~ "actc_"
@@ -642,9 +642,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
   test "quality verifier surfaces stale or unavailable sources before the final directive" do
     brief = %{
       "title" => "Saturday, May 30 - Operational brief",
-      "summary" => "Start with the highest-leverage source-backed item.",
+      "summary" => "Start with the most important checked item.",
       "body" =>
-        "## Needs Your Attention\n- Clear the first source-backed item before lower-signal inbox.\n\nToday's move: clear the first source-backed item.",
+        "## Needs Your Attention\n- Clear the first checked item before inbox triage.\n\nToday's move: clear the first checked item.",
       "todos" => []
     }
 
@@ -692,7 +692,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert String.ends_with?(
              revised["body"],
-             "Today's move: clear the first source-backed item."
+             "Today's move: clear the first checked item."
            )
   end
 
@@ -756,11 +756,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Charlie Feng"
   end
 
-  test "quality verifier patches omitted body-backed inbox and Slack triage" do
+  test "quality verifier patches omitted message-backed inbox and Slack triage" do
     brief = %{
       "title" => "Tuesday, May 12 - Generic morning",
       "summary" => "A generic priority.",
-      "body" => "## Needs Your Attention\n- Protect the work block before lower-signal inbox.",
+      "body" => "## Needs Your Attention\n- Protect the work block before inbox triage.",
       "todos" => []
     }
 
@@ -937,7 +937,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
            ]
   end
 
-  test "source-backed fallback opens with ranked executive attention items" do
+  test "checked fallback opens with ranked executive attention items" do
     brief =
       MorningBriefing.build_compact_fallback_brief(%{
         "date" => "2026-05-27",
@@ -1028,7 +1028,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief["title"] == "Wednesday, May 27 - Personal logistics first, then work triage"
 
     assert temperature_read ==
-             "This is a personal-first day: protect the first family commitment, then clear source-backed work before inbox drift."
+             "This is a personal-first day: protect the first family commitment, then clear checked work before inbox drift."
 
     assert attention_section =~ "## Needs Your Attention"
     assert length(attention_lines) in 4..6
@@ -1051,7 +1051,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief["body"] =~ "Today's move:"
   end
 
-  test "invalid model output records a compact source-backed fallback briefing",
+  test "invalid model output records a compact checked fallback briefing",
        %{
          user_id: user_id,
          agent: agent
@@ -1095,7 +1095,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
 
-    assert brief.title == "Thursday, May 7 - Clear open commitments before lower-signal inbox"
+    assert brief.title == "Thursday, May 7 - Clear open commitments before inbox triage"
     assert brief.status == "pending"
     assert brief.error_message =~ "model_response_invalid"
     assert brief.metadata["generation_mode"] == "source_fallback"
@@ -1110,7 +1110,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief.body =~ "finish_reason"
   end
 
-  test "model provider errors record a compact source-backed fallback briefing", %{
+  test "model provider errors record a compact checked fallback briefing", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1386,7 +1386,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       Briefs.record(user_id, agent.id, %{
         "cadence" => "morning",
         "title" => "Thursday morning briefing",
-        "summary" => "Existing source-backed briefing for the local day.",
+        "summary" => "Existing checked briefing for the local day.",
         "body" => "The briefing already exists for this local date.",
         "status" => "sent",
         "scheduled_for" => now,

@@ -858,7 +858,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp fallback_commitment_move(open_todos, inbox_count, sent_count, calendar_count) do
     cond do
       length(open_todos) > 0 ->
-        "Today's move: clear or explicitly keep the first open item before opening lower-signal inbox."
+        "Today's move: clear or explicitly keep the first open item before inbox triage."
 
       inbox_count + sent_count > 0 ->
         "Today's move: inspect the highest-stakes recent thread and decide whether you owe a reply."
@@ -955,7 +955,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp append_todo_write_summary(report, {:error, _reason}) do
     append_report_body(
       report,
-      "\nMaraithon found possible commitments, but could not save them as open work. Review the source-backed summary above before acting."
+      "\nMaraithon found possible commitments, but could not save them as open work. Review the checked summary above before acting."
     )
   end
 

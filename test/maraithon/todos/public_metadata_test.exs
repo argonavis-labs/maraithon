@@ -13,7 +13,7 @@ defmodule Maraithon.Todos.PublicMetadataTest do
         "source_item_id" => "gmail-456",
         "confidence" => 0.96,
         "model_rationale" => "Model score says this matters.",
-        "source_health" => "88% source-backed",
+        "source_health" => "88% checked",
         "token" => "secret-token",
         "record" => %{"person" => "Michael"}
       }

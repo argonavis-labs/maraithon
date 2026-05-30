@@ -892,7 +892,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         Enum.any?(todos, &(Map.get(&1, "source_item_id") || Map.get(&1, "dedupe_key"))),
-        "compact fallback todos must remain source-backed for action cards"
+        "compact fallback todos must remain checked for action cards"
       )
 
     scenario_result(scenario, findings, %{response: nil, tool_history: []})
@@ -1076,7 +1076,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       []
       |> require_finding(
         quality["surfaceable"] == true and quality["score"] >= 95,
-        "source-backed todo with person/company/why-now context must score as surfaceable"
+        "checked todo with person/company/why-now context must score as surfaceable"
       )
       |> require_finding(
         weak_quality["surfaceable"] == false and "source_evidence" in weak_quality["missing"],
@@ -1122,7 +1122,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       )
       |> require_finding(
         String.contains?(to_string(ActionCards.evidence_excerpt(card)), "artifact status"),
-        "decision card must carry source-backed evidence"
+        "decision card must carry checked evidence"
       )
       |> require_finding(
         "important" in Map.get(card, "available_buttons", []) and

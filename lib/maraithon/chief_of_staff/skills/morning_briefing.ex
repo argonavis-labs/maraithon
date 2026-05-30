@@ -1262,7 +1262,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        If body_status is available_truncated, treat body as the selected bounded source excerpt
        for that message and keep uncertainty visible when the excerpt is insufficient. If
        body_available is false, treat that email as unreviewable source degradation and do not
-       surface it as finance, school, marketing, urgent, or actionable unless another body-backed
+       surface it as finance, school, marketing, urgent, or actionable unless another message-backed
        source supports that conclusion.
 
        Local source rule:
@@ -1290,7 +1290,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        meeting dossier. For each required external meeting, synthesize the executive read:
        who the person is, what the company or practice does, why the meeting likely matters
        to the operator's work, what fit or risk they should test, and the concrete pre/post-call
-       next step. Do not collapse a source-backed external meeting into a generic "creative
+       next step. Do not collapse a verified external meeting into a generic "creative
        vendor" or "intro chat" label when the page context supports a richer prep note.
        When a source page gives concrete facts such as services, pricing, operating model,
        work history, background, customer profile, or partnership angle, include the most
@@ -1350,7 +1350,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        Response budget rule:
        Return compact executive JSON that can finish well under the token budget. The body should
        be concise and scannable: quiet days can be short, while packed days can run up to roughly
-       2,200 words when conflicts, commitments, and action-card stacks justify it. Include every
+       2,200 words when conflicts, commitments, and pending actions justify it. Include every
        required meeting and required commercial thread, but compress lower-priority context instead
        of expanding it. Emit todos only for durable work worth a separate Done/Dismiss decision.
        Each todo must be one concrete action with source_item_id or dedupe_key when available,
@@ -1412,7 +1412,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   @doc """
-  Builds a compact source-backed brief when model synthesis cannot produce a
+  Builds a compact checked brief when model synthesis cannot produce a
   valid JSON briefing.
   """
   def build_compact_fallback_brief(brief_input, error_message \\ "model synthesis unavailable")
@@ -1581,10 +1581,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "Resolve the calendar conflict before work triage"
 
         commitment_count > 0 ->
-          "Clear open commitments before lower-signal inbox"
+          "Clear open commitments before inbox triage"
 
         open_todos != [] ->
-          "Clear source-backed follow-ups"
+          "Clear checked follow-ups"
 
         required_threads != [] ->
           "Commercial threads need a decision"
@@ -1647,7 +1647,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         action_stack_items(brief_input)
         |> Enum.take(1)
         |> Enum.map(fn item ->
-          "- **Pending action card**: #{action_stack_item_label(item)}. Review or clear it before lower-signal inbox."
+          "- **Pending action**: #{action_stack_item_label(item)}. Review or clear it before inbox triage."
         end),
         required_threads
         |> Enum.take(1)
@@ -1669,7 +1669,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       case lines do
         [] ->
           [
-            "- **Start with checked priorities**: this brief only uses sources Maraithon could verify; review calendar and open work before lower-signal inbox."
+            "- **Start with checked priorities**: this brief only uses sources Maraithon could verify; review calendar and open work before inbox triage."
           ]
 
         lines ->
@@ -1928,13 +1928,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           "Today's move: handle the first personal/family item before work triage."
 
         commitment_lines != [] ->
-          "Today's move: clear or explicitly keep the first open commitment before lower-signal inbox."
+          "Today's move: clear or explicitly keep the first open commitment before inbox triage."
 
         open_todos != [] ->
-          "Today's move: clear or explicitly keep the first open follow-up before lower-signal inbox."
+          "Today's move: clear or explicitly keep the first open follow-up before inbox triage."
 
         required_threads != [] ->
-          "Today's move: decide which commercial thread needs your reply before opening lower-signal inbox."
+          "Today's move: decide which commercial thread needs your reply before inbox triage."
 
         today_events != [] ->
           "Today's move: review the next calendar item and prep the decision or ask before the meeting."
@@ -2217,7 +2217,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           action_stack_items(brief_input)
           |> Enum.take(2)
           |> Enum.map(fn item ->
-            "- **Pending action card**: #{action_stack_item_label(item)}. Review or clear it before lower-signal inbox."
+            "- **Pending action**: #{action_stack_item_label(item)}. Review or clear it before inbox triage."
           end)
         ]
         |> List.flatten()
@@ -2227,7 +2227,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         case lines do
           [] ->
             [
-              "- **Start with checked priorities**: review the sections below before starting lower-signal inbox work."
+              "- **Start with checked priorities**: review the sections below before inbox triage."
             ]
 
           lines ->
@@ -2461,47 +2461,47 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp todays_move_directive(brief_input) do
     cond do
       personal_calendar_events(brief_input) != [] ->
-        "Today's move: protect the first personal/family commitment, then use the first desk block for source-backed work."
+        "Today's move: protect the first personal/family commitment, then use the first desk block for checked work."
 
       calendar_conflicts(brief_input) != [] ->
-        "Today's move: resolve the first calendar conflict before opening lower-signal inbox."
+        "Today's move: resolve the first calendar conflict before inbox triage."
 
       action_stack_items(brief_input) != [] ->
-        "Today's move: review or clear the pending action-card stack before opening lower-signal inbox."
+        "Today's move: review or clear the pending action stack before inbox triage."
 
       commitments_present?(brief_input) ->
-        "Today's move: clear or explicitly keep the first open commitment before lower-signal inbox."
+        "Today's move: clear or explicitly keep the first open commitment before inbox triage."
 
       inbox_triage_items(brief_input) != [] ->
-        "Today's move: answer the highest-leverage body-backed email before opening the rest of inbox."
+        "Today's move: answer the most important email with a concrete ask before opening the rest of inbox."
 
       slack_triage_items(brief_input) != [] ->
-        "Today's move: resolve the highest-leverage Slack ask before passive channel scanning."
+        "Today's move: resolve the most important Slack ask before passive channel scanning."
 
       weekend_brief?(brief_input) ->
         "Today's move: prep next week's meetings and family logistics before Monday starts."
 
       true ->
-        "Today's move: use the first focused block to clear the highest-leverage source-backed item above before lower-signal inbox."
+        "Today's move: use the first focused block to clear the most important checked item above before inbox triage."
     end
   end
 
   defp temperature_read_directive(brief_input) do
     cond do
       personal_calendar_events(brief_input) != [] ->
-        "This is a personal-first day: protect the first family commitment, then clear source-backed work before inbox drift."
+        "This is a personal-first day: protect the first family commitment, then clear checked work before inbox drift."
 
       calendar_conflicts(brief_input) != [] ->
-        "This day has a calendar conflict: resolve the overlap before lower-signal work."
+        "This day has a calendar conflict: resolve the overlap before routine work."
 
       action_stack_items(brief_input) != [] ->
-        "This is an execution-hygiene morning: clear the pending action-card stack before passive inbox triage."
+        "This is an execution-focused morning: clear the pending action stack before passive inbox triage."
 
       commitments_present?(brief_input) ->
         "The risk is follow-through: clear or explicitly keep the oldest open commitment before new work."
 
       inbox_triage_items(brief_input) != [] ->
-        "The inbox has body-backed action: answer the highest-leverage thread before clearing lower-signal mail."
+        "The inbox has a concrete ask: answer the most important thread before clearing routine mail."
 
       slack_triage_items(brief_input) != [] ->
         "Slack has an active ask: name the owner, decision, or next unblock step before passive channel scanning."
@@ -3058,7 +3058,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     if facts == [] do
       nil
     else
-      "- Scope: #{Enum.join(facts, " · ")}. Review the body-backed items below before clearing lower-signal email."
+      "- Scope: #{Enum.join(facts, " · ")}. Review the specific email items below before clearing routine email."
     end
   end
 
@@ -4253,7 +4253,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp fallback_persist_todos(user_id, candidates, reason) do
     Logger.warning(
-      "morning_briefing todo LLM persistence failed; using direct source-backed upsert",
+      "morning_briefing todo LLM persistence failed; using direct checked upsert",
       reason: inspect(reason),
       candidate_count: length(candidates)
     )
