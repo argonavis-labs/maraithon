@@ -134,11 +134,35 @@ defmodule Maraithon.Commitments do
         |> Repo.insert()
 
       %Commitment{} = commitment ->
+        attrs =
+          attrs
+          |> Map.drop(["user_id", "source", "source_id"])
+          |> preserve_existing_context(commitment)
+
         commitment
-        |> Commitment.changeset(Map.drop(attrs, ["user_id", "source", "source_id"]))
+        |> Commitment.changeset(attrs)
         |> Repo.update()
     end
   end
+
+  defp preserve_existing_context(attrs, %Commitment{} = commitment) do
+    attrs
+    |> preserve_existing_evidence(commitment)
+    |> preserve_existing_metadata(commitment)
+  end
+
+  defp preserve_existing_evidence(%{"evidence" => []} = attrs, %Commitment{} = commitment) do
+    Map.put(attrs, "evidence", commitment.evidence || [])
+  end
+
+  defp preserve_existing_evidence(attrs, _commitment), do: attrs
+
+  defp preserve_existing_metadata(%{"metadata" => metadata} = attrs, %Commitment{} = commitment)
+       when metadata == %{} or is_nil(metadata) do
+    Map.put(attrs, "metadata", commitment.metadata || %{})
+  end
+
+  defp preserve_existing_metadata(attrs, _commitment), do: attrs
 
   defp update_status(user_id, id, status, opts) do
     note = Keyword.get(opts, :note)

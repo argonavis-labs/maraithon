@@ -22,7 +22,8 @@ defmodule Maraithon.CommitmentsTest do
         "project" => "Runner",
         "due_at" => "2026-05-06T18:00:00Z",
         "priority" => 95,
-        "evidence" => ["Captured from commitment tracker"]
+        "evidence" => ["Captured from commitment tracker"],
+        "metadata" => %{"source_url" => "message://thread/of-1"}
       })
 
     {:ok, _updated} =
@@ -36,7 +37,14 @@ defmodule Maraithon.CommitmentsTest do
         "priority" => 96
       })
 
-    assert [%{id: id, title: "Send Sarah the final deck"}] =
+    assert [
+             %{
+               id: id,
+               title: "Send Sarah the final deck",
+               evidence: ["Captured from commitment tracker"],
+               metadata: %{"source_url" => "message://thread/of-1"}
+             }
+           ] =
              Commitments.list_open_for_user(user_id)
 
     assert id == overdue.id
@@ -55,7 +63,9 @@ defmodule Maraithon.CommitmentsTest do
              %{
                "title" => "Send Sarah the final deck",
                "owed_to" => "Sarah",
-               "display_due" => "May 6, 2026 at 2:00 PM ET"
+               "display_due" => "May 6, 2026 at 2:00 PM ET",
+               "evidence" => ["Captured from commitment tracker"],
+               "metadata" => %{"source_url" => "message://thread/of-1"}
              }
            ] = bucket["overdue"]
 
