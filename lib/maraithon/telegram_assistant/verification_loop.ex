@@ -1391,7 +1391,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       dedupe_key: "verify:michael-starteryou",
       tracking_key: "verify:michael-starteryou",
       metadata: %{
-        "account" => "operator@runner.now",
+        "account" => "operator@example.com",
         "from" => "Michael Berlingo <michael@example.com>",
         "subject" => "Starteryou UGC Campaigns",
         "context_brief" => "No later reply or follow-through was found in the conversation.",
