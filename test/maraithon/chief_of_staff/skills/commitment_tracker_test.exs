@@ -54,7 +54,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert input["timezone_offset_hours"] == -4
   end
 
-  test "builds a source-backed prompt and persists model-emitted commitment todos", %{
+  test "builds a source-backed prompt and persists model-emitted commitment work items", %{
     user_id: user_id,
     agent: agent
   } do

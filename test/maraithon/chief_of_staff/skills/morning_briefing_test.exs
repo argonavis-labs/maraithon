@@ -342,7 +342,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
              1
   end
 
-  test "persists model-emitted morning todos through todo intelligence", %{
+  test "persists model-emitted morning work items through todo intelligence", %{
     user_id: user_id,
     agent: agent
   } do
@@ -370,7 +370,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       content:
         Jason.encode!(%{
           "title" => "Thursday, May 7 - Review the launch note",
-          "summary" => "One Slack follow-up belongs on the todo list.",
+          "summary" => "One Slack follow-up belongs in open work.",
           "body" => "## Needs Your Attention\n- Review the Runner launch note.",
           "todos" => [
             %{

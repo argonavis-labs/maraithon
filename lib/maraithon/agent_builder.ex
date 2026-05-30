@@ -69,7 +69,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       outputs: [
         "Unified insights for high-signal unresolved follow-through across inbox, meetings, and Slack",
-        "Daily deduped commitment todos from sent mail, inbox asks, calendar context, People, and memory",
+        "Daily deduped commitment work items from sent mail, inbox asks, calendar context, People, and memory",
         "Travel logistics briefs and updates for upcoming trips",
         "Morning, end-of-day, and weekly Chief of Staff summaries from the same assistant identity"
       ],

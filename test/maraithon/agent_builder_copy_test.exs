@@ -13,8 +13,10 @@ defmodule Maraithon.AgentBuilderCopyTest do
     assert visible_copy =~ "Shared preferences that shape interruption policy"
     assert visible_copy =~ "turns requested work into implementation plans"
     assert visible_copy =~ "calendar context, People, and memory"
+    assert visible_copy =~ "Daily deduped commitment work items"
     refute visible_copy =~ ~r/\boperator\b/i
     refute visible_copy =~ ~r/\bCRM\b/
+    refute visible_copy =~ "commitment todos"
   end
 
   defp visible_spec_copy(spec) do

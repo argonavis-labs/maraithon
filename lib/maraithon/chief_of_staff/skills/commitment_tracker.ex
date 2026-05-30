@@ -465,11 +465,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          "User committed".
        - If no new commitments are saved, do not write an all-clear. State
          what was checked, what remains unknown, and end with "Today's move:".
-       - Every todo title, summary, next_action, notes, and action_plan must
+       - Every work item title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,
          and the best next step.
        - If the exact ask is ambiguous, say "open the source thread to confirm
-         the exact promise" rather than creating a generic "follow-up" todo.
+         the exact promise" rather than creating a generic follow-up item.
        - Include company, organization, relationship context, project, source
          quote/body excerpt, and confidence in metadata whenever available.
 
