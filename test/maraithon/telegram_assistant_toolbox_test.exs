@@ -179,9 +179,11 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "I do not see open work in the connected sources I checked."
-    assert result.next_action == "No follow-up is pending in the connected sources I checked."
+    assert result.summary == "No open work appeared in the connected sources checked."
+    assert result.next_action == "No follow-up is pending in the connected sources checked."
 
+    refute result.summary =~ "I do not"
+    refute result.next_action =~ "I checked"
     refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "reconnection"
     refute result.summary =~ "complete inbox review"
@@ -242,7 +244,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "I do not see open work in the sources I could check, but coverage is incomplete."
+             "No open work appeared in the sources Maraithon could check, but coverage is incomplete."
 
     assert result.summary =~ "The Mac companion has not checked in recently"
 
@@ -253,6 +255,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
 
     refute result.summary =~ "Maraithon did not find"
+    refute result.summary =~ "I do not"
     refute result.summary =~ "companion_devices"
     refute result.summary =~ "last_seen_at"
     refute result.next_action =~ "source_health"
@@ -463,8 +466,9 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{provider: "google", status: "stale"}] = result.source_freshness
 
     assert result.message =~
-             "I could not fully verify every source before that action: work@example.com was out of date."
+             "Source verification was incomplete before that action: work@example.com was out of date."
 
+    refute result.message =~ "I could not"
     refute result.message =~ "Source health issues"
     refute result.message =~ "freshness snapshot"
     refute result.message =~ "stale"
