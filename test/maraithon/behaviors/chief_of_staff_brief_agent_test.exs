@@ -637,6 +637,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.summary == "1 item surfaced this week, and 1 remains open."
     assert brief.body =~ "Week in review:"
     assert brief.body =~ "- 1 Gmail item"
+    assert brief.body =~ "Next week's move:"
+    assert brief.body =~ "Start Monday by sending the owner, status, or ETA reset"
     assert brief.body =~ "Most important open items:"
     refute brief.body =~ "0 Calendar"
     refute brief.body =~ "0 Slack"
@@ -690,6 +692,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Weekly review: no open work surfaced"
     assert brief.summary == "No source-backed items surfaced this week."
+    assert brief.body =~ "Next week's move:"
+    assert brief.body =~ "confirm calendar, source freshness, and any new promises"
     assert brief.body =~ "Most important open items:"
 
     refute brief.title =~ "0 items"

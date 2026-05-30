@@ -668,6 +668,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     Week in review:
     #{weekly_source_lines(weekly_items)}
 
+    Next week's move:
+    #{weekly_guidance(top_open)}
+
     Most important open items:
     #{format_items(top_open, offset_hours, reference_at, "1. No active work surfaced in this week's review.")}
     """
@@ -912,6 +915,18 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "The most important work is still in human threads. Send the short owner, status, or ETA reset now instead of waiting."
     else
       "This is important enough to interrupt you. Move the item with a person or deadline attached, then tell me it is handled."
+    end
+  end
+
+  defp weekly_guidance([]) do
+    "Use Monday's first planning block to confirm calendar, source freshness, and any new promises before adding more work."
+  end
+
+  defp weekly_guidance(items) do
+    if mostly_reply_loops?(items) do
+      "Start Monday by sending the owner, status, or ETA reset on the first open human thread before taking on new work."
+    else
+      "Start Monday by closing or explicitly rescoping the first open item before taking on new work."
     end
   end
 
