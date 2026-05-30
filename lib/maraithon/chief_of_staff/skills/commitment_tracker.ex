@@ -533,7 +533,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp report_or_error_notice({:error, reason}, response, tracker_input) do
     error_message =
       [
-        "Commitment tracker model synthesis failed",
+        "Open work review used checked-source fallback",
         reason,
         llm_finish_reason(response) && "finish_reason=#{llm_finish_reason(response)}"
       ]

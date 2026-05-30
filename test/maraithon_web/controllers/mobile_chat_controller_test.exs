@@ -626,6 +626,45 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute visible_response =~ "token=secret"
   end
 
+  test "mobile chat assistant message bodies hide briefing generation internals", %{conn: conn} do
+    {conn, user_id} =
+      authenticated_mobile_conn(conn, "mobile-chat-assistant-briefing-error@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate()}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+    thread = TelegramConversations.get_mobile_thread(user_id, thread_id)
+
+    {:ok, _thread, _turn, _result} =
+      Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+        thread,
+        thread.chat_id,
+        """
+        Morning briefing generation failed.
+        The configured model did not produce a valid brief.
+        Morning briefing model synthesis failed.
+        """
+      )
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads/#{thread_id}")
+      |> json_response(200)
+
+    assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
+
+    assert body ==
+             "Maraithon saved the request and avoided sending an unverified answer."
+
+    visible_response = inspect(response)
+    refute visible_response =~ "generation failed"
+    refute visible_response =~ "configured model"
+    refute visible_response =~ "model synthesis"
+  end
+
   test "mobile chat renames a thread and keeps the manual title", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-rename@example.com")
 

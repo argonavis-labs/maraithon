@@ -238,6 +238,38 @@ defmodule Maraithon.BriefsTest do
     refute payload.text =~ "abc123"
   end
 
+  test "telegram payload hides legacy generation failure copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning briefing generation failed",
+               "summary" => "The configured model did not produce a valid brief.",
+               "body" => """
+               Morning briefing model synthesis failed.
+               Try the checked source view instead.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:legacy-generation-failure",
+               "error_message" =>
+                 "Morning briefing model synthesis failed: {:rate_limited, 60000}",
+               "metadata" => %{"generation_mode" => "error"}
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+
+    assert payload.text =~ "Chief of staff brief"
+    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
+    assert payload.text =~ "Try the checked source view instead."
+    refute lower_text =~ "generation failed"
+    refute lower_text =~ "configured model"
+    refute lower_text =~ "model synthesis"
+    refute lower_text =~ "rate_limited"
+  end
+
   test "telegram payload uses a decision-safe fallback when all brief copy is unsafe", %{
     user_id: user_id,
     agent: agent

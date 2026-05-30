@@ -1402,7 +1402,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp brief_or_error_notice({:error, reason}, response, brief_input) do
     error_message =
       [
-        "Morning briefing model synthesis failed",
+        "Morning briefing used checked-source fallback",
         reason,
         llm_finish_reason(response) && "finish_reason=#{llm_finish_reason(response)}"
       ]
@@ -1413,10 +1413,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   @doc """
-  Builds a compact checked brief when model synthesis cannot produce a
+  Builds a compact checked brief when generated output cannot produce a
   valid JSON briefing.
   """
-  def build_compact_fallback_brief(brief_input, error_message \\ "model synthesis unavailable")
+  def build_compact_fallback_brief(brief_input, error_message \\ "brief generation unavailable")
 
   def build_compact_fallback_brief(brief_input, error_message) when is_map(brief_input) do
     source_backed_fallback_brief(brief_input, error_message)

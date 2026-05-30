@@ -1130,13 +1130,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
 
     assert payload.generation_mode == "source_fallback"
+    assert payload.error_message =~ "checked-source fallback"
     assert payload.error_message =~ "model_response_invalid"
+    refute payload.error_message =~ "model synthesis"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
 
     assert brief.title == "Thursday, May 7 - Clear open commitments before inbox triage"
     assert brief.status == "pending"
+    assert brief.error_message =~ "checked-source fallback"
     assert brief.error_message =~ "model_response_invalid"
+    refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.metadata["error_message"] =~ "model_response_invalid"
     assert brief.summary =~ "Start with"
@@ -1182,11 +1186,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       )
 
     assert payload.generation_mode == "source_fallback"
+    assert payload.error_message =~ "checked-source fallback"
     assert payload.error_message =~ "max_output_tokens"
+    refute payload.error_message =~ "model synthesis"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
     assert brief.title == "Thursday, May 7 - Verify the day before committing it"
+    assert brief.error_message =~ "checked-source fallback"
     assert brief.error_message =~ "max_output_tokens"
+    refute brief.error_message =~ "model synthesis"
     assert brief.metadata["llm_finish_reason"] == "error"
     assert brief.metadata["max_tokens_used"] == 16_000
     assert brief.metadata["reasoning_effort_used"] == "high"

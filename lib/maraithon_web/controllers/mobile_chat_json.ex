@@ -27,6 +27,12 @@ defmodule MaraithonWeb.MobileChatJSON do
     "model_name",
     "model_provider",
     "model_response",
+    "configured model",
+    "model synthesis",
+    "generation failed",
+    "did not produce a valid brief",
+    "valid json",
+    "structured json",
     "reasoning_effort",
     "finish_reason",
     "max_output_tokens",
@@ -431,9 +437,19 @@ defmodule MaraithonWeb.MobileChatJSON do
       ) ->
         nil
 
+      unsafe_generation_title?(value) ->
+        nil
+
       true ->
         value
     end
+  end
+
+  defp unsafe_generation_title?(value) when is_binary(value) do
+    Regex.match?(
+      ~r/\b(?:generation failed|configured model|model synthesis|did not produce a valid brief|valid json|structured json)\b/i,
+      value
+    )
   end
 
   defp truncate_title(nil), do: nil

@@ -322,12 +322,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     assert payload.generation_mode == "source_fallback"
     assert payload.todo_count == 0
+    assert payload.error_message =~ "checked-source fallback"
     assert payload.error_message =~ "model_response_invalid"
+    refute payload.error_message =~ "model synthesis"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Open work review needs source review"
     assert brief.cadence == "commitment_tracker"
+    assert brief.error_message =~ "checked-source fallback"
     assert brief.error_message =~ "model_response_invalid"
+    refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "No reliable commitment review was available"
     assert brief.body =~ "## Needs Your Attention"
