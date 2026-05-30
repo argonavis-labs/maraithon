@@ -38,14 +38,14 @@ final class SourceIssueCopyTests: XCTestCase {
     func testUnknownMachineCodesUseGenericRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("something_weird"),
-            "This source needs attention. Open the source detail before syncing again."
+            "This source needs attention. Sync again when ready."
         )
     }
 
     func testCredentialLikeReasonsUseGenericRecoveryCopy() {
         let copy = SourceIssueCopy.status("Authorization: Bearer abc123 token=secret")
 
-        XCTAssertEqual(copy, "This source needs attention. Open the source detail before syncing again.")
+        XCTAssertEqual(copy, "This source needs attention. Sync again when ready.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.lowercased().contains("token"))
@@ -74,9 +74,10 @@ final class SourceIssueCopyTests: XCTestCase {
 
         XCTAssertEqual(
             detail,
-            "Notes could not finish its last check. Connection issue. Sync again when you are online. Select Sync now when ready."
+            "Notes could not finish its last check. Connection issue. Sync again when you are online."
         )
         XCTAssertFalse(detail.contains("Logs"))
         XCTAssertFalse(detail.lowercased().contains("diagnostic"))
+        XCTAssertFalse(detail.localizedCaseInsensitiveContains("source detail"))
     }
 }

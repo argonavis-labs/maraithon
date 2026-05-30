@@ -7,6 +7,8 @@ import Foundation
 /// UI surfaces should show these strings, not raw enum dumps, HTTP
 /// bodies, or macOS error domains.
 struct SourceIssueCopy {
+    private static let genericRecovery = "This source needs attention. Sync again when ready."
+
     static func status(_ reason: String) -> String {
         let normalized = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = normalized.lowercased()
@@ -80,14 +82,24 @@ struct SourceIssueCopy {
         }
 
         if looksTechnical(normalized) {
-            return "This source needs attention. Open the source detail before syncing again."
+            return genericRecovery
         }
 
-        return normalized.isEmpty ? "This source needs attention. Open the source detail before syncing again." : normalized
+        return normalized.isEmpty ? genericRecovery : normalized
     }
 
     static func detail(_ reason: String, sourceName: String) -> String {
-        "\(sourceName) could not finish its last check. \(status(reason)) Select Sync now when ready."
+        let recovery = status(reason)
+        let lower = recovery.lowercased()
+
+        if lower.contains("sync again")
+            || lower.contains("reconnect")
+            || lower.contains("update")
+            || lower.contains("sign out") {
+            return "\(sourceName) could not finish its last check. \(recovery)"
+        }
+
+        return "\(sourceName) could not finish its last check. \(recovery) Sync again when ready."
     }
 
     static func issue(_ reason: String, failedCount _: Int) -> String {
