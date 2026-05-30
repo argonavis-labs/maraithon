@@ -4,6 +4,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
   import Phoenix.LiveViewTest
 
   alias Maraithon.Accounts
+  alias Maraithon.Agents
   alias Maraithon.Crm
   alias Maraithon.Crm.PersonMerge
   alias Maraithon.Memory
@@ -54,6 +55,38 @@ defmodule MaraithonWeb.PeopleLiveTest do
     refute html =~ ~s(id="people-bulk-actions")
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/operator/people'][aria-current='page']", "People")
+  end
+
+  test "renders relationship activity in the Chief of Staff timezone", %{conn: conn} do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: @user_email,
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
+      })
+
+    {:ok, person} =
+      Crm.upsert_person(@user_email, %{
+        "display_name" => "Dana Lee",
+        "email" => "dana@example.com",
+        "relationship" => "Board member",
+        "interaction_count" => 3,
+        "last_interaction_at" => "2026-05-30T18:30:00Z"
+      })
+
+    {:ok, view, html} = live(conn, "/operator/people?q=Dana")
+
+    assert html =~ "Dana Lee"
+    assert html =~ "May 30, 2026 at 2:30 PM ET"
+    refute html =~ "2026-05-30 18:30 UTC"
+
+    view
+    |> element("#person-#{person.id}")
+    |> render_click()
+
+    detail_html = render(view)
+    assert detail_html =~ "May 30, 2026 at 2:30 PM ET"
+    refute detail_html =~ "2026-05-30 18:30 UTC"
   end
 
   test "search filters people and reset clears the query", %{conn: conn} do

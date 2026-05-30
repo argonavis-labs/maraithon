@@ -14,6 +14,8 @@ defmodule MaraithonWeb.CompanionChannelTest do
 
   import Ecto.Query
 
+  @channel_reply_timeout 1_000
+
   defp pair_device(email \\ nil) do
     email = email || "channel-#{System.unique_integer([:positive])}@example.com"
     {:ok, user} = Accounts.get_or_create_user_by_email(email)
@@ -335,7 +337,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
         })
 
       ref1 = push(socket, "ingest:calendar_events", %{"calendar_events" => [original]})
-      assert_reply ref1, :ok, %{accepted: 1, duplicate: 0, invalid: 0}
+      assert_reply ref1, :ok, %{accepted: 1, duplicate: 0, invalid: 0}, @channel_reply_timeout
 
       updated =
         sample_calendar_event(guid, %{
@@ -348,7 +350,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
         })
 
       ref2 = push(socket, "ingest:calendar_events", %{"calendar_events" => [updated]})
-      assert_reply ref2, :ok, %{accepted: 1, duplicate: 0, invalid: 0}
+      assert_reply ref2, :ok, %{accepted: 1, duplicate: 0, invalid: 0}, @channel_reply_timeout
 
       [stored] =
         Repo.all(

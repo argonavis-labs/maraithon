@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.PeopleLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.Crm
+  alias Maraithon.{BriefingSchedules, Crm, Timezones}
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
   alias Maraithon.Crm.RelationshipPresets
@@ -64,6 +64,7 @@ defmodule MaraithonWeb.PeopleLive do
        selected_person_ids: MapSet.new(),
        selected_person_id: nil,
        selected_person: nil,
+       timezone_info: default_timezone_info(),
        bulk_action_menu_open?: false,
        bulk_action_mode: nil,
        bulk_action_anchor: nil,
@@ -449,7 +450,7 @@ defmodule MaraithonWeb.PeopleLive do
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
-                      <div class="text-sm/6 text-zinc-950"><%= format_datetime(person.last_interaction_at) %></div>
+                      <div class="text-sm/6 text-zinc-950"><%= format_datetime(person.last_interaction_at, @timezone_info) %></div>
                       <div class="mt-1 text-xs/5 text-zinc-500">
                         <%= interaction_label(person.interaction_count) %>
                       </div>
@@ -470,7 +471,7 @@ defmodule MaraithonWeb.PeopleLive do
               </.table>
             </div>
 
-            <.person_detail_panel :if={@selected_person} person={@selected_person} filters={@filters} />
+            <.person_detail_panel :if={@selected_person} person={@selected_person} filters={@filters} timezone_info={@timezone_info} />
           </div>
         </.panel>
 
@@ -488,6 +489,7 @@ defmodule MaraithonWeb.PeopleLive do
 
   defp refresh_people(socket) do
     user_id = current_user_id(socket)
+    timezone_info = user_timezone_info(user_id)
 
     people =
       Crm.list_people(user_id,
@@ -507,7 +509,8 @@ defmodule MaraithonWeb.PeopleLive do
       bulk_action_menu_open?: has_selection? && socket.assigns.bulk_action_menu_open?,
       bulk_action_mode: if(has_selection?, do: socket.assigns.bulk_action_mode, else: nil),
       bulk_action_anchor: if(has_selection?, do: socket.assigns.bulk_action_anchor, else: nil),
-      selected_person: selected_person_for_user(user_id, socket.assigns.selected_person_id)
+      selected_person: selected_person_for_user(user_id, socket.assigns.selected_person_id),
+      timezone_info: timezone_info
     )
   end
 
@@ -1440,6 +1443,7 @@ defmodule MaraithonWeb.PeopleLive do
 
   attr :person, :any, required: true
   attr :filters, :map, required: true
+  attr :timezone_info, :map, required: true
 
   defp person_detail_panel(assigns) do
     assigns =
@@ -1454,6 +1458,7 @@ defmodule MaraithonWeb.PeopleLive do
           <div class="flex flex-wrap items-center gap-2">
             <.badge color={status_color(@person.status)}><%= label(@person.status) %></.badge>
             <span class="text-xs/5 text-zinc-500"><%= interaction_label(@person.interaction_count) %></span>
+            <span class="text-xs/5 text-zinc-500"><%= format_datetime(@person.last_interaction_at, @timezone_info) %></span>
           </div>
           <h3 class="mt-2 text-base/7 font-semibold text-zinc-950"><%= @person.display_name %></h3>
           <p class="mt-1 text-sm/6 text-zinc-500"><%= contact_preview(@person) %></p>
@@ -2039,13 +2044,41 @@ defmodule MaraithonWeb.PeopleLive do
   defp status_color("archived"), do: "zinc"
   defp status_color(_status), do: "zinc"
 
-  defp format_datetime(nil), do: "No activity yet"
+  defp format_datetime(nil, _timezone_info), do: "No activity yet"
 
-  defp format_datetime(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
+  defp format_datetime(%DateTime{} = datetime, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+    offset = Timezones.offset_at(timezone_info.name, datetime, timezone_info.offset_hours)
+    label = Timezones.label(timezone_info.name, offset)
+
+    datetime
+    |> DateTime.add(offset, :hour)
+    |> Calendar.strftime("%b %-d, %Y at %-I:%M %p #{label}")
   end
 
-  defp format_datetime(value), do: to_string(value)
+  defp format_datetime(value, _timezone_info), do: to_string(value)
+
+  defp user_timezone_info(user_id) when is_binary(user_id) do
+    case BriefingSchedules.summarize_for_prompt(user_id) do
+      %{timezone_name: timezone_name, timezone_offset_hours: offset_hours} ->
+        normalize_timezone_info(%{name: timezone_name, offset_hours: offset_hours})
+
+      _other ->
+        default_timezone_info()
+    end
+  rescue
+    _exception -> default_timezone_info()
+  end
+
+  defp user_timezone_info(_user_id), do: default_timezone_info()
+
+  defp normalize_timezone_info(%{name: name, offset_hours: offset_hours}) do
+    %{name: name, offset_hours: Timezones.normalize_offset(offset_hours)}
+  end
+
+  defp normalize_timezone_info(_timezone_info), do: default_timezone_info()
+
+  defp default_timezone_info, do: %{name: nil, offset_hours: -5}
 
   defp label(value) when is_binary(value) do
     value
