@@ -49,6 +49,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Automation activity")
     assert html =~ "No work needs attention right now."
+    assert html =~ "collect context and recommend next work"
+    assert html =~ "No open follow-ups yet."
+    assert html =~ "begin monitoring your work"
     assert html =~ "none failed"
     refute has_element?(view, "h2", "Health")
     refute html =~ "Operational activity"
@@ -66,6 +69,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "New agent"
     refute html =~ "All caught up"
     refute html =~ "all clear"
+    refute html =~ "high-signal"
+    refute html =~ "project-local state"
+    refute html =~ "operating system"
     refute html =~ "No durable preferences yet."
     refute html =~ "Install agent"
     refute html =~ "Agent activity"

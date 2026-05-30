@@ -1427,7 +1427,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </div>
                   <%= if project_card.items == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No project memory yet. Add a note, work item, or grant above so Maraithon has local context.
+                      No project context yet. Add a note, work item, or repo grant so Maraithon has the details it needs.
                     </p>
                   <% else %>
                     <div
@@ -1451,7 +1451,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </p>
                   <%= if project_card.recommendations == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No planning recommendations yet. Attach a GitHub Product Planner to this project and let it run.
+                      No recommendations yet. Attach a Product Planner when you want Maraithon to turn project context into next steps.
                     </p>
                   <% else %>
                     <div
@@ -1585,7 +1585,7 @@ defmodule MaraithonWeb.DashboardLive do
                     </p>
                     <%= if project_card.repo_grants == [] do %>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        No explicit repo grants yet.
+                        No repo access granted yet.
                       </p>
                     <% else %>
                       <div :for={grant <- project_card.repo_grants} class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-zinc-950/10 px-3 py-2">
@@ -1606,7 +1606,7 @@ defmodule MaraithonWeb.DashboardLive do
                     </p>
                     <%= if project_card.implementation_runs == [] do %>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        No delivery work yet.
+                        No delivery runs yet.
                       </p>
                     <% else %>
                       <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-zinc-950/10 px-3 py-2">
@@ -1643,7 +1643,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @projects == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No projects yet. Use “New project” above and attach a specialist automation to start building project-local state.
+              No projects yet. Use “New project,” then attach an automation to collect context and recommend next work.
             </p>
           <% end %>
         </div>
@@ -1681,14 +1681,14 @@ defmodule MaraithonWeb.DashboardLive do
                 <div class="px-4 py-6 sm:px-6">
                   <p class="text-sm/6 font-medium text-zinc-950">Scanning your connected data...</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    Maraithon is checking recent activity from your linked accounts and selecting the highest-signal examples.
+                    Maraithon is checking recent activity from your linked accounts and selecting the most useful examples.
                   </p>
                 </div>
               <% :ready when @onboarding_preview.items == [] -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 font-medium text-zinc-950">No high-signal follow-through risks surfaced in the recent scan.</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">No follow-ups need attention from this scan.</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    That is a good sign. Once you start an automation, Maraithon keeps watching continuously and only escalates concrete follow-through risk.
+                    That is a good sign. Once you start an automation, Maraithon keeps watching and only interrupts for concrete follow-through risk.
                   </p>
                 </div>
               <% :ready -> %>
@@ -1773,7 +1773,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @insights == [] do %>
             <p class="text-sm/6 text-zinc-500">
-              No actionable insights yet. Start a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation.
+              No open follow-ups yet. Start a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation.
             </p>
           <% end %>
       </section>
@@ -1907,7 +1907,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @agent_overviews == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No automations yet. Start a Chief of Staff or specialist automation to build the operating system.
+              No automations yet. Start a Chief of Staff or specialist automation to begin monitoring your work.
             </p>
           <% end %>
         </div>
