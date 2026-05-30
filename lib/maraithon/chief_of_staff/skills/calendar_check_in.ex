@@ -474,10 +474,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp user_facing_check_in(check_in, check_in_input) when is_map(check_in) do
+    body = safe_check_in_body(read_string(check_in, "body", nil), check_in_input)
+
     %{
       "title" => safe_check_in_title(read_string(check_in, "title", nil), check_in_input),
-      "summary" => safe_check_in_summary(read_string(check_in, "summary", nil), check_in_input),
-      "body" => safe_check_in_body(read_string(check_in, "body", nil), check_in_input),
+      "summary" =>
+        safe_check_in_summary(read_string(check_in, "summary", nil), check_in_input, body),
+      "body" => body,
       "reason" => read_string(check_in, "reason", nil)
     }
   end
@@ -495,8 +498,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     first_safe_user_line(value) || fallback_check_in_title(check_in_input)
   end
 
-  defp safe_check_in_summary(value, check_in_input) do
-    first_safe_user_line(value) || fallback_check_in_summary(check_in_input)
+  defp safe_check_in_summary(value, check_in_input, body) do
+    first_safe_user_line(value) ||
+      summary_from_check_in_body(body) ||
+      fallback_check_in_summary(check_in_input)
   end
 
   defp safe_check_in_body(value, check_in_input) do
@@ -518,6 +523,33 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     |> raw_user_lines()
     |> Enum.map(&strip_check_in_label/1)
     |> Enum.find_value(&safe_user_line/1)
+  end
+
+  defp summary_from_check_in_body(body) do
+    best_use =
+      case Regex.run(
+             ~r/(?:^|[.!?]\s+)(?:best use|recommended use|suggested use)\s*:\s*([^\n]+)/iu,
+             body || ""
+           ) do
+        [_match, move] -> safe_user_line(move)
+        _ -> nil
+      end
+
+    (best_use || first_safe_user_line(body))
+    |> case do
+      nil ->
+        nil
+
+      line ->
+        line =
+          String.replace(
+            line,
+            ~r/^\s*(?:best use|recommended use|suggested use)\s*:\s*/iu,
+            ""
+          )
+
+        "Best use: #{sentence(line)}"
+    end
   end
 
   defp raw_user_lines(value) do

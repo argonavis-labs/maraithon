@@ -178,12 +178,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     brief = Repo.get(Brief, payload.brief_id)
 
     assert brief.title =~ "Open time:"
-    assert brief.summary == "Use the opening for the most important reply or meeting prep."
+    assert brief.summary == "Best use: Use 12-6 to reply to Alex about pricing."
     assert brief.body == "Use 12-6 to reply to Alex about pricing"
     assert brief.metadata["reason"] == "Model confidence was high."
 
     refute brief.title =~ "confidence"
     refute brief.summary =~ "Model"
+    refute brief.summary =~ "most important reply or meeting prep"
     refute brief.body =~ "confidence"
     refute brief.body =~ "Reasoning"
     refute brief.body =~ "model"
