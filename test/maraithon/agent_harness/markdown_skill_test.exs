@@ -67,6 +67,19 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     refute skill.instructions =~ "ProductManagerAgent"
   end
 
+  test "codebase advisor skill requires actionable engineering review output" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/engineering/codebase_advisor.md")
+
+    assert skill.id == "codebase_advisor"
+    assert skill.name == "Codebase Advisor"
+    assert skill.instructions =~ "engineering review brief"
+    assert skill.instructions =~ "severity, evidence, proposed fix, and verification"
+    assert skill.instructions =~ "no material findings"
+    assert skill.instructions =~ "insufficiency note"
+    assert skill.instructions =~ "Do not expose internal behavior names"
+  end
+
   test "loads priv markdown skills through configured runtime priv dir" do
     project_priv_dir = Path.expand("priv")
     previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")
