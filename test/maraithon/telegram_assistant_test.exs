@@ -1138,8 +1138,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.at(sends, 1).text =~ "Reply with the requested eligibility details."
 
     assert Enum.at(sends, 1).text =~
-             "Rippling needs a user response before onboarding can continue."
+             "Rippling needs your reply before onboarding can continue."
 
+    refute Enum.at(sends, 1).text =~ "user response"
     refute Enum.at(sends, 1).text =~ "Reply to Rippling about employment eligibility"
     refute Enum.at(sends, 1).text =~ "Maraithon Todo"
     refute Enum.at(sends, 1).text =~ "About:"

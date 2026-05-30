@@ -51,6 +51,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     value
     |> strip_internal_label_lines()
     |> replace_internal_source_labels()
+    |> replace_generic_user_action_language()
     |> String.replace(~r/^\s*The user committed\b/i, "You committed")
     |> String.replace(~r/\bthe user committed\b/i, "you committed")
     |> String.replace(~r/^\s*The user wants\b/i, "You want")
@@ -110,6 +111,18 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   def open_work_language(value) when is_binary(value), do: replace_todo_language(value)
   def open_work_language(value), do: value
+
+  defp replace_generic_user_action_language(value) do
+    value
+    |> String.replace(~r/\bneeds a user response\b/i, "needs your reply")
+    |> String.replace(~r/\bneeds user response\b/i, "needs your reply")
+    |> String.replace(~r/\brequires a user response\b/i, "needs your reply")
+    |> String.replace(~r/\bwaiting for a user response\b/i, "waiting on your reply")
+    |> String.replace(~r/\bawaiting a user response\b/i, "waiting on your reply")
+    |> String.replace(~r/\bneeds a user decision\b/i, "needs your decision")
+    |> String.replace(~r/\bneeds user decision\b/i, "needs your decision")
+    |> String.replace(~r/\brequires a user decision\b/i, "needs your decision")
+  end
 
   defp replace_todo_language(value) do
     value

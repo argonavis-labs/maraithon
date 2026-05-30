@@ -12,13 +12,15 @@ defmodule Maraithon.TodosTest do
 
     {:ok, [todo]} =
       Todos.upsert_many(user_id, [
-        gmail_todo_attrs("thread-billing", "Billing account past due",
-          summary: "The billing account is overdue and needs a user decision."
-        )
+        gmail_todo_attrs("thread-billing", "Billing account past due", %{
+          "summary" => "The billing account is overdue and needs a user decision."
+        })
       ])
 
     assert {:ok, done_todo} = Todos.mark_done(user_id, todo.id, note: "Handled in console.")
     assert done_todo.status == "done"
+    assert done_todo.summary == "The billing account is overdue and needs your decision."
+    refute done_todo.summary =~ "user decision"
 
     {:ok, [reupserted]} =
       Todos.upsert_many(user_id, [

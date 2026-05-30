@@ -173,6 +173,22 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
 
     assert UserFacingCopy.polish_text("The user should still approve the finance reply.") ==
              "You should still approve the finance reply."
+
+    assert UserFacingCopy.polish_text("Track user response rates during onboarding.") ==
+             "Track user response rates during onboarding."
+  end
+
+  test "rewrites generic user response and decision copy into direct action copy" do
+    assert UserFacingCopy.polish_text("This Gmail thread still needs a user response.") ==
+             "This Gmail thread still needs your reply."
+
+    assert UserFacingCopy.polish_text(
+             "Rippling needs a user response before onboarding can continue."
+           ) ==
+             "Rippling needs your reply before onboarding can continue."
+
+    assert UserFacingCopy.polish_text("The billing account needs a user decision.") ==
+             "The billing account needs your decision."
   end
 
   test "uses open work language for todo-facing copy" do
