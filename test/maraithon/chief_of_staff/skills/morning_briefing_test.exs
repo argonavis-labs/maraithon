@@ -601,6 +601,48 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Today's move:"
   end
 
+  test "quality verifier requires recommendations for schedule conflicts" do
+    brief = %{
+      "title" => "Wednesday, May 27 - Collision day",
+      "summary" => "Start with the calendar collision.",
+      "body" =>
+        "This day has a calendar collision.\n\n## Needs Your Attention\n- The Sara meeting conflicts with Runner weekly planning.\n\n## Today's Schedule\n- 11:00 Runner Weekly Planning.\n- 11:30 Sara Franca overlaps Runner Weekly Planning.\n\nToday's move: settle the Sara calendar collision first.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-27",
+      "timezone" => "ET",
+      "timezone_offset_hours" => -4,
+      "calendar" => %{
+        "today_events" => [
+          %{
+            "summary" => "Runner Weekly Planning",
+            "start" => "2026-05-27T15:00:00Z",
+            "end" => "2026-05-27T15:45:00Z",
+            "display_start" => "11:00",
+            "display_end" => "11:45"
+          },
+          %{
+            "summary" => "Sara Franca",
+            "start" => "2026-05-27T15:30:00Z",
+            "end" => "2026-05-27T16:00:00Z",
+            "display_start" => "11:30",
+            "display_end" => "12:00"
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_schedule_conflicts" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+    assert revised["body"] =~ "## Schedule Conflicts"
+    assert revised["body"] =~ "Decide which to attend, move, or leave early."
+  end
+
   test "quality verifier appends the executive today's move directive" do
     brief = %{
       "title" => "Wednesday, May 27 - Operational brief",

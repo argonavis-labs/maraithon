@@ -2589,10 +2589,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp append_body_section(brief, section) when is_map(brief) and is_binary(section) do
     body = read_string(brief, "body", "")
 
-    if blank?(section) or String.contains?(body, section) do
-      brief
-    else
-      Map.put(brief, "body", [body, section] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
+    cond do
+      blank?(section) or String.contains?(body, section) ->
+        brief
+
+      todays_move_final_directive_present?(body) and
+          not todays_move_final_directive_present?(section) ->
+        {before, today_move} = split_final_today_move(body)
+
+        Map.put(
+          brief,
+          "body",
+          [before, section, today_move]
+          |> Enum.reject(&blank?/1)
+          |> Enum.join("\n\n")
+        )
+
+      true ->
+        Map.put(brief, "body", [body, section] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
     end
   end
 
@@ -2956,19 +2970,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp schedule_conflict_present?(body) when is_binary(body) do
     normalized = normalize_match_text(body)
 
-    Enum.any?(
-      [
-        "conflict",
-        "conflicts",
-        "overlap",
-        "overlaps",
-        "double booked",
-        "leave early",
-        "move this",
-        "pick one"
-      ],
-      &String.contains?(normalized, &1)
-    )
+    conflict_named? =
+      Enum.any?(
+        [
+          "conflict",
+          "conflicts",
+          "overlap",
+          "overlaps",
+          "double booked"
+        ],
+        &String.contains?(normalized, &1)
+      )
+
+    recommendation_present? =
+      Enum.any?(
+        [
+          "choose",
+          "decide which",
+          "decline",
+          "drop",
+          "leave early",
+          "move one",
+          "move the",
+          "move this",
+          "pick one",
+          "push",
+          "reschedule"
+        ],
+        &String.contains?(normalized, &1)
+      )
+
+    conflict_named? and recommendation_present?
   end
 
   defp schedule_conflict_present?(_body), do: false
