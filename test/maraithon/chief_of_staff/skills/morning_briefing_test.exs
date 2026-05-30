@@ -710,7 +710,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
             "channel_name" => "runner-general",
             "user" => "Charlie",
             "ts" => "1778162400.000000",
-            "text" => "Can Kent review the launch note before noon?"
+            "text" => "Launch is blocked by an outage; can Kent name the owner before noon?"
           }
         ],
         "mentions" => [],
@@ -737,7 +737,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert revised["body"] =~ "## Slack Triage"
     assert revised["body"] =~ "#runner-general"
-    assert revised["body"] =~ "Can Kent review the launch note before noon?"
+    assert revised["body"] =~ "Launch is blocked by an outage"
+    assert revised["body"] =~ "Name the owner and the next unblock step"
+    refute revised["body"] =~ "debug"
   end
 
   test "quality verifier drops person-only todo cards without memory-jogging context" do

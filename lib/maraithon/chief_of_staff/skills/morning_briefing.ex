@@ -2806,7 +2806,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     cond do
       triage_any_term?(normalized, ["blocked", "bug", "outage"]) ->
-        "Name the owner and next debug step"
+        "Name the owner and the next unblock step"
 
       triage_any_term?(normalized, ["approval", "approve", "review", "decision"]) ->
         "Give the decision, approval, or edit path"
