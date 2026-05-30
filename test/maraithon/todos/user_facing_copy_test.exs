@@ -159,7 +159,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert UserFacingCopy.polish_text(
              "The operator's queue needs operator attention because User should review it."
            ) ==
-             "your queue needs your attention because you should review it."
+             "Your queue needs your attention because you should review it."
   end
 
   test "todo upsert applies copy polish before persistence" do

@@ -7,6 +7,8 @@ defmodule Maraithon.Todos.PublicMetadata do
   mobile, or assistant-visible output.
   """
 
+  alias Maraithon.Todos.UserFacingCopy
+
   @public_todo_keys MapSet.new(~w(
     account
     account_email
@@ -64,6 +66,7 @@ defmodule Maraithon.Todos.PublicMetadata do
     json
     llm
     model
+    metadata
     prompt
     quality
     rationale
@@ -87,10 +90,11 @@ defmodule Maraithon.Todos.PublicMetadata do
     |> Enum.reduce(%{}, fn {key, value}, acc ->
       key = to_string(key)
 
-      if public_key?(key, public_keys) and public_value?(value) do
-        Map.put(acc, key, value)
+      with true <- public_key?(key, public_keys),
+           {:ok, public_value} <- public_value(value) do
+        Map.put(acc, key, public_value)
       else
-        acc
+        _ -> acc
       end
     end)
   end
@@ -106,20 +110,70 @@ defmodule Maraithon.Todos.PublicMetadata do
     Enum.any?(@internal_terms, &String.contains?(normalized, &1))
   end
 
-  defp public_value?(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    trimmed != "" and not internal_value?(trimmed)
-  end
+  defp public_value?(value) when is_binary(value), do: match?({:ok, _}, public_value(value))
 
   defp public_value?(value) when is_integer(value) or is_float(value) or is_boolean(value),
     do: true
 
   defp public_value?(_value), do: false
 
+  defp public_value(value) when is_binary(value) do
+    value =
+      value
+      |> String.split(~r/\R/u)
+      |> Enum.map(&clean_public_line/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
+      |> String.replace(~r/\s+/, " ")
+      |> String.trim()
+
+    cond do
+      value == "" -> :error
+      internal_value?(value) -> :error
+      true -> {:ok, value}
+    end
+  end
+
+  defp public_value(value) when is_integer(value) or is_float(value) or is_boolean(value),
+    do: {:ok, value}
+
+  defp public_value(_value), do: :error
+
+  defp clean_public_line(line) when is_binary(line) do
+    line = String.trim(line)
+
+    cond do
+      line == "" ->
+        nil
+
+      internal_value?(line) ->
+        nil
+
+      true ->
+        line
+        |> strip_safe_label()
+        |> UserFacingCopy.polish_text()
+        |> String.trim()
+        |> case do
+          "" -> nil
+          value -> if internal_value?(value), do: nil, else: value
+        end
+    end
+  end
+
+  defp strip_safe_label(value) do
+    Regex.replace(
+      ~r/^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary|source)\s*[:=-]\s*/i,
+      value,
+      ""
+    )
+  end
+
   defp internal_value?(value) do
     normalized = String.downcase(value)
 
-    Regex.match?(~r/\b\d{1,3}%/u, normalized) or
+    Regex.match?(~r/^\s*[\{\[]/u, normalized) or
+      Regex.match?(~r/\b\d{1,3}%/u, normalized) or
       Enum.any?(@internal_terms, &String.contains?(normalized, &1))
   end
 end

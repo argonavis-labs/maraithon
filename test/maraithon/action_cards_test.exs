@@ -318,6 +318,44 @@ defmodule Maraithon.ActionCardsTest do
     refute visible_copy =~ "LLM"
   end
 
+  test "polishes public metadata before rendering decision cards", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Approve the finance reply",
+      summary: "Finance is waiting on a corrected reimbursement note.",
+      next_action: "Send the corrected reimbursement note.",
+      source_item_id: "gmail-thread-finance-approval",
+      dedupe_key: "action-card:finance-public-metadata-copy",
+      priority: 90,
+      status: "open",
+      metadata: %{
+        "why_now" => """
+        source_context: The user needs to approve the finance reply.
+        telegram_fit_score: 0.94
+        The operator's next move is to review the reimbursement note.
+        """
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert card["why_now"] ==
+             "You need to approve the finance reply. Your next move is to review the reimbursement note."
+
+    assert rendered =~ "You need to approve the finance reply."
+    refute rendered =~ "source_context"
+    refute rendered =~ "telegram_fit_score"
+    refute rendered =~ "The user"
+    refute rendered =~ "operator"
+  end
+
   test "stale low-priority work becomes a keep-or-dismiss decision", %{user_id: user_id} do
     five_days_ago =
       DateTime.utc_now()

@@ -292,7 +292,7 @@ defmodule Maraithon.BriefsTest do
 
     assert payload.text =~ "Morning brief for you"
     assert payload.text =~ "You need to approve the finance reply."
-    assert payload.text =~ "your next move is to review the open work."
+    assert payload.text =~ "Your next move is to review the open work."
     assert payload.text =~ "You should confirm the invoice status."
     assert payload.text =~ "This needs your attention before noon."
 

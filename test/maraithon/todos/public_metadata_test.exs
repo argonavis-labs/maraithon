@@ -24,6 +24,24 @@ defmodule Maraithon.Todos.PublicMetadataTest do
                "why_it_matters" => "Michael is waiting on the campaign decision."
              }
     end
+
+    test "polishes public context copy and drops internal labeled lines" do
+      metadata = %{
+        "why_now" => """
+        source_context: The user needs to approve the finance reply.
+        confidence_score: 0.94
+        The operator's next move is to review the todo list.
+        """,
+        "source_quote" => "evidence_excerpt: The user asked for a corrected receipt.",
+        "body_excerpt" => ~s({"metadata":{"score":0.92}})
+      }
+
+      assert PublicMetadata.todo(metadata) == %{
+               "why_now" =>
+                 "You need to approve the finance reply. Your next move is to review the todo list.",
+               "source_quote" => "You asked for a corrected receipt."
+             }
+    end
   end
 
   describe "person/1" do
