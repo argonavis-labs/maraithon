@@ -170,14 +170,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "commitment_tracker"
-    assert brief.body =~ "Logged in Maraithon:"
+    assert brief.body =~ "Saved to your Maraithon list:"
+    assert brief.body =~ "- Send Elena the revised Runner ambassador agreement"
     assert brief.metadata["origin_skill_id"] == "commitment_tracker"
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_inbox"]) == 1
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_sent"]) == 1
     assert get_in(brief.metadata, ["tracker_input", "counts", "calendar_upcoming_events"]) == 1
 
     [todo] = Todos.list_for_user(user_id, source: "gmail", limit: 5)
-    assert brief.body =~ todo.id
+    refute brief.body =~ todo.id
     assert todo.title == "Send Elena the revised Runner ambassador agreement"
     assert todo.metadata["origin_skill_id"] == "commitment_tracker"
     assert todo.metadata["commitment_direction"] == "i_owe"

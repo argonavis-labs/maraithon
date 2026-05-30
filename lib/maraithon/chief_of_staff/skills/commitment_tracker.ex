@@ -742,15 +742,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       todos
       |> Enum.take(10)
       |> Enum.map(fn %Todo{} = todo ->
-        "- #{todo.id} - #{todo.title}"
+        "- #{todo_title(todo)}"
       end)
+
+    additional_count = max(length(todos) - length(lines), 0)
 
     summary_lines =
       []
-      |> maybe_append(lines != [], ["", "Logged in Maraithon:"] ++ lines)
-      |> maybe_append(skipped_count > 0, [
-        "- #{skipped_count} duplicate or already-covered item(s) skipped by todo intelligence."
-      ])
+      |> maybe_append(lines != [], ["", "Saved to your Maraithon list:"] ++ lines)
+      |> maybe_append(additional_count > 0, [saved_more_line(additional_count)])
+      |> maybe_append(skipped_count > 0, [already_covered_line(skipped_count)])
 
     if summary_lines == [] do
       report
@@ -765,6 +766,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "\nMaraithon found possible commitments, but could not save them as todos. Review the source-backed summary above before acting."
     )
   end
+
+  defp todo_title(%Todo{title: title}) when is_binary(title) and title != "", do: title
+  defp todo_title(%Todo{}), do: "Open commitment"
+
+  defp saved_more_line(1), do: "- 1 more saved item."
+  defp saved_more_line(count), do: "- #{count} more saved items."
+
+  defp already_covered_line(1), do: "- Already on your list: 1 duplicate or covered item."
+
+  defp already_covered_line(count),
+    do: "- Already on your list: #{count} duplicates or covered items."
 
   defp append_report_body(report, addition) do
     body = read_string(report, "body", "")
