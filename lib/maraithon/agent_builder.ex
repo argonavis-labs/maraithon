@@ -94,7 +94,7 @@ defmodule Maraithon.AgentBuilder do
           kind: :provider_service,
           provider: "google",
           service: "gmail",
-          label: "Google Gmail",
+          label: "Gmail",
           description: "Needed for follow-through loops and travel logistics.",
           required?: true
         },
@@ -253,7 +253,7 @@ defmodule Maraithon.AgentBuilder do
           kind: :provider_service,
           provider: "google",
           service: "gmail",
-          label: "Google Gmail",
+          label: "Gmail",
           description: "Required to find flight and hotel confirmations.",
           required?: true
         },
@@ -328,7 +328,7 @@ defmodule Maraithon.AgentBuilder do
           kind: :provider_service,
           provider: "google",
           service: "gmail",
-          label: "Google Gmail",
+          label: "Gmail",
           description: "Needed to inspect recent inbox activity.",
           required?: true
         },

@@ -88,12 +88,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert html =~ "Chief of Staff"
       assert html =~ "executives who want broader follow-through coverage"
-      assert html =~ "Google Gmail"
+      assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Blocked"
       assert html =~ "Resolve the highlighted blockers before launch."
+      refute html =~ "Google Gmail"
       refute html =~ "operators who want"
     end
 
@@ -109,12 +110,13 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       assert html =~ "Chief of Staff"
       assert html =~ "executives who want one proactive operating layer"
-      assert html =~ "Google Gmail"
+      assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Slack Channels"
       assert html =~ "Slack Personal DMs"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
+      refute html =~ "Google Gmail"
       refute html =~ "operators who want"
     end
 
@@ -208,10 +210,11 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
 
       assert html =~ "Personal Assistant"
-      assert html =~ "Google Gmail"
+      assert html =~ "Gmail"
       assert html =~ "Google Calendar"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
+      refute html =~ "Google Gmail"
     end
 
     test "uses simple mode by default and reveals advanced controls on demand", %{conn: conn} do

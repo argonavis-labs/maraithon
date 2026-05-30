@@ -60,7 +60,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         kind: :provider_service,
         provider: "google",
         service: "gmail",
-        label: "Google Gmail",
+        label: "Gmail",
         description: "Required to scan recent sent and received mail for commitments.",
         required?: true
       },

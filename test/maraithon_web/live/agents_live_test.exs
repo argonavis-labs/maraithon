@@ -62,9 +62,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     assert html =~ "Automations"
     assert html =~ "Watches inbox and calendar context"
-    assert html =~ "Google Gmail"
+    assert html =~ "Gmail"
     assert html =~ "Slack Channels"
     assert html =~ "Telegram"
+    refute html =~ "Google Gmail"
   end
 
   test "renders automation timestamps in the Chief of Staff timezone", %{conn: conn} do

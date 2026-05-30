@@ -48,7 +48,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Followthrough do
         kind: :provider_service,
         provider: "google",
         service: "gmail",
-        label: "Google Gmail",
+        label: "Gmail",
         description: "Needed to inspect recent inbox activity.",
         required?: true
       },

@@ -11,9 +11,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
   alias MaraithonWeb.AgentActionCopy
 
   @tool_provider_requirements %{
-    "gmail_get_message" => %{provider: "google", service: "gmail", label: "Google Gmail"},
-    "gmail_list_recent" => %{provider: "google", service: "gmail", label: "Google Gmail"},
-    "gmail_search" => %{provider: "google", service: "gmail", label: "Google Gmail"},
+    "gmail_get_message" => %{provider: "google", service: "gmail", label: "Gmail"},
+    "gmail_list_recent" => %{provider: "google", service: "gmail", label: "Gmail"},
+    "gmail_search" => %{provider: "google", service: "gmail", label: "Gmail"},
     "google_calendar_list_events" => %{
       provider: "google",
       service: "calendar",

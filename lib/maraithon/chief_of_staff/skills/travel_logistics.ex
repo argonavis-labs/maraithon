@@ -41,7 +41,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
         kind: :provider_service,
         provider: "google",
         service: "gmail",
-        label: "Google Gmail",
+        label: "Gmail",
         description: "Required to find flight and hotel confirmations.",
         required?: true
       },
