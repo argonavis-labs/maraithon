@@ -59,6 +59,7 @@ enum ProductionDataSync {
         todo.dueDate = remoteTodo.dueAt
         todo.isCompleted = remoteTodo.status == "done"
         todo.completedAt = remoteTodo.closedAt
+        apply(remoteTodo.actionCard, to: todo)
     }
 
     static func apply(_ remotePerson: MobileAPIClient.RemotePerson, to contact: CRMContact) {
@@ -184,8 +185,21 @@ enum ProductionDataSync {
             priority: priority(from: remoteTodo.priority),
             dueDate: remoteTodo.dueAt,
             isCompleted: remoteTodo.status == "done",
-            completedAt: remoteTodo.closedAt
+            completedAt: remoteTodo.closedAt,
+            decisionPrompt: cleanedText(remoteTodo.actionCard?.decisionPrompt),
+            whyNow: cleanedText(remoteTodo.actionCard?.whyNow),
+            sourceContext: cleanedText(remoteTodo.actionCard?.sourceContext),
+            nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
+            evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt)
         )
+    }
+
+    private static func apply(_ actionCard: MobileAPIClient.RemoteActionCard?, to todo: TodoItem) {
+        todo.decisionPrompt = cleanedText(actionCard?.decisionPrompt)
+        todo.whyNow = cleanedText(actionCard?.whyNow)
+        todo.sourceContext = cleanedText(actionCard?.sourceContext)
+        todo.nextBestAction = cleanedText(actionCard?.nextBestAction)
+        todo.evidenceExcerpt = cleanedText(actionCard?.evidenceExcerpt)
     }
 
     static func contact(from remotePerson: MobileAPIClient.RemotePerson, id: UUID) -> CRMContact {

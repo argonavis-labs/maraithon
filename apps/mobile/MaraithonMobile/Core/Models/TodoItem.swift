@@ -12,6 +12,11 @@ final class TodoItem {
     var isCompleted: Bool
     var createdAt: Date
     var completedAt: Date?
+    var decisionPrompt: String?
+    var whyNow: String?
+    var sourceContext: String?
+    var nextBestAction: String?
+    var evidenceExcerpt: String?
     @Relationship(deleteRule: .nullify, inverse: \CRMContact.todos) var contact: CRMContact?
 
     var priority: TodoPriority {
@@ -29,6 +34,11 @@ final class TodoItem {
         isCompleted: Bool = false,
         createdAt: Date = Date(),
         completedAt: Date? = nil,
+        decisionPrompt: String? = nil,
+        whyNow: String? = nil,
+        sourceContext: String? = nil,
+        nextBestAction: String? = nil,
+        evidenceExcerpt: String? = nil,
         contact: CRMContact? = nil
     ) {
         self.id = id
@@ -40,6 +50,11 @@ final class TodoItem {
         self.isCompleted = isCompleted
         self.createdAt = createdAt
         self.completedAt = completedAt
+        self.decisionPrompt = decisionPrompt
+        self.whyNow = whyNow
+        self.sourceContext = sourceContext
+        self.nextBestAction = nextBestAction
+        self.evidenceExcerpt = evidenceExcerpt
         self.contact = contact
     }
 

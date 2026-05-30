@@ -32,6 +32,7 @@ struct TodayFocusItem: Equatable, Identifiable {
     let referenceID: UUID
     let title: String
     let subtitle: String
+    let detail: String?
     let systemImage: String
     let priority: Int
 
@@ -134,6 +135,7 @@ enum TodayInsightEngine {
                         fallback: dueSubtitle(for: dueDate, now: now),
                         prefix: dueSubtitle(for: dueDate, now: now)
                     ),
+                    detail: todoFocusDetail(for: todo),
                     systemImage: "clock.badge.exclamationmark",
                     priority: 100 + priorityWeight(for: todo.priority)
                 )
@@ -146,6 +148,7 @@ enum TodayInsightEngine {
                     referenceID: todo.id,
                     title: todo.title,
                     subtitle: todoFocusSubtitle(for: todo, fallback: "Due today", prefix: "Today"),
+                    detail: todoFocusDetail(for: todo),
                     systemImage: todo.priority.symbolName,
                     priority: 80 + priorityWeight(for: todo.priority)
                 )
@@ -161,6 +164,7 @@ enum TodayInsightEngine {
                         fallback: "\(todo.priority.title) urgency",
                         prefix: todo.priority.title
                     ),
+                    detail: todoFocusDetail(for: todo),
                     systemImage: todo.priority.symbolName,
                     priority: todo.priority == .critical ? 85 : 65
                 )
@@ -178,6 +182,7 @@ enum TodayInsightEngine {
                     referenceID: contact.id,
                     title: contact.name,
                     subtitle: "\(relationshipContext(for: contact)) needs follow-up",
+                    detail: relationshipDetail(for: contact, now: now),
                     systemImage: "person.crop.circle.badge.exclamationmark",
                     priority: 75
                 )
@@ -190,6 +195,7 @@ enum TodayInsightEngine {
                     referenceID: contact.id,
                     title: contact.name,
                     subtitle: "Follow up with \(relationshipContext(for: contact))",
+                    detail: relationshipDetail(for: contact, now: now),
                     systemImage: "person.wave.2",
                     priority: 60
                 )
@@ -244,11 +250,43 @@ enum TodayInsightEngine {
         fallback: String,
         prefix: String
     ) -> String {
+        if let decisionPrompt = cleanedText(todo.decisionPrompt) {
+            return decisionPrompt
+        }
+
         guard let nextAction = todo.displayNextAction else {
             return fallback
         }
 
         return "\(prefix): \(nextAction)"
+    }
+
+    private static func todoFocusDetail(for todo: TodoItem) -> String? {
+        let whyNow = cleanedText(todo.whyNow).map { "Why now: \($0)" }
+        let sourceContext = cleanedText(todo.sourceContext)
+
+        return [whyNow, sourceContext]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .nilIfBlank
+    }
+
+    private static func relationshipDetail(
+        for contact: CRMContact,
+        now: Date
+    ) -> String? {
+        let recency: String
+        if let lastContactedAt = contact.lastContactedAt {
+            recency = "Last reached out \(AppFormatters.relativeString(for: lastContactedAt, relativeTo: now))"
+        } else {
+            recency = "No recent contact logged"
+        }
+
+        if let notes = cleanedText(contact.notes) {
+            return "\(recency). \(notes)"
+        }
+
+        return recency
     }
 
     private static func dueSubtitle(for dueDate: Date, now: Date) -> String {
@@ -279,5 +317,21 @@ enum TodayInsightEngine {
 
     private static func objectPronoun(_ count: Int) -> String {
         count == 1 ? "it" : "them"
+    }
+
+    private static func cleanedText(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+
+        return value
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

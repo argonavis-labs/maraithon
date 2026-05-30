@@ -158,6 +158,60 @@ struct TodayInsightEngineTests {
     }
 
     @Test
+    func focusQueueUsesSyncedDecisionCardContextWhenAvailable() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let todo = TodoItem(
+            title: "Reply to Michael",
+            notes: "Michael is waiting on the campaign update.",
+            nextAction: "Approve the short reply.",
+            priority: .high,
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60),
+            decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+            whyNow: "Michael is waiting and no later reply was found.",
+            sourceContext: "Checked Gmail"
+        )
+
+        let queue = TodayInsightEngine.focusQueue(
+            todos: [todo],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(queue.first?.subtitle == "Decide whether to send the campaign owner and ETA.")
+        #expect(queue.first?.detail == "Why now: Michael is waiting and no later reply was found. Checked Gmail")
+    }
+
+    @Test
+    func focusQueueExplainsRelationshipCareRecency() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let lastContactedAt = now.addingTimeInterval(-10 * 24 * 60 * 60)
+        let staleActive = CRMContact(
+            name: "Ada Chen",
+            company: "Northstar",
+            email: "ada@example.com",
+            status: .active,
+            lastContactedAt: lastContactedAt,
+            notes: "Prefers concise weekly updates."
+        )
+
+        let queue = TodayInsightEngine.focusQueue(
+            todos: [],
+            contacts: [staleActive],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(queue.first?.title == "Ada Chen")
+        #expect(queue.first?.subtitle == "Northstar needs follow-up")
+        #expect(queue.first?.detail == "Last reached out \(AppFormatters.relativeString(for: lastContactedAt, relativeTo: now)). Prefers concise weekly updates.")
+    }
+
+    @Test
     func briefPrioritizesOverdueWorkThenTodayThenRelationshipsThenOpenWorkThenChat() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

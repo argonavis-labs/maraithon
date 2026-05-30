@@ -67,6 +67,50 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
+    func listTodosRequestsDecisionCardsForMobileContext() async throws {
+        let recorder = HTTPRequestRecorder()
+        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
+        client.session = recorder.session(
+            statusCode: 200,
+            body:
+                """
+                {
+                  "todos": [
+                    {
+                      "id": "11111111-2222-3333-4444-555555555555",
+                      "title": "Reply to Michael",
+                      "summary": "Michael is waiting on the campaign update.",
+                      "next_action": "Approve the short reply.",
+                      "due_at": null,
+                      "notes": null,
+                      "priority": 80,
+                      "status": "open",
+                      "closed_at": null,
+                      "action_card": {
+                        "decision_prompt": "Decide whether to send the campaign owner and ETA.",
+                        "why_now": "Michael is waiting and no later reply was found.",
+                        "source_context": "Checked Gmail",
+                        "next_best_action": "Approve a short reply.",
+                        "evidence_excerpt": "Can you send the next update?"
+                      }
+                    }
+                  ]
+                }
+                """
+        )
+
+        let todos = try await client.listTodos(sessionToken: "session-token")
+        let request = try #require(recorder.requests.first)
+        let card = try #require(todos.first?.actionCard)
+
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=true")
+        #expect(card.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
+        #expect(card.whyNow == "Michael is waiting and no later reply was found.")
+        #expect(card.sourceContext == "Checked Gmail")
+    }
+
+    @Test
     func listPeopleRequestsAllRelationshipStates() async throws {
         let recorder = HTTPRequestRecorder()
         var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)

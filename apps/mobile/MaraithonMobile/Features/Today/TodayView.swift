@@ -415,6 +415,13 @@ private struct TodayFocusRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+
+                if let detail = item.detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
             }
         } icon: {
             Image(systemName: item.systemImage)

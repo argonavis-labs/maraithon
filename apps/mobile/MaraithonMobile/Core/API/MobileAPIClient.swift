@@ -115,6 +115,7 @@ struct MobileAPIClient {
         let priority: Int?
         let status: String
         let closedAt: Date?
+        let actionCard: RemoteActionCard?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -126,6 +127,61 @@ struct MobileAPIClient {
             case priority
             case status
             case closedAt = "closed_at"
+            case actionCard = "action_card"
+        }
+
+        init(
+            id: String,
+            title: String,
+            summary: String?,
+            nextAction: String?,
+            dueAt: Date?,
+            notes: String?,
+            priority: Int?,
+            status: String,
+            closedAt: Date?,
+            actionCard: RemoteActionCard? = nil
+        ) {
+            self.id = id
+            self.title = title
+            self.summary = summary
+            self.nextAction = nextAction
+            self.dueAt = dueAt
+            self.notes = notes
+            self.priority = priority
+            self.status = status
+            self.closedAt = closedAt
+            self.actionCard = actionCard
+        }
+    }
+
+    struct RemoteActionCard: Decodable, Equatable {
+        let decisionPrompt: String?
+        let whyNow: String?
+        let sourceContext: String?
+        let nextBestAction: String?
+        let evidenceExcerpt: String?
+
+        enum CodingKeys: String, CodingKey {
+            case decisionPrompt = "decision_prompt"
+            case whyNow = "why_now"
+            case sourceContext = "source_context"
+            case nextBestAction = "next_best_action"
+            case evidenceExcerpt = "evidence_excerpt"
+        }
+
+        init(
+            decisionPrompt: String? = nil,
+            whyNow: String? = nil,
+            sourceContext: String? = nil,
+            nextBestAction: String? = nil,
+            evidenceExcerpt: String? = nil
+        ) {
+            self.decisionPrompt = decisionPrompt
+            self.whyNow = whyNow
+            self.sourceContext = sourceContext
+            self.nextBestAction = nextBestAction
+            self.evidenceExcerpt = evidenceExcerpt
         }
     }
 
@@ -271,7 +327,7 @@ struct MobileAPIClient {
 
     func listTodos(sessionToken: String) async throws -> [RemoteTodo] {
         let response: TodosResponse = try await send(
-            path: "/todos?limit=200&status=all&sort=updated&dir=desc",
+            path: "/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=true",
             sessionToken: sessionToken,
             responseType: TodosResponse.self
         )

@@ -207,6 +207,29 @@ struct ProductionDataSyncTests {
         #expect(todo.displayNextAction == "Reply with the support plan, owner, and next review date.")
     }
 
+    @Test
+    func remoteTodoDecisionCardContextSurvivesSyncForTodayRows() {
+        let remote = remoteTodo(
+            summary: "Michael is waiting on the campaign update.",
+            nextAction: "Approve the short reply.",
+            actionCard: MobileAPIClient.RemoteActionCard(
+                decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+                whyNow: "Michael is waiting and no later reply was found.",
+                sourceContext: "Checked Gmail",
+                nextBestAction: "Approve a short reply.",
+                evidenceExcerpt: "Can you send the next update?"
+            )
+        )
+
+        let todo = ProductionDataSync.todo(from: remote, id: UUID())
+
+        #expect(todo.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
+        #expect(todo.whyNow == "Michael is waiting and no later reply was found.")
+        #expect(todo.sourceContext == "Checked Gmail")
+        #expect(todo.nextBestAction == "Approve a short reply.")
+        #expect(todo.evidenceExcerpt == "Can you send the next update?")
+    }
+
     private func todoPayloadPriority(_ priority: TodoPriority) -> Int? {
         ProductionDataSync.todoPayload(
             title: "Send investor update",
@@ -240,7 +263,8 @@ struct ProductionDataSyncTests {
         status: String = "open",
         priority: Int? = 55,
         summary: String? = nil,
-        nextAction: String? = nil
+        nextAction: String? = nil,
+        actionCard: MobileAPIClient.RemoteActionCard? = nil
     ) -> MobileAPIClient.RemoteTodo {
         MobileAPIClient.RemoteTodo(
             id: UUID().uuidString,
@@ -251,7 +275,8 @@ struct ProductionDataSyncTests {
             notes: nil,
             priority: priority,
             status: status,
-            closedAt: nil
+            closedAt: nil,
+            actionCard: actionCard
         )
     }
 }
