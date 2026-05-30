@@ -123,6 +123,12 @@ final class SourceRegistry {
         )
 
         for source in registered.values where blockedIDs.contains(source.id) {
+            source.statusPublisher.clearFullDiskAccessBlock()
+        }
+
+        refreshStates()
+
+        for source in registered.values where blockedIDs.contains(source.id) {
             Task { @MainActor in
                 do {
                     try await source.syncNow()

@@ -167,6 +167,30 @@ final class SourceRegistryPauseTests: XCTestCase {
         XCTAssertEqual(voiceMemos.syncCount, 1)
         XCTAssertEqual(calendar.syncCount, 0)
     }
+
+    func testSyncFullDiskAccessBlockedSourcesClearsStalePermissionStateBeforeRecheck() async {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        registry.register(imessage)
+        registry.register(calendar)
+
+        imessage.statusPublisher.recordHealthyCycle(at: Date())
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+
+        registry.syncFullDiskAccessBlockedSources()
+
+        XCTAssertNil(imessage.statusPublisher.blockingPermissionReason)
+        XCTAssertEqual(imessage.statusPublisher.displayedState(), .connected)
+        XCTAssertEqual(calendar.statusPublisher.displayedState(), .error(reason: "calendar_not_authorized"))
+        XCTAssertTrue(registry.fullDiskAccessBlockedSources().isEmpty)
+
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertEqual(imessage.syncCount, 1)
+        XCTAssertEqual(calendar.syncCount, 0)
+    }
 }
 
 @MainActor

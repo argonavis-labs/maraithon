@@ -259,6 +259,32 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(restored.displayedState(), .connected)
     }
 
+    func testClearFullDiskAccessBlockRemovesPersistedPermissionState() {
+        let reason = "imessage_full_disk_access_required"
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.recordHealthyCycle(at: Date())
+        publisher.update(state: .needsAttention(reason: reason))
+
+        XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+
+        publisher.clearFullDiskAccessBlock()
+
+        XCTAssertNil(publisher.blockingPermissionReason)
+        XCTAssertEqual(publisher.state, .connected)
+        XCTAssertEqual(publisher.displayedState(), .connected)
+    }
+
+    func testClearFullDiskAccessBlockDoesNotClearOtherPermissionFailures() {
+        let reason = "calendar_not_authorized"
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.update(state: .needsAttention(reason: reason))
+
+        publisher.clearFullDiskAccessBlock()
+
+        XCTAssertEqual(publisher.blockingPermissionReason, reason)
+        XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+    }
+
     func testPersistentPublisherDoesNotRestoreNonBlockingAttention() {
         let defaults = makeDefaults()
         let reason = "voice_memos_speech_not_authorized"

@@ -182,6 +182,36 @@ final class SourceStatusPublisher {
         persist()
     }
 
+    /// Clears the durable Full Disk Access blocker after the app has
+    /// independently proved that the macOS grant is present. Source
+    /// start-up remains conservative: ordinary `.connected` updates do
+    /// not erase permission blocks until this probe or a healthy cycle
+    /// proves the app can read protected stores.
+    func clearFullDiskAccessBlock() {
+        guard let reason = blockingPermissionReason,
+              SourceState.isFullDiskAccessReason(reason)
+        else {
+            return
+        }
+
+        blockingPermissionReason = nil
+
+        if case .needsAttention(let stateReason) = state,
+           SourceState.isFullDiskAccessReason(stateReason) {
+            state = .connected
+        } else if case .error(let stateReason) = state,
+                  SourceState.isFullDiskAccessReason(stateReason) {
+            state = .connected
+        }
+
+        if let issue = activeIssue,
+           SourceState.isFullDiskAccessReason(issue.reason) {
+            activeIssue = nil
+        }
+
+        persist()
+    }
+
     func displayedState() -> SourceState {
         if let blockingPermissionReason {
             return .error(reason: blockingPermissionReason)
