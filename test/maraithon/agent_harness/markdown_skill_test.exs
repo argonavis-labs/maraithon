@@ -33,6 +33,24 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "Generic phrases such as \"send the follow-up\" are not enough"
   end
 
+  test "travel logistics skill requires actionable trip briefs" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/chief_of_staff/travel_logistics.md")
+
+    assert skill.id == "travel_logistics"
+    assert skill.name == "Travel Logistics"
+    assert skill.instructions =~ "This is not a raw itinerary dump"
+    assert skill.instructions =~ "Return ONLY valid JSON"
+
+    assert skill.instructions =~
+             "\"status\": \"ready|incomplete|changed|cancelled|no_reliable_trip|source_gap\""
+
+    assert skill.instructions =~ "`CHECK BEFORE YOU GO`"
+    assert skill.instructions =~ "`NEXT MOVE`"
+    assert skill.instructions =~ "Never invent confirmation codes"
+    assert skill.instructions =~ "return a `source_gap` object instead of a heuristic itinerary"
+  end
+
   test "loads priv markdown skills through configured runtime priv dir" do
     project_priv_dir = Path.expand("priv")
     previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")
