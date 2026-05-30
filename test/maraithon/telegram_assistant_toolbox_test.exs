@@ -688,10 +688,11 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              )
 
     assert unknown_copy ==
-             "That assistant action is not available. Refresh the message before asking again."
+             "That action is not available. Refresh the message before asking again."
 
     refute unknown_copy =~ "unknown_private_tool"
     refute unknown_copy =~ "unknown_tool"
+    refute unknown_copy =~ "assistant action"
 
     assert {:error, confirmation_copy} =
              Toolbox.execute(

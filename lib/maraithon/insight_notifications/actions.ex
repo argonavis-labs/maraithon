@@ -1071,7 +1071,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     case primary_action(insight) do
       %{label: label} ->
         action_intro =
-          "Suggested: tap #{label}; I'll draft for approval before #{delivery_verb(insight)}."
+          "Suggested: tap #{label} to draft for approval before #{delivery_verb(insight)}."
 
         action_detail = proactive_action_detail(base_text, insight, metadata)
 

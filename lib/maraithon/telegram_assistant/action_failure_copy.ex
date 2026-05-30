@@ -56,7 +56,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
     "reminder_not_found" => "That reminder is no longer available.",
     "todo_not_found" => "That work item is no longer available. Refresh open work.",
     "unknown_telegram_tool" =>
-      "That assistant action is not available. Refresh the message before asking again.",
+      "That action is not available. Refresh the message before asking again.",
     "unsupported_person_link_operation" => "That person update is not available.",
     "unsupported_todo_status" => "That work item update is not available.",
     "visit_not_found" => "That browser visit is no longer available.",

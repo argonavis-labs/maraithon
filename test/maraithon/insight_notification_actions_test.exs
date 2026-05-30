@@ -133,6 +133,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "<b>Next</b>"
     assert sent.text =~ "tap Draft Email"
     assert sent.text =~ "approval before sending"
+    refute sent.text =~ "I'll draft"
 
     assert sent.text =~
              "Send the promised follow-through now and explicitly confirm delivery"
@@ -407,6 +408,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Suggested:"
     assert sent.text =~ "tap Draft Email"
     assert sent.text =~ "approval before sending"
+    refute sent.text =~ "I'll draft"
     assert sent.text =~ "open the Intro launch video thread"
     assert sent.text =~ "confirm what Renat Gabitov is waiting on"
     assert String.length(sent.text) <= 700
@@ -534,6 +536,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     sent = last_telegram_message(:send)
     assert sent.text =~ "tap Draft Slack"
     assert sent.text =~ "approval before posting"
+    refute sent.text =~ "I'll draft"
     assert button_labels(sent.opts) |> Enum.member?("Draft Slack")
 
     :ok =

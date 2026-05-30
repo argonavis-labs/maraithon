@@ -650,7 +650,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       )
 
     """
-    Why I'm checking in:
+    Why this check-in matters:
     #{check_in_guidance(top_items)}
 
     Move now:
@@ -658,7 +658,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     #{workload}
 
-    Reply here when one is handled and I'll refresh the rest.
+    Reply here when one is handled; Maraithon will refresh the rest.
     """
     |> String.trim()
   end

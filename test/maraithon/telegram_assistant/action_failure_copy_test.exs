@@ -127,10 +127,11 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
     assert confirmation_copy == "Confirm this action before it runs."
 
     assert denied_copy ==
-             "That assistant action is not available. Refresh the message before asking again."
+             "That action is not available. Refresh the message before asking again."
 
     refute confirmation_copy =~ "tool_policy"
     refute denied_copy =~ "unknown_tool"
+    refute denied_copy =~ "assistant action"
   end
 
   test "linear lookup and prepared action copy hide raw persistence failures" do
