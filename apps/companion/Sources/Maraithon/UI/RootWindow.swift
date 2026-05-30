@@ -227,6 +227,11 @@ struct FullDiskAccessRequiredBanner: View {
                         .font(.caption)
                         .foregroundStyle(StatusTone.attention.color)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if let reminder = FullDiskAccessInstallHint.stableGrantReminder {
+                    Text(reminder)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer()
@@ -264,6 +269,9 @@ struct FullDiskAccessRequiredBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
         .accessibilityElement(children: .combine)
+        .task {
+            await pollFullDiskAccessGrant()
+        }
     }
 
     static func detailText(blockedSourceNames: [String]) -> String {
@@ -326,11 +334,30 @@ struct FullDiskAccessRequiredBanner: View {
     }
 
     private func checkAgain() {
-        if FullDiskAccessProbe.isGranted() {
-            env.onboarding.recordFullDiskAccessGranted()
-            env.sources.syncFullDiskAccessBlockedSources()
-        } else {
-            env.sources.syncNow()
+        if clearFullDiskAccessBlockIfGranted() {
+            return
+        }
+
+        env.sources.syncNow()
+    }
+
+    @MainActor
+    private func clearFullDiskAccessBlockIfGranted() -> Bool {
+        guard FullDiskAccessProbe.isGranted() else {
+            return false
+        }
+
+        env.onboarding.recordFullDiskAccessGranted()
+        env.sources.syncFullDiskAccessBlockedSources()
+        return true
+    }
+
+    private func pollFullDiskAccessGrant() async {
+        while !Task.isCancelled {
+            if clearFullDiskAccessBlockIfGranted() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 }

@@ -23,6 +23,16 @@ enum FullDiskAccessInstallHint {
     static let stableDevelopmentAppDisplayPath = "~/Applications/Maraithon.app"
     static let switchToStableAppButtonTitle = "Switch to stable app"
     static let installStableAppButtonTitle = "Install stable app"
+    static var stableGrantReminder: String? {
+        #if DEBUG
+        return """
+            For local builds, grant Full Disk Access to \(stableDevelopmentAppDisplayPath). \
+            If System Settings shows more than one Maraithon, remove old entries first.
+            """
+        #else
+        return nil
+        #endif
+    }
 
     static func current(
         bundleURL: URL = Bundle.main.bundleURL,

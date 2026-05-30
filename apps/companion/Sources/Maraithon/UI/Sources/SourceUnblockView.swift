@@ -44,6 +44,12 @@ struct SourceUnblockView: View {
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: 480, alignment: .leading)
                     .accessibilityElement(children: .combine)
+                } else if hint.requiresStableFullDiskAccessApp,
+                          let reminder = FullDiskAccessInstallHint.stableGrantReminder {
+                    Text(reminder)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .multilineTextAlignment(.center)
@@ -105,15 +111,39 @@ struct SourceUnblockView: View {
             guard newPhase == .active else { return }
             checkAgain()
         }
+        .task(id: hint.requiresStableFullDiskAccessApp) {
+            guard hint.requiresStableFullDiskAccessApp else { return }
+            await pollFullDiskAccessGrant()
+        }
     }
 
     private func checkAgain() {
-        if env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
-           FullDiskAccessProbe.isGranted() {
-            env.onboarding.recordFullDiskAccessGranted()
-            env.sources.syncFullDiskAccessBlockedSources()
-        } else {
-            env.sources.syncNow(id: sourceID)
+        if clearFullDiskAccessBlockIfGranted() {
+            return
+        }
+
+        env.sources.syncNow(id: sourceID)
+    }
+
+    @MainActor
+    private func clearFullDiskAccessBlockIfGranted() -> Bool {
+        guard env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
+              FullDiskAccessProbe.isGranted()
+        else {
+            return false
+        }
+
+        env.onboarding.recordFullDiskAccessGranted()
+        env.sources.syncFullDiskAccessBlockedSources()
+        return true
+    }
+
+    private func pollFullDiskAccessGrant() async {
+        while !Task.isCancelled {
+            if clearFullDiskAccessBlockIfGranted() {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 

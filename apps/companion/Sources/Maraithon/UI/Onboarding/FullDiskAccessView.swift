@@ -73,6 +73,13 @@ struct FullDiskAccessView: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: 420, alignment: .leading)
                 .accessibilityElement(children: .combine)
+            } else if let reminder = FullDiskAccessInstallHint.stableGrantReminder {
+                Text(reminder)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 420, alignment: .leading)
             }
 
             VStack(spacing: Tokens.Spacing.small) {

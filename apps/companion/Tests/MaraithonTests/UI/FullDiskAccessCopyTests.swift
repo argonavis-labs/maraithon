@@ -82,6 +82,15 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertNil(FullDiskAccessInstallHint.message(for: bundle, homeDirectory: home))
     }
 
+    func testStableGrantReminderPointsAtPersistentLocalApp() throws {
+        let reminder = try XCTUnwrap(FullDiskAccessInstallHint.stableGrantReminder)
+
+        XCTAssertTrue(reminder.contains("~/Applications/Maraithon.app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("local builds"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("more than one Maraithon"))
+        XCTAssertFalse(reminder.localizedCaseInsensitiveContains("DerivedData"))
+    }
+
     func testInstallHintIncludesStableAppStatusAndURL() throws {
         let fileManager = FileManager.default
         let home = fileManager.temporaryDirectory
