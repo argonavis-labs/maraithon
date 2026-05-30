@@ -512,10 +512,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       |> Enum.map(&safe_user_line/1)
       |> Enum.reject(&is_nil/1)
 
-    case lines do
-      [] -> fallback_check_in_body(check_in_input)
-      lines -> Enum.join(lines, "\n\n")
-    end
+    body =
+      case lines do
+        [] -> fallback_check_in_body(check_in_input)
+        lines -> Enum.join(lines, "\n\n")
+      end
+
+    ensure_opening_context(body, check_in_input)
   end
 
   defp first_safe_user_line(value) do
@@ -637,23 +640,106 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     "#{opening} #{next_move}"
   end
 
-  defp opening_range_label(check_in_input) do
-    check_in_input
-    |> read_list("openings")
-    |> List.first()
-    |> case do
-      opening when is_map(opening) ->
-        start_at = opening |> read_string("local_start", nil) |> clock_label()
-        end_at = opening |> read_string("local_end", nil) |> clock_label()
-
-        if start_at && end_at do
-          "#{start_at}-#{end_at}"
-        end
-
-      _ ->
-        nil
+  defp ensure_opening_context(body, check_in_input) do
+    if body_mentions_opening?(body, check_in_input) do
+      body
+    else
+      case opening_sentence(check_in_input) do
+        nil -> body
+        opening -> "#{opening}\n\n#{body}"
+      end
     end
   end
+
+  defp opening_sentence(check_in_input) do
+    case opening_range_label(check_in_input) do
+      nil -> nil
+      range -> "You have #{range} open."
+    end
+  end
+
+  defp body_mentions_opening?(body, check_in_input) do
+    variants =
+      check_in_input
+      |> opening_mention_variants()
+      |> Enum.map(&normalize_opening_text/1)
+      |> Enum.reject(&(&1 == "" or &1 == "to"))
+
+    if variants == [] do
+      false
+    else
+      normalized_body = normalize_opening_text(body)
+
+      Enum.any?(variants, &String.contains?(normalized_body, &1))
+    end
+  end
+
+  defp opening_range_label(check_in_input) do
+    check_in_input
+    |> opening_range_labels()
+    |> List.first()
+  end
+
+  defp opening_range_labels(check_in_input) do
+    check_in_input
+    |> check_in_openings()
+    |> Enum.map(&opening_range_label_for/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp opening_range_label_for(opening) when is_map(opening) do
+    start_at = opening |> read_string("local_start", nil) |> clock_label()
+    end_at = opening |> read_string("local_end", nil) |> clock_label()
+
+    if start_at && end_at do
+      "#{start_at}-#{end_at}"
+    end
+  end
+
+  defp opening_range_label_for(_opening), do: nil
+
+  defp opening_mention_variants(check_in_input) do
+    check_in_input
+    |> check_in_openings()
+    |> Enum.flat_map(&opening_mention_variants_for/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp check_in_openings(check_in_input) when is_map(check_in_input) do
+    case Map.get(check_in_input, "openings") || Map.get(check_in_input, :openings) do
+      openings when is_list(openings) -> openings
+      _ -> []
+    end
+  end
+
+  defp check_in_openings(_check_in_input), do: []
+
+  defp opening_mention_variants_for(opening) when is_map(opening) do
+    start_at = opening |> read_string("local_start", nil) |> clock_label()
+    end_at = opening |> read_string("local_end", nil) |> clock_label()
+    short_start = short_clock_label(start_at)
+    short_end = short_clock_label(end_at)
+
+    range_variants(start_at, end_at) ++ range_variants(short_start, short_end)
+  end
+
+  defp opening_mention_variants_for(_opening), do: []
+
+  defp range_variants(nil, _end_at), do: []
+  defp range_variants(_start_at, nil), do: []
+
+  defp range_variants(start_at, end_at) do
+    ["#{start_at}-#{end_at}", "#{start_at} - #{end_at}", "#{start_at} to #{end_at}"]
+  end
+
+  defp normalize_opening_text(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.trim()
+  end
+
+  defp normalize_opening_text(_value), do: ""
 
   defp primary_todo_move(check_in_input) do
     check_in_input
@@ -701,6 +787,37 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp clock_label(_value), do: nil
+
+  defp short_clock_label(nil), do: nil
+
+  defp short_clock_label(value) when is_binary(value) do
+    value
+    |> String.split(":")
+    |> case do
+      [hour, minute | _] ->
+        with {hour, ""} <- Integer.parse(hour),
+             {minute, ""} <- Integer.parse(minute) do
+          display_hour =
+            case rem(hour, 12) do
+              0 -> 12
+              hour -> hour
+            end
+
+          if minute == 0 do
+            Integer.to_string(display_hour)
+          else
+            "#{display_hour}:#{String.pad_leading(Integer.to_string(minute), 2, "0")}"
+          end
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp short_clock_label(_value), do: nil
 
   defp parse_response(response) do
     error =

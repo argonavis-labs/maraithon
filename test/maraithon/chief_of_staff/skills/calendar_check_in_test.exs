@@ -106,6 +106,36 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     assert brief.body =~ "noon meeting"
   end
 
+  test "anchors model check-ins to the concrete calendar opening", %{state: state} = ctx do
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context(ctx, events))
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "decision" => "send",
+          "title" => "Useful work block",
+          "summary" => "Good moment to unblock pricing.",
+          "body" => "Draft the pricing reply before the next meeting.",
+          "reason" => "There is open calendar time and a useful next move."
+        })
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _final_state} =
+             CalendarCheckIn.handle_effect_result(
+               {:llm_call, response},
+               pending,
+               context(ctx, events)
+             )
+
+    brief = Repo.get!(Brief, payload.brief_id)
+
+    assert brief.body ==
+             "You have 10:00-11:00 open.\n\nDraft the pricing reply before the next meeting"
+  end
+
   test "accepts markdown-fenced model JSON as a real check-in", %{state: state} = ctx do
     events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
 
