@@ -20,6 +20,10 @@ defmodule MaraithonWeb.SettingsController do
       %{name: "Workspace URL", value: MaraithonWeb.Endpoint.url()},
       %{name: "Assistant provider", value: assistant_engine_label(assistant_engine)},
       %{
+        name: "Provider key",
+        value: provider_key_status(runtime, assistant_engine)
+      },
+      %{
         name: "Response quality",
         value: configured_value(Keyword.get(runtime, :llm_model))
       },
@@ -150,6 +154,25 @@ defmodule MaraithonWeb.SettingsController do
   defp assistant_engine_label(nil), do: "Setup needed"
   defp assistant_engine_label(""), do: "Setup needed"
   defp assistant_engine_label(_other), do: "Custom engine"
+
+  defp provider_key_status(_runtime, "mock"), do: "Local test engine"
+  defp provider_key_status(_runtime, "unconfigured"), do: "Setup needed"
+  defp provider_key_status(_runtime, nil), do: "Setup needed"
+  defp provider_key_status(_runtime, ""), do: "Setup needed"
+
+  defp provider_key_status(runtime, "openai"),
+    do: key_status(Keyword.get(runtime, :openai_api_key) || Keyword.get(runtime, :llm_api_key))
+
+  defp provider_key_status(runtime, "openrouter"),
+    do:
+      key_status(Keyword.get(runtime, :openrouter_api_key) || Keyword.get(runtime, :llm_api_key))
+
+  defp provider_key_status(runtime, "anthropic"),
+    do: key_status(Keyword.get(runtime, :anthropic_api_key) || Keyword.get(runtime, :llm_api_key))
+
+  defp provider_key_status(runtime, _other), do: key_status(Keyword.get(runtime, :llm_api_key))
+
+  defp key_status(value), do: if(present?(value), do: "Configured", else: "Setup needed")
 
   defp reasoning_profile(runtime, "openai"),
     do: setting_value(Keyword.get(runtime, :openai_reasoning_effort))
