@@ -1123,13 +1123,30 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     brief = MorningBriefing.build_compact_fallback_brief(nil, "provider unavailable")
 
     assert brief["title"] == "Morning briefing"
-    assert brief["summary"] == "No priority has been verified yet."
+    assert brief["summary"] == "Core sources need a fresh pass before ranking the day."
     assert brief["body"] =~ "Core sources were not verified for this briefing."
+    assert brief["body"] =~ "Verify calendar, open work, inbox, Slack, and local sources"
     assert brief["body"] =~ "Calendar, open work, inbox, Slack, and local sources"
     assert brief["body"] =~ "Today's move: verify the day"
+    refute brief["body"] =~ "No priority has been verified yet"
     refute brief["body"] =~ "I could not"
     refute brief["body"] =~ "I "
     refute brief["body"] =~ "provider unavailable"
+  end
+
+  test "empty checked fallback scopes the lack of priority to checked sources" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "commercial_coverage" => %{}
+      })
+
+    assert brief["summary"] ==
+             "No priority surfaced in the checked sources; check calendar and open work before committing the day."
+
+    refute brief["summary"] =~ "No priority has been verified yet"
   end
 
   test "invalid model output records a compact checked fallback briefing",

@@ -1525,7 +1525,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp source_backed_fallback_brief(_brief_input, error_message) do
     %{
       "title" => "Morning briefing",
-      "summary" => "No priority has been verified yet.",
+      "summary" => "Core sources need a fresh pass before ranking the day.",
       "body" => fallback_no_source_body(error_message),
       "todos" => []
     }
@@ -1558,7 +1558,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "Use today to check next week's meetings, family logistics, and unresolved decisions."
 
       true ->
-        "No priority has been verified yet; check calendar and open work before committing the day."
+        "No priority surfaced in the checked sources; check calendar and open work before committing the day."
     end
   end
 
@@ -1902,10 +1902,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp fallback_no_source_body(_error_message) do
     """
-    Core sources were not verified for this briefing. Do not assume the day is clear yet.
+    Core sources were not verified for this briefing. Do not assume the day is clear.
 
     ## Needs Your Attention
-    - No priority has been verified yet.
+    - Verify calendar, open work, inbox, Slack, and local sources before ranking the day.
 
     ## Unknowns
     Calendar, open work, inbox, Slack, and local sources still need a fresh pass before this can be treated as a real daily read.
