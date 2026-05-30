@@ -359,7 +359,10 @@ defmodule Maraithon.BriefsTest do
     assert intro =~ "checking on these today"
     assert intro =~ "1 new today"
     assert intro =~ "1 still open from earlier"
-    assert intro =~ "Best next move: review each item now"
+
+    assert intro =~
+             "Best next move: start with the first item: Reply to finance about the receipt"
+
     assert intro =~ "keep what still matters"
     assert intro =~ "move anything that can wait"
     refute intro =~ "stale"
@@ -676,7 +679,10 @@ defmodule Maraithon.BriefsTest do
     assert message.text =~ "Why now: Pickup-form changes close today."
     assert message.text =~ "Next: Send the signed pickup form and ask for confirmation."
     assert message.text =~ "Evidence: School asked for the signed form before the pickup cutoff."
-    assert message.text =~ "Best next move: review each item now"
+
+    assert message.text =~
+             "Best next move: start with the first item: Reply to school about the pickup form"
+
     refute message.text =~ "clear decisions"
   end
 

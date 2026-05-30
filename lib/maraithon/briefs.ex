@@ -309,7 +309,7 @@ defmodule Maraithon.Briefs do
     #{greeting}
 
     #{detail_line}
-    Best next move: review each item now, close what is done, keep what still matters, and move anything that can wait.
+    Best next move: #{todo_digest_next_move(todos)}
     """
     |> String.trim()
   end
@@ -605,6 +605,17 @@ defmodule Maraithon.Briefs do
     end
   end
 
+  defp todo_digest_next_move([todo | _todos]) do
+    title =
+      todo
+      |> read_string("title", "the first open item")
+      |> UserFacingCopy.polish_text()
+
+    "start with the first item: #{title}; close what is done, keep what still matters, and move anything that can wait."
+  end
+
+  defp todo_digest_next_move(_todos), do: "nothing needs review right now."
+
   defp todo_digest_bucket(%Brief{} = brief, todo) do
     reference_date = todo_digest_reference_date(brief)
 
@@ -776,6 +787,12 @@ defmodule Maraithon.Briefs do
       _ ->
         nil
     end
+  end
+
+  defp fetch_attr(%_{} = struct, key) when is_binary(key) do
+    struct
+    |> Map.from_struct()
+    |> fetch_attr(key)
   end
 
   defp fetch_attr(map, key) when is_map(map) and is_binary(key) do

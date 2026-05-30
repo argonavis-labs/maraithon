@@ -1808,7 +1808,10 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "checking on these today"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 still open from earlier"
-    assert intro.text =~ "Best next move: review each item now"
+
+    assert intro.text =~
+             "Best next move: start with the first item: Reply to Charlie about the budget"
+
     assert intro.text =~ "keep what still matters"
     refute intro.text =~ "not important"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
@@ -1886,7 +1889,10 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "these still need movement tonight"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 still open from earlier"
-    assert intro.text =~ "Best next move: review each item now"
+
+    assert intro.text =~
+             "Best next move: start with the first item: Reply to David about the laptop"
+
     assert intro.text =~ "move anything that can wait"
     refute intro.text =~ "stale"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"

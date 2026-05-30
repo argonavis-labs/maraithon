@@ -359,7 +359,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
           <b>Open work</b>
           #{lines}
 
-          Best next move: review each item now, close what is done, keep what still matters, and move anything that can wait.
+          Best next move: #{todo_list_next_move(todos)}
           """
           |> String.trim()
       end
@@ -749,6 +749,14 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_title(todo) do
     read_string(todo, "title", "Open work")
   end
+
+  defp todo_list_next_move([todo | _todos]) do
+    title = todo |> todo_title() |> safe()
+
+    "start with the first item: #{title}; close what is done, keep what still matters, and move anything that can wait."
+  end
+
+  defp todo_list_next_move(_todos), do: "nothing needs review right now."
 
   defp todo_next_action(todo) do
     next_action = read_string(todo, "next_action")
