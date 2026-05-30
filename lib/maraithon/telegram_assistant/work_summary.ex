@@ -436,7 +436,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     end
   end
 
-  defp result_count_summary(0), do: "No results found."
+  defp result_count_summary(0), do: "This check did not return any results."
 
   defp result_count_summary(count),
     do: "Found #{format_count(count)} #{pluralize("result", count)}."

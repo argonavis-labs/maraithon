@@ -901,6 +901,34 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "Model"
   end
 
+  test "zero-count summaries are scoped to the current check" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "search_result_metadata",
+            "result" => %{"count" => 0}
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert [
+             %{
+               "tool" => "supporting_work",
+               "label" => "Supporting work",
+               "summary" => "This check did not return any results."
+             }
+           ] =
+             summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "No results found"
+    refute visible_text =~ "search_result_metadata"
+  end
+
   test "unknown failed tool names use generic recovery copy" do
     turn = %Turn{
       structured_data: %{
