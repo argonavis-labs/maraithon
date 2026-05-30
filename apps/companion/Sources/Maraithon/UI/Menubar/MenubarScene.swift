@@ -55,7 +55,7 @@ private struct MenuBarContent: View {
             Divider()
         }
 
-        Button("Sync Now") {
+        Button("Check Now") {
             env.syncNowFromMenu()
         }
         .keyboardShortcut("r", modifiers: .command)

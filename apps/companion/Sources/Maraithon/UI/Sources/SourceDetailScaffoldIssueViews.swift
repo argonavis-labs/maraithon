@@ -18,7 +18,7 @@ extension SourceDetailScaffold {
             Button {
                 env.sources.syncNow(id: sourceID)
             } label: {
-                Label("Sync now", systemImage: "arrow.clockwise")
+                Label("Check now", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
@@ -55,7 +55,7 @@ extension SourceDetailScaffold {
                 Button {
                     env.sources.syncNow(id: sourceID)
                 } label: {
-                    Label("Sync now", systemImage: "arrow.clockwise")
+                    Label("Check now", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -84,7 +84,7 @@ extension SourceDetailScaffold {
             Button {
                 env.sources.syncNow(id: sourceID)
             } label: {
-                Label("Sync now", systemImage: "arrow.clockwise")
+                Label("Check now", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)

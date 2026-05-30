@@ -376,8 +376,8 @@ enum DiagnosticsSettingsCopy {
         guard let publisher else { return "Status: Not registered. Last checked: Never" }
         let stateString: String
         switch publisher.displayedState() {
-        case .connected: stateString = "Connected"
-        case .syncing: stateString = "Syncing"
+        case .connected: stateString = "Assistant ready"
+        case .syncing: stateString = "Checking"
         case .paused: stateString = "Paused"
         case .disconnected: stateString = "Disconnected"
         case .needsAttention(let reason):

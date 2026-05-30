@@ -43,7 +43,8 @@ final class UIComponentsTests: XCTestCase {
 
     @MainActor
     func testHealthySourceCopyUsesOutcomeLanguage() {
-        XCTAssertEqual(SourceStatusBadge.State.connected.label, "Up to date")
+        XCTAssertEqual(SourceStatusBadge.State.connected.label, "Assistant ready")
+        XCTAssertEqual(SourceStatusBadge.State.syncing.label, "Checking")
 
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let label = SourceRowCopy.accessibilityLabel(
@@ -55,8 +56,10 @@ final class UIComponentsTests: XCTestCase {
             now: now
         )
 
-        XCTAssertEqual(label, "iMessage, up to date, last checked 2m ago")
+        XCTAssertEqual(label, "iMessage, assistant ready, last checked 2m ago")
         XCTAssertFalse(label.localizedCaseInsensitiveContains("connected"))
+        XCTAssertFalse(label.localizedCaseInsensitiveContains("up to date"))
+        XCTAssertFalse(SourceStatusBadge.State.syncing.label.localizedCaseInsensitiveContains("syncing"))
     }
 
     @MainActor
@@ -158,6 +161,15 @@ final class UIComponentsTests: XCTestCase {
             ),
             "2hr"
         )
+        XCTAssertEqual(
+            SourceRowCopy.trailingStatus(
+                rawState: .syncing,
+                displayedState: .syncing,
+                lastSyncAt: nil,
+                now: now
+            ),
+            "Checking"
+        )
     }
 
     func testUnavailableSourceDetailCopyAvoidsRoadmapLanguage() {
@@ -183,6 +195,19 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(line.contains("clientError"))
         XCTAssertFalse(line.contains("token=secret"))
         XCTAssertFalse(line.lowercased().contains("stacktrace"))
+    }
+
+    @MainActor
+    func testDiagnosticsSettingsCopyUsesAssistantReadyLanguage() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.recordHealthyCycle(at: now)
+
+        let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
+
+        XCTAssertTrue(line.contains("Status: Assistant ready."))
+        XCTAssertFalse(line.localizedCaseInsensitiveContains("Status: Connected"))
+        XCTAssertFalse(line.localizedCaseInsensitiveContains("up to date"))
     }
 
     @MainActor
@@ -360,7 +385,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: signedIn,
                 sourceStates: [.connected]
             ),
-            "Maraithon — up to date"
+            "Maraithon — assistant ready"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.accessibilityLabel(
@@ -368,7 +393,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: signedIn,
                 sourceStates: [.syncing]
             ),
-            "Maraithon — syncing"
+            "Maraithon — checking"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.accessibilityLabel(
@@ -384,7 +409,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: signedIn,
                 sourceStates: []
             ),
-            "Maraithon — waiting to sync"
+            "Maraithon — waiting for first check"
         )
     }
 

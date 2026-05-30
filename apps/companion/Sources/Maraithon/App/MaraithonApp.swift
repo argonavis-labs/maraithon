@@ -57,7 +57,7 @@ struct MaraithonApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(after: .toolbar) {
-                Button("Sync Now") { environment.syncNowFromMenu() }
+                Button("Check Now") { environment.syncNowFromMenu() }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(!environment.canSyncNow)
             }

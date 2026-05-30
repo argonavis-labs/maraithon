@@ -290,7 +290,8 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertFalse(SourceDetailCopy.isWaitingForFirstSync(state: .connected, lastSyncAt: Date()))
 
         let copy = SourceDetailCopy.firstSyncDescription(displayName: "Notes")
-        XCTAssertTrue(copy.contains("ready to sync Notes"))
+        XCTAssertTrue(copy.contains("ready to check Notes"))
+        XCTAssertTrue(copy.contains("assistant context"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Notes is connected"))
     }
 

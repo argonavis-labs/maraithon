@@ -96,7 +96,7 @@ struct SourceDetailScaffold: View {
                 Button {
                     env.sources.pause(id: sourceID)
                 } label: {
-                    Label("Pause", systemImage: "pause.fill")
+                    Label("Pause updates", systemImage: "pause.fill")
                 }
                 .buttonStyle(.bordered)
             }

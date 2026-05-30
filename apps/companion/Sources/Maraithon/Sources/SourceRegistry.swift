@@ -273,7 +273,7 @@ final class SourceRegistry {
 
     /// Force an immediate sync cycle for a single registered source.
     /// No-op if the source is unknown. Used by the per-source detail
-    /// panes' "Sync now" button so other sources aren't disturbed.
+    /// panes' "Check now" button so other sources aren't disturbed.
     func syncNow(id: String) {
         guard let source = registered[id] else {
             eventLog.warning(

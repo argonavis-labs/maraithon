@@ -95,7 +95,7 @@ enum SourceDetailCopy {
     }
 
     static func firstSyncDescription(displayName: String) -> String {
-        "Maraithon is ready to sync \(displayName), but the first check has not finished yet. Sync now starts it immediately; otherwise it will begin automatically within a few minutes."
+        "Maraithon is ready to check \(displayName) for assistant context, but the first check has not finished yet. Check now starts it immediately; otherwise it will begin automatically within a few minutes."
     }
 
     static func isWaitingForFirstSync(state: SourceState, lastSyncAt: Date?) -> Bool {

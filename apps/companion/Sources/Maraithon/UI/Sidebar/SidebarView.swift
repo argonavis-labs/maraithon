@@ -204,7 +204,7 @@ struct SourceRowCopy {
             guard let last = lastSyncAt else { return "Ready" }
             return SourceRecencyChip.format(interval: now.timeIntervalSince(last))
         case .syncing:
-            return "Syncing"
+            return "Checking"
         case .paused:
             return "Paused"
         case .disconnected:
@@ -223,8 +223,8 @@ struct SourceRowCopy {
 
     private static func statePhrase(_ state: SourceState) -> String {
         switch state {
-        case .connected: return "up to date"
-        case .syncing: return "syncing"
+        case .connected: return "assistant ready"
+        case .syncing: return "checking"
         case .paused: return "paused"
         case .disconnected: return "disconnected"
         case .needsAttention(let reason):

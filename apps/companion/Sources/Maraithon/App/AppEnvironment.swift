@@ -233,7 +233,7 @@ final class AppEnvironment {
 }
 
 /// Product-facing menubar copy. Keeps the tiny menu-bar surface honest:
-/// "syncing" only appears while work is actually in flight.
+/// "checking" only appears while work is actually in flight.
 enum CompanionMenuBarCopy {
     static func symbol(
         isPaused: Bool,
@@ -290,14 +290,14 @@ enum CompanionMenuBarCopy {
             return "Maraithon — needs attention"
         }
         if sourceStates.contains(.syncing) {
-            return "Maraithon — syncing"
+            return "Maraithon — checking"
         }
         if sourceStates.contains(.paused) {
             return "Maraithon — sync paused"
         }
         if sourceStates.contains(.connected) {
-            return "Maraithon — up to date"
+            return "Maraithon — assistant ready"
         }
-        return "Maraithon — waiting to sync"
+        return "Maraithon — waiting for first check"
     }
 }
