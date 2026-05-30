@@ -25,6 +25,7 @@ defmodule MaraithonWeb.DashboardLive do
   alias Maraithon.Todos.PublicMetadata
   alias Maraithon.UserMemory
   alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OAuthFlashCopy
   alias MaraithonWeb.OperationFailureCopy
   alias MaraithonWeb.TodoActionCopy
@@ -3596,30 +3597,42 @@ defmodule MaraithonWeb.DashboardLive do
   defp reason_origin_label(%{origin: :derived}), do: "Built from saved evidence"
   defp reason_origin_label(_value), do: nil
 
-  defp evidence_metadata(item) when is_map(item) do
+  defp evidence_detail(
+         %{label: "Source activity", occurred_at: %DateTime{} = occurred_at},
+         schedule
+       ),
+       do: "Seen #{format_datetime(occurred_at, schedule)}"
+
+  defp evidence_detail(%{label: "Deadline", occurred_at: %DateTime{} = occurred_at}, schedule),
+    do: "Due #{format_datetime(occurred_at, schedule)}"
+
+  defp evidence_detail(%{detail: detail}, _schedule), do: detail
+  defp evidence_detail(_item, _schedule), do: nil
+
+  defp evidence_metadata(item, schedule) when is_map(item) do
     [
       humanize_text_token(item.kind),
-      format_datetime(item.occurred_at),
+      format_datetime(item.occurred_at, schedule),
       item.source_ref
     ]
     |> Enum.reject(&blank_metadata?/1)
     |> Enum.join(" · ")
   end
 
-  defp evidence_metadata(_item), do: nil
+  defp evidence_metadata(_item, _schedule), do: nil
 
-  defp delivery_metadata(delivery) when is_map(delivery) do
+  defp delivery_metadata(delivery, schedule) when is_map(delivery) do
     [
-      format_datetime(delivery.sent_at),
+      format_datetime(delivery.sent_at, schedule),
       delivery.feedback && "feedback #{humanize_text_token(delivery.feedback)}",
-      delivery.feedback_at && format_datetime(delivery.feedback_at),
+      delivery.feedback_at && format_datetime(delivery.feedback_at, schedule),
       delivery_error_metadata(delivery)
     ]
     |> Enum.reject(&blank_metadata?/1)
     |> Enum.join(" · ")
   end
 
-  defp delivery_metadata(_delivery), do: nil
+  defp delivery_metadata(_delivery, _schedule), do: nil
 
   defp delivery_error_metadata(%{error_message: error_message})
        when is_binary(error_message) and error_message != "" do
@@ -4298,9 +4311,11 @@ defmodule MaraithonWeb.DashboardLive do
                           <%= for item <- detail.evidence_checked do %>
                             <li class="rounded-lg border border-zinc-950/10 bg-white px-3 py-2">
                               <p class="font-medium text-zinc-950"><%= item.label %></p>
-                              <p :if={item.detail} class="mt-1 text-zinc-600"><%= item.detail %></p>
+                              <p :if={evidence_detail(item, @chief_of_staff_schedule)} class="mt-1 text-zinc-600">
+                                <%= evidence_detail(item, @chief_of_staff_schedule) %>
+                              </p>
                               <p class="mt-1 text-xs/5 text-zinc-500">
-                                <%= evidence_metadata(item) %>
+                                <%= evidence_metadata(item, @chief_of_staff_schedule) %>
                               </p>
                             </li>
                           <% end %>
@@ -4331,7 +4346,7 @@ defmodule MaraithonWeb.DashboardLive do
                               </div>
                               <p class="mt-1 text-zinc-600"><%= delivery.destination_label %></p>
                               <p class="mt-1 text-xs/5 text-zinc-500">
-                                <%= delivery_metadata(delivery) %>
+                                <%= delivery_metadata(delivery, @chief_of_staff_schedule) %>
                               </p>
                             </li>
                           <% end %>
@@ -4830,6 +4845,23 @@ defmodule MaraithonWeb.DashboardLive do
     timezone_label = Timezones.label(timezone.name, timezone.offset_hours)
 
     "#{Calendar.strftime(dt, "%b %-d, %-I:%M %p")} #{timezone_label}"
+  end
+
+  defp format_datetime(nil, _chief_of_staff_schedule), do: nil
+
+  defp format_datetime(datetime, chief_of_staff_schedule) when is_binary(datetime) do
+    case DateTime.from_iso8601(datetime) do
+      {:ok, dt, _} -> format_datetime(dt, chief_of_staff_schedule)
+      _ -> datetime
+    end
+  end
+
+  defp format_datetime(%DateTime{} = dt, chief_of_staff_schedule) do
+    LocalTime.format_datetime(dt, nil, dashboard_timezone(chief_of_staff_schedule))
+  end
+
+  defp format_datetime(%NaiveDateTime{} = dt, chief_of_staff_schedule) do
+    LocalTime.format_datetime(dt, nil, dashboard_timezone(chief_of_staff_schedule))
   end
 
   defp dashboard_timezone(schedule) when is_map(schedule) do

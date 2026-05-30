@@ -466,6 +466,62 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "6:30 PM UTC"
   end
 
+  test "dashboard evidence timestamps use the Chief of Staff timezone", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5},
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    assert {:ok, [insight]} =
+             Insights.record_many(@user_email, agent.id, [
+               %{
+                 "source" => "gmail",
+                 "category" => "reply_urgent",
+                 "title" => "Evidence timestamp check",
+                 "summary" => "A follow-up thread needs a same-day answer.",
+                 "recommended_action" => "Reply with the owner and next update time.",
+                 "priority" => 91,
+                 "confidence" => 0.9,
+                 "source_occurred_at" => ~U[2026-05-30 18:30:00Z],
+                 "dedupe_key" => "dashboard:evidence:local-time"
+               }
+             ])
+
+    assert {:ok, _delivery} =
+             %Delivery{}
+             |> Delivery.changeset(%{
+               insight_id: insight.id,
+               user_id: @user_email,
+               channel: "telegram",
+               destination: "chief-of-staff-chat",
+               score: 0.93,
+               threshold: 0.78,
+               status: "feedback_helpful",
+               sent_at: ~U[2026-05-30 18:45:00Z],
+               feedback: "helpful",
+               feedback_at: ~U[2026-05-30 19:00:00Z]
+             })
+             |> Repo.insert()
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    html =
+      view
+      |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
+      |> render_click()
+
+    assert html =~ "Source activity"
+    assert html =~ "Seen May 30, 2026 at 2:30 PM ET"
+    assert html =~ "May 30, 2026 at 2:45 PM ET"
+    assert html =~ "May 30, 2026 at 3:00 PM ET"
+    refute_html_contains(html, "6:30 PM UTC")
+    refute_html_contains(html, "2026-05-30 18:45")
+    refute_html_contains(html, "2026-05-30 19:00")
+  end
+
   test "dashboard delivery evidence hides raw provider failure details", %{conn: conn} do
     {:ok, agent} =
       create_agent(%{
