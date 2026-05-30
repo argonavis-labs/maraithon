@@ -779,7 +779,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp featured_summary_subject(_summary), do: nil
 
   defp open_work_start_subject(summary) do
-    case Regex.run(~r/^Open work:\s+\d+\s+work items?\.\s+Start with\s+(.+?)(?:\.|$)/iu, summary) do
+    case Regex.run(~r/^Open work:\s+.+?\.\s+Start with\s+(.+?)(?:\.|$)/iu, summary) do
       [_match, subject] -> subject
       _other -> nil
     end

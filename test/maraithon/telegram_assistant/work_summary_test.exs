@@ -410,6 +410,31 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute inspect(summary) =~ "1 todo"
   end
 
+  test "open work headlines name insight-backed next moves" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "get_open_work_summary",
+            "result" => %{
+              "summary" =>
+                "Open work: 1 insight. Start with Reply in the old thread. Gmail has newer mail than this summary; search Gmail before treating inbox-backed follow-up as complete.",
+              "top_insights" => [%{"title" => "Old Gmail insight"}],
+              "todos" => []
+            }
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert summary["headline"] == "Open work: Reply in the old thread"
+
+    refute summary["headline"] =~ "Open work: 1 insight"
+    refute summary["headline"] =~ "Gmail has newer mail"
+  end
+
   test "running tool headline is action-oriented" do
     run = %Run{
       status: "running",

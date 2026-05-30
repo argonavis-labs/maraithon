@@ -149,10 +149,13 @@ defmodule Maraithon.LocalEmbeddings do
       pgvector = Pgvector.new(query_vector)
 
       sql = """
-      SELECT id, 1 - (embedding <=> $1::vector) AS similarity
-      FROM #{table}
-      WHERE user_id = $2 AND embedding IS NOT NULL
-      ORDER BY embedding <=> $1::vector
+      SELECT id, similarity
+      FROM (
+        SELECT id, 1 - (embedding <=> $1::vector) AS similarity
+        FROM #{table}
+        WHERE user_id = $2 AND embedding IS NOT NULL
+      ) matches
+      ORDER BY similarity DESC NULLS LAST
       LIMIT $3
       """
 
