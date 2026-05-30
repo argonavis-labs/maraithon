@@ -770,7 +770,6 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     |> String.replace(~r/\bKent has\b/i, "you have")
     |> String.replace(~r/\bKent should\b/i, "you should")
     |> String.replace(~r/\bKent is\b/i, "you are")
-    |> String.replace(~r/\bthe user\b/i, "you")
     |> String.replace(
       ~r/\bquick status check on whether the issue is resolved, who owns it, and whether users or customers were affected\b/i,
       "quick answer on whether it is fixed, who owns the follow-up, and whether any users or customers were affected"

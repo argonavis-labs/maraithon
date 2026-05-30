@@ -162,6 +162,19 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "Your queue needs your attention because you should review it."
   end
 
+  test "does not rewrite product user terminology into broken you-language" do
+    assert UserFacingCopy.polish_text("Investigate why the user interface flashes after reload.") ==
+             "Investigate why the user interface flashes after reload."
+
+    assert UserFacingCopy.polish_text(
+             "Keep the user experience stable while updating the user's account settings."
+           ) ==
+             "Keep the user experience stable while updating the user's account settings."
+
+    assert UserFacingCopy.polish_text("The user should still approve the finance reply.") ==
+             "You should still approve the finance reply."
+  end
+
   test "uses open work language for todo-facing copy" do
     assert UserFacingCopy.polish_text("Here is the full open todo list.") ==
              "Here is the full open work."

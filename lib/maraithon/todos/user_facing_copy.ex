@@ -21,6 +21,19 @@ defmodule Maraithon.Todos.UserFacingCopy do
                       "fwd"
                     ])
 
+  @product_user_contexts ~w(
+    account accounts dashboard dashboards data email emails event events experience feedback
+    flow flows interface journey journeys list lists login message messages name names
+    onboarding page pages permission permissions persona personas plan plans preference
+    preferences profile profiles record records research role roles screen screens segment
+    segments session sessions setting settings sign-up signup story stories test tests
+    testing
+  )
+  @product_user_context_pattern Enum.join(@product_user_contexts, "|")
+  @the_user_possessive_reference ~r/\bthe user's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+  @the_user_reference ~r/\bthe user\b(?!'s)(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+  @user_possessive_reference ~r/\buser's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+
   def polish_attrs(attrs) when is_map(attrs) do
     attrs
     |> polish_text_field("title")
@@ -78,8 +91,9 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\bKent asked\b/i, "you asked")
     |> String.replace(~r/^\s*Kent committed\b/i, "You committed")
     |> String.replace(~r/\bKent committed\b/i, "you committed")
-    |> String.replace(~r/\bthe user\b/i, "you")
-    |> String.replace(~r/\buser's\b/i, "your")
+    |> String.replace(@the_user_possessive_reference, "your")
+    |> String.replace(@the_user_reference, "you")
+    |> String.replace(@user_possessive_reference, "your")
     |> String.replace(~r/\boperator attention\b/i, "your attention")
     |> String.replace(~r/^\s*The operator's\b/i, "Your")
     |> String.replace(~r/\bthe operator's\b/i, "your")

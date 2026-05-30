@@ -283,6 +283,28 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "commitment tracker"
   end
 
+  test "todo cards do not corrupt product user terminology" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "github",
+      "status" => "open",
+      "title" => "Fix the user interface reload regression",
+      "summary" =>
+        "The user interface flashes after reload and the user experience feels unstable.",
+      "next_action" =>
+        "Review the user's account settings page and confirm which state changes trigger the flash."
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "The user interface"
+    assert payload.text =~ "the user experience"
+    assert payload.text =~ "the user's account settings"
+    refute payload.text =~ "you interface"
+    refute payload.text =~ "you experience"
+    refute payload.text =~ "your account settings"
+  end
+
   test "todo card source line humanizes local and namespaced source keys" do
     todo = %{
       "id" => Ecto.UUID.generate(),
