@@ -321,6 +321,40 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "Voice_memos"
   end
 
+  test "personal logistics cards disclose missing Mac companion context", %{user_id: user_id} do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "status" => "open",
+          "title" => "Confirm Tuesday pickup with school",
+          "summary" => "The school asked whether Tuesday pickup should move to 4 PM.",
+          "next_action" => "Confirm the Tuesday pickup plan with the school.",
+          "source_item_id" => "gmail-thread-school-pickup",
+          "dedupe_key" => "todo-actions:school-pickup-source-gap",
+          "metadata" => %{
+            "life_domain" => "family",
+            "source_evidence" => "The school asked whether Tuesday pickup should move to 4 PM.",
+            "record" => %{
+              "person" => "Oak Street School",
+              "relationship_context" => "school logistics"
+            }
+          }
+        }
+      ])
+
+    payload =
+      TodoActions.telegram_payload(todo,
+        source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
+      )
+
+    assert payload.text =~ "Checked Gmail."
+    assert payload.text =~ "Local context from the Mac companion was not checked."
+    assert payload.text =~ "Open the Mac companion app to reconnect it."
+    refute payload.text =~ "Checked Telegram"
+  end
+
   test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do
     install_see_less_model()
 

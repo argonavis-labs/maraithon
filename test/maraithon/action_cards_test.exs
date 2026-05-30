@@ -169,6 +169,40 @@ defmodule Maraithon.ActionCardsTest do
     refute ActionCards.source_health_note(card) =~ "Could not fully check Desktop App"
   end
 
+  test "source health only reports sources that back the decision", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to finance on the receipt thread",
+      summary: "Finance needs a corrected receipt before reimbursement can move.",
+      next_action: "Send the corrected receipt and ask finance to confirm timing.",
+      source_item_id: "gmail-thread-finance-receipt",
+      dedupe_key: "action-card:finance-checked-source",
+      priority: 86,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Finance asked for a corrected receipt."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card =
+      ActionCards.for_todo(todo,
+        include_disconnected: true,
+        source_health_snapshots: [
+          %{"provider" => "gmail", "status" => "fresh"},
+          %{"provider" => "telegram", "status" => "fresh"}
+        ]
+      )
+
+    assert ActionCards.source_health_note(card) == "Checked Gmail."
+    refute ActionCards.source_health_note(card) =~ "Telegram"
+  end
+
   test "business inbox cards do not promote the Mac companion when local context is not relevant",
        %{user_id: user_id} do
     todo = %Todo{

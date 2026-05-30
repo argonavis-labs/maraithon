@@ -23,10 +23,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   def telegram_payload(todo, opts) when is_map(todo) and is_list(opts) do
-    prefix_text = Keyword.get(opts, :prefix_text)
-
     %{
-      text: render_message(todo, prefix_text),
+      text: render_message(todo, opts),
       reply_markup: build_reply_markup(todo)
     }
   end
@@ -259,7 +257,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     if buttons == [], do: rows, else: rows ++ [buttons]
   end
 
-  defp render_message(todo, prefix_text) when is_map(todo) do
+  defp render_message(todo, opts) when is_map(todo) and is_list(opts) do
+    prefix_text = Keyword.get(opts, :prefix_text)
     todo = UserFacingCopy.polish_attrs(todo)
     metadata = todo_metadata(todo)
     account = metadata_account(metadata)
@@ -269,7 +268,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     next_action = display_text(todo_next_action(todo))
     context = display_text(todo_context(todo, metadata))
     assistant_source? = assistant_source?(todo_source)
-    card = ActionCards.for_todo(todo, include_disconnected: false)
+    card = ActionCards.for_todo(todo, action_card_opts(opts))
 
     [
       display_text(prefix_text),
@@ -286,6 +285,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n")
+  end
+
+  defp render_message(todo, prefix_text) when is_map(todo) do
+    render_message(todo, prefix_text: prefix_text)
+  end
+
+  defp action_card_opts(opts) do
+    opts
+    |> Keyword.take([:include_disconnected, :source_health_snapshots, :timezone_info])
+    |> Keyword.put_new(:include_disconnected, true)
   end
 
   defp source_label(source) when is_binary(source) do

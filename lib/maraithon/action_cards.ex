@@ -575,7 +575,8 @@ defmodule Maraithon.ActionCards do
         SourceFreshness.compact_for_prompt(user_id)
       end)
 
-    checked_sources = checked_sources(source, snapshots)
+    relevant_extra_sources = relevant_extra_sources(todo, profile, include_disconnected?)
+    checked_sources = checked_sources(source, snapshots, relevant_extra_sources)
     relevant = filter_source_snapshots(snapshots, source)
     fresh = Enum.filter(relevant, &(read_field(&1, "status") == "fresh"))
 
@@ -788,17 +789,36 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp checked_sources(source, snapshots) do
-    base =
+  defp checked_sources(source, snapshots, extra_sources) do
+    wanted =
+      [source | List.wrap(extra_sources)]
+      |> Enum.map(&normalize_source/1)
+      |> Enum.reject(&blank?/1)
+      |> MapSet.new()
+
+    matched =
       snapshots
       |> Enum.map(&read_field(&1, "provider"))
+      |> Enum.map(&normalize_source/1)
       |> Enum.reject(&blank?/1)
+      |> Enum.filter(&MapSet.member?(wanted, &1))
 
-    [source | base]
+    [normalize_source(source) | matched]
     |> Enum.reject(&blank?/1)
-    |> Enum.map(&normalize_source/1)
+    |> Enum.filter(&source_checkable?/1)
     |> Enum.uniq()
   end
+
+  defp relevant_extra_sources(%Todo{} = todo, profile, true) do
+    if local_context_relevant?(todo, profile), do: ["desktop"], else: []
+  end
+
+  defp relevant_extra_sources(_todo, _profile, _include_disconnected?), do: []
+
+  defp source_checkable?(source) when source in @assistant_sources, do: false
+  defp source_checkable?(source) when source in ["manual", "system"], do: false
+  defp source_checkable?(source) when is_binary(source), do: source != ""
+  defp source_checkable?(_source), do: false
 
   defp filter_source_snapshots(snapshots, source) do
     normalized_source = normalize_source(source)
