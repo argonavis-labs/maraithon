@@ -42,6 +42,7 @@ Output requirements:
 - Return only valid JSON. No prose outside JSON.
 - `body` must be Telegram-friendly: short headings and bullets, no Markdown tables.
 - Keep the body precise, not chatty. Lead with what was logged and what was skipped.
+- User-facing report title/body should use "Open work review" framing, not "Commitment Tracker" or automation names.
 - Work item fields may be sent as Telegram cards. Write `title`, `summary`, and `next_action` like the operator's human chief of staff, not like a raw import. Use `you`, never `the user` or a hardcoded person name, and do not include visible labels like `From:`, `Source:`, `Priority:`, or internal source names such as `chief_of_staff_commitment_tracker` in user-facing fields. Put source identifiers in metadata or notes.
 - Include `missing_sources` for unavailable channels that matter.
 - Use `todos: []` when nothing should be added.
@@ -51,9 +52,9 @@ JSON shape:
 
 ```json
 {
-  "title": "Commitment tracker - YYYY-MM-DD",
+  "title": "Open work review - YYYY-MM-DD",
   "summary": "One sentence summary of what was found and logged.",
-  "body": "Commitment Tracker - YYYY-MM-DD\n\nNew commitments:\n- ...\n\nAlready tracked:\n- ...\n\nMissing sources:\n- ...",
+  "body": "Open work review - YYYY-MM-DD\n\nNew commitments:\n- ...\n\nAlready tracked:\n- ...\n\nMissing sources:\n- ...",
   "pending_replies": [],
   "already_tracked": [],
   "missing_sources": [],

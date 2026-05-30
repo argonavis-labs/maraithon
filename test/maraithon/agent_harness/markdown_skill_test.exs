@@ -51,6 +51,19 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "return a `source_gap` object instead of a heuristic itinerary"
   end
 
+  test "commitment tracker skill produces open-work review output" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/chief_of_staff/commitment_tracker.md")
+
+    assert skill.id == "commitment_tracker"
+    assert skill.name == "Commitment Tracker"
+    assert skill.instructions =~ "Open work review"
+    assert skill.instructions =~ "not \"Commitment Tracker\" or automation names"
+    assert skill.instructions =~ "Use `you`, never `the user` or a hardcoded person name"
+    assert skill.instructions =~ "\"todos\""
+    assert skill.instructions =~ "\"missing_sources\""
+  end
+
   test "product manager skill returns executive-ready ticket JSON" do
     assert {:ok, skill} =
              MarkdownSkill.load_file("priv/agents/skills/product/github_product_planner.md")

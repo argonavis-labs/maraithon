@@ -136,6 +136,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert prompt =~ "Commitment Tracker"
     assert prompt =~ "Commitment tracker input JSON"
     assert prompt =~ "Return only valid JSON"
+    assert prompt =~ "Open work review"
+    assert prompt =~ "do not write \"Commitment"
     assert prompt =~ "source_access"
     assert prompt =~ "iMessage, WhatsApp, OmniFocus"
     assert prompt =~ "can you send the revised Runner ambassador agreement"
@@ -194,10 +196,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "commitment_tracker"
+    assert brief.title == "Open work review - 2026-05-09"
     assert brief.body =~ "Added to open work:"
     assert brief.body =~ "- Send Elena the revised Runner ambassador agreement"
     refute brief.body =~ "Maraithon list"
     refute brief.body =~ "todos"
+    refute brief.body =~ "Commitment Tracker"
     assert brief.metadata["origin_skill_id"] == "commitment_tracker"
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_inbox"]) == 1
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_sent"]) == 1
@@ -206,6 +210,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     [todo] = Todos.list_for_user(user_id, source: "gmail", limit: 5)
     refute brief.body =~ todo.id
     assert todo.title == "Send Elena the revised Runner ambassador agreement"
+    assert todo.summary == "You owe Elena the revised Runner ambassador agreement by tomorrow."
     assert todo.metadata["origin_skill_id"] == "commitment_tracker"
     assert todo.metadata["commitment_direction"] == "i_owe"
     assert todo.metadata["omni_project"] == "Runner"
@@ -275,14 +280,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     refute payload.error_message
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Commitment tracker - 2026-05-09"
+    assert brief.title == "Open work review - 2026-05-09"
     assert brief.summary =~ "No reliable commitment review was available"
     assert brief.body =~ "## Checked"
     assert brief.body =~ "## Unknowns"
     assert brief.body =~ "Today's move: refresh Gmail and Calendar"
     assert brief.metadata["generation_mode"] == "llm"
     refute brief.error_message
-    refute brief.body =~ "Commitment check needs source review"
+    refute brief.body =~ "Open work review needs source review"
+    refute brief.body =~ "Commitment Tracker"
     refute brief.summary =~ "No new commitments were found"
   end
 
@@ -319,7 +325,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert payload.error_message =~ "model_response_invalid"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Commitment check needs source review"
+    assert brief.title == "Open work review needs source review"
     assert brief.cadence == "commitment_tracker"
     assert brief.error_message =~ "model_response_invalid"
     assert brief.metadata["generation_mode"] == "source_fallback"
@@ -435,7 +441,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert payload.todo_count == 0
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Commitment check: review existing open work"
+    assert brief.title == "Open work review: check existing work"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.summary =~ "Start with 1 existing open item"
     assert brief.body =~ "Send Jordan the investor update"

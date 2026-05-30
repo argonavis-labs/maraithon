@@ -223,7 +223,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
             report
             |> read_string(
               "title",
-              "Commitment tracker - #{read_string(tracker_input, "date", "today")}"
+              "Open work review - #{read_string(tracker_input, "date", "today")}"
             )
             |> truncate(180),
           "summary" =>
@@ -232,7 +232,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
             |> truncate(500),
           "body" =>
             report
-            |> read_string("body", "Commitment tracker did not produce a body.")
+            |> read_string("body", "Open work review did not produce a body.")
             |> truncate(3_900),
           "error_message" => error_message,
           "metadata" => %{
@@ -415,7 +415,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        Response contract:
        Return only valid JSON with this shape:
        {
-         "title": "...",
+         "title": "Open work review - YYYY-MM-DD",
          "summary": "...",
          "body": "Telegram-friendly plain text or simple markdown. No tables.",
          "pending_replies": [],
@@ -461,6 +461,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        are explicitly present in the source_access payload.
 
        User-facing copy requirements:
+       - Frame the report as "Open work review"; do not write "Commitment
+         Tracker", skill names, source_behavior values, or automation names in
+         title, summary, body, or work-item text.
        - Write directly to the operator as "you"; never write "the user" or
          "User committed".
        - If no new commitments are saved, do not write an all-clear. State
@@ -541,6 +544,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp repair_commitment_report(report, tracker_input) when is_map(report) do
+    report = normalize_report_public_copy(report)
     todos = read_list(report, "todos")
 
     if todos == [] do
@@ -553,6 +557,23 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp repair_commitment_report(report, _tracker_input), do: report
+
+  defp normalize_report_public_copy(report) when is_map(report) do
+    report
+    |> Map.update("title", nil, &normalize_commitment_report_text/1)
+    |> Map.update("summary", nil, &normalize_commitment_report_text/1)
+    |> Map.update("body", nil, &normalize_commitment_report_text/1)
+  end
+
+  defp normalize_commitment_report_text(text) when is_binary(text) do
+    text
+    |> String.replace(~r/\bCommitment Tracker\b/i, "Open work review")
+    |> String.replace(~r/\bCommitment tracker\b/i, "Open work review")
+    |> String.replace(~r/\bcommitment tracker\b/i, "open work review")
+    |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "open work review")
+  end
+
+  defp normalize_commitment_report_text(value), do: value
 
   defp repair_empty_commitment_summary(report, tracker_input) do
     summary = read_string(report, "summary", "")
@@ -675,9 +696,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp fallback_commitment_title(open_todos) do
     if length(open_todos) > 0 do
-      "Commitment check: review existing open work"
+      "Open work review: check existing work"
     else
-      "Commitment check needs source review"
+      "Open work review needs source review"
     end
   end
 
