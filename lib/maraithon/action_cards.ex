@@ -9,6 +9,7 @@ defmodule Maraithon.ActionCards do
 
   alias Maraithon.SourceFreshness
   alias Maraithon.SourceLabels
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.{AttentionRanker, PublicMetadata, SurfaceQuality, Todo, UserFacingCopy}
 
@@ -101,7 +102,11 @@ defmodule Maraithon.ActionCards do
 
   def list_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
     limit = Keyword.get(opts, :limit, 20)
-    opts = put_source_health_snapshots(user_id, opts)
+
+    opts =
+      user_id
+      |> put_source_health_snapshots(opts)
+      |> put_user_timezone(user_id)
 
     user_id
     |> Todos.list_for_user(limit: limit, statuses: @open_statuses)
@@ -134,7 +139,7 @@ defmodule Maraithon.ActionCards do
         "headline" => headline(todo, context_pack, attention_mode),
         "decision_prompt" => decision_prompt(todo, context_pack, attention_mode),
         "rank_reason" => rank_reason(profile),
-        "why_now" => why_now(todo, metadata, profile, attention_mode),
+        "why_now" => why_now(todo, metadata, profile, attention_mode, opts),
         "context_pack" => context_pack,
         "next_best_action" => next_best_action(todo, attention_mode),
         "prepared_actions" => prepared_actions(todo),
@@ -431,7 +436,7 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp why_now(_todo, _metadata, profile, "stale_check") do
+  defp why_now(_todo, _metadata, profile, "stale_check", _opts) do
     age_days = read_field(profile, "age_days")
 
     if is_integer(age_days) do
@@ -441,13 +446,13 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp why_now(todo, metadata, profile, _attention_mode) do
+  defp why_now(todo, metadata, profile, _attention_mode, opts) do
     public_metadata = PublicMetadata.todo(metadata)
 
     first_present([
       read_string(public_metadata, "why_now"),
       read_string(public_metadata, "why_it_matters"),
-      due_sentence(todo),
+      due_sentence(todo, metadata, opts),
       profile_why_now(profile),
       "This is still open and needs a clear next decision."
     ])
@@ -1091,11 +1096,105 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp due_sentence(%Todo{due_at: %DateTime{} = due_at}) do
-    "Due #{Calendar.strftime(due_at, "%b %-d at %-I:%M %p UTC")}."
+  defp due_sentence(%Todo{due_at: %DateTime{} = due_at, user_id: user_id}, metadata, opts) do
+    timezone = due_timezone(metadata, opts, user_id)
+    offset_hours = Timezones.offset_at(timezone.name, due_at, timezone.offset_hours)
+    display_time = DateTime.add(due_at, offset_hours, :hour)
+    timezone_label = Timezones.label(timezone.name, offset_hours)
+
+    "Due #{Calendar.strftime(display_time, "%b %-d at %-I:%M %p")} #{timezone_label}."
   end
 
-  defp due_sentence(_todo), do: nil
+  defp due_sentence(_todo, _metadata, _opts), do: nil
+
+  defp due_timezone(metadata, opts, user_id) do
+    first_present_timezone([
+      Keyword.get(opts, :timezone_info),
+      explicit_timezone(opts),
+      metadata_timezone(metadata),
+      user_timezone(user_id)
+    ]) || default_timezone()
+  end
+
+  defp put_user_timezone(opts, user_id) when is_list(opts) and is_binary(user_id) do
+    if Keyword.has_key?(opts, :timezone_info) do
+      opts
+    else
+      Keyword.put(opts, :timezone_info, user_timezone(user_id))
+    end
+  end
+
+  defp put_user_timezone(opts, _user_id), do: opts
+
+  defp user_timezone(user_id) when is_binary(user_id) do
+    user_id
+    |> Maraithon.BriefingSchedules.summarize_for_prompt()
+    |> case do
+      %{timezone_name: timezone_name, timezone_offset_hours: offset_hours} ->
+        normalize_timezone(timezone_name, offset_hours)
+
+      _other ->
+        default_timezone()
+    end
+  rescue
+    _exception -> default_timezone()
+  end
+
+  defp user_timezone(_user_id), do: default_timezone()
+
+  defp explicit_timezone(opts) when is_list(opts) do
+    timezone_name = Keyword.get(opts, :timezone_name) || Keyword.get(opts, :timezone)
+    offset_hours = Keyword.get(opts, :timezone_offset_hours)
+
+    if present?(timezone_name) or not is_nil(offset_hours) do
+      normalize_timezone(timezone_name, offset_hours)
+    end
+  end
+
+  defp explicit_timezone(_opts), do: nil
+
+  defp metadata_timezone(metadata) when is_map(metadata) do
+    public_metadata = PublicMetadata.todo(metadata)
+
+    timezone_name =
+      read_string(public_metadata, "timezone") ||
+        read_string(public_metadata, "timezone_name") ||
+        read_string(metadata, "timezone") ||
+        read_string(metadata, "timezone_name")
+
+    offset_hours =
+      read_field(public_metadata, "timezone_offset_hours") ||
+        read_field(metadata, "timezone_offset_hours")
+
+    if present?(timezone_name) or not is_nil(offset_hours) do
+      normalize_timezone(timezone_name, offset_hours)
+    end
+  end
+
+  defp metadata_timezone(_metadata), do: nil
+
+  defp normalize_timezone(timezone_name, offset_hours) do
+    case Timezones.normalize(to_string(timezone_name || "")) do
+      "offset:" <> offset ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset)}
+
+      normalized when is_binary(normalized) ->
+        fallback = offset_hours || Timezones.standard_offset(normalized)
+        %{name: normalized, offset_hours: Timezones.normalize_offset(fallback)}
+
+      _other ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset_hours)}
+    end
+  end
+
+  defp first_present_timezone(values) do
+    Enum.find(values, fn
+      %{offset_hours: offset_hours} -> is_integer(offset_hours)
+      _other -> false
+    end)
+  end
+
+  defp default_timezone, do: %{name: nil, offset_hours: -5}
 
   defp created_from(metadata) do
     first_present([

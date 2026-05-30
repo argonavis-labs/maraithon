@@ -3,6 +3,7 @@ defmodule Maraithon.ActionCardsTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ActionCards
+  alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Todos
   alias Maraithon.Todos.Todo
@@ -224,6 +225,41 @@ defmodule Maraithon.ActionCardsTest do
 
     assert ActionCards.render_telegram_todo(todo, opts) =~
              "Local context from the Mac companion was not checked."
+  end
+
+  test "due copy uses the user's Chief of Staff timezone instead of UTC", %{user_id: user_id} do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
+      })
+
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Send the board packet",
+      summary: "The board packet is due before the afternoon review.",
+      next_action: "Send the board packet and confirm the review window.",
+      source_item_id: "gmail-thread-board-packet",
+      dedupe_key: "action-card:board-packet-due",
+      due_at: ~U[2026-05-30 18:30:00Z],
+      priority: 90,
+      status: "open",
+      metadata: %{},
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert card["why_now"] == "Due May 30 at 2:30 PM ET."
+    assert rendered =~ "Due May 30 at 2:30 PM ET."
+    refute rendered =~ "UTC"
   end
 
   test "filters model and scoring metadata out of visible card copy", %{user_id: user_id} do
