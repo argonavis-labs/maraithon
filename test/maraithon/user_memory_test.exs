@@ -78,10 +78,13 @@ defmodule Maraithon.UserMemoryTest do
                llm_complete: fn _prompt -> {:error, :summary_unavailable} end
              )
 
-    assert profile.summary =~ "No current focus has been confirmed yet."
+    assert profile.summary =~ "Prioritize source-backed obligations"
     assert profile.profile["working_style"] =~ "source-grounded recommendations"
+    assert profile.profile["current_focus"] =~ "source-backed obligations"
     assert profile.profile["important_context"] =~ "connected-source evidence"
 
+    refute profile.summary =~ "No current focus"
+    refute profile.profile["current_focus"] =~ "No current focus"
     refute profile.summary =~ "Patterns are still emerging"
     refute profile.summary =~ "No active projects have been captured"
     refute profile.summary =~ "durable"

@@ -288,7 +288,7 @@ defmodule Maraithon.UserMemory do
     current_focus =
       case Map.get(bundle, :projects, []) do
         [] ->
-          "No current focus has been confirmed yet."
+          "Prioritize source-backed obligations until a project focus is confirmed."
 
         projects ->
           project_names =
