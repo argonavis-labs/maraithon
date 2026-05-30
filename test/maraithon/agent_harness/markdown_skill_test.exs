@@ -80,6 +80,20 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "Do not expose internal behavior names"
   end
 
+  test "repo planner skill requires executable implementation plans" do
+    assert {:ok, skill} =
+             MarkdownSkill.load_file("priv/agents/skills/engineering/repo_planner.md")
+
+    assert skill.id == "repo_planner"
+    assert skill.name == "Repo Planner"
+    assert skill.instructions =~ "engineer who will execute the work"
+    assert skill.instructions =~ "first reversible milestone"
+    assert skill.instructions =~ "explicit verification"
+    assert skill.instructions =~ "`Insufficient Context` section"
+    assert skill.instructions =~ "smallest launchable slice"
+    assert skill.instructions =~ "Do not expose internal behavior names"
+  end
+
   test "loads priv markdown skills through configured runtime priv dir" do
     project_priv_dir = Path.expand("priv")
     previous_priv_dir = System.get_env("MARAITHON_PRIV_DIR")
