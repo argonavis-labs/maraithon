@@ -189,7 +189,8 @@ reset_stale_companion_tcc_if_needed() {
   local app_path="$1"
   local marker_dir="${HOME}/Library/Application Support/Maraithon"
   local marker_path="${marker_dir}/companion-dev-designated-requirement.txt"
-  local requirement previous
+  local requirement previous_requirement previous_reset_version marker_header
+  local reset_marker_version="2"
 
   requirement="$(companion_designated_requirement "${app_path}")"
   if [[ -z "${requirement}" ]]; then
@@ -202,23 +203,34 @@ reset_stale_companion_tcc_if_needed() {
     return
   fi
 
-  previous="$(cat "${marker_path}" 2>/dev/null || true)"
-  if [[ "${previous}" == "${requirement}" ]]; then
-    return
+  marker_header="$(head -n 1 "${marker_path}" 2>/dev/null || true)"
+  if [[ "${marker_header}" == "tcc-reset-version=${reset_marker_version}" ]]; then
+    previous_reset_version="${reset_marker_version}"
+    previous_requirement="$(tail -n +2 "${marker_path}" 2>/dev/null || true)"
+  else
+    previous_reset_version=""
+    previous_requirement="$(cat "${marker_path}" 2>/dev/null || true)"
   fi
 
-  if [[ -z "${previous}" ]]; then
-    mkdir -p "${marker_dir}"
-    printf '%s\n' "${requirement}" > "${marker_path}"
-    echo "Recorded stable companion signing requirement for ${app_path}; existing Full Disk Access grants were preserved."
+  if [[ "${previous_requirement}" == "${requirement}" && "${previous_reset_version}" == "${reset_marker_version}" ]]; then
     return
   fi
 
   reset_companion_full_disk_access_entries
-  echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+
+  if [[ -z "${previous_requirement}" ]]; then
+    echo "Reset existing Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+  elif [[ "${previous_requirement}" == "${requirement}" ]]; then
+    echo "Reset legacy Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+  else
+    echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
+  fi
 
   mkdir -p "${marker_dir}"
-  printf '%s\n' "${requirement}" > "${marker_path}"
+  {
+    printf 'tcc-reset-version=%s\n' "${reset_marker_version}"
+    printf '%s\n' "${requirement}"
+  } > "${marker_path}"
 }
 
 reset_companion_full_disk_access_entries() {
