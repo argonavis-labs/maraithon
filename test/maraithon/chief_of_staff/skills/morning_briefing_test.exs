@@ -639,6 +639,63 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute revised["body"] =~ "actc_"
   end
 
+  test "quality verifier surfaces stale or unavailable sources before the final directive" do
+    brief = %{
+      "title" => "Saturday, May 30 - Operational brief",
+      "summary" => "Start with the highest-leverage source-backed item.",
+      "body" =>
+        "## Needs Your Attention\n- Clear the first source-backed item before lower-signal inbox.\n\nToday's move: clear the first source-backed item.",
+      "todos" => []
+    }
+
+    input = %{
+      "source_health" => %{
+        "imessage" => %{
+          "source" => "imessage",
+          "status" => "stale",
+          "device_last_seen_at" => "2026-05-30T08:00:00Z",
+          "item_count" => 0
+        },
+        "notes" => %{
+          "source" => "notes",
+          "status" => "error",
+          "fetch_error" => "operation not permitted",
+          "item_count" => 0
+        },
+        "gmail" => %{
+          "status" => "unavailable",
+          "reason" => "oauth_reauth_required"
+        },
+        "calendar" => %{
+          "source" => "calendar",
+          "status" => "ready"
+        }
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_source_gaps" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert "source_gaps_are_visible_when_connectors_are_stale_or_unavailable" in verification[
+             "criteria"
+           ]
+
+    assert revised["body"] =~ "## Source Gaps"
+    assert revised["body"] =~ "**iMessage**: last check is stale"
+    assert revised["body"] =~ "**Notes**: could not be checked for this brief"
+    assert revised["body"] =~ "**Gmail**: needs reconnection or permission"
+    refute revised["body"] =~ "operation not permitted"
+    refute revised["body"] =~ "Google Calendar"
+
+    assert String.ends_with?(
+             revised["body"],
+             "Today's move: clear the first source-backed item."
+           )
+  end
+
   test "quality verifier patches dropped required meetings and commercial threads" do
     brief = %{
       "title" => "Monday, May 11 - Generic morning",
@@ -950,6 +1007,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
                 "Charlie looped Kent into Cogniate's Enterprise plan discussion for pricing guidance."
             }
           ]
+        },
+        "source_health" => %{
+          "imessage" => %{
+            "source" => "imessage",
+            "status" => "stale",
+            "device_last_seen_at" => "2026-05-27T09:00:00Z"
+          },
+          "notes" => %{
+            "source" => "notes",
+            "status" => "error",
+            "fetch_error" => "operation not permitted"
+          }
         }
       })
 
@@ -969,6 +1038,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief["body"] =~ "due May 20, 2026 at 12:00 PM ET"
     refute brief["body"] =~ "k2_kp3zotvz"
     refute brief["body"] =~ "2026-05-20T16:00:00Z"
+    assert brief["body"] =~ "## Source Gaps"
+    assert brief["body"] =~ "**iMessage**: last check is stale"
+    assert brief["body"] =~ "**Notes**: could not be checked for this brief"
+    refute brief["body"] =~ "operation not permitted"
     assert brief["body"] =~ "## Unknowns"
     assert brief["body"] =~ "Today's move:"
   end

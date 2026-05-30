@@ -1470,6 +1470,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           |> Enum.map(&fallback_commercial_thread_line/1)
         ),
         fallback_lookahead_section(tomorrow, brief_input),
+        fallback_section(
+          "Source Gaps",
+          brief_input
+          |> source_gap_items()
+          |> Enum.take(6)
+          |> Enum.map(&source_gap_line/1)
+        ),
         fallback_unknowns_note(),
         fallback_todays_move(
           open_todos,
@@ -1979,6 +1986,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "action_card_and_draft_work_is_named_without_internal_handles",
         "model_todo_next_actions_visible_in_primary_brief",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
+        "source_gaps_are_visible_when_connectors_are_stale_or_unavailable",
         "brief_ends_with_today_move_directive",
         "structured_open_work_available_behind_review_button_and_sent_one_at_a_time"
       ]
@@ -2000,6 +2008,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     non_draft_items = non_draft_job_items(brief_input)
     inbox_triage_items = inbox_triage_items(brief_input)
     slack_triage_items = slack_triage_items(brief_input)
+    source_gap_items = source_gap_items(brief_input)
     missing_required_meetings = missing_required_schedule_meetings(body, brief_input)
     missing_required_threads = missing_required_commercial_threads(body, brief_input)
 
@@ -2062,6 +2071,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       :missing_non_draft_jobs
     )
     |> maybe_finding(
+      generation_mode == "llm" and source_gap_items != [] and
+        not source_gaps_present?(body, source_gap_items),
+      :missing_source_gaps
+    )
+    |> maybe_finding(
       generation_mode == "llm" and not todays_move_final_directive_present?(body),
       :missing_today_move
     )
@@ -2087,6 +2101,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> maybe_append_open_commitments(brief_input, findings)
     |> maybe_append_action_stack(brief_input, findings)
     |> maybe_append_non_draft_jobs(brief_input, findings)
+    |> maybe_append_source_gaps(brief_input, findings)
     |> maybe_append_todays_move(brief_input, findings)
   end
 
@@ -2334,6 +2349,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp maybe_append_source_gaps(brief, brief_input, findings) do
+    if :missing_source_gaps in findings do
+      lines =
+        brief_input
+        |> source_gap_items()
+        |> Enum.take(6)
+        |> Enum.map(&source_gap_line/1)
+        |> Enum.reject(&blank?/1)
+
+      if lines == [] do
+        brief
+      else
+        append_body_section_before_today_move(
+          brief,
+          "## Source Gaps\n" <> Enum.join(lines, "\n")
+        )
+      end
+    else
+      brief
+    end
+  end
+
   defp maybe_append_todays_move(brief, brief_input, findings) do
     if :missing_today_move in findings and
          not todays_move_final_directive_present?(read_string(brief, "body", "")) do
@@ -2435,6 +2472,30 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
+  defp append_body_section_before_today_move(brief, section)
+       when is_map(brief) and is_binary(section) do
+    body = read_string(brief, "body", "")
+
+    cond do
+      blank?(section) or String.contains?(body, section) ->
+        brief
+
+      todays_move_final_directive_present?(body) ->
+        {before, today_move} = split_final_today_move(body)
+
+        Map.put(
+          brief,
+          "body",
+          [before, section, today_move]
+          |> Enum.reject(&blank?/1)
+          |> Enum.join("\n\n")
+        )
+
+      true ->
+        append_body_section(brief, section)
+    end
+  end
+
   defp prepend_body_section(brief, section) when is_map(brief) and is_binary(section) do
     body = read_string(brief, "body", "")
 
@@ -2442,6 +2503,35 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       brief
     else
       Map.put(brief, "body", [section, body] |> Enum.reject(&blank?/1) |> Enum.join("\n\n"))
+    end
+  end
+
+  defp split_final_today_move(body) when is_binary(body) do
+    lines = String.split(body, ~r/\R/u, trim: false)
+
+    final_index =
+      lines
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.find_value(fn {line, index} ->
+        if blank?(line), do: nil, else: index
+      end)
+
+    if is_integer(final_index) do
+      before =
+        lines
+        |> Enum.take(final_index)
+        |> Enum.join("\n")
+        |> String.trim()
+
+      today_move =
+        lines
+        |> Enum.at(final_index, "")
+        |> String.trim()
+
+      {before, today_move}
+    else
+      {String.trim(body), ""}
     end
   end
 
@@ -2474,6 +2564,194 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp todays_move_final_directive_present?(_body), do: false
+
+  defp source_gap_items(brief_input) when is_map(brief_input) do
+    brief_input
+    |> read_map("source_health")
+    |> Enum.flat_map(fn {source_key, health} -> source_gap_item(source_key, health) end)
+    |> Enum.uniq_by(& &1.source)
+    |> Enum.sort_by(fn item -> {source_gap_priority(item.source), item.label} end)
+  end
+
+  defp source_gap_items(_brief_input), do: []
+
+  defp source_gap_item(source_key, health) when is_map(health) do
+    source =
+      health
+      |> read_string("source", nil)
+      |> default_if_blank(to_string(source_key))
+
+    status =
+      health
+      |> read_string("status", "")
+      |> String.downcase()
+      |> String.trim()
+
+    if source_gap_status?(status) do
+      [
+        %{
+          source: source,
+          status: status,
+          label: source_gap_label(source)
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp source_gap_item(_source_key, _health), do: []
+
+  defp source_gap_status?(status)
+       when status in ["stale", "error", "unavailable", "partial", "degraded"],
+       do: true
+
+  defp source_gap_status?(_status), do: false
+
+  defp source_gaps_present?(body, items) when is_binary(body) and is_list(items) do
+    normalized_body = normalize_match_text(body)
+
+    caveat_present? =
+      Enum.any?(
+        [
+          "source gap",
+          "source gaps",
+          "unknown",
+          "unavailable",
+          "not available",
+          "stale",
+          "could not be checked",
+          "incomplete",
+          "needs reconnection",
+          "permission"
+        ],
+        &String.contains?(normalized_body, normalize_match_text(&1))
+      )
+
+    listed_sources_present? =
+      items
+      |> Enum.take(6)
+      |> Enum.all?(fn item ->
+        label = normalize_match_text(item.label)
+        source = normalize_match_text(item.source)
+
+        (label != "" and String.contains?(normalized_body, label)) or
+          (source != "" and String.contains?(normalized_body, source))
+      end)
+
+    caveat_present? and listed_sources_present?
+  end
+
+  defp source_gaps_present?(_body, _items), do: false
+
+  defp source_gap_line(%{label: label, source: source, status: status}) do
+    subject = source_gap_subject(source)
+
+    case status do
+      "stale" ->
+        "- **#{label}**: last check is stale, so #{subject} may be incomplete until the source syncs again."
+
+      "error" ->
+        "- **#{label}**: could not be checked for this brief; treat missing #{subject} as unknown."
+
+      "unavailable" ->
+        "- **#{label}**: needs reconnection or permission before it can be checked."
+
+      "partial" ->
+        "- **#{label}**: partially checked; use included #{subject}, but do not treat absent items as clear."
+
+      "degraded" ->
+        "- **#{label}**: partially checked; use included #{subject}, but do not treat absent items as clear."
+
+      _ ->
+        nil
+    end
+  end
+
+  defp source_gap_line(_item), do: nil
+
+  defp source_gap_label(source) do
+    case normalize_match_text(source) do
+      "imessage" ->
+        "iMessage"
+
+      "messages" ->
+        "iMessage"
+
+      "voice memos" ->
+        "Voice Memos"
+
+      "notes" ->
+        "Notes"
+
+      "calendar local" ->
+        "Mac Calendar"
+
+      "local calendar" ->
+        "Mac Calendar"
+
+      "calendar" ->
+        "Google Calendar"
+
+      "gmail" ->
+        "Gmail"
+
+      "google mail" ->
+        "Gmail"
+
+      "slack" ->
+        "Slack"
+
+      "files" ->
+        "Files"
+
+      "browser history" ->
+        "Browser History"
+
+      "reminders" ->
+        "Reminders"
+
+      normalized ->
+        normalized |> String.split(" ", trim: true) |> Enum.map_join(" ", &String.capitalize/1)
+    end
+  end
+
+  defp source_gap_subject(source) do
+    case normalize_match_text(source) do
+      "imessage" -> "messages"
+      "messages" -> "messages"
+      "voice memos" -> "voice memos"
+      "notes" -> "notes"
+      "calendar local" -> "calendar items"
+      "local calendar" -> "calendar items"
+      "calendar" -> "calendar items"
+      "gmail" -> "email threads"
+      "google mail" -> "email threads"
+      "slack" -> "Slack threads"
+      "files" -> "files"
+      "browser history" -> "browser history"
+      "reminders" -> "reminders"
+      _ -> "items"
+    end
+  end
+
+  defp source_gap_priority(source) do
+    case normalize_match_text(source) do
+      "imessage" -> 0
+      "messages" -> 0
+      "notes" -> 1
+      "voice memos" -> 2
+      "calendar local" -> 3
+      "local calendar" -> 3
+      "calendar" -> 4
+      "gmail" -> 5
+      "slack" -> 6
+      "reminders" -> 7
+      "files" -> 8
+      "browser history" -> 9
+      _ -> 99
+    end
+  end
 
   defp schedule_conflict_present?(body) when is_binary(body) do
     normalized = normalize_match_text(body)
