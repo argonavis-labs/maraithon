@@ -26,9 +26,14 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
     assert ConnectorsHTML.connection_status_label(:missing_scope) == "needs permission"
     assert ConnectorsHTML.connection_status_label(:needs_refresh) == "reconnect needed"
     assert ConnectorsHTML.connection_status_label(:not_configured) == "setup needed"
+    assert ConnectorsHTML.connection_status_label(:unknown) == "status unavailable"
     assert ConnectorsHTML.refresh_token_status_label(:active) == "background access on"
     assert ConnectorsHTML.refresh_token_status_label(:inactive) == "reconnect needed"
     assert ConnectorsHTML.refresh_token_status_label(:missing) == "reconnect needed"
+    assert ConnectorsHTML.refresh_token_status_label(:unknown) == "background access not checked"
+    assert ConnectorsHTML.setup_status_label(:unexpected) == "setup not checked"
+    assert ConnectorsHTML.format_datetime(:unexpected) == "not recorded"
+    refute ConnectorsHTML.provider_subtitle(%{}) =~ "No details yet"
   end
 
   test "connection token summary avoids implementation terms" do

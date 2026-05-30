@@ -14,7 +14,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
     |> Enum.join(" ")
   end
 
-  def provider_subtitle(_provider), do: "No details yet."
+  def provider_subtitle(_provider), do: "Connection details are not available yet."
 
   def telegram_connected?(providers) when is_list(providers) do
     Enum.any?(providers, fn provider ->
@@ -158,7 +158,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_label(:missing_scope), do: "needs permission"
   def connection_status_label(:needs_refresh), do: "reconnect needed"
   def connection_status_label(:not_configured), do: "setup needed"
-  def connection_status_label(:unknown), do: "unknown"
+  def connection_status_label(:unknown), do: "status unavailable"
   def connection_status_label(_status), do: "disconnected"
 
   def connection_status_color(:connected), do: "emerald"
@@ -171,8 +171,8 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def refresh_token_status_label(:missing), do: "reconnect needed"
   def refresh_token_status_label(:not_required), do: "not required"
   def refresh_token_status_label(:not_applicable), do: "not applicable"
-  def refresh_token_status_label(:unknown), do: "unknown"
-  def refresh_token_status_label(_status), do: "unknown"
+  def refresh_token_status_label(:unknown), do: "background access not checked"
+  def refresh_token_status_label(_status), do: "background access not checked"
 
   def refresh_token_status_color(:active), do: "emerald"
   def refresh_token_status_color(status) when status in [:inactive, :missing], do: "amber"
@@ -224,7 +224,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def setup_status_label(:configured), do: "configured"
   def setup_status_label(:incomplete), do: "needs setup"
-  def setup_status_label(_status), do: "unknown"
+  def setup_status_label(_status), do: "setup not checked"
 
   def setup_status_badge_class(:configured),
     do:
@@ -356,7 +356,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
     do: Calendar.strftime(value, "%b %-d, %Y at %-I:%M %p UTC")
 
   def format_datetime(value, _timezone_info) when is_binary(value), do: value
-  def format_datetime(_value, _timezone_info), do: "unknown"
+  def format_datetime(_value, _timezone_info), do: "not recorded"
 
   def endpoint_url do
     MaraithonWeb.Endpoint.url()
