@@ -16,6 +16,13 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
         XCTAssertTrue(copy.localizedCaseInsensitiveContains("grant Full Disk Access there"))
     }
 
+    func testRepairActionCanRevealStableApp() {
+        XCTAssertEqual(
+            FullDiskAccessInstallHint.revealStableAppButtonTitle,
+            "Show Maraithon app"
+        )
+    }
+
     func testTemporaryAppBannerUsesSwitchCopyWhenStableAppExists() {
         let copy = TemporaryFullDiskAccessAppBanner.detailText(stableAppInstalled: true)
 

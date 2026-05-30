@@ -80,6 +80,17 @@ struct SourceUnblockView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
+                } else if hint.requiresStableFullDiskAccessApp,
+                          FullDiskAccessInstallHint.stableGrantReminder != nil {
+                    Button {
+                        revealStableApp()
+                    } label: {
+                        Label(
+                            FullDiskAccessInstallHint.revealStableAppButtonTitle,
+                            systemImage: "folder"
+                        )
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 if fullDiskAccessInstallHint == nil ||
@@ -160,6 +171,13 @@ struct SourceUnblockView: View {
             to: appURL,
             eventLog: env.eventLog,
             eventName: "\(sourceID).install_stable_app"
+        )
+    }
+
+    private func revealStableApp() {
+        FullDiskAccessInstallHint.revealStableDevelopmentApp(
+            eventLog: env.eventLog,
+            eventName: "\(sourceID).reveal_stable_app"
         )
     }
 

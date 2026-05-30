@@ -23,12 +23,11 @@ enum FullDiskAccessInstallHint {
     static let stableDevelopmentAppDisplayPath = "~/Applications/Maraithon.app"
     static let switchToStableAppButtonTitle = "Switch to stable app"
     static let installStableAppButtonTitle = "Install stable app"
+    static let revealStableAppButtonTitle = "Show Maraithon app"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return """
-            For local builds, grant Full Disk Access to \(stableDevelopmentAppDisplayPath). \
-            If System Settings shows more than one Maraithon, remove old entries first.
-            """
+        return "For local builds, grant Full Disk Access to the exact app at \(stableDevelopmentAppDisplayPath). " +
+            "If Maraithon is already enabled but still blocked, remove duplicate Maraithon entries, add this app again, then click Check again."
         #else
         return nil
         #endif
@@ -218,6 +217,21 @@ enum FullDiskAccessInstallHint {
             )
             NSWorkspace.shared.activateFileViewerSelecting([stableAppURL])
         }
+    }
+
+    @MainActor
+    static func revealStableDevelopmentApp(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+        eventLog: EventLog,
+        eventName: String
+    ) {
+        let appURL = stableDevelopmentAppURL(homeDirectory: homeDirectory)
+        let revealURL = FileManager.default.fileExists(atPath: appURL.path)
+            ? appURL
+            : appURL.deletingLastPathComponent()
+
+        eventLog.info(eventName, source: .ui, payload: ["path": appURL.path])
+        NSWorkspace.shared.activateFileViewerSelecting([revealURL])
     }
     #endif
 }

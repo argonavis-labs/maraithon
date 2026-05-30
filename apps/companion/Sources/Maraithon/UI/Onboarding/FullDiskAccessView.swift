@@ -109,6 +109,18 @@ struct FullDiskAccessView: View {
                     }
                     .controlSize(.large)
                     .buttonStyle(.borderedProminent)
+                } else if FullDiskAccessInstallHint.stableGrantReminder != nil {
+                    Button {
+                        revealStableApp()
+                    } label: {
+                        Label(
+                            FullDiskAccessInstallHint.revealStableAppButtonTitle,
+                            systemImage: "folder"
+                        )
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .buttonStyle(.bordered)
                 }
 
                 if FullDiskAccessInstallHint.current() == nil ||
@@ -213,6 +225,15 @@ struct FullDiskAccessView: View {
             to: appURL,
             eventLog: env.eventLog,
             eventName: "onboarding.full_disk_access.install_stable_app"
+        )
+        #endif
+    }
+
+    private func revealStableApp() {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.revealStableDevelopmentApp(
+            eventLog: env.eventLog,
+            eventName: "onboarding.full_disk_access.reveal_stable_app"
         )
         #endif
     }

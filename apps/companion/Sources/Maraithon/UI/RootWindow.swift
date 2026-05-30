@@ -249,6 +249,12 @@ struct FullDiskAccessRequiredBanner: View {
                 }
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
+            } else if FullDiskAccessInstallHint.stableGrantReminder != nil {
+                Button(FullDiskAccessInstallHint.revealStableAppButtonTitle) {
+                    revealStableApp()
+                }
+                .controlSize(.small)
+                .buttonStyle(.bordered)
             }
             Button("Check again") {
                 checkAgain()
@@ -329,6 +335,15 @@ struct FullDiskAccessRequiredBanner: View {
             to: appURL,
             eventLog: env.eventLog,
             eventName: "root_window.fda_banner.install_stable_app"
+        )
+        #endif
+    }
+
+    private func revealStableApp() {
+        #if canImport(AppKit)
+        FullDiskAccessInstallHint.revealStableDevelopmentApp(
+            eventLog: env.eventLog,
+            eventName: "root_window.fda_banner.reveal_stable_app"
         )
         #endif
     }

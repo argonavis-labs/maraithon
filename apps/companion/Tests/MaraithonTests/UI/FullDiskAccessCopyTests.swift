@@ -87,7 +87,10 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         XCTAssertTrue(reminder.contains("~/Applications/Maraithon.app"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("local builds"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("more than one Maraithon"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("exact app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("already enabled"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("duplicate Maraithon entries"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("Check again"))
         XCTAssertFalse(reminder.localizedCaseInsensitiveContains("DerivedData"))
     }
 
