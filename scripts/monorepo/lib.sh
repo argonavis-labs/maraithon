@@ -208,10 +208,9 @@ reset_stale_companion_tcc_if_needed() {
   fi
 
   if [[ -z "${previous}" ]]; then
-    reset_companion_full_disk_access_entries
     mkdir -p "${marker_dir}"
     printf '%s\n' "${requirement}" > "${marker_path}"
-    echo "Prepared stable companion Full Disk Access grant for ${app_path}; grant it once if macOS asks again."
+    echo "Recorded stable companion signing requirement for ${app_path}; existing Full Disk Access grants were preserved."
     return
   fi
 
