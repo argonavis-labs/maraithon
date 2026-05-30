@@ -15,6 +15,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   alias Maraithon.TelegramConversations.Turn
 
   @max_detail_chars 140
+  @max_headline_chars 96
   @max_steps 12
   @max_tool_calls 8
   @internal_result_fragments [
@@ -724,6 +725,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   defp completed_tool_headline(tool_calls) when is_list(tool_calls) do
     completed = Enum.reject(tool_calls, &(map_value(&1, "status") == "failed"))
     failed_count = length(tool_calls) - length(completed)
+    featured_headline = featured_headline(completed, failed_count)
 
     phrases =
       completed
@@ -733,6 +735,9 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     phrase = phrase_list(phrases)
 
     cond do
+      present?(featured_headline) ->
+        featured_headline
+
       phrases != [] && failed_count == 0 ->
         phrases
         |> completed_reply_phrase()
@@ -747,6 +752,81 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
       true ->
         "Finished the request"
     end
+  end
+
+  defp featured_headline([tool_call], 0) do
+    label = tool_call |> map_value("label") |> clean_item_text()
+    summary = tool_call |> map_value("summary") |> clean_item_text()
+    subject = featured_summary_subject(summary)
+
+    if present?(label) and present?(subject) do
+      truncate_headline("#{label}: #{subject}")
+    end
+  end
+
+  defp featured_headline(_completed, _failed_count), do: nil
+
+  defp featured_summary_subject(summary) when is_binary(summary) do
+    [
+      open_work_start_subject(summary),
+      listed_summary_subject(summary),
+      specific_result_subject(summary)
+    ]
+    |> first_present()
+    |> clean_featured_subject()
+  end
+
+  defp featured_summary_subject(_summary), do: nil
+
+  defp open_work_start_subject(summary) do
+    case Regex.run(~r/^Open work:\s+\d+\s+work items?\.\s+Start with\s+(.+?)(?:\.|$)/iu, summary) do
+      [_match, subject] -> subject
+      _other -> nil
+    end
+  end
+
+  defp listed_summary_subject(summary) do
+    case Regex.run(~r/^\d+\s+[^:]+:\s+(.+)$/u, summary) do
+      [_match, items] ->
+        items
+        |> String.split(";")
+        |> List.first()
+        |> clean_item_text()
+
+      _other ->
+        nil
+    end
+  end
+
+  defp specific_result_subject(summary) do
+    if generic_result_summary?(summary), do: nil, else: summary
+  end
+
+  defp generic_result_summary?(summary) when is_binary(summary) do
+    Regex.match?(
+      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check could not finish\.?$|.* could not finish\.?$)/i,
+      summary
+    )
+  end
+
+  defp generic_result_summary?(_summary), do: true
+
+  defp clean_featured_subject(subject) when is_binary(subject) do
+    subject
+    |> String.split(" - ")
+    |> List.first()
+    |> clean_item_text()
+    |> remove_trailing_sentence()
+  end
+
+  defp clean_featured_subject(_subject), do: nil
+
+  defp remove_trailing_sentence(nil), do: nil
+
+  defp remove_trailing_sentence(subject) when is_binary(subject) do
+    subject
+    |> String.trim()
+    |> String.trim_trailing(".")
   end
 
   @public_tool_labels %{
@@ -1313,6 +1393,16 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   end
 
   defp truncate(value), do: value |> to_string() |> truncate()
+
+  defp truncate_headline(value) when is_binary(value) do
+    if String.length(value) > @max_headline_chars do
+      String.slice(value, 0, @max_headline_chars) <> "..."
+    else
+      value
+    end
+  end
+
+  defp truncate_headline(value), do: value |> to_string() |> truncate_headline()
 
   defp json_time(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp json_time(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)

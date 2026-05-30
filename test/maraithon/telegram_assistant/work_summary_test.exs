@@ -4,7 +4,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
   alias Maraithon.TelegramAssistant.{Run, Step, WorkSummary}
   alias Maraithon.TelegramConversations.Turn
 
-  test "completed run headline describes product work instead of tool count" do
+  test "completed run headline names the concrete work item instead of the check" do
     run = %Run{
       status: "completed",
       model_name: "gpt-test",
@@ -16,7 +16,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
-    assert summary["headline"] == "Checked open work and replied"
+    assert summary["headline"] == "Open work: Send update"
 
     assert [
              %{
@@ -139,7 +139,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "todo_update"
   end
 
-  test "completed message work summary uses the same executive headline" do
+  test "completed message work summary names the concrete source result" do
     turn = %Turn{
       structured_data: %{
         "tool_history" => [
@@ -154,7 +154,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_message(turn)
 
-    assert summary["headline"] == "Checked connected sources and replied"
+    assert summary["headline"] ==
+             "Connected sources: Found Matthew in Gmail and relationship data"
 
     assert [%{"tool" => "connected_sources", "label" => "Connected sources"}] =
              summary["tool_calls"]
@@ -237,7 +238,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_message(turn)
 
-    assert summary["headline"] == "Checked Messages and replied"
+    assert summary["headline"] == "Messages: Alex: Board prep"
 
     assert [
              %{
@@ -394,7 +395,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_message(turn)
 
-    assert summary["headline"] == "Reviewed open work and replied"
+    assert summary["headline"] == "Open work: Send investor update"
 
     assert [
              %{
