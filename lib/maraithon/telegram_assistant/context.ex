@@ -424,14 +424,14 @@ defmodule Maraithon.TelegramAssistant.Context do
     )
   end
 
-  defp normalize_fetch_reason(:timeout), do: "timed out"
+  defp normalize_fetch_reason(:timeout), do: "timeout"
   defp normalize_fetch_reason(:slow_fetch), do: "slow response"
   defp normalize_fetch_reason(:interrupted), do: "interrupted"
   defp normalize_fetch_reason(:temporary_failure), do: "temporarily unavailable"
-  defp normalize_fetch_reason("timeout"), do: "timed out"
+  defp normalize_fetch_reason("timeout"), do: "timeout"
   defp normalize_fetch_reason("slow_fetch"), do: "slow response"
   defp normalize_fetch_reason("interrupted"), do: "interrupted"
-  defp normalize_fetch_reason("timed out"), do: "timed out"
+  defp normalize_fetch_reason("timed out"), do: "timeout"
   defp normalize_fetch_reason("slow response"), do: "slow response"
   defp normalize_fetch_reason("temporarily unavailable"), do: "temporarily unavailable"
   defp normalize_fetch_reason("temporary_failure"), do: "temporarily unavailable"

@@ -209,6 +209,30 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
       refute diagnostics =~ "/Users/kent"
       refute diagnostics =~ "iMessage database"
     end
+
+    test "reports timed-out source fetches with a machine-readable reason" do
+      started = System.monotonic_time(:millisecond)
+
+      context =
+        Context.safe_parallel_fetch(
+          [
+            messages: fn ->
+              Process.sleep(250)
+              ["late message"]
+            end
+          ],
+          defaults: %{messages: []},
+          timeout_ms: 20,
+          max_concurrency: 1
+        )
+
+      elapsed_ms = System.monotonic_time(:millisecond) - started
+
+      assert context.messages == []
+      assert context.context_fetch.status == "degraded"
+      assert [%{key: "messages", reason: "timeout"}] = context.context_fetch.failures
+      assert elapsed_ms < 250
+    end
   end
 
   defp calendar_status_text(context) do

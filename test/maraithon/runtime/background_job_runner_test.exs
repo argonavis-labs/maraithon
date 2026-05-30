@@ -13,6 +13,8 @@ defmodule Maraithon.Runtime.BackgroundJobRunnerTest do
   alias Maraithon.Runtime.BackgroundJobs
 
   setup do
+    Repo.delete_all(from job in BackgroundJob, where: job.status in ["pending", "running"])
+
     user_id = "background-runner-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
     %{user_id: user_id}

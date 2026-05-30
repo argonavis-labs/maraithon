@@ -204,7 +204,7 @@ defmodule Maraithon.ActionCards do
       telegram_next_line(card),
       telegram_prepared_line(card),
       telegram_evidence_line(card),
-      source_health_note(card),
+      telegram_source_health_line(card),
       telegram_learning_line(card)
     ]
     |> Enum.reject(&blank?/1)
@@ -964,6 +964,13 @@ defmodule Maraithon.ActionCards do
     case evidence_excerpt(card) do
       value when is_binary(value) -> "Evidence: #{safe(truncate(value, 180))}"
       _ -> nil
+    end
+  end
+
+  defp telegram_source_health_line(card) do
+    case source_health_note(card) do
+      "Checked " <> rest -> "Checked: #{rest}"
+      note -> note
     end
   end
 

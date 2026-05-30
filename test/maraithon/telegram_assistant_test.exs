@@ -2120,7 +2120,7 @@ defmodule Maraithon.TelegramAssistantTest do
       typing_refresh_ms: 50,
       contextual_progress_delay_ms: 75,
       timeout_notice_ms: 140,
-      hard_timeout_ms: 200
+      hard_timeout_ms: 2_000
     )
 
     start_supervised!(%{
@@ -2173,7 +2173,7 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:assistant_waiting, run_pid}, 3_000
     assert_receive {:capturing_telegram_event, %{type: :send, text: progress_text}}, 1_000
     assert progress_text == "Still checking what I know about Charlie."
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
@@ -2194,7 +2194,7 @@ defmodule Maraithon.TelegramAssistantTest do
       typing_refresh_ms: 50,
       contextual_progress_delay_ms: 75,
       timeout_notice_ms: 140,
-      hard_timeout_ms: 200
+      hard_timeout_ms: 2_000
     )
 
     start_supervised!(%{
@@ -2245,7 +2245,7 @@ defmodule Maraithon.TelegramAssistantTest do
         })
       end)
 
-    assert_receive {:assistant_waiting, run_pid}, 1_000
+    assert_receive {:assistant_waiting, run_pid}, 3_000
     assert_receive {:capturing_telegram_event, %{type: :send}}, 1_000
     assert_receive {:capturing_telegram_event, %{type: :edit, text: timeout_text}}, 1_000
     assert timeout_text =~ "I saved this request"

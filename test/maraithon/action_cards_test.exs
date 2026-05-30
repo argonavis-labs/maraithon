@@ -74,7 +74,7 @@ defmodule Maraithon.ActionCardsTest do
     assert rendered =~ "Why now:"
     assert rendered =~ "Prepared:"
     refute rendered =~ "Can handle:"
-    assert rendered =~ "Checked Gmail."
+    assert rendered =~ "Checked: Gmail."
   end
 
   test "telegram source verification copy hides raw source health errors", %{user_id: user_id} do
