@@ -120,8 +120,8 @@ enum SourceDetailCopy {
     }
 
     static func relativeSyncTime(_ date: Date, relativeTo now: Date = Date()) -> String {
-        let distance = date.timeIntervalSince(now)
-        if abs(distance) < 60 {
+        let elapsed = now.timeIntervalSince(date)
+        if elapsed < 60 {
             return "just now"
         }
 

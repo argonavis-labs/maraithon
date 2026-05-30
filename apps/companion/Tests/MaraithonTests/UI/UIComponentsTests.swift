@@ -63,6 +63,34 @@ final class UIComponentsTests: XCTestCase {
     }
 
     @MainActor
+    func testHealthySourceRecencyCopyHandlesJustCheckedTimestamps() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+
+        let label = SourceRowCopy.accessibilityLabel(
+            sourceName: "iMessage",
+            comingSoon: false,
+            rawState: .connected,
+            displayedState: .connected,
+            lastSyncAt: now,
+            now: now
+        )
+
+        XCTAssertEqual(label, "iMessage, assistant ready, last checked just now")
+        XCTAssertFalse(label.localizedCaseInsensitiveContains("now ago"))
+
+        XCTAssertEqual(
+            SourceRowCopy.tooltip(
+                comingSoon: false,
+                state: .connected,
+                activeIssueReason: nil,
+                lastSyncAt: now.addingTimeInterval(120),
+                now: now
+            ),
+            "Last checked just now"
+        )
+    }
+
+    @MainActor
     func testSourceRowAssistiveCopyDoesNotLeakRawIssueDetails() {
         let raw = "clientError(status: 400, body: Optional(\"{\\\"error\\\":\\\"invalid_batch\\\",\\\"secret\\\":\\\"abc\\\"}\"))"
 

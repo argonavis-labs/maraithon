@@ -334,6 +334,10 @@ final class SourceDetailScaffoldTests: XCTestCase {
             SourceDetailCopy.relativeSyncTime(now.addingTimeInterval(20), relativeTo: now),
             "just now"
         )
+        XCTAssertEqual(
+            SourceDetailCopy.relativeSyncTime(now.addingTimeInterval(120), relativeTo: now),
+            "just now"
+        )
     }
 
     func testScaffoldBuildsWithEmptyActivity() {
