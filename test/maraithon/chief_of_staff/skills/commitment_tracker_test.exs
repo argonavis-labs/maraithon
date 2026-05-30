@@ -194,8 +194,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "commitment_tracker"
-    assert brief.body =~ "Saved to your Maraithon list:"
+    assert brief.body =~ "Added to open work:"
     assert brief.body =~ "- Send Elena the revised Runner ambassador agreement"
+    refute brief.body =~ "Maraithon list"
+    refute brief.body =~ "todos"
     assert brief.metadata["origin_skill_id"] == "commitment_tracker"
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_inbox"]) == 1
     assert get_in(brief.metadata, ["tracker_input", "counts", "gmail_recent_sent"]) == 1
@@ -324,11 +326,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.summary =~ "No reliable commitment review was available"
     assert brief.body =~ "## Needs Your Attention"
     assert brief.body =~ "## Unknowns"
-    assert brief.body =~ "No existing open commitment was already on your list"
+    assert brief.body =~ "No existing open commitment is already saved in open work"
     assert brief.body =~ "Today's move:"
 
     assert brief.body =~
              "No new commitments were saved because the checked source evidence did not clearly show a new promise"
+
+    refute brief.body =~ "your list"
 
     refute brief.body =~ "classified safely"
     refute brief.body =~ "could not produce"

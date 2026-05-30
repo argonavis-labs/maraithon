@@ -35,7 +35,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   @impl true
   def description do
-    "Finds work-related promises and asks, then writes them to the built-in todo list."
+    "Finds work-related promises and asks, then saves them as open work."
   end
 
   @impl true
@@ -456,8 +456,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
        Do not invent source access. Do not claim iMessage, WhatsApp, OmniFocus, or
        calendar write/delete were scanned or changed unless source_access says they
-       are available. Current Maraithon writes commitment todos to the built-in
-       todo list; OmniFocus/calendar mirrors are future integrations unless tools
+       are available. Current Maraithon writes commitment work items to built-in
+       open work; OmniFocus/calendar mirrors are future integrations unless tools
        are explicitly present in the source_access payload.
 
        User-facing copy requirements:
@@ -690,7 +690,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "Start with #{count_phrase(open_count, "existing open item", "existing open items")}; no new commitments were saved from this pass."
 
       checked_count > 0 ->
-        "No new commitments were saved from this pass; review the checked source threads before assuming the list is clear."
+        "No new commitments were saved from this pass; review the checked source threads before assuming open work is clear."
 
       true ->
         "No reliable commitment review was available; refresh Gmail and Calendar, then check the most urgent thread."
@@ -701,7 +701,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     case Enum.take(open_todos, 5) do
       [] ->
         [
-          "- No existing open commitment was already on your list. Do not treat that as clear; check the specific thread before assuming nothing is owed."
+          "- No existing open commitment is already saved in open work. Do not treat that as clear; check the specific thread before assuming nothing is owed."
         ]
 
       todos ->
@@ -850,7 +850,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       if(checked_count > 0,
         do: "- Anything outside the checked Gmail, Calendar, and existing open work is unknown.",
         else:
-          "- Gmail, Calendar, and source threads still need a fresh pass before you rely on the list."
+          "- Gmail, Calendar, and source threads still need a fresh pass before you rely on open work."
       )
     ]
   end
@@ -941,7 +941,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
     summary_lines =
       []
-      |> maybe_append(lines != [], ["", "Saved to your Maraithon list:"] ++ lines)
+      |> maybe_append(lines != [], ["", "Added to open work:"] ++ lines)
       |> maybe_append(additional_count > 0, [saved_more_line(additional_count)])
       |> maybe_append(skipped_count > 0, [already_covered_line(skipped_count)])
 
@@ -955,20 +955,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp append_todo_write_summary(report, {:error, _reason}) do
     append_report_body(
       report,
-      "\nMaraithon found possible commitments, but could not save them as todos. Review the source-backed summary above before acting."
+      "\nMaraithon found possible commitments, but could not save them as open work. Review the source-backed summary above before acting."
     )
   end
 
   defp todo_title(%Todo{title: title}) when is_binary(title) and title != "", do: title
   defp todo_title(%Todo{}), do: "Open commitment"
 
-  defp saved_more_line(1), do: "- 1 more saved item."
-  defp saved_more_line(count), do: "- #{count} more saved items."
+  defp saved_more_line(1), do: "- 1 more work item saved."
+  defp saved_more_line(count), do: "- #{count} more work items saved."
 
-  defp already_covered_line(1), do: "- Already on your list: 1 duplicate or covered item."
+  defp already_covered_line(1), do: "- Already covered in open work: 1 item."
 
   defp already_covered_line(count),
-    do: "- Already on your list: #{count} duplicates or covered items."
+    do: "- Already covered in open work: #{count} items."
 
   defp append_report_body(report, addition) do
     body = read_string(report, "body", "")
