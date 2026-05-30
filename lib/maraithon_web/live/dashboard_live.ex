@@ -1371,7 +1371,7 @@ defmodule MaraithonWeb.DashboardLive do
                       <%= project_card.project.status %>
                     </span>
                     <span class={project_priority_class(project_card.project.priority)}>
-                      <%= project_card.project.priority %>
+                      <%= project_priority_label(project_card.project.priority) %>
                     </span>
                   </div>
                   <p class="mt-1 text-xs/5 text-zinc-500">
@@ -1462,8 +1462,8 @@ defmodule MaraithonWeb.DashboardLive do
                         <div>
                           <p class="text-sm/6 font-medium text-zinc-950"><%= recommendation.title %></p>
                           <div class="mt-2 flex flex-wrap gap-2">
-                            <span class="text-xs font-semibold text-emerald-700">
-                              p<%= recommendation.priority %>
+                            <span class={recommendation_priority_class(recommendation.priority)}>
+                              <%= recommendation_priority_label(recommendation.priority) %>
                             </span>
                             <%= if recommendation.decision do %>
                               <.badge class="bg-white">
@@ -3263,6 +3263,33 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp project_priority_class(_priority),
     do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
+
+  defp project_priority_label(value), do: humanize_text_token(value) || "Normal"
+
+  defp recommendation_priority_class(priority) when is_integer(priority) and priority >= 90,
+    do:
+      "inline-flex rounded-md bg-emerald-600/15 px-1.5 py-0.5 text-xs/5 font-medium text-emerald-800"
+
+  defp recommendation_priority_class(priority) when is_integer(priority) and priority >= 80,
+    do:
+      "inline-flex rounded-md bg-amber-400/20 px-1.5 py-0.5 text-xs/5 font-medium text-amber-800"
+
+  defp recommendation_priority_class(priority) when is_integer(priority) and priority >= 65,
+    do: "inline-flex rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs/5 font-medium text-sky-800"
+
+  defp recommendation_priority_class(_priority),
+    do: "inline-flex rounded-md bg-zinc-600/10 px-1.5 py-0.5 text-xs/5 font-medium text-zinc-700"
+
+  defp recommendation_priority_label(priority) when is_integer(priority) and priority >= 90,
+    do: "Critical path"
+
+  defp recommendation_priority_label(priority) when is_integer(priority) and priority >= 80,
+    do: "High impact"
+
+  defp recommendation_priority_label(priority) when is_integer(priority) and priority >= 65,
+    do: "Worth considering"
+
+  defp recommendation_priority_label(_priority), do: "Later"
 
   defp project_summary(project) do
     project.summary || project.description || "No project summary yet."

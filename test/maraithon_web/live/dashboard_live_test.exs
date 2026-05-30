@@ -270,7 +270,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "GitHub scope"
     assert html =~ "Project workspace"
     assert html =~ "Launch projects on the dashboard first."
+    assert html =~ "Critical path"
     assert html =~ "Attach Project Manager"
+    refute html =~ "p96"
+    refute html =~ "priority 96"
   end
 
   test "lets the user accept a recommendation, grant repo access, and start delivery", %{
