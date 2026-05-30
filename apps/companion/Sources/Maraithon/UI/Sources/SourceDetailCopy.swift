@@ -76,7 +76,7 @@ enum SourceDetailCopy {
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("No new \(plural) since the last check.")
         } else {
-            sentences.append("No \(plural) found yet.")
+            sentences.append("Last check did not add any \(plural) to assistant context yet.")
         }
 
         if hasUnfinishedItems {
@@ -86,6 +86,8 @@ enum SourceDetailCopy {
             } else {
                 sentences.append("Maraithon will retry on the next check.")
             }
+        } else if totalSynced == 0 && lastCheckSynced == 0 && lastCheckAlreadySynced == 0 {
+            sentences.append("Maraithon will keep checking.")
         } else {
             sentences.append("Your assistant will keep this context current.")
         }

@@ -167,6 +167,29 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
     }
 
+    func testConnectedSummaryScopesEmptyHealthyCheckBeforeAnyContext() {
+        let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let copy = SourceDetailCopy.connectedSummary(
+            displayName: "iMessage",
+            totalSynced: 0,
+            lastCheckSynced: 0,
+            lastCheckAlreadySynced: 0,
+            lastCheckNotSynced: 0,
+            lastSyncAt: now,
+            singular: "message",
+            plural: "messages",
+            relativeTo: now
+        )
+
+        XCTAssertEqual(
+            copy,
+            "Last check did not add any messages to assistant context yet. Maraithon will keep checking. Checked just now."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("found"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
+    }
+
     func testConnectedSummaryUsesAttentionCopyForPartialFailures() {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let copy = SourceDetailCopy.connectedSummary(
