@@ -110,7 +110,7 @@ enum SourceDetailCopy {
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("No new \(plural) since the last check.")
         } else {
-            sentences.append("Last check did not add any \(plural) to assistant context yet.")
+            sentences.append("No \(plural) were added to assistant context during the last check.")
         }
 
         if hasUnfinishedItems {
@@ -131,7 +131,7 @@ enum SourceDetailCopy {
     }
 
     static func firstSyncDescription(displayName: String) -> String {
-        "Maraithon is ready to check \(displayName) for assistant context, but the first check has not finished yet. Check now starts it immediately; otherwise it will begin automatically within a few minutes."
+        "Maraithon is ready to check \(displayName) for assistant context. Check now starts the first check immediately; otherwise it will begin automatically within a few minutes."
     }
 
     static func isWaitingForFirstSync(state: SourceState, lastSyncAt: Date?) -> Bool {

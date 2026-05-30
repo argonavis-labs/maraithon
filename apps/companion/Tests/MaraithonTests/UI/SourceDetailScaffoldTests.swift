@@ -183,11 +183,12 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check did not add any messages to assistant context yet. Maraithon will keep checking. Checked just now."
+            "No messages were added to assistant context during the last check. Maraithon will keep checking. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("found"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("yet"))
     }
 
     func testConnectedSummaryUsesAttentionCopyForPartialFailures() {
@@ -346,6 +347,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertTrue(copy.contains("ready to check Notes"))
         XCTAssertTrue(copy.contains("assistant context"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Notes is connected"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("not finished yet"))
     }
 
     func testSourceDetailRelativeSyncTimeDoesNotSayInZeroSeconds() {
