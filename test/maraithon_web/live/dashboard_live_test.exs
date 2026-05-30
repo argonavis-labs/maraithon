@@ -74,6 +74,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "high-signal"
     refute html =~ "project-local state"
     refute html =~ "operating system"
+    refute html =~ "how this user prefers to work"
     refute html =~ "No durable preferences yet."
     refute html =~ "Install agent"
     refute html =~ "Agent activity"
@@ -192,9 +193,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "3 things Maraithon would have caught this week"
     assert html =~ "Deck follow-up for Sarah"
     assert html =~ "Sarah asked for the deck"
+    assert html =~ "Recommended move:"
     refute_html_contains(html, "recent sample")
     refute_html_contains(html, "proof-of-value scan")
     refute_html_contains(html, "proof-of-value preview")
+    refute_html_contains(html, "What Maraithon would do")
     refute_html_contains(html, "confidence 99")
     refute_html_contains(html, "99.0%")
   end

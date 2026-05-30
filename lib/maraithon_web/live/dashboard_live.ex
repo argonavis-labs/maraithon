@@ -1711,7 +1711,7 @@ defmodule MaraithonWeb.DashboardLive do
                         </p>
                         <p class="mt-1 text-sm/6 text-zinc-600"><%= item.rationale %></p>
                         <p class="mt-2 text-sm/6 text-indigo-700">
-                          <span class="font-medium">What Maraithon would do:</span> <%= item.recommended_action %>
+                          <span class="font-medium">Recommended move:</span> <%= item.recommended_action %>
                         </p>
                       </div>
                       <div class="w-full max-w-xs rounded-lg border border-zinc-950/10 bg-zinc-50 p-4">
@@ -2500,7 +2500,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp empty_memory_profile do
     %{
-      summary: "Maraithon is still learning how this user prefers to work.",
+      summary: "Maraithon is still learning how you prefer to work.",
       profile: %{},
       confidence: 0.0,
       source_window_start: nil,
