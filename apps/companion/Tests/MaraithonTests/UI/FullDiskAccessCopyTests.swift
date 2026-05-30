@@ -5,20 +5,22 @@ final class FullDiskAccessCopyTests: XCTestCase {
     func testOnboardingCopyNamesAllBlockedLocalSources() {
         XCTAssertEqual(
             FullDiskAccessCopy.onboardingTitle,
-            "Allow Maraithon to read local sources"
+            "Allow access to iMessage, Notes, and Voice Memos"
         )
         XCTAssertTrue(FullDiskAccessCopy.onboardingBody.contains("iMessage"))
         XCTAssertTrue(FullDiskAccessCopy.onboardingBody.contains("Notes"))
         XCTAssertTrue(FullDiskAccessCopy.onboardingBody.contains("Voice Memos"))
         XCTAssertTrue(FullDiskAccessCopy.onboardingBody.contains("read-only"))
+        XCTAssertFalse(FullDiskAccessCopy.onboardingTitle.localizedCaseInsensitiveContains("local source"))
         XCTAssertFalse(FullDiskAccessCopy.onboardingBody.localizedCaseInsensitiveContains("database is"))
     }
 
     func testOnboardingActionsAvoidSingleSourceSetupLanguage() {
         XCTAssertEqual(FullDiskAccessCopy.openSettingsButton, "Open System Settings")
         XCTAssertEqual(FullDiskAccessCopy.continueButton, "Continue")
-        XCTAssertEqual(FullDiskAccessCopy.skipButton, "Set up local sources later")
+        XCTAssertEqual(FullDiskAccessCopy.skipButton, "Skip for now")
         XCTAssertFalse(FullDiskAccessCopy.skipButton.localizedCaseInsensitiveContains("iMessage"))
+        XCTAssertFalse(FullDiskAccessCopy.skipButton.localizedCaseInsensitiveContains("local source"))
     }
 
     func testUnblockFollowUpDoesNotRequireARestart() {
@@ -27,7 +29,8 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Notes"))
         XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Voice Memos"))
         XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("Check again"))
-        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("every blocked local source"))
+        XCTAssertTrue(FullDiskAccessCopy.unblockFollowUp.contains("anything still blocked"))
+        XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("local source"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("quit"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("reopen"))
         XCTAssertFalse(FullDiskAccessCopy.unblockFollowUp.localizedCaseInsensitiveContains("restart"))

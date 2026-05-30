@@ -268,7 +268,7 @@ struct FullDiskAccessRequiredBanner: View {
 
     static func detailText(blockedSourceNames: [String]) -> String {
         let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
-        return "\(subject) need one macOS Full Disk Access grant. Enable Maraithon once; other sources continue to sync."
+        return "\(subject) need one macOS Full Disk Access grant. Enable Maraithon once; the rest of the app can keep syncing."
     }
 
     private static func readableList(_ values: [String], fallback: String) -> String {

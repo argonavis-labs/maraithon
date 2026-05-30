@@ -48,10 +48,10 @@ struct SourcePermissionHint: Equatable {
         case "calendar_not_authorized":
             return SourcePermissionHint(
                 title: "Calendar access needed",
-                body: "Calendar access is separate from Full Disk Access. Maraithon needs Calendars Full Access to read your events on this Mac. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
+                body: "Calendar access is separate from Full Disk Access. Maraithon needs Calendar Full Access to read your events on this Mac. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"),
                 settingsButtonTitle: "Open Calendar Settings",
-                followUpNote: "After enabling Maraithon, return here; Check again rechecks Calendar immediately. If Maraithon is already listed, toggle it off and back on."
+                followUpNote: "After enabling Maraithon, return here and click Check again to recheck Calendar. If Maraithon is already listed, toggle it off and back on."
             )
         case "reminders_not_authorized":
             return SourcePermissionHint(
@@ -59,7 +59,7 @@ struct SourcePermissionHint: Equatable {
                 body: "Reminders access is separate from Full Disk Access. Maraithon needs Reminders Full Access to read reminders on this Mac. Open System Settings → Privacy & Security → Reminders, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"),
                 settingsButtonTitle: "Open Reminders Settings",
-                followUpNote: "After enabling Maraithon, return here; Check again rechecks Reminders immediately. If Maraithon is already listed, toggle it off and back on."
+                followUpNote: "After enabling Maraithon, return here and click Check again to recheck Reminders. If Maraithon is already listed, toggle it off and back on."
             )
         case "imessage_full_disk_access_required":
             return SourcePermissionHint(
@@ -85,7 +85,7 @@ struct SourcePermissionHint: Equatable {
                 body: "Voice Memos still sync, but macOS is refusing local transcription because Siri or Dictation is disabled. Open System Settings → Apple Intelligence & Siri and turn Siri on, or open Keyboard → Dictation and turn Dictation on.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension"),
                 settingsButtonTitle: "Open Siri Settings",
-                followUpNote: "After enabling Siri or Dictation, tap Check again. New voice memos will get transcripts on the next sync; existing memos pick up transcripts when their audio re-flows."
+                followUpNote: "After enabling Siri or Dictation, click Check again. New voice memos will get transcripts on the next sync; existing memos update when they are checked again."
             )
         case "voice_memos_speech_not_authorized":
             return SourcePermissionHint(
@@ -93,7 +93,7 @@ struct SourcePermissionHint: Equatable {
                 body: "Voice Memos sync, but transcripts need Speech Recognition permission. Open System Settings → Privacy & Security → Speech Recognition, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"),
                 settingsButtonTitle: "Open Speech Settings",
-                followUpNote: "After enabling, tap Check again. New voice memos will get transcripts on the next sync."
+                followUpNote: "After enabling, click Check again. New voice memos will get transcripts on the next sync."
             )
         case "voice_memos_full_disk_access_required":
             return SourcePermissionHint(
