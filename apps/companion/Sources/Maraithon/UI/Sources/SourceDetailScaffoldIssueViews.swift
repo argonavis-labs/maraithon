@@ -4,7 +4,7 @@ import SwiftUI
 extension SourceDetailScaffold {
     func errorView(reason: String) -> some View {
         ContentUnavailableView {
-            Label("Sync error", systemImage: "xmark.octagon.fill")
+            Label(SourceDetailCopy.issueErrorTitle, systemImage: "xmark.octagon.fill")
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(StatusTone.error.color)
         } description: {
@@ -18,7 +18,7 @@ extension SourceDetailScaffold {
             Button {
                 env.sources.syncNow(id: sourceID)
             } label: {
-                Label("Check now", systemImage: "arrow.clockwise")
+                Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
@@ -61,7 +61,7 @@ extension SourceDetailScaffold {
                 Button {
                     env.sources.syncNow(id: sourceID)
                 } label: {
-                    Label("Check now", systemImage: "arrow.clockwise")
+                    Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -90,7 +90,7 @@ extension SourceDetailScaffold {
             Button {
                 env.sources.syncNow(id: sourceID)
             } label: {
-                Label("Check now", systemImage: "arrow.clockwise")
+                Label(SourceDetailCopy.checkNowButtonTitle, systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)

@@ -246,12 +246,37 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "available now")
         XCTAssertEqual(SourceDetailCopy.lastSyncTitle, "Last checked")
         XCTAssertEqual(SourceDetailCopy.lastSyncCaption, "successful check")
-        XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first sync")
+        XCTAssertEqual(SourceDetailCopy.checkNowButtonTitle, "Check now")
+        XCTAssertEqual(SourceDetailCopy.resumeUpdatesButtonTitle, "Resume updates")
+        XCTAssertEqual(SourceDetailCopy.pauseUpdatesButtonTitle, "Pause updates")
+        XCTAssertEqual(SourceDetailCopy.firstSyncTitle, "Ready for first check")
         XCTAssertEqual(SourceDetailCopy.issueErrorTitle, "Last check failed")
         XCTAssertEqual(SourceDetailCopy.resetSourceButtonTitle, "Check from the beginning")
+        XCTAssertEqual(SourceDetailCopy.pausedHeadline(displayName: "iMessage"), "iMessage updates are paused")
+        XCTAssertEqual(
+            SourceDetailCopy.pausedSummary(displayName: "iMessage", plural: "messages"),
+            "Resume updates when you want iMessage to check for new messages again."
+        )
+        XCTAssertEqual(
+            SourceDetailCopy.unavailablePublisherSummary(displayName: "iMessage"),
+            "Open Maraithon on this Mac to make iMessage available to your assistant."
+        )
+        XCTAssertEqual(SourceDetailCopy.errorHeadline(displayName: "iMessage"), "iMessage could not be checked")
+        XCTAssertEqual(SourceDetailCopy.disconnectedHeadline(displayName: "iMessage"), "iMessage is not updating")
         XCTAssertEqual(SourceDetailCopy.issueAttentionTitle(plural: "messages"), "Some messages need attention")
         XCTAssertEqual(SourceDetailCopy.failedItemsLine(1, singular: "message", plural: "messages"), "1 message needs another check.")
         XCTAssertEqual(SourceDetailCopy.failedItemsLine(3, singular: "message", plural: "messages"), "3 messages need another check.")
+
+        let statusCopy = [
+            SourceDetailCopy.resumeUpdatesButtonTitle,
+            SourceDetailCopy.firstSyncTitle,
+            SourceDetailCopy.issueErrorTitle,
+            SourceDetailCopy.pausedHeadline(displayName: "iMessage"),
+            SourceDetailCopy.pausedSummary(displayName: "iMessage", plural: "messages"),
+            SourceDetailCopy.errorHeadline(displayName: "iMessage"),
+            SourceDetailCopy.disconnectedHeadline(displayName: "iMessage")
+        ].joined(separator: " ")
+        XCTAssertFalse(statusCopy.localizedCaseInsensitiveContains("sync"))
     }
 
     func testIMessagesCapabilitiesNameChiefOfStaffOutcomes() {
@@ -276,12 +301,12 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(notes.count, 3)
         XCTAssertEqual(notes.map(\.title), [
             "Local filtering",
-            "Encrypted sync",
+            "Encrypted upload",
             "Device control"
         ])
         XCTAssertTrue(text.localizedCaseInsensitiveContains("filtered on this Mac"))
         XCTAssertTrue(text.localizedCaseInsensitiveContains("encrypted on this Mac"))
-        XCTAssertTrue(text.localizedCaseInsensitiveContains("delete synced Messages data"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("delete uploaded Messages data"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("server"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("database"))
     }
@@ -293,7 +318,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
             XCTAssertEqual(notes.count, 3, sourceID)
             XCTAssertTrue(text.localizedCaseInsensitiveContains("this Mac"), sourceID)
-            XCTAssertTrue(text.localizedCaseInsensitiveContains("delete synced"), sourceID)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("delete uploaded"), sourceID)
             XCTAssertFalse(text.localizedCaseInsensitiveContains("server"), sourceID)
             XCTAssertFalse(text.localizedCaseInsensitiveContains("database"), sourceID)
         }

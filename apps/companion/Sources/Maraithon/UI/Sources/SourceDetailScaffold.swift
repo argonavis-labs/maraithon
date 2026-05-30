@@ -87,7 +87,10 @@ struct SourceDetailScaffold: View {
                     env.sources.syncNow(id: sourceID)
                 }
             } label: {
-                Label(isPaused ? "Resume sync" : "Check now", systemImage: isPaused ? "play.fill" : "arrow.clockwise")
+                Label(
+                    isPaused ? SourceDetailCopy.resumeUpdatesButtonTitle : SourceDetailCopy.checkNowButtonTitle,
+                    systemImage: isPaused ? "play.fill" : "arrow.clockwise"
+                )
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut("r", modifiers: .command)
@@ -96,7 +99,7 @@ struct SourceDetailScaffold: View {
                 Button {
                     env.sources.pause(id: sourceID)
                 } label: {
-                    Label("Pause updates", systemImage: "pause.fill")
+                    Label(SourceDetailCopy.pauseUpdatesButtonTitle, systemImage: "pause.fill")
                 }
                 .buttonStyle(.bordered)
             }
@@ -138,7 +141,7 @@ struct SourceDetailScaffold: View {
 
     var headlineCopy: String {
         if isPaused {
-            return "\(displayName) sync is paused"
+            return SourceDetailCopy.pausedHeadline(displayName: displayName)
         }
 
         guard let publisher else {
@@ -156,23 +159,23 @@ struct SourceDetailScaffold: View {
                 plural: syncedItemPlural
             )
         case .paused:
-            return "\(displayName) sync is paused"
+            return SourceDetailCopy.pausedHeadline(displayName: displayName)
         case .needsAttention:
             return "\(displayName) needs attention"
         case .error:
-            return "\(displayName) could not sync"
+            return SourceDetailCopy.errorHeadline(displayName: displayName)
         case .disconnected:
-            return "\(displayName) is not syncing"
+            return SourceDetailCopy.disconnectedHeadline(displayName: displayName)
         }
     }
 
     var summaryCopy: String {
         guard let publisher else {
-            return "Open Maraithon from this Mac to start syncing \(syncedItemPlural)."
+            return SourceDetailCopy.unavailablePublisherSummary(displayName: displayName)
         }
 
         if isPaused {
-            return "Resume sync when you want \(displayName) to update again."
+            return SourceDetailCopy.pausedSummary(displayName: displayName, plural: syncedItemPlural)
         }
 
         return SourceDetailCopy.connectedSummary(

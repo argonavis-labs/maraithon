@@ -234,36 +234,36 @@ private struct DataSettingsView: View {
 }
 
 enum DataSettingsCopy {
-    static let intro = "Manage data Maraithon has synced from this Mac. Re-sync starts a source over locally; Delete removes Maraithon's synced copy and cannot be undone."
-    static let resyncTitle = "Re-sync"
+    static let intro = "Manage data Maraithon has uploaded from this Mac. Start over checks a source from the beginning; Delete removes Maraithon's uploaded copy and cannot be undone."
+    static let resyncTitle = "Start over"
     static let deleteTitle = "Delete…"
-    static let deleteAllTitle = "Delete all synced data…"
-    static let deleteAllDescription = "Deletes Maraithon's synced copy for every source from this Mac. Local data is not affected; sources can sync again afterward."
-    static let deleteAllConfirmation = "This deletes every record Maraithon has synced from this Mac across all sources. Local data on your device is not affected; sources can sync again afterward."
+    static let deleteAllTitle = "Delete uploaded data…"
+    static let deleteAllDescription = "Deletes Maraithon's uploaded copy for every source from this Mac. Local data is not affected; sources can be checked again afterward."
+    static let deleteAllConfirmation = "This deletes every record Maraithon has uploaded from this Mac across all sources. Local data on your device is not affected; sources can be checked again afterward."
 
     static func sourceDeleteConfirmation(sourceName: String) -> String {
-        "This deletes every \(sourceName) record Maraithon has synced from this Mac. Local data on your device is not affected."
+        "This deletes every \(sourceName) record Maraithon has uploaded from this Mac. Local data on your device is not affected."
     }
 
     static func deleteStarted(sourceName: String?) -> String {
         if let sourceName {
-            return "Deleting synced \(sourceName) data…"
+            return "Deleting uploaded \(sourceName) data…"
         }
 
-        return "Deleting synced data…"
+        return "Deleting uploaded data…"
     }
 
     static func deleteSuccess(sourceName: String?, deletedCount: Int) -> String {
         if deletedCount == 0 {
             if let sourceName {
-                return "No synced \(sourceName) records were stored in Maraithon. Local data on this Mac was not changed."
+                return "No uploaded \(sourceName) records were stored in Maraithon. Local data on this Mac was not changed."
             }
 
-            return "No synced records were stored in Maraithon. Local data on this Mac was not changed."
+            return "No uploaded records were stored in Maraithon. Local data on this Mac was not changed."
         }
 
         if let sourceName {
-            return "Deleted \(recordCount(deletedCount)) of synced \(sourceName) data from Maraithon. Local data on this Mac was not changed."
+            return "Deleted \(recordCount(deletedCount)) of uploaded \(sourceName) data from Maraithon. Local data on this Mac was not changed."
         }
 
         return "Deleted \(recordCount(deletedCount)) from Maraithon. Local data on this Mac was not changed."
@@ -271,10 +271,10 @@ enum DataSettingsCopy {
 
     static func deleteFailure(sourceName: String?, error: Error) -> String {
         if let sourceName {
-            return "Could not delete synced \(sourceName) data. \(CompanionErrorCopy.message(for: error))"
+            return "Could not delete uploaded \(sourceName) data. \(CompanionErrorCopy.message(for: error))"
         }
 
-        return "Could not delete synced data. \(CompanionErrorCopy.message(for: error))"
+        return "Could not delete uploaded data. \(CompanionErrorCopy.message(for: error))"
     }
 
     private static func recordCount(_ count: Int) -> String {

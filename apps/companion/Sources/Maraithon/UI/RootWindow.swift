@@ -118,7 +118,7 @@ struct RootWindow: View {
             ContentUnavailableView(
                 "Pick a source",
                 systemImage: "sidebar.left",
-                description: Text("Choose a source from the sidebar to see its sync status.")
+                description: Text("Choose a source from the sidebar to see assistant context and recent checks.")
             )
         }
     }

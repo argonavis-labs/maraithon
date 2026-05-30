@@ -82,18 +82,18 @@ struct SourcePermissionHint: Equatable {
         case "voice_memos_speech_disabled":
             return SourcePermissionHint(
                 title: "Siri or Dictation is off",
-                body: "Voice Memos still sync, but macOS is refusing local transcription because Siri or Dictation is disabled. Open System Settings → Apple Intelligence & Siri and turn Siri on, or open Keyboard → Dictation and turn Dictation on.",
+                body: "Voice Memos can still be checked, but macOS is refusing local transcription because Siri or Dictation is disabled. Open System Settings → Apple Intelligence & Siri and turn Siri on, or open Keyboard → Dictation and turn Dictation on.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.Siri-Settings.extension"),
                 settingsButtonTitle: "Open Siri Settings",
-                followUpNote: "After enabling Siri or Dictation, click Check again. New voice memos will get transcripts on the next sync; existing memos update when they are checked again."
+                followUpNote: "After enabling Siri or Dictation, click Check again. New voice memos will get transcripts on the next check; existing memos update when they are checked again."
             )
         case "voice_memos_speech_not_authorized":
             return SourcePermissionHint(
                 title: "Speech Recognition access needed",
-                body: "Voice Memos sync, but transcripts need Speech Recognition permission. Open System Settings → Privacy & Security → Speech Recognition, then enable Maraithon.",
+                body: "Voice Memos can be checked, but transcripts need Speech Recognition permission. Open System Settings → Privacy & Security → Speech Recognition, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"),
                 settingsButtonTitle: "Open Speech Settings",
-                followUpNote: "After enabling, click Check again. New voice memos will get transcripts on the next sync."
+                followUpNote: "After enabling, click Check again. New voice memos will get transcripts on the next check."
             )
         case "voice_memos_full_disk_access_required":
             return SourcePermissionHint(

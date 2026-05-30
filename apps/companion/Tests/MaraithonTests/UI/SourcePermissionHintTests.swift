@@ -80,6 +80,8 @@ final class SourcePermissionHintTests: XCTestCase {
         )
         XCTAssertEqual(hint.settingsButtonTitle, "Open Siri Settings")
         XCTAssertNotNil(hint.followUpNote)
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(hint.followUpNote?.localizedCaseInsensitiveContains("next sync") == true)
         XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
 
@@ -91,6 +93,8 @@ final class SourcePermissionHintTests: XCTestCase {
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition"
         )
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(hint.followUpNote?.localizedCaseInsensitiveContains("next sync") == true)
         XCTAssertFalse(hint.requiresStableFullDiskAccessApp)
     }
 

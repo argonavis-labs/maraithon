@@ -87,8 +87,8 @@ struct DevicesSettingsView: View {
 }
 
 enum DevicesSettingsCopy {
-    static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start syncing again."
-    static let revokeConfirmation = "This signs the Mac out and stops new data from syncing. Data already synced to Maraithon is kept."
+    static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start sending data again."
+    static let revokeConfirmation = "This signs the Mac out and stops it from sending new data. Data already uploaded to Maraithon is kept."
 }
 
 private struct DeviceRow: View {

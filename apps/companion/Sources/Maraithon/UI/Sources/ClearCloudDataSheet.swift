@@ -7,7 +7,7 @@ import SwiftUI
 struct ClearCloudDataSheet: View {
     @Binding var isPresented: Bool
     let description: String
-    /// Destructive action: deletes synced data for this source.
+    /// Destructive action: deletes uploaded data for this source.
     var onConfirmClearCloud: () -> Void
     /// Non-destructive action: drops the local cursor and lets the next
     /// polling tick repopulate.
@@ -33,15 +33,15 @@ struct ClearCloudDataSheet: View {
                     .textFieldStyle(.roundedBorder)
             }
             if let onResetLocalCursor {
-                Section("Re-sync Source") {
-                    Text("Re-sync this source from this Mac. Maraithon's synced copy is left untouched.")
+                Section("Check Source From Beginning") {
+                    Text("Check this source from the beginning on this Mac. Maraithon's uploaded copy is left untouched.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button {
                         onResetLocalCursor()
                         isPresented = false
                     } label: {
-                        Label("Re-sync this source", systemImage: "arrow.counterclockwise")
+                        Label("Check from the beginning", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -54,7 +54,7 @@ struct ClearCloudDataSheet: View {
                 Button("Cancel") { isPresented = false }
             }
             ToolbarItem(placement: .destructiveAction) {
-                Button("Delete synced data") {
+                Button("Delete uploaded data") {
                     onConfirmClearCloud()
                     isPresented = false
                 }
@@ -63,6 +63,6 @@ struct ClearCloudDataSheet: View {
                 .disabled(!canConfirm)
             }
         }
-        .navigationTitle("Delete synced data")
+        .navigationTitle("Delete uploaded data")
     }
 }

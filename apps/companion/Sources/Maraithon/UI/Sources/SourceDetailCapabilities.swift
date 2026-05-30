@@ -87,7 +87,7 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "quiet_cleanup",
                     title: "Quiet cleanup",
-                    description: "Already synced reminders stay out of the way unless they change.",
+                    description: "Reminders already in assistant context stay out of the way unless they change.",
                     systemImage: "tray.full"
                 )
             ]
@@ -109,7 +109,7 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "local_transcription",
                     title: "Local transcription",
-                    description: "Transcribes audio on this Mac before syncing searchable text.",
+                    description: "Transcribes audio on this Mac before sending searchable text.",
                     systemImage: "lock.doc"
                 )
             ]
@@ -177,19 +177,19 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "local_filtering",
                     title: "Local filtering",
-                    description: "Blocked phone numbers and emails are filtered on this Mac before anything syncs.",
+                    description: "Blocked phone numbers and emails are filtered on this Mac before anything leaves it.",
                     systemImage: "hand.raised"
                 ),
                 SourceCapability(
                     id: "encrypted_sync",
-                    title: "Encrypted sync",
+                    title: "Encrypted upload",
                     description: "Message content is encrypted on this Mac before upload when encryption is enabled.",
                     systemImage: "lock.shield"
                 ),
                 SourceCapability(
                     id: "device_control",
                     title: "Device control",
-                    description: "Revoke this Mac or delete synced Messages data without changing Messages on this Mac.",
+                    description: "Revoke this Mac or delete uploaded Messages data without changing Messages on this Mac.",
                     systemImage: "macbook.and.iphone"
                 )
             ]
@@ -199,19 +199,19 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "local_data_stays",
                     title: "Local data stays put",
-                    description: "\(displayName) stays on this Mac; Maraithon only syncs the records this source is allowed to read.",
+                    description: "\(displayName) stays on this Mac; Maraithon only sends the records this source is allowed to read.",
                     systemImage: "externaldrive"
                 ),
                 SourceCapability(
                     id: "encrypted_sync",
-                    title: "Encrypted sync",
+                    title: "Encrypted upload",
                     description: "Content is encrypted on this Mac before upload when encryption is enabled.",
                     systemImage: "lock.shield"
                 ),
                 SourceCapability(
                     id: "device_control",
                     title: "Device control",
-                    description: "Revoke this Mac or delete synced \(displayName) data without changing local files or apps.",
+                    description: "Revoke this Mac or delete uploaded \(displayName) data without changing local files or apps.",
                     systemImage: "macbook.and.iphone"
                 )
             ]

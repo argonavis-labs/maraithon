@@ -9,6 +9,9 @@ enum SourceDetailCopy {
     static let privacySectionTitle = "Privacy guardrails"
     static let activitySectionTitle = "Activity"
     static let recentChecksSectionTitle = "Recent checks"
+    static let checkNowButtonTitle = "Check now"
+    static let resumeUpdatesButtonTitle = "Resume updates"
+    static let pauseUpdatesButtonTitle = "Pause updates"
     static let lastCheckTitle = "Last check"
     static let lastBatchSyncedCaption = "new this check"
     static let alreadySyncedTitle = "Already known"
@@ -19,7 +22,7 @@ enum SourceDetailCopy {
     static let totalSyncedCaption = "available now"
     static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
-    static let firstSyncTitle = "Ready for first sync"
+    static let firstSyncTitle = "Ready for first check"
     static let issueErrorTitle = "Last check failed"
     static let resetSourceButtonTitle = "Check from the beginning"
 
@@ -34,6 +37,26 @@ enum SourceDetailCopy {
         }
 
         return "Checking \(displayName) for assistant context"
+    }
+
+    static func pausedHeadline(displayName: String) -> String {
+        "\(displayName) updates are paused"
+    }
+
+    static func pausedSummary(displayName: String, plural: String) -> String {
+        "Resume updates when you want \(displayName) to check for new \(plural) again."
+    }
+
+    static func unavailablePublisherSummary(displayName: String) -> String {
+        "Open Maraithon on this Mac to make \(displayName) available to your assistant."
+    }
+
+    static func errorHeadline(displayName: String) -> String {
+        "\(displayName) could not be checked"
+    }
+
+    static func disconnectedHeadline(displayName: String) -> String {
+        "\(displayName) is not updating"
     }
 
     static func itemNoun(total: Int, singular: String, plural: String) -> String {
