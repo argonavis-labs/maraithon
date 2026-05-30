@@ -190,6 +190,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
             "local_hour" => %{"type" => "integer", "minimum" => 0, "maximum" => 23},
             "local_minute" => %{"type" => "integer", "minimum" => 0, "maximum" => 59},
             "local_day_of_week" => %{"type" => "integer", "minimum" => 1, "maximum" => 7},
+            "timezone" => %{
+              "type" => "string",
+              "description" =>
+                "Named local timezone when the user specifies one, for example America/Toronto, America/Los_Angeles, ET, or PT. Prefer this over timezone_offset_hours so daylight-saving changes persist."
+            },
             "timezone_offset_hours" => %{
               "type" => "integer",
               "minimum" => -12,

@@ -129,6 +129,9 @@ defmodule Maraithon.TelegramAssistantLLMJsonClientTest do
     assert prompt =~ "10 instead of 9"
     assert prompt =~ "10:00 AM"
     assert prompt =~ "current local timezone"
+    assert prompt =~ "10 Eastern"
+    assert prompt =~ "America/Toronto"
+    assert prompt =~ "named zones preserve daylight-saving changes"
   end
 
   test "next_step applies explicit model routing options from the runner payload" do

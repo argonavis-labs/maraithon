@@ -973,6 +973,47 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert Agents.get_agent!(followthrough_agent.id).config["morning_brief_hour_local"] == 10
   end
 
+  test "briefing schedule tool preserves a named timezone from chat" do
+    user_id = "toolbox-briefing-zone-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, chief_of_staff_agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "timezone_offset_hours" => -5,
+          "morning_brief_hour_local" => 9
+        }
+      })
+
+    runtime_context = %{user_id: user_id, context: %{projects: []}}
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "update_briefing_schedule",
+               %{
+                 "briefing_kind" => "morning",
+                 "local_hour" => 10,
+                 "timezone" => "America/Toronto"
+               },
+               runtime_context
+             )
+
+    updated = Agents.get_agent!(chief_of_staff_agent.id)
+
+    assert result.status == "updated"
+    assert result.display_time_local == "10:00 AM"
+    assert result.local_timezone == "ET"
+    assert result.timezone_name == "America/Toronto"
+    assert result.timezone_offset_hours in [-5, -4]
+    assert updated.config["timezone"] == "America/Toronto"
+    assert updated.config["timezone_name"] == "America/Toronto"
+    assert updated.config["timezone_offset_hours"] == -5
+    assert updated.config["morning_brief_hour_local"] == 10
+  end
+
   test "project scope tool can update the linked project from reply context" do
     user_id = "toolbox-project-scope-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -20,13 +20,19 @@ defmodule Maraithon.BriefingSchedules do
   @default_weekly_hour 16
   @default_weekly_minute 0
 
-  @spec summarize_for_prompt(String.t() | nil) :: map()
-  def summarize_for_prompt(user_id) when is_binary(user_id) do
+  @spec summarize_for_prompt(String.t() | nil, keyword()) :: map()
+  def summarize_for_prompt(user_id, opts \\ [])
+
+  def summarize_for_prompt(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    now = Keyword.get(opts, :now, DateTime.utc_now())
     agents = list_briefing_agents(user_id)
     primary_agent = List.first(agents)
 
     timezone_name = timezone_name(primary_agent)
-    timezone_offset_hours = timezone_offset_hours(primary_agent)
+    configured_timezone_offset_hours = timezone_offset_hours(primary_agent)
+
+    timezone_offset_hours =
+      active_timezone_offset_hours(timezone_name, configured_timezone_offset_hours, now)
 
     morning_hour =
       primary_agent
@@ -89,11 +95,11 @@ defmodule Maraithon.BriefingSchedules do
         display_time_local: display_time_label(weekly_hour, weekly_minute)
       },
       agent_count: length(agents),
-      agents: Enum.map(agents, &serialize_agent_schedule/1)
+      agents: Enum.map(agents, &serialize_agent_schedule(&1, now))
     }
   end
 
-  def summarize_for_prompt(_user_id), do: default_summary()
+  def summarize_for_prompt(_user_id, _opts), do: default_summary()
 
   @spec list_due_morning_agents(DateTime.t()) :: [map()]
   def list_due_morning_agents(%DateTime{} = now) do
@@ -108,16 +114,20 @@ defmodule Maraithon.BriefingSchedules do
   def update_schedule(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
     with {:ok, agents} <- resolve_target_agents(user_id, attrs),
          {:ok, normalized} <- normalize_schedule_update(attrs, agents) do
+      now = DateTime.utc_now()
+
       {updated_agents, failed_agents} =
         Enum.reduce(agents, {[], []}, fn agent, {updated, failed} ->
-          previous = serialize_agent_schedule(agent)
+          previous = serialize_agent_schedule(agent, now)
 
           case Runtime.update_agent(agent.id, %{
                  config: schedule_config_updates(agent, normalized.config_updates)
                }) do
             {:ok, updated_agent} ->
-              {[build_update_result(previous, updated_agent, normalized.briefing_kind) | updated],
-               failed}
+              {[
+                 build_update_result(previous, updated_agent, normalized.briefing_kind, now)
+                 | updated
+               ], failed}
 
             {:error, reason} ->
               {updated,
@@ -138,7 +148,7 @@ defmodule Maraithon.BriefingSchedules do
           {:error, :briefing_schedule_update_failed}
 
         updated_agents ->
-          refreshed = summarize_for_prompt(user_id)
+          refreshed = summarize_for_prompt(user_id, now: now)
 
           {:ok,
            %{
@@ -149,18 +159,9 @@ defmodule Maraithon.BriefingSchedules do
              local_time: time_label(normalized.local_hour, normalized.local_minute),
              display_time_local:
                display_time_label(normalized.local_hour, normalized.local_minute),
-             local_timezone:
-               if(normalized.timezone_name || is_integer(normalized.timezone_offset_hours),
-                 do:
-                   Timezones.label(
-                     normalized.timezone_name,
-                     normalized.timezone_offset_hours || refreshed.timezone_offset_hours
-                   ),
-                 else: refreshed.local_timezone
-               ),
-             timezone_name: normalized.timezone_name || refreshed.timezone_name,
-             timezone_offset_hours:
-               normalized.timezone_offset_hours || refreshed.timezone_offset_hours,
+             local_timezone: refreshed.local_timezone,
+             timezone_name: refreshed.timezone_name,
+             timezone_offset_hours: refreshed.timezone_offset_hours,
              weekly_review_day_local:
                normalized.weekly_review_day_local || refreshed.weekly_review.day_local,
              weekly_review_weekday_local:
@@ -411,8 +412,8 @@ defmodule Maraithon.BriefingSchedules do
   defp briefing_agent?(%Agent{behavior: behavior}), do: behavior in @briefing_behaviors
   defp briefing_agent?(_agent), do: false
 
-  defp build_update_result(previous, %Agent{} = updated_agent, briefing_kind) do
-    current = serialize_agent_schedule(updated_agent)
+  defp build_update_result(previous, %Agent{} = updated_agent, briefing_kind, now) do
+    current = serialize_agent_schedule(updated_agent, now)
 
     {previous_time_local, previous_display_time_local, current_time_local,
      current_display_time_local} =
@@ -432,9 +433,12 @@ defmodule Maraithon.BriefingSchedules do
     }
   end
 
-  defp serialize_agent_schedule(%Agent{} = agent) do
+  defp serialize_agent_schedule(%Agent{} = agent, now) do
     timezone_name = timezone_name(agent)
-    timezone_offset_hours = timezone_offset_hours(agent)
+    configured_timezone_offset_hours = timezone_offset_hours(agent)
+
+    timezone_offset_hours =
+      active_timezone_offset_hours(timezone_name, configured_timezone_offset_hours, now)
 
     morning_hour =
       agent
@@ -517,6 +521,18 @@ defmodule Maraithon.BriefingSchedules do
   end
 
   defp timezone_offset_hours(_agent), do: @default_timezone_offset_hours
+
+  defp active_timezone_offset_hours(
+         timezone_name,
+         configured_timezone_offset_hours,
+         %DateTime{} = now
+       ) do
+    Timezones.offset_at(timezone_name, now, configured_timezone_offset_hours)
+  end
+
+  defp active_timezone_offset_hours(_timezone_name, configured_timezone_offset_hours, _now) do
+    configured_timezone_offset_hours
+  end
 
   defp parse_integer(value, _default) when is_integer(value), do: value
 

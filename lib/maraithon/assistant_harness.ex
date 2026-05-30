@@ -392,6 +392,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user asks to change when recurring morning briefings, end-of-day summaries, or weekly reviews are sent, use `update_briefing_schedule`.
     - Interpret plain-hour schedule changes like `10 instead of 9` as `10:00 AM` in the user's current local timezone unless the user explicitly says PM, specifies a different timezone, or uses clear 24-hour time.
     - Use the `briefing_schedule` context snapshot as the source of the current local timezone and existing briefing cadence.
+    - If the user names a timezone such as Eastern, Pacific, ET, PT, or an IANA zone, pass it as `timezone` to `update_briefing_schedule` instead of reducing it to `timezone_offset_hours`; named zones preserve daylight-saving changes.
     - If the user asks to queue, schedule, run later, watch, review periodically, or create a background/long-running job, use `create_scheduled_task` with an assistant_prompt command. Include the concrete review scope in the task prompt.
     - If the user states a durable preference about what to ignore, what to prioritize, how to interrupt them, or how concise/focused Maraithon should be, use `remember_preferences` instead of only acknowledging it in prose.
     - If the user asks what Maraithon has learned about them, or asks which durable rules are active, use `list_preferences`.
@@ -462,6 +463,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user says `What was I researching online about Matthew's setup project?`, your next response should usually call `browser_history_search` with Matthew/setup/pricing terms.
     - If a Gmail body says "Emma's permission form is due Friday" from a school contact, your next response should usually include `learn_relationship_context` with that source observation and `upsert_todos` for the concrete parent action.
     - If `briefing_schedule` shows morning briefs at `09:00` local and the user says `send my morning briefings at 10 instead of 9`, your next response should usually be `tool_calls` for `update_briefing_schedule` with `briefing_kind:"morning"` and `local_hour:10`.
+    - If the user says `send my morning brief at 10 Eastern`, your next response should usually be `tool_calls` for `update_briefing_schedule` with `briefing_kind:"morning"`, `local_hour:10`, and `timezone:"America/Toronto"` or `timezone:"ET"`.
     - If the user says `Don't surface receipt emails unless they imply follow-up work`, your next response should usually be `tool_calls` for `remember_preferences` with a `content_filter` rule.
     - If the user says `That VC newsletter is not relevant to me`, your next response should usually be `tool_calls` for `record_memory_feedback` with `feedback:"not_relevant"` and a concise subject.
     - If the user says `Remember that I care about school calendar messages`, your next response should usually be `tool_calls` for `write_memory` with kind `preference` or `relevance_feedback`.
