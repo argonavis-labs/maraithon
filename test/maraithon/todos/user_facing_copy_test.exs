@@ -191,6 +191,19 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "The billing account needs your decision."
   end
 
+  test "rewrites owner ETA and no later reply boilerplate" do
+    assert UserFacingCopy.polish_text("Decide whether to send the campaign owner and ETA.") ==
+             "Send the campaign update with a clear owner and timing."
+
+    assert UserFacingCopy.polish_text("Michael is waiting and no later reply was found.") ==
+             "Michael is waiting; no later reply clearly closes the loop."
+
+    assert UserFacingCopy.polish_text(
+             "Reply now with owner, ETA, and the exact artifact or update you committed to."
+           ) ==
+             "Reply with the promised update, current status, and timing you can stand behind."
+  end
+
   test "uses open work language for todo-facing copy" do
     assert UserFacingCopy.polish_text("Here is the full open todo list.") ==
              "Here is the full open work."

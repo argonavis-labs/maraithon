@@ -78,8 +78,8 @@ struct TodoRowCopyTests {
 
         let context = TodoDecisionContext(todo: todo)
 
-        #expect(context.rowContext == "Decide whether to send the campaign owner and ETA.")
-        #expect(context.rowReason == "Why now: Michael is waiting and no later reply was found. Checked Gmail")
+        #expect(context.rowContext == "Send the campaign update with a clear owner and timing.")
+        #expect(context.rowReason == "Why now: Michael is waiting; no later reply clearly closes the loop. Checked Gmail")
         #expect(context.rowMove == "Approve a short reply.")
         #expect(context.preparedMove == "Approve a short reply.")
         #expect(context.evidence == "Can you send the next update?")

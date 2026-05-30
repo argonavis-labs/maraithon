@@ -223,8 +223,8 @@ struct ProductionDataSyncTests {
 
         let todo = ProductionDataSync.todo(from: remote, id: UUID())
 
-        #expect(todo.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
-        #expect(todo.whyNow == "Michael is waiting and no later reply was found.")
+        #expect(todo.decisionPrompt == "Send the campaign update with a clear owner and timing.")
+        #expect(todo.whyNow == "Michael is waiting; no later reply clearly closes the loop.")
         #expect(todo.sourceContext == "Checked Gmail")
         #expect(todo.nextBestAction == "Approve a short reply.")
         #expect(todo.evidenceExcerpt == "Can you send the next update?")

@@ -114,6 +114,37 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   defp replace_generic_user_action_language(value) do
     value
+    |> String.replace(
+      ~r/\bDecide whether to send the ([^.,;]+?) owner and ETA\.?/i,
+      "Send the \\1 update with a clear owner and timing."
+    )
+    |> String.replace(
+      ~r/\bReply now with owner, ETA, and the exact artifact or update you committed to\.?/i,
+      "Reply with the promised update, current status, and timing you can stand behind."
+    )
+    |> String.replace(
+      ~r/\bReply now with owner and ETA\.?/i,
+      "Reply with a clear owner and timing."
+    )
+    |> String.replace(~r/\bwith owner, ETA, and\b/i, "with a clear owner, timing, and")
+    |> String.replace(~r/\bwith owner and ETA\b/i, "with a clear owner and timing")
+    |> String.replace(~r/\bwith the owner and ETA\b/i, "with a clear owner and timing")
+    |> String.replace(
+      ~r/\bNo later reply or follow[- ]?through was found in the conversation\.?/i,
+      "No later reply or delivery clearly closes the loop."
+    )
+    |> String.replace(
+      ~r/\bNo later reply or delivery was found\.?/i,
+      "No later reply or delivery clearly closes the loop."
+    )
+    |> String.replace(
+      ~r/\s+and no later reply was found\.?/i,
+      "; no later reply clearly closes the loop."
+    )
+    |> String.replace(
+      ~r/\bNo later reply was found\.?/i,
+      "No later reply clearly closes the loop."
+    )
     |> String.replace(~r/\bneeds a user response\b/i, "needs your reply")
     |> String.replace(~r/\bneeds user response\b/i, "needs your reply")
     |> String.replace(~r/\brequires a user response\b/i, "needs your reply")
@@ -405,6 +436,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
       String.contains?(text, "follow-up not yet sent") or
       String.contains?(text, "follow up not yet sent") or
       String.match?(text, ~r/no later reply or follow[- ]?through/) or
+      String.contains?(text, "no later reply or delivery clearly closes the loop") or
       String.contains?(text, "no sent follow-up") or
       String.contains?(text, "commitment still appears open") or
       String.contains?(text, "the commitment still appears open") or
@@ -417,6 +449,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     text = String.downcase(value)
 
     String.contains?(text, "exact artifact or update you committed to") or
+      String.contains?(text, "promised update, current status, and timing you can stand behind") or
       String.contains?(text, "owner, eta") or
       String.contains?(text, "owner and eta") or
       String.contains?(text, "owner, next step") or

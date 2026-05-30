@@ -57,4 +57,22 @@ struct ChiefOfStaffCopyTests {
                 "The billing account needs your decision."
         )
     }
+
+    @Test
+    func rewritesOwnerETAAndNoLaterReplyBoilerplate() {
+        #expect(
+            ChiefOfStaffCopy.clean("Decide whether to send the campaign owner and ETA.") ==
+                "Send the campaign update with a clear owner and timing."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean("Michael is waiting and no later reply was found.") ==
+                "Michael is waiting; no later reply clearly closes the loop."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean(
+                "Reply now with owner, ETA, and the exact artifact or update you committed to."
+            ) ==
+                "Reply with the promised update, current status, and timing you can stand behind."
+        )
+    }
 }
