@@ -35,12 +35,11 @@ You can still run `make setup-companion-signing` explicitly to prepare signing
 without launching the app.
 
 The first `make run-companion` after signing is configured also records the
-installed app's designated code-signing requirement without resetting existing
-Full Disk Access grants. If a previously recorded requirement changes, the
-launcher resets stale Full Disk Access rows for `com.maraithon.companion` once
-and asks you to grant the stable `~/Applications/Maraithon.app` copy again.
-Future reloads with the same signing requirement do not reset TCC and should
-preserve the grant.
+installed app's designated code-signing requirement and resets existing Full
+Disk Access rows for `com.maraithon.companion` once. That avoids macOS keeping
+an enabled row for an old DerivedData or ad-hoc-signed copy. Grant the stable
+`~/Applications/Maraithon.app` copy after that reset. Future reloads with the
+same signing requirement do not reset TCC and should preserve the grant.
 
 If Full Disk Access still does not apply after that switch, reset the stale TCC
 row and grant the stable installed app again:

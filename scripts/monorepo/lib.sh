@@ -208,19 +208,24 @@ reset_stale_companion_tcc_if_needed() {
   fi
 
   if [[ -z "${previous}" ]]; then
+    reset_companion_full_disk_access_entries
     mkdir -p "${marker_dir}"
     printf '%s\n' "${requirement}" > "${marker_path}"
-    echo "Recorded companion signing requirement; existing Full Disk Access grants were left intact."
+    echo "Prepared stable companion Full Disk Access grant for ${app_path}; grant it once if macOS asks again."
     return
   fi
 
-  if command -v tccutil >/dev/null 2>&1; then
-    tccutil reset SystemPolicyAllFiles "${COMPANION_BUNDLE_ID}" >/dev/null 2>&1 || true
-    echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
-  fi
+  reset_companion_full_disk_access_entries
+  echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}; grant ${app_path} once if macOS asks again."
 
   mkdir -p "${marker_dir}"
   printf '%s\n' "${requirement}" > "${marker_path}"
+}
+
+reset_companion_full_disk_access_entries() {
+  if command -v tccutil >/dev/null 2>&1; then
+    tccutil reset SystemPolicyAllFiles "${COMPANION_BUNDLE_ID}" >/dev/null 2>&1 || true
+  fi
 }
 
 companion_app_bundle_id() {
