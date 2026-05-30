@@ -1106,6 +1106,25 @@ defmodule MaraithonWeb.AgentsLive do
                       />
                     </div>
 
+                    <.panel class="bg-zinc-50">
+                      <.heading level={3} class="text-base/7">Purpose</.heading>
+                      <p class="mt-3 text-sm/6 text-zinc-700"><%= agent_purpose_summary(@selected_agent) %></p>
+                      <dl class="mt-4 divide-y divide-zinc-950/10 text-sm/6">
+                        <div class="flex items-center justify-between gap-4 py-2">
+                          <dt class="text-zinc-500">Watches</dt>
+                          <dd class="text-right font-medium text-zinc-950">
+                            <%= subscriptions_preview(@selected_agent.config) %>
+                          </dd>
+                        </div>
+                        <div class="flex items-center justify-between gap-4 py-2">
+                          <dt class="text-zinc-500">Allowed actions</dt>
+                          <dd class="text-right font-medium text-zinc-950">
+                            <%= tools_preview(@selected_agent.config) %>
+                          </dd>
+                        </div>
+                      </dl>
+                    </.panel>
+
                     <%= if @diagnostics_visible and @selected_architecture do %>
                       <.architecture_card architecture={@selected_architecture} mode="full" />
                     <% end %>
@@ -1141,8 +1160,8 @@ defmodule MaraithonWeb.AgentsLive do
                       </.panel>
                     </div>
 
-                    <.panel class="bg-zinc-50">
-                      <.heading level={3} class="text-base/7">Instructions</.heading>
+                    <.panel :if={@diagnostics_visible} class="bg-zinc-50">
+                      <.heading level={3} class="text-base/7">Run instructions</.heading>
                       <p class="mt-3 whitespace-pre-wrap text-sm/6 text-zinc-700"><%= agent_prompt(@selected_agent.config) %></p>
                     </.panel>
 
@@ -2063,6 +2082,17 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp agent_row_summary(agent), do: agent_job_summary(agent)
 
+  defp agent_purpose_summary(agent) do
+    case agent_job_summary(agent) do
+      summary when is_binary(summary) ->
+        summary = String.trim(summary)
+        if summary == "", do: "Runs this saved automation for you.", else: summary
+
+      _summary ->
+        "Runs this saved automation for you."
+    end
+  end
+
   defp chief_of_staff_agent?(%{behavior: behavior}) when behavior in ["ai_chief_of_staff"],
     do: true
 
@@ -2210,14 +2240,14 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp subscriptions_preview(config) do
     case config["subscribe"] || [] do
-      [] -> "No subscriptions"
+      [] -> "No signals selected"
       values -> values |> Enum.take(3) |> Enum.join(", ") |> truncate(70)
     end
   end
 
   defp tools_preview(config) do
     case config["tools"] || [] do
-      [] -> "No actions"
+      [] -> "No actions allowed"
       values -> values |> Enum.join(", ") |> truncate(70)
     end
   end
