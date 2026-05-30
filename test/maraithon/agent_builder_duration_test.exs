@@ -3,6 +3,16 @@ defmodule Maraithon.AgentBuilderDurationTest do
 
   alias Maraithon.AgentBuilder
 
+  test "repository automation defaults do not expose server-local paths" do
+    for behavior <- ["codebase_advisor", "repo_planner"] do
+      launch = AgentBuilder.launch_params_for_behavior(behavior)
+
+      assert launch["codebase_path"] == ""
+      assert launch["output_path"] == ""
+      refute inspect(launch) =~ File.cwd!()
+    end
+  end
+
   test "agent builder accepts human-readable wakeup cadences" do
     launch =
       "watchdog_summarizer"

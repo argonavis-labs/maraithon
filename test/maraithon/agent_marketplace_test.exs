@@ -52,6 +52,17 @@ defmodule Maraithon.AgentMarketplaceTest do
                "priv/agents/skills/engineering/repo_planner.md"
              ]
     end
+
+    test "does not publish server-local filesystem paths as package defaults" do
+      for behavior <- ["codebase_advisor", "repo_planner"] do
+        spec = AgentBuilder.behavior_spec(behavior)
+        default_config = AgentMarketplace.builtin_manifest(spec)["default_config"]
+
+        assert default_config["codebase_path"] == ""
+        assert default_config["output_path"] == ""
+        refute inspect(default_config) =~ File.cwd!()
+      end
+    end
   end
 
   describe "sync_builtin_packages/0" do
