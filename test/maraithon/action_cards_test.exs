@@ -112,6 +112,34 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "stacktrace"
   end
 
+  test "missing person context copy avoids internal CRM language", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Review the finance approval note",
+      summary: "Finance needs approval before sending the reimbursement note.",
+      next_action: "Review the note and approve the reimbursement reply.",
+      source_item_id: "gmail-thread-finance-approval",
+      dedupe_key: "action-card:missing-person-context",
+      priority: 86,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Finance needs approval before the reimbursement reply is sent."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    missing_context = get_in(card, ["context_pack", "missing_context"])
+
+    assert missing_context == "No person has been confirmed for this item yet."
+    refute missing_context =~ "CRM"
+  end
+
   test "source health copy humanizes local source names" do
     card = %{
       "source_health" => %{

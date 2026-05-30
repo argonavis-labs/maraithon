@@ -20,10 +20,9 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
 
     test_pid = self()
 
-    start_supervised!(
-      {Task,
-       fn -> send(test_pid, {:checkout_result, LLMRateLimiter.checkout(limiter, :default)}) end}
-    )
+    start_task_supervised!(fn ->
+      send(test_pid, {:checkout_result, LLMRateLimiter.checkout(limiter, :default)})
+    end)
 
     assert_receive {:checkout_result, {:error, {:llm_busy, retry_after_ms}}}
     assert retry_after_ms > 0
@@ -38,29 +37,23 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
 
     test_pid = self()
 
-    start_supervised!(
-      {Task,
-       fn ->
-         result = LLMRateLimiter.checkout(limiter, :chat)
-         send(test_pid, {:chat_checkout_result, result})
+    start_task_supervised!(fn ->
+      result = LLMRateLimiter.checkout(limiter, :chat)
+      send(test_pid, {:chat_checkout_result, result})
 
-         if result == :ok do
-           LLMRateLimiter.checkin(limiter, :chat)
-         end
-       end}
-    )
+      if result == :ok do
+        LLMRateLimiter.checkin(limiter, :chat)
+      end
+    end)
 
     assert_receive {:chat_checkout_result, :ok}
 
-    start_supervised!(
-      {Task,
-       fn ->
-         send(
-           test_pid,
-           {:reasoning_checkout_result, LLMRateLimiter.checkout(limiter, :reasoning)}
-         )
-       end}
-    )
+    start_task_supervised!(fn ->
+      send(
+        test_pid,
+        {:reasoning_checkout_result, LLMRateLimiter.checkout(limiter, :reasoning)}
+      )
+    end)
 
     assert_receive {:reasoning_checkout_result, {:error, {:llm_busy, retry_after_ms}}}
     assert retry_after_ms > 0
@@ -76,5 +69,13 @@ defmodule Maraithon.Runtime.Effects.LLMRateLimiterTest do
 
     assert retry_after_ms > 0
     assert retry_after_ms <= 60_000
+  end
+
+  defp start_task_supervised!(fun) when is_function(fun, 0) do
+    start_supervised!(%{
+      id: {Task, System.unique_integer([:positive])},
+      start: {Task, :start_link, [fun]},
+      restart: :temporary
+    })
   end
 end

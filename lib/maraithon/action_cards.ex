@@ -775,7 +775,7 @@ defmodule Maraithon.ActionCards do
   defp missing_context(todo, metadata, person) do
     cond do
       blank?(person) ->
-        "No confirmed CRM person is attached yet."
+        "No person has been confirmed for this item yet."
 
       read_field(metadata, "source_health_missing") ->
         read_string(metadata, "source_health_missing")
