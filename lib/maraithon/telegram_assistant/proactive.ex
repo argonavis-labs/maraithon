@@ -11,9 +11,11 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
+  alias Maraithon.BriefingSchedules
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
+  alias Maraithon.Timezones
 
   alias Maraithon.TelegramAssistant.{
     Context,
@@ -284,9 +286,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
     now = Keyword.get(opts, :now) || DateTime.utc_now()
     trigger_type = Keyword.get(opts, :trigger_type, "scheduled_check_in")
 
-    timezone_offset_hours =
-      Keyword.get(opts, :timezone_offset_hours, @default_timezone_offset_hours)
-      |> normalize_timezone_offset()
+    timezone = proactive_timezone_context(user_id, opts, now)
 
     %{
       "id" =>
@@ -296,16 +296,68 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       "user_id" => user_id,
       "chat_id" => chat_id,
       "now" => DateTime.to_iso8601(DateTime.truncate(now, :second)),
-      "local_time" => local_time_context(now, timezone_offset_hours)
+      "local_time" => local_time_context(now, timezone)
     }
   end
 
-  defp local_time_context(%DateTime{} = now, offset_hours) do
+  defp proactive_timezone_context(user_id, opts, %DateTime{} = now) do
+    cond do
+      Keyword.has_key?(opts, :timezone) or Keyword.has_key?(opts, :timezone_name) or
+          Keyword.has_key?(opts, :timezone_offset_hours) ->
+        timezone_context_from_values(
+          Keyword.get(opts, :timezone) || Keyword.get(opts, :timezone_name),
+          Keyword.get(opts, :timezone_offset_hours, @default_timezone_offset_hours),
+          now
+        )
+
+      briefing_schedule = briefing_schedule_from_opts(opts) ->
+        timezone_context_from_map(briefing_schedule, now)
+
+      true ->
+        user_id
+        |> BriefingSchedules.summarize_for_prompt(now: now)
+        |> timezone_context_from_map(now)
+    end
+  end
+
+  defp timezone_context_from_map(summary, %DateTime{} = now) when is_map(summary) do
+    timezone_context_from_values(
+      read_field(summary, "timezone_name") || read_field(summary, "timezone"),
+      read_field(summary, "timezone_offset_hours"),
+      now,
+      read_field(summary, "local_timezone")
+    )
+  end
+
+  defp timezone_context_from_map(_summary, %DateTime{} = now) do
+    timezone_context_from_values(nil, @default_timezone_offset_hours, now)
+  end
+
+  defp timezone_context_from_values(timezone_name, offset_hours, %DateTime{} = now, label \\ nil) do
+    normalized_name = Timezones.normalize(to_string(timezone_name || ""))
+    configured_offset = normalize_timezone_offset(offset_hours)
+    active_offset = Timezones.offset_at(normalized_name, now, configured_offset)
+
+    %{
+      timezone_name: normalized_name,
+      timezone_offset_hours: active_offset,
+      local_timezone: label || Timezones.label(normalized_name, active_offset)
+    }
+  end
+
+  defp briefing_schedule_from_opts(opts) do
+    opts
+    |> Keyword.get(:context, %{})
+    |> read_field("briefing_schedule")
+  end
+
+  defp local_time_context(%DateTime{} = now, timezone) when is_map(timezone) do
+    offset_hours = Map.fetch!(timezone, :timezone_offset_hours)
     local_now = DateTime.add(now, offset_hours * 3600, :second)
     local_date = DateTime.to_date(local_now)
     weekday = Date.day_of_week(local_date)
 
-    %{
+    base = %{
       "date" => Date.to_iso8601(local_date),
       "weekday" => weekday_name(weekday),
       "weekday_number" => weekday,
@@ -313,8 +365,14 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       "day_phase" => day_phase(local_now.hour),
       "weekend" => weekday in [6, 7],
       "weekly_prep_window" => weekday in [6, 7],
-      "timezone_offset_hours" => offset_hours
+      "timezone_offset_hours" => offset_hours,
+      "local_timezone" => Map.get(timezone, :local_timezone)
     }
+
+    case Map.get(timezone, :timezone_name) do
+      nil -> base
+      timezone_name -> Map.put(base, "timezone_name", timezone_name)
+    end
   end
 
   defp day_phase(hour) when hour >= 5 and hour < 11, do: "morning"
@@ -342,6 +400,19 @@ defmodule Maraithon.TelegramAssistant.Proactive do
   end
 
   defp normalize_timezone_offset(_value), do: @default_timezone_offset_hours
+
+  defp read_field(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, atom_field_key(key))
+  end
+
+  defp read_field(_map, _key), do: nil
+
+  defp atom_field_key("briefing_schedule"), do: :briefing_schedule
+  defp atom_field_key("local_timezone"), do: :local_timezone
+  defp atom_field_key("timezone"), do: :timezone
+  defp atom_field_key("timezone_name"), do: :timezone_name
+  defp atom_field_key("timezone_offset_hours"), do: :timezone_offset_hours
+  defp atom_field_key(_key), do: :unknown
 
   defp plan_dedupe_key(_user_id, %{"dedupe_key" => key}, _trigger)
        when is_binary(key) and key != "" do

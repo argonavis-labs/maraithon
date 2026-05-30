@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
 
   alias Maraithon.Accounts
   alias Maraithon.ActionLedger
+  alias Maraithon.Agents
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
@@ -52,6 +53,55 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
       })
 
     %{user_id: user_id}
+  end
+
+  test "proactive triggers use the active offset from a named briefing timezone", %{
+    user_id: user_id
+  } do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: user_id,
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "timezone" => "America/Toronto",
+          "timezone_name" => "America/Toronto",
+          "timezone_offset_hours" => -5,
+          "morning_brief_hour_local" => 9
+        }
+      })
+
+    llm_complete = fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+      assert prompt =~ ~r/"local_timezone"\s*:\s*"ET"/
+      assert prompt =~ ~r/"timezone_name"\s*:\s*"America\/Toronto"/
+      assert prompt =~ ~r/"timezone_offset_hours"\s*:\s*-4/
+      assert prompt =~ ~r/"hour"\s*:\s*11/
+      refute prompt =~ ~r/"hour"\s*:\s*10/
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "decision" => "hold",
+             "assistant_message" => "",
+             "message_class" => "assistant_push",
+             "urgency" => 0.1,
+             "interrupt_now" => false,
+             "dedupe_key" => "proactive:hold:timezone",
+             "todo_ids" => [],
+             "summary" => "Nothing needs a proactive interruption."
+           })
+       }}
+    end
+
+    assert {:ok, %{"decision" => "hold"}} =
+             TelegramAssistant.plan_proactive_check_in(user_id,
+               now: ~U[2026-05-09 15:00:00Z],
+               context: %{todos: []},
+               llm_complete: llm_complete
+             )
   end
 
   test "model-backed proactive planner sends a Telegram check-in and records a receipt", %{
