@@ -1,9 +1,13 @@
 defmodule MaraithonWeb.MemoriesLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
+  alias Maraithon.Agents
   alias Maraithon.Memory
+  alias Maraithon.Memory.Event
+  alias Maraithon.Repo
 
   @user_email "memories-live@example.com"
 
@@ -58,6 +62,37 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     assert html =~ "Reason: No concrete Runner or customer implication."
     refute html =~ "The user"
     refute html =~ "not_relevant"
+  end
+
+  test "renders memory timestamps in the Chief of Staff timezone", %{conn: conn} do
+    {:ok, _agent} =
+      Agents.create_agent(%{
+        user_id: @user_email,
+        behavior: "founder_followthrough_agent",
+        config: %{"timezone" => "America/Toronto", "timezone_offset_hours" => -5}
+      })
+
+    {:ok, memory} =
+      Memory.write(@user_email, %{
+        "kind" => "preference",
+        "title" => "Investor updates",
+        "content" => "Send investor updates as short bullets.",
+        "source" => "telegram",
+        "last_used_at" => ~U[2026-05-30 18:30:00Z]
+      })
+
+    Repo.update_all(
+      from(event in Event, where: event.memory_id == ^memory.id),
+      set: [inserted_at: ~U[2026-05-30 18:31:00Z], updated_at: ~U[2026-05-30 18:31:00Z]]
+    )
+
+    {:ok, _view, html} = live(conn, "/operator/memories?id=#{memory.id}")
+
+    assert html =~ "Investor updates"
+    assert html =~ "May 30, 2026 at 2:30 PM ET"
+    assert html =~ "May 30, 2026 at 2:31 PM ET"
+    refute html =~ "2026-05-30 18:30 UTC"
+    refute html =~ "2026-05-30 18:31 UTC"
   end
 
   test "filters, displays supersession chain, and archives an active memory", %{conn: conn} do

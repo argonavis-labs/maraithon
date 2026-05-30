@@ -6,6 +6,7 @@ defmodule MaraithonWeb.MemoriesLive do
   alias Maraithon.Memory
   alias Maraithon.Memory.{Event, Item}
   alias Maraithon.Repo
+  alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OperationFailureCopy
 
   @statuses ~w(active superseded archived rejected all)
@@ -25,6 +26,7 @@ defmodule MaraithonWeb.MemoriesLive do
        selected_memory: nil,
        selected_events: [],
        supersession_chain: [],
+       timezone_info: LocalTime.default_timezone_info(),
        statuses: @statuses,
        kinds: @kinds,
        scopes: @scopes
@@ -257,7 +259,7 @@ defmodule MaraithonWeb.MemoriesLive do
                   <.description_term>Learned from</.description_term>
                   <.description_details><%= memory_source_label(@selected_memory) %></.description_details>
                   <.description_term>Last used</.description_term>
-                  <.description_details><%= format_datetime(@selected_memory.last_used_at) %></.description_details>
+                  <.description_details><%= format_datetime(@selected_memory.last_used_at, "Never", @timezone_info) %></.description_details>
                 </.description_list>
               </section>
 
@@ -266,7 +268,7 @@ defmodule MaraithonWeb.MemoriesLive do
                 <ol class="mt-2 divide-y divide-zinc-950/5 rounded-lg border border-zinc-950/10">
                   <li :for={event <- @selected_events} class="px-3 py-2 text-sm/6">
                     <div class="font-medium text-zinc-950"><%= memory_event_label(event.event_type) %></div>
-                    <div class="text-xs/5 text-zinc-500"><%= format_datetime(event.inserted_at) %></div>
+                    <div class="text-xs/5 text-zinc-500"><%= format_datetime(event.inserted_at, "No timestamp", @timezone_info) %></div>
                   </li>
                 </ol>
               </section>
@@ -281,6 +283,7 @@ defmodule MaraithonWeb.MemoriesLive do
   defp refresh_memories(socket, selected_id) do
     user_id = current_user_id(socket)
     filters = socket.assigns.filters
+    timezone_info = LocalTime.timezone_info_for_user(user_id)
 
     memories =
       user_id
@@ -304,7 +307,8 @@ defmodule MaraithonWeb.MemoriesLive do
       memories: memories,
       selected_memory: selected_memory,
       supersession_chain: chain,
-      selected_events: events
+      selected_events: events,
+      timezone_info: timezone_info
     )
   end
 
@@ -470,13 +474,8 @@ defmodule MaraithonWeb.MemoriesLive do
   defp memory_event_label("confidence_updated"), do: "Review status updated"
   defp memory_event_label(value), do: label(value)
 
-  defp format_datetime(nil), do: "Never"
-
-  defp format_datetime(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %H:%M UTC")
-  end
-
-  defp format_datetime(value), do: to_string(value)
+  defp format_datetime(value, fallback, timezone_info),
+    do: LocalTime.format_datetime(value, fallback, timezone_info)
 
   defp normalize_choice(value, allowed, default) do
     value = normalize_text(value) || default
