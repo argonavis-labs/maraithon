@@ -238,8 +238,8 @@ private struct DiagnosticsSourceRow: View {
 }
 
 enum DiagnosticsSettingsCopy {
-    static let intro = "Review sync health for each source. Expand a source to see recent batches and the last successful check."
-    static let developerModeDescription = "Shows Logs and Diagnostics for sync health, recent batches, and support troubleshooting. Off by default."
+    static let intro = "Review sync health for each source. Expand a source to see recent checks and the last successful check."
+    static let developerModeDescription = "Shows Logs and Diagnostics for sync health, recent checks, and support troubleshooting. Off by default."
 
     @MainActor
     static func stateLine(publisher: SourceStatusPublisher?) -> String {

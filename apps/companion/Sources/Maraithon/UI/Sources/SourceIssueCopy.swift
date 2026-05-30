@@ -33,13 +33,13 @@ struct SourceIssueCopy {
              "visits_required":
             return "Sync data was incomplete. Maraithon will keep the last successful data until the next sync."
         case "unknown_event":
-            return "This companion app is out of sync with the server. Update Maraithon, then sync again."
+            return "This companion app needs an update before it can sync this source. Update Maraithon, then sync again."
         case "device_mismatch":
             return "This Mac is paired as a different device. Sign out and pair it again."
         case "no_token", "unauthorized":
             return "Reconnect Maraithon to resume sync."
         case "invalid_url":
-            return "Maraithon is not configured with a valid server URL."
+            return "Maraithon is missing a valid sync address. Check the app settings, then sync again."
         case "pushTimeout", "timed_out":
             return "Connection timed out. Sync again when the network is stable."
         default:

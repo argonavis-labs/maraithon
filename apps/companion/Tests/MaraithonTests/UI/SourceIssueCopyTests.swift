@@ -59,6 +59,27 @@ final class SourceIssueCopyTests: XCTestCase {
         )
     }
 
+    func testUnsupportedSyncEventsUseUpdateCopyWithoutServerLanguage() {
+        let copy = SourceIssueCopy.status("unknown_event")
+
+        XCTAssertEqual(
+            copy,
+            "This companion app needs an update before it can sync this source. Update Maraithon, then sync again."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("server"))
+    }
+
+    func testInvalidSyncAddressCopyAvoidsServerURLLanguage() {
+        let copy = SourceIssueCopy.status("invalid_url")
+
+        XCTAssertEqual(
+            copy,
+            "Maraithon is missing a valid sync address. Check the app settings, then sync again."
+        )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("server"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("URL"))
+    }
+
     func testServerRejectionSummariesUseRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("2 messages were rejected by the server."),

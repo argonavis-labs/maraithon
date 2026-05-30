@@ -195,7 +195,10 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(publicCopy.lowercased().contains("publisher"))
         XCTAssertFalse(publicCopy.lowercased().contains("cursor"))
         XCTAssertFalse(publicCopy.lowercased().contains("ring buffer"))
+        XCTAssertFalse(publicCopy.lowercased().contains("batch"))
+        XCTAssertFalse(publicCopy.lowercased().contains("server"))
         XCTAssertTrue(publicCopy.contains("sync health"))
+        XCTAssertTrue(publicCopy.contains("recent checks"))
     }
 
     @MainActor
