@@ -22,7 +22,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert copy == %{
              error: "request_failed",
-             message: "Request did not complete. Refresh before continuing."
+             message: "Request did not complete. Saved data was left unchanged."
            }
 
     refute_leaks_internal_reason(copy.error)
@@ -62,15 +62,17 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     raw = "http_status: 500 internal_stacktrace db_timeout token=secret"
 
     assert ApiErrorCopy.mobile_chat_run_error(raw) ==
-             "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+             "Maraithon saved the request and avoided sending an unverified answer."
 
     assert ApiErrorCopy.mobile_chat_run_error("google_account_not_connected") ==
              "Connect the missing account before running this again."
 
     assert ApiErrorCopy.mobile_chat_run_error("tool_timeout") ==
-             "That response took too long. Ask for a narrower check."
+             "Maraithon saved the request after the response took too long and avoided sending an incomplete answer."
 
     refute_leaks_internal_reason(ApiErrorCopy.mobile_chat_run_error(raw))
+    refute ApiErrorCopy.mobile_chat_run_error(raw) =~ "Ask for"
+    refute ApiErrorCopy.mobile_chat_run_error("tool_timeout") =~ "narrower"
   end
 
   test "mobile changeset payloads return safe validation details" do

@@ -1,9 +1,9 @@
 import Foundation
 
 enum MobileErrorCopy {
-    private static let requestFallback = "Request did not complete. Refresh before continuing."
+    private static let requestFallback = "Request did not complete. Saved data was left unchanged."
     private static let assistantFallback =
-        "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+        "Maraithon saved the request and avoided sending an unverified answer."
     private static let unexpectedResponseFallback =
         "Maraithon returned an unexpected response. Update the app, then refresh."
 

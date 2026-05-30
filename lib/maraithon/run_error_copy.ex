@@ -7,7 +7,7 @@ defmodule Maraithon.RunErrorCopy do
   debugging, but route user-facing run history and exports through this module.
   """
 
-  @assistant_fallback "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+  @assistant_fallback "Maraithon saved the request and avoided sending an unverified answer."
   @agent_fallback "That run did not complete. Review the last action before running it again."
   @scheduled_task_fallback "That scheduled task did not complete. Review it before running it again."
   @runtime_fallback "Operation did not complete. Check the connection before running it again."
@@ -19,7 +19,8 @@ defmodule Maraithon.RunErrorCopy do
     classify(reason,
       fallback: @assistant_fallback,
       internal: @assistant_fallback,
-      timeout: "That response took too long. Ask for a narrower check."
+      timeout:
+        "Maraithon saved the request after the response took too long and avoided sending an incomplete answer."
     )
   end
 

@@ -7,7 +7,7 @@ import Foundation
 /// other companion-level views: no HTTP bodies, enum dumps, or transport
 /// domains should reach the screen.
 struct CompanionErrorCopy {
-    private static let requestFallback = "Request did not complete. Refresh before continuing."
+    private static let requestFallback = "Request did not complete. Saved data was left unchanged."
 
     static func message(for error: Error) -> String {
         switch error {

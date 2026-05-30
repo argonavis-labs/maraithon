@@ -10,7 +10,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Request did not complete. Refresh before continuing.")
+        XCTAssertEqual(copy, "Request did not complete. Saved data was left unchanged.")
         XCTAssertFalse(copy.contains("invalid_batch"))
         XCTAssertFalse(copy.contains("secret"))
     }
@@ -36,7 +36,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Request did not complete. Refresh before continuing.")
+        XCTAssertEqual(copy, "Request did not complete. Saved data was left unchanged.")
         XCTAssertFalse(copy.contains("Postgrex"))
         XCTAssertFalse(copy.contains("token=secret"))
     }
@@ -49,7 +49,7 @@ final class CompanionErrorCopyTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(copy, "Request did not complete. Refresh before continuing.")
+        XCTAssertEqual(copy, "Request did not complete. Saved data was left unchanged.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.contains("abc123"))
@@ -72,14 +72,14 @@ final class CompanionErrorCopyTests: XCTestCase {
 
         XCTAssertEqual(
             CompanionErrorCopy.message(for: "some_internal_code"),
-            "Request did not complete. Refresh before continuing."
+            "Request did not complete. Saved data was left unchanged."
         )
     }
 
     func testStringReasonsHideCredentialValues() {
         let copy = CompanionErrorCopy.message(for: "Authorization: Bearer abc123 token=secret")
 
-        XCTAssertEqual(copy, "Request did not complete. Refresh before continuing.")
+        XCTAssertEqual(copy, "Request did not complete. Saved data was left unchanged.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.lowercased().contains("token"))

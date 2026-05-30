@@ -49,7 +49,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def mobile(_reason) do
     %{
       error: "request_failed",
-      message: "Request did not complete. Refresh before continuing."
+      message: "Request did not complete. Saved data was left unchanged."
     }
   end
 

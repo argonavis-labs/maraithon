@@ -386,7 +386,8 @@ struct ChatSyncServiceTests {
             Issue.record("Expected failed assistant run to surface an error")
         } catch {
             let copy = MobileErrorCopy.message(for: error)
-            #expect(copy == "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing.")
+            #expect(copy == "Maraithon saved the request and avoided sending an unverified answer.")
+            #expect(!copy.contains("Ask for"))
             #expect(!copy.contains("DBConnection"))
             #expect(!copy.contains("token=secret"))
         }
@@ -419,7 +420,7 @@ struct ChatSyncServiceTests {
                     .init(
                         id: assistantMessageID,
                         role: ChatRole.assistant.rawValue,
-                        body: "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing.",
+                        body: "Maraithon saved the request and avoided sending an unverified answer.",
                         runID: runID
                     )
                 ]
@@ -431,7 +432,7 @@ struct ChatSyncServiceTests {
                 threadID: remoteThreadID,
                 status: ChatRunStatus.failed.rawValue,
                 finishedAt: Date(),
-                error: "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+                error: "Maraithon saved the request and avoided sending an unverified answer."
             )
         }
 

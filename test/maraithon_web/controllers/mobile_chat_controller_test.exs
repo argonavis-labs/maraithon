@@ -616,9 +616,10 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assert [%{"role" => "assistant", "body" => body}] = get_in(response, ["thread", "messages"])
 
     assert body ==
-             "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+             "Maraithon saved the request and avoided sending an unverified answer."
 
     visible_response = inspect(response)
+    refute body =~ "Ask for"
     refute visible_response =~ "RuntimeError"
     refute visible_response =~ "stacktrace"
     refute visible_response =~ "http_status"
@@ -810,9 +811,10 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     public_error = get_in(response, ["run", "error"])
 
     assert public_error ==
-             "Maraithon could not finish that response. Ask for a narrower check or refresh the conversation before continuing."
+             "Maraithon saved the request and avoided sending an unverified answer."
 
     encoded = inspect(response)
+    refute public_error =~ "refresh"
     refute public_error =~ "500"
     refute encoded =~ "internal_stacktrace"
     refute encoded =~ "db_timeout"
