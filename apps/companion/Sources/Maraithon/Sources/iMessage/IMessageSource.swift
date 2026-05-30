@@ -73,7 +73,7 @@ final class IMessageSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 300)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "imessage", state: .disconnected)
     }
 
     // MARK: - SourceProtocol

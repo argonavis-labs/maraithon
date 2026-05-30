@@ -74,7 +74,7 @@ final class RemindersSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 900)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "reminders", state: .disconnected)
     }
 
     /// Convenience init wiring the outbox to a `RemindersIngest`. The

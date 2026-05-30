@@ -149,6 +149,64 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(publisher.activeIssue?.severity, .warning)
     }
 
+    func testPersistentPublisherRestoresLastCheckContext() {
+        let defaults = makeDefaults()
+        let now = Date()
+        let publisher = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        publisher.recordSync(
+            at: now,
+            accepted: 4,
+            duplicate: 2,
+            failed: 1,
+            issueSummary: "1 message did not sync.",
+            latencyMS: 42
+        )
+
+        let restored = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertEqual(restored.lastSyncAt, now)
+        XCTAssertEqual(restored.lastBatchAccepted, 4)
+        XCTAssertEqual(restored.lastBatchDuplicate, 2)
+        XCTAssertEqual(restored.lastBatchFailed, 1)
+        XCTAssertEqual(restored.totalAccepted, 4)
+        XCTAssertEqual(restored.totalDuplicate, 2)
+        XCTAssertEqual(restored.totalFailed, 1)
+        XCTAssertEqual(restored.acceptedToday, 4)
+        XCTAssertEqual(restored.recentBatches.count, 1)
+        XCTAssertEqual(restored.recentBatches.first?.latencyMS, 42)
+        XCTAssertEqual(restored.activeIssue?.reason, "1 message did not sync.")
+    }
+
+    func testPersistentPublisherResetsStaleDailyCountOnRestore() {
+        let defaults = makeDefaults()
+        let twoDaysAgo = Date().addingTimeInterval(-172_800)
+        let publisher = SourceStatusPublisher(
+            sourceID: "notes",
+            state: .connected,
+            defaults: defaults
+        )
+
+        publisher.recordSync(at: twoDaysAgo, accepted: 8, duplicate: 0)
+
+        let restored = SourceStatusPublisher(
+            sourceID: "notes",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertEqual(restored.totalAccepted, 8)
+        XCTAssertEqual(restored.acceptedToday, 0)
+    }
+
     func testDisplayedStateKeepsBlockingPermissionIssuesRedEvenAfterPriorSync() {
         for reason in [
             "imessage_full_disk_access_required",
@@ -241,5 +299,12 @@ final class SourceStatusPublisherTests: XCTestCase {
             return Date()
         }
         return d
+    }
+
+    private func makeDefaults() -> UserDefaults {
+        let suiteName = "SourceStatusPublisherTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        return defaults
     }
 }

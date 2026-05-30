@@ -88,7 +88,7 @@ final class CalendarEventsSource: SourceProtocol {
         self.lookaheadDays = lookaheadDays
         self.lowPowerProbe = lowPowerProbe
         self.clock = clock
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "calendar", state: .disconnected)
     }
 
     /// Convenience init wiring the outbox to a `CalendarIngest`. The

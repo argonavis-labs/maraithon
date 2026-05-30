@@ -58,7 +58,7 @@ final class BrowserHistorySource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 1_800)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "browser_history", state: .disconnected)
     }
 
     // MARK: - SourceProtocol

@@ -105,7 +105,7 @@ final class VoiceMemosSource: SourceProtocol {
         self.audioReader = audioReader
         self.maxAudioBytes = maxAudioBytes
         self.summarizer = summarizer
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "voice_memos", state: .disconnected)
     }
 
     /// Convenience init that wires the outbox to a `VoiceMemosIngest`.

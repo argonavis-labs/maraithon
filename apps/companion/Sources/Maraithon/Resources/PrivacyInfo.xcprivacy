@@ -23,9 +23,10 @@
     <key>NSPrivacyAccessedAPITypes</key>
     <array>
         <!--
-          UserDefaults — store cursor + deviceId + per-source paused
-          state. Reason CA92.1: "Access info only available to the same
-          app (no third-party transmission)."
+          UserDefaults — store cursor, deviceId, per-source paused
+          state, and lightweight source health snapshots. Reason CA92.1:
+          "Access info only available to the same app (no third-party
+          transmission)."
         -->
         <dict>
             <key>NSPrivacyAccessedAPIType</key>

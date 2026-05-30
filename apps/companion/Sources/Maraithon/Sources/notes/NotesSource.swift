@@ -80,7 +80,7 @@ final class NotesSource: SourceProtocol {
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
         self.summarizer = summarizer
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "notes", state: .disconnected)
     }
 
     // MARK: - SourceProtocol

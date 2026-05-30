@@ -75,7 +75,7 @@ final class FilesSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 1800)
         self.lowPowerProbe = lowPowerProbe
         self.summarizer = summarizer
-        self.statusPublisher = SourceStatusPublisher(state: .disconnected)
+        self.statusPublisher = SourceStatusPublisher(sourceID: "files", state: .disconnected)
     }
 
     /// Production-style convenience init that binds the outbox to a
