@@ -27,6 +27,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
 
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.Todos
+  alias Maraithon.Todos.UserFacingCopy
 
   @recent_push_limit 8
   @default_due_batch_size 25
@@ -153,7 +154,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       origin_id: Map.get(trigger, "id"),
       dedupe_key: dedupe_key,
       title: "Maraithon check-in",
-      body: Map.fetch!(plan, "assistant_message"),
+      body: delivery_text(Map.fetch!(plan, "assistant_message")),
       urgency: Map.get(plan, "urgency", 0.0),
       interrupt_now: Map.get(plan, "interrupt_now", false),
       why_now: Map.get(plan, "summary"),
@@ -210,7 +211,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       source_id: Map.fetch!(trigger, "id"),
       dedupe_key: dedupe_key,
       title: "Maraithon check-in",
-      body: Map.fetch!(plan, "assistant_message"),
+      body: delivery_text(Map.fetch!(plan, "assistant_message")),
       urgency: Map.get(plan, "urgency", 0.0),
       why_now: Map.get(plan, "summary"),
       structured_data: %{
@@ -263,6 +264,9 @@ defmodule Maraithon.TelegramAssistant.Proactive do
       _other -> 0
     end
   end
+
+  defp delivery_text(value) when is_binary(value), do: UserFacingCopy.polish_text(value)
+  defp delivery_text(value), do: value
 
   defp recent_pushes(user_id, limit) when is_binary(user_id) do
     PushReceipt

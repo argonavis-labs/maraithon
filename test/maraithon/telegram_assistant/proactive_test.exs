@@ -124,7 +124,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
            Jason.encode!(%{
              "decision" => "send_now",
              "assistant_message" =>
-               "Rippling (HR/employment platform) still needs the employment eligibility reply today.\nNext: reply with the requested eligibility details.",
+               "The Rippling todo still needs the employment eligibility reply today.\nNext: reply with the requested eligibility details.",
              "message_class" => "todo_digest",
              "urgency" => 0.94,
              "interrupt_now" => true,
@@ -145,7 +145,8 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     assert result["todo_items_sent"] == 1
 
     [intro, todo_card] = telegram_messages()
-    assert intro.text =~ "Rippling (HR/employment platform) still needs"
+    assert intro.text =~ "Rippling work item still needs"
+    refute intro.text =~ "todo"
     assert todo_card.text =~ "Reply in-thread and close the loop."
     assert todo_card.text =~ "This Gmail thread still needs your reply."
     refute todo_card.text =~ "Reply to Rippling about employment eligibility"
