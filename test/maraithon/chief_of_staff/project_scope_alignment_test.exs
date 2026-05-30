@@ -100,7 +100,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignmentTest do
           "project_id" => home_project.id,
           "life_domain" => "home",
           "confidence" => 0.61,
-          "reasoning" => "The summary and note look like personal household work.",
+          "reasoning" =>
+            "61% confidence because the model classified the JSON as household work.",
           "ask_user" => true,
           "question" => "Is Garage Renovation a home project or a work project?"
         }
@@ -156,11 +157,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignmentTest do
     assert brief.summary =~ "Confirm whether Garage Renovation is a home project"
     assert brief.body =~ "Needs your call: is Garage Renovation a home project?"
     assert brief.body =~ "Current read: Garage Renovation looks like home"
+    assert brief.body =~ "but I want your call before I group related work"
     assert brief.body =~ "Reply with `home` or `work`"
     refute brief.summary =~ "todos"
     refute brief.body =~ "todos"
     refute brief.body =~ "Weekend home/work pass"
     refute brief.body =~ "confidence"
+    refute brief.body =~ "model"
+    refute String.downcase(brief.body) =~ "json"
     refute brief.body =~ "%"
     assert get_in(brief.metadata, ["linked_project", "id"]) == home_project.id
     assert brief.metadata["life_domain_confidence"] == 0.61

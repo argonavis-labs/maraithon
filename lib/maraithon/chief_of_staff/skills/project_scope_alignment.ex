@@ -324,17 +324,55 @@ defmodule Maraithon.ChiefOfStaff.Skills.ProjectScopeAlignment do
   defp scope_guess_sentence(_project_name, nil, nil), do: nil
 
   defp scope_guess_sentence(_project_name, nil, reasoning) do
-    "Why I am asking: #{clean_sentence(reasoning) || "this affects how related work is grouped"}."
+    reason = safe_reason_sentence(reasoning) || "this affects how related work is grouped"
+    "Why I am asking: #{reason}."
   end
 
   defp scope_guess_sentence(project_name, life_domain, reasoning) do
-    case normalize_string(reasoning) do
+    case safe_reason_sentence(reasoning) do
       nil ->
         "Current read: #{project_name} looks like #{life_domain}, but I want your call before I group related work."
 
       text ->
-        "Current read: #{project_name} looks like #{life_domain} because #{clean_sentence(text)}."
+        "Current read: #{project_name} looks like #{life_domain}. Evidence: #{text}."
     end
+  end
+
+  defp safe_reason_sentence(value) do
+    value
+    |> clean_sentence()
+    |> reject_internal_reason()
+  end
+
+  defp reject_internal_reason(nil), do: nil
+
+  defp reject_internal_reason(value) do
+    normalized = String.downcase(value)
+
+    if internal_reason?(normalized) do
+      nil
+    else
+      value
+    end
+  end
+
+  defp internal_reason?(value) do
+    String.contains?(value, "%") or
+      Enum.any?(
+        [
+          "confidence",
+          "score",
+          "threshold",
+          "model",
+          "json",
+          "heuristic",
+          "classified",
+          "classification",
+          "llm",
+          "prompt"
+        ],
+        &String.contains?(value, &1)
+      )
   end
 
   defp clean_sentence(value) do
