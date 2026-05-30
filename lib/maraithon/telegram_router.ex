@@ -536,7 +536,7 @@ defmodule Maraithon.TelegramRouter do
 
   defp send_model_unavailable_turn(conversation, chat_id, reply_to_message_id, reason) do
     text =
-      "I saved your message, but I cannot verify a reliable answer from your connected context right now. I did not send a guess."
+      "Message saved. No source-backed answer is available from connected sources right now, so no guess was sent."
 
     send_assistant_turn(
       conversation,
