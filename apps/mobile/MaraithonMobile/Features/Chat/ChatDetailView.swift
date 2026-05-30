@@ -445,7 +445,7 @@ struct ChatDetailView: View {
 
 enum ChatDetailErrorCopy {
     static func recoveryActionTitle(canRetrySend: Bool) -> String {
-        canRetrySend ? "Retry" : "Refresh"
+        canRetrySend ? "Send again" : "Refresh chat"
     }
 }
 

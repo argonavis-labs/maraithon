@@ -13,11 +13,11 @@ enum ChatSyncError: LocalizedError, Equatable {
         case .missingSession:
             return "Sign in again to keep chatting with Maraithon."
         case .emptyMessage:
-            return "Message is empty."
+            return "Enter a message before sending."
         case .emptyThreadTitle:
             return "Enter a chat name before saving."
         case .pollingTimedOut:
-            return "Maraithon is still working. Pull to refresh this chat in a moment."
+            return "Maraithon is still working. Refresh this chat in a moment."
         case .assistantResponseFailed(let message):
             return MobileErrorCopy.assistantRunFailureMessage(for: message)
         }

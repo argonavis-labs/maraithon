@@ -20,11 +20,21 @@ struct ChatDetailErrorCopyTests {
 
     @Test
     func sendFailuresOfferRetry() {
-        #expect(ChatDetailErrorCopy.recoveryActionTitle(canRetrySend: true) == "Retry")
+        #expect(ChatDetailErrorCopy.recoveryActionTitle(canRetrySend: true) == "Send again")
     }
 
     @Test
     func nonSendFailuresOfferRefresh() {
-        #expect(ChatDetailErrorCopy.recoveryActionTitle(canRetrySend: false) == "Refresh")
+        #expect(ChatDetailErrorCopy.recoveryActionTitle(canRetrySend: false) == "Refresh chat")
+    }
+
+    @Test
+    func chatSyncErrorsMatchVisibleRecoveryActions() {
+        #expect(ChatSyncError.emptyMessage.localizedDescription == "Enter a message before sending.")
+        #expect(
+            ChatSyncError.pollingTimedOut.localizedDescription ==
+                "Maraithon is still working. Refresh this chat in a moment."
+        )
+        #expect(!ChatSyncError.pollingTimedOut.localizedDescription.localizedCaseInsensitiveContains("pull"))
     }
 }
