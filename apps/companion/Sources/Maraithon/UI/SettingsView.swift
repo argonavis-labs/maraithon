@@ -251,9 +251,9 @@ enum DiagnosticsSettingsCopy {
         case .paused: stateString = "Paused"
         case .disconnected: stateString = "Disconnected"
         case .needsAttention(let reason):
-            stateString = "Needs attention - \(SourceIssueCopy.status(reason))"
+            stateString = "Needs review - \(SourceIssueCopy.status(reason))"
         case .error(let reason):
-            stateString = "Error - \(SourceIssueCopy.status(reason))"
+            stateString = "Needs review - \(SourceIssueCopy.status(reason))"
         }
         let last = publisher.lastSyncAt.map { date in
             let f = ISO8601DateFormatter()
