@@ -62,6 +62,20 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert has_element?(view, "a[href='/insights'][aria-current='page']", "Insights")
   end
 
+  test "empty people insight copy stays scoped to checked records", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/insights")
+
+    html = render(view)
+
+    assert has_element?(view, "h2", "No people insights surfaced from checked records.")
+    assert has_element?(view, "p", "No duplicate candidates surfaced in checked people data.")
+    assert has_element?(view, "p", "No relationship suggestions surfaced from checked evidence.")
+    refute html =~ "No people insights right now"
+    refute html =~ "looks clean"
+    refute html =~ "No duplicate people found"
+    refute html =~ "No relationship suggestions found"
+  end
+
   test "merges a duplicate suggestion from the insight card", %{conn: conn} do
     {:ok, canonical} =
       Crm.create_person(@user_email, %{

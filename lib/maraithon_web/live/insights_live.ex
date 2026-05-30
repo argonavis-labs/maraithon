@@ -193,9 +193,11 @@ defmodule MaraithonWeb.InsightsLive do
 
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
-            <h2 class="text-sm/6 font-semibold text-zinc-950">No people insights right now.</h2>
+            <h2 class="text-sm/6 font-semibold text-zinc-950">
+              No people insights surfaced from checked records.
+            </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              Your people list looks clean for this pass. Review People directly if you want to edit relationships or merge contacts.
+              Maraithon has not surfaced duplicate or relationship suggestions from the people data it checked. Review People directly if you want to edit relationships or merge contacts.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People
@@ -225,7 +227,9 @@ defmodule MaraithonWeb.InsightsLive do
     ~H"""
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
-        <p class="text-sm/6 text-zinc-500">No duplicate people found.</p>
+        <p class="text-sm/6 text-zinc-500">
+          No duplicate candidates surfaced in checked people data.
+        </p>
       </div>
 
       <div :if={@suggestions != []} class="divide-y divide-zinc-950/5">
@@ -270,7 +274,9 @@ defmodule MaraithonWeb.InsightsLive do
     ~H"""
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
-        <p class="text-sm/6 text-zinc-500">No relationship suggestions found.</p>
+        <p class="text-sm/6 text-zinc-500">
+          No relationship suggestions surfaced from checked evidence.
+        </p>
       </div>
 
       <div :if={@suggestions != []} class="divide-y divide-zinc-950/5">
