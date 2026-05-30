@@ -453,7 +453,7 @@ defmodule Maraithon.AssistantChat do
   end
 
   defp prepared_action_failure_text(%PreparedAction{} = prepared_action, reason) do
-    "I could not complete #{prepared_action_label(prepared_action.action_type)} yet. " <>
+    "Maraithon could not #{prepared_action_failure_label(prepared_action.action_type)}. " <>
       prepared_action_failure_detail(reason)
   end
 
@@ -470,6 +470,23 @@ defmodule Maraithon.AssistantChat do
   defp prepared_action_label("project_create"), do: "the project creation"
   defp prepared_action_label("project_update"), do: "the project update"
   defp prepared_action_label(_action_type), do: "that action"
+
+  defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
+  defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
+  defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
+  defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"
+
+  defp prepared_action_failure_label("linear_update_issue_state"),
+    do: "update the Linear issue status"
+
+  defp prepared_action_failure_label("notaui_complete_task"), do: "complete the Notaui task"
+  defp prepared_action_failure_label("notaui_update_task"), do: "update the Notaui task"
+  defp prepared_action_failure_label("agent_create"), do: "create the automation"
+  defp prepared_action_failure_label("agent_update"), do: "update the automation"
+  defp prepared_action_failure_label("agent_delete"), do: "remove the automation"
+  defp prepared_action_failure_label("project_create"), do: "create the project"
+  defp prepared_action_failure_label("project_update"), do: "update the project"
+  defp prepared_action_failure_label(_action_type), do: "complete that action"
 
   defp prepared_action_failure_detail(:confirmation_expired),
     do: "The confirmation expired before it could run."

@@ -965,9 +965,10 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     message = response |> get_in(["thread", "messages"]) |> List.last()
 
     assert message["body"] ==
-             "I could not complete the project update yet. " <>
+             "Maraithon could not update the project. " <>
                "The project it referenced is no longer available."
 
+    refute message["body"] =~ "I could not"
     refute message["body"] =~ ":project_not_found"
     refute message["body"] =~ "project_not_found"
     assert message["structured_data"] == %{}
@@ -1034,8 +1035,9 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     message = response |> get_in(["thread", "messages"]) |> List.last()
 
     assert message["body"] ==
-             "I could not complete the Gmail message yet. Gmail is not connected."
+             "Maraithon could not send the Gmail message. Gmail is not connected."
 
+    refute message["body"] =~ "I could not"
     refute message["body"] =~ "Gmail draft"
     refute message["body"] =~ "thread-123"
   end

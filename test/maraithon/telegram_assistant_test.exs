@@ -658,9 +658,10 @@ defmodule Maraithon.TelegramAssistantTest do
     result_message = last_telegram_message(:send)
 
     assert result_message.text ==
-             "I could not complete the project update yet. " <>
+             "Maraithon could not update the project. " <>
                "The project it referenced is no longer available."
 
+    refute result_message.text =~ "I could not"
     refute result_message.text =~ ":project_not_found"
     refute result_message.text =~ "project_not_found"
     assert Repo.get!(PreparedAction, prepared_action.id).status == "failed"
