@@ -77,8 +77,8 @@ final class UIComponentsTests: XCTestCase {
             lastSyncAt: nil
         )
 
-        XCTAssertEqual(label, "Notes, error, Some items were not accepted. Maraithon will keep the last successful data until the next sync.")
-        XCTAssertEqual(tooltip, "Some items were not accepted. Maraithon will keep the last successful data until the next sync.")
+        XCTAssertEqual(label, "Notes, error, Some items could not finish syncing. Maraithon will keep the last successful data until the next sync.")
+        XCTAssertEqual(tooltip, "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync.")
         XCTAssertFalse(label.contains("secret"))
         XCTAssertFalse(tooltip.contains("secret"))
         XCTAssertFalse(label.contains("clientError"))
@@ -210,13 +210,14 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.batchLine(event)
 
-        XCTAssertEqual(line, "Synced 7 | Already synced 2 | Not synced 1 | 42 ms")
+        XCTAssertEqual(line, "Synced 7 | Already known 2 | Needs attention 1 | 42 ms")
         XCTAssertFalse(line.contains("accepted="))
         XCTAssertFalse(line.contains("dup="))
         XCTAssertFalse(line.contains("failed="))
         XCTAssertFalse(line.contains("lat="))
         XCTAssertFalse(line.contains("Accepted"))
         XCTAssertFalse(line.contains("Duplicates"))
+        XCTAssertFalse(line.contains("Not synced"))
     }
 
     func testDataSettingsCopyUsesExplicitUserActions() {

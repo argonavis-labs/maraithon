@@ -250,14 +250,14 @@ struct SourceDetailScaffold: View {
                     }
                     .width(min: 70, ideal: 80)
 
-                    TableColumn("Already synced") { row in
+                    TableColumn(SourceDetailCopy.alreadySyncedTitle) { row in
                         Text(String(row.duplicates))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                     .width(min: 80, ideal: 100)
 
-                    TableColumn("Not synced") { row in
+                    TableColumn(SourceDetailCopy.notSyncedTitle) { row in
                         Text(String(row.failed))
                             .monospacedDigit()
                             .foregroundStyle(row.failed > 0 ? StatusTone.error.color : StatusTone.muted.color)
@@ -466,9 +466,9 @@ enum SourceDetailCopy {
     static let recentChecksSectionTitle = "Recent checks"
     static let lastCheckTitle = "Last check"
     static let lastBatchSyncedCaption = "synced"
-    static let alreadySyncedTitle = "Already synced"
+    static let alreadySyncedTitle = "Already known"
     static let alreadySyncedCaption = "last check"
-    static let notSyncedTitle = "Not synced"
+    static let notSyncedTitle = "Needs attention"
     static let notSyncedCaption = "last check"
     static let lastSyncTitle = "Last checked"
     static let lastSyncCaption = "successful check"
@@ -508,14 +508,8 @@ enum SourceDetailCopy {
         let hasUnfinishedItems = lastCheckNotSynced > 0
         if lastCheckSynced > 0 {
             sentences.append("Synced \(countedItem(lastCheckSynced, singular: singular, plural: plural)).")
-            if !hasUnfinishedItems {
-                sentences.append("Everything is current.")
-            }
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("No new \(plural) found.")
-            if !hasUnfinishedItems {
-                sentences.append("Everything is current.")
-            }
         } else {
             sentences.append("No \(plural) found yet.")
         }
@@ -524,7 +518,7 @@ enum SourceDetailCopy {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
             sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention.")
         } else {
-            sentences.append("Automatic checks are on.")
+            sentences.append("Maraithon will keep checking in the background.")
         }
 
         sentences.append("Checked \(relativeSyncTime(lastSyncAt, relativeTo: now)).")

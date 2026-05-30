@@ -152,9 +152,9 @@ enum DataSettingsCopy {
     }
 }
 
-/// Developer-grade diagnostics: per-source publisher metrics (today /
-/// last batch / duplicates / total), the live cursor state, and the
-/// recent-activity ring buffer. The end-user detail panes no longer
+/// Developer-grade diagnostics: per-source publisher metrics, the live
+/// cursor state, and the recent-activity ring buffer. The end-user
+/// detail panes no longer
 /// show any of this — it lives only here so debugging surfaces don't
 /// crowd the day-to-day "is this working?" view.
 private struct DiagnosticsSettingsView: View {
@@ -189,8 +189,8 @@ private struct DiagnosticsSourceRow: View {
             HStack {
                 MetricCell(title: "Today", value: format(pub?.acceptedToday))
                 MetricCell(title: "Last check", value: format(pub?.lastBatchAccepted))
-                MetricCell(title: "Already synced", value: format(pub?.lastBatchDuplicate))
-                MetricCell(title: "Not synced", value: format(pub?.lastBatchFailed))
+                MetricCell(title: "Already known", value: format(pub?.lastBatchDuplicate))
+                MetricCell(title: "Needs attention", value: format(pub?.lastBatchFailed))
                 MetricCell(title: "Synced", value: format(pub?.totalAccepted))
             }
             Text(DiagnosticsSettingsCopy.stateLine(publisher: pub))
@@ -264,7 +264,7 @@ enum DiagnosticsSettingsCopy {
     }
 
     static func batchLine(_ event: SourceStatusPublisher.BatchEvent) -> String {
-        "Synced \(event.accepted) | Already synced \(event.duplicate) | Not synced \(event.failed) | \(event.latencyMS) ms"
+        "Synced \(event.accepted) | Already known \(event.duplicate) | Needs attention \(event.failed) | \(event.latencyMS) ms"
     }
 }
 

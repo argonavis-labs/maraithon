@@ -25,7 +25,7 @@ final class SourceIssueCopyTests: XCTestCase {
         let clientError = "clientError(status: 400, body: Optional(\"{\\\"error\\\":\\\"invalid_batch\\\",\\\"secret\\\":\\\"abc\\\"}\"))"
         XCTAssertEqual(
             SourceIssueCopy.status(clientError),
-            "Some items were not accepted. Maraithon will keep the last successful data until the next sync."
+            "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync."
         )
 
         let transport = "Error Domain=NSURLErrorDomain Code=-1009 \"The Internet connection appears to be offline.\""
@@ -62,7 +62,7 @@ final class SourceIssueCopyTests: XCTestCase {
     func testServerRejectionSummariesUseRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("2 messages were rejected by the server."),
-            "Some items did not sync. Maraithon will keep the last successful data until the next sync."
+            "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync."
         )
     }
 

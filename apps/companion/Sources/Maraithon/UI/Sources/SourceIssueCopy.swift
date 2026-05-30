@@ -25,7 +25,7 @@ struct SourceIssueCopy {
         case "voice_memos_speech_not_authorized":
             return "Speech Recognition permission is off."
         case "invalid_batch":
-            return "Some items were not accepted. Maraithon will keep the last successful data until the next sync."
+            return "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync."
         case "messages_required", "notes_required", "voice_memos_required",
              "calendar_events_required", "reminders_required", "files_required",
              "visits_required":
@@ -49,11 +49,11 @@ struct SourceIssueCopy {
         }
 
         if lower.contains("invalid_batch") || lower.contains("clienterror(status: 400") {
-            return "Some items were not accepted. Maraithon will keep the last successful data until the next sync."
+            return "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync."
         }
 
         if lower.contains("rejected") || lower.contains("by the server") {
-            return "Some items did not sync. Maraithon will keep the last successful data until the next sync."
+            return "Some items could not finish syncing. Maraithon will keep the last successful data until the next sync."
         }
 
         if lower.contains("servererror") || lower.contains("status: 5") {
