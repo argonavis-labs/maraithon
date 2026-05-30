@@ -13,6 +13,8 @@ status: done
 
 ## Fix 1 — Anthropic prompt caching
 
+**Verified 2026-05-30:** `mise exec -- env MIX_ENV=test mix test test/maraithon/llm/anthropic_provider_test.exs ...` passed in the targeted 88-test batch. Landing points confirmed at `lib/maraithon/llm/anthropic_provider.ex:168`, `:223`, `:235`, and usage parsing at `:121`.
+
 **Files**
 - Modify: `lib/maraithon/llm/anthropic_provider.ex`
 - Test: `test/maraithon/llm/anthropic_provider_test.exs` (create or extend)
@@ -23,6 +25,8 @@ status: done
 - Add a small helper `Maraithon.LLM.AnthropicProvider.build_body/1` and unit-test that the request body shape includes the cache_control block.
 
 ## Fix 2 — Parallel tool execution
+
+**Verified 2026-05-30:** targeted Telegram/LLM/context batch passed with 88 tests, 0 failures. `lib/maraithon/telegram_assistant/runner.ex:400`, `:424`, `:434`, and `:452` show ordered `Task.async_stream` execution plus tool-history guarding.
 
 **Files**
 - Modify: `lib/maraithon/telegram_assistant/runner.ex` — `execute_tool_calls/5`
@@ -36,6 +40,8 @@ status: done
 
 ## Fix 3 — Fast routing model (Haiku)
 
+**Verified 2026-05-30:** targeted batch passed. `config/runtime.exs:170`, `:183`, `:308`; `lib/maraithon/llm.ex:42`, `:155`; and `lib/maraithon/telegram_interpreter.ex:148` confirm routing-model configuration and dispatch.
+
 **Files**
 - Modify: `config/runtime.exs` — accept `ANTHROPIC_ROUTING_MODEL` / `OPENAI_ROUTING_MODEL` env vars
 - Modify: `lib/maraithon/llm.ex` — add `routing_model/0`, `complete_routing/1` that swaps the `model` param
@@ -48,6 +54,8 @@ status: done
 - Default routing model: `claude-haiku-4-5-20251001` for Anthropic, `gpt-4o-mini` (or what's configured) for OpenAI.
 
 ## Fix 4 — Today digest ETS cache
+
+**Verified 2026-05-30:** targeted batch passed. `lib/maraithon/application.ex:26`, `lib/maraithon/context_cache.ex:40`, `lib/maraithon/context_cache/builder.ex:33`, and `lib/maraithon/telegram_assistant/context.ex:57` confirm supervision, cache reads, and async refresh.
 
 **Files**
 - Create: `lib/maraithon/context_cache.ex` — GenServer + ETS table
@@ -64,6 +72,8 @@ status: done
 
 ## Fix 5 — Streaming progress via editMessageText
 
+**Verified 2026-05-30:** targeted batch passed. `lib/maraithon/telegram_assistant.ex:434`, `:460`, `:833`, and `:837` confirm liveness session creation, final delivery preparation, and edit-with-fallback dispatch.
+
 **Files**
 - Modify: `lib/maraithon/telegram_assistant/runner.ex` — send a placeholder turn at start; edit with progress; final answer replaces it
 - Modify: `lib/maraithon/telegram_assistant.ex` — likely already has `send_turn`/edit semantics; add a thin `send_progress_turn` and `update_progress_turn` if needed
@@ -76,6 +86,8 @@ status: done
 - Behind a config flag `telegram_assistant.streaming_enabled?` (default false in tests, true in dev/prod) so existing tests don't have to change.
 
 ## Fix 6 — Fuzzy person resolve (pg_trgm)
+
+**Verified 2026-05-30:** targeted batch passed. `priv/repo/migrations/20260510005233_enable_pg_trgm_for_crm_persons.exs:8`, `:12`, `:21` and `lib/maraithon/crm.ex:872`, `:1015` confirm pg_trgm setup and similarity-ranked fallback queries.
 
 **Files**
 - Create: `priv/repo/migrations/<timestamp>_enable_pg_trgm_for_crm_persons.exs`
@@ -90,6 +102,8 @@ status: done
 
 ## Fix 7 — Parallel context prefetch
 
+**Verified 2026-05-30:** targeted batch passed. `lib/maraithon/telegram_assistant/context.ex:47`, `:61`, `:104`, and `:251` confirm the context build path runs the independent fetchers through the safe parallel fetch helper while preserving the output map.
+
 **Files**
 - Modify: `lib/maraithon/telegram_assistant/context.ex` — `build/1`
 - Test: existing `test/maraithon/telegram_assistant_test.exs` should keep passing
@@ -100,6 +114,8 @@ status: done
 - Output shape stays identical.
 
 ## Fix 8 — Rolling conversation summarization
+
+**Verified 2026-05-30:** targeted batch passed. `lib/maraithon/telegram_conversations.ex:347`, `:353`, `:404`, and `:465` confirm threshold-based compaction, historical summary storage, and routing-model summarization.
 
 **Files**
 - Modify: `lib/maraithon/telegram_conversations.ex` — `recent_turns/2` plus a new `compact_old_turns/1`
