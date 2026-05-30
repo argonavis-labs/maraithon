@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Detects local development app copies that cannot hold macOS privacy
 /// grants reliably across rebuilds. Full Disk Access is tied to the app
@@ -86,4 +89,32 @@ enum FullDiskAccessInstallHint {
 
         return true
     }
+
+    #if canImport(AppKit)
+    @MainActor
+    static func switchToStableDevelopmentApp(
+        _ stableAppURL: URL,
+        eventLog: EventLog,
+        eventName: String
+    ) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-n", stableAppURL.path]
+
+        do {
+            try process.run()
+            eventLog.info(eventName, source: .ui, payload: ["path": stableAppURL.path])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                NSApp.terminate(nil)
+            }
+        } catch {
+            eventLog.warning(
+                "\(eventName)_failed",
+                source: .ui,
+                payload: ["path": stableAppURL.path, "error": String(describing: error)]
+            )
+            NSWorkspace.shared.activateFileViewerSelecting([stableAppURL])
+        }
+    }
+    #endif
 }

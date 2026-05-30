@@ -79,9 +79,9 @@ struct FullDiskAccessView: View {
                 if let installHint = FullDiskAccessInstallHint.current(),
                    installHint.stableAppInstalled {
                     Button {
-                        revealStableApp(installHint.stableAppURL)
+                        switchToStableApp(installHint.stableAppURL)
                     } label: {
-                        Label("Show stable app", systemImage: "app.dashed")
+                        Label("Open stable app", systemImage: "app.dashed")
                             .frame(maxWidth: .infinity)
                     }
                     .controlSize(.large)
@@ -171,15 +171,14 @@ struct FullDiskAccessView: View {
         env.eventLog.info("onboarding.full_disk_access.open_settings", source: .ui)
     }
 
-    private func revealStableApp(_ appURL: URL) {
+    private func switchToStableApp(_ appURL: URL) {
         #if canImport(AppKit)
-        NSWorkspace.shared.activateFileViewerSelecting([appURL])
-        #endif
-        env.eventLog.info(
-            "onboarding.full_disk_access.show_stable_app",
-            source: .ui,
-            payload: ["path": appURL.path]
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "onboarding.full_disk_access.open_stable_app"
         )
+        #endif
     }
 
     private func startPolling() {

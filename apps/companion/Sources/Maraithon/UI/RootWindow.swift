@@ -147,8 +147,8 @@ struct FullDiskAccessRequiredBanner: View {
             Spacer()
             if let installHint = FullDiskAccessInstallHint.current(),
                installHint.stableAppInstalled {
-                Button("Show stable app") {
-                    revealStableApp(installHint.stableAppURL)
+                Button("Open stable app") {
+                    switchToStableApp(installHint.stableAppURL)
                 }
                 .controlSize(.small)
                 .buttonStyle(.bordered)
@@ -210,15 +210,14 @@ struct FullDiskAccessRequiredBanner: View {
         #endif
     }
 
-    private func revealStableApp(_ appURL: URL) {
+    private func switchToStableApp(_ appURL: URL) {
         #if canImport(AppKit)
-        NSWorkspace.shared.activateFileViewerSelecting([appURL])
-        #endif
-        env.eventLog.info(
-            "root_window.fda_banner.show_stable_app",
-            source: .ui,
-            payload: ["path": appURL.path]
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "root_window.fda_banner.open_stable_app"
         )
+        #endif
     }
 
     private func checkAgain() {

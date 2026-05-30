@@ -53,9 +53,9 @@ struct SourceUnblockView: View {
                 if let installHint = fullDiskAccessInstallHint,
                    installHint.stableAppInstalled {
                     Button {
-                        revealStableApp(installHint.stableAppURL)
+                        switchToStableApp(installHint.stableAppURL)
                     } label: {
-                        Label("Show stable app", systemImage: "app.dashed")
+                        Label("Open stable app", systemImage: "app.dashed")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -99,12 +99,11 @@ struct SourceUnblockView: View {
         }
     }
 
-    private func revealStableApp(_ appURL: URL) {
-        NSWorkspace.shared.activateFileViewerSelecting([appURL])
-        env.eventLog.info(
-            "\(sourceID).show_stable_app",
-            source: .ui,
-            payload: ["path": appURL.path]
+    private func switchToStableApp(_ appURL: URL) {
+        FullDiskAccessInstallHint.switchToStableDevelopmentApp(
+            appURL,
+            eventLog: env.eventLog,
+            eventName: "\(sourceID).open_stable_app"
         )
     }
 
