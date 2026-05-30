@@ -25,6 +25,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   alias Maraithon.Todos
   alias Maraithon.Todos.AttentionRanker
   alias Maraithon.Todos.SurfaceQuality
+  alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tracing
 
   @default_batch_size 25
@@ -142,7 +143,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       source_id: candidate.source_id,
       dedupe_key: candidate.dedupe_key,
       title: candidate.title,
-      body: candidate.body,
+      body: delivery_text(candidate.body),
       urgency: candidate.urgency,
       why_now: candidate.why_now,
       structured_data: candidate.structured_data || %{},
@@ -459,7 +460,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       case TelegramAssistant.send_turn(
              conversation,
              conversation.chat_id,
-             candidate.body,
+             delivery_text(candidate.body),
              send_mode: :send,
              turn_kind: "assistant_push",
              origin_type: origin_type(candidate),
@@ -502,7 +503,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       linked_insight_id: get_in(candidate.structured_data || %{}, ["linked_insight_id"]),
       dedupe_key: candidate.dedupe_key,
       title: candidate.title,
-      body: candidate.body,
+      body: delivery_text(candidate.body),
       urgency: candidate.urgency,
       interrupt_now: Keyword.get(opts, :interrupt_now, false),
       why_now: candidate.why_now,
@@ -679,10 +680,13 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   defp digest_intro(plan) do
     case Map.get(plan, "digest_intro") do
-      value when is_binary(value) and value != "" -> value
+      value when is_binary(value) and value != "" -> delivery_text(value)
       _value -> "A few proactive updates are grouped here."
     end
   end
+
+  defp delivery_text(value) when is_binary(value), do: UserFacingCopy.polish_text(value)
+  defp delivery_text(value), do: value
 
   defp max_urgency(candidates) do
     candidates

@@ -7,8 +7,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
   prioritization, and business framing for personal/family items.
   """
 
-  alias Maraithon.Todos.AttentionRanker
-  alias Maraithon.Todos.SurfaceQuality
+  alias Maraithon.Todos.{AttentionRanker, SurfaceQuality, UserFacingCopy}
 
   @max_iterations 2
   @urgent_terms ~w(urgent immediately immediate now high-priority high priority overdue)
@@ -555,6 +554,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
     value
     |> one_line()
     |> String.replace(~r/<[^>]*>/, "")
+    |> UserFacingCopy.polish_text()
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
     |> trim_terminal_punctuation()
