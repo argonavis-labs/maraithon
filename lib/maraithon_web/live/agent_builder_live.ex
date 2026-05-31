@@ -1291,7 +1291,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "URL check",
         body:
           if(launch["check_url"] == "",
-            do: "No URL configured. The monitor will only write monitoring updates.",
+            do: "Monitoring updates only. Add a URL if you also want endpoint checks.",
             else: "Configured endpoint: #{launch["check_url"]}"
           )
       }
@@ -1522,7 +1522,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
           %{label: "Check cadence", value: format_cadence(launch["wakeup_interval_ms"])},
           %{
             label: "Optional URL",
-            value: if(launch["check_url"] == "", do: "None", else: launch["check_url"])
+            value:
+              if(launch["check_url"] == "",
+                do: "Monitoring updates only",
+                else: launch["check_url"]
+              )
           },
           %{label: "Action limit", value: launch["budget_tool_calls"]}
         ]

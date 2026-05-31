@@ -56,6 +56,16 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "Wakeup cadence"
     end
 
+    test "uses outcome-facing health monitor copy without an endpoint", %{conn: conn} do
+      {:ok, _view, html} = live(conn, "/agents/new?behavior=watchdog_summarizer")
+
+      assert html =~ "Health Monitor"
+      assert html =~ "Monitoring updates only. Add a URL if you also want endpoint checks."
+      assert html =~ "Monitoring updates only"
+      refute html =~ "No URL configured."
+      refute html =~ "Optional URL</dt><dd>None"
+    end
+
     test "coverage level copy avoids spend and budget framing", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/agents/new?behavior=ai_chief_of_staff")
 
