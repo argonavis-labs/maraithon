@@ -1647,10 +1647,10 @@ defmodule Maraithon.Connections do
   defp notaui_account_count_detail(token, account) do
     case provider_snapshot_value(account, token, "account_count") |> normalize_integer() do
       count when is_integer(count) and count > 0 ->
-        "Discovered #{count} accessible account#{plural_suffix(count)}"
+        "Found #{count} Notaui #{pluralize("account", count)} Maraithon can use."
 
       0 ->
-        "No accessible Notaui accounts were discovered yet."
+        "Notaui connected, but it did not return any accounts Maraithon can use. Reconnect Notaui if accounts are missing."
 
       _ ->
         nil
@@ -1726,9 +1726,6 @@ defmodule Maraithon.Connections do
   end
 
   defp normalize_integer(_value), do: nil
-
-  defp plural_suffix(1), do: ""
-  defp plural_suffix(_count), do: "s"
 
   defp account_word(1), do: "account"
   defp account_word(_count), do: "accounts"

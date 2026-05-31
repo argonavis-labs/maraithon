@@ -3,6 +3,7 @@ defmodule Maraithon.ConnectionsTest do
 
   alias Maraithon.Companion.Devices
   alias Maraithon.Connections
+  alias Maraithon.OAuth
 
   describe "safe_dashboard_snapshot/2" do
     test "returns product-safe degraded copy when connection inventory cannot load" do
@@ -60,6 +61,31 @@ defmodule Maraithon.ConnectionsTest do
       visible_copy = inspect(desktop)
       refute visible_copy =~ "Paired, but no local sources have synced yet"
       refute visible_copy =~ "No local sources synced yet"
+    end
+  end
+
+  describe "dashboard_snapshot/2 Notaui copy" do
+    test "uses actionable copy when Notaui returns no usable accounts" do
+      user_id = "notaui-empty@example.com"
+
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, "notaui", %{
+                 access_token: "notaui-token",
+                 refresh_token: "notaui-refresh",
+                 scopes: ["tasks:read"],
+                 metadata: %{
+                   "account_count" => 0,
+                   "accounts" => [],
+                   "mcp_url" => "https://api.notaui.com/mcp"
+                 }
+               })
+
+      snapshot = Connections.dashboard_snapshot(user_id)
+      notaui = Enum.find(snapshot.providers, &(&1.provider == "notaui"))
+
+      assert "Notaui connected, but it did not return any accounts Maraithon can use. Reconnect Notaui if accounts are missing." in notaui.details
+
+      refute inspect(notaui) =~ "No accessible Notaui accounts were discovered yet"
     end
   end
 end

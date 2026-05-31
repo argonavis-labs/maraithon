@@ -701,7 +701,7 @@ defmodule MaraithonWeb.OAuthController do
   defp discovery_status(_metadata), do: "ok"
 
   defp notaui_success_message(%{"account_count" => 0}, _scopes) do
-    "Notaui connected, but no accessible accounts were discovered."
+    "Notaui connected, but it did not return any accounts Maraithon can use. Reconnect Notaui if accounts are missing."
   end
 
   defp notaui_success_message(snapshot, scopes) when is_map(snapshot) and is_list(scopes) do

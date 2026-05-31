@@ -1121,6 +1121,72 @@ defmodule MaraithonWeb.OAuthControllerTest do
       assert get_in(connected_account.metadata, ["accounts"]) |> length() == 2
     end
 
+    test "redirected empty account discovery message is actionable", %{conn: conn} do
+      bypass = Bypass.open()
+
+      Application.put_env(:maraithon, :notaui,
+        client_id: "test_notaui_client_id",
+        client_secret: "test_notaui_client_secret",
+        redirect_uri: "http://localhost:4000/auth/notaui/callback",
+        issuer: "https://api.notaui.com",
+        token_url: "http://localhost:#{bypass.port}/oauth/token",
+        mcp_url: "http://localhost:#{bypass.port}/mcp"
+      )
+
+      Bypass.expect_once(bypass, "POST", "/oauth/token", fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "access_token" => "notaui_empty_access_token",
+            "refresh_token" => "notaui_empty_refresh_token",
+            "expires_in" => 3600,
+            "scope" => "tasks:read tasks:write",
+            "token_type" => "Bearer"
+          })
+        )
+      end)
+
+      Bypass.expect_once(bypass, "POST", "/mcp", fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        req = Jason.decode!(body)
+        assert req["params"]["name"] == "account.list"
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.resp(
+          200,
+          Jason.encode!(%{
+            "jsonrpc" => "2.0",
+            "id" => req["id"],
+            "result" => %{
+              "content" => [%{"type" => "text", "text" => Jason.encode!([])}]
+            }
+          })
+        )
+      end)
+
+      state =
+        signed_provider_state("notaui", "oauth-empty@example.com", %{
+          "code_verifier" => "test-code-verifier",
+          "return_to" => "/connectors?user_id=oauth-empty@example.com"
+        })
+
+      conn = get(conn, "/auth/notaui/callback", %{code: "valid_notaui_code", state: state})
+
+      redirect_url = redirected_to(conn)
+      params = redirect_url |> URI.parse() |> Map.fetch!(:query) |> URI.decode_query()
+
+      assert params["oauth_provider"] == "notaui"
+      assert params["oauth_status"] == "connected"
+
+      assert params["oauth_message"] ==
+               "Notaui connected, but it did not return any accounts Maraithon can use. Reconnect Notaui if accounts are missing."
+
+      refute params["oauth_message"] =~ "no accessible accounts were discovered"
+    end
+
     test "returns degraded success when account discovery fails", %{conn: conn} do
       bypass = Bypass.open()
 

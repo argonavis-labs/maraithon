@@ -358,7 +358,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Accounts"
       assert html =~ "Default account: Personal"
-      assert html =~ "Discovered 2 accessible accounts"
+      assert html =~ "Found 2 Notaui accounts Maraithon can use."
       assert html =~ "Task sync endpoint connected"
       assert html =~ "2 Notaui permissions granted"
       refute html =~ ">Reconnect<"
