@@ -1283,9 +1283,131 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   defp final_text(response, prepared_action_id, state) do
     case pending_preference_confirmation_rules(state.tool_history) do
-      [] -> final_text(response, prepared_action_id)
-      rules -> PreferenceConfirmationCopy.text(rules)
+      [] ->
+        response
+        |> final_text(prepared_action_id)
+        |> maybe_replace_generic_final_text(response, prepared_action_id, state)
+
+      rules ->
+        PreferenceConfirmationCopy.text(rules)
     end
+  end
+
+  defp maybe_replace_generic_final_text(text, _response, prepared_action_id, _state)
+       when is_binary(prepared_action_id),
+       do: text
+
+  defp maybe_replace_generic_final_text(text, response, _prepared_action_id, state) do
+    if generic_completion_text?(text) do
+      response
+      |> response_or_tool_result_text(state.tool_history)
+      |> case do
+        replacement when is_binary(replacement) and replacement != "" -> replacement
+        _ -> text
+      end
+    else
+      text
+    end
+  end
+
+  defp generic_completion_text?(text) when is_binary(text) do
+    normalized =
+      text
+      |> String.trim()
+      |> String.downcase()
+      |> String.replace(~r/[.!?]+$/u, "")
+
+    normalized in [
+      "done",
+      "reviewed",
+      "work reviewed",
+      "open work reviewed",
+      "completed",
+      "completed the check",
+      "finished",
+      "finished that step",
+      "i finished that step",
+      "that is done"
+    ]
+  end
+
+  defp generic_completion_text?(_text), do: false
+
+  defp response_or_tool_result_text(response, tool_history) do
+    [
+      tool_result_text(tool_history),
+      response_summary_text(response)
+    ]
+    |> Enum.find(&present_string?/1)
+  end
+
+  defp response_summary_text(response) when is_map(response) do
+    response
+    |> map_value("summary")
+    |> case do
+      value when is_binary(value) and value != "" ->
+        if generic_completion_text?(value),
+          do: nil,
+          else: UserFacingCopy.open_work_language(value)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp response_summary_text(_response), do: nil
+
+  defp tool_result_text(tool_history) when is_list(tool_history) do
+    tool_history
+    |> Enum.reverse()
+    |> Enum.find_value(fn entry ->
+      result = map_value(entry, "result")
+
+      if is_map(result) do
+        tool_result_summary(result)
+      end
+    end)
+  end
+
+  defp tool_result_text(_tool_history), do: nil
+
+  defp tool_result_summary(result) when is_map(result) do
+    summary = map_value(result, "summary")
+    next_action = map_value(result, "next_action")
+
+    cond do
+      present_string?(summary) and present_string?(next_action) and
+          not same_sentence?(summary, next_action) ->
+        UserFacingCopy.open_work_language("#{summary}\n\nNext: #{next_action}")
+
+      present_string?(summary) ->
+        UserFacingCopy.open_work_language(summary)
+
+      present_string?(next_action) ->
+        UserFacingCopy.open_work_language(next_action)
+
+      true ->
+        nil
+    end
+  end
+
+  defp tool_result_summary(_result), do: nil
+
+  defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_string?(_value), do: false
+
+  defp same_sentence?(left, right) when is_binary(left) and is_binary(right) do
+    normalize_sentence(left) == normalize_sentence(right)
+  end
+
+  defp same_sentence?(_left, _right), do: false
+
+  defp normalize_sentence(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace(~r/\s+/u, " ")
+    |> String.replace(~r/[.!?]+$/u, "")
   end
 
   defp turn_kind_for_message_class("approval_prompt"), do: "approval_prompt"
