@@ -1002,7 +1002,7 @@ defmodule MaraithonWeb.DashboardLive do
             value={@connected_provider_count}
             description={
               if @connected_provider_count == 0,
-                do: "No services linked yet.",
+                do: "Connect work apps so Maraithon can see current context.",
                 else: "Linked accounts feed every project."
             }
             href="/connectors"
@@ -1015,7 +1015,7 @@ defmodule MaraithonWeb.DashboardLive do
             description={
               if @memory_profile.summary && @memory_profile.summary != "",
                 do: @memory_profile.summary,
-                else: "No confirmed preferences yet."
+                else: "Using source-backed defaults until you save a standing preference."
             }
             href="#memory-detail"
             cta="View context"
@@ -1874,7 +1874,7 @@ defmodule MaraithonWeb.DashboardLive do
                     Technical notes
                   </p>
                   <%= if overview.inspection.recent_logs == [] do %>
-                    <p class="mt-2 text-sm/6 text-zinc-500">No technical notes yet.</p>
+                    <p class="mt-2 text-sm/6 text-zinc-500">No technical notes are available for this automation.</p>
                   <% else %>
                     <div class="mt-2 space-y-2">
                       <div
@@ -1907,7 +1907,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @agent_overviews == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No automations yet. Start a Chief of Staff or specialist automation to begin monitoring your work.
+              Start a Chief of Staff or specialist automation to begin monitoring active work.
             </p>
           <% end %>
         </div>
@@ -2011,7 +2011,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
               </div>
               <%= if @recent_activity == [] do %>
-                <p class="text-sm/6 text-zinc-500">No activity yet.</p>
+                <p class="text-sm/6 text-zinc-500">No operational events have been recorded in this window.</p>
               <% end %>
             </div>
           </div>
@@ -2076,7 +2076,7 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
           <% end %>
           <%= if @recent_logs == [] do %>
-            <p class="font-sans text-sm/6 text-zinc-500">No system logs yet.</p>
+            <p class="font-sans text-sm/6 text-zinc-500">No recent system logs are available in this window.</p>
           <% end %>
         </div>
       </details>
@@ -2125,7 +2125,7 @@ defmodule MaraithonWeb.DashboardLive do
               </p>
             <% else %>
               <%= if @fly_logs.logs == [] do %>
-                <p class="font-sans text-sm/6 text-zinc-500">No platform logs returned yet.</p>
+                <p class="font-sans text-sm/6 text-zinc-500">No platform logs were returned for the configured apps.</p>
               <% else %>
                 <%= for log <- @fly_logs.logs do %>
                   <div class="grid grid-cols-[auto_auto_1fr] gap-3 border-b border-zinc-950/5 py-1.5 last:border-0">

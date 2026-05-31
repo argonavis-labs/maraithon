@@ -51,7 +51,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "No work needs attention right now."
     assert html =~ "collect context and recommend next work"
     assert html =~ "No open follow-ups yet."
-    assert html =~ "begin monitoring your work"
+    assert html =~ "Connect work apps so Maraithon can see current context."
+    assert html =~ "begin monitoring active work"
     assert html =~ "nothing waiting"
     refute html =~ "none failed"
     refute has_element?(view, "h2", "Health")
@@ -117,8 +118,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Platform logs"
     assert html =~ "Platform logs are not configured for this environment."
     assert html =~ "Technical notes"
+    assert html =~ "No technical notes are available for this automation."
     assert html =~ "Maraithon could not finish this step. Review the latest automation status."
     refute html =~ "captured"
+    refute html =~ "No technical notes yet."
     refute_html_contains(html, "DBConnection")
     refute_html_contains(html, "token=secret")
     refute_html_contains(html, "123456789")
