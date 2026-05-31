@@ -1900,8 +1900,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert {:ok, brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "check_in",
-               "title" => "Check-in: 2 items still need movement",
-               "summary" => "Two open communication loops still need movement.",
+               "title" => "Check-in: 2 items ready for a decision",
+               "summary" => "Two open communication loops are ready for a decision.",
                "body" => "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND",
                "scheduled_for" => scheduled_for,
                "dedupe_key" => "telegram-assistant:check-in:todo-style",
@@ -1921,7 +1921,7 @@ defmodule Maraithon.TelegramAssistantTest do
     [intro] = sends
 
     assert intro.text =~ "<b>Chief of staff check-in</b>"
-    assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
+    assert intro.text =~ "<b>Check-in: 2 items ready for a decision</b>"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 carried over from earlier"
 
@@ -1929,7 +1929,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
 
     assert intro.text =~ "Then triage the rest"
-    assert intro.text =~ "keep what still needs you"
+    assert intro.text =~ "keep active work visible"
     assert {best_index, _} = :binary.match(intro.text, "Best next move")
     assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
     assert best_index < open_work_index
@@ -1984,8 +1984,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert {:ok, brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "end_of_day",
-               "title" => "End-of-day review: 2 items still open",
-               "summary" => "Two items still need movement before the day closes.",
+               "title" => "End-of-day review: 2 items to close or reset",
+               "summary" => "Two items are ready to close or reset before the day ends.",
                "body" => "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND",
                "scheduled_for" => scheduled_for,
                "dedupe_key" => "telegram-assistant:end-of-day:todo-style",
@@ -2005,7 +2005,7 @@ defmodule Maraithon.TelegramAssistantTest do
     [intro] = sends
 
     assert intro.text =~ "<b>End-of-day review</b>"
-    assert intro.text =~ "<b>End-of-day review: 2 items still open</b>"
+    assert intro.text =~ "<b>End-of-day review: 2 items to close or reset</b>"
     refute intro.text =~ "debt"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 carried over from earlier"

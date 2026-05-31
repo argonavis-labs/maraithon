@@ -797,7 +797,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_list_next_move([todo | _todos]) do
     focus = todo |> todo_list_focus() |> todo_list_sentence() |> safe()
 
-    "#{focus} Then triage the list: close resolved items, keep what still needs you, and defer anything that can wait."
+    "#{focus} Then triage the list: close resolved items, keep active work visible, and defer anything that can wait."
   end
 
   defp todo_list_next_move(_todos), do: "Nothing needs a decision right now."

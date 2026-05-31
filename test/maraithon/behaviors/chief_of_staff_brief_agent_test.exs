@@ -710,11 +710,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "check_in"
-    assert brief.title == "Check-in: 1 item still needs movement"
+    assert brief.title == "Check-in: 1 item ready for a decision"
     assert brief.summary =~ "Most urgent"
     assert brief.body =~ "Why this check-in matters:"
     assert brief.body =~ "Move now:"
-    assert brief.body =~ "1 item still needs a decision or reply"
+    assert brief.body =~ "1 item is waiting on a decision or reply"
     assert brief.body =~ "Reply here when one is handled; Maraithon will refresh the rest."
     assert brief.body =~ "Send revised pricing to David"
     refute brief.body =~ "Why I'm"

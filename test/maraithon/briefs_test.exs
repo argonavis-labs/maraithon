@@ -538,8 +538,8 @@ defmodule Maraithon.BriefsTest do
     assert {:ok, %Brief{} = brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "check_in",
-               "title" => "Check-in: 2 items still need movement",
-               "summary" => "Two open communication loops still need movement.",
+               "title" => "Check-in: 2 items ready for a decision",
+               "summary" => "Two open communication loops are ready for a decision.",
                "body" => "Superseded by todo delivery.",
                "scheduled_for" => scheduled_for,
                "dedupe_key" => "brief:check-in:todo-style",
@@ -563,7 +563,7 @@ defmodule Maraithon.BriefsTest do
     assert intro =~ "Open work: 1 new today. 1 carried over from earlier."
     assert intro =~ "Then triage the rest"
     assert intro =~ "close resolved items"
-    assert intro =~ "keep what still needs you"
+    assert intro =~ "keep active work visible"
     assert intro =~ "defer anything that can wait"
     refute intro =~ "Hey"
     refute intro =~ "here's the open work"
@@ -588,8 +588,8 @@ defmodule Maraithon.BriefsTest do
     assert {:ok, %Brief{} = brief} =
              Briefs.record(user_id, agent.id, %{
                "cadence" => "check_in",
-               "title" => "Check-in: 1 item still needs movement",
-               "summary" => "One open communication loop still needs movement.",
+               "title" => "Check-in: 1 item ready for a decision",
+               "summary" => "One open communication loop is ready for a decision.",
                "body" => "Superseded by todo delivery.",
                "scheduled_for" => ~U[2026-04-02 16:30:00Z],
                "dedupe_key" => "brief:check-in:single-todo-style",

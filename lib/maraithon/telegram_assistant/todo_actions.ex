@@ -772,7 +772,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       if present?(person) do
         "#{person}#{context} is waiting on this commitment: #{commitment}"
       else
-        "This commitment is still open: #{commitment}"
+        "This commitment is on your work queue: #{commitment}"
       end
     end
   end

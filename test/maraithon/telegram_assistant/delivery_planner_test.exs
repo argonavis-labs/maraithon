@@ -146,15 +146,15 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert result.delivered == 2
 
     [intro, first_card, second_card] = telegram_messages()
-    assert intro.text =~ "Two updates are worth a look together"
+    assert intro.text =~ "Two updates are ready to review together"
     assert intro.text =~ "morning brief has two open follow-ups"
-    assert intro.text =~ "Rippling work item still needs a reply"
+    assert intro.text =~ "Rippling work item is waiting on your reply"
     refute intro.text =~ "proactive updates"
     refute intro.text =~ "todo"
     assert first_card.text =~ "morning brief"
     refute first_card.text =~ "open loops"
     assert second_card.text =~ "Rippling"
-    assert second_card.text =~ "work item still needs a reply"
+    assert second_card.text =~ "work item is waiting on your reply"
     refute second_card.text =~ "todo"
 
     assert Repo.get!(ProactiveCandidate, first.id).status == "delivered"

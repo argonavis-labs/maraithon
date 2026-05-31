@@ -329,7 +329,6 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     if should_send_check_in?(top_items, state, plan.scheduled_for) do
       count = length(top_items)
-      movement_verb = if count == 1, do: "needs", else: "need"
 
       check_in_metadata =
         brief_delivery_metadata(card_insights(top_items), state, plan.scheduled_for)
@@ -338,8 +337,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "cadence" => "check_in",
         "scheduled_for" => plan.scheduled_for,
         "dedupe_key" => dedupe_key("check_in", plan.period_key),
-        "title" =>
-          "Check-in: #{count} item#{if(count == 1, do: "", else: "s")} still #{movement_verb} movement",
+        "title" => "Check-in: #{count_phrase(count, "item")} ready for a decision",
         "summary" =>
           check_in_summary(
             top_items,
@@ -636,8 +634,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         [
           count_line(
             length(act_now_insights),
-            "item still needs a decision or reply",
-            "items still need a decision or reply"
+            "item is waiting on a decision or reply",
+            "items are waiting on a decision or reply"
           ),
           count_line(
             overdue_count(act_now_insights, time_context, reference_at),
@@ -646,8 +644,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           ),
           count_line(
             due_today_count(act_now_insights, time_context, reference_at),
-            "item still lands today",
-            "items still land today"
+            "item is due today",
+            "items are due today"
           )
         ],
         "No active work warrants an interruption."
@@ -827,8 +825,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> append_sentence(
       count_summary(
         due_today_count(act_now_insights, time_context, reference_at),
-        "still due today",
-        "still due today"
+        "due today",
+        "due today"
       )
     )
   end

@@ -469,15 +469,15 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGate do
         "Only the highest-signal item met the bar for attention now."
 
       length(labels) == 1 ->
-        "#{List.first(labels)} is worth a look now."
+        "#{List.first(labels)} is ready for review now."
 
       length(labels) == 2 ->
         [first, second] = labels
-        "Two updates are worth a look together: #{first}; #{second}."
+        "Two updates are ready to review together: #{first}; #{second}."
 
       true ->
         [first, second | rest] = labels
-        "Top updates are worth a look together: #{first}; #{second}; and #{length(rest)} more."
+        "Top updates are ready to review together: #{first}; #{second}; and #{length(rest)} more."
     end
   end
 

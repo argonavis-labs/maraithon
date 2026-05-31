@@ -645,7 +645,7 @@ defmodule Maraithon.Briefs do
   defp todo_digest_next_move([todo | _todos]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
-    "#{focus} Then triage the rest: close resolved items, keep what still needs you, and defer anything that can wait."
+    "#{focus} Then triage the rest: close resolved items, keep active work visible, and defer anything that can wait."
   end
 
   defp todo_digest_next_move(_todos), do: "Nothing needs a decision right now."

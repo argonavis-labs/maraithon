@@ -231,6 +231,10 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\btodo list\b/i, "open work")
     |> String.replace(~r/\btodos\b/i, "work items")
     |> String.replace(~r/\btodo\b/i, "work item")
+    |> String.replace(
+      ~r/\bwork item still needs a reply\b/i,
+      "work item is waiting on your reply"
+    )
   end
 
   defp maybe_rewrite_generic_commitment_copy(attrs) do
