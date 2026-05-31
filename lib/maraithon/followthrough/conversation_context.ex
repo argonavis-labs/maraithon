@@ -169,6 +169,12 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
       "heads_up" ->
         cond do
+          closure_state == "acknowledged" and present?(acknowledgment_actor) ->
+            "#{acknowledgment_actor} acknowledged the thread and the conversation is moving."
+
+          closure_state == "acknowledged" ->
+            "Another participant acknowledged the thread and the conversation is moving."
+
           closure_state == "handoff" and present?(owner_mentioned) and present?(eta_mentioned) ->
             "#{owner_mentioned} acknowledged the thread and appears to own the next step with ETA #{eta_mentioned}."
 
@@ -225,7 +231,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
     momentum_state =
       cond do
-        closure_state in ["resolved", "acknowledged"] -> "resolved"
+        closure_state == "resolved" -> "resolved"
         later_messages == [] -> "stalled"
         true -> "active"
       end
@@ -256,10 +262,10 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
     notification_posture =
       cond do
-        closure_state in ["resolved", "acknowledged"] ->
+        closure_state == "resolved" ->
           "resolved"
 
-        closure_state == "handoff" ->
+        closure_state in ["handoff", "acknowledged"] ->
           "heads_up"
 
         coverage_state in ["covered_by_other", "covered_by_both", "covered_by_user"] ->
