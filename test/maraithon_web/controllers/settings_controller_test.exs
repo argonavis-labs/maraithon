@@ -48,7 +48,12 @@ defmodule MaraithonWeb.SettingsControllerTest do
     html = html_response(conn, 200)
 
     assert html =~ "Sends login links and account notifications."
+    assert html =~ "Trusted access"
+    assert html =~ "Lets approved companion apps and automations connect securely."
     assert html =~ "Protects synced local source data at rest."
+    assert html =~ "readiness"
+    refute html =~ "Service access"
+    refute html =~ "protected API endpoints"
     refute html =~ "POSTMARK_SERVER_TOKEN"
     refute html =~ "AUTH_EMAIL_FROM"
     refute html =~ "API_BEARER_TOKEN"

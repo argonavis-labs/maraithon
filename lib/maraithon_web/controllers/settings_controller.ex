@@ -66,8 +66,8 @@ defmodule MaraithonWeb.SettingsController do
         present?: present?(System.get_env("AUTH_EMAIL_FROM", ""))
       },
       %{
-        name: "Service access",
-        description: "Allows trusted service clients to use protected API endpoints.",
+        name: "Trusted access",
+        description: "Lets approved companion apps and automations connect securely.",
         required?: true,
         present?: present?(Keyword.get(api_auth, :bearer_token))
       },
