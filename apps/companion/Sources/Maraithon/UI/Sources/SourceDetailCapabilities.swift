@@ -182,14 +182,14 @@ extension SourceDetailCopy {
                 ),
                 SourceCapability(
                     id: "encrypted_sync",
-                    title: "Encrypted upload",
-                    description: "Message content is encrypted on this Mac before upload when encryption is enabled.",
+                    title: "Encrypted transfer",
+                    description: "Message content is encrypted on this Mac before it is sent when encryption is enabled.",
                     systemImage: "lock.shield"
                 ),
                 SourceCapability(
                     id: "device_control",
                     title: "Device control",
-                    description: "Revoke this Mac or delete uploaded Messages data without changing Messages on this Mac.",
+                    description: "Revoke this Mac or delete Maraithon's copy of Messages data without changing Messages on this Mac.",
                     systemImage: "macbook.and.iphone"
                 )
             ]
@@ -204,14 +204,14 @@ extension SourceDetailCopy {
                 ),
                 SourceCapability(
                     id: "encrypted_sync",
-                    title: "Encrypted upload",
-                    description: "Content is encrypted on this Mac before upload when encryption is enabled.",
+                    title: "Encrypted transfer",
+                    description: "Content is encrypted on this Mac before it is sent when encryption is enabled.",
                     systemImage: "lock.shield"
                 ),
                 SourceCapability(
                     id: "device_control",
                     title: "Device control",
-                    description: "Revoke this Mac or delete uploaded \(displayName) data without changing local files or apps.",
+                    description: "Revoke this Mac or delete Maraithon's copy of \(displayName) data without changing local files or apps.",
                     systemImage: "macbook.and.iphone"
                 )
             ]

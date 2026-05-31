@@ -315,14 +315,15 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(notes.count, 3)
         XCTAssertEqual(notes.map(\.title), [
             "Local filtering",
-            "Encrypted upload",
+            "Encrypted transfer",
             "Device control"
         ])
         XCTAssertTrue(text.localizedCaseInsensitiveContains("filtered on this Mac"))
         XCTAssertTrue(text.localizedCaseInsensitiveContains("encrypted on this Mac"))
-        XCTAssertTrue(text.localizedCaseInsensitiveContains("delete uploaded Messages data"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("delete Maraithon's copy of Messages data"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("server"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("database"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("upload"))
     }
 
     func testKnownSourcePrivacyNotesStayUserFacing() {
@@ -332,9 +333,10 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
             XCTAssertEqual(notes.count, 3, sourceID)
             XCTAssertTrue(text.localizedCaseInsensitiveContains("this Mac"), sourceID)
-            XCTAssertTrue(text.localizedCaseInsensitiveContains("delete uploaded"), sourceID)
+            XCTAssertTrue(text.localizedCaseInsensitiveContains("delete Maraithon's copy"), sourceID)
             XCTAssertFalse(text.localizedCaseInsensitiveContains("server"), sourceID)
             XCTAssertFalse(text.localizedCaseInsensitiveContains("database"), sourceID)
+            XCTAssertFalse(text.localizedCaseInsensitiveContains("upload"), sourceID)
         }
     }
 
