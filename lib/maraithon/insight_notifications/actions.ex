@@ -6,6 +6,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   import Ecto.Query
 
   alias Maraithon.Connectors.Telegram
+  alias Maraithon.BriefingSchedules
   alias Maraithon.Drafts
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
@@ -17,6 +18,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   alias Maraithon.Repo
   alias Maraithon.SourceLabels
   alias Maraithon.TelegramAssistant.ActionFailureCopy
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Tools
@@ -43,7 +45,9 @@ defmodule Maraithon.InsightNotifications.Actions do
     "still looks open",
     "thread still looks open",
     "still looks unclosed",
-    "I found no later reply"
+    "I found no later reply",
+    "<b>Open work</b>",
+    "<b>Why important</b>"
   ]
 
   def telegram_payload(%Delivery{} = delivery) do
@@ -647,7 +651,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp insight_sections(%Insight{} = insight, metadata) do
-    label = if monitor_insight?(insight), do: "Watching", else: "Open work"
+    label = if monitor_insight?(insight), do: "Watching", else: "Needs action"
 
     polished =
       UserFacingCopy.polish_attrs(%{
@@ -658,22 +662,22 @@ defmodule Maraithon.InsightNotifications.Actions do
 
     [
       {label, Map.get(polished, "title")},
+      {"Next", next_text(insight, metadata) |> UserFacingCopy.polish_text()},
       {"Context", Map.get(polished, "summary")},
       {"Person", person_text(insight, metadata) |> UserFacingCopy.polish_text()},
-      {"Why important", why_important_text(insight, metadata) |> UserFacingCopy.polish_text()},
-      {"Next", next_text(insight, metadata) |> UserFacingCopy.polish_text()}
+      {"Why now", why_important_text(insight, metadata) |> UserFacingCopy.polish_text()}
     ]
   end
 
   defp verify_chief_message(message) when is_binary(message) do
-    required_sections = ["Context", "Person", "Why important", "Next"]
+    required_sections = ["Next", "Context", "Person", "Why now"]
 
     issues =
       []
       |> maybe_append("too_long", String.length(message) > @chief_message_max_length)
       |> maybe_append(
-        "missing_open_work_or_watching",
-        not (String.contains?(message, "<b>Open work</b>") or
+        "missing_needs_action_or_watching",
+        not (String.contains?(message, "<b>Needs action</b>") or
                String.contains?(message, "<b>Watching</b>"))
       )
       |> then(fn issues ->
@@ -758,7 +762,7 @@ defmodule Maraithon.InsightNotifications.Actions do
           context
       end
 
-    [context, due_sentence(insight)]
+    [context, due_sentence(insight, metadata)]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
   end
@@ -904,11 +908,71 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp generic_person_candidate_word?(_word), do: false
 
-  defp due_sentence(%Insight{due_at: %DateTime{} = due_at}) do
-    "Due #{Calendar.strftime(due_at, "%b %d, %H:%M UTC")}."
+  defp due_sentence(%Insight{due_at: %DateTime{} = due_at, user_id: user_id}, metadata) do
+    timezone = insight_timezone(user_id, metadata)
+    offset_hours = Timezones.offset_at(timezone.name, due_at, timezone.offset_hours)
+    display_time = DateTime.add(due_at, offset_hours, :hour)
+    timezone_label = Timezones.label(timezone.name, offset_hours)
+
+    "Due #{Calendar.strftime(display_time, "%b %-d at %-I:%M %p")} #{timezone_label}."
   end
 
-  defp due_sentence(%Insight{}), do: nil
+  defp due_sentence(%Insight{}, _metadata), do: nil
+
+  defp insight_timezone(user_id, metadata) do
+    metadata_timezone(metadata) || user_timezone(user_id) || default_timezone()
+  end
+
+  defp metadata_timezone(metadata) when is_map(metadata) do
+    timezone_name =
+      read_string(metadata, "timezone") ||
+        read_string(metadata, "timezone_name") ||
+        metadata |> read_map("briefing_schedule") |> read_string("timezone_name")
+
+    offset_hours =
+      read_integer(metadata, "timezone_offset_hours") ||
+        metadata |> read_map("briefing_schedule") |> read_integer("timezone_offset_hours")
+
+    if present?(timezone_name) or not is_nil(offset_hours) do
+      normalize_timezone(timezone_name, offset_hours)
+    end
+  end
+
+  defp metadata_timezone(_metadata), do: nil
+
+  defp user_timezone(user_id) when is_binary(user_id) do
+    user_id
+    |> BriefingSchedules.summarize_for_prompt()
+    |> case do
+      %{timezone_name: timezone_name, timezone_offset_hours: offset_hours} ->
+        normalize_timezone(timezone_name, offset_hours)
+
+      _other ->
+        default_timezone()
+    end
+  rescue
+    _exception -> default_timezone()
+  end
+
+  defp user_timezone(_user_id), do: default_timezone()
+
+  defp normalize_timezone(timezone_name, offset_hours) do
+    case Timezones.normalize(to_string(timezone_name || "")) do
+      "offset:" <> offset ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset)}
+
+      normalized when is_binary(normalized) ->
+        fallback = offset_hours || Timezones.standard_offset(normalized)
+        %{name: normalized, offset_hours: Timezones.normalize_offset(fallback)}
+
+      _other ->
+        %{name: nil, offset_hours: Timezones.normalize_offset(offset_hours)}
+    end
+  end
+
+  defp default_timezone do
+    %{name: nil, offset_hours: -5}
+  end
 
   defp clean_subject(subject) when is_binary(subject) do
     subject

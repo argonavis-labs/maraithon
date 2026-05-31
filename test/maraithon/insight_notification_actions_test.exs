@@ -122,19 +122,21 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "<b>Open work</b>"
+    assert sent.text =~ "<b>Needs action</b>"
     assert sent.text =~ "Send the deck to Sarah"
+    assert sent.text =~ "<b>Next</b>"
+    assert sent.text =~ "tap Draft Email"
+    assert sent.text =~ "approval before sending"
     assert sent.text =~ "<b>Context</b>"
     assert sent.text =~ "Explicit promise made to Sarah."
     assert sent.text =~ "<b>Person</b>"
     assert sent.text =~ "Sarah"
     assert sent.text =~ "Gmail"
-    assert sent.text =~ "<b>Why important</b>"
+    assert sent.text =~ "<b>Why now</b>"
     assert sent.text =~ "A named person is waiting on the next step"
-    assert sent.text =~ "<b>Next</b>"
-    assert sent.text =~ "tap Draft Email"
-    assert sent.text =~ "approval before sending"
     refute sent.text =~ "I'll draft"
+    refute sent.text =~ "<b>Open work</b>"
+    refute sent.text =~ "<b>Why important</b>"
 
     assert sent.text =~
              "Send the promised follow-through now and explicitly confirm delivery"
@@ -432,11 +434,11 @@ defmodule Maraithon.InsightNotificationActionsTest do
     sent = last_telegram_message(:send)
 
     assert in_order?(sent.text, [
-             "<b>Open work</b>",
+             "<b>Needs action</b>",
+             "<b>Next</b>",
              "<b>Context</b>",
              "<b>Person</b>",
-             "<b>Why important</b>",
-             "<b>Next</b>"
+             "<b>Why now</b>"
            ])
 
     assert sent.text =~ "Reply to Renat about the intro launch video"
@@ -455,6 +457,43 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute sent.text =~ "Tap Draft"
     refute sent.text =~ "generic reply plan with too much detail"
     refute sent.text =~ "Reply with the owner"
+  end
+
+  test "renders due copy in the user's local timezone instead of UTC", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send the board packet",
+          "summary" => "The board packet is still waiting.",
+          "recommended_action" => "Send the board packet and confirm the review window.",
+          "priority" => 94,
+          "confidence" => 0.91,
+          "due_at" => ~U[2026-05-30 18:30:00Z],
+          "source_id" => "msg-board-packet-local-time",
+          "dedupe_key" => "telegram-actions:gmail:local-due-time",
+          "metadata" => %{
+            "account" => "kent@runner.now",
+            "thread_id" => "thread-board-packet",
+            "timezone" => "America/Toronto",
+            "timezone_offset_hours" => -5,
+            "context_brief" => "The board packet is still waiting.",
+            "record" => %{"person" => "Board"}
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert sent.text =~ "Due May 30 at 2:30 PM ET."
+    refute sent.text =~ "UTC"
   end
 
   test "renders todo cards with person context and suggested next actions", %{
@@ -492,7 +531,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
 
     sent = last_telegram_message(:send)
 
-    assert sent.text =~ "<b>Open work</b>"
+    assert sent.text =~ "<b>Needs action</b>"
     assert sent.text =~ "Michael Berlingo"
     assert sent.text =~ "Thread: Starteryou UGC Campaigns"
     assert sent.text =~ "Michael Berlingo is tied to this open thread"
@@ -506,6 +545,8 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "confirm what Michael Berlingo is waiting on"
     assert sent.text =~ "close if done"
     assert String.length(sent.text) <= 700
+    refute sent.text =~ "<b>Open work</b>"
+    refute sent.text =~ "<b>Why important</b>"
     refute sent.text =~ "dismiss if stale"
     refute sent.text =~ "exact artifact or update"
     refute sent.text =~ "Reply now with owner, ETA"
@@ -823,8 +864,9 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Ownership moved to Breck after acknowledgment."
     assert sent.text =~ "<b>Person</b>"
     assert sent.text =~ "Breck"
-    assert sent.text =~ "<b>Why important</b>"
+    assert sent.text =~ "<b>Why now</b>"
     assert sent.text =~ "<b>Next</b>"
+    refute sent.text =~ "<b>Why important</b>"
     refute sent.text =~ "I'm watching this."
     refute sent.text =~ "<b>What I'm watching</b>"
     refute sent.text =~ "Since the last check:"
