@@ -907,7 +907,7 @@ defmodule MaraithonWeb.DashboardLive do
             Control Center
           </h1>
           <p class="mt-1 text-sm/6 text-zinc-500">
-            <%= dashboard_greeting(@current_user) %>
+            <%= dashboard_greeting(@current_user, @chief_of_staff_schedule) %>
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -4587,7 +4587,9 @@ defmodule MaraithonWeb.DashboardLive do
     """
   end
 
-  defp dashboard_greeting(user) do
+  def dashboard_greeting(user, schedule \\ nil, now \\ DateTime.utc_now())
+
+  def dashboard_greeting(user, schedule, %DateTime{} = now) do
     name =
       user
       |> case do
@@ -4600,15 +4602,26 @@ defmodule MaraithonWeb.DashboardLive do
         value -> value |> String.split([".", "_"]) |> List.first() |> String.capitalize()
       end
 
-    period =
-      case Time.utc_now().hour do
-        h when h < 12 -> "morning"
-        h when h < 17 -> "afternoon"
-        _ -> "evening"
-      end
+    period = greeting_period(local_dashboard_hour(schedule, now))
 
     if name, do: "Good #{period}, #{name}", else: "Good #{period}"
   end
+
+  def dashboard_greeting(user, schedule, _now),
+    do: dashboard_greeting(user, schedule, DateTime.utc_now())
+
+  defp local_dashboard_hour(schedule, %DateTime{} = now) do
+    timezone = dashboard_timezone(schedule)
+    offset_hours = Timezones.offset_at(timezone.name, now, timezone.offset_hours)
+
+    now
+    |> DateTime.add(offset_hours, :hour)
+    |> Map.fetch!(:hour)
+  end
+
+  defp greeting_period(hour) when is_integer(hour) and hour < 12, do: "morning"
+  defp greeting_period(hour) when is_integer(hour) and hour < 17, do: "afternoon"
+  defp greeting_period(_hour), do: "evening"
 
   attr :title, :string, required: true
   attr :metrics, :list, required: true

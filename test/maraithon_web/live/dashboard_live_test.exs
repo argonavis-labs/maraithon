@@ -88,6 +88,17 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "Agent Details"
   end
 
+  test "dashboard greeting uses the operator local timezone" do
+    user = %{email: "operator@example.com"}
+    schedule = %{timezone_name: "America/Los_Angeles", timezone_offset_hours: -8}
+
+    assert apply(MaraithonWeb.DashboardLive, :dashboard_greeting, [
+             user,
+             schedule,
+             ~U[2026-05-31 02:00:00Z]
+           ]) == "Good evening, Operator"
+  end
+
   test "renders operational diagnostics for admins only" do
     admin_email = "dashboard-admin@example.com"
 
