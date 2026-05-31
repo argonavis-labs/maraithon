@@ -19,13 +19,14 @@ final class CompanionErrorCopyTests: XCTestCase {
         let copy = CompanionErrorCopy.message(
             for: MaraithonClientError.clientError(
                 status: 404,
-                body: "{\"error\":\"device_not_found\",\"message\":\"That Mac is no longer paired. Refresh the device list; pair it again if it should still sync.\",\"secret\":\"abc\"}"
+                body: "{\"error\":\"device_not_found\",\"message\":\"That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac.\",\"secret\":\"abc\"}"
             )
         )
 
-        XCTAssertEqual(copy, "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync.")
+        XCTAssertEqual(copy, "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac.")
         XCTAssertFalse(copy.contains("device_not_found"))
         XCTAssertFalse(copy.contains("secret"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("sync"))
     }
 
     func testClientErrorsRejectTechnicalServerMessages() {

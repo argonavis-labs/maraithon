@@ -226,7 +226,7 @@ enum RecallCopy {
         let prefix = trimmed.isEmpty
             ? "Maraithon searched available context."
             : "Maraithon searched available context for \"\(trimmed)\"."
-        return "\(prefix) Try a person, thread, phrase, or date from context Maraithon has already synced."
+        return "\(prefix) Try a person, thread, phrase, or date from context already available to your assistant."
     }
 
     static func resultTitle(for hit: RecallResult) -> String {
@@ -272,7 +272,7 @@ enum RecallCopy {
             .replacingOccurrences(of: "_", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !cleaned.isEmpty else { return "Synced source" }
+        guard !cleaned.isEmpty else { return "Source" }
 
         return cleaned
             .split(separator: " ")

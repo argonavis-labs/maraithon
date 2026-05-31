@@ -471,6 +471,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertEqual(RecallCopy.resultTitle(for: calendar), "Calendar event")
         XCTAssertEqual(RecallCopy.resultTitle(for: unknown), "Search result")
         XCTAssertEqual(RecallCopy.sourceLabel(for: unknown.source), "Slack Messages")
+        XCTAssertEqual(RecallCopy.sourceLabel(for: ""), "Source")
         XCTAssertFalse(RecallCopy.sourceLabel(for: unknown.source).contains("_"))
         XCTAssertFalse(RecallCopy.resultTitle(for: message).contains("Untitled"))
     }
@@ -489,12 +490,13 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertEqual(RecallCopy.noMatchesTitle, "Available context did not match")
         XCTAssertEqual(
             copy,
-            "Maraithon searched available context for \"agenda from Dana\". Try a person, thread, phrase, or date from context Maraithon has already synced."
+            "Maraithon searched available context for \"agenda from Dana\". Try a person, thread, phrase, or date from context already available to your assistant."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Nothing matched"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No matches"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("all sources"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("sync"))
     }
 
     @MainActor
@@ -601,6 +603,24 @@ final class UIComponentsTests: XCTestCase {
         for window in BackfillSetupView.Window.allCases {
             XCTAssertFalse(window.title.isEmpty, "Window \(window) needs a title")
         }
+    }
+
+    @MainActor
+    func testBackfillSetupCopyUsesHistoryLanguage() {
+        let publicCopy = [
+            BackfillSetupCopy.stepLabel,
+            BackfillSetupCopy.progressAccessibilityValue,
+            BackfillSetupCopy.startButtonTitle,
+            BackfillSetupCopy.skipButtonTitle,
+            BackfillSetupCopy.skipAccessibilityLabel
+        ].joined(separator: " ")
+
+        XCTAssertEqual(BackfillSetupCopy.stepLabel, "History")
+        XCTAssertEqual(BackfillSetupCopy.progressAccessibilityValue, "Step 4 of 4 — History")
+        XCTAssertEqual(BackfillSetupCopy.startButtonTitle, "Start with this history")
+        XCTAssertEqual(BackfillSetupCopy.skipButtonTitle, "Start fresh")
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("backfill"))
     }
 
     @MainActor

@@ -1,12 +1,20 @@
 import SwiftUI
 
+enum BackfillSetupCopy {
+    static let stepLabel = "History"
+    static let progressAccessibilityValue = "Step 4 of 4 — History"
+    static let startButtonTitle = "Start with this history"
+    static let skipButtonTitle = "Start fresh"
+    static let skipAccessibilityLabel = "Start fresh without importing older history"
+}
+
 /// Final onboarding step. The user picks how much message history to
-/// backfill on first connect.
+/// make available on first connect.
 ///
 /// v4: surfaces a single `Picker` for the preset windows (30 / 60 / 90 /
 /// 180 days) plus a custom "From a specific date" option that reveals a
 /// `DatePicker`. Defaults to 90 days because that's where the assistant
-/// stops feeling thin without making the first sync feel like it never
+/// stops feeling thin without making the first import feel like it never
 /// finishes.
 ///
 /// This view *records* the choice via `onComplete`; sources are
@@ -109,7 +117,7 @@ struct BackfillSetupView: View {
                 Button {
                     onComplete(resolvedChoice)
                 } label: {
-                    Text("Start syncing")
+                    Text(BackfillSetupCopy.startButtonTitle)
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
@@ -119,12 +127,12 @@ struct BackfillSetupView: View {
                 Button {
                     onComplete(.fresh)
                 } label: {
-                    Text("Skip backfill")
+                    Text(BackfillSetupCopy.skipButtonTitle)
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
                 .buttonStyle(.bordered)
-                .accessibilityLabel("Skip backfill and start fresh")
+                .accessibilityLabel(BackfillSetupCopy.skipAccessibilityLabel)
             }
             .frame(maxWidth: 280)
 
@@ -137,7 +145,7 @@ struct BackfillSetupView: View {
     }
 
     /// Translate the current selection into an emitted `Choice`. Centralised
-    /// so the "Start syncing" button is the only spot that needs to know
+    /// so the primary button is the only spot that needs to know
     /// about the picker → choice mapping.
     private var resolvedChoice: Choice {
         switch window {

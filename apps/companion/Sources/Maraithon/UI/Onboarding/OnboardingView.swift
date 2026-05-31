@@ -41,7 +41,7 @@ struct OnboardingView: View {
                 onSkip: {
                     flow.markFullDiskAccessSkipped()
                     flow.markComplete()
-                    // Skipping FDA jumps over the backfill choice; the
+                    // Skipping FDA jumps over the history choice; the
                     // user can still set a window from Settings later.
                     while flow.current != .done {
                         flow.advance()
@@ -92,7 +92,7 @@ struct OnboardingView: View {
         case .connect: return "Connect"
         case .whatWeSync: return ContextScopeCopy.stepLabel
         case .fullDiskAccess: return "Full Disk Access"
-        case .backfill: return "Backfill"
+        case .backfill: return BackfillSetupCopy.stepLabel
         case .done: return ""
         }
     }
@@ -102,7 +102,7 @@ struct OnboardingView: View {
         case .connect: return "Step 1 of 4 — Connect"
         case .whatWeSync: return ContextScopeCopy.progressAccessibilityValue
         case .fullDiskAccess: return "Step 3 of 4 — Full Disk Access"
-        case .backfill: return "Step 4 of 4 — Backfill"
+        case .backfill: return BackfillSetupCopy.progressAccessibilityValue
         case .done: return "Complete"
         }
     }
