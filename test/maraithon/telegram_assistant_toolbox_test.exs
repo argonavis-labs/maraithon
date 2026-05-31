@@ -273,7 +273,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "Nothing needs review right now, but some context is unavailable."
+             "Checked sources did not surface follow-up that needs review."
 
     assert result.summary =~ "The Mac companion has not checked in recently"
 
@@ -284,6 +284,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app to refresh local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context."
 
     refute result.summary =~ "No open work appeared"
+    refute result.summary =~ "Nothing needs review right now"
     refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "I do not"
     refute result.summary =~ "companion_devices"
@@ -342,12 +343,16 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Maraithon could not confirm whether the Mac companion is current"
 
     assert result.summary =~
+             "Checked sources did not surface follow-up that needs review."
+
+    assert result.summary =~
              "local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context may be incomplete"
 
     assert result.next_action ==
              "Open the Mac companion app to confirm local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context is current."
 
     refute result.summary =~ "freshness"
+    refute result.summary =~ "Nothing needs review right now"
     refute result.next_action =~ "freshness"
     refute result.next_action =~ "source_health"
   end

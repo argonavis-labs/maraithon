@@ -3915,7 +3915,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp open_work_count_line(0, 0, source_health) do
     if source_coverage_gap?(source_health) do
-      "Nothing needs review right now, but some context is unavailable."
+      "Checked sources did not surface follow-up that needs review."
     else
       open_work_count_line(0, 0)
     end
