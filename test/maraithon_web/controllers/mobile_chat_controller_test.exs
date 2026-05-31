@@ -616,7 +616,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assert todo_body =~ "Why now: Michael is waiting"
     assert todo_body =~ "State: Waiting on you"
     assert todo_body =~ "Next: Reply with the recommended campaign next step"
-    assert todo_body =~ "Prepared: Maraithon can draft the reply for approval."
+    assert todo_body =~ "Prepared: Draft the reply for approval."
     assert todo_body =~ "Evidence: Michael asked for Starteryou UGC campaign next steps"
     assert todo_body =~ "Context used: Gmail."
 

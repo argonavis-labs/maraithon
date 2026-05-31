@@ -692,13 +692,13 @@ defmodule Maraithon.ActionCards do
         [%{"type" => "review_draft", "label" => "Draft material is ready for approval."}]
 
       source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
-        [%{"type" => "draft_email", "label" => "Maraithon can draft the reply for approval."}]
+        [%{"type" => "draft_email", "label" => "Draft the reply for approval."}]
 
       source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
         [
           %{
             "type" => "draft_slack",
-            "label" => "Maraithon can draft the Slack response for approval."
+            "label" => "Draft the Slack response for approval."
           }
         ]
 

@@ -3921,10 +3921,10 @@ defmodule MaraithonWeb.DashboardLive do
         "Draft material is ready for approval."
 
       todo.source == "gmail" and String.contains?(next_action, ["reply", "email"]) ->
-        "Maraithon can draft the reply for approval."
+        "Draft the reply for approval."
 
       todo.source == "slack" and String.contains?(next_action, ["reply", "respond", "message"]) ->
-        "Maraithon can draft the Slack response for approval."
+        "Draft the Slack response for approval."
 
       true ->
         nil

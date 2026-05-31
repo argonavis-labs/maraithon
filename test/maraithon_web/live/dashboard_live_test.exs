@@ -1013,7 +1013,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "UGC campaign contact"
     assert html =~ "Suggested next step"
     assert html =~ "Why it matters"
-    assert html =~ "Maraithon can draft the reply for approval."
+    assert html =~ "Draft the reply for approval."
     assert html =~ "Can you confirm whether the UGC campaign materials are ready?"
     assert html =~ "Next: Write the top three updates and owner for each."
 

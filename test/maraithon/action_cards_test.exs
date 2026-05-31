@@ -64,7 +64,7 @@ defmodule Maraithon.ActionCardsTest do
     assert card["headline"] =~ "Michael Berlingo"
     assert get_in(card, ["context_pack", "summary"]) =~ "Starteryou"
     assert ActionCards.evidence_excerpt(card) =~ "UGC campaign next steps"
-    assert ActionCards.prepared_action_hint(card) =~ "draft the reply"
+    assert ActionCards.prepared_action_hint(card) == "Draft the reply for approval."
     refute Enum.any?(ActionCards.context_items(card), &(&1.label == "Confidence"))
     assert "gmail" in get_in(card, ["source_health", "checked_sources"])
     assert card["decision_prompt"] == "Choose the next move with Michael Berlingo."
