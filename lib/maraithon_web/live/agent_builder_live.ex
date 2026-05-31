@@ -401,10 +401,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_subscriptions"
                         name="launch[subscriptions]"
-                        label="Sources to watch"
+                        label="Context to review"
                         value={@launch["subscriptions"]}
                         placeholder="github:owner/repo or email:you@example.com"
-                        description="Optional. Add only the source feeds this automation should inspect."
+                        description="Optional. Limit this automation to the inboxes, repos, or channels that matter."
                       />
                     <% end %>
 
@@ -443,7 +443,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[codebase_path]"
                         label="Codebase path"
                         value={@launch["codebase_path"]}
-                        description="Absolute or relative directory that Maraithon should inspect."
+                        description="Absolute or relative directory Maraithon should review."
                       />
                     <% end %>
 
@@ -467,7 +467,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                         name="launch[file_patterns]"
                         label="Include patterns"
                         value={@launch["file_patterns"]}
-                        description="Comma-separated glob patterns that define the files the automation may inspect."
+                        description="Comma-separated glob patterns that define the files this automation may review."
                       />
                     <% end %>
 
@@ -1237,10 +1237,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
     subscriptions =
       case launch["subscriptions"] do
         "" ->
-          "This automation responds only to direct messages until you add sources to watch."
+          "This automation responds only to direct messages until you add context to review."
 
         value ->
-          "Sources: #{value}"
+          "Context: #{value}"
       end
 
     tools =
@@ -1254,7 +1254,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "Operating profile",
         body: cost_profile_summary("prompt_agent", launch["cost_profile"])
       },
-      %{title: "Sources to watch", body: subscriptions},
+      %{title: "Context to review", body: subscriptions},
       %{title: "Allowed actions", body: tools}
     ]
   end

@@ -26,6 +26,7 @@ defmodule Maraithon.AgentBuilderCopyTest do
     refute visible_copy =~ "scan volume"
     refute visible_copy =~ "inbox scan"
     refute visible_copy =~ "scan surface"
+    refute visible_copy =~ ~r/\bwakeup\b/i
     refute visible_copy =~ ~r/\bspend\b/i
   end
 

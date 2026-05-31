@@ -47,13 +47,13 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "New project"
     assert html =~ "Saved context"
     assert has_element?(view, "h2", "Projects")
-    assert has_element?(view, "h2", "Automation coverage")
+    assert html =~ "Automation overview"
     assert html =~ "No work needs attention right now."
     assert html =~ "attach an automation to recommend next moves"
     assert html =~ "Follow-ups will appear here after"
     assert html =~ "Connect work apps so Maraithon can see current context."
     assert html =~ "Focus on clear obligations until a project focus is confirmed."
-    assert html =~ "begin monitoring active work"
+    assert html =~ "begin reviewing active work"
     assert html =~ "nothing waiting"
     refute html =~ "none failed"
     refute html =~ "No projects yet."
@@ -215,12 +215,17 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render_async(view)
 
     assert html =~ "3 things Maraithon would have caught this week"
+    assert html =~ "This preview shows what Maraithon can catch continuously"
     assert html =~ "Deck follow-up for Sarah"
     assert html =~ "Sarah asked for the deck"
     assert html =~ "Recommended move:"
     refute_html_contains(html, "recent sample")
     refute_html_contains(html, "proof-of-value scan")
     refute_html_contains(html, "proof-of-value preview")
+    refute_html_contains(html, "quick scan")
+    refute_html_contains(html, "Scanning your connected data")
+    refute_html_contains(html, "this scan")
+    refute_html_contains(html, "keeps watching")
     refute_html_contains(html, "What Maraithon would do")
     refute_html_contains(html, "confidence 99")
     refute_html_contains(html, "99.0%")
@@ -784,9 +789,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
       }
     })
 
-    {:ok, _view, html} = live(conn, "/dashboard")
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
 
-    assert html =~ "Automation coverage"
+    assert html =~ "Automation overview"
     assert html =~ "Completed work"
     assert html =~ "Prepared the renewal follow-up for review."
     assert html =~ "Maraithon finished this update."
@@ -886,10 +892,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "Spend"
     refute html =~ "Queued actions"
     assert html =~ "Prompt automation"
-    assert html =~ "Automation coverage"
-    assert html =~ "Signals"
-    assert html =~ "Waiting"
-    assert html =~ "Scheduled"
+    assert html =~ "Automation overview"
+    assert html =~ "Updates"
+    assert html =~ "Pending actions"
+    assert html =~ "Next checks"
+    refute html =~ "Automation coverage"
+    refute html =~ "Signals"
     refute html =~ "Pending effects"
     refute html =~ "Automation activity"
     refute html =~ "Prompt agent"

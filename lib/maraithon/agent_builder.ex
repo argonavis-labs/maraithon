@@ -11,7 +11,7 @@ defmodule Maraithon.AgentBuilder do
   alias Maraithon.OAuth.Google
   alias Maraithon.Timezones
 
-  @default_prompt "You are a helpful assistant that watches for events and responds thoughtfully."
+  @default_prompt "You are a helpful assistant that reviews relevant events and responds thoughtfully."
   @default_tools "read_file,search_files"
 
   @launch_defaults %{
@@ -143,7 +143,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Custom Automation",
       category: "Flexible",
       summary:
-        "General-purpose automation that watches topics, reasons over connected context, and uses only the actions you allow.",
+        "General-purpose automation that reviews selected topics, reasons over connected context, and uses only the actions you allow.",
       inputs: [
         "Direct messages from the dashboard",
         "Events published to the topics you subscribe to",
@@ -159,7 +159,7 @@ defmodule Maraithon.AgentBuilder do
       defaults: %{},
       requirements: [],
       suggestions: [
-        "Start with a narrow prompt and only 2-3 subscriptions so the automation does not drown in noise.",
+        "Start with a narrow prompt and only 2-3 context areas so the automation does not drown in noise.",
         "Keep the action list short. Every extra action expands what the automation can affect.",
         "Use the recent context limit to control how much history the automation can revisit."
       ]
@@ -222,7 +222,7 @@ defmodule Maraithon.AgentBuilder do
       label: "Personal Assistant",
       category: "Workflow",
       summary:
-        "Watches Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a Telegram prep brief the day before the trip.",
+        "Reviews Gmail and Calendar for upcoming travel, assembles an itinerary, and sends a Telegram prep brief the day before the trip.",
       inputs: [
         "Travel confirmation emails from Gmail",
         "Calendar events that corroborate destination and timing",
@@ -537,7 +537,7 @@ defmodule Maraithon.AgentBuilder do
       summary:
         "Writes concise monitoring updates and can optionally check one endpoint on a fixed cadence.",
       inputs: [
-        "Scheduled wakeups on the chosen interval",
+        "Scheduled checks on the chosen interval",
         "Optional HTTP checks against a single URL",
         "Current activity and timing context"
       ],

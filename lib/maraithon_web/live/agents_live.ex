@@ -583,7 +583,7 @@ defmodule MaraithonWeb.AgentsLive do
             <div>
               <h2 class="text-base/7 font-semibold text-zinc-950">Library</h2>
               <p class="mt-0.5 text-sm/6 text-zinc-500">
-                Pre-built automations you can install. Each one ships with the right instructions, source access, and action limits.
+                Pre-built automations you can install. Each one comes with focused instructions, connected apps, and sensible review limits.
               </p>
             </div>
             <span class="text-xs/5 text-zinc-500">
@@ -781,7 +781,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
                         <h3 class="text-base/7 font-semibold text-zinc-950">Instructions</h3>
                         <span class="text-xs/5 text-zinc-500">
-                          Updates take effect on the next wakeup
+                          Updates take effect at the next scheduled review
                         </span>
                       </div>
                       <p class="mt-2 text-sm/6 text-zinc-500">
@@ -802,7 +802,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            sources · allowed actions · review limits · support setup
+                            context · allowed actions · review limits · support setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -833,9 +833,9 @@ defmodule MaraithonWeb.AgentsLive do
 
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <.field
-                            label="Sources to watch"
+                            label="Context to review"
                             for="launch_subscriptions"
-                            description="Optional. Add only the source feeds this automation should inspect."
+                            description="Optional. Limit this automation to the inboxes, repos, or channels that matter."
                           >
                             <.c_input
                               id="launch_subscriptions"
@@ -1090,7 +1090,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <:header>
                           <.heading level={3} class="text-base/7">Connected apps</.heading>
                           <.text class="mt-1">
-                            Accounts this automation can inspect or act through.
+                            Accounts this automation can review or use for approved actions.
                           </.text>
                         </:header>
 
@@ -1106,7 +1106,7 @@ defmodule MaraithonWeb.AgentsLive do
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at, @timezone_info)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at, @timezone_info)} />
-                      <.summary_card title="Sources to watch" value={subscriptions_preview(@selected_agent.config)} />
+                      <.summary_card title="Context to review" value={subscriptions_preview(@selected_agent.config)} />
                       <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
                       <.summary_card
                         :if={@diagnostics_visible}
@@ -1115,7 +1115,7 @@ defmodule MaraithonWeb.AgentsLive do
                       />
                       <.summary_card
                         :if={@diagnostics_visible}
-                        title="Spend"
+                        title="Estimated cost"
                         value={"$#{Float.round(@agent_spend.total_cost, 4)}"}
                         value_class="text-amber-700"
                       />
@@ -1126,7 +1126,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <p class="mt-3 text-sm/6 text-zinc-700"><%= agent_purpose_summary(@selected_agent) %></p>
                       <dl class="mt-4 divide-y divide-zinc-950/10 text-sm/6">
                         <div class="flex items-center justify-between gap-4 py-2">
-                          <dt class="text-zinc-500">Watches</dt>
+                          <dt class="text-zinc-500">Reviews</dt>
                           <dd class="text-right font-medium text-zinc-950">
                             <%= subscriptions_preview(@selected_agent.config) %>
                           </dd>
@@ -1161,7 +1161,7 @@ defmodule MaraithonWeb.AgentsLive do
                             <dd class="font-medium text-amber-950"><%= @agent_spend.output_tokens %></dd>
                           </div>
                           <div class="flex items-center justify-between gap-3 border-t border-amber-200 pt-2">
-                            <dt class="text-amber-700/80">Estimated spend</dt>
+                            <dt class="text-amber-700/80">Estimated cost</dt>
                             <dd class="font-semibold text-amber-950">
                               $<%= Float.round(@agent_spend.total_cost, 4) %>
                             </dd>
@@ -1342,7 +1342,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <.summary_card title="Last Updated" value={format_datetime(agent_updated_at(@selected_agent), @timezone_info)} />
                       <.summary_card title="Updates" value={to_string(@inspection.event_count)} />
                       <.summary_card
-                        title="Spend"
+                        title="Estimated cost"
                         value={"$#{Float.round(@agent_spend.total_cost, 4)}"}
                         value_class="text-amber-700"
                       />
@@ -1423,7 +1423,7 @@ defmodule MaraithonWeb.AgentsLive do
   defp connected_apps_empty_copy([]), do: "No connected apps required for this automation."
 
   defp connected_apps_empty_copy(_required_app_rows),
-    do: "Connect the required apps before this automation can check those sources."
+    do: "Connect the required apps before this automation can review that context."
 
   attr :title, :string, required: true
   attr :value, :string, required: true
@@ -2130,21 +2130,25 @@ defmodule MaraithonWeb.AgentsLive do
     do: "Daily briefings, follow-through, travel, projects, and reminders."
 
   defp agent_row_summary(%{behavior: "founder_followthrough_agent"}),
-    do: "Watches commitments and reminds you when one needs action."
+    do: "Reviews commitments and reminds you when one needs action."
 
   defp agent_row_summary(%{behavior: "inbox_calendar_advisor"}),
-    do: "Watches inbox and calendar context for timely follow-up."
+    do: "Reviews inbox and calendar context for timely follow-up."
 
   defp agent_row_summary(%{behavior: "slack_followthrough_agent"}),
     do: "Finds Slack threads and messages that need a reply."
 
-  defp agent_row_summary(agent), do: agent_job_summary(agent)
+  defp agent_row_summary(agent),
+    do: agent |> agent_job_summary() |> normalize_agent_summary_copy()
 
   defp agent_purpose_summary(agent) do
     case agent_job_summary(agent) do
       summary when is_binary(summary) ->
         summary = String.trim(summary)
-        if summary == "", do: "Runs this saved automation for you.", else: summary
+
+        if summary == "",
+          do: "Runs this saved automation for you.",
+          else: normalize_agent_summary_copy(summary)
 
       _summary ->
         "Runs this saved automation for you."
@@ -2322,6 +2326,16 @@ defmodule MaraithonWeb.AgentsLive do
     |> behavior_spec()
     |> Map.get(:summary, "Runs this saved automation for you.")
   end
+
+  defp normalize_agent_summary_copy(summary) when is_binary(summary) do
+    summary
+    |> String.replace("watches topics", "reviews selected topics")
+    |> String.replace("Watches inbox", "Reviews inbox")
+    |> String.replace("Watches Gmail", "Reviews Gmail")
+    |> String.replace("Watches commitments", "Reviews commitments")
+  end
+
+  defp normalize_agent_summary_copy(_summary), do: "Runs this saved automation for you."
 
   defp agent_connector_requirements(agent) do
     requirements =

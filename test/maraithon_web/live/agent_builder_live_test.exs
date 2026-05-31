@@ -370,13 +370,12 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Allowed actions"
-
-      assert html =~
-               "This automation responds only to direct messages until you add sources to watch."
-
       assert html =~ "Review limit"
       assert html =~ "Action limit"
       assert html =~ "room for 200 review passes and 300 allowed actions"
+      refute html =~ "Sources to watch"
+      refute html =~ "source feeds"
+      refute html =~ "should inspect"
       refute html =~ "Permitted actions"
       refute html =~ "No watched signals yet."
       refute html =~ "Reasoning allowance"

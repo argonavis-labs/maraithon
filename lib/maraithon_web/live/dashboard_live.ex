@@ -1661,7 +1661,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </.badge>
                 </div>
                 <.text class="mt-1">
-                  Real signals from your connected accounts. This quick scan shows what Maraithon can watch continuously once you start an automation.
+                  Recent examples from your connected accounts. This preview shows what Maraithon can catch continuously once you start an automation.
                 </.text>
               </div>
               <.button
@@ -1679,16 +1679,16 @@ defmodule MaraithonWeb.DashboardLive do
             <%= case @onboarding_preview.status do %>
               <% :loading -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 font-medium text-zinc-950">Scanning your connected data...</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">Checking recent activity...</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
                     Maraithon is checking recent activity from your linked accounts and selecting the most useful examples.
                   </p>
                 </div>
               <% :ready when @onboarding_preview.items == [] -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 font-medium text-zinc-950">No follow-ups need attention from this scan.</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">No follow-ups need attention in this preview.</p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    That is a good sign. Once you start an automation, Maraithon keeps watching and only interrupts for concrete follow-through risk.
+                    That is a good sign. Once you start an automation, Maraithon checks quietly and only interrupts for concrete follow-through risk.
                   </p>
                 </div>
               <% :ready -> %>
@@ -1773,14 +1773,14 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @insights == [] do %>
             <p class="text-sm/6 text-zinc-500">
-              Follow-ups will appear here after a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation starts watching.
+              Follow-ups will appear here after a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation starts reviewing recent context.
             </p>
           <% end %>
       </section>
 
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Automation coverage</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Automation overview</h2>
           <.link navigate="/agents" class="text-xs/5 font-medium text-zinc-500 hover:text-zinc-950">
             All automations →
           </.link>
@@ -1819,7 +1819,7 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="mt-4 grid grid-cols-3 gap-3">
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Signals
+                    Updates
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.event_count %>
@@ -1827,7 +1827,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Waiting
+                    Pending actions
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.effect_counts.pending %>
@@ -1835,7 +1835,7 @@ defmodule MaraithonWeb.DashboardLive do
                 </div>
                 <div class="rounded-lg border border-zinc-950/10 bg-white px-3 py-3">
                   <p class="text-xs/5 font-medium text-zinc-500">
-                    Scheduled
+                    Next checks
                   </p>
                   <p class="mt-2 text-lg/7 font-semibold text-zinc-950">
                     <%= overview.inspection.job_counts.pending %>
@@ -1907,7 +1907,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @agent_overviews == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              Start a Chief of Staff or specialist automation to begin monitoring active work.
+              Start a Chief of Staff or specialist automation to begin reviewing active work.
             </p>
           <% end %>
         </div>

@@ -49,7 +49,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Start with a template"
   end
 
-  test "registry rows describe what automations do and which connectors they inspect", %{
+  test "registry rows describe what automations do and which connected apps they use", %{
     conn: conn
   } do
     {:ok, _agent} =
@@ -62,7 +62,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     {:ok, _view, html} = live(conn, "/agents")
 
     assert html =~ "Automations"
-    assert html =~ "Watches inbox and calendar context"
+    assert html =~ "Reviews inbox and calendar context"
     assert html =~ "Gmail"
     assert html =~ "Slack Channels"
     assert html =~ "Telegram"
@@ -164,13 +164,17 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ ~r/<option[^>]*value="ai_chief_of_staff"[^>]*>\s*Chief of Staff\s*<\/option>/
     assert html =~ "review limits"
     assert html =~ "support setup"
-    assert html =~ "Sources to watch"
-    assert html =~ "Add only the source feeds this automation should inspect."
+    assert html =~ "Context to review"
+    assert html =~ "Limit this automation to the inboxes, repos, or channels that matter."
     assert html =~ "Allowed actions"
     assert html =~ "Keep this list short; only listed actions can run."
     assert html =~ "Support setup JSON"
     assert html =~ "Leave blank unless Maraithon support gives you setup JSON."
     refute html =~ ~r/<option[^>]*>\s*prompt_agent\s*<\/option>/
+    refute html =~ "Updates take effect on the next wakeup"
+    refute html =~ "Sources to watch"
+    refute html =~ "source feeds"
+    refute html =~ "should inspect"
     refute html =~ "permissions"
     refute html =~ "allowances"
     refute html =~ "custom setup"
@@ -271,7 +275,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Inspection ready"
     assert html =~ "Recorded automation activity."
     assert html =~ "Purpose"
-    assert html =~ "General-purpose automation that watches topics"
+    assert html =~ "General-purpose automation that reviews selected topics"
     assert html =~ "Runs on request"
     assert html =~ "No app actions enabled"
     refute html =~ "Run instructions"
@@ -325,6 +329,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Review passes"
     assert html =~ "Context reviewed"
     assert html =~ "Assistant output"
+    assert html =~ "Estimated cost"
     assert html =~ "review_limit"
     assert html =~ "action_limit"
     assert html =~ "Purpose"
@@ -353,6 +358,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     refute html =~ "OTP Agent Runtime"
     refute html =~ "Current settings"
     refute html =~ "Assistant work"
+    refute html =~ "Estimated spend"
     refute html =~ "reasoning_budget"
     refute html =~ "action_budget"
   end
