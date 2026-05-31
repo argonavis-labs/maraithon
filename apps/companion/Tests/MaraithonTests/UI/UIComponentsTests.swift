@@ -310,6 +310,12 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(line.contains("Not synced"))
     }
 
+    func testDiagnosticsSummaryCopyUsesContextLanguage() {
+        XCTAssertEqual(DiagnosticsSummaryCopy.contextAddedTodayTitle, "Context added today")
+        XCTAssertFalse(DiagnosticsSummaryCopy.contextAddedTodayTitle.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(DiagnosticsSummaryCopy.contextAddedTodayTitle.localizedCaseInsensitiveContains("event"))
+    }
+
     func testDataSettingsCopyUsesExplicitUserActions() {
         let publicCopy = [
             DataSettingsCopy.intro,
@@ -683,7 +689,7 @@ final class UIComponentsTests: XCTestCase {
     }
 
     @MainActor
-    func testDiagnosticsSummaryUsesDailyAcceptedTotals() {
+    func testDiagnosticsSummaryUsesDailyContextTotals() {
         let messages = SourceStatusPublisher(state: .connected)
         let notes = SourceStatusPublisher(state: .connected)
         let now = Date()
@@ -693,11 +699,11 @@ final class UIComponentsTests: XCTestCase {
         notes.recordSync(at: now, accepted: 7, duplicate: 0)
 
         XCTAssertEqual(
-            DiagnosticsSummaryMetrics.eventsSyncedToday([messages, notes, nil]),
+            DiagnosticsSummaryMetrics.contextAddedToday([messages, notes, nil]),
             24
         )
         XCTAssertNotEqual(
-            DiagnosticsSummaryMetrics.eventsSyncedToday([messages, notes]),
+            DiagnosticsSummaryMetrics.contextAddedToday([messages, notes]),
             messages.lastBatchAccepted + notes.lastBatchAccepted
         )
     }

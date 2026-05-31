@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Bottom-of-sidebar diagnostics pane. Pairs a single summary card
-/// (realtime channel state, total events synced today, total queued for
-/// retry, last check per source) with the existing `LogsView` below it.
+/// (realtime channel state, context added today, total queued for retry,
+/// last check per source) with the existing `LogsView` below it.
 ///
 /// Invariants:
 ///   - Reuses `LogsView` verbatim — this view never duplicates log
@@ -49,8 +49,8 @@ struct DiagnosticsView: View {
                     caption: realtimeStatus.caption
                 )
                 StatCard(
-                    title: "Events synced today",
-                    value: String(eventsToday),
+                    title: DiagnosticsSummaryCopy.contextAddedTodayTitle,
+                    value: String(contextAddedToday),
                     caption: "Across \(activeSourceCount) sources"
                 )
                 StatCard(
@@ -96,8 +96,8 @@ struct DiagnosticsView: View {
 
     private var activeSourceCount: Int { visibleSources.count }
 
-    private var eventsToday: Int {
-        DiagnosticsSummaryMetrics.eventsSyncedToday(
+    private var contextAddedToday: Int {
+        DiagnosticsSummaryMetrics.contextAddedToday(
             visibleSources.map { env.sources.statusPublisher(for: $0.id) }
         )
     }
@@ -150,9 +150,13 @@ struct DiagnosticsView: View {
     }
 }
 
+enum DiagnosticsSummaryCopy {
+    static let contextAddedTodayTitle = "Context added today"
+}
+
 enum DiagnosticsSummaryMetrics {
     @MainActor
-    static func eventsSyncedToday(_ publishers: [SourceStatusPublisher?]) -> Int {
+    static func contextAddedToday(_ publishers: [SourceStatusPublisher?]) -> Int {
         publishers.reduce(0) { total, publisher in
             total + (publisher?.acceptedToday ?? 0)
         }
