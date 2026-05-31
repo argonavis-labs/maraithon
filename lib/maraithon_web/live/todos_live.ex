@@ -391,7 +391,7 @@ defmodule MaraithonWeb.TodosLive do
                         <%= todo.summary %>
                       </div>
                       <div :if={present?(todo.next_action)} class="mt-1 line-clamp-2 text-sm/6 text-zinc-700">
-                        <span class="font-medium text-zinc-950">Next:</span> <%= todo.next_action %>
+                        <span class="font-medium text-zinc-950"><%= todo_next_action_label(todo) %>:</span> <%= todo.next_action %>
                       </div>
                     </.table_cell>
                     <.table_cell class="whitespace-normal align-top">
@@ -580,7 +580,7 @@ defmodule MaraithonWeb.TodosLive do
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
       |> assign(:decision_signal?, decision_signal?)
-      |> assign(:decision_context_fields, todo_decision_context_fields(assigns.todo))
+      |> assign(:decision_review_fields, todo_decision_review_fields(assigns.todo))
       |> assign(
         :next_action_form,
         to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
@@ -608,6 +608,16 @@ defmodule MaraithonWeb.TodosLive do
         >
           Close
         </.link>
+      </div>
+
+      <div :if={@decision_review_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
+        <p class="text-xs/5 font-medium text-zinc-500">Decision ready for review</p>
+        <dl class="mt-2 divide-y divide-zinc-950/5">
+          <div :for={field <- @decision_review_fields} class="grid grid-cols-1 gap-1 py-2">
+            <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
+            <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
+          </div>
+        </dl>
       </div>
 
       <.form
@@ -642,16 +652,6 @@ defmodule MaraithonWeb.TodosLive do
           <dd class="break-words text-sm/6 text-zinc-700"><%= field.value %></dd>
         </div>
       </dl>
-
-      <div :if={@decision_context_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-        <p class="text-xs/5 font-medium text-zinc-500">Decision context</p>
-        <dl class="mt-2 space-y-2">
-          <div :for={field <- @decision_context_fields} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
-            <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
-            <dd class="break-words text-xs/5 text-zinc-700"><%= field.value %></dd>
-          </div>
-        </dl>
-      </div>
 
       <div :if={@can_edit_next_action} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
         <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
@@ -940,20 +940,22 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.reject(fn field -> blank?(field.value) end)
   end
 
-  defp todo_decision_context_fields(%Todo{} = todo) do
+  defp todo_decision_review_fields(%Todo{} = todo) do
     if todo_decision_signal?(todo) do
       card = ActionCards.for_todo(todo, include_disconnected: false)
+      context = Map.get(card, "context_pack") || %{}
 
       core_fields = [
-        %{label: "Decision", value: Map.get(card, "decision_prompt")},
-        %{label: "Why now", value: Map.get(card, "why_now")},
-        %{label: "Evidence", value: ActionCards.evidence_excerpt(card)},
+        %{label: "Decision needed", value: Map.get(card, "decision_prompt")},
+        %{label: "Suggested move", value: Map.get(card, "next_best_action")},
+        %{label: "Why this matters now", value: Map.get(card, "why_now")},
+        %{label: "Source evidence", value: ActionCards.evidence_excerpt(card)},
         %{
-          label: "Context used",
+          label: "Context checked",
           value: ActionCards.source_health_note(card) || todo_source_check_value(todo)
         },
-        %{label: "Prepared", value: ActionCards.prepared_action_hint(card)},
-        %{label: "Next", value: Map.get(card, "next_best_action")}
+        %{label: "Prepared action", value: ActionCards.prepared_action_hint(card)},
+        %{label: "Who and thread", value: Map.get(context, "summary")}
       ]
 
       context_fields =
@@ -1142,6 +1144,10 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_decision_signal?(%Todo{} = todo), do: DecisionSignals.needs_decision?(todo)
   defp todo_decision_signal?(_todo), do: false
+
+  defp todo_next_action_label(%Todo{} = todo) do
+    if todo_decision_signal?(todo), do: "Suggested", else: "Next"
+  end
 
   defp todo_source_label("gmail"), do: "Gmail"
   defp todo_source_label("google_calendar"), do: "Google Calendar"
