@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// State machine for the first-run onboarding sequence:
-/// **Connect → What we sync → Full Disk Access → Backfill setup → Done.**
+/// **Connect → Context → Full Disk Access → Backfill setup → Done.**
 ///
 /// The flow is owned by `AppEnvironment` and rendered by `OnboardingView`.
 /// It persists a single boolean — "onboarding complete" — to

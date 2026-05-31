@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// Second onboarding step. A plain-text "what we sync, plainly" screen
+/// Second onboarding step. A plain-text assistant-context scope screen
 /// sandwiched between Connect and Full Disk Access so the user reads the
 /// scope of data collection before being asked to grant the system
 /// permission.
 ///
 /// Invariants:
-///   - No decorative chrome. Two `Group`-style lists ("We sync" / "We
-///     don't"), one row per item, each row a leading SF Symbol + label.
+///   - No decorative chrome. Two `Group`-style lists, one row per item,
+///     each row a leading SF Symbol + label.
 ///   - Primary CTA continues the flow. The secondary "Skip" button advances
 ///     without recording an opt-out — the user can always revisit the
 ///     story in Settings → Privacy later.
@@ -52,11 +52,11 @@ struct WhatWeSyncView: View {
                 .foregroundStyle(.tint)
                 .accessibilityHidden(true)
 
-            Text("What we sync, plainly")
+            Text(ContextScopeCopy.title)
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
 
-            Text("Maraithon mirrors local context to your assistant so it can answer questions about your life. Here's exactly what crosses the line — and what doesn't.")
+            Text(ContextScopeCopy.body)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -67,16 +67,16 @@ struct WhatWeSyncView: View {
     private var bulletColumns: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.large) {
             BulletSection(
-                title: "We sync",
+                title: ContextScopeCopy.includedTitle,
                 tone: .good,
                 rowSymbol: "checkmark",
-                items: Self.synced
+                items: ContextScopeCopy.includedItems
             )
             BulletSection(
-                title: "We don't sync",
+                title: ContextScopeCopy.excludedTitle,
                 tone: .muted,
                 rowSymbol: "minus",
-                items: Self.notSynced
+                items: ContextScopeCopy.excludedItems
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -107,25 +107,30 @@ struct WhatWeSyncView: View {
             .accessibilityLabel("Skip past data summary")
         }
     }
+}
 
-    /// Plain-language list of what gets synced. Order matches the
-    /// product copy in the spec.
-    static let synced: [String] = [
-        "iMessage",
+enum ContextScopeCopy {
+    static let stepLabel = "Context"
+    static let progressAccessibilityValue = "Step 2 of 4 — Assistant context"
+    static let title = "Context your assistant can use"
+    static let body = "Maraithon adds selected local context from this Mac so your assistant can answer questions and catch follow-ups. Here is what can be included, and what stays out."
+    static let includedTitle = "Can be included"
+    static let excludedTitle = "Never included"
+
+    static let includedItems: [String] = [
+        "Messages",
         "Notes",
-        "Voice Memos + transcripts",
+        "Voice Memos and transcripts",
         "Calendar",
         "Reminders",
-        "Documents in ~/Documents",
+        "Files in Documents",
         "Browser history"
     ]
 
-    /// Plain-language list of what is excluded. Each entry is a phrase,
-    /// not a sentence, so the layout reads as a checklist.
-    static let notSynced: [String] = [
+    static let excludedItems: [String] = [
         "Encrypted disks",
-        ".ssh keys and identities",
-        ".env files",
+        "SSH keys and developer identities",
+        "Developer secret files (.env)",
         "Banking and brokerage sites",
         "Medical portals",
         "Search engine queries"

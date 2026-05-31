@@ -90,7 +90,7 @@ struct OnboardingView: View {
     private func stepLabel(_ step: OnboardingFlow.Step) -> String {
         switch step {
         case .connect: return "Connect"
-        case .whatWeSync: return "What we sync"
+        case .whatWeSync: return ContextScopeCopy.stepLabel
         case .fullDiskAccess: return "Full Disk Access"
         case .backfill: return "Backfill"
         case .done: return ""
@@ -100,7 +100,7 @@ struct OnboardingView: View {
     private var progressAccessibilityValue: String {
         switch flow.current {
         case .connect: return "Step 1 of 4 — Connect"
-        case .whatWeSync: return "Step 2 of 4 — What we sync"
+        case .whatWeSync: return ContextScopeCopy.progressAccessibilityValue
         case .fullDiskAccess: return "Step 3 of 4 — Full Disk Access"
         case .backfill: return "Step 4 of 4 — Backfill"
         case .done: return "Complete"
