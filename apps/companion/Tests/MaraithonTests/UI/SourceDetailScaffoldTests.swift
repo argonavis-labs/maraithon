@@ -106,14 +106,14 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check added 4 messages, bringing 12 messages into assistant context. Your assistant will keep this context current. Checked just now."
+            "Last check made 4 messages available, for 12 messages your assistant can use. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("last check added"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("assistant context"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("last check made"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("assistant can use"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything is current"))
     }
 
@@ -131,7 +131,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Your assistant has 12 messages available. Check now to look for anything new."
+            "Your assistant can use 12 messages. Check now to look for anything new."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("has synced"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Maraithon can use"))
@@ -153,7 +153,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check confirmed iMessage is current. Your assistant will keep this context current. Checked just now."
+            "Last check confirmed iMessage is current. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
     }
@@ -174,7 +174,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check confirmed iMessage is current. Your assistant will keep this context current. Checked just now."
+            "Last check confirmed iMessage is current. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
@@ -196,9 +196,9 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check did not add messages to assistant context. Maraithon will keep checking. Checked just now."
+            "Last check did not find iMessage context to add. Maraithon will keep checking. Checked just now."
         )
-        XCTAssertFalse(copy.localizedCaseInsensitiveContains("found"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("yet"))
@@ -220,7 +220,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check added 3 notes, bringing 8 notes into assistant context. 1 note needs attention. Checked just now."
+            "Last check made 3 notes available, for 8 notes your assistant can use. 1 note needs another check. Checked just now."
         )
     }
 
@@ -240,16 +240,16 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check found 1 message that needs attention. Maraithon will retry on the next check. Checked just now."
+            "Last check found 1 message that needs another check. Maraithon will retry on the next check. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages found"))
     }
 
     func testSourceDetailMetricCopyAvoidsSyncEngineVocabulary() {
-        XCTAssertEqual(SourceDetailCopy.capabilitiesSectionTitle, "Assistant coverage")
-        XCTAssertEqual(SourceDetailCopy.privacySectionTitle, "Privacy guardrails")
-        XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Activity")
-        XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Recent checks")
+        XCTAssertEqual(SourceDetailCopy.capabilitiesSectionTitle, "What your assistant can use")
+        XCTAssertEqual(SourceDetailCopy.privacySectionTitle, "Control and privacy")
+        XCTAssertEqual(SourceDetailCopy.activitySectionTitle, "Available context")
+        XCTAssertEqual(SourceDetailCopy.recentChecksSectionTitle, "Check history")
         XCTAssertEqual(SourceDetailCopy.lastCheckTitle, "Last check")
         XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "new this check")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already known")
@@ -304,7 +304,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
             "Reply prep"
         ])
         XCTAssertTrue(text.localizedCaseInsensitiveContains("source evidence"))
-        XCTAssertTrue(text.localizedCaseInsensitiveContains("approval loop"))
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("keeps approval with you"))
         XCTAssertFalse(text.localizedCaseInsensitiveContains("this session"))
     }
 

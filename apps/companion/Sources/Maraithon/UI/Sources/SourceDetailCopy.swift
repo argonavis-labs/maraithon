@@ -5,10 +5,10 @@ import Foundation
 /// Keeps user-facing source metrics in outcome language instead of
 /// sync-engine vocabulary like "accepted" or "duplicates."
 enum SourceDetailCopy {
-    static let capabilitiesSectionTitle = "Assistant coverage"
-    static let privacySectionTitle = "Privacy guardrails"
-    static let activitySectionTitle = "Activity"
-    static let recentChecksSectionTitle = "Recent checks"
+    static let capabilitiesSectionTitle = "What your assistant can use"
+    static let privacySectionTitle = "Control and privacy"
+    static let activitySectionTitle = "Available context"
+    static let recentChecksSectionTitle = "Check history"
     static let recentChecksEmptyTitle = "Waiting for first check"
     static let checkNowButtonTitle = "Check now"
     static let resumeUpdatesButtonTitle = "Resume updates"
@@ -90,7 +90,7 @@ enum SourceDetailCopy {
     ) -> String {
         guard let lastSyncAt else {
             if totalSynced > 0 {
-                return "Your assistant has \(countedItem(totalSynced, singular: singular, plural: plural)) available. Check now to look for anything new."
+                return "Your assistant can use \(countedItem(totalSynced, singular: singular, plural: plural)). Check now to look for anything new."
             }
             return "Check now to make \(displayName) available to your assistant."
         }
@@ -101,30 +101,29 @@ enum SourceDetailCopy {
             let added = countedItem(lastCheckSynced, singular: singular, plural: plural)
             if totalSynced > lastCheckSynced {
                 let total = countedItem(totalSynced, singular: singular, plural: plural)
-                sentences.append("Last check added \(added), bringing \(total) into assistant context.")
+                sentences.append("Last check made \(added) available, for \(total) your assistant can use.")
             } else {
-                sentences.append("Last check added \(added) to assistant context.")
+                sentences.append("Last check made \(added) available to your assistant.")
             }
         } else if hasUnfinishedItems {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
-            sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) attention.")
+            sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) another check.")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
             sentences.append("Last check confirmed \(displayName) is current.")
         } else {
-            sentences.append("Last check did not add \(plural) to assistant context.")
+            sentences.append("Last check did not find \(displayName) context to add.")
         }
 
         if hasUnfinishedItems {
             if lastCheckSynced > 0 {
-                let verb = lastCheckNotSynced == 1 ? "needs" : "need"
-                sentences.append("\(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) \(verb) attention.")
+                sentences.append(failedItemsLine(lastCheckNotSynced, singular: singular, plural: plural))
             } else {
                 sentences.append("Maraithon will retry on the next check.")
             }
         } else if totalSynced == 0 && lastCheckSynced == 0 && lastCheckAlreadySynced == 0 {
             sentences.append("Maraithon will keep checking.")
         } else {
-            sentences.append("Your assistant will keep this context current.")
+            sentences.append("Maraithon will keep checking for new context.")
         }
 
         sentences.append("Checked \(relativeSyncTime(lastSyncAt, relativeTo: now)).")

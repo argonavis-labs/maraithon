@@ -9,7 +9,7 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "people_threads",
                     title: "People and threads",
-                    description: "Explains who a message is about and which conversation it came from.",
+                    description: "Names the people, thread, and source behind a message when it matters.",
                     systemImage: "person.2"
                 ),
                 SourceCapability(
@@ -21,7 +21,7 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "reply_prep",
                     title: "Reply prep",
-                    description: "Drafts responses from the conversation while keeping you in the approval loop.",
+                    description: "Prepares replies from the conversation and keeps approval with you.",
                     systemImage: "square.and.pencil"
                 )
             ]
@@ -31,7 +31,7 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "meeting_prep",
                     title: "Meeting prep",
-                    description: "Adds upcoming meetings, attendees, and timing to Telegram prep.",
+                    description: "Uses upcoming meetings, attendees, and timing when briefing your day.",
                     systemImage: "calendar.badge.clock"
                 ),
                 SourceCapability(
@@ -75,13 +75,13 @@ extension SourceDetailCopy {
                 SourceCapability(
                     id: "personal_todos",
                     title: "Personal to-dos",
-                    description: "Brings Mac reminders into the same priority view as Maraithon open work.",
+                    description: "Brings Mac reminders into the same priority view as open work.",
                     systemImage: "checklist"
                 ),
                 SourceCapability(
                     id: "due_dates",
                     title: "Due-date pressure",
-                    description: "Uses reminder dates to spot commitments hiding outside Telegram.",
+                    description: "Uses reminder dates to surface commitments before they become late.",
                     systemImage: "calendar.badge.exclamationmark"
                 ),
                 SourceCapability(
