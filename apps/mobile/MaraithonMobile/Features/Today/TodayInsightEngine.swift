@@ -306,7 +306,7 @@ enum TodayInsightEngine {
 
     private static func overdueBriefSubtitle(count: Int, lead: TodoItem?) -> String {
         guard let title = briefTitle(for: lead) else {
-            return "\(count) past-due \(plural("work item", count)) \(isVerb(count)) still open. Handle, move, or dismiss \(objectPronoun(count))."
+            return "\(count) past-due \(plural("work item", count)) \(needsVerb(count)) a decision. Handle, move, or dismiss \(objectPronoun(count))."
         }
 
         if count == 1 {
@@ -314,10 +314,10 @@ enum TodayInsightEngine {
         }
 
         if let move = briefMove(for: lead) {
-            return "\(count) past-due work items are still open. Start with \(title): \(move)"
+            return "\(count) past-due work items need a decision. Start with \(title): \(move)"
         }
 
-        return "\(count) past-due work items are still open. Start with \(title)."
+        return "\(count) past-due work items need a decision. Start with \(title)."
     }
 
     private static func dueTodayBriefSubtitle(count: Int, lead: TodoItem?) -> String {

@@ -690,10 +690,10 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     open = Enum.filter(todos, &(&1.status in @open_statuses))
     reviewed_count = length(reviewed_entries(brief))
 
-    still_open =
+    remaining =
       case open do
         [] ->
-          "Still open: 0"
+          "Remaining: 0"
 
         todos ->
           lines =
@@ -704,12 +704,12 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
           extra =
             if length(todos) > 6 do
-              "\n• #{length(todos) - 6} more still open"
+              "\n• #{length(todos) - 6} more remaining"
             else
               ""
             end
 
-          "Still open: #{length(todos)}\n#{lines}#{extra}"
+          "Remaining: #{length(todos)}\n#{lines}#{extra}"
       end
 
     cleared_count = length(done) + length(dismissed)
@@ -718,9 +718,9 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     <b>Open work review complete</b>
     Reviewed: #{reviewed_count}
     Cleared: #{cleared_count} (#{length(done)} done, #{length(dismissed)} dismissed)
-    #{still_open}
+    #{remaining}
 
-    Cleared work is off future briefs. Still-open work stays visible until you act, dismiss, or defer it.
+    Cleared work is off future briefs. Remaining work stays visible until you act, dismiss, or defer it.
     """
     |> String.trim()
   end

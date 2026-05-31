@@ -1150,7 +1150,7 @@ defmodule Maraithon.TelegramAssistantTest do
              "Decision: Decide whether to renew the domain and confirm it is done."
 
     assert List.last(sends).text =~
-             "Why now: You asked Maraithon to track this as open work, and it is still open."
+             "Why now: You asked Maraithon to keep this on your work queue until it is handled."
 
     refute List.last(sends).text =~ "Renew the domain this week"
     refute List.last(sends).text =~ "this telegram item"

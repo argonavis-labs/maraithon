@@ -682,7 +682,7 @@ defmodule Maraithon.BriefsTest do
     summary = sent_messages() |> List.last()
     assert summary.text =~ "Open work review complete"
     assert summary.text =~ "Cleared: 2 (1 done, 1 dismissed)"
-    assert summary.text =~ "Still open: 0"
+    assert summary.text =~ "Remaining: 0"
     assert summary.text =~ "Cleared work is off future briefs"
 
     updated_brief = Repo.get!(Brief, brief.id)
@@ -825,7 +825,7 @@ defmodule Maraithon.BriefsTest do
     refute message.text =~ "owner, ETA"
   end
 
-  test "brief todo review recap keeps next actions on still-open work", %{
+  test "brief todo review recap keeps next actions on remaining work", %{
     user_id: user_id,
     agent: agent
   } do
@@ -886,7 +886,7 @@ defmodule Maraithon.BriefsTest do
 
     summary = sent_messages() |> List.last()
     assert summary.text =~ "Open work review complete"
-    assert summary.text =~ "Still open: 1"
+    assert summary.text =~ "Remaining: 1"
     assert summary.text =~ "Confirm the shipment ETA"
     assert summary.text =~ "Why now: The receiving window closes before tomorrow's dispatch."
     assert summary.text =~ "Next: Reply with the signed shipment timing before noon."

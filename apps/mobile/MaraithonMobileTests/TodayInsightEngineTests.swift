@@ -427,7 +427,7 @@ struct TodayInsightEngineTests {
             calendar: calendar
         )
 
-        #expect(brief.subtitle == "2 past-due work items are still open. Start with Investor reply: Send the revised terms before the board packet closes.")
+        #expect(brief.subtitle == "2 past-due work items need a decision. Start with Investor reply: Send the revised terms before the board packet closes.")
     }
 
     @Test

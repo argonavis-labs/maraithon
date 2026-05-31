@@ -616,11 +616,11 @@ defmodule Maraithon.ActionCards do
 
     cond do
       captured_from in ["telegram_message", "mobile_chat"] ->
-        "You asked Maraithon to track this as open work, and it is still open."
+        "You asked Maraithon to keep this on your work queue until it is handled."
 
       todo.source in ["telegram", "mobile_assistant"] and
           present?(read_string(metadata, "request_text")) ->
-        "You asked Maraithon to track this as open work, and it is still open."
+        "You asked Maraithon to keep this on your work queue until it is handled."
 
       true ->
         nil

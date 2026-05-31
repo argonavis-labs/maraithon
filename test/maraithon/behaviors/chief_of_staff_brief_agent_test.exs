@@ -785,7 +785,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "weekly_review"
-    assert brief.title == "Weekly review: 1 item still open"
+    assert brief.title == "Weekly review: 1 item ready for a decision"
     assert brief.summary == "1 item reviewed this week, and 1 remains open."
     assert brief.body =~ "Week in review:"
     assert brief.body =~ "- 1 Gmail item"

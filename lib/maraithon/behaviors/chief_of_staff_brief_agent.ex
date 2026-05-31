@@ -875,7 +875,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp weekly_title(0), do: "Weekly review: no open work ready"
 
   defp weekly_title(open_count),
-    do: "Weekly review: #{count_phrase(open_count, "item")} still open"
+    do: "Weekly review: #{count_phrase(open_count, "item")} ready for a decision"
 
   defp lead_summary([], _time_context, _reference_at), do: nil
 

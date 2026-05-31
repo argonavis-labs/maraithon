@@ -159,7 +159,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "Decision: Decide whether to renew the domain and confirm it is done."
 
     assert payload.text =~
-             "Why now: You asked Maraithon to track this as open work, and it is still open."
+             "Why now: You asked Maraithon to keep this on your work queue until it is handled."
 
     refute payload.text =~ "this telegram item"
     refute payload.text =~ "This is still open and needs a clear next decision"
