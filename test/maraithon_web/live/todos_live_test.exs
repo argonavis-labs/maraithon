@@ -386,6 +386,46 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute detail_html =~ "Handle this now, snooze it, or dismiss it."
   end
 
+  test "detail panel discloses missing Mac companion context for personal logistics", %{
+    conn: conn
+  } do
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Confirm Tuesday pickup with school",
+                 "summary" => "The school asked whether Tuesday pickup should move to 4 PM.",
+                 "next_action" => "Confirm the Tuesday pickup plan with the school.",
+                 "priority" => 92,
+                 "dedupe_key" => "todos-live:source-gap:school-pickup",
+                 "metadata" => %{
+                   "life_domain" => "family",
+                   "source_evidence" =>
+                     "The school asked whether Tuesday pickup should move to 4 PM.",
+                   "record" => %{
+                     "person" => "Oak Street School",
+                     "relationship_context" => "school logistics"
+                   }
+                 }
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/todos?todo_id=#{todo.id}")
+
+    detail_html =
+      view
+      |> element("#todo-detail")
+      |> render()
+
+    assert detail_html =~ "Sources checked"
+    assert detail_html =~ "Used Gmail."
+    assert detail_html =~ "Mac companion context was not available"
+    assert detail_html =~ "Open the Mac companion to refresh it."
+    refute detail_html =~ "source_health"
+    refute detail_html =~ "desktop: not connected"
+  end
+
   test "source filter includes local companion sources", %{conn: conn} do
     assert {:ok, [imessage_todo, _notes_todo]} =
              Todos.upsert_many(@user_email, [

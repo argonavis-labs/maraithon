@@ -942,7 +942,7 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_decision_review_fields(%Todo{} = todo) do
     if todo_decision_signal?(todo) do
-      card = ActionCards.for_todo(todo, include_disconnected: false)
+      card = ActionCards.for_todo(todo, include_disconnected: true)
       context = Map.get(card, "context_pack") || %{}
 
       core_fields = [
