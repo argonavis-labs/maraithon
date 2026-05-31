@@ -809,8 +809,14 @@ defmodule Maraithon.BriefsTest do
         dedupe_key: "briefs-legacy-copy",
         metadata: %{
           "subject" => "Corrected receipt",
-          "why_now" => "The user needs this before noon.",
-          "source_evidence" => "The user asked for the corrected receipt.",
+          "why_now" => """
+          source_health: %{gmail: connected}
+          The user needs this before noon.
+          """,
+          "source_evidence" => """
+          model_name: gpt-test
+          The user asked for the corrected receipt.
+          """,
           "record" => %{"person" => "Finance", "commitment" => "Corrected receipt"}
         }
       })
@@ -841,6 +847,8 @@ defmodule Maraithon.BriefsTest do
     refute message.text =~ "User committed"
     refute message.text =~ "the user"
     refute message.text =~ "owner, ETA"
+    refute message.text =~ "source_health"
+    refute message.text =~ "model_name"
   end
 
   test "brief todo review recap keeps next actions on remaining work", %{

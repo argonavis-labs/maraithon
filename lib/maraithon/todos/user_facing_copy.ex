@@ -982,7 +982,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
        ) or
          String.match?(
            text,
-           ~r/^(?:model|model[_ ]name|model[_ ]provider|model[_ ]response|model[_ ]rationale|model[_ ]reasoning|model[_ ]score|reasoning|score|threshold|quality[_ ]verification)\s*[:=]/i
+           ~r/^(?:model|model[_ ]name|model[_ ]provider|model[_ ]response|model[_ ]rationale|model[_ ]reasoning|model[_ ]score|reasoning|score|threshold|quality[_ ]verification|source[_ ](?:access|freshness|health|status))\s*[:=]/i
          ) or
          (String.match?(
             text,
@@ -990,7 +990,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
           ) and
             String.match?(
               text,
-              ~r/"(?:confidence|score|model[_ ]|reasoning|threshold|quality[_ ]verification)"/i
+              ~r/"(?:confidence|score|model[_ ]|reasoning|threshold|quality[_ ]verification|source[_ ]health)"/i
             )))
   end
 

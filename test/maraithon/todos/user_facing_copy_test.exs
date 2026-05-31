@@ -291,8 +291,14 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert UserFacingCopy.open_work_language("""
            model_name: gpt-test
            confidence_score: 0.94
+           source_health: {"gmail":"connected"}
            Here is the open todo list.
            """) == "Here is the open work."
+
+    assert UserFacingCopy.polish_text("""
+           source_access: %{gmail: ready}
+           Send Sam the board packet status and next review date.
+           """) == "Send Sam the board packet status and next review date."
 
     assert UserFacingCopy.polish_text("Track user response rates during onboarding.") ==
              "Track user response rates during onboarding."
