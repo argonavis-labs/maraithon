@@ -13,14 +13,14 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
 
         XCTAssertTrue(copy.contains("~/Applications/Maraithon.app"))
         XCTAssertTrue(copy.localizedCaseInsensitiveContains("grant Full Disk Access to that app once"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("reloads keep using the same permission"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("reloads use the same permission"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("may reset"))
     }
 
     func testRepairActionCanRevealStableApp() {
         XCTAssertEqual(
             FullDiskAccessInstallHint.revealStableAppButtonTitle,
-            "Show Maraithon app"
+            "Show stable app"
         )
     }
 
@@ -34,14 +34,14 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
     func testDetailTextUsesLiveBlockedSources() {
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["iMessage", "Notes", "Voice Memos"]),
-            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable Maraithon once; the rest of the app can keep syncing."
+            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
         )
     }
 
     func testDetailTextFallsBackWhenOnlyOnboardingSkipIsKnown() {
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: []),
-            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable Maraithon once; the rest of the app can keep syncing."
+            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
         )
     }
 }

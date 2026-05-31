@@ -46,10 +46,18 @@ struct SourceUnblockView: View {
                     .accessibilityElement(children: .combine)
                 } else if hint.requiresStableFullDiskAccessApp,
                           let reminder = FullDiskAccessInstallHint.stableGrantReminder {
-                    Text(reminder)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Label {
+                        Text(reminder)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(StatusTone.attention.color)
+                    }
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 480, alignment: .leading)
+                    .accessibilityElement(children: .combine)
                 }
             }
             .multilineTextAlignment(.center)

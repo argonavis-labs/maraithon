@@ -177,10 +177,10 @@ struct TemporaryFullDiskAccessAppBanner: View {
 
     static func detailText(stableAppInstalled: Bool) -> String {
         if stableAppInstalled {
-            return "Switch to \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads keep using the same permission."
+            return "Switch to \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads use the same permission."
         }
 
-        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads keep using the same permission."
+        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads use the same permission."
     }
 
     private func switchToStableApp(_ appURL: URL) {
@@ -282,7 +282,7 @@ struct FullDiskAccessRequiredBanner: View {
 
     static func detailText(blockedSourceNames: [String]) -> String {
         let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
-        return "\(subject) need one macOS Full Disk Access grant. Enable Maraithon once; the rest of the app can keep syncing."
+        return "\(subject) need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
     }
 
     private static func readableList(_ values: [String], fallback: String) -> String {
