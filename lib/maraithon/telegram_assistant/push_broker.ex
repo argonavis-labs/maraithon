@@ -91,7 +91,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp deliver_brief_now(%Brief{} = brief) do
-    todos = Briefs.todo_digest_todos(brief)
+    todos = todo_digest_delivery_todos(brief)
 
     if todos != [] do
       deliver_todo_digest_brief(brief, todos)
@@ -407,7 +407,7 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
   end
 
   defp enqueue_brief_candidate(%Brief{} = brief) do
-    todos = Briefs.todo_digest_todos(brief)
+    todos = todo_digest_delivery_todos(brief)
 
     attrs =
       if todos == [],
@@ -420,6 +420,12 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp todo_digest_delivery_todos(%Brief{cadence: cadence} = brief)
+       when cadence in ["check_in", "end_of_day"],
+       do: Briefs.todo_digest_todos(brief)
+
+  defp todo_digest_delivery_todos(%Brief{}), do: []
 
   defp standard_brief_candidate(%Brief{} = brief) do
     payload = Briefs.telegram_payload(brief)

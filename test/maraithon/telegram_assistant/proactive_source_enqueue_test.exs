@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TestSupport.CapturingTelegram
+  alias Maraithon.Todos
 
   setup do
     start_supervised!(%{
@@ -139,6 +140,110 @@ defmodule Maraithon.TelegramAssistant.ProactiveSourceEnqueueTest do
     assert candidate.status == "pending"
     assert candidate.dedupe_key == "brief:#{brief.id}"
     assert candidate.body =~ "Morning brief"
+  end
+
+  test "brief delivery preserves morning narrative when open work is linked", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "attention_mode" => "act_now",
+          "title" => "Reply to Jordan about investor metrics",
+          "summary" => "Jordan is waiting on the current metrics before Monday.",
+          "next_action" => "Send Jordan the current metrics before Monday.",
+          "priority" => 96,
+          "source_item_id" => "planner-morning-linked:jordan",
+          "source_occurred_at" => "2026-04-02T14:00:00Z",
+          "dedupe_key" => "planner-morning-linked:jordan"
+        }
+      ])
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning brief: investor day",
+               "summary" => "Jordan's investor metrics are the first decision today.",
+               "body" =>
+                 "## Today's Schedule\n- **11:00 AM** - Investor prep; carry Jordan's metrics into the meeting.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:planner:morning-linked-open-work",
+               "metadata" => %{"linked_todo_ids" => [todo.id]}
+             })
+
+    assert :ok = Briefs.send_brief(brief)
+    assert telegram_messages() == []
+
+    candidate =
+      Repo.get_by!(ProactiveCandidate,
+        user_id: user_id,
+        source: "brief",
+        source_id: brief.id
+      )
+
+    assert candidate.body =~ "Morning brief"
+    assert candidate.body =~ "Today's Schedule"
+    assert candidate.body =~ "Jordan's metrics"
+    refute candidate.body =~ "Best next move:"
+    refute candidate.structured_data["message_class"] == "todo_digest"
+
+    buttons =
+      candidate.telegram_opts
+      |> get_in(["reply_markup", "inline_keyboard"])
+      |> List.flatten()
+
+    assert Enum.any?(buttons, &(&1["text"] == "Review open work"))
+    assert Enum.any?(buttons, &(&1["text"] == "Show list"))
+  end
+
+  test "check-in delivery can still use a concise open-work digest", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "attention_mode" => "act_now",
+          "title" => "Reply to finance about the receipt",
+          "summary" => "Finance needs the corrected receipt today.",
+          "next_action" => "Send finance the corrected receipt before the cutoff.",
+          "priority" => 94,
+          "source_item_id" => "planner-check-in:finance",
+          "source_occurred_at" => "2026-04-02T14:00:00Z",
+          "dedupe_key" => "planner-check-in:finance"
+        }
+      ])
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "check_in",
+               "title" => "Check-in: receipt decision",
+               "summary" => "One open work item is ready for a decision.",
+               "body" => "Superseded by open-work digest.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:planner:check-in-linked-open-work",
+               "metadata" => %{"linked_todo_ids" => [todo.id]}
+             })
+
+    assert :ok = Briefs.send_brief(brief)
+
+    candidate =
+      Repo.get_by!(ProactiveCandidate,
+        user_id: user_id,
+        source: "brief",
+        source_id: brief.id
+      )
+
+    assert candidate.body =~ "Best next move:"
+    assert candidate.body =~ "Send finance the corrected receipt"
+    refute candidate.body =~ "Superseded by open-work digest"
+    assert candidate.structured_data["message_class"] == "todo_digest"
+    assert candidate.structured_data["todo_ids"] == [todo.id]
   end
 
   test "proactive check-in send decisions enqueue instead of sending", %{user_id: user_id} do
