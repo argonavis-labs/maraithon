@@ -49,6 +49,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   def polish_text(value) when is_binary(value) do
     value
+    |> strip_model_internal_copy()
     |> strip_internal_label_lines()
     |> replace_internal_source_labels()
     |> replace_generic_user_action_language()
@@ -109,7 +110,12 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   def polish_text(value), do: value
 
-  def open_work_language(value) when is_binary(value), do: replace_todo_language(value)
+  def open_work_language(value) when is_binary(value) do
+    value
+    |> strip_model_internal_copy()
+    |> replace_todo_language()
+  end
+
   def open_work_language(value), do: value
 
   defp replace_generic_user_action_language(value) do
@@ -823,6 +829,50 @@ defmodule Maraithon.Todos.UserFacingCopy do
       line,
       ~r/^\s*(from|source|priority|status|open|title|kind|ref|reference|direction|origin|cadence)\s*:/i
     )
+  end
+
+  defp strip_model_internal_copy(text) when is_binary(text) do
+    text
+    |> String.split(~r/\R/u)
+    |> Enum.map(&strip_model_internal_fragments/1)
+    |> Enum.reject(&model_internal_line?/1)
+    |> Enum.join("\n")
+    |> String.trim()
+  end
+
+  defp strip_model_internal_fragments(line) when is_binary(line) do
+    line
+    |> String.replace(~r/^\s*\d{1,3}%\s+confidence\b[^.!?\n]*(?:[.!?]\s*|$)/iu, "")
+    |> String.replace(~r/^\s*confidence\s+(?:this|that|was|is)\b[^.!?\n]*(?:[.!?]\s*|$)/iu, "")
+    |> String.replace(
+      ~r/^\s*model\s+(?:classified|confidence|ranked|reasoning|saw|score)\b[^.!?\n]*(?:[.!?]\s*|$)/iu,
+      ""
+    )
+    |> String.replace(~r/^\s*score\s+(?:says|was|is)\b[^.!?\n]*(?:[.!?]\s*|$)/iu, "")
+    |> String.replace(~r/^\s*reasoning\s*:\s*[^.!?\n]*(?:[.!?]\s*|$)/iu, "")
+    |> String.trim()
+  end
+
+  defp model_internal_line?(line) when is_binary(line) do
+    text = String.trim(line)
+
+    text != "" and
+      (String.match?(
+         text,
+         ~r/^(?:confidence|quality|priority|urgency|relevance|interrupt|telegram_fit|affinity|product)_?score\s*[:=]/i
+       ) or
+         String.match?(
+           text,
+           ~r/^(?:model|model[_ ]name|model[_ ]provider|model[_ ]response|model[_ ]rationale|model[_ ]reasoning|model[_ ]score|reasoning|score|threshold|quality[_ ]verification)\s*[:=]/i
+         ) or
+         (String.match?(
+            text,
+            ~r/^[{\[]/i
+          ) and
+            String.match?(
+              text,
+              ~r/"(?:confidence|score|model[_ ]|reasoning|threshold|quality[_ ]verification)"/i
+            )))
   end
 
   defp replace_internal_source_labels(text) do

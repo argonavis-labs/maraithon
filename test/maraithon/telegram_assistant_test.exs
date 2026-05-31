@@ -292,6 +292,41 @@ defmodule Maraithon.TelegramAssistantTest do
     assert guard_turn.structured_data["credential_status"] == "configured"
   end
 
+  test "assistant strips model scoring prose from final Telegram replies" do
+    set_assistant(fn _payload ->
+      {:ok,
+       %{
+         "status" => "final",
+         "assistant_message" => """
+         90% confidence this matters.
+         Reasoning: model saw a stale executive reply.
+         Model score says this is urgent.
+         Send Sam the board packet status and next review date.
+         """,
+         "message_class" => "assistant_reply"
+       }}
+    end)
+
+    InsightNotifications.handle_telegram_event(%{
+      type: "message",
+      data: %{
+        chat_id: 12345,
+        message_id: 91014,
+        text: "What do I need to send Sam?"
+      }
+    })
+
+    reply = last_telegram_message(:send)
+
+    assert reply.text == "Send Sam the board packet status and next review date."
+
+    lower_text = String.downcase(reply.text)
+    refute lower_text =~ "confidence"
+    refute lower_text =~ "reasoning"
+    refute lower_text =~ "model"
+    refute lower_text =~ "score"
+  end
+
   test "assistant can learn a durable preference and confirm it with plain text", %{
     user_id: user_id
   } do

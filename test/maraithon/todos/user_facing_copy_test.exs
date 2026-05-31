@@ -215,6 +215,24 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "You want this tracked as an ongoing work item."
   end
 
+  test "strips model confidence prose while keeping the action copy" do
+    assert UserFacingCopy.polish_text("""
+           90% confidence this matters.
+           Reasoning: model saw a stale executive reply.
+           Model score says this is urgent.
+           Send Sam the board packet status and next review date.
+           """) == "Send Sam the board packet status and next review date."
+
+    assert UserFacingCopy.open_work_language("""
+           model_name: gpt-test
+           confidence_score: 0.94
+           Here is the open todo list.
+           """) == "Here is the open work."
+
+    assert UserFacingCopy.polish_text("Track user response rates during onboarding.") ==
+             "Track user response rates during onboarding."
+  end
+
   test "todo upsert applies copy polish before persistence" do
     user_id = "copy-polish-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
