@@ -150,12 +150,17 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "What matters this weekend?"},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "First: Emma Soccer Practice from the personal calendar. Then prep next week meetings.",
+      "assistant_message": "Start with Emma Soccer Practice from the personal calendar: it is the only time-bound weekend commitment, so confirm logistics before stale work. After that, spend one focused block prepping next week's meetings. Dan Bourke's older A-Team artifact follow-up can wait unless you still want it marked important.",
       "tool_sequence": ["calendar_events_around", "list_todos"]
     },
     "expected": {
       "output": {"message_class": "assistant_reply"},
-      "required_tools": ["calendar_events_around"]
+      "required_tools": ["calendar_events_around", "list_todos"],
+      "assistant_message_quality": {
+        "min_length": 260,
+        "required_phrases": ["Emma Soccer Practice", "personal calendar", "only time-bound weekend commitment", "confirm logistics", "next week's meetings", "can wait", "marked important"],
+        "forbidden_phrases": ["First:", "Then prep", "todo list", "everything"]
+      }
     }
   },
   {
