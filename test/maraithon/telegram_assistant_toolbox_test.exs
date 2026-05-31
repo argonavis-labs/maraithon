@@ -256,13 +256,74 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context may be incomplete"
 
     assert result.next_action ==
-             "Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
+             "Open the Mac companion app to refresh local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context."
 
     refute result.summary =~ "No open work appeared"
     refute result.summary =~ "Maraithon did not find"
     refute result.summary =~ "I do not"
     refute result.summary =~ "companion_devices"
     refute result.summary =~ "last_seen_at"
+    refute result.next_action =~ "source_health"
+  end
+
+  test "get_open_work_summary gives direct next step when Mac companion status is unknown" do
+    bypass = Bypass.open()
+
+    Application.put_env(:maraithon, :gmail,
+      api_base_url: "http://localhost:#{bypass.port}/gmail/v1"
+    )
+
+    user_id = "toolbox-unknown-companion-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, %{device: device}} =
+      CompanionDevices.register(user_id, Ecto.UUID.generate(), device_name: "Executive Mac")
+
+    device
+    |> Ecto.Changeset.change(last_seen_at: nil)
+    |> Repo.update!()
+
+    assert {:ok, _token} =
+             OAuth.store_tokens(user_id, "google:empty-unknown-local@example.com", %{
+               access_token: "toolbox-unknown-local-token",
+               refresh_token: "toolbox-unknown-local-refresh",
+               metadata: %{"account_email" => "empty-unknown-local@example.com"}
+             })
+
+    Bypass.expect_once(bypass, "GET", "/gmail/v1/users/me/messages", fn conn ->
+      ["Bearer toolbox-unknown-local-token"] = Plug.Conn.get_req_header(conn, "authorization")
+      assert conn.query_string =~ "maxResults=1"
+      assert conn.query_string =~ "labelIds=INBOX"
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.resp(200, Jason.encode!(%{"messages" => []}))
+    end)
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "get_open_work_summary",
+               %{"limit" => 5},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert get_in(result, [:source_health, :gmail, :status]) == "ok"
+    assert get_in(result, [:source_health, :local_context, :status]) == "unknown"
+
+    assert get_in(result, [:source_health, :local_context, :recommended_next_step]) ==
+             "Open the Mac companion app to confirm local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context is current."
+
+    assert result.summary =~
+             "Maraithon could not confirm whether the Mac companion is current"
+
+    assert result.summary =~
+             "local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context may be incomplete"
+
+    assert result.next_action ==
+             "Open the Mac companion app to confirm local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context is current."
+
+    refute result.summary =~ "freshness"
+    refute result.next_action =~ "freshness"
     refute result.next_action =~ "source_health"
   end
 
@@ -368,7 +429,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~ "The Mac companion has not checked in recently"
 
     assert result.next_action ==
-             "Start here: Confirm pickup plan. Next: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
+             "Start here: Confirm pickup plan. Next: Confirm the Tuesday pickup plan. Open the Mac companion app to refresh local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context."
 
     refute result.next_action =~ "source_health"
     refute result.next_action =~ "last_seen_at"
@@ -570,7 +631,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{provider: "google", status: "stale"}] = result.source_freshness
 
     assert result.message =~
-             "Context verification was incomplete before that action: work@example.com was out of date."
+             "Context verification was incomplete before that action: work@example.com may have been out of date."
 
     refute result.message =~ "I could not"
     refute result.message =~ "Source health issues"

@@ -2531,11 +2531,11 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp source_health_status(value) when is_atom(value), do: Atom.to_string(value)
   defp source_health_status(_value), do: nil
 
-  defp source_health_status_phrase("stale"), do: "was out of date"
-  defp source_health_status_phrase("reauth_required"), do: "needed reconnecting"
+  defp source_health_status_phrase("stale"), do: "may have been out of date"
+  defp source_health_status_phrase("reauth_required"), do: "needed to be reconnected"
   defp source_health_status_phrase("error"), do: "needed attention"
-  defp source_health_status_phrase("unknown"), do: "needed a status check"
-  defp source_health_status_phrase("never_synced"), do: "had not synced yet"
+  defp source_health_status_phrase("unknown"), do: "did not have a recent status check"
+  defp source_health_status_phrase("never_synced"), do: "had not finished an initial check"
   defp source_health_status_phrase(_status), do: "needed attention"
 
   defp source_provider_label("google"), do: "Google"
@@ -3746,17 +3746,17 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp local_context_stat_count(_stats, _stat_key), do: 0
 
   defp local_context_recommended_next_step("stale", _paired_device_count) do
-    "Open the Mac companion app before treating #{@local_context_gap_phrase} as complete."
+    "Open the Mac companion app to refresh #{@local_context_gap_phrase}."
   end
 
   defp local_context_recommended_next_step("unknown", paired_device_count)
        when paired_device_count > 0 do
-    "Open the Mac companion app so Maraithon can verify local context freshness."
+    "Open the Mac companion app to confirm #{@local_context_gap_phrase} is current."
   end
 
   defp local_context_recommended_next_step("not_connected", paired_device_count)
        when paired_device_count > 0 do
-    "Open or re-pair the Mac companion app before relying on local context."
+    "Open or re-pair the Mac companion app to reconnect #{@local_context_gap_phrase}."
   end
 
   defp local_context_recommended_next_step(_status, _paired_device_count), do: nil
@@ -4038,7 +4038,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       local_context_status?(source_health, "unknown") and
           local_context_paired_device_count(source_health) > 0 ->
-        "Mac companion freshness is unknown, so local context may be incomplete."
+        "Maraithon could not confirm whether the Mac companion is current, so #{@local_context_gap_phrase} may be incomplete."
 
       local_context_status?(source_health, "not_connected") and
           local_context_paired_device_count(source_health) > 0 ->
@@ -4062,7 +4062,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp local_context_next_action(source_health) do
     local_context_field(source_health, :recommended_next_step) ||
-      "Open the Mac companion app before relying on this as a complete local-context review."
+      "Open the Mac companion app before relying on this as a complete local context review."
   end
 
   defp local_context_status?(source_health, status),
