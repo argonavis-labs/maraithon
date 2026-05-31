@@ -321,7 +321,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
                "tool" => "automations",
                "label" => "Automations",
                "summary" =>
-                 "2 automations: Morning brief (setup needed); Deep research (in progress)"
+                 "2 automations: Morning brief (not ready); Deep research (in progress)"
              }
            ] = summary["tool_calls"]
 
@@ -329,6 +329,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "needs_refresh"
     refute visible_text =~ "missing_scope"
     refute visible_text =~ "setup_required"
+    refute visible_text =~ "setup needed"
     refute visible_text =~ "in_progress"
   end
 

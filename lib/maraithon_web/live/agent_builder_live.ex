@@ -237,9 +237,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
               <div class="border-b border-zinc-950/10 px-5 py-4">
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 class="text-base font-semibold text-zinc-950">Setup</h2>
+                    <h2 class="text-base font-semibold text-zinc-950">Launch details</h2>
                     <p class="mt-1 text-sm text-zinc-500">
-                      Configure the essentials. Advanced keeps detailed controls available when you need them.
+                      Choose the essentials. Advanced keeps detailed controls available when you need them.
                     </p>
                   </div>
                   <div class="inline-flex rounded-lg border border-zinc-950/10 bg-zinc-50 p-1">
@@ -275,7 +275,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
                 <%= if @builder_mode == "simple" do %>
                   <div class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-                    <p class="font-medium">Focused setup</p>
+                    <p class="font-medium">Focused launch</p>
                     <p class="mt-1 text-sky-900/80">
                       Set the name, scope, and coverage. Detailed controls stay on sensible defaults unless you open Advanced.
                     </p>

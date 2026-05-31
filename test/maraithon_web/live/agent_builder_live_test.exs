@@ -35,8 +35,10 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Maraithon Automation Service"
       assert html =~ "Permission readiness"
       assert html =~ "Chief of Staff"
-      assert html =~ "Focused setup"
+      assert html =~ "Launch details"
+      assert html =~ "Focused launch"
       assert html =~ "email:you@example.com"
+      refute html =~ "Focused setup"
       refute html =~ "Advanced JSON overrides"
       refute html =~ "scan limits"
       refute html =~ "Memory limit"
@@ -260,9 +262,10 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "Focused setup"
+      assert html =~ "Focused launch"
       assert html =~ "Coverage level"
       assert html =~ "Balanced"
+      refute html =~ "Focused setup"
       refute has_element?(view, "label[for=launch_email_scan_limit]")
       refute has_element?(view, "#launch_morning_brief_hour_local")
       refute html =~ "Advanced JSON overrides"

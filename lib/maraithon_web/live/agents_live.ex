@@ -574,7 +574,7 @@ defmodule MaraithonWeb.AgentsLive do
           :if={@marketplace_error}
           class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900"
         >
-          <p class="font-medium">Automation library needs setup attention.</p>
+          <p class="font-medium">Automation library needs attention.</p>
           <p class="mt-1"><%= @marketplace_error %></p>
         </section>
 

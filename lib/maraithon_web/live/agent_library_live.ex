@@ -247,7 +247,7 @@ defmodule MaraithonWeb.AgentLibraryLive do
   defp status_label(:partial), do: "Partial"
   defp status_label(:needs_refresh), do: "Needs refresh"
   defp status_label(:disconnected), do: "Disconnected"
-  defp status_label(:not_configured), do: "Not configured"
+  defp status_label(:not_configured), do: "Not ready"
   defp status_label(_), do: "Unknown"
 
   defp status_color(:connected), do: "emerald"

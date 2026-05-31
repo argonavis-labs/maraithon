@@ -16,6 +16,8 @@ defmodule MaraithonWeb.AgentLibraryLiveTest do
     assert html =~ "Built-in template"
     assert html =~ "Install it with recommended defaults."
     assert html =~ "fine-tune scope, cadence, and delivery"
+    assert html =~ "Not ready"
+    refute html =~ "Not configured"
     refute html =~ "spin it up"
     refute html =~ "prompt and budgets"
   end

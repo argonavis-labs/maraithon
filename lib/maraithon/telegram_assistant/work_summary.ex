@@ -699,9 +699,9 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp status_label("needs_refresh"), do: "reconnect needed"
   defp status_label("missing_scope"), do: "needs permission"
-  defp status_label("not_configured"), do: "setup needed"
-  defp status_label("setup_required"), do: "setup needed"
-  defp status_label("partially_configured"), do: "partially set up"
+  defp status_label("not_configured"), do: "not ready"
+  defp status_label("setup_required"), do: "not ready"
+  defp status_label("partially_configured"), do: "partially ready"
   defp status_label("in_progress"), do: "in progress"
   defp status_label("awaiting_confirmation"), do: "awaiting approval"
   defp status_label(status) when is_binary(status), do: humanize_status(status)
