@@ -26,6 +26,8 @@ struct LogsView: View {
             (sourceFilter == nil || entry.source == sourceFilter) &&
             (search.isEmpty
              || entry.message.localizedCaseInsensitiveContains(search)
+             || LogDisplayCopy.label(for: entry.level).localizedCaseInsensitiveContains(search)
+             || LogDisplayCopy.label(for: entry.source).localizedCaseInsensitiveContains(search)
              || entry.payload.contains(where: {
                 $0.key.localizedCaseInsensitiveContains(search) ||
                 $0.value.localizedCaseInsensitiveContains(search)
@@ -48,17 +50,17 @@ struct LogsView: View {
             .width(min: 80, ideal: 90)
 
             TableColumn("Level") { entry in
-                Text(entry.level.rawValue.uppercased())
-                    .font(.caption.monospaced())
+                Text(LogDisplayCopy.label(for: entry.level))
+                    .font(.caption)
                     .foregroundStyle(color(for: entry.level))
             }
-            .width(min: 60, ideal: 70)
+            .width(min: 70, ideal: 80)
 
             TableColumn("Source") { entry in
-                Text(entry.source.rawValue)
+                Text(LogDisplayCopy.label(for: entry.source))
                     .foregroundStyle(.secondary)
             }
-            .width(min: 70, ideal: 90)
+            .width(min: 90, ideal: 110)
 
             TableColumn("Message") { entry in
                 Text(entry.message)
@@ -72,7 +74,7 @@ struct LogsView: View {
                 Picker("Level", selection: $levelFilter) {
                     Text("All levels").tag(LogLevel?.none)
                     ForEach(LogLevel.allCases, id: \.self) { level in
-                        Text(level.rawValue.capitalized).tag(LogLevel?.some(level))
+                        Text(LogDisplayCopy.label(for: level)).tag(LogLevel?.some(level))
                     }
                 }
                 .pickerStyle(.menu)
@@ -80,7 +82,7 @@ struct LogsView: View {
                 Picker("Source", selection: $sourceFilter) {
                     Text("All sources").tag(LogSource?.none)
                     ForEach(LogSource.allCases, id: \.self) { source in
-                        Text(source.rawValue.capitalized).tag(LogSource?.some(source))
+                        Text(LogDisplayCopy.label(for: source)).tag(LogSource?.some(source))
                     }
                 }
                 .pickerStyle(.menu)
@@ -142,7 +144,7 @@ struct LogsView: View {
     }
 
     private func copyVisibleRows() {
-        let header = "time\tlevel\tsource\tmessage\tpayload"
+        let header = LogDisplayCopy.copiedRowsHeader
         let rows = filtered.map { entry -> String in
             let payload = entry.payload
                 .sorted { $0.key < $1.key }
@@ -150,8 +152,8 @@ struct LogsView: View {
                 .joined(separator: " ")
             return [
                 ISO8601DateFormatter().string(from: entry.timestamp),
-                entry.level.rawValue,
-                entry.source.rawValue,
+                LogDisplayCopy.label(for: entry.level),
+                LogDisplayCopy.label(for: entry.source),
                 entry.message.replacingOccurrences(of: "\t", with: " "),
                 payload
             ].joined(separator: "\t")
@@ -191,12 +193,12 @@ private struct LogInspector: View {
                         VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
                             SectionHeader("Meta")
                             metaRow("Time", entry.timestamp.formatted(.iso8601))
-                            metaRow("Level", entry.level.rawValue.uppercased())
-                            metaRow("Source", entry.source.rawValue)
+                            metaRow("Level", LogDisplayCopy.label(for: entry.level))
+                            metaRow("Source", LogDisplayCopy.label(for: entry.source))
                         }
 
                         VStack(alignment: .leading, spacing: Tokens.Spacing.xsmall) {
-                            SectionHeader("Payload")
+                            SectionHeader(LogDisplayCopy.detailsSectionTitle)
                             Text(prettyPrinted(entry.payload))
                                 .font(.body.monospaced())
                                 .textSelection(.enabled)
@@ -207,9 +209,9 @@ private struct LogInspector: View {
                 }
             } else {
                 ContentUnavailableView(
-                    "Select a log entry",
+                    LogDisplayCopy.noSelectionTitle,
                     systemImage: "text.magnifyingglass",
-                    description: Text("Pick a row in the table to see its full payload.")
+                    description: Text(LogDisplayCopy.noSelectionDescription)
                 )
             }
         }
