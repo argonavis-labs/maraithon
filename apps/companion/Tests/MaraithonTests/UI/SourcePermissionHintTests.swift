@@ -33,6 +33,7 @@ final class SourcePermissionHintTests: XCTestCase {
     func testVoiceMemosFullDiskAccessReasonHasSettingsDeepLink() {
         let hint = SourcePermissionHint.forReason("voice_memos_full_disk_access_required")
         XCTAssertEqual(hint.title, "Voice Memos access needed")
+        assertFullDiskAccessRecoveryCopy(hint)
         XCTAssertEqual(
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -47,6 +48,7 @@ final class SourcePermissionHintTests: XCTestCase {
         XCTAssertEqual(hint.title, "iMessage access needed")
         XCTAssertTrue(hint.body.contains("iMessage history"))
         XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("database"))
+        assertFullDiskAccessRecoveryCopy(hint)
         XCTAssertEqual(
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -61,6 +63,7 @@ final class SourcePermissionHintTests: XCTestCase {
         XCTAssertEqual(hint.title, "Notes access needed")
         XCTAssertTrue(hint.body.contains("local Notes"))
         XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("database"))
+        assertFullDiskAccessRecoveryCopy(hint)
         XCTAssertEqual(
             hint.settingsURL?.absoluteString,
             "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
@@ -125,5 +128,16 @@ final class SourcePermissionHintTests: XCTestCase {
         }
 
         XCTAssertFalse(SourcePermissionHint.hasFocusedUnblock(for: "network down"))
+    }
+
+    private func assertFullDiskAccessRecoveryCopy(_ hint: SourcePermissionHint) {
+        XCTAssertTrue(hint.body.contains("One macOS grant covers iMessage, Notes, and Voice Memos"))
+        XCTAssertTrue(hint.body.contains("enable the Maraithon app you keep using"))
+        XCTAssertTrue(hint.body.contains("Check again"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("quit"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("reopen"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("restart"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("temporary Maraithon copy"))
+        XCTAssertFalse(hint.body.localizedCaseInsensitiveContains("DerivedData"))
     }
 }

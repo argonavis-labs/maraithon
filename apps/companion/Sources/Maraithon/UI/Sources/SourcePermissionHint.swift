@@ -64,7 +64,7 @@ struct SourcePermissionHint: Equatable {
         case "imessage_full_disk_access_required":
             return SourcePermissionHint(
                 title: "iMessage access needed",
-                body: "Maraithon needs Full Disk Access to read your local iMessage history on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                body: "Maraithon needs Full Disk Access to read your local iMessage history on this Mac. One macOS grant covers iMessage, Notes, and Voice Memos; enable the Maraithon app you keep using, then click Check again.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
@@ -73,7 +73,7 @@ struct SourcePermissionHint: Equatable {
         case "notes_full_disk_access_required":
             return SourcePermissionHint(
                 title: "Notes access needed",
-                body: "Maraithon needs Full Disk Access to read your local Notes on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                body: "Maraithon needs Full Disk Access to read your local Notes on this Mac. One macOS grant covers iMessage, Notes, and Voice Memos; enable the Maraithon app you keep using, then click Check again.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
@@ -98,7 +98,7 @@ struct SourcePermissionHint: Equatable {
         case "voice_memos_full_disk_access_required":
             return SourcePermissionHint(
                 title: "Voice Memos access needed",
-                body: "Maraithon needs Full Disk Access to read your local Voice Memos and audio files on this Mac. Open System Settings → Privacy & Security → Full Disk Access, then enable Maraithon.",
+                body: "Maraithon needs Full Disk Access to read your local Voice Memos and audio files on this Mac. One macOS grant covers iMessage, Notes, and Voice Memos; enable the Maraithon app you keep using, then click Check again.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"),
                 settingsButtonTitle: "Open Full Disk Access",
                 followUpNote: FullDiskAccessCopy.unblockFollowUp,
