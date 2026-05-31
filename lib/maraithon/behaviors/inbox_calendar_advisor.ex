@@ -3350,7 +3350,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     artifact_text = artifact_hint || "the thing you promised in the source thread"
 
     [
-      "Acknowledge the open loop with #{person || "the recipient"}.",
+      "Acknowledge #{person || "the recipient"} in the email thread.",
       "State whether #{artifact_text} is ready or still in progress.",
       "Give a concrete delivery timing commitment: #{deadline_phrase(due_at)}."
     ]
@@ -3377,7 +3377,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
             "Draft in your voice: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft in your voice: close the loop with #{person || "the recipient"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
+            "Draft in your voice: send the follow-through to #{person || "the recipient"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
             "Draft in your voice: be direct, useful, and grounded in the source evidence."

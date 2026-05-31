@@ -794,7 +794,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         "A named person is waiting on the next step, with no recorded closure signal."
 
       true ->
-        "This is a high-signal open loop worth closing."
+        "This is a high-signal open follow-up worth handling."
     end
   end
 

@@ -15,6 +15,7 @@ struct ChiefOfStaffPromptTests {
         #expect(prompts.allSatisfy { !$0.title.localizedCaseInsensitiveContains("todo") })
         #expect(prompts.allSatisfy { !$0.subtitle.localizedCaseInsensitiveContains("todo") })
         #expect(prompts.allSatisfy { !$0.message.localizedCaseInsensitiveContains("todo") })
+        #expect(prompts.allSatisfy { !$0.message.localizedCaseInsensitiveContains("open loops") })
         #expect(prompts.allSatisfy { !$0.subtitle.localizedCaseInsensitiveContains("overdue") })
         #expect(prompts.allSatisfy { !$0.message.localizedCaseInsensitiveContains("overdue") })
         #expect(prompts.contains { $0.message.localizedCaseInsensitiveContains("people") })

@@ -98,7 +98,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
         %{
           "source" => "gmail",
           "category" => "commitment_unresolved",
-          "title" => "Close open loop #{index}",
+          "title" => "Send follow-through #{index}",
           "summary" => "Person #{index} is still waiting on a concrete owner or timing.",
           "recommended_action" =>
             "Reply to Person #{index} with the owner, status, and exact timing.",
@@ -108,7 +108,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
           "due_at" => DateTime.add(scheduled_at, index, :minute),
           "metadata" => %{
             "record" => %{
-              "commitment" => "Close open loop #{index}.",
+              "commitment" => "Send follow-through #{index}.",
               "person" => "Person #{index}",
               "status" => "unresolved",
               "next_action" =>
@@ -150,8 +150,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.summary =~ "6 more open items"
 
     for index <- 1..7 do
-      assert brief.body =~ "Close open loop #{index}"
+      assert brief.body =~ "Send follow-through #{index}"
     end
+
+    refute brief.body =~ "open loop"
 
     assert length(brief.metadata["linked_todo_ids"]) == 7
     assert length(brief.metadata["linked_insight_ids"]) == 7

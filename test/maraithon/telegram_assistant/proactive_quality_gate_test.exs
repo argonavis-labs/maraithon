@@ -150,10 +150,11 @@ defmodule Maraithon.TelegramAssistant.ProactiveQualityGateTest do
       )
 
     assert verified["digest_intro"] ==
-             "Two updates are worth a look together: The morning brief has two open loops; The Rippling work item still needs a reply."
+             "Two updates are worth a look together: The morning brief has two open follow-ups; The Rippling work item still needs a reply."
 
     refute verified["digest_intro"] =~ "proactive updates"
     refute verified["digest_intro"] =~ "review together"
+    refute verified["digest_intro"] =~ "open loops"
     refute verified["digest_intro"] =~ "todo"
   end
 

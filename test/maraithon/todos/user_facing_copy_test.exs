@@ -232,6 +232,17 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "You want this tracked as an ongoing work item."
   end
 
+  test "rewrites internal loop language into executive-facing follow-through copy" do
+    assert UserFacingCopy.polish_text("This is the highest-priority open loop.") ==
+             "This is the highest-priority open follow-up."
+
+    assert UserFacingCopy.polish_text("Reply in-thread and close the loop.") ==
+             "Reply in-thread and send the follow-through."
+
+    assert UserFacingCopy.polish_text("These are mostly reply loops.") ==
+             "These are mostly reply threads."
+  end
+
   test "strips model confidence prose while keeping the action copy" do
     assert UserFacingCopy.polish_text("""
            90% confidence this matters.

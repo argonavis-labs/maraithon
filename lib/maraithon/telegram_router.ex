@@ -17,6 +17,7 @@ defmodule Maraithon.TelegramRouter do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramInterpreter
   alias Maraithon.TelegramResponder
+  alias Maraithon.Todos.UserFacingCopy
   alias MaraithonWeb.LocalTime
 
   require Logger
@@ -402,7 +403,7 @@ defmodule Maraithon.TelegramRouter do
         Map.get(interpretation, "clarifying_question") ||
         "Not sure yet. Can you clarify what should be learned or done?"
 
-    {:ok, reply, []}
+    {:ok, UserFacingCopy.polish_text(reply), []}
   end
 
   defp confirm_pending_rules(conversation, user_turn, chat_id, source_message_id) do
@@ -513,6 +514,8 @@ defmodule Maraithon.TelegramRouter do
          interpretation,
          reply_opts
        ) do
+    text = UserFacingCopy.polish_text(text)
+
     case TelegramResponder.reply(chat_id, reply_to_message_id, text, reply_opts) do
       {:ok, result} ->
         {:ok, _} =
@@ -660,6 +663,8 @@ defmodule Maraithon.TelegramRouter do
         Map.get(interpretation, "clarifying_question") ||
           Map.get(interpretation, "assistant_reply") ||
           "Can you clarify what you want me to learn or do?"
+
+      question = UserFacingCopy.polish_text(question)
 
       _ =
         TelegramConversations.update_metadata(conversation, %{

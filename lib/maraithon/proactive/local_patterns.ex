@@ -421,11 +421,11 @@ defmodule Maraithon.Proactive.LocalPatterns do
     %{
       "source" => "local_patterns",
       "category" => "general",
-      "title" => "Open loop in note: #{title}",
+      "title" => "Open follow-up in note: #{title}",
       "summary" =>
         "You recently edited \"#{title}\" and left a follow-up cue that still needs a decision.",
       "recommended_action" =>
-        "Open the note and decide whether to act now, schedule it, or close the loop.",
+        "Open the note and decide whether to act now, schedule it, or mark it handled.",
       "priority" => 50,
       "confidence" => 0.7,
       "attention_mode" => "act_now",

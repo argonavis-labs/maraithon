@@ -739,7 +739,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "Calendar follow-up",
         "Calendar follow-ups"
       ),
-      count_line(count_by_source(weekly_items, "slack"), "Slack loop", "Slack loops")
+      count_line(count_by_source(weekly_items, "slack"), "Slack follow-up", "Slack follow-ups")
     ]
     |> Enum.reject(&is_nil/1)
     |> case do
@@ -903,7 +903,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp end_of_day_guidance(items) do
     if mostly_reply_loops?(items) do
-      "These are mostly reply loops. If the work is not finished, send a short owner + exact ETA tonight instead of waiting for the perfect answer."
+      "These are mostly reply threads. If the work is not finished, send a short owner + exact ETA tonight instead of waiting for the perfect answer."
     else
       "Close the promises with a human waiting on you, or explicitly reset timing before you sign off."
     end
@@ -950,7 +950,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     cond do
       is_nil(title) and is_nil(card.promise_text) ->
-        "Open loop"
+        "Open follow-up"
 
       generic_heading?(title) and not is_nil(card.promise_text) ->
         card.promise_text

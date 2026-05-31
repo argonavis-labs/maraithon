@@ -27,7 +27,7 @@ defmodule Maraithon.TelegramAssistant do
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramResponder
-  alias Maraithon.Todos.PublicPayload
+  alias Maraithon.Todos.{PublicPayload, UserFacingCopy}
 
   require Logger
 
@@ -317,6 +317,7 @@ defmodule Maraithon.TelegramAssistant do
 
   def send_turn(%Conversation{} = conversation, chat_id, text, opts \\ [])
       when is_binary(chat_id) and is_binary(text) do
+    text = UserFacingCopy.open_work_language(text)
     reply_to_message_id = Keyword.get(opts, :reply_to_message_id)
     send_mode = resolve_send_mode(reply_to_message_id, Keyword.get(opts, :send_mode, :reply))
     telegram_opts = Keyword.get(opts, :telegram_opts, [])

@@ -39,7 +39,7 @@ struct ChiefOfStaffPrompt: Identifiable {
         id: "draft-follow-up",
         title: "Draft follow-up",
         subtitle: "Write a concise reply with relationship context.",
-        message: "Help me draft a follow-up. Use my relationship context and open loops, then give me a ready-to-send message plus the next work item if one is needed.",
+        message: "Help me draft a follow-up. Use my relationship context and open follow-ups, then give me a ready-to-send message plus the next work item if one is needed.",
         systemImage: "square.and.pencil",
         tint: .blue
     )

@@ -333,6 +333,8 @@ defmodule Maraithon.TelegramRouterTest do
 
     reply = last_telegram_message(:send)
     assert reply.text =~ "owe Sarah the deck"
+    assert reply.text =~ "open follow-up"
+    refute reply.text =~ "open loop"
     assert reply.opts[:reply_to] == "9004"
 
     conversation =
@@ -399,6 +401,8 @@ defmodule Maraithon.TelegramRouterTest do
       })
 
     reply = last_telegram_message(:send)
+    assert reply.text =~ "top open follow-up"
+    refute reply.text =~ "top open loop"
     assert reply.text =~ "Sarah"
     assert reply.opts[:reply_to] == "90045"
   end

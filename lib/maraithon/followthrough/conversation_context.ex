@@ -164,7 +164,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
             "The recipient acknowledged the thread and no fresh ask was found."
 
           true ->
-            "Later conversation activity appears to close the loop."
+            "Later conversation activity appears to resolve the follow-up."
         end
 
       "heads_up" ->

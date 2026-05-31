@@ -97,4 +97,20 @@ struct ChiefOfStaffCopyTests {
                 "Reply with the promised update, current status, and timing you can stand behind."
         )
     }
+
+    @Test
+    func rewritesLoopLanguageIntoFollowThroughCopy() {
+        #expect(
+            ChiefOfStaffCopy.clean("This is the highest-priority open loop.") ==
+                "This is the highest-priority open follow-up."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean("Reply in-thread and close the loop.") ==
+                "Reply in-thread and send the follow-through."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean("These are mostly reply loops.") ==
+                "These are mostly reply threads."
+        )
+    }
 }

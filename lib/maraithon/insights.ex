@@ -462,7 +462,7 @@ defmodule Maraithon.Insights do
 
       _ ->
         if String.contains?(source || "", "slack") do
-          "Draft in your voice: close the Slack loop with #{person} by naming the actual promise, current status, and the timing you can safely stand behind."
+          "Draft in your voice: send the Slack follow-through to #{person} by naming the actual promise, current status, and the timing you can safely stand behind."
         else
           "Draft in your voice: reply to #{person} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
         end

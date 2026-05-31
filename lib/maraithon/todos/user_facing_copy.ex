@@ -113,6 +113,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
   def open_work_language(value) when is_binary(value) do
     value
     |> strip_model_internal_copy()
+    |> replace_generic_user_action_language()
     |> replace_todo_language()
   end
 
@@ -160,6 +161,12 @@ defmodule Maraithon.Todos.UserFacingCopy do
       "own the remaining follow-through"
     )
     |> String.replace(~r/\bfinal loop\b/i, "remaining follow-through")
+    |> String.replace(~r/\bclose the Slack loop with\b/i, "send the Slack follow-through to")
+    |> String.replace(~r/\bclose the loop with\b/i, "send the follow-through to")
+    |> String.replace(~r/\bclose the loop\b/i, "send the follow-through")
+    |> String.replace(~r/\bopen loops\b/i, "open follow-ups")
+    |> String.replace(~r/\bopen loop\b/i, "open follow-up")
+    |> String.replace(~r/\breply loops\b/i, "reply threads")
     |> String.replace(~r/\bneeds a user response\b/i, "needs your reply")
     |> String.replace(~r/\bneeds user response\b/i, "needs your reply")
     |> String.replace(~r/\brequires a user response\b/i, "needs your reply")

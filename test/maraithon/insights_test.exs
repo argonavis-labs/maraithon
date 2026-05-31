@@ -196,6 +196,34 @@ defmodule Maraithon.InsightsTest do
                "Send the campaign update with a clear owner and timing."
     end
 
+    test "default Slack draft plan avoids internal loop language", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "slack",
+            "category" => "commitment_unresolved",
+            "title" => "Send the launch timing to Priya",
+            "summary" => "Priya is waiting on launch timing.",
+            "recommended_action" => "Reply in the Slack thread with timing.",
+            "metadata" => %{
+              "record" => %{
+                "person" => "Priya",
+                "source" => "slack",
+                "status" => "unresolved"
+              }
+            },
+            "dedupe_key" => "copy:slack-draft-plan"
+          }
+        ])
+
+      assert insight.metadata["draft_plan"] =~ "send the Slack follow-through to Priya"
+      refute insight.metadata["draft_plan"] =~ "Slack loop"
+      refute insight.metadata["draft_plan"] =~ "close the loop"
+    end
+
     test "insight snooze and dismiss propagate to the mirrored todo", %{
       user_id: user_id,
       agent: agent

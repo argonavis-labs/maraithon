@@ -1127,7 +1127,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     artifact_text = artifact || "the thing you promised in the source thread"
 
     [
-      "Acknowledge the open loop with #{person || "the thread"}.",
+      "Acknowledge #{person || "the thread"} in the Slack thread.",
       "State whether #{artifact_text} is ready or still in progress.",
       "Give a concrete delivery timing commitment: #{deadline_phrase(due_at)}."
     ]
@@ -1154,7 +1154,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
             "Draft in your voice: reply to #{person || "the sender"} with the direct answer, the next step you can stand behind, and timing only if it is supported by the thread."
 
           "commitment_unresolved" ->
-            "Draft in your voice: close the Slack loop with #{person || "the thread"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
+            "Draft in your voice: send the Slack follow-through to #{person || "the thread"} by naming the actual promise from the source thread, current status, and the next timing commitment you can safely make."
 
           _ ->
             "Draft in your voice: be direct, useful, and grounded in the source evidence."

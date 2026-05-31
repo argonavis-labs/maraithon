@@ -3382,7 +3382,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "Give guidance before the commercial thread drifts"
 
       true ->
-        "Reply, delegate, or close the loop"
+        "Reply, delegate, or send the follow-through"
     end
   end
 

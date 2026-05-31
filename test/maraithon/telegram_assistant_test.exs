@@ -199,6 +199,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
     reply = last_telegram_message(:send)
     assert reply.text =~ "owe Sarah the deck"
+    assert reply.text =~ "open follow-up"
+    refute reply.text =~ "open loop"
 
     run =
       Repo.one!(
@@ -965,12 +967,12 @@ defmodule Maraithon.TelegramAssistantTest do
     oauth_message = Enum.at(initial_sends, 2)
     assert billing_message
     assert oauth_message
-    assert billing_message.text =~ "Reply in-thread and close the loop."
+    assert billing_message.text =~ "Reply in-thread and send the follow-through."
     assert billing_message.text =~ "This thread still needs a reply from you."
     refute billing_message.text =~ "Billing account past due"
     refute billing_message.text =~ "Maraithon Todo"
     refute billing_message.text =~ "About:"
-    assert oauth_message.text =~ "Reply in-thread and close the loop."
+    assert oauth_message.text =~ "Reply in-thread and send the follow-through."
     refute oauth_message.text =~ "OAuth verification reply owed"
     refute oauth_message.text =~ "Maraithon Todo"
     refute oauth_message.text =~ "About:"
@@ -997,7 +999,10 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert Enum.count(sends_after_resolution) == 5
     assert Enum.at(sends_after_resolution, 3).text =~ "Billing is closed"
-    assert List.last(sends_after_resolution).text =~ "Reply in-thread and close the loop."
+
+    assert List.last(sends_after_resolution).text =~
+             "Reply in-thread and send the follow-through."
+
     refute List.last(sends_after_resolution).text =~ "OAuth verification reply owed"
     refute List.last(sends_after_resolution).text =~ "Billing account past due"
 
