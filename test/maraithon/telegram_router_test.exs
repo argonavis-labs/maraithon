@@ -461,7 +461,7 @@ defmodule Maraithon.TelegramRouterTest do
     reply = last_telegram_message(:send)
     assert reply.text =~ "Reason sent:"
     assert reply.text =~ "Sarah is tied to this unresolved commitment: Send the deck to Sarah"
-    assert reply.text =~ "Why now:"
+    refute reply.text =~ "Why now:"
     assert reply.text =~ "Evidence checked:"
     assert reply.text =~ "Recommended action:"
     assert reply.text =~ "Stored detail rationale says the promised deck was never sent."

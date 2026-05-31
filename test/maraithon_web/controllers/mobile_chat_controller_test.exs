@@ -280,7 +280,8 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assistant_body = get_in(response, ["thread", "messages", Access.at(1), "body"])
 
     assert assistant_body =~ "Needs your attention: send Sarah the answer today."
-    assert assistant_body =~ "Next action: reply before 3 PM."
+    assert assistant_body =~ "Reply before 3 PM."
+    refute assistant_body =~ "Next action:"
     refute assistant_body =~ "confidence"
     refute assistant_body =~ "score"
     refute assistant_body =~ "source_health"
@@ -333,13 +334,65 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     assistant_body = get_in(response, ["thread", "messages", Access.at(1), "body"])
     lower_body = String.downcase(assistant_body)
 
-    assert assistant_body =~ "Why now: Sarah needs the answer before today's cutoff."
-    assert assistant_body =~ "Next action: reply with the approved timing before 3 PM."
+    assert assistant_body =~ "Sarah needs the answer before today's cutoff."
+    assert assistant_body =~ "Reply with the approved timing before 3 PM."
+    refute assistant_body =~ "Why now:"
+    refute assistant_body =~ "Next action:"
     refute lower_body =~ "90%"
     refute lower_body =~ "confidence"
     refute lower_body =~ "reasoning"
     refute lower_body =~ "model"
     refute lower_body =~ "score"
+  end
+
+  test "mobile chat strips safe assistant labels and third-person user copy", %{conn: conn} do
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        next_step: fn _payload ->
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => """
+             source_context: The user needs to approve the finance reply.
+             why_now: Sarah needs the answer before today's cutoff.
+             next_action: reply with the approved timing before 3 PM.
+             """,
+             "message_class" => "assistant_reply",
+             "summary" => "Responded through production assistant runtime."
+           }}
+        end
+      )
+    )
+
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-safe-label-copy@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "What needs action on finance?"
+        }
+      })
+      |> json_response(200)
+
+    assistant_body = get_in(response, ["thread", "messages", Access.at(1), "body"])
+
+    assert assistant_body =~ "You need to approve the finance reply."
+    assert assistant_body =~ "Sarah needs the answer before today's cutoff."
+    assert assistant_body =~ "Reply with the approved timing before 3 PM."
+    refute assistant_body =~ "source_context"
+    refute assistant_body =~ "next_action"
+    refute assistant_body =~ "The user"
   end
 
   test "mobile chat exposes assistant work as user-facing summaries", %{conn: conn} do

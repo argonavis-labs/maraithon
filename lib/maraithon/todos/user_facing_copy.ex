@@ -33,6 +33,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
   @the_user_possessive_reference ~r/\bthe user's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
   @the_user_reference ~r/\bthe user\b(?!'s)(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
   @user_possessive_reference ~r/\buser's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+  @safe_label_prefix ~r/^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary)\s*[:=-]\s*/i
 
   def polish_attrs(attrs) when is_map(attrs) do
     attrs
@@ -50,60 +51,11 @@ defmodule Maraithon.Todos.UserFacingCopy do
   def polish_text(value) when is_binary(value) do
     value
     |> strip_model_internal_copy()
+    |> strip_safe_label_prefixes()
     |> strip_internal_label_lines()
     |> replace_internal_source_labels()
     |> replace_generic_user_action_language()
-    |> String.replace(~r/^\s*The user committed\b/i, "You committed")
-    |> String.replace(~r/\bthe user committed\b/i, "you committed")
-    |> String.replace(~r/^\s*The user wants\b/i, "You want")
-    |> String.replace(~r/\bthe user wants\b/i, "you want")
-    |> String.replace(~r/^\s*The user needs\b/i, "You need")
-    |> String.replace(~r/\bthe user needs\b/i, "you need")
-    |> String.replace(~r/^\s*The user has\b/i, "You have")
-    |> String.replace(~r/\bthe user has\b/i, "you have")
-    |> String.replace(~r/^\s*The user is\b/i, "You are")
-    |> String.replace(~r/\bthe user is\b/i, "you are")
-    |> String.replace(~r/^\s*The user should\b/i, "You should")
-    |> String.replace(~r/\bthe user should\b/i, "you should")
-    |> String.replace(~r/^\s*The user asked\b/i, "You asked")
-    |> String.replace(~r/\bthe user asked\b/i, "you asked")
-    |> String.replace(~r/^\s*The user owes\b/i, "You owe")
-    |> String.replace(~r/\bthe user owes\b/i, "you owe")
-    |> String.replace(~r/^\s*User committed\b/i, "You committed")
-    |> String.replace(~r/\bUser committed\b/i, "you committed")
-    |> String.replace(~r/^\s*User needs\b/i, "You need")
-    |> String.replace(~r/\bUser needs\b/i, "you need")
-    |> String.replace(~r/^\s*User should\b/i, "You should")
-    |> String.replace(~r/\bUser should\b/i, "you should")
-    |> String.replace(~r/^\s*User has\b/i, "You have")
-    |> String.replace(~r/\bUser has\b/i, "you have")
-    |> String.replace(~r/^\s*User asked\b/i, "You asked")
-    |> String.replace(~r/\bUser asked\b/i, "you asked")
-    |> String.replace(~r/^\s*User owes\b/i, "You owe")
-    |> String.replace(~r/\bUser owes\b/i, "you owe")
-    |> String.replace(~r/^\s*Kent needs\b/i, "You need")
-    |> String.replace(~r/\bKent needs\b/i, "you need")
-    |> String.replace(~r/^\s*Kent should\b/i, "You should")
-    |> String.replace(~r/\bKent should\b/i, "you should")
-    |> String.replace(~r/^\s*Kent has\b/i, "You have")
-    |> String.replace(~r/\bKent has\b/i, "you have")
-    |> String.replace(~r/^\s*Kent owes\b/i, "You owe")
-    |> String.replace(~r/\bKent owes\b/i, "you owe")
-    |> String.replace(~r/^\s*Kent asked\b/i, "You asked")
-    |> String.replace(~r/\bKent asked\b/i, "you asked")
-    |> String.replace(~r/^\s*Kent committed\b/i, "You committed")
-    |> String.replace(~r/\bKent committed\b/i, "you committed")
-    |> String.replace(@the_user_possessive_reference, "your")
-    |> String.replace(@the_user_reference, "you")
-    |> String.replace(@user_possessive_reference, "your")
-    |> String.replace(~r/\boperator attention\b/i, "your attention")
-    |> String.replace(~r/^\s*The operator's\b/i, "Your")
-    |> String.replace(~r/\bthe operator's\b/i, "your")
-    |> String.replace(~r/^\s*Operator's\b/i, "Your")
-    |> String.replace(~r/\boperator's\b/i, "your")
-    |> String.replace(~r/^\s*The operator\b/i, "You")
-    |> String.replace(~r/\bthe operator\b/i, "you")
-    |> String.replace(~r/\bKent's\b/i, "your")
+    |> replace_direct_role_language()
     |> replace_todo_language()
     |> single_line()
   end
@@ -113,7 +65,9 @@ defmodule Maraithon.Todos.UserFacingCopy do
   def open_work_language(value) when is_binary(value) do
     value
     |> strip_model_internal_copy()
+    |> strip_safe_label_prefixes()
     |> replace_generic_user_action_language()
+    |> replace_direct_role_language()
     |> replace_todo_language()
   end
 
@@ -175,6 +129,65 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\bneeds a user decision\b/i, "needs your decision")
     |> String.replace(~r/\bneeds user decision\b/i, "needs your decision")
     |> String.replace(~r/\brequires a user decision\b/i, "needs your decision")
+  end
+
+  defp replace_direct_role_language(value) do
+    value
+    |> String.replace(~r/^\s*The user committed\b/i, "You committed")
+    |> String.replace(~r/\bthe user committed\b/i, "you committed")
+    |> String.replace(~r/^\s*The user wants\b/i, "You want")
+    |> String.replace(~r/\bthe user wants\b/i, "you want")
+    |> String.replace(~r/^\s*The user needs\b/i, "You need")
+    |> String.replace(~r/\bthe user needs\b/i, "you need")
+    |> String.replace(~r/^\s*The user has\b/i, "You have")
+    |> String.replace(~r/\bthe user has\b/i, "you have")
+    |> String.replace(~r/^\s*The user is\b/i, "You are")
+    |> String.replace(~r/\bthe user is\b/i, "you are")
+    |> String.replace(~r/^\s*The user should\b/i, "You should")
+    |> String.replace(~r/\bthe user should\b/i, "you should")
+    |> String.replace(~r/^\s*The user asked\b/i, "You asked")
+    |> String.replace(~r/\bthe user asked\b/i, "you asked")
+    |> String.replace(~r/^\s*The user owes\b/i, "You owe")
+    |> String.replace(~r/\bthe user owes\b/i, "you owe")
+    |> String.replace(~r/^\s*User committed\b/i, "You committed")
+    |> String.replace(~r/\bUser committed\b/i, "you committed")
+    |> String.replace(~r/^\s*User wants\b/i, "You want")
+    |> String.replace(~r/\bUser wants\b/i, "you want")
+    |> String.replace(~r/^\s*User needs\b/i, "You need")
+    |> String.replace(~r/\bUser needs\b/i, "you need")
+    |> String.replace(~r/^\s*User has\b/i, "You have")
+    |> String.replace(~r/\bUser has\b/i, "you have")
+    |> String.replace(~r/^\s*User is\b/i, "You are")
+    |> String.replace(~r/\bUser is\b/i, "you are")
+    |> String.replace(~r/^\s*User should\b/i, "You should")
+    |> String.replace(~r/\bUser should\b/i, "you should")
+    |> String.replace(~r/^\s*User asked\b/i, "You asked")
+    |> String.replace(~r/\bUser asked\b/i, "you asked")
+    |> String.replace(~r/^\s*User owes\b/i, "You owe")
+    |> String.replace(~r/\bUser owes\b/i, "you owe")
+    |> String.replace(@the_user_possessive_reference, "your")
+    |> String.replace(@the_user_reference, "you")
+    |> String.replace(@user_possessive_reference, "your")
+    |> String.replace(~r/\boperator attention\b/i, "your attention")
+    |> String.replace(~r/^\s*The operator's\b/i, "Your")
+    |> String.replace(~r/\bthe operator's\b/i, "your")
+    |> String.replace(~r/^\s*Operator's\b/i, "Your")
+    |> String.replace(~r/\boperator's\b/i, "your")
+    |> String.replace(~r/^\s*The operator\b/i, "You")
+    |> String.replace(~r/\bthe operator\b/i, "you")
+    |> String.replace(~r/\bKent's attention\b/i, "your attention")
+    |> String.replace(~r/^\s*Kent needs\b/i, "You need")
+    |> String.replace(~r/\bKent needs\b/i, "you need")
+    |> String.replace(~r/^\s*Kent should\b/i, "You should")
+    |> String.replace(~r/\bKent should\b/i, "you should")
+    |> String.replace(~r/^\s*Kent has\b/i, "You have")
+    |> String.replace(~r/\bKent has\b/i, "you have")
+    |> String.replace(~r/^\s*Kent asked\b/i, "You asked")
+    |> String.replace(~r/\bKent asked\b/i, "you asked")
+    |> String.replace(~r/^\s*Kent owes\b/i, "You owe")
+    |> String.replace(~r/\bKent owes\b/i, "you owe")
+    |> String.replace(~r/^\s*Kent committed\b/i, "You committed")
+    |> String.replace(~r/\bKent committed\b/i, "you committed")
   end
 
   defp replace_todo_language(value) do
@@ -848,6 +861,48 @@ defmodule Maraithon.Todos.UserFacingCopy do
       line,
       ~r/^\s*(from|source|priority|status|open|title|kind|ref|reference|direction|origin|cadence)\s*:/i
     )
+  end
+
+  defp strip_safe_label_prefixes(text) do
+    text
+    |> String.split(~r/\R/u)
+    |> Enum.map(&strip_safe_label_prefix/1)
+    |> Enum.join("\n")
+  end
+
+  defp strip_safe_label_prefix(line) do
+    {stripped, changed?} =
+      Enum.reduce_while(1..3, {line, false}, fn _, {current, changed?} ->
+        next = Regex.replace(@safe_label_prefix, current, "", global: false)
+
+        if next == current do
+          {:halt, {current, changed?}}
+        else
+          {:cont, {next, true}}
+        end
+      end)
+
+    stripped = String.trim(stripped)
+
+    if changed? do
+      capitalize_action_start(stripped)
+    else
+      stripped
+    end
+  end
+
+  defp capitalize_action_start(""), do: ""
+
+  defp capitalize_action_start(text) do
+    if String.match?(
+         text,
+         ~r/^(reply|send|ask|confirm|book|review|decide|open|draft|call|text|schedule|choose|check|write|share|approve|update|follow|make|handle|finish|pay|order|prepare|forward|renew|mark)\b/
+       ) do
+      <<first::utf8, rest::binary>> = text
+      String.upcase(<<first::utf8>>) <> rest
+    else
+      text
+    end
   end
 
   defp strip_model_internal_copy(text) when is_binary(text) do

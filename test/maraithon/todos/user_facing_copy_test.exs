@@ -177,6 +177,16 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "The operator's queue needs operator attention because User should review it."
            ) ==
              "Your queue needs your attention because you should review it."
+
+    assert UserFacingCopy.polish_text("This needs Kent's attention before 3 PM.") ==
+             "This needs your attention before 3 PM."
+  end
+
+  test "does not rewrite Kent possessives inside named resources" do
+    text = "Delete the \"Kent's Gmail agent\" automation."
+
+    assert UserFacingCopy.polish_text(text) == text
+    assert UserFacingCopy.open_work_language(text) == text
   end
 
   test "does not rewrite product user terminology into broken you-language" do
@@ -259,6 +269,24 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
 
     assert UserFacingCopy.polish_text("Track user response rates during onboarding.") ==
              "Track user response rates during onboarding."
+  end
+
+  test "strips safe assistant labels without losing useful action copy" do
+    labelled = """
+    source_context: The user needs to approve the finance reply.
+    why_now: Sarah needs the answer before today's cutoff.
+    next_action: reply with the approved timing before 3 PM.
+    """
+
+    assert UserFacingCopy.polish_text(labelled) ==
+             "You need to approve the finance reply. Sarah needs the answer before today's cutoff. Reply with the approved timing before 3 PM."
+
+    assert UserFacingCopy.open_work_language(labelled) ==
+             "You need to approve the finance reply.\nSarah needs the answer before today's cutoff.\nReply with the approved timing before 3 PM."
+
+    refute UserFacingCopy.open_work_language(labelled) =~ "source_context"
+    refute UserFacingCopy.open_work_language(labelled) =~ "next_action"
+    refute UserFacingCopy.open_work_language(labelled) =~ "The user"
   end
 
   test "todo upsert applies copy polish before persistence" do

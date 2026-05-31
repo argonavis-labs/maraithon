@@ -262,9 +262,10 @@ defmodule Maraithon.BriefsTest do
     assert payload.text =~ "Chief of staff brief"
     assert payload.text =~ "Maraithon kept only checked next steps."
     assert payload.text =~ "Lead with the CFO ask."
-    assert payload.text =~ "Next action: Send the revised answer today."
+    assert payload.text =~ "Send the revised answer today."
 
     refute payload.text =~ "I kept"
+    refute payload.text =~ "Next action:"
     refute lower_text =~ "confidence"
     refute lower_text =~ "score"
     refute lower_text =~ "source_health"
@@ -299,9 +300,10 @@ defmodule Maraithon.BriefsTest do
 
     assert payload.text =~ "Chief of staff brief"
     assert payload.text =~ "Maraithon kept only checked next steps."
-    assert payload.text =~ "Why now: The receiving window closes before tomorrow's dispatch."
+    assert payload.text =~ "The receiving window closes before tomorrow's dispatch."
     assert payload.text =~ "Next: Reply with the signed shipment timing before noon."
 
+    refute payload.text =~ "Why now:"
     refute lower_text =~ "90%"
     refute lower_text =~ "confidence"
     refute lower_text =~ "model"

@@ -275,8 +275,9 @@ defmodule Maraithon.TelegramAssistant.ProactiveTest do
     refute intro.text =~ "look stale"
     refute intro.text =~ "Emma's Soccer Practice"
     assert todo_card.text =~ "Dan Bourke (A-Team; video project contact)"
-    assert todo_card.text =~ "Decision: Keep it active if it still matters"
+    assert todo_card.text =~ "Keep it active if it still matters"
     assert todo_card.text =~ "Keep it active only if it still matters"
+    refute todo_card.text =~ "Decision:"
     refute todo_card.text =~ "not treat it as urgent"
     refute todo_card.text =~ "stale follow-up"
   end
