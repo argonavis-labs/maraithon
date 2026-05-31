@@ -546,8 +546,8 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
            Briefs.record(user_id, agent_id, %{
              "cadence" => "check_in",
              "title" => "Open work review",
-             "summary" => "Review open work one item at a time.",
-             "body" => "Natural-language Telegram open-work review queue.",
+             "summary" => "Decide on open work one item at a time.",
+             "body" => "Telegram review session for deciding current open work.",
              "scheduled_for" => now_iso8601(),
              "dedupe_key" => "telegram_todo_review:#{Ecto.UUID.generate()}",
              "status" => "sent",
@@ -572,7 +572,10 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_review_todo(chat_id, %Brief{} = _brief, %Todo{} = todo, position, total) do
-    payload = TodoActions.telegram_payload(todo, prefix_text: "Open work #{position} of #{total}")
+    payload =
+      TodoActions.telegram_payload(todo,
+        prefix_text: "Open work decision #{position} of #{total}"
+      )
 
     case TelegramResponder.send(chat_id, payload.text,
            parse_mode: "HTML",
@@ -602,7 +605,9 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_review_canceled(chat_id) when is_binary(chat_id) do
-    case TelegramResponder.send(chat_id, "Open work review canceled.", parse_mode: "HTML") do
+    case TelegramResponder.send(chat_id, "Open work review canceled. Nothing changed.",
+           parse_mode: "HTML"
+         ) do
       {:ok, _result} -> :ok
       {:error, _reason} -> :ok
     end
@@ -619,7 +624,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
       maybe_mark_pending_clarification(attrs, intent)
 
       text = """
-      Do you want to review each item now, or scan the list first?
+      Do you want to decide one item at a time, or scan the list first?
       """
 
       case TelegramResponder.send(chat_id, String.trim(text),
@@ -657,7 +662,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     %{
       "inline_keyboard" => [
         [
-          %{"text" => "Review one by one", "callback_data" => latest_callback_data("start")},
+          %{"text" => "Decide one by one", "callback_data" => latest_callback_data("start")},
           %{"text" => "Show list", "callback_data" => latest_callback_data("list")}
         ],
         [%{"text" => "Cancel", "callback_data" => latest_callback_data("cancel")}]
@@ -670,7 +675,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp maybe_review_choice_markup(_todos) do
     %{
       "inline_keyboard" => [
-        [%{"text" => "Review one by one", "callback_data" => latest_callback_data("start")}]
+        [%{"text" => "Decide one by one", "callback_data" => latest_callback_data("start")}]
       ]
     }
   end
@@ -678,7 +683,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp brief_review_choice_markup(%Brief{} = brief) do
     %{
       "inline_keyboard" => [
-        [%{"text" => "Review one by one", "callback_data" => callback_data(brief.id, "start")}]
+        [%{"text" => "Decide one by one", "callback_data" => callback_data(brief.id, "start")}]
       ]
     }
   end
@@ -693,7 +698,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     remaining =
       case open do
         [] ->
-          "Remaining: 0"
+          "Still open: 0"
 
         todos ->
           lines =
@@ -704,23 +709,23 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
           extra =
             if length(todos) > 6 do
-              "\n• #{length(todos) - 6} more remaining"
+              "\n• #{length(todos) - 6} more still open"
             else
               ""
             end
 
-          "Remaining: #{length(todos)}\n#{lines}#{extra}"
+          "Still open: #{length(todos)}\n#{lines}#{extra}"
       end
 
     cleared_count = length(done) + length(dismissed)
 
     """
-    <b>Open work review complete</b>
-    Reviewed: #{reviewed_count}
+    <b>Open work review finished</b>
+    Decisions made: #{reviewed_count}
     Cleared: #{cleared_count} (#{length(done)} done, #{length(dismissed)} dismissed)
     #{remaining}
 
-    Cleared work is off future briefs. Remaining work stays visible until you act, dismiss, or defer it.
+    Done and dismissed items are off future briefs. Anything still open remains visible until it is marked done, snoozed, kept active, or dismissed.
     """
     |> String.trim()
   end
@@ -797,16 +802,16 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_list_next_move([todo | _todos]) do
     focus = todo |> todo_list_focus() |> todo_list_sentence() |> safe()
 
-    "#{focus} Then triage the list: close resolved items, keep active work visible, and defer anything that can wait."
+    "#{focus} Then decide each remaining item: mark it done, snooze it, keep it active, or dismiss it."
   end
 
-  defp todo_list_next_move(_todos), do: "Nothing needs a decision right now."
+  defp todo_list_next_move(_todos), do: "No open work needs a decision right now."
 
   defp todo_list_sentence(value) when is_binary(value) do
     value = String.trim(value)
 
     cond do
-      value == "" -> "Start with the first open item and choose keep, done, delegate, or defer."
+      value == "" -> "Start with the first open item and choose the outcome."
       Regex.match?(~r/[.!?]\z/u, value) -> value
       true -> value <> "."
     end

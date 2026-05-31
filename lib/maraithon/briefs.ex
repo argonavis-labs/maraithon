@@ -639,22 +639,22 @@ defmodule Maraithon.Briefs do
   defp todo_digest_next_move([todo]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
-    "#{focus} Then choose: mark it done, keep it active, or defer it."
+    "#{focus} Then make the call: mark it done, snooze it, keep it active, or dismiss it."
   end
 
   defp todo_digest_next_move([todo | _todos]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
-    "#{focus} Then triage the rest: close resolved items, keep active work visible, and defer anything that can wait."
+    "#{focus} Then decide the rest: mark done, snooze, keep active, or dismiss each one."
   end
 
-  defp todo_digest_next_move(_todos), do: "Nothing needs a decision right now."
+  defp todo_digest_next_move(_todos), do: "No open work needs a decision right now."
 
   defp todo_digest_sentence(value) when is_binary(value) do
     value = String.trim(value)
 
     cond do
-      value == "" -> "Start with the first open item and choose keep, done, delegate, or defer."
+      value == "" -> "Start with the first open item and choose the outcome."
       Regex.match?(~r/[.!?]\z/u, value) -> value
       true -> value <> "."
     end

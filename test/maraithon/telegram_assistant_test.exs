@@ -1306,7 +1306,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
     assert length(sends) == 1
-    assert hd(sends).text =~ "Open work 1 of 2"
+    assert hd(sends).text =~ "Open work decision 1 of 2"
     assert hd(sends).text =~ "Confirm the soccer practice timing."
     assert hd(sends).text =~ "Emma's organizer needs confirmation"
 
@@ -1325,7 +1325,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Open work 2 of 2"
+    assert List.last(sends).text =~ "Open work decision 2 of 2"
     assert List.last(sends).text =~ "Reply with the recommended setup path"
 
     :ok =
@@ -1342,9 +1342,9 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Todos.get_for_user(user_id, second.id).status == "dismissed"
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
-    assert List.last(sends).text =~ "Open work review complete"
+    assert List.last(sends).text =~ "Open work review finished"
     assert List.last(sends).text =~ "Cleared: 2 (1 done, 1 dismissed)"
-    assert List.last(sends).text =~ "Cleared work is off future briefs"
+    assert List.last(sends).text =~ "Done and dismissed items are off future briefs"
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
@@ -1928,8 +1928,8 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "Best next move: Reply to Charlie about the budget."
     assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
 
-    assert intro.text =~ "Then triage the rest"
-    assert intro.text =~ "keep active work visible"
+    assert intro.text =~ "Then decide the rest"
+    assert intro.text =~ "mark done, snooze, keep active, or dismiss each one"
     assert {best_index, _} = :binary.match(intro.text, "Best next move")
     assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
     assert best_index < open_work_index
@@ -2013,7 +2013,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "Best next move: Reply to David about the laptop."
     assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
 
-    assert intro.text =~ "defer anything that can wait"
+    assert intro.text =~ "mark done, snooze, keep active, or dismiss each one"
     assert {best_index, _} = :binary.match(intro.text, "Best next move")
     assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
     assert best_index < open_work_index

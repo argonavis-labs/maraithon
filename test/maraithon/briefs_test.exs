@@ -561,10 +561,8 @@ defmodule Maraithon.BriefsTest do
     assert String.starts_with?(intro, "Best next move: Reply to finance about the receipt.")
     assert intro =~ "Best next move: Reply to finance about the receipt."
     assert intro =~ "Open work: 1 new today. 1 carried over from earlier."
-    assert intro =~ "Then triage the rest"
-    assert intro =~ "close resolved items"
-    assert intro =~ "keep active work visible"
-    assert intro =~ "defer anything that can wait"
+    assert intro =~ "Then decide the rest"
+    assert intro =~ "mark done, snooze, keep active, or dismiss each one"
     refute intro =~ "Hey"
     refute intro =~ "here's the open work"
     refute intro =~ "stale"
@@ -604,7 +602,7 @@ defmodule Maraithon.BriefsTest do
     intro = Briefs.todo_digest_intro_text(brief, [digest_todo])
 
     assert intro =~ "Best next move: Reply to finance about the receipt."
-    assert intro =~ "Then choose: mark it done, keep it active, or defer it."
+    assert intro =~ "Then make the call: mark it done, snooze it, keep it active, or dismiss it."
     assert intro =~ "Open work: 1 new today."
     refute intro =~ "the rest"
     refute intro =~ "items still need"
@@ -654,7 +652,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 1
-    assert hd(sends).text =~ "Open work 1 of 2"
+    assert hd(sends).text =~ "Open work decision 1 of 2"
     assert hd(sends).text =~ first_todo.next_action
 
     :ok =
@@ -667,7 +665,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Open work 2 of 2"
+    assert List.last(sends).text =~ "Open work decision 2 of 2"
     assert List.last(sends).text =~ second_todo.next_action
     assert Todos.get_for_user(user_id, first_todo.id).status == "done"
 
@@ -680,10 +678,10 @@ defmodule Maraithon.BriefsTest do
       })
 
     summary = sent_messages() |> List.last()
-    assert summary.text =~ "Open work review complete"
+    assert summary.text =~ "Open work review finished"
     assert summary.text =~ "Cleared: 2 (1 done, 1 dismissed)"
-    assert summary.text =~ "Remaining: 0"
-    assert summary.text =~ "Cleared work is off future briefs"
+    assert summary.text =~ "Still open: 0"
+    assert summary.text =~ "Done and dismissed items are off future briefs"
 
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
@@ -762,7 +760,7 @@ defmodule Maraithon.BriefsTest do
       |> Keyword.fetch!(:reply_markup)
       |> Map.fetch!("inline_keyboard")
       |> List.flatten()
-      |> Enum.find(&(&1["text"] == "Review one by one"))
+      |> Enum.find(&(&1["text"] == "Decide one by one"))
 
     assert review_button["callback_data"] == "brftd:#{brief.id}:start"
 
@@ -885,8 +883,8 @@ defmodule Maraithon.BriefsTest do
       })
 
     summary = sent_messages() |> List.last()
-    assert summary.text =~ "Open work review complete"
-    assert summary.text =~ "Remaining: 1"
+    assert summary.text =~ "Open work review finished"
+    assert summary.text =~ "Still open: 1"
     assert summary.text =~ "Confirm the shipment ETA"
     assert summary.text =~ "Why now: The receiving window closes before tomorrow's dispatch."
     assert summary.text =~ "Next: Reply with the signed shipment timing before noon."
@@ -940,7 +938,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 1
-    assert hd(sends).text =~ "Open work 1 of 2"
+    assert hd(sends).text =~ "Open work decision 1 of 2"
     assert hd(sends).text =~ first_todo.next_action
 
     updated_brief = Repo.get!(Brief, brief.id)
@@ -957,7 +955,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Open work 2 of 2"
+    assert List.last(sends).text =~ "Open work decision 2 of 2"
     assert List.last(sends).text =~ second_todo.next_action
   end
 
@@ -1003,7 +1001,7 @@ defmodule Maraithon.BriefsTest do
              })
 
     [message] = sent_messages()
-    assert message.text =~ "Open work 1 of 2"
+    assert message.text =~ "Open work decision 1 of 2"
     assert message.text =~ new_todo.next_action
 
     fresh_review =
@@ -1103,7 +1101,7 @@ defmodule Maraithon.BriefsTest do
     assert message.text =~ "Evidence: School asked for the signed form before the pickup cutoff."
 
     assert message.text =~
-             "Best next move: Send the signed pickup form and ask for confirmation. Then triage the list"
+             "Best next move: Send the signed pickup form and ask for confirmation. Then decide each remaining item"
 
     refute message.text =~ "clear decisions"
   end
@@ -1144,7 +1142,7 @@ defmodule Maraithon.BriefsTest do
              })
 
     [question] = sent_messages()
-    assert question.text =~ "review each item now"
+    assert question.text =~ "decide one item at a time"
     assert question.text =~ "scan the list first"
     refute question.text =~ "clear open work"
     conversation = Repo.get!(TelegramConversations.Conversation, conversation.id)
@@ -1155,7 +1153,7 @@ defmodule Maraithon.BriefsTest do
       |> Keyword.fetch!(:reply_markup)
       |> Map.fetch!("inline_keyboard")
       |> List.flatten()
-      |> Enum.find(&(&1["text"] == "Review one by one"))
+      |> Enum.find(&(&1["text"] == "Decide one by one"))
 
     assert start_button["callback_data"] == "brftd:latest:start"
 
@@ -1170,7 +1168,7 @@ defmodule Maraithon.BriefsTest do
 
     sends = sent_messages()
     assert length(sends) == 2
-    assert List.last(sends).text =~ "Open work 1 of 2"
+    assert List.last(sends).text =~ "Open work decision 1 of 2"
     assert List.last(sends).text =~ first_todo.next_action
   end
 
