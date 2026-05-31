@@ -37,7 +37,7 @@ defmodule Maraithon.ConnectionsTest do
       assert "Pair a Mac to start syncing local sources." in desktop.details
 
       assert Enum.any?(desktop.details, fn detail ->
-               String.contains?(detail, "Install the Maraithon Desktop App")
+               String.contains?(detail, "Install the Maraithon Mac companion app")
              end)
 
       refute inspect(desktop) =~ "No Mac paired yet"

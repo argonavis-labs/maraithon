@@ -52,7 +52,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def provider_account_summary(_provider), do: "0 accounts connected"
 
   def empty_accounts_message(%{provider: "desktop"}, _telegram_connected),
-    do: "Install and sign in to the Desktop App to pair this Mac."
+    do: "Install and sign in to the Mac companion app to pair this Mac."
 
   def empty_accounts_message(provider, telegram_connected) when is_map(provider) do
     cond do
@@ -127,9 +127,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def connection_primary_action(%{provider: "desktop", status: status})
       when status in [:connected, :partial],
-      do: "View Desktop App"
+      do: "View Mac companion"
 
-  def connection_primary_action(%{provider: "desktop"}), do: "Set up Desktop App"
+  def connection_primary_action(%{provider: "desktop"}), do: "Set up Mac companion"
 
   def connection_primary_action(%{provider: "slack", status: :connected}), do: "View Slack"
 

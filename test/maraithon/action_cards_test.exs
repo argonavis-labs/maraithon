@@ -233,7 +233,7 @@ defmodule Maraithon.ActionCardsTest do
         "checked_sources" => ["gmail", "desktop"],
         "blocking_gaps" => ["desktop: not connected"],
         "setup_suggestion" =>
-          "Connect the Maraithon Desktop App to include iMessage, Apple Notes, files, reminders, and local context securely."
+          "Connect the Maraithon Mac companion app to include iMessage, Apple Notes, files, reminders, and local context securely."
       }
     }
 

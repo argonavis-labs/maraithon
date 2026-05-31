@@ -20,16 +20,16 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Connected Apps"
       assert html =~ "Connect Telegram first so Maraithon can send proactive updates."
-      assert html =~ "Maraithon Desktop App"
+      assert html =~ "Maraithon Mac companion"
       assert html =~ "Google Workspace"
       assert html =~ "Notaui"
       assert html =~ "Slack"
       assert html =~ "Telegram required"
       assert html =~ "Connect Telegram first"
-      assert html =~ "Set up Desktop App"
+      assert html =~ "Set up Mac companion"
     end
 
-    test "GET /connectors surfaces detected Desktop App sources without requiring Telegram", %{
+    test "GET /connectors surfaces detected Mac companion sources without requiring Telegram", %{
       conn: conn
     } do
       user_id = "desktop-connectors@example.com"
@@ -63,10 +63,10 @@ defmodule MaraithonWeb.NavigationControllerTest do
       conn = conn |> log_in_test_user(user_id) |> get("/connectors")
       html = html_response(conn, 200)
 
-      assert html =~ "Maraithon Desktop App"
+      assert html =~ "Maraithon Mac companion"
       assert html =~ "1 Mac connected"
       assert html =~ "Synced 2 iMessages, 1 Apple Note."
-      assert html =~ "View Desktop App"
+      assert html =~ "View Mac companion"
 
       detail_conn = conn |> recycle() |> get("/connectors/desktop")
       detail_html = html_response(detail_conn, 200)

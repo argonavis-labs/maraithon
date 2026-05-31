@@ -925,7 +925,7 @@ defmodule Maraithon.ActionCards do
 
   defp setup_suggestion(missing) do
     if "desktop" in missing do
-      "Connect the Maraithon Desktop App to include iMessage, Apple Notes, files, reminders, and local context securely."
+      "Connect the Maraithon Mac companion app to include iMessage, Apple Notes, files, reminders, and local context securely."
     end
   end
 
@@ -1383,7 +1383,7 @@ defmodule Maraithon.ActionCards do
 
   defp source_label(source) when source in @assistant_sources, do: "Maraithon"
   defp source_label("system"), do: "Maraithon"
-  defp source_label("desktop"), do: "Desktop App"
+  defp source_label("desktop"), do: "Mac companion"
   defp source_label(source) when is_binary(source), do: SourceLabels.label(source)
   defp source_label(_source), do: "Maraithon"
 

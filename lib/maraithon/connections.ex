@@ -433,7 +433,7 @@ defmodule Maraithon.Connections do
     %{
       id: "desktop",
       provider: "desktop",
-      label: "Maraithon Desktop App",
+      label: "Maraithon Mac companion",
       description:
         "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
       status: status,
@@ -441,7 +441,7 @@ defmodule Maraithon.Connections do
       updated_at: latest_device_seen_at(active_entries),
       disconnectable?: false,
       connect_url: "/connectors/desktop",
-      disconnect_label: "Manage Desktop App",
+      disconnect_label: "Manage Mac companion",
       refresh_token_status: :not_applicable,
       details: desktop_details(active_entries, totals, timezone_info),
       services: desktop_services(totals),
@@ -456,7 +456,7 @@ defmodule Maraithon.Connections do
     %{
       id: "desktop",
       provider: "desktop",
-      label: "Maraithon Desktop App",
+      label: "Maraithon Mac companion",
       description:
         "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
       status: :unknown,
@@ -464,7 +464,7 @@ defmodule Maraithon.Connections do
       updated_at: nil,
       disconnectable?: false,
       connect_url: "/connectors/desktop",
-      disconnect_label: "Manage Desktop App",
+      disconnect_label: "Manage Mac companion",
       refresh_token_status: :unknown,
       details: desktop_details([], totals, LocalTime.default_timezone_info()),
       services: desktop_services(totals),
@@ -673,7 +673,7 @@ defmodule Maraithon.Connections do
   defp desktop_details([], _totals, _timezone_info) do
     [
       "Pair a Mac to start syncing local sources.",
-      "Install the Maraithon Desktop App to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
+      "Install the Maraithon Mac companion app to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
     ]
   end
 
@@ -2143,7 +2143,7 @@ defmodule Maraithon.Connections do
       callback_urls: [],
       env_requirements: [],
       setup_notes: [
-        "Install the Maraithon Desktop App on a Mac you control.",
+        "Install the Maraithon Mac companion app on a Mac you control.",
         "Pair the app with Maraithon, then choose which local sources to sync.",
         "Only the sources you enable are synced, and they stay scoped to your Maraithon account."
       ]
