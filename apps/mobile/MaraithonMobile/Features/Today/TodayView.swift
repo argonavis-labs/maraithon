@@ -113,16 +113,6 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
-                            title: TodayViewCopy.peopleTitle,
-                            subtitle: TodayViewCopy.peopleSubtitle,
-                            value: "\(metrics.peopleCount)",
-                            systemImage: "person.2.fill",
-                            tint: .green
-                        ) {
-                            appNavigation.showPeople(.all)
-                        }
-                        Divider().padding(.leading, 48)
-                        CommandRow(
                             title: TodayViewCopy.followUpTitle,
                             subtitle: TodayViewCopy.followUpSubtitle,
                             value: "\(metrics.atRiskContacts)",
@@ -384,8 +374,6 @@ enum TodayViewCopy {
     static let overdueSubtitle = "Needs action"
     static let dueTodayTitle = "Due today"
     static let dueTodaySubtitle = "Before tomorrow"
-    static let peopleTitle = "People"
-    static let peopleSubtitle = "Relationships tracked"
     static let followUpTitle = "Needs follow-up"
     static let followUpSubtitle = "Relationships need attention"
     static let emptyFocusTitle = "Nothing urgent for today"
@@ -418,8 +406,6 @@ enum TodayViewCopy {
             overdueSubtitle,
             dueTodayTitle,
             dueTodaySubtitle,
-            peopleTitle,
-            peopleSubtitle,
             followUpTitle,
             followUpSubtitle,
             emptyFocusTitle,

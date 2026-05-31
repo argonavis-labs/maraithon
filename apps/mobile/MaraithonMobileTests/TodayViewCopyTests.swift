@@ -39,6 +39,7 @@ struct TodayViewCopyTests {
         #expect(!copy.contains("needs a decision"))
         #expect(!copy.contains("outstanding work"))
         #expect(!copy.contains("stale active relationships"))
+        #expect(!copy.contains("relationships tracked"))
         #expect(!copy.contains("queue"))
         #expect(!copy.contains("delete"))
         #expect(!exactCopy.contains("No Recent Chats"))
