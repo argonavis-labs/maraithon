@@ -206,7 +206,10 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   def mcp_batch(_reason) do
-    %{"reason" => "A request in the batch failed unexpectedly."}
+    %{
+      "reason" =>
+        "One action in this batch did not complete. Check current state before running it again."
+    }
   end
 
   def mcp_policy_decision(decision) when is_map(decision) do
@@ -270,7 +273,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
         mcp_tool(:tool_timeout)
 
       String.ends_with?(reason, "_not_found") ->
-        "Requested item was not found."
+        "That item is no longer available. Refresh context before running the action again."
 
       account_connection_error?(reason) ->
         "Connect the missing account before running this action."
@@ -279,7 +282,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
         "Reconnect the account before running this action."
 
       String.starts_with?(reason, "missing_") ->
-        "Required action details are missing."
+        "Add the missing action details before running it again."
 
       String.contains?(reason, ":") ->
         "Action did not complete. No confirmed change was recorded."

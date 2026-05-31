@@ -157,6 +157,31 @@ defmodule MaraithonWeb.ControlControllerTest do
     refute inspect(response) =~ "google_account_not_connected"
   end
 
+  test "returns recovery copy for stale control action targets", %{conn: conn} do
+    response =
+      post(conn, "/api/v1/control", %{
+        "jsonrpc" => "2.0",
+        "id" => 10,
+        "method" => "tools.call",
+        "params" => %{
+          "name" => "get_todo",
+          "arguments" => %{
+            "user_id" => "control-stale-target@example.com",
+            "todo_id" => Ecto.UUID.generate()
+          }
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["result", "is_error"]) == true
+    assert get_in(response, ["result", "error", "code"]) == "tool_error"
+
+    assert get_in(response, ["result", "error", "message"]) ==
+             "That item is no longer available. Refresh context before running the action again."
+
+    refute inspect(response) =~ "todo_not_found"
+  end
+
   test "does not expose raw scheduled task failures", %{conn: conn} do
     response =
       post(conn, "/api/v1/control", %{

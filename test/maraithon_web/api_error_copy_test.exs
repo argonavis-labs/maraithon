@@ -215,6 +215,12 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.mcp_tool("unknown_tool: internal_secret_tool") ==
              "Action is not available."
 
+    assert ApiErrorCopy.mcp_tool("person_not_found") ==
+             "That item is no longer available. Refresh context before running the action again."
+
+    assert ApiErrorCopy.mcp_tool("missing_calendar_id") ==
+             "Add the missing action details before running it again."
+
     assert ApiErrorCopy.mcp_tool("google_api_failed: 500 %{token: \"secret\"}") ==
              "Action did not complete. No confirmed change was recorded."
 
@@ -227,7 +233,8 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
              "Action did not complete. No confirmed change was recorded."
 
     assert ApiErrorCopy.mcp_batch(@internal_reason) == %{
-             "reason" => "A request in the batch failed unexpectedly."
+             "reason" =>
+               "One action in this batch did not complete. Check current state before running it again."
            }
 
     refute ApiErrorCopy.mcp_tool(raw_sentence) =~ "token=secret"

@@ -425,10 +425,10 @@ defmodule Maraithon.ControlProtocol do
         "Reconnect the account before running this action."
 
       String.starts_with?(reason, "missing_") ->
-        "Required action details are missing."
+        "Add the missing action details before running it again."
 
       String.ends_with?(reason, "_not_found") ->
-        "Requested item was not found."
+        "That item is no longer available. Refresh context before running the action again."
 
       String.starts_with?(reason, "unknown_tool:") ->
         "Action is not available."

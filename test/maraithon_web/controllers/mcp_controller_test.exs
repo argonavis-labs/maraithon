@@ -227,6 +227,30 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["result", "structuredContent", "todo", "status"]) == "dismissed"
   end
 
+  test "returns recovery copy for stale MCP action targets", %{conn: conn} do
+    user_id = "mcp-stale-target-#{System.unique_integer([:positive])}@example.com"
+
+    conn =
+      post(conn, "/mcp", %{
+        "jsonrpc" => "2.0",
+        "id" => "stale-target",
+        "method" => "tools/call",
+        "params" => %{
+          "name" => "get_todo",
+          "arguments" => %{"user_id" => user_id, "todo_id" => Ecto.UUID.generate()}
+        }
+      })
+
+    response = json_response(conn, 200)
+
+    assert get_in(response, ["result", "isError"]) == true
+
+    assert response |> get_in(["result", "content"]) |> hd() |> Map.fetch!("text") ==
+             "That item is no longer available. Refresh context before running the action again."
+
+    refute Jason.encode!(response) =~ "todo_not_found"
+  end
+
   test "lists connected account status and tool coverage over MCP", %{conn: conn} do
     user_id = "mcp-connected-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
