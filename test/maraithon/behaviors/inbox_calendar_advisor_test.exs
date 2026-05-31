@@ -4,6 +4,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   alias Maraithon.Accounts
   alias Maraithon.Agents
   alias Maraithon.Behaviors.InboxCalendarAdvisor
+  alias Maraithon.ChiefOfStaff.SourceBundle
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights
   alias Maraithon.OAuth
@@ -131,6 +132,40 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert length(new_state.pending_candidates) in 1..20
       assert String.length(prompt) < 80_000
       refute prompt =~ String.duplicate("Can you send the promised deck today? ", 100)
+    end
+
+    test "titles sent commitments as missing follow-through instead of missing reply", %{
+      context: context
+    } do
+      sent_at = DateTime.add(DateTime.utc_now(), -2, :hour)
+
+      sent_message = %{
+        "message_id" => "sent-commitment-title-1",
+        "thread_id" => "thread-sent-commitment-title",
+        "subject" => "Investor deck",
+        "snippet" => "I'll send the deck to Sarah today.",
+        "text_body" => "I'll send the deck to Sarah today.",
+        "from" => context.user_id,
+        "to" => "Sarah <sarah@example.com>",
+        "labels" => ["SENT"],
+        "internal_date" => sent_at
+      }
+
+      source_bundle =
+        context
+        |> SourceBundle.empty()
+        |> SourceBundle.put_gmail(%{"sent_messages" => [sent_message]})
+
+      state = InboxCalendarAdvisor.init(%{"user_id" => context.user_id})
+
+      {:effect, {:llm_call, _params}, new_state} =
+        InboxCalendarAdvisor.handle_wakeup(state, Map.put(context, :source_bundle, source_bundle))
+
+      candidate =
+        Enum.find(new_state.pending_candidates, &(&1["category"] == "commitment_unresolved"))
+
+      assert candidate["title"] =~ "No follow-through is recorded yet."
+      refute candidate["title"] =~ "No reply has gone out yet"
     end
 
     test "includes Telegram feedback context in the llm prompt", %{

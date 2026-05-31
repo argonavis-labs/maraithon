@@ -1647,13 +1647,13 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
           nudge_line =
             cond do
               is_binary(artifact_hint) ->
-                "You said you'd send #{artifact_hint} to #{person} #{deadline_phrase(due_at)}. No reply has gone out yet."
+                "You said you'd send #{artifact_hint} to #{person} #{deadline_phrase(due_at)}. No follow-through is recorded yet."
 
               is_binary(commitment_topic) ->
-                "You committed to follow up with #{person} about #{commitment_topic}. No reply has gone out yet."
+                "You committed to follow up with #{person} about #{commitment_topic}. No follow-through is recorded yet."
 
               true ->
-                "You committed to follow up with #{person}. No reply has gone out yet."
+                "You committed to follow up with #{person}. No follow-through is recorded yet."
             end
 
           evidence =

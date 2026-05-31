@@ -790,7 +790,8 @@ defmodule Maraithon.TelegramRouterTest do
     defaults = %{
       "source" => "gmail",
       "category" => "commitment_unresolved",
-      "title" => "You said you'd send the deck to Sarah today. No reply has gone out yet.",
+      "title" =>
+        "You said you'd send the deck to Sarah today. No follow-through is recorded yet.",
       "summary" =>
         "The commitment still appears open for Sarah and no completion evidence was found in sent email.",
       "recommended_action" =>
