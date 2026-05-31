@@ -23,6 +23,9 @@ defmodule Maraithon.Todos do
   @open_statuses ~w(open snoozed)
   @feedback_values ~w(helpful not_helpful)
   @decision_text_pattern "\\m(approve|approval|approved|ask|asked|blocked|blocking|call|choose|commitment|committed|decide|decision|owe|owes|owed|reply|replied|respond|response|wait|waiting)\\M"
+  @fallback_title "Review open work"
+  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
 
   def get_for_user(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do
@@ -820,14 +823,9 @@ defmodule Maraithon.Todos do
       "kind" => kind,
       "attention_mode" =>
         normalize_attention_mode(read_string(attrs, "attention_mode", "act_now")),
-      "title" => read_string(attrs, "title", "Open todo"),
-      "summary" => read_string(attrs, "summary", read_string(attrs, "todo", "Review this item.")),
-      "next_action" =>
-        read_string(
-          attrs,
-          "next_action",
-          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply."
-        ),
+      "title" => read_string(attrs, "title", @fallback_title),
+      "summary" => read_string(attrs, "summary", read_string(attrs, "todo", @fallback_summary)),
+      "next_action" => read_string(attrs, "next_action", @fallback_action),
       "due_at" => due_at,
       "notes" => read_string(attrs, "notes", nil),
       "action_plan" => action_plan,
@@ -867,13 +865,9 @@ defmodule Maraithon.Todos do
       source_account_label: source_account_label_from_metadata(metadata),
       kind: todo_kind_from_insight(insight),
       attention_mode: normalize_attention_mode(insight.attention_mode || "act_now"),
-      title: normalize_required_text(insight.title, "Open todo"),
-      summary: normalize_required_text(insight.summary, "Review this item."),
-      next_action:
-        normalize_required_text(
-          insight.recommended_action,
-          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply."
-        ),
+      title: normalize_required_text(insight.title, @fallback_title),
+      summary: normalize_required_text(insight.summary, @fallback_summary),
+      next_action: normalize_required_text(insight.recommended_action, @fallback_action),
       due_at: insight.due_at,
       notes: notes_from_metadata(metadata),
       action_plan: action_plan_from_metadata(metadata),

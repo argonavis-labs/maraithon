@@ -14,6 +14,9 @@ defmodule Maraithon.ActionCards do
   alias Maraithon.Todos.{AttentionRanker, PublicMetadata, SurfaceQuality, Todo, UserFacingCopy}
 
   @open_statuses ~w(open snoozed)
+  @fallback_title "Review open work"
+  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
   @assistant_sources ~w(
     chief_of_staff_morning_briefing
     chief_of_staff_commitment_tracker
@@ -448,7 +451,7 @@ defmodule Maraithon.ActionCards do
 
   defp headline(todo, context, _attention_mode) do
     person = primary_person_name(context)
-    title = clean_title(todo.title || todo.next_action || "Review this item")
+    title = clean_title(todo.title || todo.next_action || @fallback_title)
 
     cond do
       present?(person) and title_mentions_person?(title, person) ->
@@ -498,6 +501,9 @@ defmodule Maraithon.ActionCards do
       blank?(action) ->
         nil
 
+      generic_decision_subject?(action) ->
+        nil
+
       Regex.match?(~r/^(decide|choose)\s+whether\b/i, action) ->
         ensure_terminal_punctuation(action)
 
@@ -544,13 +550,42 @@ defmodule Maraithon.ActionCards do
       present?(project) and project != source ->
         "Choose the next move for #{project}."
 
-      present?(source) and source != "Maraithon" ->
+      useful_source_decision_label?(source) ->
         "Choose whether to act on this #{String.downcase(source)} work."
 
       true ->
         "Choose whether to keep, delegate, or dismiss this work."
     end
   end
+
+  defp generic_decision_subject?(action) when is_binary(action) do
+    action
+    |> strip_terminal_punctuation()
+    |> String.downcase()
+    |> then(&(&1 in ["review open work", "review this item", "open todo", "open work"]))
+  end
+
+  defp generic_decision_subject?(_action), do: false
+
+  defp useful_source_decision_label?(source) when is_binary(source) do
+    normalized =
+      source
+      |> String.replace(~r/[\s\p{Zs}]+/u, " ")
+      |> String.trim()
+      |> String.downcase()
+
+    present?(source) and
+      normalized not in [
+        "maraithon",
+        "manual",
+        "added by you",
+        "created by you",
+        "system",
+        "connected context"
+      ]
+  end
+
+  defp useful_source_decision_label?(_source), do: false
 
   defp why_now(_todo, _metadata, profile, "stale_check", _opts, _context) do
     age_days = read_field(profile, "age_days")
@@ -1873,14 +1908,16 @@ defmodule Maraithon.ActionCards do
   end
 
   defp clean_title(value) when is_binary(value) do
-    value
-    |> UserFacingCopy.polish_text()
-    |> String.replace(~r/^\s*(todo|action|next)\s*:\s*/i, "")
-    |> single_line()
-    |> truncate(120)
+    title =
+      value
+      |> UserFacingCopy.polish_text()
+      |> String.replace(~r/^\s*(todo|action|next)\s*:\s*/i, "")
+      |> single_line()
+
+    if present?(title), do: truncate(title, 120), else: @fallback_title
   end
 
-  defp clean_title(_value), do: "Review this item"
+  defp clean_title(_value), do: @fallback_title
 
   defp title_mentions_person?(title, person) when is_binary(title) and is_binary(person) do
     title = String.downcase(title)
@@ -1907,11 +1944,9 @@ defmodule Maraithon.ActionCards do
       source_account_label: read_string(map, "source_account_label"),
       kind: read_string(map, "kind") || "general",
       attention_mode: read_string(map, "attention_mode") || "act_now",
-      title: read_string(map, "title") || read_string(map, "next_action") || "Review this item",
-      summary: read_string(map, "summary") || "Review this item.",
-      next_action:
-        read_string(map, "next_action") ||
-          "Open the source item, confirm the real ask, then choose done, dismiss, or a short reply.",
+      title: read_string(map, "title") || read_string(map, "next_action") || @fallback_title,
+      summary: read_string(map, "summary") || @fallback_summary,
+      next_action: read_string(map, "next_action") || @fallback_action,
       due_at: read_datetime(map, "due_at"),
       notes: read_string(map, "notes"),
       action_draft: read_map(map, "action_draft"),

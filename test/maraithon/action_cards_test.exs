@@ -276,6 +276,46 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "account unknown"
   end
 
+  test "preview cards avoid generic review-item fallback copy", %{user_id: user_id} do
+    card =
+      ActionCards.for_todo(%{
+        "id" => Ecto.UUID.generate(),
+        "user_id" => user_id,
+        "source" => "manual",
+        "kind" => "general",
+        "attention_mode" => "act_now",
+        "title" => "",
+        "summary" => "",
+        "next_action" => "",
+        "dedupe_key" => "action-card:preview-fallback-copy",
+        "metadata" => %{}
+      })
+
+    rendered =
+      ActionCards.render_telegram_todo(%{
+        "id" => Ecto.UUID.generate(),
+        "user_id" => user_id,
+        "source" => "manual",
+        "kind" => "general",
+        "attention_mode" => "act_now",
+        "title" => "",
+        "summary" => "",
+        "next_action" => "",
+        "dedupe_key" => "action-card:preview-fallback-copy-rendered",
+        "metadata" => %{}
+      })
+
+    assert card["headline"] == "Review open work"
+
+    assert card["decision_prompt"] ==
+             "Choose whether to keep, delegate, or dismiss this work."
+
+    assert rendered =~ "Review open work"
+    assert rendered =~ "keep, delegate, or dismiss"
+    refute rendered =~ "Review this item"
+    refute rendered =~ "Open todo"
+  end
+
   test "waiting state copy uses operator-facing language instead of raw state keys",
        %{user_id: user_id} do
     todo = %Todo{

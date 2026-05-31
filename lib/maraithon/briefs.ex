@@ -648,7 +648,7 @@ defmodule Maraithon.Briefs do
     value = String.trim(value)
 
     cond do
-      value == "" -> "Review the first open item."
+      value == "" -> "Start with the first open item and choose keep, done, delegate, or defer."
       Regex.match?(~r/[.!?]\z/u, value) -> value
       true -> value <> "."
     end

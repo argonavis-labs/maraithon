@@ -768,16 +768,25 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp person_text(%Insight{} = insight, metadata) do
-    person = person_name(insight, metadata) || "Person not clearly named"
+    person = person_name(insight, metadata)
     identity = person_identity_text(metadata)
     source = source_label(insight, metadata)
 
-    [person, identity, source]
+    cond do
+      present?(person) ->
+        [person, identity, source]
+
+      subject = subject_text(metadata) ->
+        ["Owner to confirm", "#{subject} thread", source]
+
+      true ->
+        ["Owner to confirm", source]
+    end
     |> Enum.reject(&blank?/1)
     |> case do
       [] -> nil
-      [person] -> person
-      [person | details] -> "#{person} — #{Enum.join(details, " · ")}"
+      [primary] -> primary
+      [primary | details] -> "#{primary} — #{Enum.join(details, " · ")}"
     end
   end
 
@@ -802,7 +811,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         "A named person is waiting on the next step, with no recorded closure signal."
 
       true ->
-        "This is a high-signal open follow-up worth handling."
+        "Source context says this remains open; decide whether to act, delegate, or dismiss it."
     end
   end
 
@@ -828,7 +837,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         suggestions
 
       monitor_insight?(insight) ->
-        "Watch for a blocker, direct ask, or stall."
+        "Watch for a blocker, a direct ask back to you, or a stall in progress."
 
       true ->
         inferred_next_action(insight, metadata)
@@ -1180,13 +1189,16 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp generic_next_action?(_text), do: false
 
   defp inferred_next_action(%Insight{} = insight, metadata) do
-    person = person_name(insight, metadata) || "them"
+    person = person_name(insight, metadata)
     subject = subject_text(metadata)
     commitment = record_value(metadata, "commitment")
 
     cond do
-      present?(subject) ->
+      present?(subject) and present?(person) ->
         "Suggested: open the #{subject} thread, confirm what #{person} is waiting on, then send the concrete update or mark it not important if it no longer matters."
+
+      present?(subject) ->
+        "Suggested: open the #{subject} thread, confirm the owner and real ask, then send the concrete update or mark it not important if it no longer matters."
 
       present?(commitment) ->
         "Suggested: verify whether the promised item is ready; if it is, send it, otherwise reply with the current status and realistic timing."

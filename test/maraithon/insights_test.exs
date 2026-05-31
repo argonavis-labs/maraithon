@@ -196,6 +196,41 @@ defmodule Maraithon.InsightsTest do
                "Send the campaign update with a clear owner and timing."
     end
 
+    test "fallback insight copy gives an executive decision frame", %{
+      user_id: user_id,
+      agent: agent
+    } do
+      {:ok, [insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "general",
+            "title" => " ",
+            "summary" => "",
+            "recommended_action" => nil,
+            "dedupe_key" => "copy:decision-frame-fallback"
+          }
+        ])
+
+      assert insight.title == "Review open work"
+
+      assert insight.summary ==
+               "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
+
+      assert insight.recommended_action ==
+               "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.title == insight.title
+      assert todo.summary == insight.summary
+      assert todo.next_action == insight.recommended_action
+
+      rendered = inspect({insight, todo})
+      refute rendered =~ "Actionable insight"
+      refute rendered =~ "Review this item"
+      refute rendered =~ "Review and decide next step"
+    end
+
     test "default Slack draft plan avoids internal loop language", %{
       user_id: user_id,
       agent: agent

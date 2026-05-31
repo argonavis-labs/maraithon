@@ -14,6 +14,9 @@ defmodule Maraithon.Insights do
 
   @open_statuses ["new", "snoozed"]
   @attention_modes ["act_now", "monitor"]
+  @fallback_title "Review open work"
+  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
 
   def list_open_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)
@@ -235,10 +238,9 @@ defmodule Maraithon.Insights do
       "agent_id" => agent_id,
       "source" => read_string(attrs, "source", "system"),
       "category" => read_string(attrs, "category", "general"),
-      "title" => polished_string(attrs, "title", "Actionable insight"),
-      "summary" => polished_string(attrs, "summary", "Review this item."),
-      "recommended_action" =>
-        polished_string(attrs, "recommended_action", "Review and decide next step"),
+      "title" => polished_string(attrs, "title", @fallback_title),
+      "summary" => polished_string(attrs, "summary", @fallback_summary),
+      "recommended_action" => polished_string(attrs, "recommended_action", @fallback_action),
       "priority" => clamp_integer(read_integer(attrs, "priority", 50), 0, 100),
       "confidence" => clamp_float(read_float(attrs, "confidence", 0.5), 0.0, 1.0),
       "attention_mode" => normalize_attention_mode(attention_mode),

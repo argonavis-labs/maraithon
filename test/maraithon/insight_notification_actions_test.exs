@@ -280,6 +280,42 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute sent.text =~ "Person not clearly named"
   end
 
+  test "missing person copy asks the user to confirm the owner before acting", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Reply owed: Vendor update",
+          "summary" => "The vendor update still has no recorded closure.",
+          "recommended_action" => "Reply with a clear owner and timing.",
+          "priority" => 89,
+          "confidence" => 0.86,
+          "source_id" => "msg-owner-to-confirm",
+          "dedupe_key" => "telegram-actions:gmail:owner-to-confirm",
+          "metadata" => %{
+            "thread_id" => "thread-owner-to-confirm",
+            "subject" => "Vendor update"
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert sent.text =~ "<b>Person</b>"
+    assert sent.text =~ "Owner to confirm"
+    assert sent.text =~ "Vendor update thread"
+    assert sent.text =~ "confirm the owner and real ask"
+    refute sent.text =~ "Person not clearly named"
+    refute sent.text =~ "what them is waiting on"
+  end
+
   test "action callback failures do not expose raw provider errors", %{
     agent: agent,
     user_id: user_id
