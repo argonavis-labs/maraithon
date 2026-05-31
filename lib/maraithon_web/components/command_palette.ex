@@ -122,7 +122,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
               hidden
               class="px-4 py-10 text-center text-sm/6 text-zinc-500"
             >
-              No commands found.
+              Try another command or page name.
             </div>
           </div>
 

@@ -30,7 +30,9 @@ defmodule MaraithonWeb.Components.CommandPaletteTest do
     refute html =~ "card review surface"
     refute html =~ "Create an agent"
     assert html =~ "Connect Google account"
+    assert html =~ "Try another command or page name."
     refute html =~ "Admin dashboard"
+    refute html =~ "No commands found."
   end
 
   test "renders dashboard suggestions without todo or agent jargon" do

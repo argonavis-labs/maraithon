@@ -67,10 +67,24 @@ defmodule MaraithonWeb.InsightsLiveTest do
 
     html = render(view)
 
-    assert has_element?(view, "h2", "No people insights surfaced from checked records.")
-    assert has_element?(view, "p", "No duplicate candidates surfaced in checked people data.")
-    assert has_element?(view, "p", "No relationship suggestions surfaced from checked evidence.")
+    assert has_element?(view, "h2", "Checked records did not surface people insights.")
+
+    assert has_element?(
+             view,
+             "p",
+             "Merge suggestions will appear here after checked records point to the same person."
+           )
+
+    assert has_element?(
+             view,
+             "p",
+             "Relationship suggestions will appear here after checked evidence points to a label you can confirm."
+           )
+
     refute html =~ "No people insights right now"
+    refute html =~ "No people insights surfaced from checked records."
+    refute html =~ "No duplicate candidates surfaced in checked people data."
+    refute html =~ "No relationship suggestions surfaced from checked evidence."
     refute html =~ "looks clean"
     refute html =~ "No duplicate people found"
     refute html =~ "No relationship suggestions found"

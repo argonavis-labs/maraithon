@@ -194,10 +194,10 @@ defmodule MaraithonWeb.InsightsLive do
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
             <h2 class="text-sm/6 font-semibold text-zinc-950">
-              No people insights surfaced from checked records.
+              Checked records did not surface people insights.
             </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              Maraithon has not surfaced duplicate or relationship suggestions from the people data it checked. Review People directly if you want to edit relationships or merge contacts.
+              Review People directly if you want to edit relationships or merge contacts manually.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People
@@ -228,7 +228,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          No duplicate candidates surfaced in checked people data.
+          Merge suggestions will appear here after checked records point to the same person.
         </p>
       </div>
 
@@ -275,7 +275,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          No relationship suggestions surfaced from checked evidence.
+          Relationship suggestions will appear here after checked evidence points to a label you can confirm.
         </p>
       </div>
 
