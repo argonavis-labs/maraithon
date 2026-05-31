@@ -803,7 +803,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            context · allowed actions · review limits · support setup
+                            context · allowed actions · review limits · support-provided setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -895,16 +895,16 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
 
                         <.field
-                          label="Support setup JSON"
+                          label="Support-provided setup"
                           for="launch_config_json"
-                          description="Leave blank unless Maraithon support gives you setup JSON."
+                          description="Leave blank unless Maraithon support gives you a setup block."
                         >
                           <.c_textarea
                             id="launch_config_json"
                             name="launch[config_json]"
                             rows={5}
                             class="font-mono"
-                            placeholder="Paste support-provided JSON"
+                            placeholder="Paste the setup block from support"
                             value={@launch["config_json"]}
                           />
                         </.field>
