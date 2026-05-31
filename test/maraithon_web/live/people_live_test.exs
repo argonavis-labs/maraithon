@@ -172,11 +172,17 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Family context"
     assert html =~ "No family context yet"
 
-    view
-    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")
-    |> render_click()
+    html =
+      view
+      |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")
+      |> render_click()
 
     assert has_element?(view, "#family-member-onboarding-form")
+    assert html =~ "Notifications"
+    assert html =~ "No notifications"
+    refute html =~ ">Push<"
+    refute html =~ "Push policy"
+    refute html =~ "Never push"
 
     view
     |> form("#family-member-onboarding-form",
@@ -213,9 +219,14 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert [%{id: jack_id}] = Crm.list_family_context(@user_email, limit: 5)
     assert jack_id == jack.id
 
-    assert Enum.any?(Memory.list_items(@user_email, tag: "people_onboarding"), fn memory ->
-             memory.source_ref_id == jack.id and memory.source == "people_onboarding"
-           end)
+    family_memory =
+      Enum.find(Memory.list_items(@user_email, tag: "people_onboarding"), fn memory ->
+        memory.source_ref_id == jack.id and memory.source == "people_onboarding"
+      end)
+
+    assert family_memory
+    assert family_memory.content =~ "Notifications: Time-sensitive only."
+    refute family_memory.content =~ "Delivery:"
 
     html = render(view)
     assert html =~ "Added Jack Fenwick to family context."
@@ -224,6 +235,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Child"
     assert html =~ "Logistics only"
     assert html =~ "Time-sensitive only"
+    assert html =~ "Notifications"
+    refute html =~ ">Delivery<"
   end
 
   test "onboards a family proxy linked to a family member", %{conn: conn} do
@@ -241,11 +254,17 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
     {:ok, view, _html} = live(conn, "/operator/people")
 
-    view
-    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='proxy']")
-    |> render_click()
+    html =
+      view
+      |> element("button[phx-click='show_people_onboarding'][phx-value-mode='proxy']")
+      |> render_click()
 
     assert has_element?(view, "#family-proxy-onboarding-form")
+    assert html =~ "Notifications"
+    assert html =~ "No notifications"
+    refute html =~ ">Push<"
+    refute html =~ "Push policy"
+    refute html =~ "Never push"
 
     view
     |> form("#family-proxy-onboarding-form",
@@ -291,6 +310,8 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "School / child-care"
     assert html =~ "For Jack Fenwick"
     assert html =~ "Digest only"
+    assert html =~ "Notifications"
+    refute html =~ ">Delivery<"
   end
 
   test "opens detail panel from row click", %{conn: conn} do

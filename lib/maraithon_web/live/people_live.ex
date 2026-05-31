@@ -45,7 +45,7 @@ defmodule MaraithonWeb.PeopleLive do
   @push_policy_options [
     %{value: "time_sensitive_only", label: "Time-sensitive only"},
     %{value: "digest_only", label: "Digest only"},
-    %{value: "never_push", label: "Never push"}
+    %{value: "never_push", label: "No notifications"}
   ]
 
   @impl true
@@ -569,7 +569,7 @@ defmodule MaraithonWeb.PeopleLive do
               <.table_header>Person</.table_header>
               <.table_header>Role</.table_header>
               <.table_header>Handling</.table_header>
-              <.table_header>Delivery</.table_header>
+              <.table_header>Notifications</.table_header>
             </.table_row>
           </.table_head>
           <.table_body>
@@ -672,7 +672,7 @@ defmodule MaraithonWeb.PeopleLive do
           </.c_select>
         </.field>
 
-        <.field label="Push" for="family-member-push-policy">
+        <.field label="Notifications" for="family-member-push-policy">
           <.c_select id="family-member-push-policy" name={@form[:push_policy].name}>
             <option
               :for={option <- push_policy_options()}
@@ -804,7 +804,7 @@ defmodule MaraithonWeb.PeopleLive do
           </.c_select>
         </.field>
 
-        <.field label="Push" for="family-proxy-push-policy">
+        <.field label="Notifications" for="family-proxy-push-policy">
           <.c_select id="family-proxy-push-policy" name={@form[:push_policy].name}>
             <option
               :for={option <- push_policy_options()}
@@ -1100,7 +1100,7 @@ defmodule MaraithonWeb.PeopleLive do
       "#{person.display_name} is #{family_role_label(person)} in #{String.downcase(family_context_kind(person))} context.",
       "Treat items involving #{person.display_name} as family context, not generic work follow-up.",
       "Handling: #{todo_policy_label(person)}.",
-      "Delivery: #{push_policy_label(person)}.",
+      "Notifications: #{push_policy_label(person)}.",
       person.notes
     ]
     |> Enum.filter(&present?/1)
@@ -1572,7 +1572,7 @@ defmodule MaraithonWeb.PeopleLive do
             </.c_select>
           </.field>
 
-          <.field label="Push policy" for={"relationship-push-policy-#{@person.id}"}>
+          <.field label="Notifications" for={"relationship-push-policy-#{@person.id}"}>
             <.c_select
               id={"relationship-push-policy-#{@person.id}"}
               name={@relationship_form[:push_policy].name}
