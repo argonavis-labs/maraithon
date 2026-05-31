@@ -15,6 +15,22 @@ defmodule MaraithonWeb.MemoriesLiveTest do
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
+  test "empty saved context distinguishes first-run and filtered states", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/operator/memories")
+    html = render(view)
+
+    assert html =~ "No saved context yet."
+    assert html =~ "Preferences, corrections, relationships, and project notes will appear here"
+    refute html =~ "No saved context matches these filters."
+
+    {:ok, view, _html} = live(conn, "/operator/memories?q=Charlie")
+    html = render(view)
+
+    assert html =~ "No saved context matches these filters."
+    assert html =~ "Reset filters or search for a different person, project, or preference."
+    refute html =~ "No saved context yet."
+  end
+
   test "renders memory rows and highlights the Saved Context nav", %{conn: conn} do
     {:ok, memory} =
       Memory.write(@user_email, %{

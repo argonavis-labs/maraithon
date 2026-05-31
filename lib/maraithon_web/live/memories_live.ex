@@ -161,7 +161,8 @@ defmodule MaraithonWeb.MemoriesLive do
             <.table_body>
               <.table_row :if={@memories == []}>
                 <.table_cell colspan="5" class="py-10 text-center text-sm/6 text-zinc-500">
-                  No saved context matches these filters.
+                  <p class="font-medium text-zinc-700"><%= memory_empty_title(@filters) %></p>
+                  <p class="mt-1"><%= memory_empty_body(@filters) %></p>
                 </.table_cell>
               </.table_row>
               <.table_row
@@ -479,6 +480,25 @@ defmodule MaraithonWeb.MemoriesLive do
   defp memory_event_label("feedback_recorded"), do: "Feedback saved"
   defp memory_event_label("confidence_updated"), do: "Review status updated"
   defp memory_event_label(value), do: label(value)
+
+  defp memory_empty_title(filters) do
+    if default_filters?(filters),
+      do: "No saved context yet.",
+      else: "No saved context matches these filters."
+  end
+
+  defp memory_empty_body(filters) do
+    if default_filters?(filters) do
+      "Preferences, corrections, relationships, and project notes will appear here once Maraithon has confirmed them."
+    else
+      "Reset filters or search for a different person, project, or preference."
+    end
+  end
+
+  defp default_filters?(filters) do
+    normalize_text(filters["q"]) in [nil, ""] and filters["status"] == "active" and
+      filters["kind"] == "all" and filters["scope"] == "all"
+  end
 
   defp format_datetime(value, fallback, timezone_info),
     do: LocalTime.format_datetime(value, fallback, timezone_info)
