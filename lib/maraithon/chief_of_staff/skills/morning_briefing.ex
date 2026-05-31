@@ -3427,7 +3427,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     end
   end
 
-  defp triage_next_move(_text, _source), do: "Decide the next move"
+  defp triage_next_move(_text, _source),
+    do: "Reply, delegate, or dismiss if this still needs attention"
 
   defp triage_any_term?(normalized, terms) when is_binary(normalized) and is_list(terms) do
     words = String.split(normalized, " ", trim: true)

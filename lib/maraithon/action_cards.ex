@@ -542,13 +542,13 @@ defmodule Maraithon.ActionCards do
 
     cond do
       present?(project) and project != source ->
-        "Decide the next move for #{project}."
+        "Choose the next move for #{project}."
 
       present?(source) and source != "Maraithon" ->
-        "Decide the next move for this #{String.downcase(source)} item."
+        "Choose whether to act on this #{String.downcase(source)} work."
 
       true ->
-        "Decide the next move for this work item."
+        "Choose whether to keep, delegate, or dismiss this work."
     end
   end
 
@@ -571,7 +571,8 @@ defmodule Maraithon.ActionCards do
       due_sentence(todo, metadata, opts),
       manual_capture_why_now(todo, metadata),
       profile_why_now(profile, todo, context),
-      "This is still open and needs a clear next decision."
+      contextual_why_now(todo, context),
+      fallback_why_now()
     ])
   end
 
@@ -589,6 +590,21 @@ defmodule Maraithon.ActionCards do
       true ->
         nil
     end
+  end
+
+  defp contextual_why_now(todo, context) do
+    context = if is_map(context), do: context, else: %{}
+
+    [
+      read_field(context, "summary"),
+      todo.summary,
+      todo.title
+    ]
+    |> Enum.find_value(&waiting_reason_sentence/1)
+  end
+
+  defp fallback_why_now do
+    "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
   end
 
   defp next_best_action(_todo, "stale_check") do

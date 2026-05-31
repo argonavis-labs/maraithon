@@ -241,6 +241,41 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "Unclear"
   end
 
+  test "open work without timing evidence becomes a keep-or-dismiss decision", %{
+    user_id: user_id
+  } do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "chief_of_staff_morning_briefing",
+      kind: "general",
+      attention_mode: "act_now",
+      title: "Review generated operating note",
+      summary: "Maraithon created this work item from its own operating context.",
+      next_action: "Review the note and decide whether it belongs in open work.",
+      source_item_id: nil,
+      dedupe_key: "action-card:generated-source-default-why",
+      priority: 72,
+      status: "open",
+      metadata: %{},
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert card["why_now"] ==
+             "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+
+    assert rendered =~
+             "Why now: No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+
+    refute rendered =~ "This is still open and needs a clear next decision"
+    refute rendered =~ "this Maraithon item"
+    refute rendered =~ "account unknown"
+  end
+
   test "waiting state copy uses operator-facing language instead of raw state keys",
        %{user_id: user_id} do
     todo = %Todo{

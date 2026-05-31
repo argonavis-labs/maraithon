@@ -1070,7 +1070,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     {:ok, _view, html} = live(conn, "/dashboard")
 
     assert html =~ "Review generated operating note"
-    assert html =~ "This is still open and needs a clear next decision."
+
+    assert html =~
+             "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+
+    refute html =~ "This is still open and needs a clear next decision."
     refute html =~ "This is an open Maraithon item."
     refute html =~ "account unknown"
     refute html =~ "&gt;system&lt;"
