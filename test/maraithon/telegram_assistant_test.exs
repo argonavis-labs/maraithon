@@ -1139,7 +1139,16 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.at(sends, 1).text =~ "Here is the full open work"
     assert List.last(sends).text =~ "Renew the domain and confirm it is done."
     assert List.last(sends).text =~ "You want this tracked as an ongoing work item."
+
+    assert List.last(sends).text =~
+             "Decision: Decide whether to renew the domain and confirm it is done."
+
+    assert List.last(sends).text =~
+             "Why now: You asked Maraithon to track this as open work, and it is still open."
+
     refute List.last(sends).text =~ "Renew the domain this week"
+    refute List.last(sends).text =~ "this telegram item"
+    refute List.last(sends).text =~ "still open and needs a clear next decision"
     refute List.last(sends).text =~ "Maraithon Todo"
     refute List.last(sends).text =~ "you wants"
     refute List.last(sends).text =~ "You need to:"

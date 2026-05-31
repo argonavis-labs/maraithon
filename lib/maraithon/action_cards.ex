@@ -102,6 +102,12 @@ defmodule Maraithon.ActionCards do
     Today Tomorrow Update Voice Work Yesterday
   )
 
+  @decision_action_verbs ~w(
+    add attach book buy call cancel close complete create draft email escalate file finalize finish
+    follow get handle make message pay plan prepare publish renew schedule share ship submit text
+    unblock update upload verify
+  )
+
   @doc """
   Returns ranked action cards for open work items.
   """
@@ -509,12 +515,26 @@ defmodule Maraithon.ActionCards do
 
         "Decide whether to #{action}."
 
+      starts_with_decision_action_verb?(action) ->
+        action =
+          action
+          |> strip_terminal_punctuation()
+          |> lowercase_first_character()
+
+        "Decide whether to #{action}."
+
       true ->
         nil
     end
   end
 
   defp decision_prompt_from_action(_value), do: nil
+
+  defp starts_with_decision_action_verb?(action) when is_binary(action) do
+    Enum.any?(@decision_action_verbs, fn verb ->
+      Regex.match?(~r/^#{Regex.escape(verb)}\b/i, action)
+    end)
+  end
 
   defp contextual_decision_prompt(todo, context) do
     source = source_label(todo.source)
@@ -549,9 +569,26 @@ defmodule Maraithon.ActionCards do
       read_string(public_metadata, "why_now"),
       read_string(public_metadata, "why_it_matters"),
       due_sentence(todo, metadata, opts),
+      manual_capture_why_now(todo, metadata),
       profile_why_now(profile, todo, context),
       "This is still open and needs a clear next decision."
     ])
+  end
+
+  defp manual_capture_why_now(todo, metadata) do
+    captured_from = read_string(metadata, "captured_from")
+
+    cond do
+      captured_from in ["telegram_message", "mobile_chat"] ->
+        "You asked Maraithon to track this as open work, and it is still open."
+
+      todo.source in ["telegram", "mobile_assistant"] and
+          present?(read_string(metadata, "request_text")) ->
+        "You asked Maraithon to track this as open work, and it is still open."
+
+      true ->
+        nil
+    end
   end
 
   defp next_best_action(_todo, "stale_check") do

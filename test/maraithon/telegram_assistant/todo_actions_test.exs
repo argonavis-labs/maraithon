@@ -102,6 +102,31 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     refute payload.text =~ "Decision: Decide whether"
   end
 
+  test "manual open work cards use the concrete next action instead of source fallback" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "telegram",
+      "status" => "open",
+      "title" => "Renew the domain this week",
+      "summary" => "The user wants this tracked as an ongoing todo.",
+      "next_action" => "Renew the domain and confirm it is done.",
+      "metadata" => %{
+        "captured_from" => "telegram_message",
+        "request_text" => "Add renew the domain this week to my todo list."
+      }
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+
+    assert payload.text =~ "Decision: Decide whether to renew the domain and confirm it is done."
+
+    assert payload.text =~
+             "Why now: You asked Maraithon to track this as open work, and it is still open."
+
+    refute payload.text =~ "this telegram item"
+    refute payload.text =~ "This is still open and needs a clear next decision"
+  end
+
   test "source link buttons name the source app" do
     source_url = "https://mail.google.com/mail/u/0/#inbox/thread-1"
 
