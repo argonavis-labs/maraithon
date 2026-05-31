@@ -33,12 +33,13 @@ struct ChatDetailErrorCopyTests {
         #expect(ChatSyncError.emptyMessage.localizedDescription == "Enter a message before sending.")
         #expect(
             ChatSyncError.pollingTimedOut.localizedDescription ==
-                "Maraithon is still working. Refresh this chat in a moment."
+                "Maraithon is still working on your answer. Refresh this chat in a moment."
         )
         #expect(
             ChatSyncError.failedMessageStateNotSaved.localizedDescription ==
-                "Message was not sent, and Maraithon could not save the failed state. Refresh this chat before sending again."
+                "Message was not sent. Refresh this chat before sending again."
         )
         #expect(!ChatSyncError.pollingTimedOut.localizedDescription.localizedCaseInsensitiveContains("pull"))
+        #expect(!ChatSyncError.failedMessageStateNotSaved.localizedDescription.localizedCaseInsensitiveContains("state"))
     }
 }

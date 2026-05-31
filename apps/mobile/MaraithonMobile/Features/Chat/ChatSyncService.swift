@@ -18,9 +18,9 @@ enum ChatSyncError: LocalizedError, Equatable {
         case .emptyThreadTitle:
             return "Enter a chat name before saving."
         case .pollingTimedOut:
-            return "Maraithon is still working. Refresh this chat in a moment."
+            return "Maraithon is still working on your answer. Refresh this chat in a moment."
         case .failedMessageStateNotSaved:
-            return "Message was not sent, and Maraithon could not save the failed state. Refresh this chat before sending again."
+            return "Message was not sent. Refresh this chat before sending again."
         case .assistantResponseFailed(let message):
             return MobileErrorCopy.assistantRunFailureMessage(for: message)
         }

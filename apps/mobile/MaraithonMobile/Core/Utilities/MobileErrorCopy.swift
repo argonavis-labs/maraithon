@@ -57,7 +57,7 @@ enum MobileErrorCopy {
         case "invalid_or_expired_code", "invalid_or_expired_link":
             return "Sign-in code is invalid or expired."
         case "assistant_run_in_progress":
-            return "Maraithon is still working on the last message."
+            return "Maraithon is still working on your last request. Wait for that answer before sending another message."
         case "message_not_found":
             return "That message is no longer available. Refresh the conversation before continuing."
         case "message_too_long":

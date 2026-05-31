@@ -314,7 +314,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   defp mobile_chat_message(:assistant_run_in_progress) do
-    "Maraithon is still working on the last message."
+    "Maraithon is still working on your last request. Wait for that answer before sending another message."
   end
 
   defp mobile_chat_message(:message_too_long), do: "Message is too long. Send a shorter note."

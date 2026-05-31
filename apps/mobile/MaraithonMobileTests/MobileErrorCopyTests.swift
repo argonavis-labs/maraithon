@@ -42,7 +42,7 @@ struct MobileErrorCopyTests {
     func mapsKnownServerCodes() {
         #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("assistant_run_in_progress")) ==
-                "Maraithon is still working on the last message."
+                "Maraithon is still working on your last request. Wait for that answer before sending another message."
         )
         #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("invalid_or_expired_code")) ==

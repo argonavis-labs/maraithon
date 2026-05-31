@@ -13,7 +13,8 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert ApiErrorCopy.mobile_chat(:assistant_run_in_progress) == %{
              error: "assistant_run_in_progress",
-             message: "Maraithon is still working on the last message."
+             message:
+               "Maraithon is still working on your last request. Wait for that answer before sending another message."
            }
   end
 
