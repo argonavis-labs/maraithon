@@ -229,7 +229,7 @@ struct CRMFilteringTests {
         #expect(CRMStatusFilter.atRisk.emptyState(searchText: "", hasAnyPeople: true) == PeopleEmptyState(
             title: "No relationship follow-ups flagged",
             systemImage: "person.crop.circle.badge.checkmark",
-            description: "People will appear here when a cadence, reply, or relationship check-in needs attention."
+            description: "People will appear here when a cadence, reply, or relationship check-in is ready for review."
         ))
         #expect(!CRMStatusFilter.atRisk.emptyState(searchText: "", hasAnyPeople: true)
             .description

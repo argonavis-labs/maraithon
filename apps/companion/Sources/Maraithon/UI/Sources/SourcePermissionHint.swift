@@ -6,7 +6,7 @@ import Foundation
 ///
 /// Invariant: every permission reason emitted by `SourceProtocol`
 /// implementations should resolve to a concrete hint here. Unknown
-/// reasons fall back to a generic "This source needs attention" view
+/// reasons fall back to a generic "This source could not be checked" view
 /// that shows sanitized recovery copy and offers no settings deep link.
 struct SourcePermissionHint: Equatable {
     let title: String
@@ -106,7 +106,7 @@ struct SourcePermissionHint: Equatable {
             )
         default:
             return SourcePermissionHint(
-                title: "This source needs attention",
+                title: "This source could not be checked",
                 body: SourceIssueCopy.status(reason),
                 settingsURL: nil,
                 followUpNote: nil

@@ -7,7 +7,7 @@ import Foundation
 /// UI surfaces should show these strings, not raw enum dumps, HTTP
 /// bodies, or macOS error domains.
 struct SourceIssueCopy {
-    private static let genericRecovery = "This source needs attention. Check again when ready."
+    private static let genericRecovery = "Maraithon could not finish this check. Check again when ready."
 
     static func status(_ reason: String) -> String {
         let normalized = reason.trimmingCharacters(in: .whitespacesAndNewlines)

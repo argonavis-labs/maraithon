@@ -38,14 +38,14 @@ final class SourceIssueCopyTests: XCTestCase {
     func testUnknownMachineCodesUseGenericRecoveryCopy() {
         XCTAssertEqual(
             SourceIssueCopy.status("something_weird"),
-            "This source needs attention. Check again when ready."
+            "Maraithon could not finish this check. Check again when ready."
         )
     }
 
     func testCredentialLikeReasonsUseGenericRecoveryCopy() {
         let copy = SourceIssueCopy.status("Authorization: Bearer abc123 token=secret")
 
-        XCTAssertEqual(copy, "This source needs attention. Check again when ready.")
+        XCTAssertEqual(copy, "Maraithon could not finish this check. Check again when ready.")
         XCTAssertFalse(copy.lowercased().contains("authorization"))
         XCTAssertFalse(copy.lowercased().contains("bearer"))
         XCTAssertFalse(copy.lowercased().contains("token"))
