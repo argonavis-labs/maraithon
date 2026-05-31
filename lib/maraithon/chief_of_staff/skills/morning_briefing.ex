@@ -1294,10 +1294,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
        Source digest rule:
        The morning briefing payload is assembled from independently bounded source digests for
-       Gmail, Slack, calendar, CRM, todos, memory, and local sources. Treat included rows as the
-       selected high-signal evidence set, not a full raw export. Review all included rows before
-       deciding what belongs in the executive brief, and use source_health/counts to call out
-       connector gaps or truncation risk when it affects confidence.
+       Gmail, Slack, calendar, People records, open work, memory, and local sources. Treat
+       included rows as the selected high-signal evidence set, not a full raw export. Review all
+       included rows before deciding what belongs in the executive brief, and use
+       source_health/counts to call out connector gaps or truncation risk when it affects
+       confidence.
 
        Inbox and Slack triage contract:
        If gmail.recent_inbox, gmail.recent_unread, slack.key_threads, or slack.mentions contain
@@ -1307,9 +1308,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        should do.
 
        Meeting enrichment rule:
-       The brief input includes meeting_prep, which is prepared CRM-first. Use CRM context
-       before public web context. Use web snippets only as fallback evidence for attendees
-       or companies missing from CRM, and keep uncertainty visible when the evidence is thin.
+       The brief input includes meeting_prep, which is prepared relationship-first. Use saved
+       relationship context before public web context. Use web snippets only as fallback evidence
+       for attendees or companies missing from People records, and keep uncertainty visible when
+       the evidence is thin.
        When meeting_prep.web_context includes page_contexts, treat those source pages as the
        meeting dossier. For each required external meeting, synthesize the executive read:
        who the person is, what the company or practice does, why the meeting likely matters
@@ -1325,8 +1327,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
        Commercial thread rule:
        Fresh external commercial threads from close teammates are not inbox noise. Use model
-       judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, todos, and
-       CRM context for teammate-led customer, prospect, intro, plan, pricing, discount,
+       judgment to scan gmail.commercial_threads, gmail.recent_inbox, commitments, open work, and
+       relationship context for teammate-led customer, prospect, intro, plan, pricing, discount,
        availability, or launch-video threads.
        Treat gmail.commercial_threads as a coverage list: include every live non-duplicative
        external commercial thread from that list that a busy executive would want to know about,
@@ -1841,8 +1843,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Enum.reject(&blank?/1)
         |> Enum.take(3)
         |> case do
-          [] -> "Prep context is thin; check CRM/web notes before the call."
-          attendees -> "External attendees: #{Enum.join(attendees, ", ")}."
+          [] ->
+            "Prep context is thin; check relationship context and source notes before the call."
+
+          attendees ->
+            "External attendees: #{Enum.join(attendees, ", ")}."
         end
     end
   end

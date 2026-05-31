@@ -129,11 +129,11 @@ defmodule Maraithon.Capabilities do
     "google_contacts_search" => "Search connected Google Contacts.",
     "google_calendar_list_events" => "List Google Calendar events.",
     "review_connected_context" =>
-      "Review connected CRM, Gmail, contacts, calendar, Slack, open loops, memory, and Mac companion app sources like iMessage, Apple Notes, Reminders, files, browser history, and voice memos for source-grounded context.",
+      "Review connected People records, Gmail, contacts, calendar, Slack, open loops, memory, and Mac companion app sources like iMessage, Apple Notes, Reminders, files, browser history, and voice memos for source-grounded context.",
     "list_connected_accounts" =>
       "List connected accounts, freshness, connector status, and MCP tool coverage for a user.",
     "get_open_loops" =>
-      "Fetch the built-in open-loop snapshot across work items, CRM relationships, and deep memory.",
+      "Fetch the built-in open-loop snapshot across work items, relationship context, and deep memory.",
     "get_todo" => "Get one built-in persistent work item by id, or the best query match.",
     "list_todos" => "List the built-in persistent open work items for a user.",
     "upsert_todos" =>
@@ -142,17 +142,18 @@ defmodule Maraithon.Capabilities do
       "Patch one built-in persistent work item by id without rerunning model-level ingestion.",
     "resolve_todo" => "Mark one built-in persistent work item done, dismissed, or snoozed.",
     "delete_todo" => "Dismiss one built-in persistent work item as no longer relevant.",
-    "list_people" => "List CRM people and relationship metadata for a user.",
-    "get_person" => "Get one CRM person by id, query, or contact detail.",
-    "upsert_person" => "Create or update one CRM person with contact and relationship details.",
-    "delete_person" => "Delete one CRM person and its CRM links.",
+    "list_people" => "List People records and relationship metadata for a user.",
+    "get_person" => "Get one People record by id, query, or contact detail.",
+    "upsert_person" =>
+      "Create or update one People record with contact and relationship details.",
+    "delete_person" => "Delete one People record and its relationship links.",
     "link_person_data" =>
-      "Attach or detach a CRM person from a work item or another user-owned data object.",
-    "merge_people" => "Merge two CRM people into one surviving record with an audit trail.",
+      "Attach or detach a People record from a work item or another user-owned data object.",
+    "merge_people" => "Merge two People records into one surviving record with an audit trail.",
     "get_relationship_context" =>
-      "Fetch CRM relationship context for a person, including linked work items.",
+      "Fetch saved relationship context for a person, including linked work items.",
     "learn_relationship_context" =>
-      "Use model-level relationship intelligence to learn CRM people, memories, and links from source observations.",
+      "Use model-level relationship intelligence to learn People records, memories, and links from source observations.",
     "list_memories" => "List built-in durable deep memories for a user.",
     "write_memory" => "Create or update one built-in durable deep memory item.",
     "recall_memory" =>
@@ -236,7 +237,7 @@ defmodule Maraithon.Capabilities do
     "browser_history_get" =>
       "Fetch one browser visit using a visit_id returned by browser-history search or recent-visit results, including the full URL and title.",
     "recall_anywhere" =>
-      "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
+      "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, People records, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
     "companion_devices_list" =>
       "List the Macs (and other companion devices) the user has paired, with last-seen timestamps and per-source mirrored-row counts. Use when the user asks 'what Macs am I paired on?' or wants to audit which devices are sending data.",
     "notes_semantic_search" =>

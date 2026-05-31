@@ -261,7 +261,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Brief input JSON"
     assert prompt =~ "Skill instructions"
     assert prompt =~ "Email review rule"
-    assert prompt =~ "Treat meeting prep as CRM-first"
+    assert prompt =~ "Treat meeting prep as relationship-first"
     assert prompt =~ "source pages as the"
     assert prompt =~ "meeting dossier"
     assert prompt =~ "services, pricing, operating model"
