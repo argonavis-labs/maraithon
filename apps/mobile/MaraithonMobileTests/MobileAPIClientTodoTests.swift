@@ -95,6 +95,7 @@ struct MobileAPIClientTodoTests {
                         "why_now": "Michael is waiting and no later reply was found.",
                         "source_context": "Checked Gmail",
                         "next_best_action": "Approve a short reply.",
+                        "draft_preview": "Thanks Michael. I can send the timing today.",
                         "evidence_excerpt": "Can you send the next update?"
                       }
                     }
@@ -113,6 +114,7 @@ struct MobileAPIClientTodoTests {
         #expect(card.contextItems.compactMap(\.value) == ["Michael", "UGC campaign"])
         #expect(card.whyNow == "Michael is waiting and no later reply was found.")
         #expect(card.sourceContext == "Checked Gmail")
+        #expect(card.draftPreview == "Thanks Michael. I can send the timing today.")
     }
 
     @Test

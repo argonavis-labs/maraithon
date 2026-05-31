@@ -191,6 +191,7 @@ enum ProductionDataSync {
             whyNow: cleanedText(remoteTodo.actionCard?.whyNow),
             sourceContext: cleanedText(remoteTodo.actionCard?.sourceContext),
             nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
+            draftPreview: cleanedText(remoteTodo.actionCard?.draftPreview),
             evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt)
         )
     }
@@ -201,6 +202,7 @@ enum ProductionDataSync {
         todo.whyNow = cleanedText(actionCard?.whyNow)
         todo.sourceContext = cleanedText(actionCard?.sourceContext)
         todo.nextBestAction = cleanedText(actionCard?.nextBestAction)
+        todo.draftPreview = cleanedText(actionCard?.draftPreview)
         todo.evidenceExcerpt = cleanedText(actionCard?.evidenceExcerpt)
     }
 

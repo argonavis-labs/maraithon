@@ -3825,6 +3825,13 @@ defmodule MaraithonWeb.DashboardLive do
     end
   end
 
+  defp todo_draft_preview(card) do
+    case ActionCards.draft_preview(card || %{}) do
+      value when is_binary(value) and value != "" -> value
+      _ -> nil
+    end
+  end
+
   defp todo_decision_prompt(card) do
     card
     |> Map.get("decision_prompt")
@@ -4138,6 +4145,9 @@ defmodule MaraithonWeb.DashboardLive do
               <div class="border-l border-zinc-950/10 pl-3">
                 <p class="text-xs/5 font-medium text-zinc-500">Suggested next step</p>
                 <p class="mt-1 text-sm/6 text-zinc-700"><%= @current_todo.next_action %></p>
+                <p :if={todo_draft_preview(@current_todo_card)} class="mt-2 text-sm/6 text-zinc-800">
+                  <span class="font-medium text-zinc-950">Suggested reply:</span> <%= todo_draft_preview(@current_todo_card) %>
+                </p>
                 <p :if={todo_action_hint(@current_todo_card, @current_todo)} class="mt-2 text-sm/6 font-medium text-indigo-700">
                   <%= todo_action_hint(@current_todo_card, @current_todo) %>
                 </p>

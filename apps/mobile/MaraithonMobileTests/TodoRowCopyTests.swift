@@ -16,6 +16,7 @@ struct TodoRowCopyTests {
         #expect(TodoEditorCopy.whyNowLabel == "Why this matters now")
         #expect(TodoEditorCopy.sourceContextLabel == "Context checked")
         #expect(TodoEditorCopy.preparedMoveLabel == "Suggested move")
+        #expect(TodoEditorCopy.draftPreviewLabel == "Suggested reply")
         #expect(TodoEditorCopy.evidenceLabel == "Source evidence")
         #expect(TodoEditorCopy.timingSectionTitle == "Timing")
         #expect(TodoEditorCopy.dueDateToggleTitle == "Add due date")
@@ -81,6 +82,7 @@ struct TodoRowCopyTests {
             whyNow: "Michael is waiting and no later reply was found.",
             sourceContext: "Checked Gmail",
             nextBestAction: "Approve a short reply.",
+            draftPreview: "Thanks Michael. I can send the campaign timing today.",
             evidenceExcerpt: "Can you send the next update?"
         )
 
@@ -91,6 +93,7 @@ struct TodoRowCopyTests {
         #expect(context.rowReason == "Send the campaign update with a clear owner and timing. Michael is waiting; no later reply is recorded. Reviewed Gmail")
         #expect(context.rowMove == "Approve a short reply.")
         #expect(context.preparedMove == "Approve a short reply.")
+        #expect(context.draftPreview == "Thanks Michael. I can send the campaign timing today.")
         #expect(context.evidence == "Can you send the next update?")
         #expect(context.hasChiefOfStaffContext)
         #expect(TodoDecisionSignals.signalPillTitle(for: todo) == "Decision")

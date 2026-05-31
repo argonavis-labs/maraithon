@@ -295,6 +295,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       todo_context_line(context, next_action),
       decision_line(card, next_action),
       why_line(card, context),
+      draft_preview_line(card),
       prepared_action_line(card),
       evidence_line(card, context),
       source_sentence(source, account, assistant_source?, source_health_note),
@@ -528,6 +529,15 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp prepared_action_line(_card), do: nil
+
+  defp draft_preview_line(card) when is_map(card) do
+    case ActionCards.draft_preview(card) do
+      preview when is_binary(preview) -> "Suggested reply: #{safe(truncate(preview, 360))}"
+      _ -> nil
+    end
+  end
+
+  defp draft_preview_line(_card), do: nil
 
   defp evidence_line(card, already_rendered_context) when is_map(card) do
     case ActionCards.evidence_excerpt(card) do

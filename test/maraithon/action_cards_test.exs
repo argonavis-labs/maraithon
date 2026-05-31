@@ -81,6 +81,76 @@ defmodule Maraithon.ActionCardsTest do
     assert rendered =~ "Context used: Gmail."
   end
 
+  test "decision cards surface a safe suggested reply preview when draft material exists",
+       %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+      summary: "Michael Berlingo is waiting on Starteryou UGC campaign timing.",
+      next_action: "Approve the short reply with campaign timing.",
+      action_draft: %{
+        "kind" => "gmail_reply",
+        "body" => "Thanks Michael. I can send the campaign timing today."
+      },
+      source_item_id: "gmail-thread-michael-draft",
+      dedupe_key: "action-card:michael-draft",
+      priority: 88,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Michael asked for Starteryou UGC campaign timing.",
+        "record" => %{"person" => "Michael Berlingo", "company" => "Starteryou"}
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+    mobile = ActionCards.render_mobile_todo(todo, include_disconnected: false)
+
+    assert card["draft_preview"] == "Thanks Michael. I can send the campaign timing today."
+    assert ActionCards.draft_preview(card) == card["draft_preview"]
+    assert rendered =~ "Suggested reply: Thanks Michael. I can send the campaign timing today."
+    assert mobile =~ "Suggested reply: Thanks Michael. I can send the campaign timing today."
+    refute rendered =~ "gmail_reply"
+  end
+
+  test "decision cards suppress technical draft material", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to finance on the receipt thread",
+      summary: "Finance needs a corrected receipt before reimbursement can move.",
+      next_action: "Send the corrected receipt and ask finance to confirm timing.",
+      action_draft: %{
+        "kind" => "gmail_reply",
+        "body" => "token=secret stacktrace DBConnection.ConnectionError"
+      },
+      source_item_id: "gmail-thread-finance-draft-secret",
+      dedupe_key: "action-card:finance-draft-secret",
+      priority: 86,
+      status: "open",
+      metadata: %{"source_evidence" => "Finance asked for a corrected receipt."},
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    assert card["draft_preview"] == nil
+    refute rendered =~ "Suggested reply:"
+    refute rendered =~ "token=secret"
+    refute rendered =~ "DBConnection"
+  end
+
   test "telegram source verification copy hides raw source health errors", %{user_id: user_id} do
     {:ok, [todo]} =
       Todos.upsert_many(user_id, [

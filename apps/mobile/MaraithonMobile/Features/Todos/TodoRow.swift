@@ -107,6 +107,7 @@ struct TodoDecisionContext: Equatable {
     let whyNow: String?
     let sourceContext: String?
     let preparedMove: String?
+    let draftPreview: String?
     let rowMove: String?
     let evidence: String?
 
@@ -133,6 +134,10 @@ struct TodoDecisionContext: Equatable {
         self.whyNow = Self.cleanedText(todo.whyNow)
         self.sourceContext = Self.cleanedText(todo.sourceContext)
         self.preparedMove = preparedMove
+        self.draftPreview = Self.uniqueText(
+            todo.draftPreview,
+            excluding: [title, notes, nextAction, contextSummary, decisionPrompt, preparedMove]
+        )
         self.rowMove = preparedMove ?? nextAction
         self.evidence = Self.cleanedText(todo.evidenceExcerpt)
     }
@@ -157,6 +162,7 @@ struct TodoDecisionContext: Equatable {
             whyNow != nil ||
             sourceContext != nil ||
             preparedMove != nil ||
+            draftPreview != nil ||
             evidence != nil
     }
 

@@ -29,6 +29,8 @@ defmodule Maraithon.ActionCards do
     checked_evidence body ask commitment summary
   )
 
+  @draft_preview_keys ~w(body text message reply draft content)
+
   @unsafe_source_gap_markers ~w(
     <redacted
     authorization
@@ -159,6 +161,7 @@ defmodule Maraithon.ActionCards do
         "context_pack" => context_pack,
         "next_best_action" => next_best_action(todo, attention_mode),
         "prepared_actions" => prepared_actions(todo),
+        "draft_preview" => draft_preview(todo),
         "available_buttons" => available_buttons(todo, attention_mode),
         "estimated_effort" => estimated_effort(todo),
         "attention_mode" => attention_mode,
@@ -218,6 +221,7 @@ defmodule Maraithon.ActionCards do
       telegram_why_line(card),
       telegram_thread_line(card),
       telegram_next_line(card),
+      telegram_draft_preview_line(card),
       telegram_prepared_line(card),
       telegram_evidence_line(card),
       telegram_source_health_line(card),
@@ -245,6 +249,7 @@ defmodule Maraithon.ActionCards do
       mobile_why_line(card),
       mobile_thread_line(card),
       mobile_next_line(card),
+      mobile_draft_preview_line(card),
       mobile_prepared_line(card),
       mobile_evidence_line(card),
       mobile_source_health_line(card),
@@ -324,6 +329,21 @@ defmodule Maraithon.ActionCards do
 
     case read_field(card, "prepared_actions") do
       [%{"label" => label} | _] when is_binary(label) -> label
+      _other -> nil
+    end
+  end
+
+  def draft_preview(%Todo{} = todo) do
+    todo.action_draft
+    |> draft_preview_values()
+    |> Enum.find_value(&public_draft_preview/1)
+  end
+
+  def draft_preview(card_or_todo) do
+    card = ensure_card(card_or_todo)
+
+    case read_field(card, "draft_preview") do
+      value when is_binary(value) -> public_draft_preview(value)
       _other -> nil
     end
   end
@@ -1228,6 +1248,13 @@ defmodule Maraithon.ActionCards do
     if present?(next), do: "Next: #{safe(next)}"
   end
 
+  defp telegram_draft_preview_line(card) do
+    case draft_preview(card) do
+      value when is_binary(value) -> "Suggested reply: #{safe(truncate(value, 360))}"
+      _other -> nil
+    end
+  end
+
   defp telegram_prepared_line(card) do
     case read_field(card, "prepared_actions") do
       [%{"label" => label} | _] when is_binary(label) -> "Prepared: #{safe(label)}"
@@ -1304,6 +1331,13 @@ defmodule Maraithon.ActionCards do
   defp mobile_next_line(card) do
     next = read_field(card, "next_best_action")
     if present?(next), do: "Next: #{next}"
+  end
+
+  defp mobile_draft_preview_line(card) do
+    case draft_preview(card) do
+      value when is_binary(value) -> "Suggested reply: #{truncate(value, 360)}"
+      _other -> nil
+    end
   end
 
   defp mobile_prepared_line(card) do
@@ -1638,6 +1672,42 @@ defmodule Maraithon.ActionCards do
     do: value |> Map.values() |> Enum.any?(&action_draft_present?/1)
 
   defp action_draft_present?(value), do: not is_nil(value)
+
+  defp draft_preview_values(%{} = draft) do
+    preferred =
+      @draft_preview_keys
+      |> Enum.map(&read_field(draft, &1))
+
+    nested =
+      draft
+      |> Map.values()
+      |> Enum.reject(&is_binary/1)
+
+    (preferred ++ nested)
+    |> Enum.flat_map(&draft_preview_values/1)
+  end
+
+  defp draft_preview_values(values) when is_list(values),
+    do: Enum.flat_map(values, &draft_preview_values/1)
+
+  defp draft_preview_values(value) when is_binary(value), do: [value]
+  defp draft_preview_values(_value), do: []
+
+  defp public_draft_preview(value) when is_binary(value) do
+    value =
+      value
+      |> externalize_copy()
+      |> String.replace(~r/\s+/, " ")
+      |> String.trim()
+
+    cond do
+      blank?(value) -> nil
+      public_card_text?(value) -> truncate(value, 500)
+      true -> nil
+    end
+  end
+
+  defp public_draft_preview(_value), do: nil
 
   defp evidence_type(value) when is_binary(value) do
     value = String.downcase(value)

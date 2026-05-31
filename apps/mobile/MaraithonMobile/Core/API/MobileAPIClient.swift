@@ -166,6 +166,7 @@ struct MobileAPIClient {
         let whyNow: String?
         let sourceContext: String?
         let nextBestAction: String?
+        let draftPreview: String?
         let evidenceExcerpt: String?
 
         enum CodingKeys: String, CodingKey {
@@ -174,6 +175,7 @@ struct MobileAPIClient {
             case whyNow = "why_now"
             case sourceContext = "source_context"
             case nextBestAction = "next_best_action"
+            case draftPreview = "draft_preview"
             case evidenceExcerpt = "evidence_excerpt"
         }
 
@@ -184,6 +186,7 @@ struct MobileAPIClient {
             whyNow = try container.decodeIfPresent(String.self, forKey: .whyNow)
             sourceContext = try container.decodeIfPresent(String.self, forKey: .sourceContext)
             nextBestAction = try container.decodeIfPresent(String.self, forKey: .nextBestAction)
+            draftPreview = try container.decodeIfPresent(String.self, forKey: .draftPreview)
             evidenceExcerpt = try container.decodeIfPresent(String.self, forKey: .evidenceExcerpt)
         }
 
@@ -193,6 +196,7 @@ struct MobileAPIClient {
             whyNow: String? = nil,
             sourceContext: String? = nil,
             nextBestAction: String? = nil,
+            draftPreview: String? = nil,
             evidenceExcerpt: String? = nil
         ) {
             self.decisionPrompt = decisionPrompt
@@ -200,6 +204,7 @@ struct MobileAPIClient {
             self.whyNow = whyNow
             self.sourceContext = sourceContext
             self.nextBestAction = nextBestAction
+            self.draftPreview = draftPreview
             self.evidenceExcerpt = evidenceExcerpt
         }
     }

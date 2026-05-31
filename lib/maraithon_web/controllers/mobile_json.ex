@@ -106,6 +106,7 @@ defmodule MaraithonWeb.MobileJSON do
       context_items: ActionCards.context_items(card),
       evidence_excerpt: ActionCards.evidence_excerpt(card),
       next_best_action: card["next_best_action"],
+      draft_preview: ActionCards.draft_preview(card),
       prepared_actions: card["prepared_actions"] || [],
       available_buttons: format_buttons(card["available_buttons"] || []),
       estimated_effort: card["estimated_effort"],

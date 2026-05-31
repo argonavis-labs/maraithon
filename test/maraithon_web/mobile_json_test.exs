@@ -14,6 +14,10 @@ defmodule MaraithonWeb.MobileJSONTest do
       title: "Reply to Alex about launch timing",
       summary: "Alex is waiting on the launch sequencing decision.",
       next_action: "Reply to Alex with the launch sequence and timing.",
+      action_draft: %{
+        "kind" => "gmail_reply",
+        "body" => "Thanks Alex. I can send the launch sequence today."
+      },
       priority: 92,
       status: "open",
       metadata: %{
@@ -26,6 +30,9 @@ defmodule MaraithonWeb.MobileJSONTest do
 
     response = MobileJSON.todo(todo, include_card: true, source_health_snapshots: [])
     buttons = get_in(response, [:action_card, :available_buttons])
+
+    assert get_in(response, [:action_card, :draft_preview]) ==
+             "Thanks Alex. I can send the launch sequence today."
 
     assert %{action: "done", label: "Done"} in buttons
     assert %{action: "snooze", label: "Snooze"} in buttons

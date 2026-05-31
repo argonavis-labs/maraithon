@@ -17,6 +17,7 @@ final class TodoItem {
     var whyNow: String?
     var sourceContext: String?
     var nextBestAction: String?
+    var draftPreview: String?
     var evidenceExcerpt: String?
     @Relationship(deleteRule: .nullify, inverse: \CRMContact.todos) var contact: CRMContact?
 
@@ -40,6 +41,7 @@ final class TodoItem {
         whyNow: String? = nil,
         sourceContext: String? = nil,
         nextBestAction: String? = nil,
+        draftPreview: String? = nil,
         evidenceExcerpt: String? = nil,
         contact: CRMContact? = nil
     ) {
@@ -57,6 +59,7 @@ final class TodoItem {
         self.whyNow = whyNow
         self.sourceContext = sourceContext
         self.nextBestAction = nextBestAction
+        self.draftPreview = draftPreview
         self.evidenceExcerpt = evidenceExcerpt
         self.contact = contact
     }

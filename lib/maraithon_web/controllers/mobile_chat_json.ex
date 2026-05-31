@@ -84,7 +84,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     ~r/\b(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]/,
     ~r/\b(?:authorization|bearer)\b/
   ]
-  @action_card_label_pattern ~r/^(\s*(?:Context used|Context|Decision|Why now|State|Next|Prepared|Evidence):\s*)(.*)$/i
+  @action_card_label_pattern ~r/^(\s*(?:Context used|Context|Decision|Why now|State|Next|Suggested reply|Draft|Prepared|Evidence):\s*)(.*)$/i
 
   def thread_index(threads) when is_list(threads) do
     %{threads: Enum.map(threads, &thread_summary/1), next_cursor: nil}

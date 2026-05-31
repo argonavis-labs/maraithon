@@ -222,6 +222,7 @@ struct ProductionDataSyncTests {
                 whyNow: "Michael is waiting and no later reply was found.",
                 sourceContext: "Checked Gmail",
                 nextBestAction: "Approve a short reply.",
+                draftPreview: "Thanks Michael. I can send the campaign timing today.",
                 evidenceExcerpt: "Can you send the next update?"
             )
         )
@@ -233,6 +234,7 @@ struct ProductionDataSyncTests {
         #expect(todo.whyNow == "Michael is waiting; no later reply is recorded.")
         #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "Approve a short reply.")
+        #expect(todo.draftPreview == "Thanks Michael. I can send the campaign timing today.")
         #expect(todo.evidenceExcerpt == "Can you send the next update?")
     }
 
@@ -249,6 +251,7 @@ struct ProductionDataSyncTests {
                 whyNow: "This needs operator attention before noon.",
                 sourceContext: "source_context: Checked Gmail\npriority_score: 97",
                 nextBestAction: "User should send the ETA.",
+                draftPreview: "The operator's reply should include timing.",
                 evidenceExcerpt: "The operator's last message asked for timing."
             )
         )
@@ -260,6 +263,7 @@ struct ProductionDataSyncTests {
         #expect(todo.whyNow == "This needs your attention before noon.")
         #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "You should send the ETA.")
+        #expect(todo.draftPreview == "Your reply should include timing.")
         #expect(todo.evidenceExcerpt == "Your last message asked for timing.")
     }
 

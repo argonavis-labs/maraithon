@@ -128,6 +128,13 @@ struct TodoEditorView: View {
                 )
             }
 
+            if let draftPreview = decisionContext.draftPreview {
+                contextLine(
+                    label: TodoEditorCopy.draftPreviewLabel,
+                    value: draftPreview
+                )
+            }
+
             if let whyNow = decisionContext.whyNow {
                 contextLine(
                     label: TodoEditorCopy.whyNowLabel,
@@ -263,6 +270,7 @@ enum TodoEditorCopy {
     static let whyNowLabel = "Why this matters now"
     static let sourceContextLabel = "Context checked"
     static let preparedMoveLabel = "Suggested move"
+    static let draftPreviewLabel = "Suggested reply"
     static let evidenceLabel = "Source evidence"
     static let urgencyPickerTitle = "Urgency"
     static let timingSectionTitle = "Timing"
@@ -299,6 +307,7 @@ enum TodoEditorCopy {
             whyNowLabel,
             sourceContextLabel,
             preparedMoveLabel,
+            draftPreviewLabel,
             evidenceLabel,
             urgencyPickerTitle,
             timingSectionTitle,

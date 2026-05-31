@@ -948,6 +948,7 @@ defmodule MaraithonWeb.TodosLive do
       core_fields = [
         %{label: "Decision", value: Map.get(card, "decision_prompt")},
         %{label: "Recommended move", value: Map.get(card, "next_best_action")},
+        %{label: "Suggested reply", value: ActionCards.draft_preview(card)},
         %{label: "Why now", value: Map.get(card, "why_now")},
         %{label: "What this is based on", value: ActionCards.evidence_excerpt(card)},
         %{
