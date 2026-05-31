@@ -212,6 +212,9 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert UserFacingCopy.polish_text("This thread still needs a reply from you.") ==
              "This thread is waiting on your reply."
 
+    assert UserFacingCopy.polish_text("This thread still needs a reply from the user.") ==
+             "This thread is waiting on your reply."
+
     assert UserFacingCopy.polish_text("The Rippling todo still needs a reply.") ==
              "The Rippling work item is waiting on your reply."
 

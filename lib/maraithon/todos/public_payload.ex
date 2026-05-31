@@ -39,6 +39,8 @@ defmodule Maraithon.Todos.PublicPayload do
   end
 
   def todo(%{} = todo) do
+    todo = UserFacingCopy.polish_attrs(todo)
+
     @todo_fields
     |> Enum.reduce(%{}, fn {key, atom_key}, acc ->
       todo

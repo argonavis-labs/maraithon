@@ -745,6 +745,69 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute encoded =~ "secret-token"
   end
 
+  test "mobile chat linked todo polishes legacy map copy", %{conn: conn} do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-linked-todo-copy@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+    thread = TelegramConversations.get_mobile_thread(user_id, thread_id)
+
+    raw_linked_todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "gmail",
+      "kind" => "gmail_triage",
+      "attention_mode" => "act_now",
+      "status" => "open",
+      "title" => "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+      "summary" => "This thread still needs a reply from the user.",
+      "next_action" =>
+        "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+      "priority" => 90,
+      "metadata" => %{
+        "subject" => "Starteryou UGC Campaigns",
+        "source_evidence" => "You said you would follow up on Starteryou UGC campaign timing.",
+        "record" => %{
+          "person" => "Alex Müller",
+          "relationship_context" => "Starteryou UGC campaign contact",
+          "commitment" => "Follow through on \"Starteryou UGC Campaigns\" for Alex Müller"
+        }
+      }
+    }
+
+    {:ok, _thread, _turn, _result} =
+      Maraithon.AssistantChat.MobileDelivery.deliver_turn(
+        thread,
+        thread.chat_id,
+        "Added to your open work: Alex Müller follow-up",
+        structured_data: %{
+          "message_class" => "action_result",
+          "linked_todo" => raw_linked_todo
+        }
+      )
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads/#{thread_id}")
+      |> json_response(200)
+
+    linked_todo = get_in(response, ["thread", "messages", Access.at(0), "linked_todo"])
+
+    assert linked_todo["title"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
+    assert linked_todo["summary"] == "This thread is waiting on your reply."
+    assert linked_todo["next_action"] =~ "Reply to Alex Müller about Starteryou UGC Campaigns"
+    assert linked_todo["metadata"] == %{"subject" => "Starteryou UGC Campaigns"}
+
+    visible = inspect(linked_todo)
+    refute visible =~ "User committed"
+    refute visible =~ "the user"
+    refute visible =~ "owner, ETA"
+    refute visible =~ "record"
+  end
+
   test "mobile chat answers safe arithmetic without an LLM", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn, "mobile-direct-math@example.com")
 

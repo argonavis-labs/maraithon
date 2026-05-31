@@ -4,10 +4,10 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias Maraithon.TelegramAssistant.{PreparedAction, Run}
   alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
-  alias Maraithon.Todos.{Todo, UserFacingCopy}
+  alias Maraithon.Todos.{PublicPayload, Todo, UserFacingCopy}
   alias Maraithon.AssistantChat.ThreadNaming
   alias Maraithon.Repo
-  alias MaraithonWeb.{ApiErrorCopy, MobileJSON}
+  alias MaraithonWeb.ApiErrorCopy
 
   @public_structured_data_keys ~w(calculation)
   @internal_assistant_markers [
@@ -83,26 +83,6 @@ defmodule MaraithonWeb.MobileChatJSON do
     ~r/\bthreshold\s*[:=]\s*\d/,
     ~r/\b(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]/,
     ~r/\b(?:authorization|bearer)\b/
-  ]
-  @public_linked_todo_fields [
-    {"id", :id},
-    {"source", :source},
-    {"kind", :kind},
-    {"attention_mode", :attention_mode},
-    {"title", :title},
-    {"summary", :summary},
-    {"next_action", :next_action},
-    {"due_at", :due_at},
-    {"notes", :notes},
-    {"action_plan", :action_plan},
-    {"owner_label", :owner_label},
-    {"priority", :priority},
-    {"status", :status},
-    {"snoozed_until", :snoozed_until},
-    {"closed_at", :closed_at},
-    {"source_occurred_at", :source_occurred_at},
-    {"inserted_at", :inserted_at},
-    {"updated_at", :updated_at}
   ]
   @action_card_label_pattern ~r/^(\s*(?:Context used|Context|Decision|Why now|State|Next|Prepared|Evidence):\s*)(.*)$/i
 
@@ -328,38 +308,11 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp public_linked_todo(nil), do: nil
 
-  defp public_linked_todo(%Todo{} = todo), do: MobileJSON.todo(todo)
+  defp public_linked_todo(%Todo{} = todo), do: PublicPayload.todo(todo)
 
-  defp public_linked_todo(%{} = todo) do
-    @public_linked_todo_fields
-    |> Enum.reduce(%{}, fn {key, atom_key}, acc ->
-      todo
-      |> known_map_value(key, atom_key)
-      |> put_linked_todo_value(acc, key)
-    end)
-    |> Map.put(
-      "metadata",
-      MobileJSON.public_todo_metadata(known_map_value(todo, "metadata", :metadata))
-    )
-  end
+  defp public_linked_todo(%{} = todo), do: PublicPayload.todo(todo)
 
   defp public_linked_todo(_linked_todo), do: nil
-
-  defp put_linked_todo_value(nil, acc, _key), do: acc
-
-  defp put_linked_todo_value(value, acc, key) when is_binary(value) do
-    if String.trim(value) == "" do
-      acc
-    else
-      Map.put(acc, key, value)
-    end
-  end
-
-  defp put_linked_todo_value(value, acc, key), do: Map.put(acc, key, json_value(value))
-
-  defp known_map_value(map, string_key, atom_key) when is_map(map) do
-    Map.get(map, string_key) || Map.get(map, atom_key)
-  end
 
   defp public_structured_data(structured_data) when is_map(structured_data) do
     Enum.reduce(structured_data, %{}, fn {key, value}, acc ->

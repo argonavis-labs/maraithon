@@ -44,5 +44,42 @@ defmodule Maraithon.Todos.PublicPayloadTest do
       refute inspect(payload) =~ "Model score"
       refute inspect(payload) =~ "secret-token"
     end
+
+    test "polishes map payload copy before it reaches clients" do
+      payload =
+        PublicPayload.todo(%{
+          "id" => Ecto.UUID.generate(),
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "attention_mode" => "act_now",
+          "status" => "open",
+          "title" => "User committed to follow-up with Alex Müller; follow-up not yet sent.",
+          "summary" => "This thread still needs a reply from the user.",
+          "next_action" =>
+            "Reply now with owner, ETA, and the exact artifact or update you committed to.",
+          "priority" => 90,
+          "metadata" => %{
+            "subject" => "Starteryou UGC Campaigns",
+            "source_evidence" =>
+              "You said you would follow up on Starteryou UGC campaign timing.",
+            "record" => %{
+              "person" => "Alex Müller",
+              "relationship_context" => "Starteryou UGC campaign contact",
+              "commitment" => "Follow through on \"Starteryou UGC Campaigns\" for Alex Müller"
+            }
+          }
+        })
+
+      assert payload["title"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
+      assert payload["summary"] == "This thread is waiting on your reply."
+      assert payload["next_action"] =~ "Reply to Alex Müller about Starteryou UGC Campaigns"
+      assert payload["metadata"] == %{"subject" => "Starteryou UGC Campaigns"}
+
+      visible = inspect(payload)
+      refute visible =~ "User committed"
+      refute visible =~ "the user"
+      refute visible =~ "owner, ETA"
+      refute visible =~ "exact artifact or update"
+    end
   end
 end
