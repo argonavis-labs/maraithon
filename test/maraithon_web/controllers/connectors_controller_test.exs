@@ -28,9 +28,10 @@ defmodule MaraithonWeb.ConnectorsControllerTest do
 
     assert html =~ "Connected Apps"
     assert html =~ "Connect Telegram first so Maraithon can send proactive updates."
-    assert html =~ "Setup needed"
+    assert html =~ "Connection needed"
     refute html =~ "OAuth"
     refute html =~ "Configure OAuth first"
+    refute html =~ "Setup needed"
   end
 
   test "unknown connector paths use product-safe copy", %{conn: conn} do

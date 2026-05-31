@@ -69,7 +69,7 @@
               <%= connection_primary_action(@provider) %> →
             </.link>
           <% true -> %>
-            <span class="text-xs/5 text-zinc-400">Setup needed</span>
+            <span class="text-xs/5 text-zinc-400">Connection needed</span>
         <% end %>
       </div>
 
@@ -237,12 +237,12 @@
     <%= if provider_oauth_setup_visible?(@current_user, @provider) do %>
       <section>
         <div class="flex items-end justify-between border-b border-zinc-950/10 pb-1">
-          <h2 class="text-base/7 font-semibold text-zinc-950">Connection Setup</h2>
+          <h2 class="text-base/7 font-semibold text-zinc-950">Connection readiness</h2>
         </div>
 
         <div class="mt-4 grid grid-cols-1 gap-x-8 gap-y-6 lg:grid-cols-2">
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Return URLs</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Return links</p>
             <div class="mt-2 space-y-3">
               <div :for={callback <- @provider.callback_urls}>
                 <div class="flex items-center gap-2">
@@ -262,7 +262,7 @@
           </div>
 
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Setup Checklist</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Readiness checklist</p>
             <ul role="list" class="mt-2 divide-y divide-zinc-950/5">
               <li :for={env <- @provider.env_requirements} class="py-2.5">
                 <div class="flex items-center justify-between gap-2">
@@ -287,7 +287,7 @@
           </div>
 
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Permissions</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Access requested</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               <.badge :for={permission <- @provider.permissions} color="indigo">
                 <%= permission %>
@@ -296,7 +296,7 @@
           </div>
 
           <div>
-            <p class="text-xs/5 font-medium text-zinc-500">Setup notes</p>
+            <p class="text-xs/5 font-medium text-zinc-500">Connection notes</p>
             <ul role="list" class="mt-2 list-disc space-y-1 pl-4 text-sm/6 text-zinc-600">
               <li :for={note <- @provider.setup_notes}><%= note %></li>
             </ul>

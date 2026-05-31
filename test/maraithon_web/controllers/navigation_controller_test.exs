@@ -79,7 +79,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "Apple Notes"
       assert detail_html =~ "Secure local sync"
       refute detail_html =~ "Telegram required"
-      refute detail_html =~ "Connection Setup"
+      refute detail_html =~ "Connection readiness"
       refute detail_html =~ "Disconnect"
     end
 
@@ -230,9 +230,9 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Connect Telegram first, then add GitHub."
       refute html =~ "No accounts connected."
       refute html =~ "No connected accounts yet."
-      refute html =~ "Connection Setup"
-      refute html =~ "Return URLs"
-      refute html =~ "Setup Checklist"
+      refute html =~ "Connection readiness"
+      refute html =~ "Return links"
+      refute html =~ "Readiness checklist"
     end
 
     test "GET /connectors/slack hides setup details for standard users", %{conn: conn} do
@@ -240,7 +240,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      refute html =~ "Connection Setup"
+      refute html =~ "Connection readiness"
       refute html =~ "SLACK_SIGNING_SECRET"
       refute html =~ "/webhooks/slack"
     end
@@ -250,9 +250,15 @@ defmodule MaraithonWeb.NavigationControllerTest do
       html = html_response(conn, 200)
 
       assert html =~ "Slack"
-      assert html =~ "Connection Setup"
+      assert html =~ "Connection readiness"
+      assert html =~ "Return links"
+      assert html =~ "Readiness checklist"
+      assert html =~ "Access requested"
       assert html =~ "SLACK_SIGNING_SECRET"
       assert html =~ "/webhooks/slack"
+      refute html =~ "Connection Setup"
+      refute html =~ "Return URLs"
+      refute html =~ "Setup Checklist"
     end
 
     test "GET /connectors/github shows account-level disconnect controls for healthy account", %{

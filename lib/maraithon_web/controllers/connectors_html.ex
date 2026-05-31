@@ -26,7 +26,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def telegram_connected?(_providers), do: false
 
   def setup_completion_text(%{setup_status: :configured}), do: "Connection ready"
-  def setup_completion_text(_provider), do: "Connection setup needed"
+  def setup_completion_text(_provider), do: "Connection needs attention"
 
   def provider_account_summary(provider) when is_map(provider) do
     accounts = Map.get(provider, :accounts, [])
@@ -63,12 +63,12 @@ defmodule MaraithonWeb.ConnectorsHTML do
         "#{connection_primary_action(provider)} to start syncing."
 
       true ->
-        "Finish setup to start syncing this source."
+        "Finish connecting this source to start syncing."
     end
   end
 
   def empty_accounts_message(_provider, _telegram_connected),
-    do: "Finish setup to start syncing this source."
+    do: "Finish connecting this source to start syncing."
 
   def connection_error_detail(%{details: details}), do: public_error_detail(details)
   def connection_error_detail(_error), do: nil
@@ -176,7 +176,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_label(:partial), do: "partial"
   def connection_status_label(:missing_scope), do: "needs permission"
   def connection_status_label(:needs_refresh), do: "reconnect needed"
-  def connection_status_label(:not_configured), do: "setup needed"
+  def connection_status_label(:not_configured), do: "not ready"
   def connection_status_label(:unknown), do: "status unavailable"
   def connection_status_label(_status), do: "disconnected"
 
@@ -241,9 +241,9 @@ defmodule MaraithonWeb.ConnectorsHTML do
   def connection_status_badge_class(_status),
     do: "inline-flex rounded-md bg-rose-400/15 px-1.5 py-0.5 text-xs/5 font-medium text-rose-700"
 
-  def setup_status_label(:configured), do: "configured"
-  def setup_status_label(:incomplete), do: "needs setup"
-  def setup_status_label(_status), do: "setup not checked"
+  def setup_status_label(:configured), do: "ready"
+  def setup_status_label(:incomplete), do: "needs attention"
+  def setup_status_label(_status), do: "not checked"
 
   def setup_status_badge_class(:configured),
     do:
