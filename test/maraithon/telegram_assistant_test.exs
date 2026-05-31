@@ -273,6 +273,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert reply.text =~ "OpenRouter is configured"
     assert reply.text =~ "won't display API keys, tokens, passwords, or other credentials"
     assert reply.text =~ "deployment secrets or Settings"
+    assert reply.text =~ "rotate or update it"
     refute reply.text =~ secret
     refute reply.text =~ "OPENROUTER_API_KEY"
     refute reply.text =~ "sk-or"

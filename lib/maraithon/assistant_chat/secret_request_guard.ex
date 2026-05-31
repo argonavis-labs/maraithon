@@ -103,19 +103,19 @@ defmodule Maraithon.AssistantChat.SecretRequestGuard do
   end
 
   defp response_text(nil, true) do
-    "Provider credentials are configured for this environment. I won't display API keys, tokens, passwords, or other credentials in chat. Rotate or update them from deployment secrets or Settings."
+    "Provider credentials are configured for this environment. I won't display API keys, tokens, passwords, or other credentials in chat. Use deployment secrets or Settings to rotate or update them."
   end
 
   defp response_text(nil, false) do
-    "Provider credentials do not look configured in this environment. I still won't display API keys, tokens, passwords, or other credentials in chat. Add or rotate them from deployment secrets or Settings."
+    "Provider credentials do not look configured in this environment. I still won't display API keys, tokens, passwords, or other credentials in chat. Use deployment secrets or Settings to add or rotate them."
   end
 
   defp response_text(%{label: label}, true) do
-    "#{label} is configured for this environment. I won't display API keys, tokens, passwords, or other credentials in chat. Rotate or update it from deployment secrets or Settings."
+    "#{label} is configured for this environment. I won't display API keys, tokens, passwords, or other credentials in chat. Use deployment secrets or Settings to rotate or update it."
   end
 
   defp response_text(%{label: label}, false) do
-    "#{label} does not look configured in this environment. I still won't display API keys, tokens, passwords, or other credentials in chat. Add or rotate it from deployment secrets or Settings."
+    "#{label} does not look configured in this environment. I still won't display API keys, tokens, passwords, or other credentials in chat. Use deployment secrets or Settings to add or rotate it."
   end
 
   defp credential_status(true), do: "configured"

@@ -790,6 +790,44 @@ defmodule Maraithon.TelegramRouterTest do
     refute String.contains?(String.downcase(reply.text), "internal issue")
   end
 
+  test "unknown Telegram fallback gives the user a concrete next step" do
+    Application.put_env(:maraithon, :telegram_assistant, telegram_full_chat_enabled: false)
+
+    set_interpreter(fn _prompt ->
+      {:ok,
+       Jason.encode!(%{
+         "intent" => "unknown",
+         "confidence" => 0.34,
+         "scope" => "thread_local",
+         "needs_clarification" => false,
+         "candidate_rules" => [],
+         "candidate_action" => nil,
+         "feedback_target" => %{},
+         "memory_summary_updates" => [],
+         "explanation" => "The request is underspecified."
+       })}
+    end)
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "message",
+        data: %{chat_id: 12345, message_id: 9008, text: "Handle this"}
+      })
+
+    reply = last_telegram_message(:send)
+    assert reply.text =~ "I need one more detail before I act"
+    assert reply.text =~ "what you want me to do"
+    assert reply.text =~ "save a preference"
+    assert reply.text =~ "draft or send a reply"
+    assert reply.text =~ "explain why it matters"
+
+    lower_text = String.downcase(reply.text)
+    refute lower_text =~ "not fully clear"
+    refute lower_text =~ "not sure"
+    refute lower_text =~ "learned or done"
+    refute lower_text =~ "try again"
+  end
+
   defp create_and_dispatch_gmail_delivery(user_id, agent_id, overrides \\ %{}) do
     defaults = %{
       "source" => "gmail",

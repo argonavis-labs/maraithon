@@ -17,7 +17,7 @@ defmodule Maraithon.AssistantChat.SecretRequestGuardTest do
 
     assert text =~ "OpenRouter is configured"
     assert text =~ "won't display API keys, tokens, passwords, or other credentials"
-    assert text =~ "deployment secrets or Settings"
+    assert text =~ "Use deployment secrets or Settings to rotate or update it"
     refute text =~ @openrouter_key
     refute text =~ "OPENROUTER_API_KEY"
     refute text =~ "sk-or"

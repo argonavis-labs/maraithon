@@ -10,19 +10,23 @@ defmodule Maraithon.TelegramInterpreter do
   alias Maraithon.UserMemory
   require Logger
 
+  @default_assistant_reply "I need one more detail before I act. Reply with the exact item and what you want me to do: save a preference, draft or send a reply, mark work done, snooze it, or explain why it matters."
+
   @default_result %{
     "intent" => "unknown",
     "confidence" => 0.0,
     "scope" => "thread_local",
     "needs_clarification" => false,
     "clarifying_question" => nil,
-    "assistant_reply" => "Not fully clear yet. Can you clarify what should change or happen?",
+    "assistant_reply" => @default_assistant_reply,
     "candidate_rules" => [],
     "candidate_action" => nil,
     "feedback_target" => %{"delivery_id" => nil, "insight_id" => nil},
     "memory_summary_updates" => [],
     "explanation" => "Model did not provide an explanation."
   }
+
+  def default_assistant_reply, do: @default_assistant_reply
 
   def interpret(user_id, attrs, opts \\ []) when is_binary(user_id) and is_map(attrs) do
     llm_complete = Keyword.get(opts, :llm_complete) || configured_llm_complete()

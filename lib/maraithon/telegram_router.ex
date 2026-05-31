@@ -401,7 +401,7 @@ defmodule Maraithon.TelegramRouter do
     reply =
       Map.get(interpretation, "assistant_reply") ||
         Map.get(interpretation, "clarifying_question") ||
-        "Not sure yet. Can you clarify what should be learned or done?"
+        TelegramInterpreter.default_assistant_reply()
 
     {:ok, UserFacingCopy.polish_text(reply), []}
   end
@@ -662,7 +662,7 @@ defmodule Maraithon.TelegramRouter do
       question =
         Map.get(interpretation, "clarifying_question") ||
           Map.get(interpretation, "assistant_reply") ||
-          "Can you clarify what you want me to learn or do?"
+          TelegramInterpreter.default_assistant_reply()
 
       question = UserFacingCopy.polish_text(question)
 
