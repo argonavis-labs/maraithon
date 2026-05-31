@@ -49,12 +49,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert has_element?(view, "h2", "Projects")
     assert has_element?(view, "h2", "Automation coverage")
     assert html =~ "No work needs attention right now."
-    assert html =~ "collect context and recommend next work"
-    assert html =~ "No open follow-ups yet."
+    assert html =~ "attach an automation to recommend next moves"
+    assert html =~ "Follow-ups will appear here after"
     assert html =~ "Connect work apps so Maraithon can see current context."
     assert html =~ "begin monitoring active work"
     assert html =~ "nothing waiting"
     refute html =~ "none failed"
+    refute html =~ "No projects yet."
+    refute html =~ "No open follow-ups yet."
     refute has_element?(view, "h2", "Health")
     refute html =~ "Operational activity"
     refute html =~ "Automation activity"
@@ -254,6 +256,33 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Operator OS"
     assert html =~ "Ship dashboard"
     assert html =~ "Launch the first project workspace slice."
+    assert html =~ "Add project context, then attach a Product Planner"
+    assert html =~ "Grant read access when a recommendation needs code context."
+    assert html =~ "Accepted recommendations will appear here once you start delivery."
+    refute html =~ "No recommendations yet."
+    refute html =~ "No repo access granted yet."
+    refute html =~ "No delivery runs yet."
+  end
+
+  test "renders project setup guidance without placeholder absence copy", %{conn: conn} do
+    {:ok, _project} =
+      Projects.create_project(@user_email, %{
+        "name" => "Board Prep"
+      })
+
+    {:ok, _view, html} = live(conn, "/dashboard")
+
+    assert html =~ "Board Prep"
+    assert html =~ "Add a project summary to keep recommendations focused."
+
+    assert html =~
+             "Add a note, work item, or repo grant so Maraithon has enough detail to make useful recommendations."
+
+    assert html =~ "Add project context, then attach a Product Planner"
+    assert html =~ "Grant read access when a recommendation needs code context."
+    assert html =~ "Accepted recommendations will appear here once you start delivery."
+    refute html =~ "No project context yet."
+    refute html =~ "No project summary yet."
   end
 
   test "renders project manager recommendations on the dashboard", %{conn: conn} do

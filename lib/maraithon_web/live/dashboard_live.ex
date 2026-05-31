@@ -1427,7 +1427,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </div>
                   <%= if project_card.items == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No project context yet. Add a note, work item, or repo grant so Maraithon has the details it needs.
+                      Add a note, work item, or repo grant so Maraithon has enough detail to make useful recommendations.
                     </p>
                   <% else %>
                     <div
@@ -1451,7 +1451,7 @@ defmodule MaraithonWeb.DashboardLive do
                   </p>
                   <%= if project_card.recommendations == [] do %>
                     <p class="text-sm/6 text-zinc-500">
-                      No recommendations yet. Attach a Product Planner when you want Maraithon to turn project context into next steps.
+                      Add project context, then attach a Product Planner to turn it into ranked next steps.
                     </p>
                   <% else %>
                     <div
@@ -1585,7 +1585,7 @@ defmodule MaraithonWeb.DashboardLive do
                     </p>
                     <%= if project_card.repo_grants == [] do %>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        No repo access granted yet.
+                        Grant read access when a recommendation needs code context.
                       </p>
                     <% else %>
                       <div :for={grant <- project_card.repo_grants} class="mt-2 flex items-center justify-between gap-3 rounded-lg border border-zinc-950/10 px-3 py-2">
@@ -1606,7 +1606,7 @@ defmodule MaraithonWeb.DashboardLive do
                     </p>
                     <%= if project_card.implementation_runs == [] do %>
                       <p class="mt-2 text-sm/6 text-zinc-500">
-                        No delivery runs yet.
+                        Accepted recommendations will appear here once you start delivery.
                       </p>
                     <% else %>
                       <div :for={run <- project_card.implementation_runs} class="mt-2 rounded-lg border border-zinc-950/10 px-3 py-2">
@@ -1643,7 +1643,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @projects == [] do %>
             <p class="text-sm/6 text-zinc-500 xl:col-span-2">
-              No projects yet. Use “New project,” then attach an automation to collect context and recommend next work.
+              Create a project, add the active work, then attach an automation to recommend next moves.
             </p>
           <% end %>
         </div>
@@ -1773,7 +1773,7 @@ defmodule MaraithonWeb.DashboardLive do
 
           <%= if @insights == [] do %>
             <p class="text-sm/6 text-zinc-500">
-              No open follow-ups yet. Start a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation.
+              Follow-ups will appear here after a Chief of Staff, Inbox and Calendar Assistant, or Slack Follow-through automation starts watching.
             </p>
           <% end %>
       </section>
@@ -3292,7 +3292,8 @@ defmodule MaraithonWeb.DashboardLive do
   defp recommendation_priority_label(_priority), do: "Later"
 
   defp project_summary(project) do
-    project.summary || project.description || "No project summary yet."
+    project.summary || project.description ||
+      "Add a project summary to keep recommendations focused."
   end
 
   defp item_type_label("todo"), do: "Work item"
