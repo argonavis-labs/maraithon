@@ -28,6 +28,7 @@ defmodule Maraithon.UserMemory do
   @default_confidence 0.55
   @recent_feedback_limit 8
   @recent_turn_limit 16
+  @empty_profile_guidance "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
 
   def prompt_context(user_id) when is_binary(user_id) do
     case Repo.get_by(Profile, user_id: user_id) do
@@ -346,15 +347,19 @@ defmodule Maraithon.UserMemory do
   end
 
   defp preference_instruction(bundle, kinds) when is_map(bundle) and is_list(kinds) do
-    bundle
-    |> get_in([:preference_memory, :rules]) ||
+    rules = get_in(bundle, [:preference_memory, :rules])
+
+    if is_list(rules) do
+      rules
+    else
       []
-      |> Enum.filter(&Enum.member?(kinds, Map.get(&1, "kind")))
-      |> Enum.map(&Map.get(&1, "instruction"))
-      |> Enum.reject(&blank?/1)
-      |> Enum.take(3)
-      |> Enum.join(" ")
-      |> normalize_optional_text()
+    end
+    |> Enum.filter(&Enum.member?(kinds, Map.get(&1, "kind")))
+    |> Enum.map(&Map.get(&1, "instruction"))
+    |> Enum.reject(&blank?/1)
+    |> Enum.take(3)
+    |> Enum.join(" ")
+    |> normalize_optional_text()
   end
 
   defp connected_account_summary(bundle) do
@@ -525,7 +530,7 @@ defmodule Maraithon.UserMemory do
 
   defp empty_prompt_context do
     %{
-      summary: "No confirmed long-term user profile yet.",
+      summary: @empty_profile_guidance,
       profile: %{},
       confidence: 0.0,
       source_window_start: nil,

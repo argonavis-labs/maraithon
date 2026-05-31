@@ -80,6 +80,8 @@ defmodule Maraithon.UserMemoryTest do
 
     assert profile.summary =~ "Prioritize source-backed obligations"
     assert profile.profile["working_style"] =~ "source-grounded recommendations"
+    assert profile.profile["communication_style"] =~ "updates concise"
+    assert profile.profile["decision_style"] =~ "practical next steps"
     assert profile.profile["current_focus"] =~ "source-backed obligations"
     assert profile.profile["important_context"] =~ "connected-source evidence"
 
@@ -88,6 +90,17 @@ defmodule Maraithon.UserMemoryTest do
     refute profile.summary =~ "Patterns are still emerging"
     refute profile.summary =~ "No active projects have been captured"
     refute profile.summary =~ "durable"
+  end
+
+  test "prompt context fallback gives usable guidance instead of an empty placeholder" do
+    context = UserMemory.prompt_context(nil)
+
+    assert context.summary ==
+             "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
+
+    assert context.profile == %{}
+    assert context.confidence == 0.0
+    refute context.summary =~ "No confirmed long-term user profile yet"
   end
 
   test "telegram assistant context exposes stored user memory", %{user_id: user_id} do

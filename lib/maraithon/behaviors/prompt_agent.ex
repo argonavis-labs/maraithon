@@ -25,6 +25,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   @behaviour Maraithon.Behaviors.Behavior
 
   @default_memory_limit 50
+  @empty_user_memory_guidance "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
 
   alias Maraithon.LLM
 
@@ -440,7 +441,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   defp format_user_memory(%{summary: summary, profile: profile}) when is_map(profile) do
     summary_text =
       case normalize_optional_text(summary) do
-        nil -> "No confirmed long-term user profile yet."
+        nil -> @empty_user_memory_guidance
         value -> value
       end
 
@@ -462,7 +463,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     end
   end
 
-  defp format_user_memory(_memory), do: "No confirmed long-term user profile yet."
+  defp format_user_memory(_memory), do: @empty_user_memory_guidance
 
   defp format_deep_memory(%{memories: memories}) when is_list(memories) do
     format_deep_memory(%{"memories" => memories})
