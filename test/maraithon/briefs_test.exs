@@ -1031,10 +1031,11 @@ defmodule Maraithon.BriefsTest do
     [message] = sent_messages()
 
     assert message.text ==
-             "No saved open work is ready for review right now. New commitments will appear here after Maraithon catches a source-backed next move."
+             "No saved open work is ready for review right now. New commitments will appear here once Maraithon has enough context to recommend a concrete next move."
 
     refute message.text =~ "I "
     refute message.text =~ "don't"
+    refute message.text =~ "source-backed"
   end
 
   test "latest review empty state answers with accurate callback copy" do
@@ -1051,7 +1052,9 @@ defmodule Maraithon.BriefsTest do
     [message] = sent_messages()
 
     assert message.text ==
-             "No saved open work is ready for review right now. New commitments will appear here after Maraithon catches a source-backed next move."
+             "No saved open work is ready for review right now. New commitments will appear here once Maraithon has enough context to recommend a concrete next move."
+
+    refute message.text =~ "source-backed"
   end
 
   test "unavailable brief review callback uses product copy" do

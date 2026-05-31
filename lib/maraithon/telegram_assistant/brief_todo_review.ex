@@ -30,7 +30,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     postgrex private_key stacktrace token
   )
   @no_open_work_review_text "No saved open work is ready for review right now. " <>
-                              "New commitments will appear here after Maraithon catches a source-backed next move."
+                              "New commitments will appear here once Maraithon has enough context to recommend a concrete next move."
 
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
