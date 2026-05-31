@@ -1289,7 +1289,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert List.last(sends).text =~ "Open work review complete"
     assert List.last(sends).text =~ "Done: 1"
     assert List.last(sends).text =~ "Dismissed: 1"
-    assert List.last(sends).text =~ "Done and dismissed work will stay out of future briefs"
+    assert List.last(sends).text =~ "Cleared items are off your future briefs"
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{
@@ -1869,7 +1869,7 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert intro.text =~ "Best next move: Reply to Charlie about the budget."
 
-    assert intro.text =~ "review the rest one by one"
+    assert intro.text =~ "Then triage the rest"
     assert intro.text =~ "keep what still needs you"
     refute intro.text =~ "not important"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"

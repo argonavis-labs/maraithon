@@ -631,10 +631,10 @@ defmodule Maraithon.Briefs do
   defp todo_digest_next_move([todo | _todos]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
-    "#{focus} Then review the rest one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
+    "#{focus} Then triage the rest: close resolved items, keep what still needs you, and defer anything that can wait."
   end
 
-  defp todo_digest_next_move(_todos), do: "No decision is needed right now."
+  defp todo_digest_next_move(_todos), do: "Nothing needs a decision right now."
 
   defp todo_digest_sentence(value) when is_binary(value) do
     value = String.trim(value)

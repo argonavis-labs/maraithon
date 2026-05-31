@@ -472,8 +472,8 @@ defmodule Maraithon.BriefsTest do
 
     assert intro =~ "Best next move: Reply to finance about the receipt."
 
-    assert intro =~ "review the rest one by one"
-    assert intro =~ "mark resolved items done"
+    assert intro =~ "Then triage the rest"
+    assert intro =~ "close resolved items"
     assert intro =~ "keep what still needs you"
     assert intro =~ "defer anything that can wait"
     refute intro =~ "stale"
@@ -557,7 +557,7 @@ defmodule Maraithon.BriefsTest do
     assert summary.text =~ "Done: 1"
     assert summary.text =~ "Dismissed: 1"
     assert summary.text =~ "Still open: 0"
-    assert summary.text =~ "Done and dismissed work will stay out of future briefs"
+    assert summary.text =~ "Cleared items are off your future briefs"
 
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
@@ -966,7 +966,7 @@ defmodule Maraithon.BriefsTest do
     assert message.text =~ "Evidence: School asked for the signed form before the pickup cutoff."
 
     assert message.text =~
-             "Best next move: Send the signed pickup form and ask for confirmation. Then review the list one by one"
+             "Best next move: Send the signed pickup form and ask for confirmation. Then triage the list"
 
     refute message.text =~ "clear decisions"
   end

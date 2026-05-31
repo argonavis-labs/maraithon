@@ -717,7 +717,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     Dismissed: #{length(dismissed)}
     #{still_open}
 
-    Done and dismissed work will stay out of future briefs; anything still open can carry forward.
+    Cleared items are off your future briefs. Still-open work stays in the queue until you act or defer it.
     """
     |> String.trim()
   end
@@ -794,10 +794,10 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   defp todo_list_next_move([todo | _todos]) do
     focus = todo |> todo_list_focus() |> todo_list_sentence() |> safe()
 
-    "#{focus} Then review the list one by one: mark resolved items done, keep what still needs you, and defer anything that can wait."
+    "#{focus} Then triage the list: close resolved items, keep what still needs you, and defer anything that can wait."
   end
 
-  defp todo_list_next_move(_todos), do: "No decision is needed right now."
+  defp todo_list_next_move(_todos), do: "Nothing needs a decision right now."
 
   defp todo_list_sentence(value) when is_binary(value) do
     value = String.trim(value)
