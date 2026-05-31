@@ -178,6 +178,48 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute today_html =~ "Tomorrow local follow-up"
   end
 
+  test "next 7 days filter excludes past-due work", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    assert {:ok, _todos} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Expired renewal follow-up",
+                 "summary" => "This should stay in the Past due filter.",
+                 "next_action" => "Handle the late renewal separately.",
+                 "due_at" => DateTime.add(now, -1, :hour),
+                 "dedupe_key" => "todos-live:week-filter:past"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Upcoming board review",
+                 "summary" => "This should appear in the next seven days.",
+                 "next_action" => "Send the board review notes.",
+                 "due_at" => DateTime.add(now, 2, :day),
+                 "dedupe_key" => "todos-live:week-filter:soon"
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Later offsite prep",
+                 "summary" => "This is beyond the next seven days.",
+                 "next_action" => "Prepare the later offsite packet.",
+                 "due_at" => DateTime.add(now, 8, :day),
+                 "dedupe_key" => "todos-live:week-filter:later"
+               }
+             ])
+
+    {:ok, _view, html} = live(conn, "/todos?due=week")
+
+    assert html =~ "Next 7 days"
+    assert html =~ "Upcoming board review"
+    refute html =~ "Expired renewal follow-up"
+    refute html =~ "Later offsite prep"
+  end
+
   test "searches and filters todos through query-backed controls", %{conn: conn} do
     assert {:ok, _todos} =
              Todos.upsert_many(@user_email, [

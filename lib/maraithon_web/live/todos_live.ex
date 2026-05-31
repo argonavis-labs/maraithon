@@ -836,7 +836,7 @@ defmodule MaraithonWeb.TodosLive do
     now = DateTime.utc_now()
     week_out = now |> DateTime.add(7, :day)
 
-    [due_before: week_out]
+    [due_after: now, due_before: week_out]
   end
 
   defp due_filter("no_due", _timezone_info), do: [due_nil?: true]
