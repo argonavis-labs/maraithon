@@ -167,10 +167,11 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
 
       context = Context.build(%{user_id: user_id, chat_id: "12345", request_focus: :today_mode})
 
-      assert context.calendar.source_status.google == "temporarily unavailable"
+      assert context.calendar.source_status.google == "service problem"
       refute calendar_status_text(context) =~ "internal_stacktrace"
       refute calendar_status_text(context) =~ "db_timeout"
       refute calendar_status_text(context) =~ "500"
+      refute calendar_status_text(context) =~ "temporarily unavailable"
     end
   end
 
@@ -198,8 +199,8 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
       assert context.context_fetch.status == "degraded"
 
       assert Enum.map(context.context_fetch.failures, & &1.reason) == [
-               "temporarily unavailable",
-               "temporarily unavailable",
+               "service problem",
+               "service problem",
                "interrupted"
              ]
 
@@ -208,6 +209,7 @@ defmodule Maraithon.TelegramAssistant.ContextTest do
       refute diagnostics =~ "sk-live-secret"
       refute diagnostics =~ "/Users/kent"
       refute diagnostics =~ "iMessage database"
+      refute diagnostics =~ "temporarily unavailable"
     end
 
     test "reports timed-out source fetches with a machine-readable reason" do

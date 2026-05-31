@@ -23,6 +23,7 @@ defmodule Maraithon.TelegramAssistant.Context do
   alias Maraithon.Projects
   alias Maraithon.Redaction
   alias Maraithon.Repo
+  alias Maraithon.SourceErrorCopy
   alias Maraithon.SourceFreshness
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
@@ -428,16 +429,12 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp normalize_fetch_reason(:timeout), do: "timeout"
   defp normalize_fetch_reason(:slow_fetch), do: "slow response"
   defp normalize_fetch_reason(:interrupted), do: "interrupted"
-  defp normalize_fetch_reason(:temporary_failure), do: "temporarily unavailable"
   defp normalize_fetch_reason("timeout"), do: "timeout"
   defp normalize_fetch_reason("slow_fetch"), do: "slow response"
   defp normalize_fetch_reason("interrupted"), do: "interrupted"
   defp normalize_fetch_reason("timed out"), do: "timeout"
   defp normalize_fetch_reason("slow response"), do: "slow response"
-  defp normalize_fetch_reason("temporarily unavailable"), do: "temporarily unavailable"
-  defp normalize_fetch_reason("temporary_failure"), do: "temporarily unavailable"
-  defp normalize_fetch_reason(reason) when is_binary(reason), do: "temporarily unavailable"
-  defp normalize_fetch_reason(_reason), do: "temporarily unavailable"
+  defp normalize_fetch_reason(reason), do: SourceErrorCopy.reason(reason)
 
   defp context_fetch_timeout_ms do
     :maraithon
@@ -671,47 +668,7 @@ defmodule Maraithon.TelegramAssistant.Context do
       {[], "unavailable"}
   end
 
-  defp google_calendar_status(:no_token), do: "not connected"
-  defp google_calendar_status(:reauth_required), do: "needs reconnect"
-  defp google_calendar_status(:no_refresh_token), do: "needs reconnect"
-  defp google_calendar_status({:token_refresh_failed, reason}), do: google_calendar_status(reason)
-  defp google_calendar_status({:error, reason}), do: google_calendar_status(reason)
-  defp google_calendar_status({:http_error, _reason}), do: "temporarily unavailable"
-  defp google_calendar_status(:unauthorized), do: "needs reconnect"
-  defp google_calendar_status({:rate_limited, _body}), do: "temporarily unavailable"
-
-  defp google_calendar_status({:http_status, status, _body})
-       when is_integer(status) and status in [401, 403],
-       do: "needs reconnect"
-
-  defp google_calendar_status({:http_status, status, _body})
-       when is_integer(status) and (status in [408, 409, 425, 429] or status >= 500),
-       do: "temporarily unavailable"
-
-  defp google_calendar_status({:http_status, _status, _body}), do: "unavailable"
-
-  defp google_calendar_status(reason) when is_binary(reason) do
-    normalized = String.downcase(reason)
-
-    cond do
-      String.contains?(normalized, "oauth_reauth_required") ->
-        "needs reconnect"
-
-      String.contains?(normalized, "oauth_missing_refresh_token") ->
-        "needs reconnect"
-
-      String.contains?(normalized, "invalid_grant") ->
-        "needs reconnect"
-
-      String.contains?(normalized, "not_connected") ->
-        "not connected"
-
-      true ->
-        "unavailable"
-    end
-  end
-
-  defp google_calendar_status(_reason), do: "unavailable"
+  defp google_calendar_status(reason), do: SourceErrorCopy.reason(reason)
 
   defp local_calendar_event_for_prompt(event) do
     %{

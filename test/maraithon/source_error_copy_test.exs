@@ -20,16 +20,35 @@ defmodule Maraithon.SourceErrorCopyTest do
       {:http_status, 500, ~s({"error":"internal_stacktrace: db_timeout token=secret"})},
       {:http_error, %RuntimeError{message: "connect failed for token secret"}},
       "google_calendar_api_failed: 500 %{secret: true}",
+      "Slack is temporarily unavailable. Wait a minute before running this action.",
+      "HTTP request failed for token=secret",
       {:provider_error, "raw local path /Users/kent/Library/secret"}
     ]
 
     copies = Enum.map(reasons, &SourceErrorCopy.reason/1)
 
-    assert Enum.all?(copies, &(&1 in ["temporarily unavailable", "unavailable"]))
+    assert copies == [
+             "service problem",
+             "service problem",
+             "service problem",
+             "service problem",
+             "service problem",
+             "source check failed"
+           ]
 
     encoded = inspect(copies)
     refute encoded =~ "internal_stacktrace"
     refute encoded =~ "secret"
     refute encoded =~ "/Users/kent"
+    refute encoded =~ "temporarily unavailable"
+    refute encoded =~ "unavailable"
+  end
+
+  test "keeps rate limits and timeouts specific" do
+    assert SourceErrorCopy.reason({:rate_limited, "provider body"}) == "rate limited"
+    assert SourceErrorCopy.reason({:http_status, 429, "provider body"}) == "rate limited"
+    assert SourceErrorCopy.reason("slack_rate_limited token=secret") == "rate limited"
+    assert SourceErrorCopy.reason({:http_status, 408, "provider body"}) == "timed out"
+    assert SourceErrorCopy.reason("request timed out with token=secret") == "timed out"
   end
 end

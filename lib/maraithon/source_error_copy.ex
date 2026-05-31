@@ -10,19 +10,21 @@ defmodule Maraithon.SourceErrorCopy do
   @doc """
   Returns a short, user-safe availability reason.
   """
+  @service_problem "service problem"
+  @source_check_failed "source check failed"
+
   def reason({:error, reason}), do: reason(reason)
   def reason({:token_refresh_failed, reason}), do: reason(reason)
   def reason({:revocation_failed, reason}), do: reason(reason)
 
   def reason({:http_status, status, _body}) when status in [401, 403], do: "needs reconnect"
+  def reason({:http_status, 408, _body}), do: "timed out"
+  def reason({:http_status, 429, _body}), do: "rate limited"
+  def reason({:http_status, status, _body}) when status >= 500, do: @service_problem
 
-  def reason({:http_status, status, _body})
-      when status in [408, 409, 425, 429] or status >= 500,
-      do: "temporarily unavailable"
-
-  def reason({:http_status, _status, _body}), do: "unavailable"
-  def reason({:rate_limited, _body}), do: "temporarily unavailable"
-  def reason({:http_error, _reason}), do: "temporarily unavailable"
+  def reason({:http_status, _status, _body}), do: @source_check_failed
+  def reason({:rate_limited, _body}), do: "rate limited"
+  def reason({:http_error, _reason}), do: @service_problem
   def reason({:exit, _reason}), do: "interrupted"
 
   def reason(:no_token), do: "not connected"
@@ -33,9 +35,9 @@ defmodule Maraithon.SourceErrorCopy do
   def reason(:timeout), do: "timed out"
   def reason(:slow_fetch), do: "slow response"
   def reason(:interrupted), do: "interrupted"
-  def reason(:temporary_failure), do: "temporarily unavailable"
+  def reason(:temporary_failure), do: @service_problem
 
-  def reason(%_{}), do: "temporarily unavailable"
+  def reason(%_{}), do: @service_problem
 
   def reason(value) when is_binary(value) do
     value
@@ -43,7 +45,7 @@ defmodule Maraithon.SourceErrorCopy do
     |> classify_text()
   end
 
-  def reason(_value), do: "temporarily unavailable"
+  def reason(_value), do: @source_check_failed
 
   defp classify_text(text) do
     cond do
@@ -66,26 +68,29 @@ defmodule Maraithon.SourceErrorCopy do
       ]) ->
         "needs reconnect"
 
+      String.contains?(text, ["429", "rate_limited"]) ->
+        "rate limited"
+
       String.contains?(text, [
-        "429",
         "api_failed",
         "db_timeout",
         "http_error",
+        "http request failed",
         "http_status",
         "internal",
-        "rate_limited",
+        "temporarily unavailable",
         "tool_failed"
       ]) ->
-        "temporarily unavailable"
+        @service_problem
 
       Regex.match?(~r/\b5\d\d\b/, text) ->
-        "temporarily unavailable"
+        @service_problem
 
       String.contains?(text, ["timeout", "timed out"]) ->
         "timed out"
 
       true ->
-        "temporarily unavailable"
+        @source_check_failed
     end
   end
 end

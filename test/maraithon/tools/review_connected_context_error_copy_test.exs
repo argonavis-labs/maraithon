@@ -44,13 +44,14 @@ defmodule Maraithon.Tools.ReviewConnectedContextErrorCopyTest do
                "timeout_ms" => 1_000
              })
 
-    assert [%{source: "calendar", reason: "temporarily unavailable"}] = review.errors
+    assert [%{source: "calendar", reason: "service problem"}] = review.errors
 
     encoded = inspect(review.errors)
     refute encoded =~ "internal_stacktrace"
     refute encoded =~ "db_timeout"
     refute encoded =~ "token=secret"
     refute encoded =~ "500"
+    refute encoded =~ "temporarily unavailable"
   end
 
   test "review_connected_context presents Slack matches without workspace internals" do
@@ -178,7 +179,7 @@ defmodule Maraithon.Tools.ReviewConnectedContextErrorCopyTest do
     assert %{
              count: 0,
              matches: [],
-             errors: [%{workspace: "Agora", reason: "temporarily unavailable"}]
+             errors: [%{workspace: "Agora", reason: "service problem"}]
            } =
              review.results["slack"]
 
@@ -188,5 +189,6 @@ defmodule Maraithon.Tools.ReviewConnectedContextErrorCopyTest do
     refute encoded =~ "internal_stacktrace"
     refute encoded =~ "slack-secret"
     refute encoded =~ "500"
+    refute encoded =~ "temporarily unavailable"
   end
 end
