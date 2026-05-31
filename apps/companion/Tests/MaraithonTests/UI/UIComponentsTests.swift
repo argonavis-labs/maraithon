@@ -269,6 +269,16 @@ final class UIComponentsTests: XCTestCase {
     }
 
     @MainActor
+    func testDiagnosticsSettingsCopyUsesNotUpdatingForDisconnectedSources() {
+        let publisher = SourceStatusPublisher(state: .disconnected)
+
+        let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
+
+        XCTAssertTrue(line.contains("Status: Not updating."))
+        XCTAssertFalse(line.localizedCaseInsensitiveContains("Status: Disconnected"))
+    }
+
+    @MainActor
     func testDiagnosticsSettingsCopyKeepsDeveloperCopyReadable() {
         let publicCopy = [
             DiagnosticsSettingsCopy.intro,
@@ -314,6 +324,24 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertEqual(DiagnosticsSummaryCopy.contextAddedTodayTitle, "Context added today")
         XCTAssertFalse(DiagnosticsSummaryCopy.contextAddedTodayTitle.localizedCaseInsensitiveContains("sync"))
         XCTAssertFalse(DiagnosticsSummaryCopy.contextAddedTodayTitle.localizedCaseInsensitiveContains("event"))
+    }
+
+    func testDiagnosticsRealtimeStatusCopyUsesUserOutcomeLanguage() {
+        let states: [DiagnosticsRealtimeStatus] = [.connected, .reconnecting, .offline]
+        let visibleCopy = states
+            .flatMap { [$0.label, $0.caption ?? ""] }
+            .joined(separator: " ")
+
+        XCTAssertEqual(DiagnosticsSummaryCopy.liveUpdatesTitle, "Live updates")
+        XCTAssertEqual(DiagnosticsSummaryCopy.needsAnotherCheckTitle, "Needs another check")
+        XCTAssertEqual(DiagnosticsRealtimeStatus.connected.label, "On")
+        XCTAssertEqual(DiagnosticsRealtimeStatus.connected.caption, "New context can appear immediately")
+        XCTAssertEqual(DiagnosticsRealtimeStatus.offline.label, "Checking periodically")
+        XCTAssertEqual(DiagnosticsRealtimeStatus.offline.caption, "Checks continue without live updates")
+        XCTAssertFalse(visibleCopy.localizedCaseInsensitiveContains("HTTP"))
+        XCTAssertFalse(visibleCopy.localizedCaseInsensitiveContains("push"))
+        XCTAssertFalse(visibleCopy.localizedCaseInsensitiveContains("channel"))
+        XCTAssertFalse(visibleCopy.localizedCaseInsensitiveContains("offline"))
     }
 
     func testDataSettingsCopyUsesExplicitUserActions() {

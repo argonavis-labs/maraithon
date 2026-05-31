@@ -383,7 +383,7 @@ enum DiagnosticsSettingsCopy {
         case .connected: stateString = "Assistant ready"
         case .syncing: stateString = "Checking"
         case .paused: stateString = "Paused"
-        case .disconnected: stateString = "Disconnected"
+        case .disconnected: stateString = "Not updating"
         case .needsAttention(let reason):
             stateString = "Needs review - \(SourceIssueCopy.status(reason))"
         case .error(let reason):

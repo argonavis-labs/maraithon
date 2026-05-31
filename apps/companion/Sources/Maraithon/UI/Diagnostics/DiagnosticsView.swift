@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Bottom-of-sidebar diagnostics pane. Pairs a single summary card
-/// (realtime channel state, context added today, total queued for retry,
+/// (live update state, context added today, total needing another check,
 /// last check per source) with the existing `LogsView` below it.
 ///
 /// Invariants:
@@ -44,7 +44,7 @@ struct DiagnosticsView: View {
             let columns = [GridItem(.adaptive(minimum: 180), spacing: Tokens.Spacing.medium)]
             LazyVGrid(columns: columns, spacing: Tokens.Spacing.medium) {
                 StatCard(
-                    title: "Realtime channel",
+                    title: DiagnosticsSummaryCopy.liveUpdatesTitle,
                     value: realtimeStatus.label,
                     caption: realtimeStatus.caption
                 )
@@ -54,12 +54,14 @@ struct DiagnosticsView: View {
                     caption: "Across \(activeSourceCount) sources"
                 )
                 StatCard(
-                    title: "Queued for retry",
+                    title: DiagnosticsSummaryCopy.needsAnotherCheckTitle,
                     value: String(pendingRetryCount),
-                    caption: pendingRetryCount == 0 ? "No backlog" : "Will retry on next tick"
+                    caption: pendingRetryCount == 0
+                        ? "All checks are current"
+                        : "Maraithon will check again"
                 )
                 StatCard(
-                    title: "Auth",
+                    title: "Account",
                     value: authLabel,
                     caption: authCaption
                 )
@@ -133,11 +135,11 @@ struct DiagnosticsView: View {
         }
     }
 
-    /// Approximation of "queued for retry" using the sync engine's
+    /// Approximation of "needs another check" using the sync engine's
     /// observable `consecutiveFailures`. The persistent queue's actual
     /// row count would be more precise, but the engine's existing
     /// public surface only exposes the retry counter — and that's the
-    /// signal the user cares about: "is sync stuck?"
+    /// signal the user cares about: "are checks stuck?"
     private func startObservingQueue() {
         queueTask?.cancel()
         let engine = env.syncEngine
@@ -151,7 +153,9 @@ struct DiagnosticsView: View {
 }
 
 enum DiagnosticsSummaryCopy {
+    static let liveUpdatesTitle = "Live updates"
     static let contextAddedTodayTitle = "Context added today"
+    static let needsAnotherCheckTitle = "Needs another check"
 }
 
 enum DiagnosticsSummaryMetrics {
@@ -180,17 +184,17 @@ enum DiagnosticsRealtimeStatus: Equatable, Sendable {
 
     var label: String {
         switch self {
-        case .connected: return "Connected"
+        case .connected: return "On"
         case .reconnecting: return "Reconnecting"
-        case .offline: return "Offline"
+        case .offline: return "Checking periodically"
         }
     }
 
     var caption: String? {
         switch self {
-        case .connected: return "Push enabled"
-        case .reconnecting: return "Falling back to HTTP"
-        case .offline: return "Falling back to HTTP"
+        case .connected: return "New context can appear immediately"
+        case .reconnecting: return "Checks continue while live updates recover"
+        case .offline: return "Checks continue without live updates"
         }
     }
 }
