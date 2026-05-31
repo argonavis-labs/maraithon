@@ -5,6 +5,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   @behaviour Maraithon.ChiefOfStaff.Skill
 
+  require Logger
+
   alias Maraithon.AgentHarness.MarkdownSkill
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.{SourceBundle, SourceScope}
@@ -916,7 +918,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         {:ok, :no_todos}
 
       candidates ->
-        OpenLoops.ingest_todos(user_id, candidates,
+        ingest_todos_with_fallback(user_id, candidates,
           source: "chief_of_staff_commitment_tracker",
           now: read_string(tracker_input, "generated_at", nil)
         )
@@ -924,6 +926,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp persist_model_todos(_user_id, _report, _tracker_input), do: {:ok, :no_todos}
+
+  defp ingest_todos_with_fallback(user_id, candidates, opts) do
+    case OpenLoops.ingest_todos(user_id, candidates, opts) do
+      {:error, reason} ->
+        fallback_persist_todos(user_id, candidates, reason)
+
+      result ->
+        result
+    end
+  end
+
+  defp fallback_persist_todos(user_id, candidates, reason) do
+    Logger.warning(
+      "commitment_tracker todo intelligence failed; using direct checked upsert",
+      reason: inspect(reason),
+      candidate_count: length(candidates)
+    )
+
+    case Todos.upsert_many(user_id, candidates) do
+      {:ok, todos} ->
+        {:ok,
+         %{
+           todos: todos,
+           decisions:
+             todos
+             |> Enum.with_index()
+             |> Enum.map(fn {todo, index} ->
+               %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
+             end),
+           skipped_count: 0,
+           usage: %{},
+           fallback_reason: inspect(reason)
+         }}
+
+      {:error, direct_reason} ->
+        {:error, {:todo_ingest_failed, reason, direct_reason}}
+    end
+  end
 
   defp commitment_todo_candidate(todo, tracker_input) when is_map(todo) do
     metadata =
@@ -976,7 +1016,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp append_todo_write_summary(report, {:error, _reason}) do
     append_report_body(
       report,
-      "\nMaraithon found possible commitments, but could not save them as open work. Review the checked summary above before acting."
+      "\nReviewed follow-ups could not be saved as open work. Review the checked items above before acting."
     )
   end
 
