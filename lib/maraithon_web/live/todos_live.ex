@@ -1055,49 +1055,49 @@ defmodule MaraithonWeb.TodosLive do
 
     cond do
       present?(query) ->
-        "No work items match this search."
+        "No work matches that search."
 
       filters["attention"] == "decision" ->
-        "No decisions are waiting on you."
+        "No decisions are waiting in this filter."
 
       filters["due"] == "overdue" ->
-        "No past-due work is visible in this view."
+        "No past-due work in this filter."
 
       filters["due"] == "today" ->
-        "No work due today is visible in this view."
+        "No work due today in this filter."
 
       filters["due"] == "week" ->
-        "No work is due in the next 7 days in this view."
+        "No work due in the next 7 days in this filter."
 
       filters["due"] == "no_due" ->
-        "No unscheduled work is visible in this view."
+        "No unscheduled work in this filter."
 
       filters["status"] == "done" ->
-        "No completed work is visible in this view."
+        "No completed work in this filter."
 
       filters["status"] == "dismissed" ->
-        "No dismissed work is visible in this view."
+        "No dismissed work in this filter."
 
       filters["status"] == "snoozed" ->
-        "No snoozed work is visible in this view."
+        "No snoozed work in this filter."
 
       filters["status"] == "open" ->
-        "No open work is visible in this view."
+        "No open work in this filter."
 
       filters["attention"] == "monitor" ->
-        "No watched work is visible in this view."
+        "No watched work in this filter."
 
       filters["attention"] == "act_now" ->
-        "No action-needed work is visible in this view."
+        "No action-needed work in this filter."
 
       source_label ->
-        "No work from #{source_label} is visible in this view."
+        "No work from #{source_label} in this filter."
 
       default_filter_view?(filters) ->
-        "Nothing needs review right now. Add a follow-up manually, or let Maraithon surface commitments when the next move is clear."
+        "Your open work list is clear. Add a follow-up manually, or Maraithon will surface commitments when the next move is clear."
 
       true ->
-        "No work is visible in this view."
+        "No work in this filter."
     end
   end
 

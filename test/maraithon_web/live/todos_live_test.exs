@@ -77,7 +77,7 @@ defmodule MaraithonWeb.TodosLiveTest do
   test "empty work list copy stays user-facing", %{conn: conn} do
     {:ok, view, html} = live(conn, "/todos")
 
-    assert html =~ "Nothing needs review right now."
+    assert html =~ "Your open work list is clear."
     assert html =~ "when the next move is clear"
     refute html =~ "No work items match these filters."
     refute html =~ "No active work right now"
@@ -96,8 +96,9 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> render_change()
 
     html = render(view)
-    assert html =~ "No completed work is visible in this view."
+    assert html =~ "No completed work in this filter."
     refute html =~ "No work items match these filters."
+    refute html =~ "visible in this view"
 
     view
     |> form("#todo-filters",
@@ -112,8 +113,9 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> render_change()
 
     html = render(view)
-    assert html =~ "No past-due work is visible in this view."
+    assert html =~ "No past-due work in this filter."
     refute html =~ "No work items match these filters."
+    refute html =~ "visible in this view"
 
     view
     |> form("#todo-filters",
@@ -128,8 +130,9 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> render_change()
 
     html = render(view)
-    assert html =~ "No work from iMessage is visible in this view."
+    assert html =~ "No work from iMessage in this filter."
     refute html =~ "No work items match these filters."
+    refute html =~ "visible in this view"
 
     view
     |> form("#todo-filters",
@@ -143,7 +146,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     )
     |> render_change()
 
-    assert render(view) =~ "No work items match this search."
+    assert render(view) =~ "No work matches that search."
   end
 
   test "generated work source is labeled as Maraithon", %{conn: conn} do
