@@ -38,9 +38,9 @@ defmodule MaraithonWeb.PeopleLive do
     medical_provider
   )
   @todo_policy_options [
-    %{value: "family_logistics_only", label: "Logistics only"},
-    %{value: "quiet_relationship_support", label: "Quiet support"},
-    %{value: "opt_in_rhythm", label: "Opt-in rhythm"}
+    %{value: "family_logistics_only", label: "Source-backed logistics only"},
+    %{value: "quiet_relationship_support", label: "Context only, no check-ins"},
+    %{value: "opt_in_rhythm", label: "Opted-in relationship rhythms"}
   ]
   @push_policy_options [
     %{value: "time_sensitive_only", label: "Time-sensitive only"},
@@ -539,7 +539,8 @@ defmodule MaraithonWeb.PeopleLive do
             </.badge>
           </div>
           <p class="mt-1 max-w-3xl text-sm/6 text-zinc-500">
-            Tell Maraithon who is family so it can separate family logistics from work follow-ups.
+            Tell Maraithon who is family so it surfaces only the family logistics or
+            relationship rhythms you actually want as work.
           </p>
         </div>
         <div class="flex flex-wrap items-center gap-2">
@@ -568,7 +569,7 @@ defmodule MaraithonWeb.PeopleLive do
             <.table_row>
               <.table_header>Person</.table_header>
               <.table_header>Role</.table_header>
-              <.table_header>Handling</.table_header>
+              <.table_header>Work surfaced</.table_header>
               <.table_header>Notifications</.table_header>
             </.table_row>
           </.table_head>
@@ -660,7 +661,11 @@ defmodule MaraithonWeb.PeopleLive do
           </.c_select>
         </.field>
 
-        <.field label="Handling" for="family-member-todo-policy">
+        <.field
+          label="Work to surface"
+          description="Controls when family context becomes open work."
+          for="family-member-todo-policy"
+        >
           <.c_select id="family-member-todo-policy" name={@form[:todo_policy].name}>
             <option
               :for={option <- todo_policy_options()}
@@ -792,7 +797,11 @@ defmodule MaraithonWeb.PeopleLive do
           </.c_select>
         </.field>
 
-        <.field label="Handling" for="family-proxy-todo-policy">
+        <.field
+          label="Work to surface"
+          description="Controls when this contact can create open work."
+          for="family-proxy-todo-policy"
+        >
           <.c_select id="family-proxy-todo-policy" name={@form[:todo_policy].name}>
             <option
               :for={option <- todo_policy_options()}
@@ -1099,7 +1108,7 @@ defmodule MaraithonWeb.PeopleLive do
     [
       "#{person.display_name} is #{family_role_label(person)} in #{String.downcase(family_context_kind(person))} context.",
       "Treat items involving #{person.display_name} as family context, not generic work follow-up.",
-      "Handling: #{todo_policy_label(person)}.",
+      "Work surfaced: #{todo_policy_label(person)}.",
       "Notifications: #{push_policy_label(person)}.",
       person.notes
     ]
@@ -1152,7 +1161,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp todo_policy_label(%Person{} = person) do
     person
     |> metadata_value("todo_policy")
-    |> option_label(@todo_policy_options, "Logistics only")
+    |> option_label(@todo_policy_options, "Source-backed logistics only")
   end
 
   defp push_policy_label(%Person{} = person) do
@@ -1557,7 +1566,11 @@ defmodule MaraithonWeb.PeopleLive do
         </div>
 
         <div :if={family_context_person?(@person)} class="grid gap-3 sm:grid-cols-2">
-          <.field label="Family handling" for={"relationship-todo-policy-#{@person.id}"}>
+          <.field
+            label="Work to surface"
+            description="Controls when family context becomes open work."
+            for={"relationship-todo-policy-#{@person.id}"}
+          >
             <.c_select
               id={"relationship-todo-policy-#{@person.id}"}
               name={@relationship_form[:todo_policy].name}

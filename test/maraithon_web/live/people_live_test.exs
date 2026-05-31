@@ -172,14 +172,20 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Family context"
     assert html =~ "No family context yet"
 
-    html =
-      view
-      |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")
-      |> render_click()
+    view
+    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")
+    |> render_click()
+
+    html = render(view)
 
     assert has_element?(view, "#family-member-onboarding-form")
+    assert html =~ "Work to surface"
+    assert html =~ "Source-backed logistics only"
+    assert html =~ "Context only, no check-ins"
+    assert html =~ "Opted-in relationship rhythms"
     assert html =~ "Notifications"
     assert html =~ "No notifications"
+    refute html =~ ">Handling<"
     refute html =~ ">Push<"
     refute html =~ "Push policy"
     refute html =~ "Never push"
@@ -225,7 +231,9 @@ defmodule MaraithonWeb.PeopleLiveTest do
       end)
 
     assert family_memory
+    assert family_memory.content =~ "Work surfaced: Source-backed logistics only."
     assert family_memory.content =~ "Notifications: Time-sensitive only."
+    refute family_memory.content =~ "Handling:"
     refute family_memory.content =~ "Delivery:"
 
     html = render(view)
@@ -233,9 +241,11 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "1 family member"
     assert html =~ "Family member"
     assert html =~ "Child"
-    assert html =~ "Logistics only"
+    assert html =~ "Work surfaced"
+    assert html =~ "Source-backed logistics only"
     assert html =~ "Time-sensitive only"
     assert html =~ "Notifications"
+    refute html =~ ">Handling<"
     refute html =~ ">Delivery<"
   end
 
@@ -254,14 +264,18 @@ defmodule MaraithonWeb.PeopleLiveTest do
 
     {:ok, view, _html} = live(conn, "/operator/people")
 
-    html =
-      view
-      |> element("button[phx-click='show_people_onboarding'][phx-value-mode='proxy']")
-      |> render_click()
+    view
+    |> element("button[phx-click='show_people_onboarding'][phx-value-mode='proxy']")
+    |> render_click()
+
+    html = render(view)
 
     assert has_element?(view, "#family-proxy-onboarding-form")
+    assert html =~ "Work to surface"
+    assert html =~ "Source-backed logistics only"
     assert html =~ "Notifications"
     assert html =~ "No notifications"
+    refute html =~ ">Handling<"
     refute html =~ ">Push<"
     refute html =~ "Push policy"
     refute html =~ "Never push"
