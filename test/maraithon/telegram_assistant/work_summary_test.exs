@@ -417,6 +417,56 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute visible_text =~ "No connected sources found"
   end
 
+  test "empty source list summaries stay scoped to the current check" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "messages_search",
+            "result" => %{"messages" => []}
+          },
+          %{
+            "tool" => "calendar_events_around",
+            "result" => %{"events" => []}
+          },
+          %{
+            "tool" => "list_people",
+            "result" => %{"people" => []}
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert summary["headline"] ==
+             "Checked Messages, checked calendar, checked people, and replied"
+
+    assert [
+             %{
+               "tool" => "messages",
+               "label" => "Messages",
+               "summary" => "This check did not return any messages."
+             },
+             %{
+               "tool" => "calendar",
+               "label" => "Calendar",
+               "summary" => "This check did not return any calendar events."
+             },
+             %{
+               "tool" => "people",
+               "label" => "People",
+               "summary" => "This check did not return any people."
+             }
+           ] = summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "No messages found"
+    refute visible_text =~ "No events found"
+    refute visible_text =~ "No people found"
+    refute visible_text =~ "all clear"
+  end
+
   test "pre-normalized public tool keys keep specific labels" do
     turn = %Turn{
       structured_data: %{

@@ -430,7 +430,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "No connected sources were available for this request."
 
       {_singular, 0} ->
-        "No #{pluralize(singular, 2, plural)} found."
+        empty_list_summary(singular, plural)
 
       {_singular, count} ->
         "Found #{format_count(count)} #{pluralize(singular, count, plural)}."
@@ -443,6 +443,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     do: "Found #{format_count(count)} #{pluralize("result", count)}."
 
   defp completed_check_summary, do: "Completed the check."
+
+  defp empty_list_summary("event", _plural),
+    do: "This check did not return any calendar events."
+
+  defp empty_list_summary(singular, plural),
+    do: "This check did not return any #{pluralize(singular, 2, plural)}."
 
   defp list_summary(items, singular, item_summary, plural \\ nil) when is_list(items) do
     count = length(items)
@@ -839,7 +845,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp generic_result_summary?(summary) when is_binary(summary) do
     Regex.match?(
-      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check (?:returned|surfaced)\b|This check could not finish\.?$|.* could not finish\.?$)/i,
+      ~r/^(?:No |Found \d+\b|Completed the check\.?$|Checking now\.?$|This check (?:did not return|returned|surfaced)\b|This check could not finish\.?$|.* could not finish\.?$)/i,
       summary
     )
   end
