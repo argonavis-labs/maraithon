@@ -109,9 +109,9 @@ enum SourceDetailCopy {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
             sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) attention.")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
-            sentences.append("No new \(plural) since the last check.")
+            sentences.append("Last check confirmed \(displayName) is current.")
         } else {
-            sentences.append("No \(plural) were added to assistant context during the last check.")
+            sentences.append("Last check did not add \(plural) to assistant context.")
         }
 
         if hasUnfinishedItems {

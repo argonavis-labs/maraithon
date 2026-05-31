@@ -142,8 +142,9 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages since the last check. Your assistant will keep this context current. Checked just now."
+            "Last check confirmed iMessage is current. Your assistant will keep this context current. Checked just now."
         )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
     }
 
     func testConnectedSummaryExplainsEmptyHealthyCheckAfterPriorSync() {
@@ -162,9 +163,10 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No new messages since the last check. Your assistant will keep this context current. Checked just now."
+            "Last check confirmed iMessage is current. Your assistant will keep this context current. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
     }
 
     func testConnectedSummaryScopesEmptyHealthyCheckBeforeAnyContext() {
@@ -183,7 +185,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "No messages were added to assistant context during the last check. Maraithon will keep checking. Checked just now."
+            "Last check did not add messages to assistant context. Maraithon will keep checking. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("found"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
