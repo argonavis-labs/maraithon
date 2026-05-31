@@ -15,15 +15,16 @@ development, run:
 make run-companion
 ```
 
-`make run-companion` configures stable signing automatically the first time it
-sees no pinned `CODE_SIGN_IDENTITY` in the local signing config. A
-`DEVELOPMENT_TEAM` value by itself is not enough for Full Disk Access
+`make run-companion` configures stable signing automatically before each local
+run. A `DEVELOPMENT_TEAM` value by itself is not enough for Full Disk Access
 persistence because Xcode can still choose a different local certificate. The
-launcher uses an existing Apple Development certificate when one is available,
-falling back to Developer ID or a local self-signed `Maraithon Dev` identity
-only when needed. The setup pins the full signing identity in gitignored
-`Config.local.xcconfig`, which makes future companion builds keep the same TCC
-identity instead of letting Xcode choose a different local certificate.
+launcher uses an existing Developer ID Application certificate when one is
+available because it gives the local app the most durable macOS privacy
+identity, falling back to Apple Development or a local self-signed
+`Maraithon Dev` identity only when needed. The setup pins the full signing
+identity in gitignored `Config.local.xcconfig`, which makes future companion
+builds keep the same TCC identity instead of letting Xcode choose a different
+local certificate.
 `make run-companion` also installs the Debug app at
 `~/Applications/Maraithon.app` before launching it, refreshing the existing app
 bundle in place across reloads so Full Disk Access is granted to one stable app

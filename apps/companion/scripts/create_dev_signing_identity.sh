@@ -2,11 +2,12 @@
 # Configure a *stable* local code-signing identity so macOS TCC (Full
 # Disk Access, Keychain, etc.) persists grants across rebuilds.
 #
-# It prefers an existing Apple Development identity for local debug
-# rebuilds, then falls back to Developer ID Application and finally a
-# self-signed "Maraithon Dev" code-signing certificate. We pin the full
-# identity string instead of the generic "Apple Development" selector so
-# Xcode cannot silently choose a different certificate between reloads.
+# It prefers an existing Developer ID Application identity for local
+# debug rebuilds that need durable macOS privacy grants, then falls back
+# to Apple Development and finally a self-signed "Maraithon Dev"
+# code-signing certificate. We pin the full identity string instead of a
+# generic signing selector so Xcode cannot silently choose a different
+# certificate between reloads.
 #
 # Idempotent: safe to re-run.
 
@@ -105,14 +106,14 @@ team_id_from_identity() {
     printf '%s\n' "${identity}" | sed -En 's/.*\(([A-Z0-9]{10})\)$/\1/p'
 }
 
-SELECTED_IDENTITY="$(preferred_apple_development_identity)"
+SELECTED_IDENTITY="$(preferred_developer_id_identity)"
 
 if [ -n "${SELECTED_IDENTITY}" ]; then
     SELECTED_TEAM="$(team_id_from_identity "${SELECTED_IDENTITY}")"
     SELECTED_CODE_SIGN_IDENTITY="${SELECTED_IDENTITY}"
     SELECTED_CODE_SIGN_STYLE="Manual"
     echo "Using existing identity \"${SELECTED_IDENTITY}\"."
-elif SELECTED_IDENTITY="$(preferred_developer_id_identity)" && [ -n "${SELECTED_IDENTITY}" ]; then
+elif SELECTED_IDENTITY="$(preferred_apple_development_identity)" && [ -n "${SELECTED_IDENTITY}" ]; then
     SELECTED_TEAM="$(team_id_from_identity "${SELECTED_IDENTITY}")"
     SELECTED_CODE_SIGN_IDENTITY="${SELECTED_IDENTITY}"
     SELECTED_CODE_SIGN_STYLE="Manual"
