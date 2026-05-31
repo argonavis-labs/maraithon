@@ -13,6 +13,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant.{Run, Step}
   alias Maraithon.TelegramConversations.Turn
+  alias Maraithon.Todos.UserFacingCopy
 
   @max_detail_chars 140
   @max_headline_chars 96
@@ -687,8 +688,13 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp clean_item_text(value) when is_binary(value) do
     value
+    |> UserFacingCopy.polish_text()
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
+    |> case do
+      "" -> nil
+      text -> if technical_result_text?(text), do: nil, else: text
+    end
   end
 
   defp clean_item_text(_value), do: nil

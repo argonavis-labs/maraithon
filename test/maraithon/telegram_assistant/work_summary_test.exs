@@ -120,6 +120,44 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute inspect(summary) =~ "3 todos"
   end
 
+  test "work summaries strip model-scoring prose from returned work items" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "list_todos",
+            "result" => %{
+              "todos" => [
+                %{
+                  "title" => "90% confidence: board packet follow-up",
+                  "next_action" =>
+                    "Model score says this should interrupt. Reply with the owner and timing.",
+                  "summary" => "The user needs to reply to Alex."
+                },
+                %{"title" => "Ops review"}
+              ]
+            }
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert [
+             %{
+               "tool" => "open_work",
+               "label" => "Open work",
+               "summary" => "2 work items: Reply with the owner and timing.; Ops review"
+             }
+           ] = summary["tool_calls"]
+
+    visible_text = inspect(summary)
+    refute visible_text =~ "confidence"
+    refute visible_text =~ "Model score"
+    refute visible_text =~ "The user"
+  end
+
   test "work update and relationship context tools use customer-facing names" do
     turn = %Turn{
       structured_data: %{
