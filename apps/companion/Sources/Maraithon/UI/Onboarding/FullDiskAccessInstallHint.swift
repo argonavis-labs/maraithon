@@ -23,12 +23,12 @@ enum FullDiskAccessInstallHint {
     }
 
     static let stableDevelopmentAppDisplayPath = "~/Applications/Maraithon.app"
-    static let switchToStableAppButtonTitle = "Switch to stable app"
-    static let installStableAppButtonTitle = "Install stable app"
-    static let revealStableAppButtonTitle = "Show stable app"
+    static let switchToStableAppButtonTitle = "Open app copy"
+    static let installStableAppButtonTitle = "Install app copy"
+    static let revealStableAppButtonTitle = "Show app copy"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return "Full Disk Access is still blocked for the running app. In System Settings, remove old Maraithon rows, add \(stableDevelopmentAppDisplayPath), enable that row, then click Check again. Reloads use this same app."
+        return "Full Disk Access is still blocked for this Maraithon app. In System Settings, remove old Maraithon rows, add \(stableDevelopmentAppDisplayPath), enable that row, then click Check again. Reloads use this same app."
         #else
         return nil
         #endif
@@ -73,10 +73,10 @@ enum FullDiskAccessInstallHint {
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
         let canInstallStableApp = bundleURL.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame
-        let stableAppAction = stableAppInstalled ? "Switch to" : "Install"
+        let stableAppAction = stableAppInstalled ? "Open" : "Install"
 
         return Detail(
-            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to one exact app. \(stableAppAction) the stable app at \(stableDevelopmentAppDisplayPath), then grant access to that app once.",
+            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to one exact app. \(stableAppAction) \(stableDevelopmentAppDisplayPath), then grant access to that app once.",
             stableAppURL: stableAppURL,
             stableAppInstalled: stableAppInstalled,
             canInstallStableApp: canInstallStableApp

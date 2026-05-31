@@ -173,14 +173,14 @@ struct TemporaryFullDiskAccessAppBanner: View {
         .accessibilityElement(children: .combine)
     }
 
-    static let titleText = "Use the stable Maraithon app"
+    static let titleText = "Use one app copy for Full Disk Access"
 
     static func detailText(stableAppInstalled: Bool) -> String {
         if stableAppInstalled {
-            return "Switch to \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads use the same permission."
+            return "Open \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), grant Full Disk Access once, and reloads will keep using that permission."
         }
 
-        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), then grant Full Disk Access to that app once so reloads use the same permission."
+        return "Install \(FullDiskAccessInstallHint.stableDevelopmentAppDisplayPath), grant Full Disk Access once, and reloads will keep using that permission."
     }
 
     private func switchToStableApp(_ appURL: URL) {

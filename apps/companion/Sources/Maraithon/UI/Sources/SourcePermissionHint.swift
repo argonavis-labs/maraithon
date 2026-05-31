@@ -24,7 +24,7 @@ struct SourcePermissionHint: Equatable {
     /// changes a macOS permission.
     let followUpNote: String?
     /// True for Full Disk Access reasons where debug builds must be
-    /// launched from a stable app bundle to keep the macOS TCC grant.
+    /// launched from one persistent app bundle to keep the macOS TCC grant.
     let requiresStableFullDiskAccessApp: Bool
 
     init(

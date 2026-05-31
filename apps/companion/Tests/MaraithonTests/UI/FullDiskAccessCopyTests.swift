@@ -50,6 +50,7 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
         XCTAssertTrue(message?.localizedCaseInsensitiveContains("one exact app") == true)
         XCTAssertFalse(message?.localizedCaseInsensitiveContains("disappear after reloads") == true)
+        XCTAssertFalse(message?.localizedCaseInsensitiveContains("stable app") == true)
         XCTAssertFalse(message?.contains("make run-companion") == true)
         XCTAssertFalse(message?.contains("xcodebuild") == true)
         XCTAssertFalse(message?.contains("DerivedData") == true)
@@ -88,7 +89,7 @@ final class FullDiskAccessCopyTests: XCTestCase {
         let reminder = try XCTUnwrap(FullDiskAccessInstallHint.stableGrantReminder)
 
         XCTAssertTrue(reminder.contains("~/Applications/Maraithon.app"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("running app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("this Maraithon app"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("remove old Maraithon rows"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("enable that row"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("reloads use this same app"))
@@ -125,11 +126,12 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         XCTAssertEqual(detail?.stableAppURL.path, stableApp.standardizedFileURL.path)
         XCTAssertTrue(detail?.stableAppInstalled == true)
-        XCTAssertEqual(FullDiskAccessInstallHint.switchToStableAppButtonTitle, "Switch to stable app")
-        XCTAssertEqual(FullDiskAccessInstallHint.installStableAppButtonTitle, "Install stable app")
+        XCTAssertEqual(FullDiskAccessInstallHint.switchToStableAppButtonTitle, "Open app copy")
+        XCTAssertEqual(FullDiskAccessInstallHint.installStableAppButtonTitle, "Install app copy")
         XCTAssertTrue(detail?.canInstallStableApp == true)
-        XCTAssertTrue(detail?.message.contains("Switch to the stable app") == true)
+        XCTAssertTrue(detail?.message.contains("Open ~/Applications/Maraithon.app") == true)
         XCTAssertTrue(detail?.message.contains("grant access to that app once") == true)
+        XCTAssertFalse(detail?.message.localizedCaseInsensitiveContains("stable app") == true)
     }
 
     func testInstallHintMarksStableAppMissing() {
@@ -148,7 +150,8 @@ final class FullDiskAccessCopyTests: XCTestCase {
 
         XCTAssertFalse(detail?.stableAppInstalled == true)
         XCTAssertTrue(detail?.canInstallStableApp == true)
-        XCTAssertTrue(detail?.message.contains("Install the stable app") == true)
+        XCTAssertTrue(detail?.message.contains("Install ~/Applications/Maraithon.app") == true)
+        XCTAssertFalse(detail?.message.localizedCaseInsensitiveContains("stable app") == true)
     }
 
     func testInstallHintDoesNotOfferInstallForSwiftPMBinary() {
