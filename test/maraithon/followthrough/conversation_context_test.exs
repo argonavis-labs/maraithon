@@ -115,4 +115,28 @@ defmodule Maraithon.Followthrough.ConversationContextTest do
     assert context["momentum_state"] == "resolved"
     assert context["notification_posture"] == "resolved"
   end
+
+  test "slack open thread metadata does not leak nil strings" do
+    trigger = %{
+      team_id: "T123",
+      channel_id: "C456",
+      user_id: "U_SELF",
+      ts: "1762502400.000001",
+      thread_ts: nil,
+      text: "I'll send the board deck today"
+    }
+
+    context =
+      ConversationContext.from_slack([trigger], trigger,
+        self_user_ids: ["U_SELF"],
+        default_owner: "user_owner"
+      )
+
+    assert context["notification_posture"] == "interrupt_now"
+    assert context["thread_ref"] == "T123:C456:1762502400.000001"
+    assert context["latest_actor"] == nil
+    assert context["latest_actor_role"] == "unknown"
+
+    refute context["thread_ref"] =~ "nil"
+  end
 end

@@ -737,6 +737,9 @@ defmodule Maraithon.Followthrough.ConversationContext do
 
   defp read_string(map, key, default \\ nil) do
     case fetch_attr(map, key) do
+      nil ->
+        default
+
       value when is_binary(value) ->
         normalize_text(value) || default
 
