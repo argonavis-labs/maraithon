@@ -7,6 +7,13 @@ struct ChatWorkSummaryDisclosure: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 8) {
+                if let summaryText = summary.summary, !summaryText.isEmpty {
+                    Text(summaryText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if !summary.toolCalls.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(ChatWorkSummaryViewCopy.checkedSectionTitle)
@@ -31,7 +38,10 @@ struct ChatWorkSummaryDisclosure: View {
             }
             .padding(.top, 6)
         } label: {
-            Label(summary.headline ?? ChatWorkSummaryViewCopy.completedFallbackTitle, systemImage: "checklist")
+            Label(
+                summary.headline ?? summary.summary ?? ChatWorkSummaryViewCopy.completedFallbackTitle,
+                systemImage: "checklist"
+            )
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -49,7 +59,7 @@ struct ChatPendingWorkSummary: View {
                 ProgressView()
                     .controlSize(.small)
 
-                Text(summary?.headline ?? ChatWorkSummaryViewCopy.pendingFallbackTitle)
+                Text(summary?.headline ?? summary?.summary ?? ChatWorkSummaryViewCopy.pendingFallbackTitle)
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

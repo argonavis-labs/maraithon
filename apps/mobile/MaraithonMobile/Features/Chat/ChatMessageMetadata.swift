@@ -22,7 +22,7 @@ struct ChatWorkSummary: Codable, Equatable {
     var steps: [ChatWorkStepSummary] = []
 
     var hasVisibleWork: Bool {
-        !(headline ?? "").isEmpty || !toolCalls.isEmpty || !steps.isEmpty
+        !(headline ?? "").isEmpty || !(summary ?? "").isEmpty || !toolCalls.isEmpty || !steps.isEmpty
     }
 
     enum CodingKeys: String, CodingKey {

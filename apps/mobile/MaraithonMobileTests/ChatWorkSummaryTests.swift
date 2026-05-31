@@ -76,6 +76,29 @@ struct ChatWorkSummaryTests {
     }
 
     @Test
+    func summaryOnlyWorkRemainsVisibleAfterSanitizing() throws {
+        let data = Data(
+            """
+            {
+              "status": "completed",
+              "summary": "Checked three sources and prepared the suggested reply.",
+              "tool_calls": [],
+              "steps": []
+            }
+            """.utf8
+        )
+
+        let summary = try JSONDecoder().decode(ChatWorkSummary.self, from: data)
+        let technicalSummary = ChatWorkSummary(summary: "serverError(status: 500) token=secret")
+
+        #expect(summary.headline == nil)
+        #expect(summary.summary == "Reviewed three sources and prepared the suggested reply.")
+        #expect(summary.hasVisibleWork)
+        #expect(technicalSummary.summary == nil)
+        #expect(technicalSummary.hasVisibleWork == false)
+    }
+
+    @Test
     func decodingNormalizesLegacyImplementationVocabulary() throws {
         let data = Data(
             """
