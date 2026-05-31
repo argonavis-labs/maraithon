@@ -24,8 +24,8 @@ defmodule Maraithon.Briefs do
   @brief_title_fallback "Chief of staff brief"
   @brief_summary_default "No priority follow-up surfaced in the checked sources."
   @brief_body_default "No checked decision needs your attention right now."
-  @brief_summary_fallback "Maraithon kept the usable action items and removed diagnostics."
-  @brief_body_fallback "Maraithon did not find enough checked detail in this run to send a recommendation."
+  @brief_summary_fallback "Maraithon kept only checked next steps."
+  @brief_body_fallback "No verified recommendation was safe to send yet."
   @internal_brief_markers [
     "<redacted",
     "=>",
@@ -39,6 +39,7 @@ defmodule Maraithon.Briefs do
     "model synthesis",
     "generation failed",
     "did not produce a valid brief",
+    "checked source view",
     "valid json",
     "structured json",
     "reasoning_effort",

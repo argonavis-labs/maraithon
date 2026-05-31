@@ -31,6 +31,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     "model synthesis",
     "generation failed",
     "did not produce a valid brief",
+    "checked source view",
     "valid json",
     "structured json",
     "reasoning_effort",
@@ -447,7 +448,7 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp unsafe_generation_title?(value) when is_binary(value) do
     Regex.match?(
-      ~r/\b(?:generation failed|configured model|model synthesis|did not produce a valid brief|valid json|structured json)\b/i,
+      ~r/\b(?:generation failed|configured model|model synthesis|did not produce a valid brief|checked source view|valid json|structured json)\b/i,
       value
     )
   end

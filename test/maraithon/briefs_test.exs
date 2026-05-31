@@ -260,7 +260,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
+    assert payload.text =~ "Maraithon kept only checked next steps."
     assert payload.text =~ "Lead with the CFO ask."
     assert payload.text =~ "Next action: Send the revised answer today."
 
@@ -299,11 +299,12 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
-    assert payload.text =~ "Try the checked source view instead."
+    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "No verified recommendation was safe to send yet."
     refute lower_text =~ "generation failed"
     refute lower_text =~ "configured model"
     refute lower_text =~ "model synthesis"
+    refute lower_text =~ "checked source view"
     refute lower_text =~ "rate_limited"
   end
 
@@ -329,13 +330,14 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept the usable action items and removed diagnostics."
+    assert payload.text =~ "Maraithon kept only checked next steps."
 
     assert payload.text =~
-             "Maraithon did not find enough checked detail in this run to send a recommendation."
+             "No verified recommendation was safe to send yet."
 
     refute payload.text =~ "I could not"
     refute payload.text =~ "Check connected sources"
+    refute lower_text =~ "diagnostics"
     refute String.contains?(lower_text, "source-backed")
     refute lower_text =~ "authorization"
     refute lower_text =~ "bearer"

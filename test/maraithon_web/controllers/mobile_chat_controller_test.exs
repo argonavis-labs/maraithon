@@ -737,6 +737,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
         Morning briefing generation failed.
         The configured model did not produce a valid brief.
         Morning briefing model synthesis failed.
+        Try the checked source view instead.
         """
       )
 
@@ -754,6 +755,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute visible_response =~ "generation failed"
     refute visible_response =~ "configured model"
     refute visible_response =~ "model synthesis"
+    refute visible_response =~ "checked source view"
   end
 
   test "mobile chat renames a thread and keeps the manual title", %{conn: conn} do
