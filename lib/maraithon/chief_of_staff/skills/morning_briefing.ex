@@ -1538,7 +1538,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           brief_input
         ),
       "body" => body,
-      "todos" => [],
+      "todos" => fallback_existing_todo_cards(open_todos),
       "linked_todo_ids" => fallback_existing_todo_ids(open_todos)
     }
   end
@@ -2059,6 +2059,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp fallback_existing_todo_ids(_open_todos), do: []
+
+  defp fallback_existing_todo_cards(open_todos) when is_list(open_todos) do
+    open_todos
+    |> Enum.map(&fallback_existing_todo_card/1)
+    |> Enum.reject(&map_empty?/1)
+    |> Enum.take(10)
+  end
+
+  defp fallback_existing_todo_cards(_open_todos), do: []
+
+  defp fallback_existing_todo_card(todo) when is_map(todo) do
+    %{}
+    |> maybe_put_public_todo_field("id", read_string(todo, "id", nil))
+    |> maybe_put_public_todo_field("source", read_string(todo, "source", nil))
+    |> maybe_put_public_todo_field("kind", read_string(todo, "kind", nil))
+    |> maybe_put_public_todo_field("attention_mode", read_string(todo, "attention_mode", nil))
+    |> maybe_put_public_todo_field("title", read_string(todo, "title", nil))
+    |> maybe_put_public_todo_field("summary", read_string(todo, "summary", nil))
+    |> maybe_put_public_todo_field("next_action", read_string(todo, "next_action", nil))
+    |> maybe_put_public_todo_field("source_item_id", read_string(todo, "source_item_id", nil))
+    |> maybe_put_public_todo_field("dedupe_key", read_string(todo, "dedupe_key", nil))
+    |> maybe_put_public_todo_field("priority", read_integer(todo, "priority", 0))
+    |> maybe_put_public_todo_field("due_at", read_string(todo, "due_at", nil))
+    |> maybe_put_public_todo_field(
+      "source_occurred_at",
+      read_string(todo, "source_occurred_at", nil)
+    )
+  end
+
+  defp fallback_existing_todo_card(_todo), do: %{}
+
+  defp maybe_put_public_todo_field(map, _key, nil), do: map
+  defp maybe_put_public_todo_field(map, _key, ""), do: map
+  defp maybe_put_public_todo_field(map, _key, 0), do: map
+  defp maybe_put_public_todo_field(map, key, value), do: Map.put(map, key, value)
+
+  defp map_empty?(map) when is_map(map), do: map_size(map) == 0
+  defp map_empty?(_value), do: true
 
   @doc """
   Scores and revises a model-produced morning brief against the Chief of Staff

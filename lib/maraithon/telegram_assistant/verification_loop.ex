@@ -694,7 +694,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     stale_candidate = %{
       "id" => "candidate-stale-work",
       "body" =>
-        "Dan Bourke (A-Team video project contact) is attached to the artifact-status commitment. Keep it active if it still matters, otherwise dismiss it.",
+        "Dan Bourke (A-Team video project contact) is attached to the artifact status commitment. Keep it active if it still matters, otherwise dismiss it.",
       "planning_rank" => 2,
       "attention_profile" => %{
         "bucket" => "business_project_waiting",
@@ -800,7 +800,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         %{
           "title" => "Decide whether Dan Bourke still matters",
           "summary" =>
-            "Dan Bourke is the A-Team video project contact attached to the stale artifact-status commitment.",
+            "Dan Bourke is the A-Team video project contact attached to the stale artifact status commitment.",
           "next_action" =>
             "Mark the A-Team artifact follow-up important if it still matters, otherwise dismiss it.",
           "metadata" => %{
@@ -2029,7 +2029,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "attention_mode" => "act_now",
       "title" => "Confirm artifact status for Dan Bourke",
       "summary" =>
-        "Dan Bourke is the A-Team video project contact attached to the stale artifact-status commitment.",
+        "Dan Bourke is the A-Team video project contact attached to the stale artifact status commitment.",
       "next_action" =>
         "Decide whether the A-Team artifact follow-up still matters; keep it active or dismiss it.",
       "priority" => 50,
@@ -2050,6 +2050,12 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
   end
 
   defp verification_surface_todo do
+    occurred_at =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 86_400, :second)
+      |> DateTime.truncate(:second)
+      |> DateTime.to_iso8601()
+
     %{
       "id" => "surface-quality-dan",
       "source" => "gmail",
@@ -2059,8 +2065,9 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "summary" =>
         "Dan Bourke is the A-Team video project contact tied to the video artifact status commitment.",
       "next_action" =>
-        "Mark the Dan Bourke artifact-status follow-up important if it still matters, otherwise dismiss it.",
+        "Mark the Dan Bourke artifact status follow-up important if it still matters, otherwise dismiss it.",
       "source_item_id" => "gmail-thread-dan-bourke",
+      "source_occurred_at" => occurred_at,
       "dedupe_key" => "gmail:dan-bourke-artifact-status",
       "metadata" => %{
         "company" => "A-Team",

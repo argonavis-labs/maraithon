@@ -731,7 +731,7 @@ defmodule Maraithon.ActionCards do
        do: ["open_dashboard"]
 
   defp available_buttons(_todo, "stale_check"),
-    do: ["keep_active", "dismiss", "see_less", "more_context"]
+    do: ["important", "dismiss", "see_less", "more_context"]
 
   defp available_buttons(_todo, _attention_mode),
     do: ["done", "dismiss", "snooze", "helpful", "not_helpful", "see_less", "more_context"]

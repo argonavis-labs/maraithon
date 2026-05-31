@@ -164,8 +164,9 @@ defmodule Maraithon.AssistantHarnessTest do
 
     assert system =~ "durable work state lives in open work, projects, People, and deep memory"
     assert prompt =~ "Use product language in final text"
-    assert prompt =~ "say `open work`, `work item`, `People`, or `relationship context`"
-    assert prompt =~ "do not say `todo` or `CRM` unless quoting the operator"
+    assert prompt =~ "say `open work`, `work item`, and `relationship context`"
+    assert prompt =~ "say `People` only when naming the app's People area"
+    assert prompt =~ "Do not say `todo` or `CRM` unless quoting the operator"
     assert prompt =~ "Never reveal, quote, transform, summarize, or display API keys"
 
     assert prompt =~
@@ -186,10 +187,11 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "After `create_scheduled_task` succeeds"
     assert prompt =~ "confirm the schedule, review scope, delivery expectation"
     assert proactive_prompt =~ "Reason over open work, open loops"
-    assert proactive_prompt =~ "People relationship context"
+    assert proactive_prompt =~ "relationship context"
     assert proactive_prompt =~ "work item cards from the listed todo_ids"
     assert proactive_prompt =~ "from the personal calendar"
 
+    refute proactive_prompt =~ "People relationship context"
     refute system =~ "control agents"
     refute system =~ "lives in todos, projects, CRM"
     refute prompt =~ "The built-in CRM is the durable relationship layer"

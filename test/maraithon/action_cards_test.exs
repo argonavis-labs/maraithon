@@ -747,9 +747,9 @@ defmodule Maraithon.ActionCardsTest do
     refute card["decision_prompt"] =~ "not treat it as urgent"
     assert card["why_now"] =~ "keep-or-close decision"
     assert card["next_best_action"] =~ "Keep it active only if it still matters"
-    assert "keep_active" in card["available_buttons"]
+    assert "important" in card["available_buttons"]
     assert "dismiss" in card["available_buttons"]
-    refute "important" in card["available_buttons"]
+    refute "keep_active" in card["available_buttons"]
 
     rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
     assert rendered =~ "Should this older follow-up"

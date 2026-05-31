@@ -1375,7 +1375,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert brief["body"] =~ "Reply to Maya about launch timing"
     assert brief["linked_todo_ids"] == [existing_todo_id]
-    assert brief["todos"] == []
+
+    assert [%{"id" => ^existing_todo_id, "title" => "Reply to Maya about launch timing"}] =
+             brief["todos"]
+
     refute inspect(brief) =~ "morning-fallback"
     refute inspect(brief) =~ "compact_fallback"
   end

@@ -134,7 +134,7 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "proactive check-in"},
     "mock_output": {
       "message_class": "todo_digest",
-      "assistant_message": "Not urgent based on the available evidence: Dan Bourke appears to be the A-Team video project contact tied to the artifact-status commitment. The decision is whether this still matters. Mark it important if you want it kept in the active stack; dismiss it if the artifact-status follow-up can leave the active list.",
+      "assistant_message": "Not urgent based on the available evidence: Dan Bourke appears to be the A-Team video project contact tied to the artifact status commitment. The decision is whether this still matters. Mark it important if you want it kept in the active stack; dismiss it if the artifact status follow-up can leave the active list.",
       "tool_calls": [{"tool": "list_todos"}]
     },
     "expected": {
@@ -143,8 +143,8 @@
       "forbidden_tools": ["gmail_send"],
       "assistant_message_quality": {
         "min_length": 280,
-        "required_phrases": ["Not urgent", "available evidence", "Dan Bourke", "A-Team video project", "artifact-status commitment", "The decision", "Mark it important", "dismiss it"],
-        "forbidden_phrases": ["needs immediate attention", "overdue", "todo list", "Priority:"]
+        "required_phrases": ["Not urgent", "available evidence", "Dan Bourke", "A-Team video project", "artifact status commitment", "The decision", "Mark it important", "dismiss it"],
+        "forbidden_phrases": ["needs immediate attention", "overdue", "todo list", "Priority:", "artifact-status"]
       }
     }
   },
@@ -175,7 +175,7 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "Prep me for Matthew tomorrow."},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "Prep for Matthew tomorrow: confirm the setup path, pricing owner, and ETA before the call. I checked calendar context, connected context, and open todos; if no newer reply is found, draft the follow-up for approval.",
+      "assistant_message": "Prep for Matthew tomorrow: confirm the setup path, pricing owner, and ETA before the call. I checked calendar context, connected context, and open work; if no newer reply is found, draft the follow-up for approval.",
       "tool_sequence": ["calendar_events_for_person", "review_connected_context", "list_todos"]
     },
     "expected": {
@@ -183,8 +183,8 @@
       "required_tools": ["calendar_events_for_person", "review_connected_context", "list_todos"],
       "assistant_message_quality": {
         "min_length": 160,
-        "required_phrases": ["setup path", "pricing owner", "connected context", "open todos", "draft the follow-up"],
-        "forbidden_phrases": ["I found some context", "looks important", "maybe"]
+        "required_phrases": ["setup path", "pricing owner", "connected context", "open work", "draft the follow-up"],
+        "forbidden_phrases": ["I found some context", "looks important", "maybe", "open todos"]
       }
     }
   },
@@ -195,7 +195,7 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "Queue a job to review my CRM, calendar, and todos tomorrow morning."},
     "mock_output": {
       "message_class": "action_result",
-      "assistant_message": "Queued for tomorrow morning: Maraithon will review People relationship context, calendar, and open work, then send a prep note with the highest-signal changes and next actions. Tell me to change the time or cancel it if this should run on a different cadence.",
+      "assistant_message": "Queued for tomorrow morning: Maraithon will review relationship context, calendar, and open work, then send a prep note with the highest-signal changes and next actions. Tell me to change the time or cancel it if this should run on a different cadence.",
       "tool_calls": [{"tool": "create_scheduled_task"}]
     },
     "expected": {
@@ -203,8 +203,8 @@
       "required_tools": ["create_scheduled_task"],
       "assistant_message_quality": {
         "min_length": 220,
-        "required_phrases": ["Queued for tomorrow morning", "People relationship context", "calendar", "open work", "prep note", "next actions", "change the time", "cancel it"],
-        "forbidden_phrases": ["Done", "I'll handle it", "CRM"]
+        "required_phrases": ["Queued for tomorrow morning", "relationship context", "calendar", "open work", "prep note", "next actions", "change the time", "cancel it"],
+        "forbidden_phrases": ["Done", "I'll handle it", "CRM", "People relationship context", "open todos"]
       }
     }
   }

@@ -64,10 +64,10 @@ defmodule MaraithonWeb.MobileJSONTest do
     buttons = get_in(response, [:action_card, :available_buttons])
 
     assert get_in(response, [:action_card, :attention_mode]) == "stale_check"
-    assert %{action: "keep_active", label: "Keep active"} in buttons
+    assert %{action: "important", label: "Keep active"} in buttons
     assert %{action: "dismiss", label: "Dismiss"} in buttons
     assert Enum.count(buttons, &(&1.label == "Keep active")) == 1
-    refute Enum.any?(buttons, &(&1.action == "important"))
+    refute Enum.any?(buttons, &(&1.action == "keep_active"))
     refute Enum.any?(buttons, &(&1.action == "done"))
   end
 
