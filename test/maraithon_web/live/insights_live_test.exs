@@ -48,15 +48,21 @@ defmodule MaraithonWeb.InsightsLiveTest do
 
     {:ok, view, html} = live(conn, "/insights")
 
-    assert html =~ "People cleanup"
+    assert html =~ "Contacts to merge"
+    assert html =~ "Relationships to confirm"
+
+    assert html =~
+             "Approve contact merges and relationship labels before Maraithon updates People."
+
     refute html =~ "CRM cleanup"
-    assert html =~ "Relationship suggestions"
     assert html =~ "Possible duplicate: Christina Giannone"
     assert html =~ "Merge contacts"
-    assert html =~ "Next move:"
+    assert html =~ "Recommended move:"
     assert html =~ "Review relationship: Emma Fenwick as your daughter"
     assert html =~ "Confirm before updating Emma Fenwick"
+    assert html =~ "Confirm label"
     refute html =~ "Evidence-backed"
+    refute html =~ "Next move:"
     refute html =~ "Suggested action:"
     refute html =~ "I think Emma Fenwick is your daughter"
     refute html =~ "confidence"
@@ -64,32 +70,36 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert has_element?(view, "a[href='/insights'][aria-current='page']", "Insights")
   end
 
-  test "empty people insight copy stays scoped to checked records", %{conn: _conn} do
+  test "empty people insight copy stays approval oriented", %{conn: _conn} do
     conn = log_in_test_user(build_conn(), "insights-empty-live@example.com")
     {:ok, view, _html} = live(conn, "/insights")
 
     html = render(view)
 
-    assert has_element?(view, "h2", "No people changes are ready for review.")
+    assert has_element?(view, "h2", "No People changes are waiting for approval.")
 
     assert has_element?(
              view,
              "p",
-             "When checked People records give a clear reason, Maraithon will list merge and relationship suggestions here. Open People to edit a record manually."
+             "When Maraithon has a clear, source-backed reason to merge contacts or add a relationship label, it will ask here first. You can still edit People directly."
            )
 
     assert has_element?(
              view,
              "p",
-             "When checked records point to the same person, merge suggestions appear here."
+             "Merge recommendations appear here only when records clearly describe the same person."
            )
 
     assert has_element?(
              view,
              "p",
-             "When checked records point to a label you can confirm, relationship suggestions appear here."
+             "Relationship labels appear here when there is enough context for you to confirm."
            )
 
+    refute html =~ "Duplicate suggestions"
+    refute html =~ "Relationship suggestions"
+    refute html =~ "When checked People records"
+    refute html =~ "When checked records"
     refute html =~ "checked evidence"
     refute html =~ "Evidence-backed"
     refute html =~ "No people insights right now"
@@ -127,7 +137,7 @@ defmodule MaraithonWeb.InsightsLiveTest do
       |> List.first()
 
     {:ok, view, html} = live(conn, "/insights")
-    assert html =~ "Next move:"
+    assert html =~ "Recommended move:"
     assert html =~ "keep Christina Giannone"
 
     html =
@@ -145,7 +155,7 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert merged.merged_into_id == survivor.id
     assert survivor.relationship == "family event organizer"
     refute html =~ "Possible duplicate: Christina Giannone"
-    assert html =~ "Merged 1 duplicate into Christina Giannone."
+    assert html =~ "Merged 1 contact into Christina Giannone."
   end
 
   test "applies a relationship suggestion and removes the card", %{conn: conn} do
@@ -170,7 +180,7 @@ defmodule MaraithonWeb.InsightsLiveTest do
       view
       |> element(
         "button[phx-click='apply_relationship_suggestion'][phx-value-id='#{suggestion.id}']",
-        "Apply relationship"
+        "Confirm label"
       )
       |> render_click()
 
@@ -190,5 +200,6 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert [%{id: updated_id}] = Crm.list_family_context(@user_email, limit: 5)
     assert updated_id == emma.id
     refute html =~ "Review relationship: Emma Fenwick as your daughter"
+    assert html =~ "Relationship label confirmed for Emma Fenwick."
   end
 end

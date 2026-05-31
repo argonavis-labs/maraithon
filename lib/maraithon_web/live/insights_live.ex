@@ -102,7 +102,7 @@ defmodule MaraithonWeb.InsightsLive do
         nil ->
           socket
           |> refresh_crm_insights()
-          |> put_flash(:error, "That relationship suggestion is no longer available.")
+          |> put_flash(:error, "That relationship label is no longer available.")
 
         suggestion ->
           apply_relationship_suggestion(socket, suggestion)
@@ -130,7 +130,7 @@ defmodule MaraithonWeb.InsightsLive do
         nil ->
           socket
           |> refresh_crm_insights()
-          |> put_flash(:error, "That duplicate suggestion is no longer available.")
+          |> put_flash(:error, "That merge recommendation is no longer available.")
 
         suggestion ->
           merge_duplicate_suggestion(socket, suggestion)
@@ -146,7 +146,7 @@ defmodule MaraithonWeb.InsightsLive do
       <div class="space-y-6">
         <.page_header
           title="Insights"
-          subtitle="Review People cleanup and relationship labels before Maraithon changes your data."
+          subtitle="Approve contact merges and relationship labels before Maraithon updates People."
         >
           <:actions>
             <.button navigate="/operator/people" variant="outline">Open People</.button>
@@ -155,17 +155,17 @@ defmodule MaraithonWeb.InsightsLive do
 
         <dl class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <.insight_stat label="Ready for review" value={@crm_insights.total_count} />
-          <.insight_stat label="Duplicate suggestions" value={length(@crm_insights.duplicate_suggestions)} />
-          <.insight_stat label="Relationship suggestions" value={length(@crm_insights.relationship_suggestions)} />
+          <.insight_stat label="Contacts to merge" value={length(@crm_insights.duplicate_suggestions)} />
+          <.insight_stat label="Labels to confirm" value={length(@crm_insights.relationship_suggestions)} />
         </dl>
 
         <.panel id="crm-cleanup" body_class="p-0">
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="text-base/7 font-semibold text-zinc-950">People cleanup</h2>
+                <h2 class="text-base/7 font-semibold text-zinc-950">Contacts to merge</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
-                  Review possible duplicate People records before combining them.
+                  Approve only when these records clearly describe the same person.
                 </p>
               </div>
               <.badge color="zinc"><%= length(@crm_insights.duplicate_suggestions) %></.badge>
@@ -179,9 +179,9 @@ defmodule MaraithonWeb.InsightsLive do
           <:header>
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="text-base/7 font-semibold text-zinc-950">Relationship suggestions</h2>
+                <h2 class="text-base/7 font-semibold text-zinc-950">Relationships to confirm</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
-                  Labels to confirm before Maraithon updates People.
+                  Confirm labels that help Maraithon understand family, close contacts, and obligations.
                 </p>
               </div>
               <.badge color="zinc"><%= length(@crm_insights.relationship_suggestions) %></.badge>
@@ -194,10 +194,10 @@ defmodule MaraithonWeb.InsightsLive do
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
             <h2 class="text-sm/6 font-semibold text-zinc-950">
-              No people changes are ready for review.
+              No People changes are waiting for approval.
             </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              When checked People records give a clear reason, Maraithon will list merge and relationship suggestions here. Open People to edit a record manually.
+              When Maraithon has a clear, source-backed reason to merge contacts or add a relationship label, it will ask here first. You can still edit People directly.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People
@@ -228,7 +228,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          When checked records point to the same person, merge suggestions appear here.
+          Merge recommendations appear here only when records clearly describe the same person.
         </p>
       </div>
 
@@ -237,12 +237,12 @@ defmodule MaraithonWeb.InsightsLive do
           <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <.badge color="amber">Duplicate</.badge>
+                <.badge color="amber">Merge</.badge>
               </div>
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
               <p class="mt-2 text-sm/6 text-zinc-950">
-                Next move:
+                Recommended move:
                 <span class="font-medium">
                   merge these records and keep <%= duplicate_survivor_name(suggestion) %>.
                 </span>
@@ -275,7 +275,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          When checked records point to a label you can confirm, relationship suggestions appear here.
+          Relationship labels appear here when there is enough context for you to confirm.
         </p>
       </div>
 
@@ -284,7 +284,7 @@ defmodule MaraithonWeb.InsightsLive do
           <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <.badge color="blue">Relationship</.badge>
+                <.badge color="blue">Label</.badge>
               </div>
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
@@ -296,7 +296,7 @@ defmodule MaraithonWeb.InsightsLive do
                 phx-click="apply_relationship_suggestion"
                 phx-value-id={suggestion.id}
               >
-                Apply relationship
+                Confirm label
               </.button>
               <.button navigate={suggestion.review_path} variant="outline">
                 Review person
@@ -378,7 +378,7 @@ defmodule MaraithonWeb.InsightsLive do
     case Crm.upsert_person(current_user_id(socket), attrs) do
       {:ok, updated} ->
         socket
-        |> put_flash(:info, "Updated relationship for #{updated.display_name}.")
+        |> put_flash(:info, "Relationship label confirmed for #{updated.display_name}.")
         |> refresh_crm_insights()
 
       {:error, reason} ->
@@ -461,7 +461,7 @@ defmodule MaraithonWeb.InsightsLive do
              "performed_by" => "operator_insights",
              "evidence" => evidence_summary,
              "model_rationale" =>
-               "Maraithon suggested this duplicate group from People cleanup, and Merge contacts was confirmed in Insights."
+               "Maraithon recommended this contact merge, and Merge contacts was confirmed in Insights."
            }) do
         {:ok, _result} -> {:cont, {:ok, count + 1}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -538,16 +538,16 @@ defmodule MaraithonWeb.InsightsLive do
   defp timestamp_score(_datetime), do: 0
 
   defp duplicate_merge_flash(survivor, 1),
-    do: "Merged 1 duplicate into #{survivor.display_name}."
+    do: "Merged 1 contact into #{survivor.display_name}."
 
   defp duplicate_merge_flash(survivor, count),
-    do: "Merged #{count} duplicates into #{survivor.display_name}."
+    do: "Merged #{count} contacts into #{survivor.display_name}."
 
   defp duplicate_merge_error(:not_enough_people), do: "Select at least two people to merge."
   defp duplicate_merge_error(:person_not_found), do: "One of those people could not be found."
 
   defp duplicate_merge_error(:person_already_merged),
-    do: "That duplicate has already been merged."
+    do: "That contact has already been merged."
 
   defp duplicate_merge_error(:survivor_already_merged), do: "Choose an active person to keep."
   defp duplicate_merge_error(:person_not_active), do: "Only active people can be merged."
