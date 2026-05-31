@@ -9,11 +9,17 @@ defmodule Maraithon.Insights.Detail do
 
   @max_summary_evidence 3
 
-  @exact_promise_gap "This item does not include the exact promise text."
-  @requester_gap "This item does not identify who asked."
-  @evidence_gap "This item does not include a source excerpt."
-  @delivery_gap "No delivery evidence has been recorded for this item."
-  @reason_gap "Maraithon needs more context before it can explain why this remains open."
+  @exact_promise_gap "Exact commitment is not available; open the source before replying or delegating."
+  @requester_gap "Requester is not identified; confirm who is waiting before assigning ownership."
+  @evidence_gap "Source excerpt is not available; review the original thread before acting."
+  @delivery_gap "Delivery history is not available; do not assume the follow-through was sent."
+  @reason_gap "Why-now context is incomplete; confirm urgency from the source before acting."
+
+  def missing_context_copy(:promise_text), do: @exact_promise_gap
+  def missing_context_copy(:requested_by), do: @requester_gap
+  def missing_context_copy(:source_evidence), do: @evidence_gap
+  def missing_context_copy(:delivery_evidence), do: @delivery_gap
+  def missing_context_copy(:open_loop_reason), do: @reason_gap
 
   def build(%Insight{} = insight, deliveries \\ [], opts \\ []) when is_list(deliveries) do
     metadata = stringify_keys(insight.metadata || %{})
@@ -30,7 +36,14 @@ defmodule Maraithon.Insights.Detail do
     delivery_evidence = build_delivery_evidence(deliveries)
 
     open_loop_reason =
-      build_open_loop_reason(insight, metadata, detail_metadata, record, delivery_evidence)
+      build_open_loop_reason(
+        insight,
+        metadata,
+        detail_metadata,
+        record,
+        delivery_evidence,
+        timezone_info
+      )
 
     %{
       promise_text: promise_text,
@@ -58,7 +71,7 @@ defmodule Maraithon.Insights.Detail do
           text
 
         _ ->
-          "Saved evidence does not show completion for this item."
+          "Available evidence does not show completion for this item."
       end
 
     evidence_text =
@@ -112,7 +125,7 @@ defmodule Maraithon.Insights.Detail do
         "Unresolved commitment involving #{requested_by}."
 
       true ->
-        "Saved evidence still shows an unresolved commitment."
+        "Available evidence still shows an unresolved commitment."
     end
   end
 
@@ -333,7 +346,7 @@ defmodule Maraithon.Insights.Detail do
       status ->
         %{
           kind: :record_status,
-          label: "Stored status",
+          label: "Status",
           detail: humanize_text(status),
           occurred_at: nil,
           source_ref: nil
@@ -412,7 +425,14 @@ defmodule Maraithon.Insights.Detail do
 
   defp public_delivery_error_message(_value), do: nil
 
-  defp build_open_loop_reason(insight, metadata, detail_metadata, record, delivery_evidence) do
+  defp build_open_loop_reason(
+         insight,
+         metadata,
+         detail_metadata,
+         record,
+         delivery_evidence,
+         timezone_info
+       ) do
     case stored_open_loop_reason(detail_metadata) do
       %{} = stored_reason ->
         stored_reason
@@ -424,13 +444,14 @@ defmodule Maraithon.Insights.Detail do
                read_string(metadata, "context_brief")
              ]) do
           nil ->
-            derived_open_loop_reason(insight, metadata, record, delivery_evidence)
+            derived_open_loop_reason(insight, metadata, record, delivery_evidence, timezone_info)
 
           text ->
             %{
               text: text,
               origin: :stored,
-              factors: derive_reason_factors(insight, metadata, record, delivery_evidence),
+              factors:
+                derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info),
               evaluated_at: nil
             }
         end
@@ -474,8 +495,8 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp derived_open_loop_reason(insight, metadata, record, delivery_evidence) do
-    factors = derive_reason_factors(insight, metadata, record, delivery_evidence)
+  defp derived_open_loop_reason(insight, metadata, record, delivery_evidence, timezone_info) do
+    factors = derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info)
 
     case factors do
       [] ->
@@ -491,22 +512,22 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp derive_reason_factors(insight, metadata, record, delivery_evidence) do
+  defp derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info) do
     []
     |> maybe_append(
-      "The stored record is still marked unresolved.",
+      "The saved item is still marked unresolved.",
       unresolved_status?(metadata, record)
     )
     |> maybe_append(
-      "Saved evidence still does not show completion after the original commitment.",
+      "Available evidence still does not show completion after the original commitment.",
       missing_completion_evidence?(metadata, record)
     )
     |> maybe_append(deadline_factor(insight, metadata, record))
     |> maybe_append(
-      "There is delivery history for this item, but nothing saved marks the commitment complete.",
+      "A delivery attempt exists, but nothing marks the commitment complete.",
       delivery_evidence != []
     )
-    |> maybe_append(source_occurrence_factor(insight))
+    |> maybe_append(source_occurrence_factor(insight, timezone_info))
     |> ensure_reason_fallback(insight)
   end
 
@@ -551,18 +572,21 @@ defmodule Maraithon.Insights.Detail do
            read_string(metadata, "deadline")
          ]) do
       nil -> nil
-      deadline -> "The stored deadline is #{deadline}."
+      deadline -> "The deadline is #{deadline}."
     end
   end
 
-  defp source_occurrence_factor(%Insight{source_occurred_at: %DateTime{} = occurred_at}) do
-    "The source evidence was last recorded at #{DateTime.to_iso8601(occurred_at)}."
+  defp source_occurrence_factor(
+         %Insight{source_occurred_at: %DateTime{} = occurred_at},
+         timezone_info
+       ) do
+    "Source activity was last recorded #{evidence_datetime(occurred_at, timezone_info)}."
   end
 
-  defp source_occurrence_factor(_insight), do: nil
+  defp source_occurrence_factor(_insight, _timezone_info), do: nil
 
   defp ensure_reason_fallback([], %Insight{}) do
-    ["Saved evidence does not show completion for this item."]
+    ["Available evidence does not show completion for this item."]
   end
 
   defp ensure_reason_fallback(factors, _insight), do: factors

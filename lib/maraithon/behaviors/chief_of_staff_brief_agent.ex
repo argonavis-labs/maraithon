@@ -976,7 +976,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp maybe_line(_label, nil), do: nil
   defp maybe_line(label, value), do: "#{label}: #{value}"
 
-  defp action_label(%{attention_mode: "monitor"}), do: "Watch"
+  defp action_label(%{attention_mode: "monitor"}), do: "Track"
   defp action_label(_insight), do: "Do"
 
   defp select_brief_items([], _reference_at, _offset_hours, _limit, _opts), do: []

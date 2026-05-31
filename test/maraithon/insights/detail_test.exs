@@ -120,7 +120,8 @@ defmodule Maraithon.Insights.DetailTest do
 
     assert detail.open_loop_reason.origin == :derived
     assert detail.open_loop_reason.text =~ "unresolved"
-    assert "No delivery evidence has been recorded for this item." in detail.data_gaps
+
+    assert "Delivery history is not available; do not assume the follow-through was sent." in detail.data_gaps
 
     summary = Detail.summary_text(detail, insight)
 
@@ -172,9 +173,12 @@ defmodule Maraithon.Insights.DetailTest do
     assert detail.promise_text == %{text: "Reply owed: Board deck", origin: :reconstructed}
     assert detail.requested_by == nil
     assert detail.open_loop_reason.origin == :derived
-    assert "This item does not identify who asked." in detail.data_gaps
-    assert "This item does not include a source excerpt." in detail.data_gaps
-    assert "No delivery evidence has been recorded for this item." in detail.data_gaps
+
+    assert "Requester is not identified; confirm who is waiting before assigning ownership." in detail.data_gaps
+
+    assert "Source excerpt is not available; review the original thread before acting." in detail.data_gaps
+
+    assert "Delivery history is not available; do not assume the follow-through was sent." in detail.data_gaps
 
     summary = Detail.summary_text(detail, insight)
 

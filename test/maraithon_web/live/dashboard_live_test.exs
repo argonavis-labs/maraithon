@@ -642,9 +642,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     assert html =~ "Delivery failed. Check the connected channel before sending another delivery."
     assert html =~ "Why this still needs attention"
-    assert html =~ "Built from saved evidence"
+    assert html =~ "Inferred from available context"
     assert html =~ "Missing context"
-    assert html =~ "This item does not include a source excerpt."
+    assert html =~ "Source excerpt is not available; review the original thread before acting."
+    refute_html_contains(html, "This item does not include a source excerpt.")
     refute_html_contains(html, "not captured")
     refute_html_contains(html, "saved evidence was captured")
     refute_html_contains(html, "DBConnection")
@@ -847,7 +848,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "high priority"
     assert html =~ "watching"
     assert html =~ "Action:"
-    assert html =~ "Watch:"
+    assert html =~ "Track:"
     assert html =~ "from Gmail"
     refute html =~ "Reply now with owner and ETA"
     refute html =~ "account unknown"

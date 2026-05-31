@@ -575,7 +575,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "[Gmail] Send the investor deck"
     assert brief.body =~ "Watching, not blocking right now:"
     assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
-    assert brief.body =~ "Watch: Watch for a blocker"
+    assert brief.body =~ "Track: Watch for a blocker"
     assert brief.body =~ "1 thread is still being watched"
   end
 

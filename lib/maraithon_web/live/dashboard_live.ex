@@ -2246,12 +2246,12 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_dashboard(socket, opts \\ []) do
+    socket = refresh_chief_of_staff_install(socket)
     socket = refresh_insights(socket)
     socket = refresh_connections(socket)
     socket = refresh_projects(socket)
     socket = refresh_global_memory(socket)
     socket = refresh_todos(socket)
-    socket = refresh_chief_of_staff_install(socket)
 
     user_id = current_user_id(socket)
 
@@ -2306,11 +2306,19 @@ defmodule MaraithonWeb.DashboardLive do
   end
 
   defp refresh_insights(socket) do
+    timezone_info = dashboard_timezone(socket.assigns.chief_of_staff_schedule)
+
     act_now_cards =
-      Insights.list_open_act_now_with_details_for_user(current_user_id(socket), limit: 20)
+      Insights.list_open_act_now_with_details_for_user(current_user_id(socket),
+        limit: 20,
+        timezone_info: timezone_info
+      )
 
     monitor_cards =
-      Insights.list_open_monitor_with_details_for_user(current_user_id(socket), limit: 20)
+      Insights.list_open_monitor_with_details_for_user(current_user_id(socket),
+        limit: 20,
+        timezone_info: timezone_info
+      )
 
     cards = act_now_cards ++ monitor_cards
     visible_ids = MapSet.new(Enum.map(cards, & &1.insight.id))
@@ -3629,7 +3637,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp detail_origin_label(_value), do: nil
 
   defp reason_origin_label(%{origin: :stored}), do: "Saved explanation"
-  defp reason_origin_label(%{origin: :derived}), do: "Built from saved evidence"
+  defp reason_origin_label(%{origin: :derived}), do: "Inferred from available context"
   defp reason_origin_label(_value), do: nil
 
   defp evidence_detail(
@@ -4303,7 +4311,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <p class="mt-1 text-sm/6 text-zinc-600"><%= insight.summary %></p>
                 <p class="mt-2 text-sm/6 text-indigo-700">
                   <span class="font-medium">
-                    <%= if insight.attention_mode == "monitor", do: "Watch:", else: "Action:" %>
+                    <%= if insight.attention_mode == "monitor", do: "Track:", else: "Action:" %>
                   </span>
                   <%= insight.recommended_action %>
                 </p>
@@ -4346,13 +4354,13 @@ defmodule MaraithonWeb.DashboardLive do
                       title="Exact promise"
                       value={
                         detail_text(detail.promise_text) ||
-                          "This item does not include the exact promise text."
+                          Detail.missing_context_copy(:promise_text)
                       }
                       origin={detail_origin_label(detail.promise_text)}
                     />
                     <.insight_detail_section
                       title="Who asked"
-                      value={detail_text(detail.requested_by) || "This item does not identify who asked."}
+                      value={detail_text(detail.requested_by) || Detail.missing_context_copy(:requested_by)}
                       origin={detail_origin_label(detail.requested_by)}
                     />
                     <div class="space-y-2">
@@ -4363,7 +4371,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.evidence_checked == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          This item does not include a source excerpt.
+                          <%= Detail.missing_context_copy(:source_evidence) %>
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4389,7 +4397,7 @@ defmodule MaraithonWeb.DashboardLive do
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
                         <p class="text-sm/6 text-zinc-600">
-                          No delivery evidence has been recorded for this item.
+                          <%= Detail.missing_context_copy(:delivery_evidence) %>
                         </p>
                       <% else %>
                         <ul class="space-y-2 text-sm/6 text-zinc-700">
@@ -4436,7 +4444,7 @@ defmodule MaraithonWeb.DashboardLive do
                         </ul>
                       <% else %>
                         <p class="text-sm/6 text-zinc-600">
-                          Maraithon needs more context before it can explain why this remains open.
+                          <%= Detail.missing_context_copy(:open_loop_reason) %>
                         </p>
                       <% end %>
                     </div>
