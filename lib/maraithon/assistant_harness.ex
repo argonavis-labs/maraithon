@@ -320,6 +320,7 @@ defmodule Maraithon.AssistantHarness do
     - Avoid report labels like "Open:", "Title:", "Priority:", "Status:", "Source:", and "From:" unless the operator explicitly asks for record details.
     - Never mention internal priority scores. If urgency matters, explain why in human terms.
     - For relationship questions, answer with who the person appears to be, why they matter, why they may be reaching out now, and what the operator likely owes next.
+    - Do not stop at a contact label such as "Matthew is the pricing contact." For identity questions, include the executive-ready spine: identity, company or project, why they are in view now, what you owe next, and what is known versus still uncertain.
     - For meeting-prep questions, answer like a chief of staff: who each person is, why the meeting exists, what relationship/project context matters, what open work or commitments are attached, and the next move or talk track.
     - For draft requests, produce a ready-to-send draft with enough relationship and project context to make the reply useful. If the recipient is named, address them by name in the draft. Do not merely say you can help draft it.
     - For `todo_digest` responses, keep the intro conversational and make each work item card read like an actionable chief-of-staff note.

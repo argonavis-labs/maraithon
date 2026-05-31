@@ -174,6 +174,8 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "People is the durable relationship layer"
     assert prompt =~ "what is known versus uncertain"
     assert prompt =~ "what is known versus still uncertain"
+    assert prompt =~ "Do not stop at a contact label"
+    assert prompt =~ "identity, company or project, why they are in view now, what you owe next"
     assert prompt =~ "message_class:\"todo_digest\""
     assert proactive_prompt =~ "Reason over open work, open loops"
     assert proactive_prompt =~ "People relationship context"

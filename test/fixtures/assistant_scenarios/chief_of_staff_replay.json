@@ -26,12 +26,17 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "Who is Matthew Raue?"},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "Matthew Raue is the Raue Automation contact asking about setup help and pricing.",
+      "assistant_message": "Matthew Raue appears to be the Raue Automation contact tied to setup help and pricing. He is in view because the open thread needs a setup path, pricing owner, and ETA. Next move: reply with the owner and timing, and keep the relationship context cautious if no newer source detail is available.",
       "tool_calls": [{"tool": "review_connected_context"}, {"tool": "learn_relationship_context"}]
     },
     "expected": {
       "output": {"message_class": "assistant_reply"},
-      "required_tools": ["review_connected_context"]
+      "required_tools": ["review_connected_context"],
+      "assistant_message_quality": {
+        "min_length": 220,
+        "required_phrases": ["Raue Automation", "setup path", "pricing owner", "ETA", "Next move", "source detail"],
+        "forbidden_phrases": ["is the contact", "looks important", "maybe"]
+      }
     }
   },
   {
@@ -41,12 +46,17 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "Who is this?", "reply_to_message_id": "todo-card-1"},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "This is Matthew Raue from Raue Automation; he is waiting on setup path, pricing owner, and ETA.",
+      "assistant_message": "This is Matthew Raue from Raue Automation. The linked work item exists because he is waiting on the setup path, pricing owner, and ETA. What you owe next: send the owner/timing update, then only expand the relationship read if connected context shows newer source detail.",
       "tool_sequence": ["review_connected_context", "get_relationship_context"]
     },
     "expected": {
       "output": {"message_class": "assistant_reply"},
-      "required_tools": ["review_connected_context"]
+      "required_tools": ["review_connected_context"],
+      "assistant_message_quality": {
+        "min_length": 220,
+        "required_phrases": ["Matthew Raue", "Raue Automation", "linked work item", "setup path", "pricing owner", "What you owe next", "connected context"],
+        "forbidden_phrases": ["this is a todo", "looks important", "maybe"]
+      }
     }
   },
   {
