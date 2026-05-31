@@ -1,8 +1,7 @@
 defmodule Maraithon.Tools.BrowserHistoryGet do
   @moduledoc """
-  Fetch one browser visit by its source GUID. Use after
-  `browser_history_search` or `browser_history_by_host` returns
-  candidates and you need the full record for one row.
+  Fetch one browser visit using a `visit_id` returned by browser
+  history search, host, or recent-visit tools.
 
   Calls `Maraithon.LocalBrowserHistory.get_by_guid/2`.
   """

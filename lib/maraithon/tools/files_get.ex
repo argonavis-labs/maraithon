@@ -1,8 +1,9 @@
 defmodule Maraithon.Tools.FilesGet do
   @moduledoc """
-  Fetch one mirrored macOS file by its source GUID. Returns the full
-  record including extracted text content, capped server-side at
-  30 KB to protect the assistant's context window.
+  Fetch one mirrored macOS file using a `file_id` returned by file
+  search or recent-file tools. Returns the full record including
+  extracted text content, capped server-side at 30 KB to protect the
+  assistant's context window.
 
   Calls `Maraithon.LocalFiles.get_by_guid/2`.
   """

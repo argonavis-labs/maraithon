@@ -1068,7 +1068,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "notes_get",
-        "Fetch a single Apple Note by its id. Use after notes_search returns candidates and you need the full snippet/folder/timestamps.",
+        "Fetch a single Apple Note using a note_id returned by notes_search or notes_list_recent, including folder and timestamps.",
         %{
           "type" => "object",
           "required" => ["note_id"],
@@ -1102,7 +1102,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "voice_memos_get",
-        "Fetch a single Apple Voice Memo by its id. Use after voice_memos_search returns candidates and you need duration, size, and timestamps.",
+        "Fetch a single Apple Voice Memo using a memo_id returned by voice_memos_search or voice_memos_list_recent, including duration, size, and timestamps.",
         %{
           "type" => "object",
           "required" => ["memo_id"],
@@ -1137,7 +1137,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "files_get",
-        "Fetch a single mirrored macOS file by its id, including the full extracted text content (capped at 30 KB). Use after files_search returns candidates and you need the body, not just the snippet.",
+        "Fetch a single mirrored macOS file using a file_id returned by files_search or files_list_recent, including extracted text capped for the response.",
         %{
           "type" => "object",
           "required" => ["file_id"],
@@ -1174,7 +1174,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "messages_get",
-        "Fetch a single iMessage by its id. Use after messages_search returns candidates and you need the full text body and chat metadata.",
+        "Fetch a single iMessage using a message_id returned by messages_search or messages_list_recent, including full text and chat context.",
         %{
           "type" => "object",
           "required" => ["message_id"],
@@ -1242,7 +1242,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "reminders_get",
-        "Fetch a single Apple Reminder by its id. Use after reminders_search or reminders_open returns candidates and you need the full notes body, completion timestamp, or url attachment.",
+        "Fetch a single Apple Reminder using a reminder_id returned by reminders_search, reminders_open, or reminders_due_soon, including notes, completion timestamp, and URL attachment.",
         %{
           "type" => "object",
           "required" => ["reminder_id"],
@@ -1291,7 +1291,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "calendar_event_get",
-        "Fetch a single Calendar event by its EventKit id. Use after calendar_events_around or calendar_search returns candidates and you need the full notes body and attendee list.",
+        "Fetch a single Calendar event using an event_id returned by calendar_events_around, calendar_events_for_person, or calendar_search, including notes and attendees.",
         %{
           "type" => "object",
           "required" => ["event_id"],
@@ -1339,7 +1339,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "browser_history_get",
-        "Fetch a single browser visit by its source GUID. Use after browser_history_search / browser_history_by_host returns candidates and you need the full URL and title.",
+        "Fetch a single browser visit using a visit_id returned by browser_history_search, browser_history_by_host, or browser_history_recent, including the full URL and title.",
         %{
           "type" => "object",
           "required" => ["visit_id"],

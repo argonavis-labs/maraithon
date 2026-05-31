@@ -1,6 +1,7 @@
 defmodule Maraithon.Tools.NotesGet do
   @moduledoc """
-  Fetch one mirrored macOS Note by its source GUID.
+  Fetch one mirrored macOS Note using a `note_id` returned by note
+  search or recent-note tools.
 
   TODO: depends on server schema agent. Calls
   `Maraithon.LocalNotes.get_by_guid/2`.

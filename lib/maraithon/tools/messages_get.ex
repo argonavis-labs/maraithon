@@ -1,6 +1,7 @@
 defmodule Maraithon.Tools.MessagesGet do
   @moduledoc """
-  Fetch one mirrored iMessage by its source GUID.
+  Fetch one mirrored iMessage using a `message_id` returned by message
+  search or recent-message tools.
 
   Calls `Maraithon.LocalMessages.get_by_guid/2`.
   """

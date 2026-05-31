@@ -1,7 +1,7 @@
 defmodule Maraithon.Tools.RemindersGet do
   @moduledoc """
-  Fetch one mirrored macOS Reminder by its source GUID
-  (`calendarItemIdentifier`).
+  Fetch one mirrored macOS Reminder using a `reminder_id` returned by
+  reminder search, due-soon, or open-reminder tools.
   """
 
   import Maraithon.Tools.ActionHelpers

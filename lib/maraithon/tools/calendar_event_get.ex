@@ -1,10 +1,11 @@
 defmodule Maraithon.Tools.CalendarEventGet do
   @moduledoc """
-  Fetch one macOS Calendar event by its EventKit GUID.
+  Fetch one macOS Calendar event using an `event_id` returned by
+  calendar search or event-list tools.
 
   Args:
     * `user_id`  (required)
-    * `event_id` (required) — EventKit identifier (guid)
+    * `event_id` (required)
   """
 
   import Maraithon.Tools.ActionHelpers

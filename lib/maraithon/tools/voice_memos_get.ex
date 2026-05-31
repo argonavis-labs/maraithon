@@ -1,6 +1,7 @@
 defmodule Maraithon.Tools.VoiceMemosGet do
   @moduledoc """
-  Fetch one mirrored macOS Voice Memo by its source GUID.
+  Fetch one mirrored macOS Voice Memo using a `memo_id` returned by
+  Voice Memos search or recent-memo tools.
 
   TODO: depends on server schema agent. Calls
   `Maraithon.LocalVoiceMemos.get_by_guid/2`.

@@ -30,6 +30,31 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     :ok
   end
 
+  test "local fetch tool definitions explain returned ids in client-facing language" do
+    descriptions =
+      Toolbox.tool_definitions(%{})
+      |> Map.new(fn definition -> {definition["name"], definition["description"]} end)
+
+    assert descriptions["notes_get"] =~ "note_id returned by notes_search"
+    assert descriptions["voice_memos_get"] =~ "memo_id returned by voice_memos_search"
+    assert descriptions["files_get"] =~ "file_id returned by files_search"
+    assert descriptions["messages_get"] =~ "message_id returned by messages_search"
+    assert descriptions["reminders_get"] =~ "reminder_id returned by reminders_search"
+    assert descriptions["calendar_event_get"] =~ "event_id returned by calendar_events_around"
+    assert descriptions["browser_history_get"] =~ "visit_id returned by browser_history_search"
+
+    local_fetch_copy =
+      ~w(
+        notes_get voice_memos_get files_get messages_get reminders_get calendar_event_get
+        browser_history_get
+      )
+      |> Enum.map_join(" ", &Map.fetch!(descriptions, &1))
+
+    refute local_fetch_copy =~ "source GUID"
+    refute local_fetch_copy =~ "EventKit"
+    refute local_fetch_copy =~ "by its id"
+  end
+
   test "get_open_work_summary flags stale Gmail insights when live inbox mail is newer" do
     bypass = Bypass.open()
 
