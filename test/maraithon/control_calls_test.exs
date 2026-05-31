@@ -24,6 +24,27 @@ defmodule Maraithon.ControlCallsTest do
     assert Process.get(:control_call_runs) == 1
   end
 
+  test "stores safe error payloads for failed idempotent calls" do
+    fun = fn ->
+      {:error,
+       %{
+         api_key: "sk-or-v1-control-secret-test-value",
+         message: "http_status: 500 token=secret stacktrace"
+       }}
+    end
+
+    attrs = %{
+      method: "tools.call:safe-error",
+      idempotency_key: "unit-test-key-safe-error",
+      request: %{"params" => %{"value" => 1}}
+    }
+
+    assert {:error, error, replay?: false} = ControlCalls.run(attrs, fun)
+    assert error["api_key"] == "<redacted>"
+    refute inspect(error) =~ "sk-or-v1"
+    refute inspect(error) =~ "token=secret"
+  end
+
   test "purges expired idempotency keys" do
     expired_at = DateTime.utc_now() |> DateTime.add(-60, :second)
 

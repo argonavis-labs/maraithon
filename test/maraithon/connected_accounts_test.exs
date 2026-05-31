@@ -76,6 +76,30 @@ defmodule Maraithon.ConnectedAccountsTest do
     assert is_binary(get_in(account.metadata, ["reconnect_notification", "sent_at"]))
   end
 
+  test "mark_error/3 stores safe generic metadata for structured failures" do
+    user_id = "safe-account-error-#{System.unique_integer()}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _token} =
+      OAuth.store_tokens(user_id, "google:founder@example.com", %{
+        access_token: "google-token",
+        refresh_token: "google-refresh",
+        metadata: %{"account_email" => "founder@example.com"}
+      })
+
+    assert {:ok, account} =
+             ConnectedAccounts.mark_error(
+               user_id,
+               "google:founder@example.com",
+               {:oauth_failed, %{api_key: "sk-or-v1-account-secret-test-value"}}
+             )
+
+    last_error = get_in(account.metadata, ["last_error", "reason"])
+
+    assert last_error == "connector_error"
+    refute inspect(account.metadata) =~ "sk-or-v1"
+  end
+
   test "report_access_issue/3 sends one reconnect alert when Gmail access is unavailable" do
     user_id = "access-issue-#{System.unique_integer()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -56,6 +56,9 @@ defmodule Maraithon.Tools.ToolErrorCopyTest do
     assert message == "Action did not complete. No confirmed change was recorded."
     refute inspect(message) =~ "sk-or-v1"
     refute inspect(message) =~ "super-secret-token"
+
+    assert ActionHelpers.safe_error(:enoent) ==
+             "Action did not complete. No confirmed change was recorded."
   end
 
   test "provider helper errors do not leak tokens, status bodies, or inspected terms" do

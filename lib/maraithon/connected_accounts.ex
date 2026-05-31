@@ -11,6 +11,7 @@ defmodule Maraithon.ConnectedAccounts do
   alias Maraithon.OAuth.Token
   alias Maraithon.Repo
   alias Maraithon.SourceLabels
+  alias Maraithon.Tools.ToolErrorCopy
 
   require Logger
 
@@ -238,8 +239,11 @@ defmodule Maraithon.ConnectedAccounts do
   defp normalize_metadata(metadata) when is_map(metadata), do: metadata
   defp normalize_metadata(_), do: %{}
 
-  defp normalize_error_reason(reason) when is_binary(reason), do: reason
-  defp normalize_error_reason(reason), do: inspect(reason)
+  defp normalize_error_reason(reason) when is_binary(reason) do
+    ToolErrorCopy.safe_message(reason, "connector_error")
+  end
+
+  defp normalize_error_reason(_reason), do: "connector_error"
 
   defp normalize_access_issue_reason(:reauth_required), do: "oauth_reauth_required"
   defp normalize_access_issue_reason(:no_refresh_token), do: "oauth_missing_refresh_token"

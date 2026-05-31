@@ -11,6 +11,9 @@ defmodule Maraithon.Behaviors.ManifestAgent do
   alias Maraithon.Behaviors
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
+  alias Maraithon.Tools.{ActionHelpers, ToolErrorCopy}
+
+  @agent_error_fallback "That automation did not complete. Review the latest event before running it again."
 
   @impl true
   def init(config) do
@@ -255,8 +258,31 @@ defmodule Maraithon.Behaviors.ManifestAgent do
       }}, state}
   end
 
-  defp error_text(reason) when is_binary(reason), do: reason
-  defp error_text(reason), do: inspect(reason)
+  defp error_text("model_not_configured") do
+    "That automation is missing model configuration."
+  end
+
+  defp error_text({:model_not_configured, _details}) do
+    "That automation is missing model configuration."
+  end
+
+  defp error_text("intelligence_not_configured") do
+    "That automation is missing intelligence configuration."
+  end
+
+  defp error_text({:intelligence_not_configured, _details}) do
+    "That automation is missing intelligence configuration."
+  end
+
+  defp error_text("tool_not_allowed:" <> _tool_name) do
+    "That automation is not allowed to use that action."
+  end
+
+  defp error_text(reason) when is_binary(reason) do
+    ToolErrorCopy.safe_message(reason, @agent_error_fallback)
+  end
+
+  defp error_text(reason), do: ActionHelpers.safe_error(reason, @agent_error_fallback)
 
   defp emit_response(message, state, context) do
     {:emit,

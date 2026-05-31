@@ -28,6 +28,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   @empty_user_memory_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
 
   alias Maraithon.LLM
+  alias Maraithon.Tools.ActionHelpers
 
   require Logger
 
@@ -233,7 +234,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
          {:agent_error,
           %{
             agent: state.name,
-            error: "Tool #{tool_call.tool} failed: #{inspect(reason)}",
+            error: ActionHelpers.safe_error(reason),
             correlation_id: get_in(state, [:processing_event, :metadata, "correlation_id"]),
             message_id: get_in(state, [:processing_event, :message_id])
           }}, state}

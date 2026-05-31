@@ -50,7 +50,7 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
     assert {:emit, {:agent_error, payload}, _state} =
              ManifestAgent.handle_wakeup(state, %{last_message_metadata: %{}})
 
-    assert payload.error =~ "model_not_configured"
+    assert payload.error == "That automation is missing model configuration."
   end
 
   test "turns structured model tool requests into allowlisted tool effects" do
@@ -96,7 +96,7 @@ defmodule Maraithon.Behaviors.ManifestAgentTest do
                last_message_metadata: %{}
              })
 
-    assert payload.error == "tool_not_allowed: gmail.read"
+    assert payload.error == "That automation is not allowed to use that action."
   end
 
   test "delegates scheduled work to a source behavior shim when configured" do

@@ -3,7 +3,6 @@ defmodule Maraithon.Tools.ActionHelpers do
   Shared argument parsing helpers for outbound action tools.
   """
 
-  alias Maraithon.Redaction
   alias Maraithon.Tools.ToolErrorCopy
 
   @generic_tool_error "Action did not complete. No confirmed change was recorded."
@@ -78,17 +77,10 @@ defmodule Maraithon.Tools.ActionHelpers do
   def maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   def safe_error(reason, fallback \\ @generic_tool_error) do
-    reason
-    |> error_text()
-    |> ToolErrorCopy.safe_message(fallback)
-  end
-
-  defp error_text(reason) when is_binary(reason), do: reason
-
-  defp error_text(reason) do
-    reason
-    |> Redaction.redact()
-    |> inspect(limit: 50)
+    case reason do
+      message when is_binary(message) -> ToolErrorCopy.safe_message(message, fallback)
+      _other -> fallback
+    end
   end
 
   defp parse_integer(value, message) do

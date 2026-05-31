@@ -288,7 +288,7 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
         PromptAgent.handle_effect_result({:tool_call, result}, state, @context)
 
       assert payload.agent == "test"
-      assert payload.error =~ "read_file failed"
+      assert payload.error == "Action did not complete. No confirmed change was recorded."
       assert new_state.pending_tool_call == nil
       assert new_state.processing_event == nil
     end

@@ -7,9 +7,12 @@ defmodule Maraithon.ControlCalls do
 
   alias Maraithon.ControlCalls.ControlCall
   alias Maraithon.Normalization
+  alias Maraithon.Redaction
   alias Maraithon.Repo
+  alias Maraithon.Tools.ToolErrorCopy
 
   @default_ttl_seconds 24 * 60 * 60
+  @generic_control_error "Action did not complete. No confirmed change was recorded."
 
   def run(attrs, fun) when is_map(attrs) and is_function(fun, 0) do
     method = read_string(attrs, :method)
@@ -172,9 +175,17 @@ defmodule Maraithon.ControlCalls do
   defp normalize_payload(value) when is_function(value), do: inspect(value)
   defp normalize_payload(value), do: value
 
-  defp normalize_error(reason) when is_map(reason), do: normalize_payload(reason)
-  defp normalize_error(reason) when is_binary(reason), do: %{"message" => reason}
-  defp normalize_error(reason), do: %{"message" => inspect(reason)}
+  defp normalize_error(reason) when is_map(reason) do
+    reason
+    |> Redaction.redact()
+    |> normalize_payload()
+  end
+
+  defp normalize_error(reason) when is_binary(reason) do
+    %{"message" => ToolErrorCopy.safe_message(reason, @generic_control_error)}
+  end
+
+  defp normalize_error(_reason), do: %{"message" => @generic_control_error}
 
   defp read_string(attrs, key), do: Normalization.read_string(attrs, key)
 
