@@ -524,7 +524,7 @@ private enum ChatWorkSummaryCopy {
         case "running":
             return "Checking now."
         default:
-            return returnedSummary(value) ?? legacyProductTerms(value)
+            return returnedSummary(value) ?? prioritySummary(value) ?? legacyProductTerms(value)
         }
     }
 
@@ -537,8 +537,30 @@ private enum ChatWorkSummaryCopy {
         default:
             return returnedSummary(value, tool: tool) ??
                 foundResultsSummary(value, tool: tool, label: label) ??
+                prioritySummary(value) ??
                 legacyProductTerms(value)
         }
+    }
+
+    private static func prioritySummary(_ value: String) -> String? {
+        let pattern = #"^([0-9,]+)\s+priorit(?:y|ies)\s+found\.?$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return nil
+        }
+
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard
+            let match = regex.firstMatch(in: value, options: [], range: range),
+            match.numberOfRanges == 2,
+            let countRange = Range(match.range(at: 1), in: value),
+            let count = Int(value[countRange].replacingOccurrences(of: ",", with: ""))
+        else {
+            return nil
+        }
+
+        return count == 0
+            ? "This check returned no priorities."
+            : "Found \(count) \(displayNoun(for: count, singular: "priority", plural: "priorities"))."
     }
 
     private static func returnedSummary(_ value: String, tool: String? = nil) -> String? {
