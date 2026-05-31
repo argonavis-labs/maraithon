@@ -11,6 +11,7 @@ import AppKit
 enum FullDiskAccessInstallHint {
     enum InstallError: Error {
         case sourceIsNotAppBundle
+        case stableAppRefreshFailed(status: Int32)
     }
 
     struct Detail: Equatable {
@@ -170,6 +171,14 @@ enum FullDiskAccessInstallHint {
                 return
             }
 
+            if try refreshExistingStableAppWithRsync(
+                from: source,
+                to: target,
+                fileManager: fileManager
+            ) {
+                return
+            }
+
             let existingContents = try fileManager.contentsOfDirectory(
                 at: target,
                 includingPropertiesForKeys: nil
@@ -191,6 +200,39 @@ enum FullDiskAccessInstallHint {
         } else {
             try fileManager.copyItem(at: source, to: target)
         }
+    }
+
+    private static func refreshExistingStableAppWithRsync(
+        from source: URL,
+        to target: URL,
+        fileManager: FileManager
+    ) throws -> Bool {
+        let rsyncURL = URL(fileURLWithPath: "/usr/bin/rsync")
+        guard fileManager.isExecutableFile(atPath: rsyncURL.path) else {
+            return false
+        }
+
+        let process = Process()
+        process.executableURL = rsyncURL
+        process.arguments = [
+            "-a",
+            "--checksum",
+            "--delete",
+            "--inplace",
+            source.path.hasSuffix("/") ? source.path : "\(source.path)/",
+            target.path.hasSuffix("/") ? target.path : "\(target.path)/"
+        ]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw InstallError.stableAppRefreshFailed(status: process.terminationStatus)
+        }
+
+        return true
     }
 
     @MainActor

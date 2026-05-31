@@ -237,4 +237,49 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertFalse(fileManager.fileExists(atPath: stable.appendingPathComponent("old.txt").path))
         XCTAssertTrue(fileManager.fileExists(atPath: stable.appendingPathComponent("new.txt").path))
     }
+
+    func testStableAppInstallRefreshesExistingFilesInPlaceWhenPossible() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory
+            .appendingPathComponent("maraithon-fda-inplace-\(UUID().uuidString)", isDirectory: true)
+        let source = root
+            .appendingPathComponent("Build", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+        let stable = root
+            .appendingPathComponent("Applications", isDirectory: true)
+            .appendingPathComponent("Maraithon.app", isDirectory: true)
+        let sourceInfo = source
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+        let stableInfo = stable
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Info.plist")
+
+        defer { try? fileManager.removeItem(at: root) }
+
+        try fileManager.createDirectory(
+            at: sourceInfo.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: stableInfo.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "new bundle".write(to: sourceInfo, atomically: true, encoding: .utf8)
+        try "old bundle".write(to: stableInfo, atomically: true, encoding: .utf8)
+
+        let originalFileNumber = try fileManager.attributesOfItem(atPath: stableInfo.path)[.systemFileNumber] as? NSNumber
+
+        try FullDiskAccessInstallHint.copyStableDevelopmentApp(
+            from: source,
+            to: stable,
+            fileManager: fileManager
+        )
+
+        let refreshed = try String(contentsOf: stableInfo, encoding: .utf8)
+        let refreshedFileNumber = try fileManager.attributesOfItem(atPath: stableInfo.path)[.systemFileNumber] as? NSNumber
+
+        XCTAssertEqual(refreshed, "new bundle")
+        XCTAssertEqual(refreshedFileNumber, originalFileNumber)
+    }
 }
