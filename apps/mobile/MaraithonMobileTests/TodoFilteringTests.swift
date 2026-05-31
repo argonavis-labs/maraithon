@@ -142,6 +142,25 @@ struct TodoFilteringTests {
     }
 
     @Test
+    func searchPromptMatchesSelectedFilter() {
+        #expect(TodoFilter.all.searchPrompt == "Search work")
+        #expect(TodoFilter.open.searchPrompt == "Search open work")
+        #expect(TodoFilter.decisions.searchPrompt == "Search decisions")
+        #expect(TodoFilter.today.searchPrompt == "Search today's work")
+        #expect(TodoFilter.overdue.searchPrompt == "Search past-due work")
+        #expect(TodoFilter.upcoming.searchPrompt == "Search upcoming work")
+        #expect(TodoFilter.completed.searchPrompt == "Search completed work")
+
+        let promptCopy = TodoFilter.allCases
+            .map(\.searchPrompt)
+            .joined(separator: " ")
+            .lowercased()
+
+        #expect(!promptCopy.contains("todos"))
+        #expect(!promptCopy.contains("outstanding"))
+    }
+
+    @Test
     func emptyStateCopyAvoidsFalseAllClearLanguage() {
         let copy = TodoFilter.allCases
             .map { $0.emptyState(searchText: "", hasAnyWork: true).description }

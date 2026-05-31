@@ -98,7 +98,7 @@ struct TodosView: View {
                 .listStyle(.plain)
             }
             .navigationTitle(filter.navigationTitle)
-            .searchable(text: $searchText, prompt: "Search open work")
+            .searchable(text: $searchText, prompt: filter.searchPrompt)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     AccountMenuButton()

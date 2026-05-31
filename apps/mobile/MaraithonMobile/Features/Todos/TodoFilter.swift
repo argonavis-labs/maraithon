@@ -35,6 +35,18 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         }
     }
 
+    var searchPrompt: String {
+        switch self {
+        case .all: "Search work"
+        case .open: "Search open work"
+        case .decisions: "Search decisions"
+        case .today: "Search today's work"
+        case .overdue: "Search past-due work"
+        case .upcoming: "Search upcoming work"
+        case .completed: "Search completed work"
+        }
+    }
+
     func emptyState(searchText: String, hasAnyWork: Bool) -> TodoEmptyState {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
 
