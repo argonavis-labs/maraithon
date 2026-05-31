@@ -130,21 +130,36 @@ defmodule Maraithon.OperatorMemory do
   defp fallback_summary(summary_type, rules) do
     case summary_type do
       "content_preferences" ->
-        summarize_by_kind(rules, "content_filter", "No confirmed content preferences yet.")
+        summarize_by_kind(
+          rules,
+          "content_filter",
+          "Use source-backed relevance signals until content preferences are confirmed."
+        )
 
       "interrupt_policy" ->
-        summarize_by_kind(rules, "quiet_hours", "No confirmed interruption policy yet.")
+        summarize_by_kind(
+          rules,
+          "quiet_hours",
+          "Use explicit urgency and source evidence until interruption rules are confirmed."
+        )
 
       "action_style" ->
-        summarize_by_kind(rules, "style_preference", "No confirmed action-style preferences yet.")
+        summarize_by_kind(
+          rules,
+          "style_preference",
+          "Keep actions concise, reversible, and clearly sourced until action-style preferences are confirmed."
+        )
 
       "telegram_behavior" ->
         rules
         |> Enum.take(3)
         |> Enum.map_join(" ", &Map.get(&1, "instruction"))
         |> case do
-          "" -> "No confirmed Telegram behavior summary yet."
-          content -> content
+          "" ->
+            "Keep Telegram replies concise and action-oriented until Telegram behavior preferences are confirmed."
+
+          content ->
+            content
         end
     end
   end

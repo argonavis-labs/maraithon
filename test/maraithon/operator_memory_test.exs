@@ -16,10 +16,32 @@ defmodule Maraithon.OperatorMemoryTest do
     summaries = OperatorMemory.summaries_for_prompt(user_id)
 
     assert length(summaries) == 4
-    assert Enum.any?(summaries, &(&1.content == "No confirmed content preferences yet."))
-    assert Enum.any?(summaries, &(&1.content == "No confirmed interruption policy yet."))
-    assert Enum.any?(summaries, &(&1.content == "No confirmed action-style preferences yet."))
-    assert Enum.any?(summaries, &(&1.content == "No confirmed Telegram behavior summary yet."))
+
+    assert Enum.any?(
+             summaries,
+             &(&1.content ==
+                 "Use source-backed relevance signals until content preferences are confirmed.")
+           )
+
+    assert Enum.any?(
+             summaries,
+             &(&1.content ==
+                 "Use explicit urgency and source evidence until interruption rules are confirmed.")
+           )
+
+    assert Enum.any?(
+             summaries,
+             &(&1.content ==
+                 "Keep actions concise, reversible, and clearly sourced until action-style preferences are confirmed.")
+           )
+
+    assert Enum.any?(
+             summaries,
+             &(&1.content ==
+                 "Keep Telegram replies concise and action-oriented until Telegram behavior preferences are confirmed.")
+           )
+
     refute Enum.any?(summaries, &String.contains?(&1.content, "durable"))
+    refute Enum.any?(summaries, &String.contains?(&1.content, "No confirmed"))
   end
 end
