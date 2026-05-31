@@ -7,7 +7,7 @@ import SwiftUI
 struct ClearCloudDataSheet: View {
     @Binding var isPresented: Bool
     let description: String
-    /// Destructive action: deletes uploaded data for this source.
+    /// Destructive action: deletes Maraithon's stored copy for this source.
     var onConfirmClearCloud: () -> Void
     /// Non-destructive action: drops the local cursor and lets the next
     /// polling tick repopulate.
@@ -22,26 +22,26 @@ struct ClearCloudDataSheet: View {
     var body: some View {
         Form {
             Section {
-                Label("This cannot be undone", systemImage: "exclamationmark.triangle.fill")
+                Label(ClearCloudDataSheetCopy.irreversibleTitle, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(StatusTone.attention.color)
                 Text(description)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            Section("Confirm") {
-                TextField("Type \"delete\" to confirm", text: $typed)
+            Section(ClearCloudDataSheetCopy.confirmSectionTitle) {
+                TextField(ClearCloudDataSheetCopy.confirmPrompt, text: $typed)
                     .textFieldStyle(.roundedBorder)
             }
             if let onResetLocalCursor {
-                Section("Check Source From Beginning") {
-                    Text("Check this source from the beginning on this Mac. Maraithon's uploaded copy is left untouched.")
+                Section(ClearCloudDataSheetCopy.resetSectionTitle) {
+                    Text(ClearCloudDataSheetCopy.resetDescription)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button {
                         onResetLocalCursor()
                         isPresented = false
                     } label: {
-                        Label("Check from the beginning", systemImage: "arrow.counterclockwise")
+                        Label(ClearCloudDataSheetCopy.resetButtonTitle, systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                 }
@@ -51,10 +51,10 @@ struct ClearCloudDataSheet: View {
         .frame(minWidth: 360, minHeight: 320)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { isPresented = false }
+                Button(ClearCloudDataSheetCopy.cancelTitle) { isPresented = false }
             }
             ToolbarItem(placement: .destructiveAction) {
-                Button("Delete uploaded data") {
+                Button(ClearCloudDataSheetCopy.deleteButtonTitle) {
                     onConfirmClearCloud()
                     isPresented = false
                 }
@@ -63,6 +63,18 @@ struct ClearCloudDataSheet: View {
                 .disabled(!canConfirm)
             }
         }
-        .navigationTitle("Delete uploaded data")
+        .navigationTitle(ClearCloudDataSheetCopy.navigationTitle)
     }
+}
+
+enum ClearCloudDataSheetCopy {
+    static let irreversibleTitle = "This cannot be undone"
+    static let confirmSectionTitle = "Confirm"
+    static let confirmPrompt = "Type \"delete\" to confirm"
+    static let resetSectionTitle = "Check Source From Beginning"
+    static let resetDescription = "Check this source from the beginning on this Mac. Maraithon's copy is left untouched."
+    static let resetButtonTitle = "Check from the beginning"
+    static let cancelTitle = "Cancel"
+    static let deleteButtonTitle = "Delete Maraithon's copy"
+    static let navigationTitle = "Delete Maraithon's copy"
 }

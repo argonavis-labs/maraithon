@@ -329,14 +329,37 @@ final class UIComponentsTests: XCTestCase {
 
         XCTAssertTrue(publicCopy.contains("Start over"))
         XCTAssertTrue(publicCopy.contains("Delete"))
-        XCTAssertTrue(publicCopy.contains("Deleted 2 uploaded iMessage records"))
+        XCTAssertTrue(publicCopy.contains("Maraithon's copy"))
+        XCTAssertTrue(publicCopy.contains("Deleted 2 iMessage records"))
         XCTAssertTrue(publicCopy.contains("Local data on this Mac was not changed"))
         XCTAssertTrue(publicCopy.contains("Reconnect Maraithon to continue"))
         XCTAssertFalse(publicCopy.lowercased().contains("clear cloud"))
         XCTAssertFalse(publicCopy.lowercased().contains("synced copy"))
+        XCTAssertFalse(publicCopy.lowercased().contains("uploaded"))
         XCTAssertFalse(publicCopy.lowercased().contains("wipes"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
         XCTAssertFalse(publicCopy.lowercased().contains("reset is safe"))
+    }
+
+    func testClearCloudDataSheetCopyAvoidsCloudAndUploadLanguage() {
+        let publicCopy = [
+            ClearCloudDataSheetCopy.irreversibleTitle,
+            ClearCloudDataSheetCopy.confirmSectionTitle,
+            ClearCloudDataSheetCopy.confirmPrompt,
+            ClearCloudDataSheetCopy.resetSectionTitle,
+            ClearCloudDataSheetCopy.resetDescription,
+            ClearCloudDataSheetCopy.resetButtonTitle,
+            ClearCloudDataSheetCopy.cancelTitle,
+            ClearCloudDataSheetCopy.deleteButtonTitle,
+            ClearCloudDataSheetCopy.navigationTitle
+        ].joined(separator: " ")
+
+        XCTAssertTrue(publicCopy.contains("Delete Maraithon's copy"))
+        XCTAssertTrue(publicCopy.contains("This cannot be undone"))
+        XCTAssertTrue(publicCopy.contains("Check from the beginning"))
+        XCTAssertFalse(publicCopy.lowercased().contains("cloud"))
+        XCTAssertFalse(publicCopy.lowercased().contains("upload"))
+        XCTAssertFalse(publicCopy.lowercased().contains("server"))
     }
 
     func testPrivacySettingsCopyExplainsEncryptionWithoutServerJargon() {
@@ -346,16 +369,21 @@ final class UIComponentsTests: XCTestCase {
             PrivacySettingsCopy.diagnosticsSharingSectionTitle,
             PrivacySettingsCopy.usageStatsToggleTitle,
             PrivacySettingsCopy.crashReportsToggleTitle,
-            PrivacySettingsCopy.diagnosticsSharingFooter
+            PrivacySettingsCopy.diagnosticsSharingFooter,
+            SpotlightSurfaceCopy.sectionTitle,
+            SpotlightSurfaceCopy.footer
         ].joined(separator: " ")
 
         XCTAssertTrue(publicCopy.contains("encrypted on this Mac"))
         XCTAssertTrue(publicCopy.contains("time, sender, and source name"))
         XCTAssertTrue(publicCopy.contains("Search quality may drop"))
-        XCTAssertTrue(publicCopy.contains("Logs and uploaded source data are never attached automatically"))
+        XCTAssertTrue(publicCopy.contains("Logs and source data are never attached automatically"))
+        XCTAssertTrue(publicCopy.contains("Maraithon items appear in macOS Spotlight search"))
         XCTAssertTrue(PrivacySettingsCopy.usageStatsDefaultsKey.contains("share_usage_stats"))
         XCTAssertTrue(PrivacySettingsCopy.crashReportsDefaultsKey.contains("share_crash_reports"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
+        XCTAssertFalse(publicCopy.lowercased().contains("uploaded"))
+        XCTAssertFalse(publicCopy.lowercased().contains("synced records"))
         XCTAssertFalse(publicCopy.lowercased().contains("ciphertext"))
         XCTAssertFalse(publicCopy.lowercased().contains("metadata"))
         XCTAssertFalse(publicCopy.lowercased().contains("comparatively low"))
@@ -423,7 +451,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertTrue(publicCopy.contains("Pair a Mac to make its local context available to your assistant."))
         XCTAssertTrue(publicCopy.contains("Waiting for the first context check"))
         XCTAssertTrue(publicCopy.contains("Re-pair"))
-        XCTAssertTrue(publicCopy.contains("Data already uploaded to Maraithon is kept."))
+        XCTAssertTrue(publicCopy.contains("Maraithon keeps data already sent from that Mac"))
         XCTAssertTrue(publicCopy.contains("Reconnect Maraithon in General to see paired Macs."))
         XCTAssertTrue(publicCopy.contains("Paired Macs could not load."))
         XCTAssertTrue(publicCopy.contains("Could not revoke Office Mac."))
@@ -433,6 +461,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(publicCopy.lowercased().contains("token"))
         XCTAssertFalse(publicCopy.lowercased().contains("invalid_device"))
         XCTAssertFalse(publicCopy.lowercased().contains("secret"))
+        XCTAssertFalse(publicCopy.lowercased().contains("uploaded"))
         XCTAssertFalse(publicCopy.lowercased().contains("sync"))
         XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("NSURLErrorDomain"))
         XCTAssertFalse(publicCopy.contains("No Macs paired yet."))

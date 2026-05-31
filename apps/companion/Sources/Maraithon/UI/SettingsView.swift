@@ -234,55 +234,55 @@ private struct DataSettingsView: View {
 }
 
 enum DataSettingsCopy {
-    static let intro = "Manage data Maraithon has uploaded from this Mac. Start over makes a source check from the beginning. Delete removes Maraithon's uploaded copy and cannot be undone."
+    static let intro = "Manage Maraithon's copy of data from this Mac. Start over makes a source check from the beginning. Delete removes Maraithon's copy and cannot be undone."
     static let resyncTitle = "Start over"
     static let deleteTitle = "Delete…"
-    static let deleteAllTitle = "Delete uploaded data…"
-    static let deleteAllDescription = "Removes Maraithon's uploaded copy for every source from this Mac. Local data is not affected; sources can be checked again afterward."
-    static let deleteAllConfirmation = "This removes every record Maraithon has uploaded from this Mac across all sources. Local data on your device is not affected; sources can be checked again afterward."
+    static let deleteAllTitle = "Delete Maraithon's copy…"
+    static let deleteAllDescription = "Removes Maraithon's copy for every source from this Mac. Local data is not affected; sources can be checked again afterward."
+    static let deleteAllConfirmation = "This removes every record Maraithon has stored from this Mac across all sources. Local data on your device is not affected; sources can be checked again afterward."
 
     static func sourceDeleteConfirmation(sourceName: String) -> String {
-        "This removes every \(sourceName) record Maraithon has uploaded from this Mac. Local data on your device is not affected."
+        "This removes every \(sourceName) record Maraithon has stored from this Mac. Local data on your device is not affected."
     }
 
     static func deleteStarted(sourceName: String?) -> String {
         if let sourceName {
-            return "Deleting uploaded \(sourceName) data…"
+            return "Deleting Maraithon's copy of \(sourceName) data…"
         }
 
-        return "Deleting uploaded data…"
+        return "Deleting Maraithon's copy…"
     }
 
     static func deleteSuccess(sourceName: String?, deletedCount: Int) -> String {
         if deletedCount == 0 {
             if let sourceName {
-                return "No uploaded \(sourceName) records were stored in Maraithon. Local data on this Mac was not changed."
+                return "No \(sourceName) records from this Mac were stored in Maraithon. Local data on this Mac was not changed."
             }
 
-            return "No uploaded records were stored in Maraithon. Local data on this Mac was not changed."
+            return "No records from this Mac were stored in Maraithon. Local data on this Mac was not changed."
         }
 
         if let sourceName {
-            return "Deleted \(uploadedRecordCount(deletedCount, sourceName: sourceName)) from Maraithon. Local data on this Mac was not changed."
+            return "Deleted \(storedRecordCount(deletedCount, sourceName: sourceName)) from Maraithon. Local data on this Mac was not changed."
         }
 
-        return "Deleted \(uploadedRecordCount(deletedCount, sourceName: nil)) from Maraithon. Local data on this Mac was not changed."
+        return "Deleted \(storedRecordCount(deletedCount, sourceName: nil)) from Maraithon. Local data on this Mac was not changed."
     }
 
     static func deleteFailure(sourceName: String?, error: Error) -> String {
         if let sourceName {
-            return "Could not delete uploaded \(sourceName) data. \(CompanionErrorCopy.message(for: error))"
+            return "Could not delete Maraithon's copy of \(sourceName) data. \(CompanionErrorCopy.message(for: error))"
         }
 
-        return "Could not delete uploaded data. \(CompanionErrorCopy.message(for: error))"
+        return "Could not delete Maraithon's copy. \(CompanionErrorCopy.message(for: error))"
     }
 
-    private static func uploadedRecordCount(_ count: Int, sourceName: String?) -> String {
+    private static func storedRecordCount(_ count: Int, sourceName: String?) -> String {
         let noun = count == 1 ? "record" : "records"
         if let sourceName {
-            return "\(count.formatted()) uploaded \(sourceName) \(noun)"
+            return "\(count.formatted()) \(sourceName) \(noun)"
         }
-        return "\(count.formatted()) uploaded \(noun)"
+        return "\(count.formatted()) \(noun)"
     }
 }
 
@@ -615,7 +615,7 @@ enum PrivacySettingsCopy {
     static let usageStatsToggleTitle = "Share anonymous usage stats"
     static let crashReportsToggleTitle = "Share crash reports"
     static let diagnosticsSharingFooter =
-        "Maraithon uses these choices before sending diagnostics from this Mac. Logs and uploaded source data are never attached automatically."
+        "Maraithon uses these choices before sending diagnostics from this Mac. Logs and source data are never attached automatically."
     static let encryptionIntro =
         "When enabled, content is encrypted on this Mac with a key only this device holds. " +
         "Maraithon can still use details like time, sender, and source name, but not the message, " +
@@ -623,6 +623,13 @@ enum PrivacySettingsCopy {
     static let browserHistoryEncryptionFooter =
         "Browser History is handled separately because search ranking needs site and visit details. " +
         "You can control whether browser results appear in Spotlight above."
+}
+
+enum SpotlightSurfaceCopy {
+    static let sectionTitle = "Surface in Mac Spotlight"
+    static let footer =
+        "When on, Maraithon items appear in macOS Spotlight search alongside your other Mac results. " +
+        "Tapping a result opens the matching detail view in Maraithon."
 }
 
 /// "End-to-end encryption (per source)" section. One checkbox per
@@ -709,13 +716,9 @@ private struct SpotlightSurfaceSection: View {
                 )
             }
         } header: {
-            Text("Surface in Mac Spotlight")
+            Text(SpotlightSurfaceCopy.sectionTitle)
         } footer: {
-            Text(
-                "When on, synced records appear in macOS Spotlight search " +
-                "alongside your other Mac results. Tapping a result opens " +
-                "the matching detail view in Maraithon."
-            )
+            Text(SpotlightSurfaceCopy.footer)
             .font(.footnote)
             .foregroundStyle(.secondary)
         }

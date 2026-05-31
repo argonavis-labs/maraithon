@@ -90,7 +90,7 @@ enum DevicesSettingsCopy {
     static let emptyDevices = "Pair a Mac to make its local context available to your assistant."
     static let emptyCounts = "Waiting for the first context check"
     static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start sending data again."
-    static let revokeConfirmation = "This signs the Mac out and stops it from sending new data. Data already uploaded to Maraithon is kept."
+    static let revokeConfirmation = "This signs the Mac out and stops it from sending new data. Maraithon keeps data already sent from that Mac until you delete it in Data."
     static let signedOutDevices = "Reconnect Maraithon in General to see paired Macs."
 
     static func loadFailure(error: Error) -> String {
