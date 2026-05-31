@@ -21,7 +21,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   @default_end_of_day_hour 18
   @default_weekly_day 5
   @default_weekly_hour 16
-  @default_max_items 3
+  @default_max_items 12
+  @max_items 30
   @default_check_in_slots_per_day 3
   @default_check_in_max_items 2
 
@@ -40,7 +41,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       weekly_day: integer_in_range(config["weekly_review_day_local"], @default_weekly_day, 1, 7),
       weekly_hour:
         integer_in_range(config["weekly_review_hour_local"], @default_weekly_hour, 0, 23),
-      max_items: integer_in_range(config["brief_max_items"], @default_max_items, 1, 5),
+      max_items: integer_in_range(config["brief_max_items"], @default_max_items, 1, @max_items),
       adaptive_check_ins_enabled: boolean_value(config["adaptive_check_ins_enabled"], true),
       check_in_slots_per_day:
         integer_in_range(

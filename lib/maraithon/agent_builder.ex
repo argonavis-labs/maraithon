@@ -87,7 +87,7 @@ defmodule Maraithon.AgentBuilder do
         "end_of_day_brief_hour_local" => "18",
         "weekly_review_day_local" => "5",
         "weekly_review_hour_local" => "16",
-        "brief_max_items" => "3"
+        "brief_max_items" => "12"
       },
       requirements: [
         %{
@@ -320,7 +320,7 @@ defmodule Maraithon.AgentBuilder do
         "end_of_day_brief_hour_local" => "18",
         "weekly_review_day_local" => "5",
         "weekly_review_hour_local" => "16",
-        "brief_max_items" => "3"
+        "brief_max_items" => "12"
       },
       requirements: [
         %{
@@ -1080,7 +1080,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, weekly_review_hour_local} <-
            parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
          {:ok, brief_max_items} <-
-           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5),
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 30),
          {:ok, wakeup_interval_ms} <-
            parse_duration_ms(launch["wakeup_interval_ms"], "Chief of Staff cadence"),
          {:ok, follow_email_scan_limit} <-
@@ -1326,7 +1326,7 @@ defmodule Maraithon.AgentBuilder do
          {:ok, weekly_review_hour_local} <-
            parse_integer_in_range(launch["weekly_review_hour_local"], "Weekly review hour", 0, 23),
          {:ok, brief_max_items} <-
-           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 5) do
+           parse_integer_in_range(launch["brief_max_items"], "Brief max items", 1, 30) do
       {:ok,
        %{
          "name" => launch_name(launch),

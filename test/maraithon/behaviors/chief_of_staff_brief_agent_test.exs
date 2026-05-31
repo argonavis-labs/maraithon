@@ -87,6 +87,76 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.metadata["timezone_offset_hours"] == -5
   end
 
+  test "morning briefs include all material default items instead of hiding work", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-03-11 13:05:00Z]
+
+    insights =
+      Enum.map(1..7, fn index ->
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Close open loop #{index}",
+          "summary" => "Person #{index} is still waiting on a concrete owner or timing.",
+          "recommended_action" =>
+            "Reply to Person #{index} with the owner, status, and exact timing.",
+          "priority" => 90 - index,
+          "confidence" => 0.9,
+          "dedupe_key" => "brief-test:all-material-default:#{index}",
+          "due_at" => DateTime.add(scheduled_at, index, :minute),
+          "metadata" => %{
+            "record" => %{
+              "commitment" => "Close open loop #{index}.",
+              "person" => "Person #{index}",
+              "status" => "unresolved",
+              "next_action" =>
+                "Reply to Person #{index} with the owner, status, and exact timing."
+            }
+          }
+        }
+      end)
+
+    {:ok, _insights} = Insights.record_many(user_id, agent.id, insights)
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["morning"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.title == "Morning brief: 7 items worth watching"
+    assert brief.summary =~ "6 more open items"
+
+    for index <- 1..7 do
+      assert brief.body =~ "Close open loop #{index}"
+    end
+
+    assert length(brief.metadata["linked_todo_ids"]) == 7
+    assert length(brief.metadata["linked_insight_ids"]) == 7
+  end
+
   test "clean morning briefs avoid false all-clear and zero-count pressure copy" do
     user_id = "chief-clean-morning-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

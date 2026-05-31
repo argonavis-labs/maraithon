@@ -12,7 +12,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.Briefing do
   @default_end_of_day_hour 18
   @default_weekly_day 5
   @default_weekly_hour 16
-  @default_brief_max_items 3
+  @default_brief_max_items 12
 
   @impl true
   def id, do: "briefing"

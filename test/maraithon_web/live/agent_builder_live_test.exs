@@ -741,7 +741,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
             end_of_day_brief_hour_local: "18",
             weekly_review_day_local: "5",
             weekly_review_hour_local: "16",
-            brief_max_items: "3",
+            brief_max_items: "12",
             budget_llm_calls: "200",
             budget_tool_calls: "400",
             config_json: ""
@@ -773,6 +773,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["timezone_name"] == "America/Los_Angeles"
       assert agent.config["timezone_offset_hours"] == -8
       assert agent.config["wakeup_interval_ms"] == 600_000
+      assert agent.config["brief_max_items"] == 12
 
       assert agent.config["subscribe"] == [
                "email:#{@user_email}",
@@ -821,6 +822,8 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
                "slack_message_scan_limit"
              ]) ==
                50
+
+      assert get_in(agent.config, ["skill_configs", "briefing", "brief_max_items"]) == 12
 
       assert {:error, {:live_redirect, %{to: "/agents?id=" <> redirect_id}}} = result
       assert redirect_id == agent.id

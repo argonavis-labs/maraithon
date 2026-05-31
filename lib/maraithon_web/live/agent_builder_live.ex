@@ -784,7 +784,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
                           id="launch_brief_max_items"
                           type="number"
                           min="1"
-                          max="5"
+                          max="30"
                           name="launch[brief_max_items]"
                           label="Items per brief"
                           value={@launch["brief_max_items"]}
