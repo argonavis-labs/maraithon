@@ -139,7 +139,7 @@ defmodule Maraithon.ActionCards do
         "headline" => headline(todo, context_pack, attention_mode),
         "decision_prompt" => decision_prompt(todo, context_pack, attention_mode),
         "rank_reason" => rank_reason(profile),
-        "why_now" => why_now(todo, metadata, profile, attention_mode, opts),
+        "why_now" => why_now(todo, metadata, profile, attention_mode, opts, context_pack),
         "context_pack" => context_pack,
         "next_best_action" => next_best_action(todo, attention_mode),
         "prepared_actions" => prepared_actions(todo),
@@ -497,7 +497,7 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp why_now(_todo, _metadata, profile, "stale_check", _opts) do
+  defp why_now(_todo, _metadata, profile, "stale_check", _opts, _context) do
     age_days = read_field(profile, "age_days")
 
     if is_integer(age_days) do
@@ -507,14 +507,14 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp why_now(todo, metadata, profile, _attention_mode, opts) do
+  defp why_now(todo, metadata, profile, _attention_mode, opts, context) do
     public_metadata = PublicMetadata.todo(metadata)
 
     first_present([
       read_string(public_metadata, "why_now"),
       read_string(public_metadata, "why_it_matters"),
       due_sentence(todo, metadata, opts),
-      profile_why_now(profile),
+      profile_why_now(profile, todo, context),
       "This is still open and needs a clear next decision."
     ])
   end
@@ -1172,13 +1172,14 @@ defmodule Maraithon.ActionCards do
     end
   end
 
-  defp profile_why_now(profile) do
+  defp profile_why_now(profile, todo, context) do
     cond do
       read_field(profile, "personal_family") == true ->
         "Personal or family logistics are ranked first."
 
       read_field(profile, "actively_waiting") == true ->
-        "Someone appears to be waiting on a reply or commitment from you."
+        active_waiting_why_now(todo, context) ||
+          "This source item appears to be waiting on your reply or commitment."
 
       read_field(profile, "business_project") == true ->
         "This is tied to an active business objective."
@@ -1187,6 +1188,47 @@ defmodule Maraithon.ActionCards do
         nil
     end
   end
+
+  defp active_waiting_why_now(todo, context) do
+    context = if is_map(context), do: context, else: %{}
+
+    [
+      read_field(context, "summary"),
+      todo.summary,
+      todo.title
+    ]
+    |> Enum.find_value(&waiting_reason_sentence/1)
+  end
+
+  defp waiting_reason_sentence(value) when is_binary(value) do
+    sentence =
+      value
+      |> externalize_copy()
+      |> first_sentence()
+
+    if waiting_reason?(sentence), do: ensure_terminal_punctuation(sentence)
+  end
+
+  defp waiting_reason_sentence(_value), do: nil
+
+  defp waiting_reason?(value) when is_binary(value) do
+    value = String.downcase(value)
+
+    contains_any?(value, [
+      "asked",
+      "waiting",
+      "needs",
+      "requires",
+      "approval",
+      "approve",
+      "reply",
+      "commitment",
+      "confirm",
+      "blocked"
+    ])
+  end
+
+  defp waiting_reason?(_value), do: false
 
   defp due_sentence(%Todo{due_at: %DateTime{} = due_at, user_id: user_id}, metadata, opts) do
     timezone = due_timezone(metadata, opts, user_id)
@@ -1792,6 +1834,18 @@ defmodule Maraithon.ActionCards do
     |> String.replace(~r/\s+/, " ")
     |> String.trim()
   end
+
+  defp first_sentence(text) when is_binary(text) do
+    text = single_line(text)
+
+    case Regex.run(~r/^(.+?[.!?])(?:\s|$)/, text) do
+      [_, sentence] -> sentence
+      _ -> text
+    end
+    |> truncate(180)
+  end
+
+  defp first_sentence(text), do: text
 
   defp truncate(text, max_length) when is_binary(text) do
     if String.length(text) > max_length do

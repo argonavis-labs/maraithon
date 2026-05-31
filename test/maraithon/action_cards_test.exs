@@ -447,7 +447,7 @@ defmodule Maraithon.ActionCardsTest do
       |> Enum.join("\n")
 
     assert visible_copy =~ "The investor asked whether the financing terms changed."
-    assert card["why_now"] == "Someone appears to be waiting on a reply or commitment from you."
+    assert card["why_now"] == "The investor asked whether the financing terms changed."
     refute visible_copy =~ "90%"
     refute visible_copy =~ "91%"
     refute visible_copy =~ "confidence"
