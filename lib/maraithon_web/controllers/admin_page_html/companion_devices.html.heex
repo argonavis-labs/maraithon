@@ -5,8 +5,8 @@
         Paired devices
       </h1>
       <p class="mt-1 max-w-2xl text-sm/6 text-zinc-500">
-        Macs you have signed in with the Maraithon companion app. Per-source counts come from each
-        device's mirrored data — revoking removes the bearer token; deleting also purges the data.
+        Macs signed in with the Maraithon companion app. Counts show what each Mac has synced.
+        Revoking a Mac signs it out; deleting it also removes its synced local data.
       </p>
     </header>
 
@@ -25,9 +25,6 @@
                 <%= for {_key, label} <- MaraithonWeb.AdminPageHTML.source_labels() do %>
                   <.table_header><%= label %></.table_header>
                 <% end %>
-                <.table_header>
-                  <span class="sr-only">Actions</span>
-                </.table_header>
               </tr>
             </.table_head>
             <.table_body>
@@ -36,9 +33,6 @@
                   <.table_cell class="font-medium">
                     <span class="block text-sm/6 text-zinc-950">
                       <%= device.device_name || "Untitled Mac" %>
-                    </span>
-                    <span class="block font-mono text-xs/5 text-zinc-500">
-                      <%= device.device_id %>
                     </span>
                   </.table_cell>
                   <.table_cell>
@@ -57,11 +51,6 @@
                       <%= Map.get(stats, key, 0) %>
                     </.table_cell>
                   <% end %>
-                  <.table_cell class="text-right">
-                    <span class="font-mono text-xs/5 text-zinc-500">
-                      <%= String.slice(device.id, 0, 8) %>
-                    </span>
-                  </.table_cell>
                 </.table_row>
               <% end %>
             </.table_body>

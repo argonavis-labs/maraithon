@@ -43,7 +43,10 @@ defmodule MaraithonWeb.AdminPageControllerTest do
       body = html_response(conn, 200)
       assert body =~ "Paired devices"
       assert body =~ "Studio Mac"
-      assert body =~ device.device_id
+      assert body =~ "Revoking a Mac signs it out"
+      refute body =~ "bearer token"
+      refute body =~ device.device_id
+      refute body =~ String.slice(device.id, 0, 8)
       # The messages count cell holds "2" in the same row as the device name.
       # We pull just the messages-column cells out so the assertion is robust
       # to surrounding whitespace.
