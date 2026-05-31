@@ -10,7 +10,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   require Logger
 
   @registry Maraithon.TelegramAssistant.LivenessRegistry
-  @default_timeout_text "Request saved. Still finishing the lookup with available context; the answer will appear here when ready."
+  @default_timeout_text "Request saved. Finishing the lookup with available context; the answer will appear here when ready."
   @stream_flush_interval_ms 1_000
   @stream_placeholder "…"
 
@@ -626,40 +626,40 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
   end
 
   defp progress_text(%{hint_category: "open_work"}) do
-    "Still reviewing your open work."
+    "Reviewing open work now."
   end
 
   defp progress_text(%{hint_category: "agents"}) do
-    "Still asking your agents."
+    "Checking your automations now."
   end
 
   defp progress_text(%{hint_category: "actions"}) do
-    "Still preparing that action."
+    "Preparing the action for confirmation."
   end
 
   defp progress_text(%{hint_category: "relationships", hint_labels: [name | _]}) do
-    "Still checking what I know about #{name}."
+    "Checking relationship context for #{name}."
   end
 
   defp progress_text(%{hint_category: "relationships"}) do
-    "Still checking your relationship context."
+    "Checking relationship context now."
   end
 
   defp progress_text(%{hint_category: "connected_accounts", hint_labels: labels}) do
     case Enum.uniq(labels) do
-      ["Gmail", "Calendar"] -> "Still checking Gmail and Calendar."
-      ["Calendar", "Gmail"] -> "Still checking Gmail and Calendar."
-      ["Gmail"] -> "Still checking Gmail."
-      ["Calendar"] -> "Still checking your calendar."
-      [_single] -> "Still checking your connected accounts."
-      _ -> "Still checking your connected accounts."
+      ["Gmail", "Calendar"] -> "Checking Gmail and Calendar now."
+      ["Calendar", "Gmail"] -> "Checking Gmail and Calendar now."
+      ["Gmail"] -> "Checking Gmail now."
+      ["Calendar"] -> "Checking your calendar now."
+      [_single] -> "Checking connected sources now."
+      _ -> "Checking connected sources now."
     end
   end
 
-  defp progress_text(_state), do: "Still working on that."
+  defp progress_text(_state), do: "Working through the request now."
 
   defp timeout_text(%{hint_category: "relationships", hint_labels: [name | _]}) do
-    "Question about #{name} is saved. Still checking relationship context and connected sources; the answer will appear here when ready."
+    "Question about #{name} is saved. Checking relationship context and connected sources; the answer will appear here when ready."
   end
 
   defp timeout_text(%{hint_category: "connected_accounts", hint_labels: labels}) do
@@ -675,7 +675,7 @@ defmodule Maraithon.TelegramAssistant.LivenessSession do
         _ -> "your connected accounts"
       end
 
-    "Request saved. Still checking #{source} with available context; the answer will appear here when ready."
+    "Request saved. Checking #{source} with available context; the answer will appear here when ready."
   end
 
   defp timeout_text(_state), do: @default_timeout_text
