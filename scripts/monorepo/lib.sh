@@ -132,6 +132,11 @@ xcconfig_value() {
 }
 
 companion_debug_app_path() {
+  local build_setting_overrides=()
+  if [[ -n "${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" ]]; then
+    build_setting_overrides+=("CONFIGURATION_BUILD_DIR=${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR}")
+  fi
+
   local build_dir
   build_dir="$(
     cd "${COMPANION_DIR}" &&
@@ -139,6 +144,7 @@ companion_debug_app_path() {
         -project Maraithon.xcodeproj \
         -scheme Maraithon \
         -configuration Debug \
+        "${build_setting_overrides[@]}" \
         -showBuildSettings 2>/dev/null |
       awk -F= '
         $1 ~ /BUILT_PRODUCTS_DIR[[:space:]]*$/ {

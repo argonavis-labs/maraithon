@@ -16,8 +16,12 @@ if selected_component "${component}" "companion"; then
   quit_running_companion_app
   mkdir -p "${install_dir}"
 
-  "${ROOT_DIR}/scripts/monorepo/build" companion
-  built_app="$(companion_debug_app_path)"
+  MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${install_dir}" \
+    "${ROOT_DIR}/scripts/monorepo/build" companion
+  built_app="$(
+    MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${install_dir}" \
+      companion_debug_app_path
+  )"
 
   if [[ ! -d "${built_app}" ]]; then
     echo "Companion app was not built at ${built_app}" >&2
@@ -25,6 +29,7 @@ if selected_component "${component}" "companion"; then
   fi
 
   install_companion_dev_app "${built_app}" "${install_app}"
+  cleanup_companion_direct_build_products "${install_dir}" "${install_app}"
   xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
   if [[ -x "${LSREGISTER}" ]]; then
     unregister_stale_companion_apps "${install_app}"
