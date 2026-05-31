@@ -239,6 +239,56 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute html =~ "Boardy follow-up"
   end
 
+  test "decisions filter shows only work waiting on an operator choice", %{conn: conn} do
+    assert {:ok, [decision, _reference]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Approve investor reply",
+                 "summary" => "The investor asked whether the revised terms are approved.",
+                 "next_action" => "Send the revised terms and confirm the review window.",
+                 "priority" => 88,
+                 "dedupe_key" => "todos-live:decision-filter:investor",
+                 "metadata" => %{
+                   "account" => @user_email,
+                   "person" => "Jordan Lee",
+                   "why_now" => "Jordan is waiting on your approval.",
+                   "source_quote" => "Can you approve the revised terms?"
+                 }
+               },
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Read market update",
+                 "summary" => "Background market note for later reference.",
+                 "next_action" => "File the note.",
+                 "priority" => 35,
+                 "dedupe_key" => "todos-live:decision-filter:reference"
+               }
+             ])
+
+    {:ok, view, html} = live(conn, "/todos?attention=decision")
+
+    assert html =~ "Decisions"
+    assert html =~ "Approve investor reply"
+    assert html =~ "Decision"
+    refute html =~ "Read market update"
+
+    detail_html =
+      view
+      |> element("#todo-#{decision.id}")
+      |> render_click()
+
+    assert_patch(view, "/todos?attention=decision&todo_id=#{decision.id}")
+    assert detail_html =~ "Decision context"
+    assert detail_html =~ "Choose the next move with Jordan Lee."
+    assert detail_html =~ "Jordan is waiting on your approval."
+    assert detail_html =~ "Can you approve the revised terms?"
+    assert detail_html =~ "Used Gmail."
+    refute detail_html =~ "Handle this now, snooze it, or dismiss it."
+  end
+
   test "source filter includes local companion sources", %{conn: conn} do
     assert {:ok, [imessage_todo, _notes_todo]} =
              Todos.upsert_many(@user_email, [

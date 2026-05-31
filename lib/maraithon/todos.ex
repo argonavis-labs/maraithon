@@ -8,12 +8,21 @@ defmodule Maraithon.Todos do
   alias Maraithon.Insights.Insight
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
-  alias Maraithon.Todos.{AttentionRanker, FeedbackTrainer, Intelligence, SurfaceQuality}
+
+  alias Maraithon.Todos.{
+    AttentionRanker,
+    DecisionSignals,
+    FeedbackTrainer,
+    Intelligence,
+    SurfaceQuality
+  }
+
   alias Maraithon.Todos.UserFacingCopy
   alias Maraithon.Todos.Todo
 
   @open_statuses ~w(open snoozed)
   @feedback_values ~w(helpful not_helpful)
+  @decision_text_pattern "\\m(approve|approval|approved|ask|asked|blocked|blocking|call|choose|commitment|committed|decide|decision|owe|owes|owed|reply|replied|respond|response|wait|waiting)\\M"
 
   def get_for_user(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do
@@ -28,18 +37,24 @@ defmodule Maraithon.Todos do
     limit = normalize_limit(Keyword.get(opts, :limit, 20), 20)
     sort_by = normalize_sort_by(Keyword.get(opts, :sort_by, "rank"))
     sort_dir = normalize_sort_dir(Keyword.get(opts, :sort_dir, "desc"))
+    decision_only? = decision_only_option?(opts)
 
     user_id
     |> filtered_todo_query(opts)
+    |> maybe_filter_decision_only(decision_only?)
     |> apply_todo_order(sort_by, sort_dir)
     |> limit(^limit)
     |> Repo.all()
     |> Enum.map(&polish_todo_copy/1)
+    |> Enum.filter(&(not decision_only? or DecisionSignals.needs_decision?(&1)))
   end
 
   def count_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    decision_only? = decision_only_option?(opts)
+
     user_id
     |> filtered_todo_query(opts)
+    |> maybe_filter_decision_only(decision_only?)
     |> exclude(:order_by)
     |> select([todo], count(todo.id))
     |> Repo.one()
@@ -985,6 +1000,71 @@ defmodule Maraithon.Todos do
   defp maybe_filter_attention_mode(query, attention_mode) when is_binary(attention_mode) do
     where(query, [todo], todo.attention_mode == ^attention_mode)
   end
+
+  defp maybe_filter_decision_only(query, false), do: query
+
+  defp maybe_filter_decision_only(query, true) do
+    where(
+      query,
+      [todo],
+      todo.status in ^@open_statuses and
+        (fragment(
+           """
+           coalesce(?->>'commitment_direction', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me')
+           """,
+           todo.metadata
+         ) or
+           fragment(
+             """
+             coalesce(?->>'thread_state', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me', 'waiting_on_kent')
+             """,
+             todo.metadata
+           ) or
+           fragment(
+             """
+             coalesce(? #>> '{conversation_context,momentum_state}', '') in ('i_owe', 'asked_of_me', 'pending_reply', 'user_owes', 'waiting_on_user', 'waiting_on_me', 'waiting_on_kent')
+             """,
+             todo.metadata
+           ) or
+           fragment(
+             """
+             lower(concat_ws(' ', ?, ?, ?, ?, ?, coalesce(?->>'why_now', ''), coalesce(?->>'why_it_matters', ''), coalesce(?->>'context_brief', ''), coalesce(?->>'thread_state', ''), coalesce(?->>'source_quote', ''), coalesce(?->>'source_excerpt', ''), coalesce(?->>'quote', ''))) ~ ?
+             """,
+             todo.title,
+             todo.summary,
+             todo.next_action,
+             todo.notes,
+             todo.action_plan,
+             todo.metadata,
+             todo.metadata,
+             todo.metadata,
+             todo.metadata,
+             todo.metadata,
+             todo.metadata,
+             todo.metadata,
+             ^@decision_text_pattern
+           ))
+    )
+  end
+
+  defp decision_only_option?(opts) when is_list(opts) do
+    Enum.any?(opts, fn
+      {:decision_only?, value} -> truthy?(value)
+      {:decision_only, value} -> truthy?(value)
+      {"decision_only?", value} -> truthy?(value)
+      {"decision_only", value} -> truthy?(value)
+      _entry -> false
+    end)
+  end
+
+  defp decision_only_option?(opts) when is_map(opts) do
+    opts
+    |> Map.take([:decision_only?, :decision_only, "decision_only?", "decision_only"])
+    |> Map.values()
+    |> Enum.any?(&truthy?/1)
+  end
+
+  defp decision_only_option?(_opts), do: false
 
   defp maybe_filter_owner_user_id(query, nil), do: query
   defp maybe_filter_owner_user_id(query, ""), do: query

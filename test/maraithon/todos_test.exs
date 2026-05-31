@@ -99,6 +99,45 @@ defmodule Maraithon.TodosTest do
              |> Enum.map(& &1.id)
   end
 
+  test "decision-only filter returns calls waiting on the operator" do
+    user_id = unique_user_email("todos-decisions")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [decision, _reference]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Approve investor reply",
+          "summary" => "The investor asked whether the revised terms are approved.",
+          "next_action" => "Send the revised terms and confirm the review window.",
+          "priority" => 88,
+          "dedupe_key" => "todos-decisions:investor",
+          "metadata" => %{
+            "person" => "Jordan Lee",
+            "why_now" => "Jordan is waiting on your decision.",
+            "source_quote" => "Can you approve the revised terms?"
+          }
+        },
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "Read strategy note",
+          "summary" => "Background context for planning.",
+          "next_action" => "Review when planning next week.",
+          "priority" => 50,
+          "dedupe_key" => "todos-decisions:reference"
+        }
+      ])
+
+    assert [decision.id] ==
+             user_id
+             |> Todos.list_for_user(decision_only?: true, limit: 10)
+             |> Enum.map(& &1.id)
+
+    assert Todos.count_for_user(user_id, decision_only?: true) == 1
+  end
+
   test "todos persist durable source, owner, due date, notes, and action draft details" do
     user_id = unique_user_email("todos-detail")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

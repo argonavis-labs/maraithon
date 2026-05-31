@@ -1,9 +1,9 @@
 defmodule MaraithonWeb.TodosLive do
   use MaraithonWeb, :live_view
 
-  alias Maraithon.{BriefingSchedules, SourceLabels, Timezones}
+  alias Maraithon.{ActionCards, BriefingSchedules, SourceLabels, Timezones}
   alias Maraithon.Todos
-  alias Maraithon.Todos.{PublicMetadata, Todo}
+  alias Maraithon.Todos.{DecisionSignals, Todo}
   alias MaraithonWeb.TodoActionCopy
 
   @page_limit 200
@@ -28,6 +28,7 @@ defmodule MaraithonWeb.TodosLive do
   @attention_options [
     {"Any attention", "all"},
     {"Needs action", "act_now"},
+    {"Decisions", "decision"},
     {"Watching", "monitor"}
   ]
   @due_options [
@@ -382,7 +383,10 @@ defmodule MaraithonWeb.TodosLive do
                       />
                     </.table_cell>
                     <.table_cell class="max-w-xl whitespace-normal align-top">
-                      <div class="font-medium text-zinc-950"><%= todo.title %></div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <div class="font-medium text-zinc-950"><%= todo.title %></div>
+                        <.badge :if={todo_decision_signal?(todo)} color="indigo">Decision</.badge>
+                      </div>
                       <div :if={present?(todo.summary)} class="mt-1 line-clamp-2 text-sm/6 text-zinc-600">
                         <%= todo.summary %>
                       </div>
@@ -570,10 +574,12 @@ defmodule MaraithonWeb.TodosLive do
 
   defp todo_detail_panel(assigns) do
     can_edit_next_action = todo_next_action_editable?(assigns.todo)
+    decision_signal? = todo_decision_signal?(assigns.todo)
 
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
+      |> assign(:decision_signal?, decision_signal?)
       |> assign(:decision_context_fields, todo_decision_context_fields(assigns.todo))
       |> assign(
         :next_action_form,
@@ -592,6 +598,7 @@ defmodule MaraithonWeb.TodosLive do
             <.badge color={priority_color(@todo.priority)}>
               <%= priority_label(@todo.priority) %>
             </.badge>
+            <.badge :if={@decision_signal?} color="indigo">Decision</.badge>
           </div>
           <h3 class="mt-2 text-base/7 font-semibold text-zinc-950"><%= @todo.title %></h3>
         </div>
@@ -783,6 +790,7 @@ defmodule MaraithonWeb.TodosLive do
       query: normalize_text(filters["q"]),
       statuses: status_filter(filters["status"]),
       attention_mode: attention_filter(filters["attention"]),
+      decision_only?: decision_filter?(filters["attention"]),
       source: source_filter(filters["source"]),
       sort_by: filters["sort"],
       sort_dir: filters["dir"]
@@ -802,8 +810,12 @@ defmodule MaraithonWeb.TodosLive do
   defp status_filter(_status), do: ["open", "snoozed"]
 
   defp attention_filter("all"), do: nil
+  defp attention_filter("decision"), do: nil
   defp attention_filter(attention) when attention in ~w(act_now monitor), do: attention
   defp attention_filter(_attention), do: nil
+
+  defp decision_filter?("decision"), do: true
+  defp decision_filter?(_attention), do: false
 
   defp source_filter("all"), do: nil
   defp source_filter(source) when is_binary(source), do: source
@@ -840,7 +852,7 @@ defmodule MaraithonWeb.TodosLive do
           "active"
         ),
       "attention" =>
-        normalize_choice(Map.get(params, "attention"), ~w(all act_now monitor), "all"),
+        normalize_choice(Map.get(params, "attention"), ~w(all act_now decision monitor), "all"),
       "due" => normalize_choice(Map.get(params, "due"), ~w(all overdue today week no_due), "all"),
       "source" => normalize_source(Map.get(params, "source")),
       "sort" =>
@@ -929,57 +941,35 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp todo_decision_context_fields(%Todo{} = todo) do
-    public_metadata = PublicMetadata.todo(todo.metadata || %{})
-    person = public_metadata_value(public_metadata, ~w(person contact_name name))
-    company = public_metadata_value(public_metadata, ~w(company organization account_name))
-    thread = public_metadata_value(public_metadata, ~w(thread_subject email_subject subject))
+    if todo_decision_signal?(todo) do
+      card = ActionCards.for_todo(todo, include_disconnected: false)
 
-    fields =
-      [
-        %{label: "Decision", value: todo_decision_prompt(person)},
+      core_fields = [
+        %{label: "Decision", value: Map.get(card, "decision_prompt")},
+        %{label: "Why now", value: Map.get(card, "why_now")},
+        %{label: "Evidence", value: ActionCards.evidence_excerpt(card)},
         %{
-          label: "Why now",
-          value: public_metadata_value(public_metadata, ~w(why_now why_it_matters reason))
+          label: "Context used",
+          value: ActionCards.source_health_note(card) || todo_source_check_value(todo)
         },
-        %{
-          label: "Thread",
-          value: thread
-        },
-        %{label: "Person", value: person_with_company(person, company)},
-        %{
-          label: "Project",
-          value: public_metadata_value(public_metadata, ~w(project topic campaign)) || thread
-        },
-        %{
-          label: "Evidence",
-          value:
-            public_metadata_value(
-              public_metadata,
-              ~w(source_quote source_excerpt evidence_excerpt quote)
-            )
-        },
-        %{label: "Context used", value: todo_source_check_value(todo)},
-        %{label: "Prepared", value: todo.next_action}
+        %{label: "Prepared", value: ActionCards.prepared_action_hint(card)},
+        %{label: "Next", value: Map.get(card, "next_best_action")}
       ]
+
+      context_fields =
+        card
+        |> ActionCards.context_items()
+        |> Enum.map(fn item -> %{label: item.label, value: item.value} end)
+
+      (core_fields ++ context_fields)
       |> Enum.map(fn field -> %{field | value: normalize_context_value(field.value)} end)
       |> Enum.reject(fn field -> blank?(field.value) end)
       |> Enum.uniq_by(fn field -> {field.label, field.value} end)
-      |> Enum.take(8)
-
-    fields
-  end
-
-  defp todo_decision_prompt(person) do
-    if present?(person) do
-      "Choose the next move with #{person}."
+      |> Enum.take(10)
     else
-      "Handle this now, snooze it, or dismiss it."
+      []
     end
   end
-
-  defp person_with_company(nil, company), do: company
-  defp person_with_company(person, nil), do: person
-  defp person_with_company(person, company), do: "#{person} (#{company})"
 
   defp todo_source_check_value(%Todo{source: source}) do
     case todo_source_label(source) do
@@ -987,10 +977,6 @@ defmodule MaraithonWeb.TodosLive do
       "" -> nil
       label -> "Used #{label}."
     end
-  end
-
-  defp public_metadata_value(metadata, keys) when is_map(metadata) and is_list(keys) do
-    Enum.find_value(keys, &normalize_context_value(fetch_map_value(metadata, &1)))
   end
 
   defp normalize_context_value(value) when is_binary(value), do: normalize_text(value)
@@ -1067,6 +1053,9 @@ defmodule MaraithonWeb.TodosLive do
       present?(query) ->
         "No work items match this search."
 
+      filters["attention"] == "decision" ->
+        "No decisions are waiting on you."
+
       default_filter_view?(filters) ->
         "No open work is ready to review."
 
@@ -1109,6 +1098,9 @@ defmodule MaraithonWeb.TodosLive do
 
   defp attention_mode_label("monitor"), do: "Watching"
   defp attention_mode_label(_attention), do: "Needs action"
+
+  defp todo_decision_signal?(%Todo{} = todo), do: DecisionSignals.needs_decision?(todo)
+  defp todo_decision_signal?(_todo), do: false
 
   defp todo_source_label("gmail"), do: "Gmail"
   defp todo_source_label("google_calendar"), do: "Google Calendar"
