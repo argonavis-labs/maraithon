@@ -257,8 +257,8 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Recorded automation activity."
     assert html =~ "Purpose"
     assert html =~ "General-purpose automation that watches topics"
-    assert html =~ "No signals selected"
-    assert html =~ "No actions allowed"
+    assert html =~ "Runs on request"
+    assert html =~ "No app actions enabled"
     refute html =~ "Run instructions"
     refute html =~ "Instructions"
     refute html =~ "Inspect me"
@@ -360,9 +360,10 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "No work is waiting or running for this automation."
     assert html =~ "No follow-ups are queued for this automation."
     assert html =~ "This automation has not reported an update yet."
-    assert html =~ "No automation notes are available for this automation."
+    assert html =~ "Diagnostic notes will appear after this automation has a run to report."
     refute html =~ "No queued work recorded yet."
     refute html =~ "No automation notes yet."
+    refute html =~ "No automation notes are available for this automation."
     refute html =~ "captured"
   end
 

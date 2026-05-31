@@ -1302,7 +1302,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <% end %>
 
                         <%= if @inspection.recent_logs == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No automation notes are available for this automation.</p>
+                          <p class="text-sm/6 text-zinc-500">Diagnostic notes will appear after this automation has a run to report.</p>
                         <% end %>
                       </div>
                     </section>
@@ -2240,14 +2240,14 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp subscriptions_preview(config) do
     case config["subscribe"] || [] do
-      [] -> "No signals selected"
+      [] -> "Runs on request"
       values -> values |> Enum.take(3) |> Enum.join(", ") |> truncate(70)
     end
   end
 
   defp tools_preview(config) do
     case config["tools"] || [] do
-      [] -> "No actions allowed"
+      [] -> "No app actions enabled"
       values -> values |> Enum.join(", ") |> truncate(70)
     end
   end
