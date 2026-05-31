@@ -54,6 +54,23 @@ defmodule Maraithon.Tools.HttpGetTest do
       assert result.url == "http://localhost:#{bypass.port}/test"
     end
 
+    test "redacts sensitive query parameters in returned url" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/test", fn conn ->
+        assert conn.query_string == "token=secret-token&visible=ok"
+        Plug.Conn.resp(conn, 200, "Hello World")
+      end)
+
+      {:ok, result} =
+        HttpGet.execute(%{
+          "url" => "http://localhost:#{bypass.port}/test?token=secret-token&visible=ok"
+        })
+
+      assert result.url == "http://localhost:#{bypass.port}/test?token=redacted&visible=ok"
+      refute inspect(result) =~ "secret-token"
+    end
+
     test "handles non-200 status codes" do
       bypass = Bypass.open()
 
@@ -86,9 +103,26 @@ defmodule Maraithon.Tools.HttpGetTest do
 
     test "returns error for connection failure" do
       # Use a port that's definitely not listening
-      {:error, reason} = HttpGet.execute(%{"url" => "http://localhost:1/test"})
+      {:error, reason} =
+        HttpGet.execute(%{"url" => "http://localhost:1/test?token=secret-token"})
 
-      assert is_binary(reason)
+      assert reason == "Could not fetch that URL. Check the address and try again."
+      refute reason =~ "secret-token"
+      refute reason =~ "Req."
+    end
+
+    test "redacts sensitive fields in response body text" do
+      bypass = Bypass.open()
+
+      Bypass.expect_once(bypass, "GET", "/secret", fn conn ->
+        Plug.Conn.resp(conn, 200, ~s({"access_token":"secret-token","ok":true}))
+      end)
+
+      {:ok, result} = HttpGet.execute(%{"url" => "http://localhost:#{bypass.port}/secret"})
+
+      assert result.body =~ "access_token"
+      assert result.body =~ "[redacted]"
+      refute result.body =~ "secret-token"
     end
 
     test "handles JSON response body" do

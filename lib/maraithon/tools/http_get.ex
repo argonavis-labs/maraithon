@@ -9,6 +9,22 @@ defmodule Maraithon.Tools.HttpGet do
   @max_url_length 2_048
   @receive_timeout_ms 10_000
   @connect_timeout_ms 5_000
+  @fetch_error "Could not fetch that URL. Check the address and try again."
+  @sensitive_query_keys MapSet.new(~w(
+    access_token
+    api_key
+    apikey
+    client_secret
+    code
+    id_token
+    key
+    password
+    refresh_token
+    secret
+    sig
+    signature
+    token
+  ))
 
   def execute(args) do
     with {:ok, url} <- extract_url(args),
@@ -18,22 +34,26 @@ defmodule Maraithon.Tools.HttpGet do
   end
 
   defp fetch_url(url) do
-    Logger.info("HTTP GET", url: url)
+    public_url = redact_url(url)
+
+    Logger.info("HTTP GET", url: public_url)
 
     case Req.get(url,
            receive_timeout: @receive_timeout_ms,
-           connect_options: [timeout: @connect_timeout_ms]
+           connect_options: [timeout: @connect_timeout_ms],
+           retry: false
          ) do
       {:ok, %{status: status, body: body}} ->
         {:ok,
          %{
            status: status,
            body: truncate(body, @max_response_body_chars),
-           url: url
+           url: public_url
          }}
 
       {:error, reason} ->
-        {:error, inspect(reason)}
+        Logger.debug("HTTP GET failed", url: public_url, reason: inspect(reason))
+        {:error, @fetch_error}
     end
   end
 
@@ -79,7 +99,17 @@ defmodule Maraithon.Tools.HttpGet do
 
   defp validate_parsed_uri(%URI{}), do: :ok
 
-  defp truncate(body, max_length) when is_binary(body) do
+  defp truncate(body, max_length) do
+    body
+    |> body_to_text()
+    |> redact_sensitive_text()
+    |> truncate_text(max_length)
+  end
+
+  defp body_to_text(body) when is_binary(body), do: body
+  defp body_to_text(body), do: inspect(body, limit: 50)
+
+  defp truncate_text(body, max_length) do
     if String.length(body) > max_length do
       String.slice(body, 0, max_length) <> "... (truncated)"
     else
@@ -87,5 +117,48 @@ defmodule Maraithon.Tools.HttpGet do
     end
   end
 
-  defp truncate(body, _max_length), do: inspect(body)
+  defp redact_url(url) do
+    uri = URI.parse(url)
+    query = redact_query(uri.query)
+
+    uri
+    |> Map.put(:query, query)
+    |> Map.put(:userinfo, nil)
+    |> URI.to_string()
+  rescue
+    _ -> "redacted-url"
+  end
+
+  defp redact_query(nil), do: nil
+  defp redact_query(""), do: ""
+
+  defp redact_query(query) do
+    query
+    |> URI.query_decoder()
+    |> Enum.map(fn {key, value} ->
+      if sensitive_query_key?(key), do: {key, "redacted"}, else: {key, value}
+    end)
+    |> URI.encode_query()
+  end
+
+  defp sensitive_query_key?(key) when is_binary(key) do
+    normalized =
+      key
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9]+/, "_")
+      |> String.trim("_")
+
+    MapSet.member?(@sensitive_query_keys, normalized) or
+      String.ends_with?(normalized, "_token") or
+      String.ends_with?(normalized, "_secret") or
+      String.ends_with?(normalized, "_key")
+  end
+
+  defp redact_sensitive_text(text) do
+    Regex.replace(
+      ~r/((?:"?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|password|secret|signature|sig|token|key)"?)\s*(?::|=>|=)\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/i,
+      text,
+      "\\1[redacted]"
+    )
+  end
 end
