@@ -28,8 +28,8 @@ enum FullDiskAccessInstallHint {
     static let revealStableAppButtonTitle = "Show Maraithon app"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return "For local builds, keep Full Disk Access on the exact app at \(stableDevelopmentAppDisplayPath). " +
-            "If Maraithon is already enabled but still blocked, remove duplicate Maraithon entries, add this app again, then click Check again."
+        return "Use the Full Disk Access row for \(stableDevelopmentAppDisplayPath). " +
+            "Reloads keep using that same app. If Maraithon is already enabled but still blocked, remove duplicate Maraithon entries, add this app again, then click Check again."
         #else
         return nil
         #endif

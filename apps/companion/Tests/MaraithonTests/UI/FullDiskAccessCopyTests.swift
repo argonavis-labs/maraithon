@@ -88,8 +88,8 @@ final class FullDiskAccessCopyTests: XCTestCase {
         let reminder = try XCTUnwrap(FullDiskAccessInstallHint.stableGrantReminder)
 
         XCTAssertTrue(reminder.contains("~/Applications/Maraithon.app"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("local builds"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("exact app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("Full Disk Access row"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("reloads keep using that same app"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("already enabled"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("duplicate Maraithon entries"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("Check again"))
