@@ -193,10 +193,9 @@ struct SourceDetailScaffold: View {
     var statsSection: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.small) {
             SectionHeader(SourceDetailCopy.activitySectionTitle)
-            let columns = [GridItem(.adaptive(minimum: 160), spacing: Tokens.Spacing.medium)]
-            LazyVGrid(columns: columns, spacing: Tokens.Spacing.medium) {
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(stats) { stat in
-                    StatCard(title: stat.title, value: stat.value, caption: stat.caption)
+                    SourceStatRow(stat: stat)
                 }
             }
         }

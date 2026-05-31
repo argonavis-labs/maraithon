@@ -39,6 +39,17 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertNil(stat.caption)
     }
 
+    func testSourceStatRowBuilds() {
+        _ = SourceStatRow(
+            stat: SourceStat(
+                id: "last_sync",
+                title: "Last checked",
+                value: "just now",
+                caption: "successful check"
+            )
+        )
+    }
+
     func testSourceActivityRowDefaultsToFreshUUID() {
         let a = SourceActivityRow(timestamp: Date(), count: 1, accepted: 1, duplicates: 0)
         let b = SourceActivityRow(timestamp: Date(), count: 1, accepted: 1, duplicates: 0)
