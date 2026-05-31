@@ -665,7 +665,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         list_summary(rules, "preference", &preference_rule_item_summary/1)
 
       map_value(result, "active_count", 0) == 0 and map_value(result, "pending_count", 0) == 0 ->
-        "Using source-backed defaults until a standing preference is saved."
+        "Using confirmed context until you save a standing preference."
 
       true ->
         completed_check_summary()

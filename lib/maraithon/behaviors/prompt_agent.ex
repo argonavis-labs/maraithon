@@ -25,7 +25,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
   @behaviour Maraithon.Behaviors.Behavior
 
   @default_memory_limit 50
-  @empty_user_memory_guidance "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
+  @empty_user_memory_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
 
   alias Maraithon.LLM
 

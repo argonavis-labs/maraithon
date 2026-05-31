@@ -64,10 +64,11 @@ defmodule Maraithon.PreferenceMemoryTest do
     summary = PreferenceMemory.render_summary(user_id)
 
     assert summary =~
-             "Maraithon is using source-backed defaults until you save a standing preference."
+             "Maraithon is using confirmed context until you save a standing preference."
 
     assert summary =~ "/prefer ignore receipts"
     refute summary =~ "No standing preferences saved yet"
+    refute summary =~ "source-backed"
   end
 
   test "stores sales outreach content filters as durable preference rules", %{user_id: user_id} do

@@ -91,7 +91,7 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       assert prompt =~ "## Confirmed User Memory"
 
       assert prompt =~
-               "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
+               "Use current context and confirmed preferences until a long-term user profile is ready."
 
       assert prompt =~ "## Related Long-Term Memory"
       assert prompt =~ "No relevant long-term memories matched this context."
@@ -99,6 +99,7 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
       refute prompt =~ "No confirmed long-term user profile yet"
       refute prompt =~ "No open work found"
       refute prompt =~ "durable"
+      refute prompt =~ "source-backed"
     end
 
     test "does not reprocess same message" do

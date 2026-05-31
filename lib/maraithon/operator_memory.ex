@@ -133,7 +133,7 @@ defmodule Maraithon.OperatorMemory do
         summarize_by_kind(
           rules,
           "content_filter",
-          "Use source-backed relevance signals until content preferences are confirmed."
+          "Use confirmed context until content preferences are saved."
         )
 
       "interrupt_policy" ->

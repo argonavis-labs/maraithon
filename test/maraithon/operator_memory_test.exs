@@ -19,8 +19,7 @@ defmodule Maraithon.OperatorMemoryTest do
 
     assert Enum.any?(
              summaries,
-             &(&1.content ==
-                 "Use source-backed relevance signals until content preferences are confirmed.")
+             &(&1.content == "Use confirmed context until content preferences are saved.")
            )
 
     assert Enum.any?(
@@ -43,5 +42,6 @@ defmodule Maraithon.OperatorMemoryTest do
 
     refute Enum.any?(summaries, &String.contains?(&1.content, "durable"))
     refute Enum.any?(summaries, &String.contains?(&1.content, "No confirmed"))
+    refute Enum.any?(summaries, &String.contains?(&1.content, "source-backed"))
   end
 end

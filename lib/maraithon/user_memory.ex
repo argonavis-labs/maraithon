@@ -28,7 +28,7 @@ defmodule Maraithon.UserMemory do
   @default_confidence 0.55
   @recent_feedback_limit 8
   @recent_turn_limit 16
-  @empty_profile_guidance "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
+  @empty_profile_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
 
   def prompt_context(user_id) when is_binary(user_id) do
     case Repo.get_by(Profile, user_id: user_id) do
@@ -275,21 +275,21 @@ defmodule Maraithon.UserMemory do
   defp fallback_profile(bundle) do
     working_style =
       operator_summary(bundle, ["action_style", "interrupt_policy"]) ||
-        "Use concise, source-grounded recommendations until stronger preferences are confirmed."
+        "Recommendations should stay concise and grounded in checked context until stronger preferences are confirmed."
 
     communication_style =
       operator_summary(bundle, ["telegram_behavior", "content_preferences"]) ||
         preference_instruction(bundle, ["style_preference", "routing_preference"]) ||
-        "Keep updates concise, specific, and grounded in the user's current obligations."
+        "Updates should stay concise, specific, and tied to current obligations."
 
     decision_style =
       preference_instruction(bundle, ["action_preference", "urgency_boost"]) ||
-        "Bias toward practical next steps, explicit tradeoffs, and concrete recommendations."
+        "Recommendations should favor practical next steps, explicit tradeoffs, and concrete choices."
 
     current_focus =
       case Map.get(bundle, :projects, []) do
         [] ->
-          "Prioritize source-backed obligations until a project focus is confirmed."
+          "Focus on clear obligations until a project focus is confirmed."
 
         projects ->
           project_names =
@@ -310,7 +310,7 @@ defmodule Maraithon.UserMemory do
       |> Enum.join(" ")
       |> case do
         "" ->
-          "Use connected-source evidence and confirmed preferences before assuming additional context."
+          "Rely on connected app context and confirmed preferences before assuming additional context."
 
         value ->
           value

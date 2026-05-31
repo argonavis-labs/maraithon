@@ -78,29 +78,32 @@ defmodule Maraithon.UserMemoryTest do
                llm_complete: fn _prompt -> {:error, :summary_unavailable} end
              )
 
-    assert profile.summary =~ "Prioritize source-backed obligations"
-    assert profile.profile["working_style"] =~ "source-grounded recommendations"
-    assert profile.profile["communication_style"] =~ "updates concise"
+    assert profile.summary =~ "Focus on clear obligations"
+    assert profile.profile["working_style"] =~ "grounded in checked context"
+    assert profile.profile["communication_style"] =~ "Updates should stay concise"
     assert profile.profile["decision_style"] =~ "practical next steps"
-    assert profile.profile["current_focus"] =~ "source-backed obligations"
-    assert profile.profile["important_context"] =~ "connected-source evidence"
+    assert profile.profile["current_focus"] =~ "clear obligations"
+    assert profile.profile["important_context"] =~ "connected app context"
 
     refute profile.summary =~ "No current focus"
     refute profile.profile["current_focus"] =~ "No current focus"
     refute profile.summary =~ "Patterns are still emerging"
     refute profile.summary =~ "No active projects have been captured"
     refute profile.summary =~ "durable"
+    refute profile.summary =~ "source-backed"
+    refute profile.summary =~ "the user's"
   end
 
   test "prompt context fallback gives usable guidance instead of an empty placeholder" do
     context = UserMemory.prompt_context(nil)
 
     assert context.summary ==
-             "Use source-backed defaults and confirmed preferences until a long-term user profile is confirmed."
+             "Use current context and confirmed preferences until a long-term user profile is ready."
 
     assert context.profile == %{}
     assert context.confidence == 0.0
     refute context.summary =~ "No confirmed long-term user profile yet"
+    refute context.summary =~ "source-backed"
   end
 
   test "telegram assistant context exposes stored user memory", %{user_id: user_id} do

@@ -552,17 +552,18 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     summary = WorkSummary.for_message(turn)
 
     assert summary["headline"] ==
-             "Preferences: Using source-backed defaults until a standing preference is saved"
+             "Preferences: Using confirmed context until you save a standing preference"
 
     assert [
              %{
                "tool" => "preferences",
                "label" => "Preferences",
-               "summary" => "Using source-backed defaults until a standing preference is saved."
+               "summary" => "Using confirmed context until you save a standing preference."
              }
            ] = summary["tool_calls"]
 
     refute inspect(summary) =~ "No preferences saved yet"
+    refute inspect(summary) =~ "source-backed"
   end
 
   test "open work tool summaries prefer executive summary copy over raw counts" do

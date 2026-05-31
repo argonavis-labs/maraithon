@@ -1015,7 +1015,7 @@ defmodule MaraithonWeb.DashboardLive do
             description={
               if @memory_profile.summary && @memory_profile.summary != "",
                 do: @memory_profile.summary,
-                else: "Using source-backed defaults until you save a standing preference."
+                else: "Using confirmed context until you save a standing preference."
             }
             href="#memory-detail"
             cta="View context"
