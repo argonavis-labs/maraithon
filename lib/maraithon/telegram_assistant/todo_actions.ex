@@ -287,6 +287,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     context = display_text(todo_context(todo, metadata))
     assistant_source? = assistant_source?(todo_source)
     card = ActionCards.for_todo(todo, action_card_opts(opts))
+    source_health_note = ActionCards.source_health_note(card)
 
     [
       display_text(prefix_text),
@@ -296,8 +297,8 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       why_line(card),
       prepared_action_line(card),
       evidence_line(card, context),
-      source_sentence(source, account, assistant_source?),
-      ActionCards.source_health_note(card),
+      source_sentence(source, account, assistant_source?, source_health_note),
+      source_health_note,
       learning_line(card),
       feedback && "Feedback: #{safe(feedback)}"
     ]
@@ -435,12 +436,26 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp normalize_url(_value), do: nil
 
-  defp source_sentence(_source, _account, true), do: nil
-  defp source_sentence(nil, _account, _assistant_source?), do: nil
-  defp source_sentence("Operator", _account, _assistant_source?), do: nil
+  defp source_sentence(_source, _account, true, _source_health_note), do: nil
+  defp source_sentence(nil, _account, _assistant_source?, _source_health_note), do: nil
+  defp source_sentence("Operator", _account, _assistant_source?, _source_health_note), do: nil
 
-  defp source_sentence(source, account, _assistant_source?),
-    do: "From #{safe(source)}#{render_account(account)}."
+  defp source_sentence(source, account, _assistant_source?, source_health_note) do
+    if source_health_note_mentions_source?(source_health_note, source) do
+      nil
+    else
+      "From #{safe(source)}#{render_account(account)}."
+    end
+  end
+
+  defp source_health_note_mentions_source?(note, source)
+       when is_binary(note) and is_binary(source) do
+    normalized_source = source |> String.downcase() |> Regex.escape()
+
+    Regex.match?(~r/\bUsed\s+[^.]*#{normalized_source}\b/i, note)
+  end
+
+  defp source_health_note_mentions_source?(_note, _source), do: false
 
   defp decision_line(card) when is_map(card) do
     decision = Map.get(card, "decision_prompt")
