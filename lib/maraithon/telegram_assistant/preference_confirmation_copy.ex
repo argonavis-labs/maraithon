@@ -12,12 +12,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
         many -> "Preferences saved: #{Enum.take(many, 3) |> Enum.join("; ")}#{more_suffix(many)}."
       end
 
-    consequence =
-      if length(labels) == 1 do
-        "Maraithon will apply it when ranking future work."
-      else
-        "Maraithon will apply them when ranking future work."
-      end
+    consequence = consequence_text(rules, labels)
 
     "#{subject} #{consequence}"
   end
@@ -82,6 +77,39 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
 
   defp more_suffix(_items), do: ""
 
+  defp consequence_text(rules, labels) do
+    kinds =
+      rules
+      |> Enum.map(&rule_value(&1, "kind"))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    plural? = length(labels) != 1
+
+    cond do
+      "quiet_hours" in kinds ->
+        "Telegram interruptions will respect #{object_pronoun(plural?)} before anything is sent."
+
+      "routing_preference" in kinds ->
+        "Future alerts and summaries will use #{object_pronoun(plural?)} when choosing where work should land."
+
+      "action_preference" in kinds or "style_preference" in kinds ->
+        "Future drafts and replies will use #{object_pronoun(plural?)} before anything is prepared."
+
+      "content_filter" in kinds ->
+        "Future triage will use #{object_pronoun(plural?)} to keep low-value work out of view."
+
+      "urgency_boost" in kinds ->
+        "Future triage will use #{object_pronoun(plural?)} to raise matching work sooner."
+
+      true ->
+        "Future triage will use #{object_pronoun(plural?)} when deciding what reaches you."
+    end
+  end
+
+  defp object_pronoun(true), do: "these preferences"
+  defp object_pronoun(false), do: "this preference"
+
   defp reply_instruction(:html, count) do
     object = if count == 1, do: "it", else: "them"
 
@@ -117,6 +145,7 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopy do
           case key do
             "label" -> :label
             "instruction" -> :instruction
+            "kind" -> :kind
           end
 
         case Map.get(rule, atom_key) do

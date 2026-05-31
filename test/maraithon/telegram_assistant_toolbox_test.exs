@@ -1314,7 +1314,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert remembered.requires_confirmation == false
 
     assert remembered.message ==
-             "Preference saved: Ignore routine receipts. Maraithon will apply it when ranking future work."
+             "Preference saved: Ignore routine receipts. Future triage will use this preference to keep low-value work out of view."
 
     assert remembered.active_count == 1
     assert Enum.any?(remembered.active_rules, &(&1["id"] == "ignore_receipts"))

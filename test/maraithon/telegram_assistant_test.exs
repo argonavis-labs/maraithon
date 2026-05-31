@@ -436,7 +436,11 @@ defmodule Maraithon.TelegramAssistantTest do
 
     confirmation_reply = last_telegram_message(:send)
     assert confirmation_reply.text =~ "Preference saved: Treat investors as urgent."
-    assert confirmation_reply.text =~ "Maraithon will apply it when ranking future work."
+
+    assert confirmation_reply.text =~
+             "Future triage will use this preference to raise matching work sooner."
+
+    refute confirmation_reply.text =~ "Maraithon will apply"
     refute confirmation_reply.text =~ "saved that as a durable rule"
   end
 

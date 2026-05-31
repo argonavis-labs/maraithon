@@ -52,7 +52,8 @@ defmodule Maraithon.PreferenceMemoryTest do
              )
 
     assert reply =~ "Preference saved: Ignore receipt-style notifications."
-    assert reply =~ "Maraithon will apply it when ranking future work."
+    assert reply =~ "Future triage will use this preference to keep low-value work out of view."
+    refute reply =~ "Maraithon will apply"
     refute reply =~ "Understood"
     refute reply =~ "I'll"
     assert rule["id"] == "ignore_receipts"

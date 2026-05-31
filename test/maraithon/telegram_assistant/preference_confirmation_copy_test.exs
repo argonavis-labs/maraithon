@@ -30,9 +30,18 @@ defmodule Maraithon.TelegramAssistant.PreferenceConfirmationCopyTest do
 
     assert saved =~ "Preferences saved:"
     assert saved =~ "Treat investors as urgent"
-    assert saved =~ "Maraithon will apply them when ranking future work."
+    assert saved =~ "Future triage will use these preferences when deciding what reaches you."
+    refute saved =~ "Maraithon will apply"
     refute saved =~ "Understood"
     refute saved =~ "I'll"
+
+    assert PreferenceConfirmationCopy.saved_text([
+             %{"label" => "Treat investors as urgent", "kind" => "urgency_boost"}
+           ]) =~ "Future triage will use this preference to raise matching work sooner."
+
+    assert PreferenceConfirmationCopy.saved_text([
+             %{label: "Concise drafts", kind: "style_preference"}
+           ]) =~ "Future drafts and replies will use this preference before anything is prepared."
 
     assert PreferenceConfirmationCopy.local_only_text() ==
              "Got it. This stays in the conversation and will not be saved as a standing preference."
