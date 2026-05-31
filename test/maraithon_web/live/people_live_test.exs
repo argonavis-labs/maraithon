@@ -41,7 +41,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
     assert html =~ "Relationship health"
     assert html =~ "Strong relationship"
     assert html =~ "Warm rapport"
-    assert html =~ "No activity yet"
+    assert html =~ "No interactions recorded"
     refute html =~ "Never"
     refute html =~ "Strength 72"
     refute html =~ "Affinity 61"
@@ -55,6 +55,15 @@ defmodule MaraithonWeb.PeopleLiveTest do
     refute html =~ ~s(id="people-bulk-actions")
     refute html =~ "Hidden Person"
     assert has_element?(view, "a[href='/operator/people'][aria-current='page']", "People")
+  end
+
+  test "empty people list explains source-backed discovery", %{conn: conn} do
+    {:ok, _view, html} = live(conn, "/operator/people")
+
+    assert html =~ "People will appear after connected sources surface relationships."
+    assert html =~ "Family context will appear after you add a family member or proxy."
+    refute html =~ "No people found yet."
+    refute html =~ "No family context yet."
   end
 
   test "renders relationship activity in the Chief of Staff timezone", %{conn: conn} do

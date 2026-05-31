@@ -611,7 +611,7 @@ defmodule MaraithonWeb.PeopleLive do
       </div>
 
       <div :if={@family_context_people == []} class="mt-4 border-t border-zinc-950/10 pt-4 text-sm/6 text-zinc-500">
-        No family context yet.
+        Family context will appear after you add a family member or proxy.
       </div>
 
       <.family_member_onboarding_form
@@ -2036,7 +2036,9 @@ defmodule MaraithonWeb.PeopleLive do
   defp interaction_label(_count), do: "0 interactions"
 
   defp empty_message(%{"q" => query}) do
-    if present?(query), do: "No people match this search.", else: "No people found yet."
+    if present?(query),
+      do: "No people match this search.",
+      else: "People will appear after connected sources surface relationships."
   end
 
   defp status_color("active"), do: "green"
@@ -2044,7 +2046,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp status_color("archived"), do: "zinc"
   defp status_color(_status), do: "zinc"
 
-  defp format_datetime(nil, _timezone_info), do: "No activity yet"
+  defp format_datetime(nil, _timezone_info), do: "No interactions recorded"
 
   defp format_datetime(%DateTime{} = datetime, timezone_info) do
     timezone_info = normalize_timezone_info(timezone_info)
