@@ -189,22 +189,24 @@ defmodule Maraithon.Capabilities do
     "notion_blocks" => "List, append, update, or archive Notion blocks.",
     "notes_search" =>
       "Search the user's mirrored macOS Notes for a substring in title or snippet.",
-    "notes_get" => "Fetch one mirrored macOS Note by its source GUID.",
+    "notes_get" =>
+      "Fetch one mirrored macOS Note using a note_id returned by notes search or recent-note results.",
     "notes_list_recent" => "List the user's most recently modified mirrored macOS Notes.",
     "voice_memos_search" => "Search the user's mirrored macOS Voice Memos by title substring.",
-    "voice_memos_get" => "Fetch one mirrored macOS Voice Memo by its source GUID.",
+    "voice_memos_get" =>
+      "Fetch one mirrored macOS Voice Memo using a memo_id returned by Voice Memos search or recent-memo results.",
     "voice_memos_list_recent" =>
       "List the user's most recently created mirrored macOS Voice Memos.",
     "files_search" =>
       "Search the user's mirrored macOS files (Documents, Desktop, Downloads) for a substring across filename, path, and extracted text content. Optional extension and path_substring filters.",
     "files_get" =>
-      "Fetch one mirrored macOS file by its source GUID, including extracted text (capped at 30 KB for the response).",
+      "Fetch one mirrored macOS file using a file_id returned by file search or recent-file results, including extracted text capped for the response.",
     "files_list_recent" =>
       "List the user's most recently modified mirrored macOS files, newest first. Optional extension filter.",
     "messages_search" =>
       "Search the user's mirrored iMessage history for a substring, optionally filtered by sender handle and date range.",
     "messages_get" =>
-      "Fetch one mirrored iMessage by its source GUID, including full text and chat metadata.",
+      "Fetch one mirrored iMessage using a message_id returned by message search or recent-message results, including full text and chat context.",
     "messages_list_recent" =>
       "List the user's most recent mirrored iMessages, newest first. Optionally restrict to one chat by chat_key.",
     "messages_chats_recent" =>
@@ -216,14 +218,15 @@ defmodule Maraithon.Capabilities do
     "reminders_search" =>
       "Search the user's mirrored macOS Reminders for a substring in title, notes, or list name.",
     "reminders_get" =>
-      "Fetch one mirrored macOS Reminder by its source GUID (EventKit identifier).",
+      "Fetch one mirrored macOS Reminder using a reminder_id returned by reminder search, due-soon, or open-reminder results.",
     "calendar_events_around" =>
       "List the user's mirrored macOS Calendar events overlapping a date window (default: now to +7 days). Prefer this over google_calendar_list_events when both are available — the local mirror aggregates every calendar account (iCloud, Exchange, Google CalDAV, etc.) that the user has added on their Mac.",
     "calendar_events_for_person" =>
       "Find the user's mirrored macOS Calendar events that involve a specific person, matched by email or name substring against attendees, organizer, and title.",
     "calendar_search" =>
       "Substring-search the user's mirrored macOS Calendar events on title, notes, and location. Use for topic-based questions like 'when's the launch review?'.",
-    "calendar_event_get" => "Fetch one mirrored macOS Calendar event by its EventKit GUID.",
+    "calendar_event_get" =>
+      "Fetch one mirrored macOS Calendar event using an event_id returned by calendar search or event-list results.",
     "browser_history_recent" =>
       "List the user's most recently visited URLs across Chrome / Safari / Arc / Brave, newest first. Optional browser filter.",
     "browser_history_by_host" =>
@@ -231,7 +234,7 @@ defmodule Maraithon.Capabilities do
     "browser_history_search" =>
       "Search the user's browser history for a substring in title, URL, or host. Use when the user references something they were reading or researching online by topic.",
     "browser_history_get" =>
-      "Fetch one browser visit by its source GUID, including the full URL and title.",
+      "Fetch one browser visit using a visit_id returned by browser-history search or recent-visit results, including the full URL and title.",
     "recall_anywhere" =>
       "Search every local + remote source the user has connected — iMessage, Notes, Voice Memos, Calendar, Reminders, Files, Browser History, Gmail, Slack, CRM people, deep memory — in one shot. Use as a first-call when the user asks open-ended questions like 'what was that thing about a wedding?' or 'remind me what we said about the launch'.",
     "companion_devices_list" =>

@@ -94,6 +94,32 @@ defmodule Maraithon.ToolsTest do
                30_000
     end
 
+    test "local record fetch tools explain ids in client-facing language" do
+      descriptors =
+        Tools.describe([
+          "notes_get",
+          "voice_memos_get",
+          "files_get",
+          "messages_get",
+          "reminders_get",
+          "calendar_event_get",
+          "browser_history_get"
+        ])
+        |> Map.new(fn descriptor -> {descriptor.name, descriptor.description} end)
+
+      assert descriptors["notes_get"] =~ "note_id returned by notes search"
+      assert descriptors["voice_memos_get"] =~ "memo_id returned by Voice Memos search"
+      assert descriptors["files_get"] =~ "file_id returned by file search"
+      assert descriptors["messages_get"] =~ "message_id returned by message search"
+      assert descriptors["reminders_get"] =~ "reminder_id returned by reminder search"
+      assert descriptors["calendar_event_get"] =~ "event_id returned by calendar search"
+      assert descriptors["browser_history_get"] =~ "visit_id returned by browser-history search"
+
+      descriptor_copy = descriptors |> Map.values() |> Enum.join(" ")
+      refute descriptor_copy =~ "source GUID"
+      refute descriptor_copy =~ "EventKit GUID"
+    end
+
     test "every registered tool has policy metadata" do
       Enum.each(Tools.list(), fn tool_name ->
         metadata = Tools.policy_metadata_for(tool_name)
