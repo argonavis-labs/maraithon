@@ -72,5 +72,5 @@ defmodule Maraithon.Tools.ResolveTodo do
   end
 
   defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: safe_error(reason)
 end

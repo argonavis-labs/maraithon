@@ -88,5 +88,5 @@ defmodule Maraithon.Tools.LinkPersonData do
   defp normalize_error(:missing_resource_type), do: "missing_resource_type"
   defp normalize_error(:missing_resource_id), do: "missing_resource_id"
   defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: safe_error(reason)
 end

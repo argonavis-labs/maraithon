@@ -1,17 +1,26 @@
 defmodule Maraithon.Tools.ToolErrorCopy do
   @moduledoc false
 
+  alias Maraithon.Redaction
+
   @technical_markers [
     "access_token",
+    "api_key",
+    "apikey",
     "authorization",
     "bearer ",
+    "client_secret",
     "dbconnection",
     "ecto.",
     "http_status",
     "oauth_tokens",
+    "password",
+    "private_key",
     "postgrex",
+    "redacted",
     "refresh_token",
     "runtimeerror",
+    "secret",
     "stacktrace",
     "token=",
     "traceback"
@@ -81,7 +90,10 @@ defmodule Maraithon.Tools.ToolErrorCopy do
   end
 
   def safe_message(message, fallback) when is_binary(message) and is_binary(fallback) do
-    message = String.trim(message)
+    message =
+      message
+      |> Redaction.redact_string()
+      |> String.trim()
 
     cond do
       message == "" -> fallback

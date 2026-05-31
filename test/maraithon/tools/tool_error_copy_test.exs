@@ -2,6 +2,7 @@ defmodule Maraithon.Tools.ToolErrorCopyTest do
   use ExUnit.Case, async: true
 
   alias Maraithon.Tools.{
+    ActionHelpers,
     GmailApiHelpers,
     GmailHelpers,
     GoogleCalendarHelpers,
@@ -39,8 +40,22 @@ defmodule Maraithon.Tools.ToolErrorCopyTest do
     assert ToolErrorCopy.safe_message("RuntimeError token=secret stacktrace", fallback) ==
              fallback
 
+    assert ToolErrorCopy.safe_message("api_key=sk-or-v1-super-secret-token", fallback) ==
+             fallback
+
     assert ToolErrorCopy.safe_message({:db, :timeout}, fallback) == fallback
     refute String.contains?(String.downcase(fallback), "try again")
+  end
+
+  test "action helper error copy redacts non-string failures before surfacing them" do
+    message =
+      ActionHelpers.safe_error(
+        {:failed, %{api_key: "sk-or-v1-super-secret-token", error: "validation failed"}}
+      )
+
+    assert message == "Action did not complete. No confirmed change was recorded."
+    refute inspect(message) =~ "sk-or-v1"
+    refute inspect(message) =~ "super-secret-token"
   end
 
   test "provider helper errors do not leak tokens, status bodies, or inspected terms" do

@@ -13,7 +13,7 @@ defmodule Maraithon.Tools.DraftMessage do
       Drafts.create(user_id, args)
     else
       {:error, reason} when is_binary(reason) -> {:error, reason}
-      {:error, reason} -> {:error, inspect(reason)}
+      {:error, reason} -> {:error, ActionHelpers.safe_error(reason)}
     end
   end
 end

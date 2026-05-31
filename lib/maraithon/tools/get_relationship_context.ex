@@ -28,5 +28,5 @@ defmodule Maraithon.Tools.GetRelationshipContext do
 
   defp normalize_error(:person_not_found), do: "person_not_found"
   defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: safe_error(reason)
 end

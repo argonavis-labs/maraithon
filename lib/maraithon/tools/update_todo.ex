@@ -34,5 +34,5 @@ defmodule Maraithon.Tools.UpdateTodo do
   def execute(_args), do: {:error, "invalid_args"}
 
   defp normalize_error(reason) when is_binary(reason), do: reason
-  defp normalize_error(reason), do: inspect(reason)
+  defp normalize_error(reason), do: safe_error(reason)
 end
