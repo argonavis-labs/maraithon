@@ -14,6 +14,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   alias Maraithon.Insights
   alias Maraithon.Insights.Detail
   alias Maraithon.SourceLabels
+  alias Maraithon.Timezones
   alias Maraithon.Todos
 
   @default_timezone_offset_hours -5
@@ -32,6 +33,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       user_id: normalize_string(config["user_id"]),
       assistant_behavior:
         normalize_string(config["assistant_behavior"]) || "founder_followthrough_agent",
+      timezone: normalize_timezone(config["timezone"] || config["timezone_name"]),
       timezone_offset_hours:
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       morning_hour:
@@ -144,13 +146,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          now,
          context
        ) do
-    due_today = Enum.filter(act_now_insights, &due_today?(&1, state.timezone_offset_hours, now))
+    due_today = Enum.filter(act_now_insights, &due_today?(&1, state, now))
 
     top_items =
       select_brief_items(
         act_now_insights,
         now,
-        state.timezone_offset_hours,
+        state,
         state.max_items,
         cadence: "morning"
       )
@@ -160,7 +162,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       |> recent_monitor_items(now)
       |> select_brief_items(
         now,
-        state.timezone_offset_hours,
+        state,
         state.max_items,
         cadence: "monitor"
       )
@@ -186,7 +188,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
              due_today,
              act_now_insights,
              monitor_insights,
-             state.timezone_offset_hours,
+             state,
              now
            )}
       end
@@ -205,7 +207,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           watching_items,
           act_now_insights,
           monitor_insights,
-          state.timezone_offset_hours,
+          state,
           now
         ),
       "metadata" =>
@@ -215,7 +217,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           delivery_insights,
           context
         )
-        |> Map.merge(brief_delivery_metadata(delivery_insights, state.timezone_offset_hours))
+        |> Map.merge(brief_delivery_metadata(delivery_insights, state, now))
     }
   end
 
@@ -231,15 +233,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     debt_candidates =
       act_now_insights
       |> Enum.filter(
-        &(due_today?(&1, state.timezone_offset_hours, plan.scheduled_for) or
-            overdue?(&1, state.timezone_offset_hours, plan.scheduled_for))
+        &(due_today?(&1, state, plan.scheduled_for) or
+            overdue?(&1, state, plan.scheduled_for))
       )
 
     debt_items =
       select_brief_items(
         debt_candidates,
         plan.scheduled_for,
-        state.timezone_offset_hours,
+        state,
         state.max_items,
         cadence: "end_of_day"
       )
@@ -249,7 +251,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       |> recent_monitor_items(plan.scheduled_for)
       |> select_brief_items(
         plan.scheduled_for,
-        state.timezone_offset_hours,
+        state,
         state.max_items,
         cadence: "monitor"
       )
@@ -274,7 +276,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
              debt_items,
              debt_candidates,
              monitor_insights,
-             state.timezone_offset_hours,
+             state,
              plan.scheduled_for
            )}
       end
@@ -293,7 +295,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           watching_items,
           act_now_insights,
           monitor_insights,
-          state.timezone_offset_hours,
+          state,
           plan.scheduled_for
         ),
       "metadata" =>
@@ -303,7 +305,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           delivery_insights,
           context
         )
-        |> Map.merge(brief_delivery_metadata(delivery_insights, state.timezone_offset_hours))
+        |> Map.merge(brief_delivery_metadata(delivery_insights, state, plan.scheduled_for))
     }
   end
 
@@ -320,17 +322,17 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       select_brief_items(
         act_now_insights,
         plan.scheduled_for,
-        state.timezone_offset_hours,
+        state,
         state.check_in_max_items,
         cadence: "check_in"
       )
 
-    if should_send_check_in?(top_items, state.timezone_offset_hours, plan.scheduled_for) do
+    if should_send_check_in?(top_items, state, plan.scheduled_for) do
       count = length(top_items)
       movement_verb = if count == 1, do: "needs", else: "need"
 
       check_in_metadata =
-        brief_delivery_metadata(card_insights(top_items), state.timezone_offset_hours)
+        brief_delivery_metadata(card_insights(top_items), state, plan.scheduled_for)
 
       %{
         "cadence" => "check_in",
@@ -342,14 +344,14 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           check_in_summary(
             top_items,
             act_now_insights,
-            state.timezone_offset_hours,
+            state,
             plan.scheduled_for
           ),
         "body" =>
           check_in_body(
             top_items,
             act_now_insights,
-            state.timezone_offset_hours,
+            state,
             plan.scheduled_for
           ),
         "metadata" =>
@@ -380,7 +382,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       select_brief_items(
         act_now_insights ++ monitor_insights,
         plan.scheduled_for,
-        state.timezone_offset_hours,
+        state,
         state.max_items,
         cadence: "weekly_review"
       )
@@ -394,14 +396,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "dedupe_key" => dedupe_key("weekly_review", plan.period_key),
       "title" => weekly_title(open_count),
       "summary" => weekly_summary(length(weekly_items), closed_count, open_count),
-      "body" =>
-        weekly_body(top_open, weekly_items, state.timezone_offset_hours, plan.scheduled_for),
-      "metadata" => metadata_for(plan, state.assistant_behavior, weekly_items, context)
+      "body" => weekly_body(top_open, weekly_items, state, plan.scheduled_for),
+      "metadata" =>
+        metadata_for(plan, state.assistant_behavior, weekly_items, context)
+        |> Map.merge(timezone_metadata(state, plan.scheduled_for))
     }
   end
 
   defp due_cadences(state, now) do
-    local_now = shift_local(now, state.timezone_offset_hours)
+    local_now = shift_local(now, state)
 
     due =
       [
@@ -424,7 +427,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp due_plan("morning", state, utc_now, local_now) do
     scheduled_local = local_datetime(DateTime.to_date(local_now), state.morning_hour)
-    scheduled_utc = shift_utc(scheduled_local, state.timezone_offset_hours)
+    scheduled_utc = shift_utc(scheduled_local, state)
 
     if DateTime.compare(utc_now, scheduled_utc) != :lt do
       %{
@@ -437,7 +440,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp due_plan("end_of_day", state, utc_now, local_now) do
     scheduled_local = local_datetime(DateTime.to_date(local_now), state.end_of_day_hour)
-    scheduled_utc = shift_utc(scheduled_local, state.timezone_offset_hours)
+    scheduled_utc = shift_utc(scheduled_local, state)
 
     if DateTime.compare(utc_now, scheduled_utc) != :lt do
       %{
@@ -463,7 +466,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     if Date.day_of_week(local_date) == state.weekly_day do
       scheduled_local = local_datetime(local_date, state.weekly_hour)
-      scheduled_utc = shift_utc(scheduled_local, state.timezone_offset_hours)
+      scheduled_utc = shift_utc(scheduled_local, state)
 
       if DateTime.compare(utc_now, scheduled_utc) != :lt do
         %{
@@ -476,16 +479,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp next_occurrence("morning", state, now) do
-    next_daily_occurrence(now, state.timezone_offset_hours, state.morning_hour)
+    next_daily_occurrence(now, state, state.morning_hour)
   end
 
   defp next_occurrence("end_of_day", state, now) do
-    next_daily_occurrence(now, state.timezone_offset_hours, state.end_of_day_hour)
+    next_daily_occurrence(now, state, state.end_of_day_hour)
   end
 
   defp next_occurrence("check_in", state, now) do
     if state.adaptive_check_ins_enabled do
-      local_now = shift_local(now, state.timezone_offset_hours)
+      local_now = shift_local(now, state)
       local_date = DateTime.to_date(local_now)
 
       [local_date, Date.add(local_date, 1)]
@@ -497,7 +500,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp next_occurrence("weekly_review", state, now) do
-    local_now = shift_local(now, state.timezone_offset_hours)
+    local_now = shift_local(now, state)
     local_date = DateTime.to_date(local_now)
     current_weekday = Date.day_of_week(local_date)
 
@@ -516,11 +519,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     target_date = Date.add(local_date, days_ahead)
     target_local = local_datetime(target_date, state.weekly_hour)
-    shift_utc(target_local, state.timezone_offset_hours)
+    shift_utc(target_local, state)
   end
 
-  defp next_daily_occurrence(now, offset_hours, target_hour) do
-    local_now = shift_local(now, offset_hours)
+  defp next_daily_occurrence(now, time_context, target_hour) do
+    local_now = shift_local(now, time_context)
     local_date = DateTime.to_date(local_now)
     scheduled_today = local_datetime(local_date, target_hour)
 
@@ -531,7 +534,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         local_datetime(Date.add(local_date, 1), target_hour)
       end
 
-    shift_utc(target_local, offset_hours)
+    shift_utc(target_local, time_context)
   end
 
   defp morning_body(
@@ -539,7 +542,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          watching_items,
          act_now_insights,
          monitor_insights,
-         offset_hours,
+         time_context,
          now
        ) do
     workload =
@@ -551,12 +554,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "items need direct action in connected sources"
           ),
           count_line(
-            overdue_count(act_now_insights, offset_hours, now),
+            overdue_count(act_now_insights, time_context, now),
             "item is already overdue",
             "items are already overdue"
           ),
           count_line(
-            due_today_count(act_now_insights, offset_hours, now),
+            due_today_count(act_now_insights, time_context, now),
             "item is due today",
             "items are due today"
           ),
@@ -574,9 +577,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{morning_guidance(top_items)}
 
     Focus now:
-    #{format_items(top_items, offset_hours, now, "1. No direct action is ready for this brief.")}
+    #{format_items(top_items, time_context, now, "1. No direct action is ready for this brief.")}
 
-    #{watching_section(watching_items, offset_hours, now)}
+    #{watching_section(watching_items, time_context, now)}
 
     #{workload}
     """
@@ -588,19 +591,19 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          watching_items,
          act_now_insights,
          monitor_insights,
-         offset_hours,
+         time_context,
          now
        ) do
     workload =
       workload_section(
         [
           count_line(
-            overdue_count(act_now_insights, offset_hours, now),
+            overdue_count(act_now_insights, time_context, now),
             "item is already overdue across the full backlog",
             "items are already overdue across the full backlog"
           ),
           count_line(
-            due_today_count(act_now_insights, offset_hours, now),
+            due_today_count(act_now_insights, time_context, now),
             "item was due today and is still unresolved",
             "items were due today and are still unresolved"
           ),
@@ -618,16 +621,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{end_of_day_guidance(debt_items)}
 
     Close or reset:
-    #{format_items(debt_items, offset_hours, now, "1. No unresolved item is ready for tonight's review.")}
+    #{format_items(debt_items, time_context, now, "1. No unresolved item is ready for tonight's review.")}
 
-    #{watching_section(watching_items, offset_hours, now)}
+    #{watching_section(watching_items, time_context, now)}
 
     #{workload}
     """
     |> String.trim()
   end
 
-  defp check_in_body(top_items, act_now_insights, offset_hours, reference_at) do
+  defp check_in_body(top_items, act_now_insights, time_context, reference_at) do
     workload =
       workload_section(
         [
@@ -637,12 +640,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
             "items still need a decision or reply"
           ),
           count_line(
-            overdue_count(act_now_insights, offset_hours, reference_at),
+            overdue_count(act_now_insights, time_context, reference_at),
             "item is already overdue",
             "items are already overdue"
           ),
           count_line(
-            due_today_count(act_now_insights, offset_hours, reference_at),
+            due_today_count(act_now_insights, time_context, reference_at),
             "item still lands today",
             "items still land today"
           )
@@ -655,7 +658,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{check_in_guidance(top_items)}
 
     Move now:
-    #{format_items(top_items, offset_hours, reference_at, "1. No active work needs movement right now.")}
+    #{format_items(top_items, time_context, reference_at, "1. No active work needs movement right now.")}
 
     #{workload}
 
@@ -664,7 +667,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> String.trim()
   end
 
-  defp weekly_body(top_open, weekly_items, offset_hours, reference_at) do
+  defp weekly_body(top_open, weekly_items, time_context, reference_at) do
     """
     Week in review:
     #{weekly_source_lines(weekly_items)}
@@ -673,35 +676,35 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{weekly_guidance(top_open)}
 
     Most important open items:
-    #{format_items(top_open, offset_hours, reference_at, "1. No open work is ready from this week's review.")}
+    #{format_items(top_open, time_context, reference_at, "1. No open work is ready from this week's review.")}
     """
     |> String.trim()
   end
 
   defp format_items(
          items,
-         offset_hours,
+         time_context,
          reference_at,
          empty_text
        )
 
-  defp format_items([], _offset_hours, _reference_at, empty_text), do: empty_text
+  defp format_items([], _time_context, _reference_at, empty_text), do: empty_text
 
-  defp format_items(items, offset_hours, reference_at, _empty_text) do
+  defp format_items(items, time_context, reference_at, _empty_text) do
     items
     |> Enum.with_index(1)
     |> Enum.map(fn card ->
-      format_item_block(card, offset_hours, reference_at)
+      format_item_block(card, time_context, reference_at)
     end)
     |> Enum.join("\n")
   end
 
-  defp watching_section([], _offset_hours, _reference_at), do: ""
+  defp watching_section([], _time_context, _reference_at), do: ""
 
-  defp watching_section(items, offset_hours, reference_at) do
+  defp watching_section(items, time_context, reference_at) do
     """
     Watching, not blocking right now:
-    #{format_items(items, offset_hours, reference_at, "1. No newly changed watched items found.")}
+    #{format_items(items, time_context, reference_at, "1. No newly changed watched items found.")}
     """
     |> String.trim()
   end
@@ -748,7 +751,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp format_item_block({card, index}, offset_hours, reference_at) do
+  defp format_item_block({card, index}, time_context, reference_at) do
     insight = card.insight
     source = source_label(insight.source)
 
@@ -756,7 +759,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       "#{index}. [#{source}] #{item_heading(card)}",
       maybe_line("Waiting on", card.requested_by),
       maybe_line(action_label(insight), truncate_text(card.primary_action, 180)),
-      maybe_line("Why", item_why_now(card, offset_hours, reference_at)),
+      maybe_line("Why", item_why_now(card, time_context, reference_at)),
       maybe_line("Context", item_checked(card))
     ]
     |> Enum.reject(&is_nil/1)
@@ -769,16 +772,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          due_today,
          act_now_insights,
          monitor_insights,
-         offset_hours,
+         time_context,
          now
        ) do
     top_items
-    |> lead_summary(offset_hours, now)
+    |> lead_summary(time_context, now)
     |> append_sentence(extra_open_item_summary(top_items))
     |> append_sentence(count_summary(length(due_today), "due today", "due today"))
     |> append_sentence(
       count_summary(
-        overdue_count(act_now_insights, offset_hours, now),
+        overdue_count(act_now_insights, time_context, now),
         "overdue across the backlog",
         "overdue across the backlog"
       )
@@ -790,15 +793,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
          debt_items,
          debt_candidates,
          monitor_insights,
-         offset_hours,
+         time_context,
          reference_at
        ) do
     debt_items
-    |> lead_summary(offset_hours, reference_at)
+    |> lead_summary(time_context, reference_at)
     |> append_sentence(extra_open_item_summary(debt_items))
     |> append_sentence(
       count_summary(
-        overdue_count(debt_candidates, offset_hours, reference_at),
+        overdue_count(debt_candidates, time_context, reference_at),
         "overdue tonight",
         "overdue tonight"
       )
@@ -806,20 +809,20 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> append_sentence(count_summary(length(monitor_insights), "being watched", "being watched"))
   end
 
-  defp check_in_summary(top_items, act_now_insights, offset_hours, reference_at) do
+  defp check_in_summary(top_items, act_now_insights, time_context, reference_at) do
     top_items
-    |> lead_summary(offset_hours, reference_at)
+    |> lead_summary(time_context, reference_at)
     |> append_sentence(extra_open_item_summary(top_items))
     |> append_sentence(
       count_summary(
-        overdue_count(act_now_insights, offset_hours, reference_at),
+        overdue_count(act_now_insights, time_context, reference_at),
         "overdue",
         "overdue"
       )
     )
     |> append_sentence(
       count_summary(
-        due_today_count(act_now_insights, offset_hours, reference_at),
+        due_today_count(act_now_insights, time_context, reference_at),
         "still due today",
         "still due today"
       )
@@ -864,13 +867,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp weekly_title(open_count),
     do: "Weekly review: #{count_phrase(open_count, "item")} still open"
 
-  defp lead_summary([], _offset_hours, _reference_at), do: nil
+  defp lead_summary([], _time_context, _reference_at), do: nil
 
-  defp lead_summary([card | _], offset_hours, reference_at) do
+  defp lead_summary([card | _], time_context, reference_at) do
     [
       "Most urgent: #{item_heading(card)}",
       card.requested_by && "#{card.requested_by} is waiting",
-      due_context(card.insight, offset_hours, reference_at)
+      due_context(card.insight, time_context, reference_at)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.map(&strip_terminal_period/1)
@@ -931,10 +934,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp item_why_now(card, offset_hours, reference_at) do
+  defp item_why_now(card, time_context, reference_at) do
     [
       truncate_text(card.open_loop_reason, 180),
-      due_context(card.insight, offset_hours, reference_at)
+      due_context(card.insight, time_context, reference_at)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -979,18 +982,18 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp action_label(%{attention_mode: "monitor"}), do: "Track"
   defp action_label(_insight), do: "Do"
 
-  defp select_brief_items([], _reference_at, _offset_hours, _limit, _opts), do: []
+  defp select_brief_items([], _reference_at, _time_context, _limit, _opts), do: []
 
-  defp select_brief_items(insights, reference_at, offset_hours, limit, opts) do
+  defp select_brief_items(insights, reference_at, time_context, limit, opts) do
     cadence = Keyword.get(opts, :cadence, "general")
 
     insights
-    |> Enum.map(&build_item_card(&1, reference_at, offset_hours, cadence))
+    |> Enum.map(&build_item_card(&1, reference_at, time_context, cadence))
     |> Enum.sort_by(
       fn card ->
         {
           card.score,
-          urgency_score(card.insight, offset_hours, reference_at),
+          urgency_score(card.insight, time_context, reference_at),
           datetime_sort_value(card.insight.updated_at || card.insight.inserted_at)
         }
       end,
@@ -999,10 +1002,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> take_diverse_cards(limit)
   end
 
-  defp build_item_card(insight, reference_at, offset_hours, cadence) do
+  defp build_item_card(insight, reference_at, time_context, cadence) do
     metadata = insight.metadata || %{}
     record = read_map(metadata, "record")
-    detail = Detail.build(insight, [])
+
+    detail =
+      Detail.build(insight, [],
+        timezone_info: timezone_info(time_context, reference_at),
+        reference_at: reference_at
+      )
 
     %{
       insight: insight,
@@ -1023,12 +1031,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           insight.summary,
       evidence: best_evidence_text(detail.evidence_checked),
       group_key: item_group_key(insight, detail, metadata, record),
-      score: item_score(insight, detail, metadata, offset_hours, reference_at, cadence)
+      score: item_score(insight, detail, metadata, time_context, reference_at, cadence)
     }
   end
 
-  defp item_score(insight, detail, metadata, offset_hours, reference_at, cadence) do
-    base = insight.priority * 10 + urgency_score(insight, offset_hours, reference_at)
+  defp item_score(insight, detail, metadata, time_context, reference_at, cadence) do
+    base = insight.priority * 10 + urgency_score(insight, time_context, reference_at)
 
     richness =
       0
@@ -1042,7 +1050,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     cadence_bonus =
       case cadence do
-        "end_of_day" -> if(overdue?(insight, offset_hours, reference_at), do: 50, else: 0)
+        "end_of_day" -> if(overdue?(insight, time_context, reference_at), do: 50, else: 0)
         "monitor" -> 20
         _ -> 0
       end
@@ -1052,11 +1060,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     base + richness + cadence_bonus - risk_penalty
   end
 
-  defp urgency_score(insight, offset_hours, reference_at) do
+  defp urgency_score(insight, time_context, reference_at) do
     cond do
-      overdue?(insight, offset_hours, reference_at) -> 400
-      due_today?(insight, offset_hours, reference_at) -> 250
-      due_tomorrow?(insight, offset_hours, reference_at) -> 120
+      overdue?(insight, time_context, reference_at) -> 400
+      due_today?(insight, time_context, reference_at) -> 250
+      due_tomorrow?(insight, time_context, reference_at) -> 120
       true -> 0
     end
   end
@@ -1194,26 +1202,27 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp due_context(insight, offset_hours, reference_at) do
+  defp due_context(insight, time_context, reference_at) do
     case insight.due_at do
       %DateTime{} = due_at ->
-        due_local = shift_local(due_at, offset_hours)
-        now_local = shift_local(reference_at, offset_hours)
+        due_local = shift_local(due_at, time_context)
+        now_local = shift_local(reference_at, time_context)
         due_date = DateTime.to_date(due_local)
         today = DateTime.to_date(now_local)
+        suffix = timezone_suffix(time_context, due_at)
 
         cond do
-          DateTime.compare(due_local, now_local) == :lt ->
-            "Overdue since #{brief_datetime(due_local)}."
+          DateTime.compare(due_at, reference_at) == :lt ->
+            "Overdue since #{brief_datetime(due_local)}#{suffix}."
 
           due_date == today ->
-            "Due today by #{brief_time(due_local)}."
+            "Due today by #{brief_time(due_local)}#{suffix}."
 
           due_date == Date.add(today, 1) ->
-            "Due tomorrow by #{brief_time(due_local)}."
+            "Due tomorrow by #{brief_time(due_local)}#{suffix}."
 
           true ->
-            "Due #{brief_datetime(due_local)}."
+            "Due #{brief_datetime(due_local)}#{suffix}."
         end
 
       _ ->
@@ -1239,7 +1248,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> AttentionArbiter.merge_artifact_metadata(context)
   end
 
-  defp brief_delivery_metadata(insights, offset_hours) when is_list(insights) do
+  defp brief_delivery_metadata(insights, time_context, reference_at) when is_list(insights) do
     linked_todo_ids =
       case Todos.sync_many_from_insights(insights) do
         {:ok, todos} -> Enum.map(todos, & &1.id)
@@ -1248,8 +1257,16 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     %{
       "linked_todo_ids" => linked_todo_ids,
-      "linked_insight_ids" => Enum.map(insights, & &1.id),
-      "timezone_offset_hours" => offset_hours
+      "linked_insight_ids" => Enum.map(insights, & &1.id)
+    }
+    |> Map.merge(timezone_metadata(time_context, reference_at))
+  end
+
+  defp timezone_metadata(time_context, reference_at) do
+    %{
+      "timezone_offset_hours" => timezone_offset_hours_at(reference_at, time_context),
+      "timezone" => timezone_label(time_context, reference_at),
+      "timezone_name" => timezone_name(time_context)
     }
   end
 
@@ -1266,11 +1283,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp dedupe_key(cadence, period_key), do: "brief:#{cadence}:#{period_key}"
 
-  defp overdue_count(insights, offset_hours, reference_at),
-    do: Enum.count(insights, &overdue?(&1, offset_hours, reference_at))
+  defp overdue_count(insights, time_context, reference_at),
+    do: Enum.count(insights, &overdue?(&1, time_context, reference_at))
 
-  defp due_today_count(insights, offset_hours, reference_at),
-    do: Enum.count(insights, &due_today?(&1, offset_hours, reference_at))
+  defp due_today_count(insights, time_context, reference_at),
+    do: Enum.count(insights, &due_today?(&1, time_context, reference_at))
 
   defp count_by_source(insights, source) do
     Enum.count(insights, fn insight -> normalize_source(insight.source) == source end)
@@ -1285,11 +1302,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end)
   end
 
-  defp due_today?(insight, offset_hours, reference_at) do
+  defp due_today?(insight, time_context, reference_at) do
     case insight.due_at do
       %DateTime{} = due_at ->
-        due_local_date = due_at |> shift_local(offset_hours) |> DateTime.to_date()
-        now_local_date = reference_at |> shift_local(offset_hours) |> DateTime.to_date()
+        due_local_date = due_at |> shift_local(time_context) |> DateTime.to_date()
+        now_local_date = reference_at |> shift_local(time_context) |> DateTime.to_date()
         Date.compare(due_local_date, now_local_date) == :eq
 
       _ ->
@@ -1297,23 +1314,21 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp overdue?(insight, offset_hours, reference_at) do
+  defp overdue?(insight, _time_context, reference_at) do
     case insight.due_at do
       %DateTime{} = due_at ->
-        due_local = shift_local(due_at, offset_hours)
-        now_local = shift_local(reference_at, offset_hours)
-        DateTime.compare(due_local, now_local) == :lt
+        DateTime.compare(due_at, reference_at) == :lt
 
       _ ->
         false
     end
   end
 
-  defp due_tomorrow?(insight, offset_hours, reference_at) do
+  defp due_tomorrow?(insight, time_context, reference_at) do
     case insight.due_at do
       %DateTime{} = due_at ->
-        due_local_date = due_at |> shift_local(offset_hours) |> DateTime.to_date()
-        now_local_date = reference_at |> shift_local(offset_hours) |> DateTime.to_date()
+        due_local_date = due_at |> shift_local(time_context) |> DateTime.to_date()
+        now_local_date = reference_at |> shift_local(time_context) |> DateTime.to_date()
         Date.compare(due_local_date, Date.add(now_local_date, 1)) == :eq
 
       _ ->
@@ -1321,9 +1336,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     end
   end
 
-  defp should_send_check_in?([], _offset_hours, _reference_at), do: false
+  defp should_send_check_in?([], _time_context, _reference_at), do: false
 
-  defp should_send_check_in?(top_items, offset_hours, reference_at) do
+  defp should_send_check_in?(top_items, time_context, reference_at) do
     top_two_priority_sum =
       top_items
       |> Enum.take(2)
@@ -1331,8 +1346,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
     [top_item | _] = top_items
 
-    overdue?(top_item.insight, offset_hours, reference_at) or
-      due_today?(top_item.insight, offset_hours, reference_at) or
+    overdue?(top_item.insight, time_context, reference_at) or
+      due_today?(top_item.insight, time_context, reference_at) or
       (top_item.insight.priority || 0) >= 88 or
       top_two_priority_sum >= 165
   end
@@ -1389,7 +1404,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           do: end_local,
           else: scheduled_local
         )
-        |> shift_utc(state.timezone_offset_hours)
+        |> shift_utc(state)
     }
   end
 
@@ -1398,13 +1413,70 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp normalize_source("google_calendar"), do: "calendar"
   defp normalize_source(other), do: other
 
-  defp shift_local(datetime, offset_hours) do
+  defp shift_local(%DateTime{} = datetime, time_context) do
+    offset_hours = timezone_offset_hours_at(datetime, time_context)
     DateTime.add(datetime, offset_hours * 3600, :second)
   end
 
-  defp shift_utc(datetime, offset_hours) do
+  defp shift_utc(%DateTime{} = datetime, time_context) do
+    offset_hours = timezone_offset_hours_for_local(datetime, time_context)
     DateTime.add(datetime, offset_hours * -3600, :second)
   end
+
+  defp timezone_offset_hours_at(_datetime, offset_hours) when is_integer(offset_hours),
+    do: offset_hours
+
+  defp timezone_offset_hours_at(%DateTime{} = datetime, time_context)
+       when is_map(time_context) do
+    Timezones.offset_at(
+      timezone_name(time_context),
+      datetime,
+      timezone_fallback_offset(time_context)
+    )
+  end
+
+  defp timezone_offset_hours_for_local(_datetime, offset_hours) when is_integer(offset_hours),
+    do: offset_hours
+
+  defp timezone_offset_hours_for_local(%DateTime{} = datetime, time_context)
+       when is_map(time_context) do
+    Timezones.offset_for_local(
+      timezone_name(time_context),
+      datetime,
+      timezone_fallback_offset(time_context)
+    )
+  end
+
+  defp timezone_label(time_context, %DateTime{} = datetime) do
+    offset = timezone_offset_hours_at(datetime, time_context)
+    Timezones.label(timezone_name(time_context), offset)
+  end
+
+  defp timezone_info(time_context, %DateTime{} = datetime) do
+    %{
+      name: timezone_name(time_context),
+      offset_hours: timezone_offset_hours_at(datetime, time_context)
+    }
+  end
+
+  defp timezone_suffix(time_context, %DateTime{} = datetime) do
+    case timezone_name(time_context) do
+      nil -> ""
+      _timezone -> " #{timezone_label(time_context, datetime)}"
+    end
+  end
+
+  defp timezone_name(time_context) when is_map(time_context), do: Map.get(time_context, :timezone)
+  defp timezone_name(_time_context), do: nil
+
+  defp timezone_fallback_offset(time_context) when is_map(time_context) do
+    case Map.get(time_context, :timezone_offset_hours) do
+      offset when is_integer(offset) -> offset
+      _ -> @default_timezone_offset_hours
+    end
+  end
+
+  defp timezone_fallback_offset(_time_context), do: @default_timezone_offset_hours
 
   defp local_datetime(date, hour) do
     {:ok, dt} = DateTime.new(date, Time.new!(hour, 0, 0), "Etc/UTC")
@@ -1445,6 +1517,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   end
 
   defp normalize_string(_), do: nil
+
+  defp normalize_timezone(value) when is_binary(value) do
+    case Timezones.normalize(value) do
+      normalized when is_binary(normalized) -> normalized
+      _ -> nil
+    end
+  end
+
+  defp normalize_timezone(_value), do: nil
 
   defp read_string(attrs, key) when is_map(attrs) and is_binary(key) do
     attrs

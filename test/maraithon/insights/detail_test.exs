@@ -97,7 +97,7 @@ defmodule Maraithon.Insights.DetailTest do
         }
       })
 
-    detail = Detail.build(insight, [])
+    detail = Detail.build(insight, [], reference_at: now)
 
     assert detail.promise_text == %{
              text: "Send the revised pricing doc to Sarah",
@@ -120,6 +120,7 @@ defmodule Maraithon.Insights.DetailTest do
 
     assert detail.open_loop_reason.origin == :derived
     assert detail.open_loop_reason.text =~ "unresolved"
+    assert "The due date is tomorrow." in detail.open_loop_reason.factors
 
     assert "Delivery history is not available; do not assume the follow-through was sent." in detail.data_gaps
 
@@ -129,6 +130,32 @@ defmodule Maraithon.Insights.DetailTest do
     assert summary =~ "Deadline: Due Mar 13, 2026 at 5:00 PM UTC"
     refute summary =~ "2026-03-12T09:30:00Z"
     refute summary =~ "2026-03-13T17:00:00Z"
+  end
+
+  test "derives deadline reasons from the provided reference time and timezone" do
+    reference_at = ~U[2026-05-14 23:00:00Z]
+    due_at = ~U[2026-05-15 02:00:00Z]
+
+    insight =
+      build_insight(%{
+        due_at: due_at,
+        metadata: %{
+          "record" => %{
+            "commitment" => "Send the customer note",
+            "person" => "Sarah",
+            "status" => "unresolved"
+          }
+        }
+      })
+
+    detail =
+      Detail.build(insight, [],
+        reference_at: reference_at,
+        timezone_info: %{name: "America/Toronto", offset_hours: -5}
+      )
+
+    assert "The due date is today." in detail.open_loop_reason.factors
+    refute "The due date is tomorrow." in detail.open_loop_reason.factors
   end
 
   test "can derive evidence timestamps in a product timezone" do

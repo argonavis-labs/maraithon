@@ -87,6 +87,73 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.metadata["timezone_offset_hours"] == -5
   end
 
+  test "named timezones drive DST-aware brief schedules and due-time copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    scheduled_at = ~U[2026-05-15 12:05:00Z]
+    due_at = ~U[2026-05-15 14:30:00Z]
+
+    {:ok, _insights} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send Sarah the pricing plan",
+          "summary" => "Sarah needs the plan before the customer call.",
+          "recommended_action" =>
+            "Reply in-thread with the pricing plan and the exact next step.",
+          "priority" => 93,
+          "confidence" => 0.91,
+          "dedupe_key" => "brief-test:named-timezone-dst",
+          "due_at" => due_at,
+          "metadata" => %{
+            "record" => %{
+              "commitment" => "Send Sarah the pricing plan.",
+              "person" => "Sarah",
+              "status" => "unresolved",
+              "next_action" => "Reply in-thread with the pricing plan and the exact next step."
+            }
+          }
+        }
+      ])
+
+    state =
+      ChiefOfStaffBriefAgent.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => "-5",
+        "morning_brief_hour_local" => "8",
+        "end_of_day_brief_hour_local" => "18",
+        "weekly_review_day_local" => "5",
+        "weekly_review_hour_local" => "16",
+        "brief_max_items" => "3"
+      })
+
+    context = %{
+      agent_id: agent.id,
+      user_id: user_id,
+      timestamp: scheduled_at,
+      budget: %{llm_calls: 10, tool_calls: 10},
+      recent_events: [],
+      last_message: nil,
+      event: nil
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _next_state} =
+             ChiefOfStaffBriefAgent.handle_wakeup(state, context)
+
+    assert payload.cadences == ["morning"]
+
+    [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
+    assert brief.cadence == "morning"
+    assert brief.body =~ "Due today by 10:30 AM ET."
+    refute brief.body =~ "due date has already passed"
+    assert brief.metadata["timezone_offset_hours"] == -4
+    assert brief.metadata["timezone"] == "ET"
+    assert brief.metadata["timezone_name"] == "America/Toronto"
+  end
+
   test "morning briefs include all material default items instead of hiding work", %{
     user_id: user_id,
     agent: agent

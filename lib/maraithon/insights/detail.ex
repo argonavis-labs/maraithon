@@ -26,6 +26,7 @@ defmodule Maraithon.Insights.Detail do
     detail_metadata = read_map(metadata, "detail")
     record = read_map(metadata, "record")
     timezone_info = Keyword.get(opts, :timezone_info)
+    reference_at = Keyword.get(opts, :reference_at) || DateTime.utc_now()
 
     promise_text = build_promise_text(insight, metadata, detail_metadata, record)
     requested_by = build_requested_by(metadata, detail_metadata, record)
@@ -42,7 +43,8 @@ defmodule Maraithon.Insights.Detail do
         detail_metadata,
         record,
         delivery_evidence,
-        timezone_info
+        timezone_info,
+        reference_at
       )
 
     %{
@@ -431,7 +433,8 @@ defmodule Maraithon.Insights.Detail do
          detail_metadata,
          record,
          delivery_evidence,
-         timezone_info
+         timezone_info,
+         reference_at
        ) do
     case stored_open_loop_reason(detail_metadata) do
       %{} = stored_reason ->
@@ -444,14 +447,28 @@ defmodule Maraithon.Insights.Detail do
                read_string(metadata, "context_brief")
              ]) do
           nil ->
-            derived_open_loop_reason(insight, metadata, record, delivery_evidence, timezone_info)
+            derived_open_loop_reason(
+              insight,
+              metadata,
+              record,
+              delivery_evidence,
+              timezone_info,
+              reference_at
+            )
 
           text ->
             %{
               text: text,
               origin: :stored,
               factors:
-                derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info),
+                derive_reason_factors(
+                  insight,
+                  metadata,
+                  record,
+                  delivery_evidence,
+                  timezone_info,
+                  reference_at
+                ),
               evaluated_at: nil
             }
         end
@@ -495,8 +512,23 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp derived_open_loop_reason(insight, metadata, record, delivery_evidence, timezone_info) do
-    factors = derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info)
+  defp derived_open_loop_reason(
+         insight,
+         metadata,
+         record,
+         delivery_evidence,
+         timezone_info,
+         reference_at
+       ) do
+    factors =
+      derive_reason_factors(
+        insight,
+        metadata,
+        record,
+        delivery_evidence,
+        timezone_info,
+        reference_at
+      )
 
     case factors do
       [] ->
@@ -512,7 +544,14 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp derive_reason_factors(insight, metadata, record, delivery_evidence, timezone_info) do
+  defp derive_reason_factors(
+         insight,
+         metadata,
+         record,
+         delivery_evidence,
+         timezone_info,
+         reference_at
+       ) do
     []
     |> maybe_append(
       "The saved item is still marked unresolved.",
@@ -522,7 +561,7 @@ defmodule Maraithon.Insights.Detail do
       "Available evidence still does not show completion after the original commitment.",
       missing_completion_evidence?(metadata, record)
     )
-    |> maybe_append(deadline_factor(insight, metadata, record))
+    |> maybe_append(deadline_factor(insight, metadata, record, timezone_info, reference_at))
     |> maybe_append(
       "A delivery attempt exists, but nothing marks the commitment complete.",
       delivery_evidence != []
@@ -547,9 +586,15 @@ defmodule Maraithon.Insights.Detail do
       read_string_list(metadata, "evidence", 1) != []
   end
 
-  defp deadline_factor(%Insight{due_at: %DateTime{} = due_at}, _metadata, _record) do
-    today = Date.utc_today()
-    due_date = DateTime.to_date(due_at)
+  defp deadline_factor(
+         %Insight{due_at: %DateTime{} = due_at},
+         _metadata,
+         _record,
+         timezone_info,
+         %DateTime{} = reference_at
+       ) do
+    today = local_date(reference_at, timezone_info)
+    due_date = local_date(due_at, timezone_info)
 
     cond do
       Date.compare(due_date, today) == :lt ->
@@ -566,7 +611,17 @@ defmodule Maraithon.Insights.Detail do
     end
   end
 
-  defp deadline_factor(_insight, metadata, record) do
+  defp deadline_factor(
+         %Insight{due_at: %DateTime{} = due_at},
+         metadata,
+         record,
+         timezone_info,
+         _reference_at
+       ) do
+    deadline_factor(%Insight{due_at: due_at}, metadata, record, timezone_info, DateTime.utc_now())
+  end
+
+  defp deadline_factor(_insight, metadata, record, _timezone_info, _reference_at) do
     case first_present([
            read_string(record, "deadline"),
            read_string(metadata, "deadline")
@@ -575,6 +630,23 @@ defmodule Maraithon.Insights.Detail do
       deadline -> "The deadline is #{deadline}."
     end
   end
+
+  defp local_date(%DateTime{} = datetime, timezone_info) when is_map(timezone_info) do
+    name = Map.get(timezone_info, :name) || Map.get(timezone_info, "name")
+
+    offset_hours =
+      timezone_info
+      |> Map.get(:offset_hours, Map.get(timezone_info, "offset_hours", -5))
+      |> Maraithon.Timezones.normalize_offset()
+
+    offset = Maraithon.Timezones.offset_at(name, datetime, offset_hours)
+
+    datetime
+    |> DateTime.add(offset, :hour)
+    |> DateTime.to_date()
+  end
+
+  defp local_date(%DateTime{} = datetime, _timezone_info), do: DateTime.to_date(datetime)
 
   defp source_occurrence_factor(
          %Insight{source_occurred_at: %DateTime{} = occurred_at},
