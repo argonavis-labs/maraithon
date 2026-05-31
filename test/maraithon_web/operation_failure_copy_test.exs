@@ -26,7 +26,9 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
       OperationFailureCopy.project(:memory, @internal_reason),
       OperationFailureCopy.project(:recommendation_decision, @internal_reason),
       OperationFailureCopy.project(:repo_access, @internal_reason),
-      OperationFailureCopy.project(:implementation_run, @internal_reason)
+      OperationFailureCopy.project(:implementation_run, @internal_reason),
+      OperationFailureCopy.project(:create, "OPENROUTER_API_KEY=sk-live client_secret=secret"),
+      OperationFailureCopy.project(:memory, "Authorization: Bearer sk-live request_id=req_123")
     ]
 
     assert "Could not create that project. Review the highlighted fields before saving." in copies
@@ -37,6 +39,10 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
 
     Enum.each(copies, &refute_leaks_internal_reason/1)
     Enum.each(copies, &refute_try_again/1)
+    refute Enum.any?(copies, &String.contains?(&1, "OPENROUTER_API_KEY"))
+    refute Enum.any?(copies, &String.contains?(&1, "client_secret"))
+    refute Enum.any?(copies, &String.contains?(&1, "Bearer"))
+    refute Enum.any?(copies, &String.contains?(&1, "request_id"))
   end
 
   test "project validation copy is display-ready" do

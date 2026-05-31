@@ -164,18 +164,25 @@ defmodule MaraithonWeb.AgentActionCopy do
 
     trimmed == "" or
       Regex.match?(~r/^[a-z0-9_]+$/, trimmed) or
+      Regex.match?(
+        ~r/\b(?:authorization|bearer|token|secret|password|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret)\b/i,
+        trimmed
+      ) or
       Enum.any?(
         [
           "dbconnection",
           "postgrex",
           "ecto.",
           "phoenix.",
+          "runtimeerror",
+          "functionclauseerror",
+          "internal_stacktrace",
+          "http_status",
+          "request_id",
           "stacktrace",
           "{:",
           "%{",
-          "=>",
-          "token ",
-          "token:"
+          "=>"
         ],
         &String.contains?(lower, &1)
       )

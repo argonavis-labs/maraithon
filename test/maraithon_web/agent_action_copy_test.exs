@@ -32,6 +32,12 @@ defmodule MaraithonWeb.AgentActionCopyTest do
     assert AgentActionCopy.error(:create, "DBConnection.ConnectionError token abc123") ==
              "Could not create that automation. Review the settings before saving."
 
+    assert AgentActionCopy.error(:update, "OPENROUTER_API_KEY=sk-live client_secret=secret") ==
+             "Could not update that automation. Review the settings before saving."
+
+    assert AgentActionCopy.error(:install, "Authorization: Bearer sk-live request_id=req_123") ==
+             "Could not install that automation. Review the setup before installing."
+
     assert AgentActionCopy.error(:start, {:supervisor, :timeout}) ==
              "Could not start that automation. Refresh automations before starting it."
 
@@ -44,12 +50,18 @@ defmodule MaraithonWeb.AgentActionCopyTest do
     copies = [
       AgentActionCopy.not_found(),
       AgentActionCopy.error(:create, "DBConnection.ConnectionError token abc123"),
+      AgentActionCopy.error(:update, "OPENROUTER_API_KEY=sk-live client_secret=secret"),
+      AgentActionCopy.error(:install, "Authorization: Bearer sk-live request_id=req_123"),
       AgentActionCopy.error(:start, {:supervisor, :timeout}),
       AgentActionCopy.error(:delete, {:repo, :not_found}),
       AgentActionCopy.error(:send_message, {:runtime, :stopped})
     ]
 
     refute Enum.any?(copies, &String.contains?(String.downcase(&1), "try again"))
+    refute Enum.any?(copies, &String.contains?(&1, "OPENROUTER_API_KEY"))
+    refute Enum.any?(copies, &String.contains?(&1, "client_secret"))
+    refute Enum.any?(copies, &String.contains?(&1, "Bearer"))
+    refute Enum.any?(copies, &String.contains?(&1, "request_id"))
   end
 
   test "hides marketplace internals" do
