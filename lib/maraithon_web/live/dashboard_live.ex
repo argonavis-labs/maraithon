@@ -2121,7 +2121,7 @@ defmodule MaraithonWeb.DashboardLive do
 
             <%= if not @fly_logs.available and @fly_logs.apps == [] do %>
               <p class="font-sans text-sm/6 text-zinc-500">
-                Platform logs are not configured for this environment.
+                Platform log access is unavailable in this environment.
               </p>
             <% else %>
               <%= if @fly_logs.logs == [] do %>

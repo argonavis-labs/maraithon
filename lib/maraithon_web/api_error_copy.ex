@@ -130,7 +130,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "missing_key_id",
       message:
-        "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+        "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
     }
   end
 
@@ -138,7 +138,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "missing_public_key",
       message:
-        "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+        "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
     }
   end
 

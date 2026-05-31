@@ -26,7 +26,7 @@ defmodule Maraithon.FlyLogsTest do
     refute snapshot.available
     assert snapshot.logs == []
 
-    assert [%{message: "Platform log access is not configured for this environment."}] =
+    assert [%{message: "Platform log access is unavailable in this environment."}] =
              snapshot.errors
 
     encoded = inspect(snapshot)

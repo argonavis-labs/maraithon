@@ -153,13 +153,13 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.companion_device_key(:missing_key_id) == %{
              error: "missing_key_id",
              message:
-               "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+               "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_public_key) == %{
              error: "missing_public_key",
              message:
-               "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+               "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
            }
 
     assert ApiErrorCopy.companion_recall(:missing_query) == %{

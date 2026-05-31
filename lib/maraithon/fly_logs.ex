@@ -38,7 +38,7 @@ defmodule Maraithon.FlyLogs do
         {:ok,
          unavailable_snapshot(
            requested_apps,
-           "Platform log access is not configured for this environment."
+           "Platform log access is unavailable in this environment."
          )}
 
       requested_apps == [] ->

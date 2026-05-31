@@ -1260,7 +1260,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "missing_key_id",
                "message" =>
-                 "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+                 "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
              }
     end
 
@@ -1275,7 +1275,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "missing_public_key",
                "message" =>
-                 "Encryption setup is incomplete. Re-pair this Mac before syncing encrypted sources."
+                 "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
              }
     end
 
