@@ -172,6 +172,38 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichmentTest do
     assert Map.get(configured_meeting, "external_attendees", []) == []
   end
 
+  test "does not brief the operator as an external meeting participant", %{user_id: user_id} do
+    event = %{
+      "event_id" => "evt-board",
+      "summary" => "Board update with Priya Shah",
+      "start" => "2026-05-11T19:00:00Z",
+      "end" => "2026-05-11T19:30:00Z",
+      "attendees" => [
+        %{
+          "display_name" => "Alex Operator",
+          "email" => "alex@operatorco.com",
+          "self" => true
+        },
+        %{"display_name" => "Priya Shah", "email" => "priya@northstar.vc"}
+      ]
+    }
+
+    result = MeetingEnrichment.enrich(user_id, [event], max_web_queries: 0)
+    [meeting] = result["meetings"]
+
+    assert meeting["schedule_required"] == true
+    assert Enum.map(meeting["external_attendees"], & &1["email"]) == ["priya@northstar.vc"]
+
+    candidate_queries =
+      meeting["candidate_people_and_orgs"]
+      |> Enum.map(& &1["query"])
+
+    assert "Priya Shah" in candidate_queries
+    assert "Northstar" in candidate_queries
+    refute "Alex Operator" in candidate_queries
+    refute "Operatorco" in candidate_queries
+  end
+
   test "spends scarce public prep budget on the earliest required external meeting while preserving calendar order",
        %{user_id: user_id} do
     parent = self()

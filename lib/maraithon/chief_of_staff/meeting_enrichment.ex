@@ -343,19 +343,23 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp attendee_candidates(attendee, internal_email_domains) when is_map(attendee) do
-    email = read_string(attendee, "email")
-    domain = email_domain(email)
+    if self_attendee?(attendee) do
+      []
+    else
+      email = read_string(attendee, "email")
+      domain = email_domain(email)
 
-    name =
-      read_string(attendee, "display_name") ||
-        read_string(attendee, "displayName") ||
-        read_string(attendee, "name") ||
-        name_from_email(email)
+      name =
+        read_string(attendee, "display_name") ||
+          read_string(attendee, "displayName") ||
+          read_string(attendee, "name") ||
+          name_from_email(email)
 
-    [
-      %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
-      company_candidate_from_email(email, internal_email_domains)
-    ]
+      [
+        %{query: name, kind: "person", source: "attendee", email: email, domain: domain},
+        company_candidate_from_email(email, internal_email_domains)
+      ]
+    end
   end
 
   defp attendee_candidates(attendee, internal_email_domains) when is_binary(attendee) do
@@ -687,7 +691,7 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp external_attendee_detail(%{} = attendee, internal_email_domains) do
     email = attendee_email(attendee)
 
-    if external_email?(email, internal_email_domains) do
+    if not self_attendee?(attendee) and external_email?(email, internal_email_domains) do
       [
         %{
           "display_name" =>
@@ -751,6 +755,9 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   defp attendee_email(%{} = attendee), do: read_string(attendee, "email")
   defp attendee_email(attendee) when is_binary(attendee), do: extract_email(attendee)
   defp attendee_email(_attendee), do: nil
+
+  defp self_attendee?(%{} = attendee), do: truthy?(read_any(attendee, "self"))
+  defp self_attendee?(_attendee), do: false
 
   defp external_email?(email, internal_email_domains) when is_binary(email) do
     case email_domain(email) do
@@ -1063,6 +1070,11 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
   end
 
   defp read_list(_map, _key), do: []
+
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_value), do: false
 
   defp normalize_json_value(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
   defp normalize_json_value(%Date{} = date), do: Date.to_iso8601(date)
