@@ -454,7 +454,12 @@ defmodule MaraithonWeb.TodosLive do
               </.table>
             </div>
 
-            <.todo_detail_panel :if={@selected_todo} todo={@selected_todo} filters={@filters} timezone_info={@timezone_info} />
+            <.todo_detail_panel
+              :if={@selected_todo}
+              todo={@selected_todo}
+              filters={@filters}
+              timezone_info={@timezone_info}
+            />
           </div>
         </.panel>
       </div>
@@ -569,6 +574,7 @@ defmodule MaraithonWeb.TodosLive do
     assigns =
       assigns
       |> assign(:can_edit_next_action, can_edit_next_action)
+      |> assign(:decision_context_fields, todo_decision_context_fields(assigns.todo))
       |> assign(
         :next_action_form,
         to_form(%{"next_action" => assigns.todo.next_action || ""}, as: :todo)
@@ -630,6 +636,16 @@ defmodule MaraithonWeb.TodosLive do
         </div>
       </dl>
 
+      <div :if={@decision_context_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
+        <p class="text-xs/5 font-medium text-zinc-500">Decision context</p>
+        <dl class="mt-2 space-y-2">
+          <div :for={field <- @decision_context_fields} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
+            <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
+            <dd class="break-words text-xs/5 text-zinc-700"><%= field.value %></dd>
+          </div>
+        </dl>
+      </div>
+
       <div :if={@can_edit_next_action} class="mt-4 flex flex-wrap justify-end gap-1 border-t border-zinc-950/10 pt-4">
         <.button type="button" phx-click="complete_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
           Done
@@ -640,16 +656,6 @@ defmodule MaraithonWeb.TodosLive do
         <.button type="button" phx-click="see_less_todo" phx-value-id={@todo.id} variant="plain" class="text-xs text-zinc-600">
           Show less
         </.button>
-      </div>
-
-      <div :if={todo_metadata_pairs(@todo) != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-        <p class="text-xs/5 font-medium text-zinc-500">Context</p>
-        <dl class="mt-2 space-y-2">
-          <div :for={field <- todo_metadata_pairs(@todo)} class="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
-            <dt class="text-xs/5 text-zinc-500"><%= field.label %></dt>
-            <dd class="break-words text-xs/5 text-zinc-700"><%= field.value %></dd>
-          </div>
-        </dl>
       </div>
     </aside>
     """
@@ -922,25 +928,76 @@ defmodule MaraithonWeb.TodosLive do
     |> Enum.reject(fn field -> blank?(field.value) end)
   end
 
-  defp todo_metadata_pairs(%Todo{} = todo) do
-    (todo.metadata || %{})
-    |> PublicMetadata.todo()
-    |> Enum.map(fn {key, value} ->
-      %{
-        label: label(key),
-        value: metadata_value(value)
-      }
-    end)
-    |> Enum.reject(fn field -> blank?(field.value) end)
-    |> Enum.sort_by(& &1.label)
-    |> Enum.take(10)
+  defp todo_decision_context_fields(%Todo{} = todo) do
+    public_metadata = PublicMetadata.todo(todo.metadata || %{})
+    person = public_metadata_value(public_metadata, ~w(person contact_name name))
+    company = public_metadata_value(public_metadata, ~w(company organization account_name))
+    thread = public_metadata_value(public_metadata, ~w(thread_subject email_subject subject))
+
+    fields =
+      [
+        %{label: "Decision", value: todo_decision_prompt(person)},
+        %{
+          label: "Why now",
+          value: public_metadata_value(public_metadata, ~w(why_now why_it_matters reason))
+        },
+        %{
+          label: "Thread",
+          value: thread
+        },
+        %{label: "Person", value: person_with_company(person, company)},
+        %{
+          label: "Project",
+          value: public_metadata_value(public_metadata, ~w(project topic campaign)) || thread
+        },
+        %{
+          label: "Evidence",
+          value:
+            public_metadata_value(
+              public_metadata,
+              ~w(source_quote source_excerpt evidence_excerpt quote)
+            )
+        },
+        %{label: "Source check", value: todo_source_check_value(todo)},
+        %{label: "Prepared", value: todo.next_action}
+      ]
+      |> Enum.map(fn field -> %{field | value: normalize_context_value(field.value)} end)
+      |> Enum.reject(fn field -> blank?(field.value) end)
+      |> Enum.uniq_by(fn field -> {field.label, field.value} end)
+      |> Enum.take(8)
+
+    fields
   end
 
-  defp metadata_value(value) when is_binary(value), do: normalize_text(value)
-  defp metadata_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp metadata_value(value) when is_float(value), do: Float.to_string(value)
-  defp metadata_value(value) when is_boolean(value), do: to_string(value)
-  defp metadata_value(_value), do: nil
+  defp todo_decision_prompt(person) do
+    if present?(person) do
+      "Choose the next move with #{person}."
+    else
+      "Handle this now, snooze it, or dismiss it."
+    end
+  end
+
+  defp person_with_company(nil, company), do: company
+  defp person_with_company(person, nil), do: person
+  defp person_with_company(person, company), do: "#{person} (#{company})"
+
+  defp todo_source_check_value(%Todo{source: source}) do
+    case todo_source_label(source) do
+      nil -> nil
+      "" -> nil
+      label -> "Checked #{label}."
+    end
+  end
+
+  defp public_metadata_value(metadata, keys) when is_map(metadata) and is_list(keys) do
+    Enum.find_value(keys, &normalize_context_value(fetch_map_value(metadata, &1)))
+  end
+
+  defp normalize_context_value(value) when is_binary(value), do: normalize_text(value)
+  defp normalize_context_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp normalize_context_value(value) when is_float(value), do: Float.to_string(value)
+  defp normalize_context_value(value) when is_boolean(value), do: to_string(value)
+  defp normalize_context_value(_value), do: nil
 
   defp todo_source_account_value(%Todo{} = todo) do
     metadata = todo.metadata || %{}
