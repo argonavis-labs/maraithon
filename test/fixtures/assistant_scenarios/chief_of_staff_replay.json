@@ -2,15 +2,20 @@
   {
     "id": "chief_replay_001",
     "category": "chief_of_staff_replay",
-    "summary": "General chat stays fast and does not search connected systems.",
+    "summary": "General chat asks for missing source text and does not search connected systems.",
     "input": {"user_id": "assistant-eval@example.com", "text": "Can you make this sentence clearer?"},
     "mock_output": {
       "message_class": "assistant_reply",
-      "assistant_message": "Here is a clearer version.",
+      "assistant_message": "Send me the sentence you want rewritten and the audience or tone. I'll return a tighter version without changing the meaning.",
       "tool_calls": []
     },
     "expected": {
       "output": {"message_class": "assistant_reply"},
+      "assistant_message_quality": {
+        "min_length": 80,
+        "required_phrases": ["send me the sentence", "audience or tone"],
+        "forbidden_phrases": ["here is a clearer version"]
+      },
       "forbidden_tools": ["list_todos", "list_people", "review_connected_context"]
     }
   },

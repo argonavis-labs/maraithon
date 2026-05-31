@@ -39,4 +39,31 @@ defmodule Maraithon.AssistantEvaluationTest do
     assert [%{path: "$.decision", expected: "create_todo", actual: "ignore_noise"} | _] =
              result.diffs
   end
+
+  test "reports weak assistant reply quality when a fixture requires useful copy" do
+    scenario = %{
+      "id" => "weak_reply",
+      "category" => "chief_of_staff_replay",
+      "mock_output" => %{
+        "message_class" => "assistant_reply",
+        "assistant_message" => "Here is a clearer version.",
+        "tool_calls" => []
+      },
+      "expected" => %{
+        "output" => %{"message_class" => "assistant_reply"},
+        "assistant_message_quality" => %{
+          "min_length" => 80,
+          "required_phrases" => ["send me the sentence", "audience or tone"],
+          "forbidden_phrases" => ["here is a clearer version"]
+        }
+      }
+    }
+
+    result = AssistantEvaluation.run_fixture(scenario)
+
+    assert result.status == "failed"
+    assert Enum.any?(result.diffs, &(&1.path == "assistant_message.min_length"))
+    assert Enum.any?(result.diffs, &(&1.path == "assistant_message.required_phrases"))
+    assert Enum.any?(result.diffs, &(&1.path == "assistant_message.forbidden_phrases"))
+  end
 end

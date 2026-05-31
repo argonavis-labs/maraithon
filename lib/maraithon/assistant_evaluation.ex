@@ -38,6 +38,10 @@ defmodule Maraithon.AssistantEvaluation do
     policy_result = evaluate_policy(Map.get(expected, "policy"), scenario)
     tool_result = evaluate_tool_usage(expected, observed)
     surface_result = evaluate_surface_quality(Map.get(expected, "surface_quality"), observed)
+
+    message_result =
+      evaluate_assistant_message_quality(Map.get(expected, "assistant_message_quality"), observed)
+
     ledger_result = maybe_record_ledger(expected, scenario, policy_result, opts)
 
     diffs =
@@ -45,6 +49,7 @@ defmodule Maraithon.AssistantEvaluation do
       |> Enum.concat(policy_result.diffs)
       |> Enum.concat(tool_result.diffs)
       |> Enum.concat(surface_result.diffs)
+      |> Enum.concat(message_result.diffs)
       |> Enum.concat(ledger_result.diffs)
 
     %{
@@ -219,6 +224,25 @@ defmodule Maraithon.AssistantEvaluation do
 
   defp evaluate_surface_quality(_expected, _observed), do: %{quality: nil, diffs: []}
 
+  defp evaluate_assistant_message_quality(nil, _observed), do: %{diffs: []}
+
+  defp evaluate_assistant_message_quality(expected, observed)
+       when is_map(expected) and is_map(observed) do
+    message = observed |> Map.get("assistant_message") |> message_text()
+    trimmed = String.trim(message)
+
+    diffs =
+      []
+      |> maybe_nonempty_message_diff(trimmed)
+      |> maybe_minimum_message_length_diff(Map.get(expected, "min_length"), trimmed)
+      |> maybe_required_phrase_diff(Map.get(expected, "required_phrases", []), trimmed)
+      |> maybe_forbidden_phrase_diff(Map.get(expected, "forbidden_phrases", []), trimmed)
+
+    %{diffs: diffs}
+  end
+
+  defp evaluate_assistant_message_quality(_expected, _observed), do: %{diffs: []}
+
   defp observed_tools(observed) do
     direct =
       observed
@@ -260,6 +284,69 @@ defmodule Maraithon.AssistantEvaluation do
   end
 
   defp maybe_minimum_score_diff(diffs, _minimum_score, _actual), do: diffs
+
+  defp maybe_nonempty_message_diff(diffs, ""),
+    do: message_diff(diffs, "assistant_message", "non-empty", "")
+
+  defp maybe_nonempty_message_diff(diffs, _message), do: diffs
+
+  defp maybe_minimum_message_length_diff(diffs, nil, _message), do: diffs
+
+  defp maybe_minimum_message_length_diff(diffs, minimum_length, message)
+       when is_integer(minimum_length) do
+    actual = String.length(message)
+
+    if actual >= minimum_length do
+      diffs
+    else
+      message_diff(diffs, "assistant_message.min_length", ">= #{minimum_length}", actual)
+    end
+  end
+
+  defp maybe_minimum_message_length_diff(diffs, _minimum_length, _message), do: diffs
+
+  defp maybe_required_phrase_diff(diffs, required, message) when is_list(required) do
+    missing =
+      required
+      |> Enum.filter(&is_binary/1)
+      |> Enum.reject(&contains_phrase?(message, &1))
+
+    if missing == [] do
+      diffs
+    else
+      message_diff(diffs, "assistant_message.required_phrases", [], missing)
+    end
+  end
+
+  defp maybe_required_phrase_diff(diffs, _required, _message), do: diffs
+
+  defp maybe_forbidden_phrase_diff(diffs, forbidden, message) when is_list(forbidden) do
+    present =
+      forbidden
+      |> Enum.filter(&is_binary/1)
+      |> Enum.filter(&contains_phrase?(message, &1))
+
+    if present == [] do
+      diffs
+    else
+      message_diff(diffs, "assistant_message.forbidden_phrases", [], present)
+    end
+  end
+
+  defp maybe_forbidden_phrase_diff(diffs, _forbidden, _message), do: diffs
+
+  defp message_diff(diffs, path, expected, actual) do
+    [%{path: path, expected: expected, actual: actual} | diffs]
+  end
+
+  defp contains_phrase?(message, phrase) do
+    message
+    |> String.downcase()
+    |> String.contains?(String.downcase(phrase))
+  end
+
+  defp message_text(value) when is_binary(value), do: value
+  defp message_text(_value), do: ""
 
   defp diff(expected, actual, path \\ "$")
   defp diff(nil, _actual, _path), do: []
