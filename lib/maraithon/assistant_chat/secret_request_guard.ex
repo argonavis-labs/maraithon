@@ -57,24 +57,43 @@ defmodule Maraithon.AssistantChat.SecretRequestGuard do
   defp normalize_runtime(_runtime), do: []
 
   def disclosure_request?(text) when is_binary(text) do
-    secret_reference?(text) and
+    normalized = credential_text(text)
+
+    secret_reference?(text, normalized) and
       (Regex.match?(@disclosure_terms, text) or
-         Regex.match?(@credential_value_terms, text))
+         Regex.match?(@credential_value_terms, text) or
+         Regex.match?(@credential_value_terms, normalized))
   end
 
   def disclosure_request?(_text), do: false
 
-  defp secret_reference?(text) do
+  defp secret_reference?(text, normalized) do
     Regex.match?(@credential_terms, text) or
-      (provider_mentioned?(text) and Regex.match?(~r/\bkey\b/i, text))
+      Regex.match?(@credential_terms, normalized) or
+      (provider_mentioned?(text) and Regex.match?(~r/\bkey\b/i, normalized))
   end
 
   defp provider_mentioned?(text) do
-    Enum.any?(@providers, &Regex.match?(&1.pattern, text))
+    normalized = credential_text(text)
+
+    Enum.any?(
+      @providers,
+      &(Regex.match?(&1.pattern, text) || Regex.match?(&1.pattern, normalized))
+    )
   end
 
   defp provider_for(text, runtime) do
-    Enum.find(@providers, &Regex.match?(&1.pattern, text)) || active_provider(runtime)
+    normalized = credential_text(text)
+
+    Enum.find(
+      @providers,
+      &(Regex.match?(&1.pattern, text) || Regex.match?(&1.pattern, normalized))
+    ) ||
+      active_provider(runtime)
+  end
+
+  defp credential_text(text) do
+    String.replace(text, ~r/[_-]+/, " ")
   end
 
   defp active_provider(runtime) do
