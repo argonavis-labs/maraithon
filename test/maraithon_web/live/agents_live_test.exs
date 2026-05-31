@@ -162,7 +162,22 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "Save changes"
     assert html =~ ~r/<option[^>]*value="prompt_agent"[^>]*>\s*Custom Automation\s*<\/option>/
     assert html =~ ~r/<option[^>]*value="ai_chief_of_staff"[^>]*>\s*Chief of Staff\s*<\/option>/
+    assert html =~ "review limits"
+    assert html =~ "support setup"
+    assert html =~ "Sources to watch"
+    assert html =~ "Add only the source feeds this automation should inspect."
+    assert html =~ "Allowed actions"
+    assert html =~ "Keep this list short; only listed actions can run."
+    assert html =~ "Support setup JSON"
+    assert html =~ "Leave blank unless Maraithon support gives you setup JSON."
     refute html =~ ~r/<option[^>]*>\s*prompt_agent\s*<\/option>/
+    refute html =~ "permissions"
+    refute html =~ "allowances"
+    refute html =~ "custom setup"
+    refute html =~ "Signals to watch"
+    refute html =~ "Permitted actions"
+    refute html =~ "Custom configuration"
+    refute html =~ "custom_key"
   end
 
   test "start action updates the visible status", %{conn: conn} do

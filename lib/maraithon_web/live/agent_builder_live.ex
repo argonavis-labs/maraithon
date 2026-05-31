@@ -401,10 +401,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_subscriptions"
                         name="launch[subscriptions]"
-                        label="Signals to watch"
+                        label="Sources to watch"
                         value={@launch["subscriptions"]}
-                        placeholder="github:owner/repo,email:you@example.com"
-                        description="Comma-separated source topics. Leave blank if this automation should only react when you message it."
+                        placeholder="github:owner/repo or email:you@example.com"
+                        description="Optional. Add only the source feeds this automation should inspect."
                       />
                     <% end %>
 
@@ -412,10 +412,10 @@ defmodule MaraithonWeb.AgentBuilderLive do
                       <.launch_input
                         id="launch_tools"
                         name="launch[tools]"
-                        label="Permitted actions"
+                        label="Allowed actions"
                         value={@launch["tools"]}
                         placeholder="read_file,search_files"
-                        description="Comma-separated action names. Maraithon will not use anything else for this automation."
+                        description="Keep this list short; only listed actions can run."
                       />
                     <% end %>
                   </div>
@@ -818,11 +818,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <.launch_textarea
                     id="launch_config_json"
                     name="launch[config_json]"
-                    label="Custom configuration"
+                    label="Support setup JSON"
                     value={@launch["config_json"]}
                     rows={6}
                     textarea_class="font-mono"
-                    description="Optional JSON object for advanced template-specific settings."
+                    description="Leave blank unless Maraithon support gives you setup JSON."
                   />
                 <% end %>
 
@@ -1237,16 +1237,16 @@ defmodule MaraithonWeb.AgentBuilderLive do
     subscriptions =
       case launch["subscriptions"] do
         "" ->
-          "This automation responds only to direct messages until you add watched signals."
+          "This automation responds only to direct messages until you add sources to watch."
 
         value ->
-          "Watching: #{value}"
+          "Sources: #{value}"
       end
 
     tools =
       case launch["tools"] do
         "" -> "No actions enabled. The automation will stay text-only."
-        value -> "Permitted actions: #{value}"
+        value -> "Allowed actions: #{value}"
       end
 
     [
@@ -1254,8 +1254,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "Operating profile",
         body: cost_profile_summary("prompt_agent", launch["cost_profile"])
       },
-      %{title: "Signals to watch", body: subscriptions},
-      %{title: "Permitted actions", body: tools}
+      %{title: "Sources to watch", body: subscriptions},
+      %{title: "Allowed actions", body: tools}
     ]
   end
 
@@ -1358,7 +1358,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Launch result",
         body:
-          "The automation starts immediately with room for #{launch["budget_llm_calls"]} review passes and #{launch["budget_tool_calls"]} permitted actions."
+          "The automation starts immediately with room for #{launch["budget_llm_calls"]} review passes and #{launch["budget_tool_calls"]} allowed actions."
       }
     ]
   end

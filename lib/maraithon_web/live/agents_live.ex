@@ -802,7 +802,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <span class="flex items-center gap-2">
                           <span>Advanced</span>
                           <span class="text-xs/5 text-zinc-500">
-                            signals · permissions · allowances · custom setup
+                            sources · allowed actions · review limits · support setup
                           </span>
                         </span>
                         <span class="text-xs/5 text-zinc-500 group-open:hidden">Open</span>
@@ -832,17 +832,25 @@ defmodule MaraithonWeb.AgentsLive do
                         </div>
 
                         <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                          <.field label="Signals to watch" for="launch_subscriptions">
+                          <.field
+                            label="Sources to watch"
+                            for="launch_subscriptions"
+                            description="Optional. Add only the source feeds this automation should inspect."
+                          >
                             <.c_input
                               id="launch_subscriptions"
                               type="text"
                               name="launch[subscriptions]"
                               value={@launch["subscriptions"]}
-                              placeholder="github:owner/repo,email:you@example.com"
+                              placeholder="github:owner/repo or email:you@example.com"
                             />
                           </.field>
 
-                          <.field label="Permitted actions" for="launch_tools">
+                          <.field
+                            label="Allowed actions"
+                            for="launch_tools"
+                            description="Keep this list short; only listed actions can run."
+                          >
                             <.c_input
                               id="launch_tools"
                               type="text"
@@ -885,13 +893,17 @@ defmodule MaraithonWeb.AgentsLive do
                           </.field>
                         </div>
 
-                        <.field label="Custom configuration" for="launch_config_json">
+                        <.field
+                          label="Support setup JSON"
+                          for="launch_config_json"
+                          description="Leave blank unless Maraithon support gives you setup JSON."
+                        >
                           <.c_textarea
                             id="launch_config_json"
                             name="launch[config_json]"
                             rows={5}
                             class="font-mono"
-                            placeholder={"{\"custom_key\":\"value\"}"}
+                            placeholder="Paste support-provided JSON"
                             value={@launch["config_json"]}
                           />
                         </.field>
@@ -1094,8 +1106,8 @@ defmodule MaraithonWeb.AgentsLive do
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <.summary_card title="Started" value={format_datetime(@selected_agent.started_at, @timezone_info)} />
                       <.summary_card title="Stopped" value={format_datetime(@selected_agent.stopped_at, @timezone_info)} />
-                      <.summary_card title="Signals to watch" value={subscriptions_preview(@selected_agent.config)} />
-                      <.summary_card title="Permitted actions" value={tools_preview(@selected_agent.config)} />
+                      <.summary_card title="Sources to watch" value={subscriptions_preview(@selected_agent.config)} />
+                      <.summary_card title="Allowed actions" value={tools_preview(@selected_agent.config)} />
                       <.summary_card
                         :if={@diagnostics_visible}
                         title="Updates"
@@ -2270,16 +2282,16 @@ defmodule MaraithonWeb.AgentsLive do
     |> Map.new()
   end
 
-  defp display_config_key("tools"), do: "permitted_actions"
+  defp display_config_key("tools"), do: "allowed_actions"
   defp display_config_key("tool_calls"), do: "actions_used"
   defp display_config_key("budget_tool_calls"), do: "action_limit"
-  defp display_config_key("tool_allowlist"), do: "permitted_actions"
+  defp display_config_key("tool_allowlist"), do: "allowed_actions"
   defp display_config_key("llm_calls"), do: "review_passes"
   defp display_config_key("budget_llm_calls"), do: "review_limit"
-  defp display_config_key(:tools), do: "permitted_actions"
+  defp display_config_key(:tools), do: "allowed_actions"
   defp display_config_key(:tool_calls), do: "actions_used"
   defp display_config_key(:budget_tool_calls), do: "action_limit"
-  defp display_config_key(:tool_allowlist), do: "permitted_actions"
+  defp display_config_key(:tool_allowlist), do: "allowed_actions"
   defp display_config_key(:llm_calls), do: "review_passes"
   defp display_config_key(:budget_llm_calls), do: "review_limit"
   defp display_config_key(key), do: key

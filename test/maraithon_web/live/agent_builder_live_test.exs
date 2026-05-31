@@ -285,7 +285,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "Standard - balanced follow-through"
       assert html =~ "Review limit"
       assert html =~ "Action limit"
-      assert html =~ "Custom configuration"
+      assert html =~ "Support setup JSON"
       refute html =~ "Advanced JSON overrides"
       refute html =~ "Reasoning allowance"
       refute html =~ "Action allowance"
@@ -335,20 +335,20 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
 
       html = render(view)
 
-      assert html =~ "Permitted actions"
+      assert html =~ "Allowed actions"
 
       assert html =~
-               "This automation responds only to direct messages until you add watched signals."
+               "This automation responds only to direct messages until you add sources to watch."
 
       assert html =~ "Review limit"
       assert html =~ "Action limit"
-      assert html =~ "room for 200 review passes and 300 permitted actions"
-      refute html =~ "Allowed actions"
+      assert html =~ "room for 200 review passes and 300 allowed actions"
+      refute html =~ "Permitted actions"
       refute html =~ "No watched signals yet."
       refute html =~ "Reasoning allowance"
       refute html =~ "Action allowance"
       refute html =~ "reasoning steps"
-      refute html =~ "allowed actions"
+      refute html =~ "permitted actions"
       refute html =~ "action allowlist"
     end
   end
