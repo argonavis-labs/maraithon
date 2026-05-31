@@ -287,7 +287,15 @@ struct FullDiskAccessRequiredBanner: View {
     static func detailText(blockedSourceNames: [String]) -> String {
         let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
         let verb = blockedSourceNames.count == 1 ? "needs" : "need"
-        return "\(subject) \(verb) one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+        return "\(subject) \(verb) one macOS Full Disk Access grant for \(grantTargetCopy). Enable that exact app once; the rest of the app can keep checking."
+    }
+
+    static var grantTargetCopy: String {
+        #if DEBUG
+        "the Maraithon app at \(FullDiskAccessInstallHint.exactStableDevelopmentAppDisplayPath())"
+        #else
+        "Maraithon"
+        #endif
     }
 
     private static func readableList(_ values: [String], fallback: String) -> String {

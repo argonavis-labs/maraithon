@@ -28,7 +28,8 @@ enum FullDiskAccessInstallHint {
     static let revealStableAppButtonTitle = "Show app copy"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return "Full Disk Access is still blocked for this app copy. In System Settings, remove old Maraithon rows, add \(stableDevelopmentAppDisplayPath), enable that exact row once, then click Check again. Reloads use this same signed app."
+        let path = exactStableDevelopmentAppDisplayPath()
+        return "Full Disk Access is still blocked for \(path). In System Settings, remove old Maraithon rows that point somewhere else, add this exact app, enable it once, then click Check again. Reloads use this same signed app."
         #else
         return nil
         #endif
@@ -88,6 +89,12 @@ enum FullDiskAccessInstallHint {
             .appendingPathComponent("Applications", isDirectory: true)
             .appendingPathComponent("Maraithon.app", isDirectory: true)
             .standardizedFileURL
+    }
+
+    static func exactStableDevelopmentAppDisplayPath(
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String {
+        stableDevelopmentAppURL(homeDirectory: homeDirectory).path
     }
 
     static func isTemporaryDevelopmentLocation(

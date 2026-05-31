@@ -33,30 +33,34 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
     }
 
     func testDetailTextUsesLiveBlockedSources() {
+        let target = FullDiskAccessRequiredBanner.grantTargetCopy
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["iMessage", "Notes", "Voice Memos"]),
-            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant for \(target). Enable that exact app once; the rest of the app can keep checking."
         )
     }
 
     func testDetailTextUsesSingularVerbForOneBlockedSource() {
+        let target = FullDiskAccessRequiredBanner.grantTargetCopy
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["iMessage"]),
-            "iMessage needs one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+            "iMessage needs one macOS Full Disk Access grant for \(target). Enable that exact app once; the rest of the app can keep checking."
         )
     }
 
     func testDetailTextUsesPluralVerbForTwoBlockedSources() {
+        let target = FullDiskAccessRequiredBanner.grantTargetCopy
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["Notes", "Voice Memos"]),
-            "Notes and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+            "Notes and Voice Memos need one macOS Full Disk Access grant for \(target). Enable that exact app once; the rest of the app can keep checking."
         )
     }
 
     func testDetailTextFallsBackWhenOnlyOnboardingSkipIsKnown() {
+        let target = FullDiskAccessRequiredBanner.grantTargetCopy
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: []),
-            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+            "iMessage, Notes, and Voice Memos need one macOS Full Disk Access grant for \(target). Enable that exact app once; the rest of the app can keep checking."
         )
     }
 }
