@@ -1,7 +1,7 @@
 import SwiftUI
 import ServiceManagement
 
-/// Standard macOS Settings scene with General / Sync / Devices / Privacy tabs.
+/// Standard macOS Settings scene with General / Checks / Devices / Privacy tabs.
 struct SettingsView: View {
     @AppStorage("developer_mode") private var developerMode: Bool = false
 
@@ -10,7 +10,7 @@ struct SettingsView: View {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
             SyncSettingsView()
-                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
+                .tabItem { Label("Checks", systemImage: "arrow.triangle.2.circlepath") }
             DevicesSettingsView()
                 .tabItem { Label("Devices", systemImage: "laptopcomputer") }
             DataSettingsView()
@@ -321,7 +321,7 @@ private struct DiagnosticsSourceRow: View {
                 MetricCell(title: "Last check", value: format(pub?.lastBatchAccepted))
                 MetricCell(title: "Already known", value: format(pub?.lastBatchDuplicate))
                 MetricCell(title: "Needs attention", value: format(pub?.lastBatchFailed))
-                MetricCell(title: "Synced", value: format(pub?.totalAccepted))
+                MetricCell(title: "Available", value: format(pub?.totalAccepted))
             }
             Text(DiagnosticsSettingsCopy.stateLine(publisher: pub))
                 .font(.caption.monospaced())
@@ -368,8 +368,8 @@ private struct DiagnosticsSourceRow: View {
 }
 
 enum DiagnosticsSettingsCopy {
-    static let intro = "Review sync health for each source. Expand a source to see recent checks and the last successful check."
-    static let developerModeDescription = "Shows Logs and Diagnostics for sync health, recent checks, and support troubleshooting. Off by default."
+    static let intro = "Review check health for each source. Expand a source to see recent checks and the last successful check."
+    static let developerModeDescription = "Shows Logs and Diagnostics for check health, recent checks, and support troubleshooting. Off by default."
 
     @MainActor
     static func stateLine(publisher: SourceStatusPublisher?) -> String {
@@ -448,10 +448,10 @@ private struct GeneralSettingsView: View {
             }
             Section("Power") {
                 Toggle(
-                    "Pause syncing when on battery",
+                    GeneralSettingsCopy.pauseOnBatteryTitle,
                     isOn: $batterySettings.pauseOnBattery
                 )
-                Text("When enabled, Maraithon pauses every source while macOS is in Low Power Mode. Sources resume automatically once you plug in.")
+                Text(GeneralSettingsCopy.pauseOnBatteryDescription)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -508,6 +508,11 @@ private struct GeneralSettingsView: View {
     }
 }
 
+enum GeneralSettingsCopy {
+    static let pauseOnBatteryTitle = "Pause checks on battery"
+    static let pauseOnBatteryDescription = "When enabled, Maraithon pauses source checks while macOS is in Low Power Mode. Checks resume automatically once you plug in."
+}
+
 private struct SyncSettingsView: View {
     @AppStorage("pollIntervalSeconds") private var pollInterval = 30.0
 
@@ -539,7 +544,7 @@ private struct SyncSettingsView: View {
 }
 
 enum SyncSettingsCopy {
-    static let cadenceSectionTitle = "Sync cadence"
+    static let cadenceSectionTitle = "Check cadence"
     static let intervalLabel = "Check every"
     static let sliderAccessibilityLabel = "Check interval"
     static let minimumIntervalLabel = "15 sec"
@@ -606,7 +611,7 @@ enum PrivacySettingsCopy {
     static let usageStatsToggleTitle = "Share anonymous usage stats"
     static let crashReportsToggleTitle = "Share crash reports"
     static let diagnosticsSharingFooter =
-        "Maraithon uses these choices before sending diagnostics from this Mac. Logs and synced data are never attached automatically."
+        "Maraithon uses these choices before sending diagnostics from this Mac. Logs and uploaded source data are never attached automatically."
     static let encryptionIntro =
         "When enabled, content is encrypted on this Mac with a key only this device holds. " +
         "Maraithon can still use details like time, sender, and source name, but not the message, " +

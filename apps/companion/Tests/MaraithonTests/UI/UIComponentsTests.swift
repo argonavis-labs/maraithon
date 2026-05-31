@@ -279,8 +279,9 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(publicCopy.lowercased().contains("ring buffer"))
         XCTAssertFalse(publicCopy.lowercased().contains("batch"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
-        XCTAssertTrue(publicCopy.contains("sync health"))
+        XCTAssertTrue(publicCopy.contains("check health"))
         XCTAssertTrue(publicCopy.contains("recent checks"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync health"))
     }
 
     @MainActor
@@ -351,7 +352,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertTrue(publicCopy.contains("encrypted on this Mac"))
         XCTAssertTrue(publicCopy.contains("time, sender, and source name"))
         XCTAssertTrue(publicCopy.contains("Search quality may drop"))
-        XCTAssertTrue(publicCopy.contains("Logs and synced data are never attached automatically"))
+        XCTAssertTrue(publicCopy.contains("Logs and uploaded source data are never attached automatically"))
         XCTAssertTrue(PrivacySettingsCopy.usageStatsDefaultsKey.contains("share_usage_stats"))
         XCTAssertTrue(PrivacySettingsCopy.crashReportsDefaultsKey.contains("share_crash_reports"))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
@@ -373,11 +374,25 @@ final class UIComponentsTests: XCTestCase {
             SyncSettingsCopy.intervalValue(seconds: 300)
         ].joined(separator: " ")
 
+        XCTAssertTrue(publicCopy.contains("Check cadence"))
         XCTAssertTrue(publicCopy.contains("Check every"))
         XCTAssertTrue(publicCopy.contains("30 sec"))
         XCTAssertTrue(publicCopy.contains("1 min 30 sec"))
         XCTAssertTrue(publicCopy.contains("5 min"))
         XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("poll"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync cadence"))
+    }
+
+    func testGeneralSettingsCopyUsesCheckLanguageForPowerControls() {
+        let publicCopy = [
+            GeneralSettingsCopy.pauseOnBatteryTitle,
+            GeneralSettingsCopy.pauseOnBatteryDescription
+        ].joined(separator: " ")
+
+        XCTAssertTrue(publicCopy.contains("Pause checks on battery"))
+        XCTAssertTrue(publicCopy.contains("source checks"))
+        XCTAssertTrue(publicCopy.contains("Checks resume automatically"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync"))
     }
 
     func testDevicesSettingsCopyDoesNotExposeServerLanguage() {

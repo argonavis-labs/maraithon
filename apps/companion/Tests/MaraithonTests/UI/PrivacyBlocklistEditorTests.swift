@@ -15,8 +15,9 @@ final class PrivacyBlocklistEditorTests: XCTestCase {
     func testEmptyCopyExplainsLocalFiltering() {
         XCTAssertEqual(
             PrivacyBlocklistEditorCopy.emptyMessage,
-            "Nothing is blocked. Add a phone number or email above to filter matching messages before sync."
+            "Nothing is blocked. Add a phone number or email above to filter matching messages before upload."
         )
+        XCTAssertFalse(PrivacyBlocklistEditorCopy.emptyMessage.localizedCaseInsensitiveContains("sync"))
         XCTAssertFalse(PrivacyBlocklistEditorCopy.emptyMessage.contains("No blocked handles yet"))
     }
 

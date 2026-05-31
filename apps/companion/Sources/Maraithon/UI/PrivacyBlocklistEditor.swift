@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum PrivacyBlocklistEditorCopy {
-    static let emptyMessage = "Nothing is blocked. Add a phone number or email above to filter matching messages before sync."
+    static let emptyMessage = "Nothing is blocked. Add a phone number or email above to filter matching messages before upload."
 }
 
 /// Inline editor for the local-only `Blocklist`. Phone numbers and
