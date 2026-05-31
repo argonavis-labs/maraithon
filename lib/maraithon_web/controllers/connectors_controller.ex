@@ -114,7 +114,11 @@ defmodule MaraithonWeb.ConnectorsController do
   defp maybe_put_oauth_flash(conn, _params), do: conn
 
   defp maybe_put_degraded_flash(conn, true) do
-    put_flash(conn, :error, "Connected apps are temporarily unavailable. Refresh in a moment.")
+    put_flash(
+      conn,
+      :error,
+      "Maraithon could not load connected app status. Refresh this page in a moment."
+    )
   end
 
   defp maybe_put_degraded_flash(conn, false), do: conn

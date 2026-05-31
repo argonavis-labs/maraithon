@@ -33,6 +33,16 @@ final class SourceIssueCopyTests: XCTestCase {
             SourceIssueCopy.status(transport),
             "Connection issue. Check again when you are online."
         )
+
+        let serverError = "serverError(status: 503, body: Optional(\"database token=secret\"))"
+        let serverCopy = SourceIssueCopy.status(serverError)
+        XCTAssertEqual(
+            serverCopy,
+            "Maraithon could not reach its cloud service. Check again shortly."
+        )
+        XCTAssertFalse(serverCopy.localizedCaseInsensitiveContains("temporarily unavailable"))
+        XCTAssertFalse(serverCopy.localizedCaseInsensitiveContains("database"))
+        XCTAssertFalse(serverCopy.localizedCaseInsensitiveContains("token"))
     }
 
     func testUnknownMachineCodesUseGenericRecoveryCopy() {

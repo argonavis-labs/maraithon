@@ -247,7 +247,7 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.stateLine(publisher: publisher)
 
-        XCTAssertTrue(line.contains("Status: Needs review - Maraithon is temporarily unavailable. Check again shortly."))
+        XCTAssertTrue(line.contains("Status: Needs review - Maraithon could not reach its cloud service. Check again shortly."))
         XCTAssertTrue(line.contains("Last checked: Never"))
         XCTAssertFalse(line.contains("state="))
         XCTAssertFalse(line.contains("clientError"))

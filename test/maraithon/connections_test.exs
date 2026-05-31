@@ -16,16 +16,21 @@ defmodule Maraithon.ConnectionsTest do
 
       assert snapshot.degraded
 
-      assert [%{message: "Connection inventory is temporarily unavailable.", details: details}] =
+      assert [%{message: "Maraithon could not load connected app status.", details: details}] =
                snapshot.errors
 
-      assert details =~ "Maraithon will refresh connection status"
+      assert details =~ "Refresh this page in a moment"
       refute details =~ "database"
       refute details =~ "queue timeout"
+      refute details =~ "temporarily unavailable"
       refute inspect(snapshot) =~ "Token store"
 
       assert Enum.all?(snapshot.providers, &(&1.status == :unknown))
       assert Enum.find(snapshot.providers, &(&1.id == "desktop"))
+
+      assert Enum.all?(snapshot.providers, fn provider ->
+               "App status could not be checked. Refresh this page before changing this connection." in provider.details
+             end)
     end
   end
 

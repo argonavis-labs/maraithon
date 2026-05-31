@@ -63,7 +63,7 @@ struct SourceIssueCopy {
         }
 
         if lower.contains("servererror") || lower.contains("status: 5") {
-            return "Maraithon is temporarily unavailable. Check again shortly."
+            return "Maraithon could not reach its cloud service. Check again shortly."
         }
 
         if lower.contains("timeout") || lower.contains("timed out") {

@@ -303,7 +303,7 @@ defmodule Maraithon.Connections do
       degraded: true,
       errors: [
         %{
-          message: "Connection inventory is temporarily unavailable.",
+          message: "Maraithon could not load connected app status.",
           details: connection_inventory_error_detail(reason)
         }
       ]
@@ -312,7 +312,7 @@ defmodule Maraithon.Connections do
 
   defp connection_inventory_error_detail(_reason),
     do:
-      "Maraithon will refresh connection status when the service recovers. You can refresh this page before continuing."
+      "Refresh this page in a moment before changing connections. Maraithon will keep checking app status."
 
   defp google_card(user_id, tokens, account_by_provider, return_to, timezone_info)
        when is_list(tokens) and is_map(account_by_provider) do
@@ -1750,7 +1750,10 @@ defmodule Maraithon.Connections do
     |> Map.put(:status, :unknown)
     |> Map.put(:refresh_token_status, :unknown)
     |> Map.update!(:details, fn details ->
-      ["Connection status is temporarily unavailable." | details]
+      [
+        "App status could not be checked. Refresh this page before changing this connection."
+        | details
+      ]
     end)
     |> Map.update!(:services, fn services ->
       Enum.map(services, &Map.put(&1, :status, :unknown))
