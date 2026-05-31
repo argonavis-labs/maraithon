@@ -7,6 +7,8 @@ defmodule Maraithon.Projects do
 
   alias Maraithon.Agents.Agent
   alias Maraithon.Insights.Insight
+  alias Maraithon.Redaction
+  alias Maraithon.RunErrorCopy
 
   alias Maraithon.Projects.{
     DeliveryLauncher,
@@ -18,6 +20,7 @@ defmodule Maraithon.Projects do
   }
 
   alias Maraithon.Repo
+  alias Maraithon.Todos.UserFacingCopy
 
   @project_item_limit 10
   @recommendation_limit 5
@@ -582,10 +585,10 @@ defmodule Maraithon.Projects do
                 update_implementation_run(run, %{
                   status: "failed",
                   result_summary:
-                    "Accepted #{recommendation.title}, but delivery failed to launch: #{inspect(reason)}",
+                    implementation_run_launch_failure_summary(recommendation, reason),
                   metadata:
                     Map.merge(base_metadata, %{
-                      "launch_error" => inspect(reason)
+                      "launch_error" => redacted_implementation_run_error(reason)
                     })
                 })
             end
@@ -848,6 +851,9 @@ defmodule Maraithon.Projects do
            ) do
       now = DateTime.utc_now()
 
+      result_summary =
+        Map.get(attrs, "result_summary") || Map.get(attrs, :result_summary) || run.result_summary
+
       {:ok,
        %{
          status: status,
@@ -861,9 +867,9 @@ defmodule Maraithon.Projects do
                run.pull_request_url
            ),
          result_summary:
-           normalize_optional_text(
-             Map.get(attrs, "result_summary") || Map.get(attrs, :result_summary) ||
-               run.result_summary
+           normalize_implementation_run_summary(
+             result_summary,
+             implementation_run_status_summary(status)
            ),
          started_at: implementation_run_started_at(run, status, now),
          completed_at: implementation_run_completed_at(run, status, now),
@@ -918,6 +924,8 @@ defmodule Maraithon.Projects do
     do: status in ["completed", "failed", "blocked", "awaiting_repo_access"]
 
   defp create_implementation_run(project_id, user_id, recommendation_decision_id, now, attrs) do
+    status = Map.fetch!(attrs, :status)
+
     %ImplementationRun{}
     |> ImplementationRun.changeset(%{
       user_id: user_id,
@@ -926,20 +934,113 @@ defmodule Maraithon.Projects do
       recommendation_decision_id: recommendation_decision_id,
       repo_full_name:
         Map.get(attrs, :repo_full_name) || get_in(attrs, [:metadata, "repo_full_name"]),
-      status: Map.fetch!(attrs, :status),
-      result_summary: Map.get(attrs, :result_summary),
+      status: status,
+      result_summary:
+        normalize_implementation_run_summary(
+          Map.get(attrs, :result_summary),
+          implementation_run_status_summary(status)
+        ),
       queued_at: now,
       started_at:
-        if(Map.fetch!(attrs, :status) in ["running", "pending_plan", "queued"],
+        if(status in ["running", "pending_plan", "queued"],
           do: now,
           else: nil
         ),
-      completed_at:
-        if(implementation_run_closed_status?(Map.fetch!(attrs, :status)), do: now, else: nil),
+      completed_at: if(implementation_run_closed_status?(status), do: now, else: nil),
       metadata: Map.get(attrs, :metadata) || %{}
     })
     |> Repo.insert()
   end
+
+  defp implementation_run_launch_failure_summary(recommendation, reason) do
+    title =
+      recommendation
+      |> Map.get(:title)
+      |> normalize_implementation_run_summary("the accepted recommendation")
+
+    "Accepted #{title}, but delivery could not start. " <>
+      RunErrorCopy.runtime_failure(%{source: "effect", details: reason})
+  end
+
+  defp redacted_implementation_run_error(reason) do
+    reason
+    |> inspect(limit: 20)
+    |> Redaction.redact_string()
+  end
+
+  defp normalize_implementation_run_summary(value, fallback) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    if implementation_run_summary_safe?(trimmed) do
+      trimmed
+      |> UserFacingCopy.polish_text()
+      |> normalize_optional_text()
+      |> case do
+        nil -> fallback
+        "" -> fallback
+        summary -> if implementation_run_summary_safe?(summary), do: summary, else: fallback
+      end
+    else
+      fallback
+    end
+  end
+
+  defp normalize_implementation_run_summary(_value, fallback), do: fallback
+
+  defp implementation_run_summary_safe?(value) when is_binary(value) do
+    lower = String.downcase(value)
+
+    technical_marker? =
+      String.contains?(lower, [
+        "access_token",
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer",
+        "client_secret",
+        "dbconnection",
+        "ecto.",
+        "functionclauseerror",
+        "http_status",
+        "internal_stacktrace",
+        "openrouter_api_key",
+        "password",
+        "phoenix.",
+        "postgrex",
+        "private_key",
+        "refresh_token",
+        "runtimeerror",
+        "secret",
+        "stacktrace",
+        "token=",
+        "traceback"
+      ]) or String.contains?(value, ["{", "}", "=>", "#PID<"])
+
+    not technical_marker?
+  end
+
+  defp implementation_run_summary_safe?(_value), do: false
+
+  defp implementation_run_status_summary("pending_plan"), do: "Delivery work is being planned."
+
+  defp implementation_run_status_summary("awaiting_repo_access"),
+    do: "Grant repo access before delivery can continue."
+
+  defp implementation_run_status_summary("queued"), do: "Delivery work is queued."
+  defp implementation_run_status_summary("running"), do: "Delivery work is in progress."
+
+  defp implementation_run_status_summary("blocked"),
+    do: "Delivery work is blocked. Review the latest project status."
+
+  defp implementation_run_status_summary("awaiting_review"),
+    do: "Delivery work is ready for review."
+
+  defp implementation_run_status_summary("completed"), do: "Delivery work completed."
+
+  defp implementation_run_status_summary("failed"),
+    do: "Delivery work did not complete. Review the latest project status."
+
+  defp implementation_run_status_summary(_status), do: "Delivery work needs review."
 
   defp normalize_optional_text(nil), do: nil
   defp normalize_optional_text(""), do: nil

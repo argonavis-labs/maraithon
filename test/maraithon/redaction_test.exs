@@ -71,6 +71,20 @@ defmodule Maraithon.RedactionTest do
                "set-cookie: session=<redacted>"
     end
 
+    test "scrubs assignment-style secrets in error strings" do
+      text =
+        ~s({:api_failed, "OPENROUTER_API_KEY=sk-live token=secret client_secret='hidden'"})
+
+      result = Redaction.redact_string(text)
+
+      assert result =~ "OPENROUTER_API_KEY=<redacted>"
+      assert result =~ "token=<redacted>"
+      assert result =~ "client_secret=<redacted>"
+      refute result =~ "sk-live"
+      refute result =~ "token=secret"
+      refute result =~ "hidden"
+    end
+
     test "leaves clean strings alone" do
       assert Redaction.redact_string("hello world") == "hello world"
     end

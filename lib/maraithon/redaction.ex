@@ -61,6 +61,9 @@ defmodule Maraithon.Redaction do
     {~r/\bxox[abprs]-[A-Za-z0-9-]{10,}\b/, "<redacted-slack-token>"},
     # GitHub PAT / app tokens
     {~r/\bgh[opsu]_[A-Za-z0-9]{20,}\b/, "<redacted-github-token>"},
+    # Assignment-style secrets that often appear in inspected error strings
+    {~r/\b([A-Za-z0-9_]*(?:api_?key|access_?token|refresh_?token|client_?secret|private_?key|password|secret|token)[A-Za-z0-9_]*\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s,;)}\]]+)/i,
+     "\\1<redacted>"},
     # Generic Cookie name=value pairs
     {~r/(set-cookie:\s*[^=;]+=)([^;\s]+)/i, "\\1<redacted>"}
   ]

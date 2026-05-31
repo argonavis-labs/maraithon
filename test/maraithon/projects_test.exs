@@ -214,6 +214,57 @@ defmodule Maraithon.ProjectsTest do
     assert latest_run.metadata["launcher"] == "stub"
   end
 
+  test "launcher failures store product-safe implementation run copy", %{user_id: user_id} do
+    original_projects_env = Application.get_env(:maraithon, Maraithon.Projects, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Projects, original_projects_env)
+    end)
+
+    Application.put_env(:maraithon, Maraithon.Projects,
+      delivery_launcher: fn _project, _recommendation, _decision, _agent, _run ->
+        {:error,
+         {:api_failed,
+          "OPENROUTER_API_KEY=sk-live token=secret stacktrace DBConnection.ConnectionError"}}
+      end
+    )
+
+    %{project: project, recommendation: recommendation} =
+      project_recommendation_fixture(user_id, "Failure Gate")
+
+    assert {:ok, _planner_agent} =
+             Agents.create_agent(%{
+               user_id: user_id,
+               project_id: project.id,
+               behavior: "repo_planner",
+               config: %{"name" => "Project Builder", "codebase_path" => File.cwd!()}
+             })
+
+    assert {:ok, _grant} =
+             Projects.grant_project_repo_access(project.id, user_id, %{
+               "repo_full_name" => recommendation.metadata["repo_full_name"],
+               "scope" => "read_only"
+             })
+
+    assert {:ok, run} =
+             Projects.start_implementation_run(project.id, user_id, %{
+               "recommendation_id" => recommendation.id
+             })
+
+    assert run.status == "failed"
+
+    assert run.result_summary ==
+             "Accepted Failure Gate Workspace, but delivery could not start. Action did not complete. No confirmed change was recorded."
+
+    refute run.result_summary =~ "OPENROUTER"
+    refute run.result_summary =~ "token"
+    refute run.result_summary =~ "stacktrace"
+    refute run.result_summary =~ "{"
+
+    assert run.metadata["launch_error"] =~ "OPENROUTER_API_KEY=<redacted>"
+    assert run.metadata["launch_error"] =~ "token=<redacted>"
+  end
+
   test "updates implementation runs with branch and PR details", %{user_id: user_id} do
     original_projects_env = Application.get_env(:maraithon, Maraithon.Projects, [])
 
@@ -271,6 +322,61 @@ defmodule Maraithon.ProjectsTest do
     [listed_run] = Projects.list_implementation_runs(project_id: project.id, user_id: user_id)
     assert listed_run.id == updated_run.id
     assert listed_run.branch_name == "feature/review-loop"
+  end
+
+  test "sanitizes technical implementation run summary updates", %{user_id: user_id} do
+    original_projects_env = Application.get_env(:maraithon, Maraithon.Projects, [])
+
+    on_exit(fn ->
+      Application.put_env(:maraithon, Maraithon.Projects, original_projects_env)
+    end)
+
+    Application.put_env(:maraithon, Maraithon.Projects,
+      delivery_launcher: fn _project, _recommendation, _decision, _agent, _run ->
+        {:ok,
+         %{
+           status: "pending_plan",
+           result_summary: "Queued with the Repo Planner.",
+           metadata: %{"launcher" => "stub"}
+         }}
+      end
+    )
+
+    %{project: project, recommendation: recommendation} =
+      project_recommendation_fixture(user_id, "Sanitized Run")
+
+    assert {:ok, _planner_agent} =
+             Agents.create_agent(%{
+               user_id: user_id,
+               project_id: project.id,
+               behavior: "repo_planner",
+               config: %{"name" => "Project Builder", "codebase_path" => File.cwd!()}
+             })
+
+    assert {:ok, _grant} =
+             Projects.grant_project_repo_access(project.id, user_id, %{
+               "repo_full_name" => recommendation.metadata["repo_full_name"],
+               "scope" => "read_only"
+             })
+
+    assert {:ok, run} =
+             Projects.start_implementation_run(project.id, user_id, %{
+               "recommendation_id" => recommendation.id
+             })
+
+    assert {:ok, updated_run} =
+             Projects.update_implementation_run(run.id, user_id, %{
+               "status" => "failed",
+               "result_summary" =>
+                 "RuntimeError %{token: \"secret\", stacktrace: [Maraithon.Tools.Project]}"
+             })
+
+    assert updated_run.result_summary ==
+             "Delivery work did not complete. Review the latest project status."
+
+    refute updated_run.result_summary =~ "RuntimeError"
+    refute updated_run.result_summary =~ "secret"
+    refute updated_run.result_summary =~ "stacktrace"
   end
 
   test "marks implementation runs as awaiting repo access when grant is missing", %{
