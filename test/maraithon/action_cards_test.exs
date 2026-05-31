@@ -145,6 +145,67 @@ defmodule Maraithon.ActionCardsTest do
     refute card["decision_prompt"] =~ "Handle this now"
   end
 
+  test "infers a clear person from action copy when metadata is missing",
+       %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Send Sarah the investor deck",
+      summary: "Sarah asked for the investor deck before the partner meeting.",
+      next_action: "Send Sarah the current deck and confirm what else she needs.",
+      source_item_id: "gmail-thread-sarah-deck",
+      dedupe_key: "action-card:infer-sarah",
+      priority: 88,
+      status: "open",
+      metadata: %{
+        "subject" => "Investor deck",
+        "source_evidence" => "Sarah asked for the investor deck before the partner meeting."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+
+    assert %{label: "Person", value: "Sarah"} in ActionCards.context_items(card)
+    assert card["decision_prompt"] == "Choose the next move with Sarah."
+    assert get_in(card, ["context_pack", "missing_context"]) == nil
+    assert get_in(card, ["context_pack", "summary"]) =~ "Sarah asked"
+    refute card["decision_prompt"] =~ "Decide whether"
+  end
+
+  test "does not infer generic capitalized nouns as people", %{user_id: user_id} do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Send Finance the corrected receipt",
+      summary: "The reimbursement thread needs a corrected receipt.",
+      next_action: "Send the corrected receipt and ask finance to confirm timing.",
+      source_item_id: "gmail-thread-finance-receipt",
+      dedupe_key: "action-card:no-finance-person",
+      priority: 86,
+      status: "open",
+      metadata: %{
+        "source_evidence" => "Finance asked for a corrected receipt."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+
+    refute Enum.any?(ActionCards.context_items(card), &(&1.label == "Person"))
+
+    assert get_in(card, ["context_pack", "missing_context"]) ==
+             "No person has been confirmed for this item yet."
+  end
+
   test "cards do not surface unknown or unclear state filler", %{user_id: user_id} do
     todo = %Todo{
       id: Ecto.UUID.generate(),

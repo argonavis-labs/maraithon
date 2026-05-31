@@ -95,6 +95,13 @@ defmodule Maraithon.ActionCards do
     needs_local_context
   )
 
+  @generic_person_candidate_words ~w(
+    Account Action Approval Attachment Board Browser Calendar Call Campaign Context Customer
+    Deck Decision Email Event Finance Follow Gmail Inbox Investor Jira Link Meeting Memo Message
+    Note Notes Person Plan Project Reminder Report Review Slack Source Status Task Team Thread
+    Today Tomorrow Update Voice Work Yesterday
+  )
+
   @doc """
   Returns ranked action cards for open work items.
   """
@@ -344,7 +351,8 @@ defmodule Maraithon.ActionCards do
         read_string(person_context, "name"),
         read_string(metadata, "contact"),
         read_string(metadata, "requested_by"),
-        read_string(metadata, "sender_name")
+        read_string(metadata, "sender_name"),
+        inferred_person_name(todo)
       ])
 
     company =
@@ -747,6 +755,54 @@ defmodule Maraithon.ActionCards do
   end
 
   defp first_person_context(_metadata), do: %{}
+
+  defp inferred_person_name(%Todo{} = todo) do
+    [todo.title, todo.next_action, todo.summary]
+    |> Enum.find_value(&inferred_person_from_text/1)
+  end
+
+  defp inferred_person_from_text(value) when is_binary(value) do
+    text = String.trim(value)
+
+    [
+      ~r/\b(?i:(?:reply|respond|follow\s+up|follow-up|check\s+in|circle\s+back|sync|confirm))\s+(?i:(?:with|to))\s+(?<name>\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+){0,2})\b/u,
+      ~r/\b(?i:(?:ask|call|email|message|ping|text))\s+(?<name>\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+){0,2})\b/u,
+      ~r/\b(?i:send)\s+(?<name>\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+){0,2})\b/u,
+      ~r/\b(?<name>\p{Lu}[\p{L}'-]+(?:\s+\p{Lu}[\p{L}'-]+){0,2})\s+(?i:(?:asked|requested|needs|wants|is\s+waiting))\b/u
+    ]
+    |> Enum.find_value(fn pattern ->
+      case Regex.named_captures(pattern, text) do
+        %{"name" => candidate} -> normalize_person_candidate(candidate)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp inferred_person_from_text(_value), do: nil
+
+  defp normalize_person_candidate(candidate) when is_binary(candidate) do
+    candidate =
+      candidate
+      |> String.trim()
+      |> String.replace(~r/\s+/, " ")
+
+    words = String.split(candidate, " ", trim: true)
+    last_word = List.last(words)
+
+    cond do
+      blank?(candidate) ->
+        nil
+
+      candidate in @generic_person_candidate_words ->
+        nil
+
+      last_word in @generic_person_candidate_words ->
+        nil
+
+      true ->
+        candidate
+    end
+  end
 
   defp context_summary(todo, metadata, record, person, company, relationship) do
     commitment = read_string(record, "commitment")
