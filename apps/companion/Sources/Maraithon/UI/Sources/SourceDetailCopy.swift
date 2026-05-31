@@ -34,10 +34,10 @@ enum SourceDetailCopy {
         plural _: String
     ) -> String {
         if totalSynced > 0 {
-            return "\(displayName) is available to your assistant"
+            return "\(displayName) context is ready"
         }
 
-        return "Checking \(displayName) for assistant context"
+        return "\(displayName) is ready for its first check"
     }
 
     static func pausedHeadline(displayName: String) -> String {
@@ -90,9 +90,9 @@ enum SourceDetailCopy {
     ) -> String {
         guard let lastSyncAt else {
             if totalSynced > 0 {
-                return "Your assistant can use \(countedItem(totalSynced, singular: singular, plural: plural)). Check now to look for anything new."
+                return "Your assistant has \(countedItem(totalSynced, singular: singular, plural: plural)) available. Check now to look for anything new."
             }
-            return "Check now to make \(displayName) available to your assistant."
+            return "Check now to make \(displayName) context available to your assistant."
         }
 
         var sentences: [String] = []
@@ -101,17 +101,21 @@ enum SourceDetailCopy {
             let added = countedItem(lastCheckSynced, singular: singular, plural: plural)
             if totalSynced > lastCheckSynced {
                 let total = countedItem(totalSynced, singular: singular, plural: plural)
-                sentences.append("Last check made \(added) available, for \(total) your assistant can use.")
+                sentences.append("Added \(added) on the last check. Your assistant now has \(total) available.")
             } else {
-                sentences.append("Last check made \(added) available to your assistant.")
+                sentences.append("Added \(added) on the last check and made \(lastCheckSynced == 1 ? "it" : "them") available to your assistant.")
             }
         } else if hasUnfinishedItems {
             let verb = lastCheckNotSynced == 1 ? "needs" : "need"
             sentences.append("Last check found \(countedItem(lastCheckNotSynced, singular: singular, plural: plural)) that \(verb) another check.")
         } else if lastCheckAlreadySynced > 0 || totalSynced > 0 {
-            sentences.append("Last check confirmed \(displayName) is current.")
+            if totalSynced > 0 {
+                sentences.append("No new \(displayName) context on the last check. Your assistant still has \(countedItem(totalSynced, singular: singular, plural: plural)) available.")
+            } else {
+                sentences.append("No new \(displayName) context on the last check.")
+            }
         } else {
-            sentences.append("Last check did not find \(displayName) context to add.")
+            sentences.append("No \(displayName) context was available on the last check.")
         }
 
         if hasUnfinishedItems {

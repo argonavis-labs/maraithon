@@ -75,7 +75,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
                 singular: "message",
                 plural: "messages"
             ),
-            "Checking iMessage for assistant context"
+            "iMessage is ready for its first check"
         )
         let headline = SourceDetailCopy.healthyHeadline(
             displayName: "iMessage",
@@ -84,7 +84,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
             plural: "messages"
         )
 
-        XCTAssertEqual(headline, "iMessage is available to your assistant")
+        XCTAssertEqual(headline, "iMessage context is ready")
         XCTAssertFalse(headline.localizedCaseInsensitiveContains("messages synced"))
         XCTAssertFalse(headline.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(headline.localizedCaseInsensitiveContains("connected"))
@@ -106,14 +106,14 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check made 4 messages available, for 12 messages your assistant can use. Maraithon will keep checking for new context. Checked just now."
+            "Added 4 messages on the last check. Your assistant now has 12 messages available. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("accepted"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("duplicate"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("connected"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("last check made"))
-        XCTAssertTrue(copy.localizedCaseInsensitiveContains("assistant can use"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("added 4 messages on the last check"))
+        XCTAssertTrue(copy.localizedCaseInsensitiveContains("assistant now has"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything is current"))
     }
 
@@ -131,7 +131,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Your assistant can use 12 messages. Check now to look for anything new."
+            "Your assistant has 12 messages available. Check now to look for anything new."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("has synced"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Maraithon can use"))
@@ -153,7 +153,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check confirmed iMessage is current. Maraithon will keep checking for new context. Checked just now."
+            "No new iMessage context on the last check. Your assistant still has 4 messages available. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
     }
@@ -174,7 +174,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check confirmed iMessage is current. Maraithon will keep checking for new context. Checked just now."
+            "No new iMessage context on the last check. Your assistant still has 4 messages available. Maraithon will keep checking for new context. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Synced 4 messages."))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
@@ -196,7 +196,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check did not find iMessage context to add. Maraithon will keep checking. Checked just now."
+            "No iMessage context was available on the last check. Maraithon will keep checking. Checked just now."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No new messages"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("this session"))
@@ -220,7 +220,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
 
         XCTAssertEqual(
             copy,
-            "Last check made 3 notes available, for 8 notes your assistant can use. 1 note needs another check. Checked just now."
+            "Added 3 notes on the last check. Your assistant now has 8 notes available. 1 note needs another check. Checked just now."
         )
     }
 
