@@ -133,5 +133,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerFallbackTest do
     refute brief.body =~ "found possible commitments"
     refute brief.body =~ "could not save them as open work"
     assert get_in(brief.metadata, ["todo_write", "todo_count"]) == 1
+    assert payload.linked_todo_ids == [todo.id]
+    assert brief.metadata["linked_todo_ids"] == [todo.id]
+    assert brief.metadata["todo_digest"] == true
+    assert brief.metadata["todo_digest_count"] == 1
   end
 end

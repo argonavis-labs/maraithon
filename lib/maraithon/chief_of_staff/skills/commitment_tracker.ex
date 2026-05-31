@@ -258,10 +258,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           {:ok, brief_record} ->
             period_key = read_string(tracker_input, "date", nil)
 
+            {brief_record, linked_todo_ids, todo_link_error} =
+              attach_model_todos_to_brief(brief_record, todo_result)
+
             event_type =
               if generation_mode in ["llm", "source_fallback"],
                 do: :briefs_recorded,
                 else: :brief_generation_failed
+
+            todo_payload =
+              todo_result
+              |> todo_event_payload()
+              |> Map.put(:linked_todo_ids, linked_todo_ids)
+              |> maybe_put(:todo_link_error, todo_link_error)
 
             {:emit,
              {event_type,
@@ -274,7 +283,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
                 source_backed: true,
                 brief_id: brief_record.id
               }
-              |> Map.merge(todo_event_payload(todo_result))},
+              |> Map.merge(todo_payload)},
              %{
                state
                | pending_tracker_input: nil,
@@ -926,6 +935,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp persist_model_todos(_user_id, _report, _tracker_input), do: {:ok, :no_todos}
+
+  defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
+    todos = Map.get(result, :todos, [])
+
+    case Briefs.attach_linked_todos(brief_record, todos) do
+      {:ok, updated_brief} ->
+        {updated_brief, Enum.map(todos, & &1.id), nil}
+
+      {:error, reason} ->
+        {brief_record, [], inspect(reason)}
+    end
+  end
+
+  defp attach_model_todos_to_brief(brief_record, _todo_result), do: {brief_record, [], nil}
 
   defp ingest_todos_with_fallback(user_id, candidates, opts) do
     case OpenLoops.ingest_todos(user_id, candidates, opts) do

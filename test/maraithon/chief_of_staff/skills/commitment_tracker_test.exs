@@ -218,6 +218,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert get_in(todo.metadata, ["todo_intelligence", "source"]) ==
              "chief_of_staff_commitment_tracker"
 
+    assert payload.linked_todo_ids == [todo.id]
+    assert brief.metadata["linked_todo_ids"] == [todo.id]
+    assert brief.metadata["todo_digest"] == true
+    assert brief.metadata["todo_digest_count"] == 1
+
     [person] = Crm.list_people(user_id, query: "Elena", limit: 5)
     assert person.display_name == "Elena Saradidis"
 
