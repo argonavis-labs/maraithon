@@ -43,6 +43,7 @@ final class IMessageSource: SourceProtocol {
     private let lowPowerPollInterval: TimeInterval
     private let batchLimit: Int
     private let lowPowerProbe: @Sendable () -> Bool
+    private let fullDiskAccessProbe: @Sendable () -> Bool
 
     private var pollTask: Task<Void, Never>?
     private var isPaused: Bool = false
@@ -58,7 +59,8 @@ final class IMessageSource: SourceProtocol {
         pollInterval: TimeInterval = 180,
         lowPowerPollInterval: TimeInterval? = nil,
         batchLimit: Int = 200,
-        lowPowerProbe: @escaping @Sendable () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled }
+        lowPowerProbe: @escaping @Sendable () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled },
+        fullDiskAccessProbe: @escaping @Sendable () -> Bool = { FullDiskAccessProbe.isGranted() }
     ) {
         self.databaseURL = databaseURL
         self.cursor = cursor
@@ -73,6 +75,7 @@ final class IMessageSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 300)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
+        self.fullDiskAccessProbe = fullDiskAccessProbe
         self.statusPublisher = SourceStatusPublisher(sourceID: "imessage", state: .disconnected)
     }
 
@@ -144,9 +147,7 @@ final class IMessageSource: SourceProtocol {
     private var lastTickAt: ContinuousClock.Instant?
 
     private func tickIfNeeded(force: Bool) async {
-        if waitForFullDiskAccessGrantIfNeeded() {
-            return
-        }
+        clearFullDiskAccessBlockIfGranted()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -174,27 +175,26 @@ final class IMessageSource: SourceProtocol {
         }
     }
 
-    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+    private func clearFullDiskAccessBlockIfGranted() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
-            return false
+            return
         }
 
-        if FullDiskAccessProbe.isGranted() {
+        if fullDiskAccessProbe() {
             statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
                 "imessage.full_disk_access_granted",
                 source: .imessage,
                 payload: ["previous_reason": reason]
             )
-            return false
+            return
         }
 
         eventLog.debug(
-            "imessage.waiting_for_full_disk_access",
+            "imessage.rechecking_previous_full_disk_access_block",
             source: .imessage,
             payload: ["reason": reason]
         )
-        return true
     }
 
     /// Two-phase newest-first cycle:

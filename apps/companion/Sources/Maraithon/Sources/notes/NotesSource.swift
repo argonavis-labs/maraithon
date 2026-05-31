@@ -48,6 +48,7 @@ final class NotesSource: SourceProtocol {
     private let lowPowerPollInterval: TimeInterval
     private let batchLimit: Int
     private let lowPowerProbe: @Sendable () -> Bool
+    private let fullDiskAccessProbe: @Sendable () -> Bool
     private let summarizer: Summarizing
 
     private var pollTask: Task<Void, Never>?
@@ -65,6 +66,7 @@ final class NotesSource: SourceProtocol {
         lowPowerPollInterval: TimeInterval? = nil,
         batchLimit: Int = 200,
         lowPowerProbe: @escaping @Sendable () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled },
+        fullDiskAccessProbe: @escaping @Sendable () -> Bool = { FullDiskAccessProbe.isGranted() },
         summarizer: Summarizing = OnDeviceSummarizer()
     ) {
         self.databaseURL = databaseURL
@@ -79,6 +81,7 @@ final class NotesSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 600)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
+        self.fullDiskAccessProbe = fullDiskAccessProbe
         self.summarizer = summarizer
         self.statusPublisher = SourceStatusPublisher(sourceID: "notes", state: .disconnected)
     }
@@ -136,9 +139,7 @@ final class NotesSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
-        if waitForFullDiskAccessGrantIfNeeded() {
-            return
-        }
+        clearFullDiskAccessBlockIfGranted()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -166,27 +167,26 @@ final class NotesSource: SourceProtocol {
         }
     }
 
-    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+    private func clearFullDiskAccessBlockIfGranted() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
-            return false
+            return
         }
 
-        if FullDiskAccessProbe.isGranted() {
+        if fullDiskAccessProbe() {
             statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
                 "notes.full_disk_access_granted",
                 source: .notes,
                 payload: ["previous_reason": reason]
             )
-            return false
+            return
         }
 
         eventLog.debug(
-            "notes.waiting_for_full_disk_access",
+            "notes.rechecking_previous_full_disk_access_block",
             source: .notes,
             payload: ["reason": reason]
         )
-        return true
     }
 
     /// Two-phase newest-first cycle: pull `Z_PK > newestSeen` first,

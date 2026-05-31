@@ -54,6 +54,7 @@ final class VoiceMemosSource: SourceProtocol {
     private let lowPowerPollInterval: TimeInterval
     private let batchLimit: Int
     private let lowPowerProbe: @Sendable () -> Bool
+    private let fullDiskAccessProbe: @Sendable () -> Bool
     private let transcriber: VoiceMemosTranscriber
     private let audioReader: @Sendable (URL) throws -> Data
     private let maxAudioBytes: Int64
@@ -84,6 +85,7 @@ final class VoiceMemosSource: SourceProtocol {
         lowPowerPollInterval: TimeInterval? = nil,
         batchLimit: Int = 3,
         lowPowerProbe: @escaping @Sendable () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled },
+        fullDiskAccessProbe: @escaping @Sendable () -> Bool = { FullDiskAccessProbe.isGranted() },
         transcriber: VoiceMemosTranscriber = VoiceMemosTranscriber(),
         audioReader: @escaping @Sendable (URL) throws -> Data = { url in
             try Data(contentsOf: url, options: [.mappedIfSafe])
@@ -101,6 +103,7 @@ final class VoiceMemosSource: SourceProtocol {
         self.lowPowerPollInterval = lowPowerPollInterval ?? min(pollInterval * 4, 300)
         self.batchLimit = batchLimit
         self.lowPowerProbe = lowPowerProbe
+        self.fullDiskAccessProbe = fullDiskAccessProbe
         self.transcriber = transcriber
         self.audioReader = audioReader
         self.maxAudioBytes = maxAudioBytes
@@ -121,6 +124,7 @@ final class VoiceMemosSource: SourceProtocol {
         lowPowerPollInterval: TimeInterval? = nil,
         batchLimit: Int = 3,
         lowPowerProbe: @escaping @Sendable () -> Bool = { ProcessInfo.processInfo.isLowPowerModeEnabled },
+        fullDiskAccessProbe: @escaping @Sendable () -> Bool = { FullDiskAccessProbe.isGranted() },
         transcriber: VoiceMemosTranscriber = VoiceMemosTranscriber(),
         summarizer: Summarizing = OnDeviceSummarizer()
     ) {
@@ -133,6 +137,7 @@ final class VoiceMemosSource: SourceProtocol {
             lowPowerPollInterval: lowPowerPollInterval,
             batchLimit: batchLimit,
             lowPowerProbe: lowPowerProbe,
+            fullDiskAccessProbe: fullDiskAccessProbe,
             transcriber: transcriber,
             summarizer: summarizer,
             outbox: { deviceId, payloads in
@@ -194,9 +199,7 @@ final class VoiceMemosSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
-        if waitForFullDiskAccessGrantIfNeeded() {
-            return
-        }
+        clearFullDiskAccessBlockIfGranted()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -224,27 +227,26 @@ final class VoiceMemosSource: SourceProtocol {
         }
     }
 
-    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+    private func clearFullDiskAccessBlockIfGranted() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
-            return false
+            return
         }
 
-        if FullDiskAccessProbe.isGranted() {
+        if fullDiskAccessProbe() {
             statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
                 "voice_memos.full_disk_access_granted",
                 source: .voiceMemos,
                 payload: ["previous_reason": reason]
             )
-            return false
+            return
         }
 
         eventLog.debug(
-            "voice_memos.waiting_for_full_disk_access",
+            "voice_memos.rechecking_previous_full_disk_access_block",
             source: .voiceMemos,
             payload: ["reason": reason]
         )
-        return true
     }
 
     /// Single sync cycle: read everything beyond the cursor, build payloads,

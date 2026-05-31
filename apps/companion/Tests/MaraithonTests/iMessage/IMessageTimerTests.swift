@@ -81,6 +81,35 @@ final class IMessageTimerTests: XCTestCase {
     }
 
     @MainActor
+    func testStartRechecksSourceAfterPersistedFullDiskAccessBlock() async throws {
+        let env = makeEnvironment(
+            pollInterval: 60,
+            lowPowerProbe: { false },
+            fullDiskAccessProbe: { false }
+        )
+
+        env.source.statusPublisher.recordHealthyCycle(at: Date())
+        env.source.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        XCTAssertEqual(
+            env.source.statusPublisher.displayedState(),
+            .error(reason: "imessage_full_disk_access_required")
+        )
+
+        env.source.start()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        XCTAssertEqual(cycleCount(env.log), 1)
+        XCTAssertNil(env.source.statusPublisher.fullDiskAccessBlockReason)
+        XCTAssertEqual(env.source.statusPublisher.displayedState(), .connected)
+        XCTAssertTrue(
+            env.log.entries.contains {
+                $0.message == "imessage.rechecking_previous_full_disk_access_block"
+            }
+        )
+        env.source.pause()
+    }
+
+    @MainActor
     func testLowPowerModeStretchesCadence() async throws {
         // 50 ms base, 1 s in low-power mode. Inside a 300 ms window we
         // should see exactly the priming cycle — every subsequent tick
@@ -143,7 +172,8 @@ final class IMessageTimerTests: XCTestCase {
     private func makeEnvironment(
         pollInterval: TimeInterval,
         lowPowerPollInterval: TimeInterval? = nil,
-        lowPowerProbe: @escaping @Sendable () -> Bool
+        lowPowerProbe: @escaping @Sendable () -> Bool,
+        fullDiskAccessProbe: @escaping @Sendable () -> Bool = { FullDiskAccessProbe.isGranted() }
     ) -> Environment {
         let log = EventLog(capacity: 256)
         let blocklist = Blocklist()
@@ -173,7 +203,8 @@ final class IMessageTimerTests: XCTestCase {
             pollInterval: pollInterval,
             lowPowerPollInterval: lowPowerPollInterval,
             batchLimit: 200,
-            lowPowerProbe: lowPowerProbe
+            lowPowerProbe: lowPowerProbe,
+            fullDiskAccessProbe: fullDiskAccessProbe
         )
         return Environment(source: source, log: log)
     }
