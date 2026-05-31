@@ -159,6 +159,8 @@ defmodule Maraithon.AssistantHarnessTest do
              "Persist actionable work as durable work items through the internal todo tools"
 
     assert prompt =~ "People is the durable relationship layer"
+    assert prompt =~ "what is known versus uncertain"
+    assert prompt =~ "what is known versus still uncertain"
     assert prompt =~ "message_class:\"todo_digest\""
     assert proactive_prompt =~ "Reason over open work, open loops"
     assert proactive_prompt =~ "People relationship context"
@@ -171,6 +173,8 @@ defmodule Maraithon.AssistantHarnessTest do
     refute prompt =~ "Persist actionable work as todos."
     refute prompt =~ "generic CRM labels"
     refute prompt =~ "I don't have Charlie in your CRM"
+    refute prompt =~ "and confidence"
+    refute prompt =~ "how confident you are"
     refute proactive_prompt =~ "kent.fenwick"
   end
 
