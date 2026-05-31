@@ -253,10 +253,10 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~ "The Mac companion has not checked in recently"
 
     assert result.summary =~
-             "local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete"
+             "local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context may be incomplete"
 
     assert result.next_action ==
-             "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+             "Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
 
     refute result.summary =~ "No open work appeared"
     refute result.summary =~ "Maraithon did not find"
@@ -366,7 +366,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~ "The Mac companion has not checked in recently"
 
     assert result.next_action ==
-             "Start here: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+             "Start here: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
 
     refute result.next_action =~ "source_health"
     refute result.next_action =~ "last_seen_at"

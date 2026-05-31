@@ -47,6 +47,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     calendar_events_count: "calendar",
     voice_memos_count: "voice memos"
   ]
+  @local_context_gap_phrase "local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context"
   @source_health_issue_statuses ~w(stale reauth_required error unknown never_synced)
   @preview_label_max_chars 72
   @automation_behavior_labels %{
@@ -3745,7 +3746,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp local_context_stat_count(_stats, _stat_key), do: 0
 
   defp local_context_recommended_next_step("stale", _paired_device_count) do
-    "Open the Mac companion app before treating local iMessage, Notes, reminders, files, and browser context as complete."
+    "Open the Mac companion app before treating #{@local_context_gap_phrase} as complete."
   end
 
   defp local_context_recommended_next_step("unknown", paired_device_count)
@@ -4022,7 +4023,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp local_context_user_gap(source_health) do
     cond do
       local_context_status?(source_health, "stale") ->
-        "The Mac companion has not checked in recently, so local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete."
+        "The Mac companion has not checked in recently, so #{@local_context_gap_phrase} may be incomplete."
 
       local_context_status?(source_health, "unknown") and
           local_context_paired_device_count(source_health) > 0 ->
@@ -4030,7 +4031,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
       local_context_status?(source_health, "not_connected") and
           local_context_paired_device_count(source_health) > 0 ->
-        "The Mac companion is not connected, so local iMessage, Notes, Reminders, Files, and Browser History context may be incomplete."
+        "The Mac companion is not connected, so #{@local_context_gap_phrase} may be incomplete."
 
       true ->
         nil
