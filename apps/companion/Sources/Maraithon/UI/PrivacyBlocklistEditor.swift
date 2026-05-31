@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum PrivacyBlocklistEditorCopy {
+    static let emptyMessage = "Nothing is blocked. Add a phone number or email above to filter matching messages before sync."
+}
+
 /// Inline editor for the local-only `Blocklist`. Phone numbers and
 /// emails added here are filtered before sources push, so the server
 /// never sees them.
@@ -36,7 +40,7 @@ struct PrivacyBlocklistEditor: View {
             }
 
             if sortedHandles.isEmpty {
-                Text("No blocked handles yet.")
+                Text(PrivacyBlocklistEditorCopy.emptyMessage)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {

@@ -12,6 +12,14 @@ final class PrivacyBlocklistEditorTests: XCTestCase {
         _ = PrivacyBlocklistEditor()
     }
 
+    func testEmptyCopyExplainsLocalFiltering() {
+        XCTAssertEqual(
+            PrivacyBlocklistEditorCopy.emptyMessage,
+            "Nothing is blocked. Add a phone number or email above to filter matching messages before sync."
+        )
+        XCTAssertFalse(PrivacyBlocklistEditorCopy.emptyMessage.contains("No blocked handles yet"))
+    }
+
     func testBlocklistAddRoundtrips() {
         // Test isolation: snapshot + restore so we don't clobber the
         // user's real blocklist persisted in UserDefaults.standard.
