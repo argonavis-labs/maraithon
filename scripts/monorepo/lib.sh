@@ -109,7 +109,7 @@ ensure_companion_dev_signing() {
   fi
 
   if companion_has_persistent_signing_config; then
-    echo "Refreshing companion signing pin for persistent Full Disk Access..."
+    echo "Verifying companion signing pin for persistent Full Disk Access..."
   else
     echo "Configuring stable companion signing so macOS privacy grants persist across reloads..."
   fi

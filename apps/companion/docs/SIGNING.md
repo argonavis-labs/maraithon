@@ -26,6 +26,9 @@ available, and then to a local self-signed `Maraithon Dev` identity if needed.
 The setup pins the full signing identity in gitignored
 `Config.local.xcconfig`, which makes future companion builds keep the same TCC
 identity instead of letting Xcode choose a different local certificate.
+Once a valid identity is pinned, the setup script keeps that exact identity on
+later runs and only chooses a replacement if the pinned certificate is no
+longer available in the login Keychain.
 `make run-companion` also builds the Debug app directly at
 `~/Applications/Maraithon.app` before launching it. Building at that stable path
 lets Xcode register the app for local execution while keeping Full Disk Access

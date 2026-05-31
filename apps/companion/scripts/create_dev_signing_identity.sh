@@ -26,6 +26,20 @@ SELECTED_TEAM=""
 SELECTED_CODE_SIGN_IDENTITY=""
 SELECTED_CODE_SIGN_STYLE="Manual"
 
+xcconfig_value() {
+    local key="$1"
+
+    awk -F= -v key="${key}" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            value = $0
+            sub(/^[^=]*=/, "", value)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+            print value
+            exit
+        }
+    ' "${CONFIG_PATH}"
+}
+
 preferred_apple_development_identity() {
     security find-identity -p codesigning -v "${KEYCHAIN}" |
         sed -En 's/.*"(Apple Development: [^"]+)".*/\1/p' |
@@ -40,6 +54,12 @@ preferred_developer_id_identity() {
 
 identity_exists() {
     security find-identity -p codesigning -v "${KEYCHAIN}" | grep -Fq "\"${IDENTITY_NAME}\""
+}
+
+keychain_identity_exists() {
+    local identity="$1"
+
+    security find-identity -p codesigning -v "${KEYCHAIN}" | grep -Fq "\"${identity}\""
 }
 
 ensure_local_config() {
@@ -108,13 +128,32 @@ team_id_from_identity() {
     printf '%s\n' "${identity}" | sed -En 's/.*\(([A-Z0-9]{10})\)$/\1/p'
 }
 
-SELECTED_IDENTITY="$(preferred_apple_development_identity)"
+ensure_local_config
+
+PINNED_IDENTITY="$(xcconfig_value CODE_SIGN_IDENTITY || true)"
+
+if [ -n "${PINNED_IDENTITY}" ] && [ "${PINNED_IDENTITY}" != "-" ] &&
+    keychain_identity_exists "${PINNED_IDENTITY}"; then
+    SELECTED_IDENTITY="${PINNED_IDENTITY}"
+    SELECTED_TEAM="$(team_id_from_identity "${SELECTED_IDENTITY}")"
+    SELECTED_CODE_SIGN_IDENTITY="${SELECTED_IDENTITY}"
+    SELECTED_CODE_SIGN_STYLE="Manual"
+    echo "Keeping pinned identity \"${SELECTED_IDENTITY}\"."
+elif [ -n "${PINNED_IDENTITY}" ] && [ "${PINNED_IDENTITY}" != "-" ]; then
+    echo "Pinned identity \"${PINNED_IDENTITY}\" is not available; choosing a new stable identity."
+fi
+
+if [ -z "${SELECTED_IDENTITY}" ]; then
+    SELECTED_IDENTITY="$(preferred_apple_development_identity)"
+fi
 
 if [ -n "${SELECTED_IDENTITY}" ]; then
     SELECTED_TEAM="$(team_id_from_identity "${SELECTED_IDENTITY}")"
     SELECTED_CODE_SIGN_IDENTITY="${SELECTED_IDENTITY}"
     SELECTED_CODE_SIGN_STYLE="Manual"
-    echo "Using existing identity \"${SELECTED_IDENTITY}\"."
+    if [ "${SELECTED_IDENTITY}" != "${PINNED_IDENTITY:-}" ]; then
+        echo "Using existing identity \"${SELECTED_IDENTITY}\"."
+    fi
 elif SELECTED_IDENTITY="$(preferred_developer_id_identity)" && [ -n "${SELECTED_IDENTITY}" ]; then
     SELECTED_TEAM="$(team_id_from_identity "${SELECTED_IDENTITY}")"
     SELECTED_CODE_SIGN_IDENTITY="${SELECTED_IDENTITY}"
@@ -177,7 +216,6 @@ CONF
 fi
 
 # Wire CODE_SIGN_IDENTITY into the per-developer xcconfig if absent.
-ensure_local_config
 append_config_line_if_missing \
     CODE_SIGN_STYLE \
     "// Stable local signing keeps macOS privacy grants attached across rebuilds."

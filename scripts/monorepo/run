@@ -44,6 +44,7 @@ if selected_component "${component}" "companion"; then
 
   echo
   echo "Installed companion dev app at ${install_app}"
-  echo "Grant Full Disk Access to this app path once; future reloads preserve it."
+  echo "If Full Disk Access is already enabled for this app, this reload keeps using it."
+  echo "If it is not enabled yet, grant this exact app path once; future reloads preserve it."
   open "${install_app}"
 fi
