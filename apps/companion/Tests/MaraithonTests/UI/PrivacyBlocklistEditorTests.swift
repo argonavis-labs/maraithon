@@ -13,12 +13,32 @@ final class PrivacyBlocklistEditorTests: XCTestCase {
     }
 
     func testEmptyCopyExplainsLocalFiltering() {
+        let publicCopy = [
+            PrivacyBlocklistEditorCopy.sectionTitle,
+            PrivacyBlocklistEditorCopy.description,
+            PrivacyBlocklistEditorCopy.emptyMessage,
+            PrivacyBlocklistEditorCopy.inputPlaceholder,
+            PrivacyBlocklistEditorCopy.addButtonTitle,
+            PrivacyBlocklistEditorCopy.removeButtonTitle,
+            PrivacyBlocklistEditorCopy.removeAccessibilityLabel(for: "friend@example.com")
+        ].joined(separator: " ")
+
+        XCTAssertEqual(PrivacyBlocklistEditorCopy.sectionTitle, "Never include")
+        XCTAssertEqual(
+            PrivacyBlocklistEditorCopy.description,
+            "Add phone numbers or emails you never want included. Matching Messages stay on this Mac."
+        )
         XCTAssertEqual(
             PrivacyBlocklistEditorCopy.emptyMessage,
-            "Nothing is blocked. Add a phone number or email above to filter matching messages before upload."
+            "No phone numbers or emails are excluded. Add one to keep matching Messages out of assistant context."
         )
-        XCTAssertFalse(PrivacyBlocklistEditorCopy.emptyMessage.localizedCaseInsensitiveContains("sync"))
-        XCTAssertFalse(PrivacyBlocklistEditorCopy.emptyMessage.contains("No blocked handles yet"))
+        XCTAssertTrue(publicCopy.localizedCaseInsensitiveContains("Matching Messages stay on this Mac"))
+        XCTAssertTrue(publicCopy.localizedCaseInsensitiveContains("assistant context"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("upload"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("cloud"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("blocklist"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("blocked handles"))
     }
 
     func testBlocklistAddRoundtrips() {

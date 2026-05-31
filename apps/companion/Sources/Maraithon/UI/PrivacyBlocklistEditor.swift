@@ -1,7 +1,16 @@
 import SwiftUI
 
 enum PrivacyBlocklistEditorCopy {
-    static let emptyMessage = "Nothing is blocked. Add a phone number or email above to filter matching messages before upload."
+    static let sectionTitle = "Never include"
+    static let description = "Add phone numbers or emails you never want included. Matching Messages stay on this Mac."
+    static let emptyMessage = "No phone numbers or emails are excluded. Add one to keep matching Messages out of assistant context."
+    static let inputPlaceholder = "Phone number or email"
+    static let addButtonTitle = "Add"
+    static let removeButtonTitle = "Remove"
+
+    static func removeAccessibilityLabel(for handle: String) -> String {
+        "Remove \(handle) from never include list"
+    }
 }
 
 /// Inline editor for the local-only `Blocklist`. Phone numbers and
@@ -19,20 +28,20 @@ struct PrivacyBlocklistEditor: View {
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        Section("Blocklist") {
-            Text("Phone numbers and emails on this list are filtered locally — Maraithon's cloud never sees them.")
+        Section(PrivacyBlocklistEditorCopy.sectionTitle) {
+            Text(PrivacyBlocklistEditorCopy.description)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
             HStack(spacing: Tokens.Spacing.small) {
-                TextField("Phone number or email", text: $draft)
+                TextField(PrivacyBlocklistEditorCopy.inputPlaceholder, text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .focused($fieldFocused)
                     .onSubmit(commit)
                 Button {
                     commit()
                 } label: {
-                    Label("Add", systemImage: "plus")
+                    Label(PrivacyBlocklistEditorCopy.addButtonTitle, systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .disabled(trimmedDraft.isEmpty)
@@ -60,10 +69,10 @@ struct PrivacyBlocklistEditor: View {
                                 payload: ["handle_hash": String(handle.hashValue)]
                             )
                         } label: {
-                            Label("Remove", systemImage: "trash")
+                            Label(PrivacyBlocklistEditorCopy.removeButtonTitle, systemImage: "trash")
                         }
                         .buttonStyle(.borderless)
-                        .accessibilityLabel("Remove \(handle) from blocklist")
+                        .accessibilityLabel(PrivacyBlocklistEditorCopy.removeAccessibilityLabel(for: handle))
                     }
                 }
             }
