@@ -1392,7 +1392,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   defp tool_result_summary(tool, result)
        when tool in ["list_todos", "open_work"] and is_map(result) do
     case map_value(result, "todos") do
-      [] -> "No open work matched this request."
+      [] -> "No saved open work matched this request."
       _ -> tool_result_summary(result)
     end
   end

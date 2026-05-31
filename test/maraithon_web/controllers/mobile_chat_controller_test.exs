@@ -456,7 +456,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                        "tool" => "open_work",
                        "label" => "Open work",
                        "status" => "completed",
-                       "summary" => "No open work matched this request."
+                       "summary" => "No saved open work matched this request."
                      }
                    ],
                    "steps" => steps
@@ -467,7 +467,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user"},
                  %{
                    "role" => "assistant",
-                   "body" => "No open work matched this request.",
+                   "body" => "No saved open work matched this request.",
                    "structured_data" => assistant_structured_data,
                    "work_summary" =>
                      assistant_work_summary = %{
@@ -476,7 +476,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                          %{
                            "tool" => "open_work",
                            "label" => "Open work",
-                           "summary" => "No open work matched this request."
+                           "summary" => "No saved open work matched this request."
                          }
                        ]
                      }

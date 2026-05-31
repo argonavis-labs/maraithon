@@ -368,7 +368,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
   defp polish_legacy_product_terms(value) when is_binary(value) do
     value
-    |> replace_result_regex(~r/^No open work found\.?$/i, "No open work matched this request.")
+    |> replace_result_regex(
+      ~r/^No open (?:work|todos?) (?:found|matched this request)\.?$/i,
+      "No saved open work matched this request."
+    )
     |> replace_result_regex(~r/\bStart with\s+/, "Start here: ")
     |> replace_result_regex(~r/\bstart with\s+/, "start here: ")
     |> replace_result_regex(
@@ -420,7 +423,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
 
     case {singular, count} do
       {"work item", 0} ->
-        "No open work matched this request."
+        "No saved open work matched this request."
 
       {"work item", count} ->
         "Found #{format_count(count)} open work #{pluralize("item", count)}."
