@@ -179,10 +179,10 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
         tool_calls([
           {"create_scheduled_task",
            %{
-             "title" => "Review open loops, calendar, CRM, and todos",
+             "title" => "Review open loops, calendar, relationship context, and open work",
              "once_at" => scheduled_at(text),
              "prompt" =>
-               "Review my open loops, calendar, CRM, and todos, then send me a prep note."
+               "Review my open loops, calendar, relationship context, and open work, then send me a prep note."
            }}
         ])
 
@@ -228,7 +228,7 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
         final("Dismissed the linked work item as no longer relevant.")
 
       String.contains?(normalized, "merge crm person") ->
-        final("Merged the duplicate CRM person into the surviving relationship record.")
+        final("Merged the duplicate People record into the surviving relationship record.")
 
       String.contains?(normalized, "who is matthew raue") ->
         final(
@@ -266,7 +266,7 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
       String.contains?(normalized, "queue a one-time job") or
           String.contains?(normalized, "queue a job") ->
         final(
-          "Queued the job to review open loops, calendar, CRM, and todos, then send a prep note."
+          "Queued the job to review open loops, calendar, relationship context, and open work, then send a prep note."
         )
 
       String.contains?(normalized, "what did i look at") ->

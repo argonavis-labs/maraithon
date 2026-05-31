@@ -1968,8 +1968,10 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
     |> require_tool(run, "create_scheduled_task")
     |> require_finding(
       contains_all?(task_text, ["open loops", "calendar"]) and
-        contains_any?(task_text, ["crm", "todos", "prep"]),
-      "scheduled job must persist the requested open-loop/calendar/CRM/todo review scope"
+        contains_any?(task_text, ["relationship context", "people"]) and
+        contains_any?(task_text, ["open work", "work"]) and
+        contains_any?(task_text, ["prep"]),
+      "scheduled job must persist the requested open-loop/calendar/relationship/open-work review scope"
     )
   end
 
