@@ -89,7 +89,22 @@ defmodule Maraithon.Todos.UserFacingCopy do
       ~r/\bReply now with owner and ETA\.?/i,
       "Reply with a clear owner and timing."
     )
-    |> String.replace(~r/\bwith owner, ETA, and\b/i, "with a clear owner, timing, and")
+    |> String.replace(
+      ~r/\bwith status, owner, and ETA\b/i,
+      "with current status, a clear owner, and timing"
+    )
+    |> String.replace(
+      ~r/\bwith owner, ETA, and\b/i,
+      "with a clear owner, timing, and"
+    )
+    |> String.replace(
+      ~r/\bwith owner, ETA\b/i,
+      "with a clear owner and timing"
+    )
+    |> String.replace(
+      ~r/\bwith a clear owner and ETA\b/i,
+      "with a clear owner and timing"
+    )
     |> String.replace(~r/\bwith owner and ETA\b/i, "with a clear owner and timing")
     |> String.replace(~r/\bwith the owner and ETA\b/i, "with a clear owner and timing")
     |> String.replace(

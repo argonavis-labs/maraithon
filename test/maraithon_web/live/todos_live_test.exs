@@ -33,6 +33,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert html =~ "Work list"
     assert html =~ "Reply to Michael Berlingo"
     assert html =~ "Starteryou UGC Campaigns"
+    assert html =~ "Draft a reply with current status, a clear owner, and timing."
     assert html =~ "follow-ups that need confirmation"
     assert html =~ "personal commitments"
     assert html =~ "1 work item shown."
@@ -47,6 +48,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute html =~ "stale follow-ups"
     refute html =~ "personal tasks"
     refute html =~ "todo shown"
+    refute html =~ "Draft a reply with status, owner, and ETA."
     refute html =~ ">Manual<"
     assert has_element?(view, "a[href='/todos'][aria-current='page']", "Work")
 
@@ -550,7 +552,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     html = render(view)
     refute html =~ "Read vendor newsletter one"
     refute html =~ "Read vendor newsletter two"
-    assert html =~ "Maraithon will show fewer like those"
+    assert html =~ "Similar work will show up less often"
     assert Todos.get_for_user(@user_email, first.id).status == "dismissed"
     assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
   end
@@ -691,7 +693,7 @@ defmodule MaraithonWeb.TodosLiveTest do
 
     html = render(view)
     refute html =~ "Read vendor newsletter"
-    assert html =~ "Maraithon will show fewer like that."
+    assert html =~ "Similar work will show up less often."
 
     [memory] =
       Memory.list_items(@user_email,

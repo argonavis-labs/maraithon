@@ -222,6 +222,15 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert UserFacingCopy.polish_text("Decide whether to send the campaign owner and ETA.") ==
              "Send the campaign update with a clear owner and timing."
 
+    assert UserFacingCopy.polish_text("Draft a reply with status, owner, and ETA.") ==
+             "Draft a reply with current status, a clear owner, and timing."
+
+    assert UserFacingCopy.polish_text("Reply with owner, ETA, and billing contact.") ==
+             "Reply with a clear owner, timing, and billing contact."
+
+    assert UserFacingCopy.polish_text("Confirm the shipment ETA.") ==
+             "Confirm the shipment ETA."
+
     assert UserFacingCopy.polish_text("Michael is waiting and no later reply was found.") ==
              "Michael is waiting; no later reply is recorded."
 

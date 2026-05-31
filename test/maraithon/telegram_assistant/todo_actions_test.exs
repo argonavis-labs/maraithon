@@ -464,12 +464,13 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert memory.source_ref_id == todo.id
 
     assert last_telegram_message(:callback).opts[:text] ==
-             "Maraithon will show fewer like this"
+             "Similar work will show up less often"
 
     edit = last_telegram_message(:edit)
     assert edit.text =~ "Feedback: Show less"
     refute edit.text =~ "Feedback noted:"
     refute edit.text =~ "I'll show fewer"
+    refute edit.text =~ "Maraithon will show fewer"
   end
 
   defp last_telegram_message(type) do

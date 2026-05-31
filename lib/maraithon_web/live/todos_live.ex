@@ -181,7 +181,7 @@ defmodule MaraithonWeb.TodosLive do
         socket =
           socket
           |> refresh_todos()
-          |> put_flash(:info, "Maraithon will show fewer like that.")
+          |> put_flash(:info, "Similar work will show up less often.")
 
         socket =
           if selected? do
@@ -722,7 +722,7 @@ defmodule MaraithonWeb.TodosLive do
       case action do
         :complete -> "Marked #{pluralize_work_item(updated_count)} done"
         :dismiss -> "Dismissed #{pluralize_work_item(updated_count)}"
-        :see_less -> "Maraithon will show fewer like those"
+        :see_less -> "Similar work will show up less often"
       end
 
     case length(errors) do

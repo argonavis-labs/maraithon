@@ -997,7 +997,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp callback_notice("important"), do: "Kept active"
   defp callback_notice("helpful"), do: "Saved helpful feedback"
   defp callback_notice("not_helpful"), do: "Feedback saved"
-  defp callback_notice("see_less"), do: "Maraithon will show fewer like this"
+  defp callback_notice("see_less"), do: "Similar work will show up less often"
   defp callback_notice("draft_email"), do: "Draft ready"
   defp callback_notice("draft_slack"), do: "Draft ready"
 
