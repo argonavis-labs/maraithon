@@ -198,7 +198,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
         "Conversation context could not be fully evaluated, so this should be monitored instead of treated as a direct ask."
 
       _ ->
-        "No later reply or delivery clearly closes the loop."
+        "No later reply or delivery is recorded."
     end
   end
 

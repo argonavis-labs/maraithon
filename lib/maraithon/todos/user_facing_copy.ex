@@ -137,20 +137,29 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\bwith the owner and ETA\b/i, "with a clear owner and timing")
     |> String.replace(
       ~r/\bNo later reply or follow[- ]?through was found in the conversation\.?/i,
-      "No later reply or delivery clearly closes the loop."
+      "No later reply or delivery is recorded."
     )
     |> String.replace(
       ~r/\bNo later reply or delivery was found\.?/i,
-      "No later reply or delivery clearly closes the loop."
+      "No later reply or delivery is recorded."
     )
     |> String.replace(
       ~r/\s+and no later reply was found\.?/i,
-      "; no later reply clearly closes the loop."
+      "; no later reply is recorded."
     )
     |> String.replace(
       ~r/\bNo later reply was found\.?/i,
-      "No later reply clearly closes the loop."
+      "No later reply is recorded."
     )
+    |> String.replace(
+      ~r/\bclose the final loop\b/i,
+      "handle the remaining follow-through"
+    )
+    |> String.replace(
+      ~r/\bown the final loop\b/i,
+      "own the remaining follow-through"
+    )
+    |> String.replace(~r/\bfinal loop\b/i, "remaining follow-through")
     |> String.replace(~r/\bneeds a user response\b/i, "needs your reply")
     |> String.replace(~r/\bneeds user response\b/i, "needs your reply")
     |> String.replace(~r/\brequires a user response\b/i, "needs your reply")
@@ -358,7 +367,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     [
       "You committed to follow up with #{person}#{topic}.",
       context.why && "Context: #{context.why}.",
-      "No later reply or delivery clearly closes the loop."
+      "No later reply or delivery is recorded."
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
@@ -436,17 +445,20 @@ defmodule Maraithon.Todos.UserFacingCopy do
   defp topic_phrase(topic), do: " about #{topic}"
 
   defp generic_commitment_copy?(value) when is_binary(value) do
-    text = String.downcase(value)
+    text = value |> String.trim() |> String.downcase()
 
-    String.match?(text, ~r/\b(user|you)\s+committed\s+to\s+follow[- ]?up\b/) or
-      String.contains?(text, "follow-up not yet sent") or
-      String.contains?(text, "follow up not yet sent") or
-      String.match?(text, ~r/no later reply or follow[- ]?through/) or
-      String.contains?(text, "no later reply or delivery clearly closes the loop") or
-      String.contains?(text, "no sent follow-up") or
-      String.contains?(text, "commitment still appears open") or
-      String.contains?(text, "the commitment still appears open") or
-      String.contains?(text, "no completion evidence was found")
+    not String.starts_with?(text, "thread:") and
+      (String.match?(text, ~r/\b(user|you)\s+committed\s+to\s+follow[- ]?up\b/) or
+         String.contains?(text, "follow-up not yet sent") or
+         String.contains?(text, "follow up not yet sent") or
+         String.match?(text, ~r/no later reply or follow[- ]?through/) or
+         String.contains?(text, "no later reply or delivery clearly closes the loop") or
+         String.contains?(text, "no later reply or delivery is recorded") or
+         String.contains?(text, "no later reply is recorded") or
+         String.contains?(text, "no sent follow-up") or
+         String.contains?(text, "commitment still appears open") or
+         String.contains?(text, "the commitment still appears open") or
+         String.contains?(text, "no completion evidence was found"))
   end
 
   defp generic_commitment_copy?(_value), do: false

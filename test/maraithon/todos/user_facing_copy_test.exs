@@ -32,7 +32,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert attrs["title"] == "Follow up with Alex Müller about Starteryou UGC Campaigns"
 
     assert attrs["summary"] ==
-             "You committed to follow up with Alex Müller (Starteryou) about Starteryou UGC Campaigns. Context: Alex is waiting on the UGC campaign materials decision. No later reply or delivery clearly closes the loop."
+             "You committed to follow up with Alex Müller (Starteryou) about Starteryou UGC Campaigns. Context: Alex is waiting on the UGC campaign materials decision. No later reply or delivery is recorded."
 
     assert attrs["next_action"] ==
              "Reply to Alex Müller about Starteryou UGC Campaigns with the promised update, current status, and the next timing you can safely commit to."
@@ -110,7 +110,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     assert attrs["title"] == "Reply to Michael Berlingo on \"Starteryou UGC Campaigns\"."
 
     assert attrs["summary"] ==
-             "You committed to follow up with Michael Berlingo (Starteryou; UGC campaign contact) about Starteryou UGC Campaigns. Context: Michael is waiting on the UGC campaign next-step decision. No later reply or delivery clearly closes the loop."
+             "You committed to follow up with Michael Berlingo (Starteryou; UGC campaign contact) about Starteryou UGC Campaigns. Context: Michael is waiting on the UGC campaign next-step decision. No later reply or delivery is recorded."
 
     assert attrs["next_action"] ==
              "Reply to Michael Berlingo about Starteryou UGC Campaigns with the promised update, current status, and the next timing you can safely commit to."
@@ -118,6 +118,23 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
     refute attrs["summary"] =~ "No later reply or follow-through was found"
     refute attrs["summary"] =~ "I found"
     refute attrs["next_action"] =~ "owner, ETA"
+  end
+
+  test "preserves explicit thread context when evidence copy is already contextual" do
+    attrs =
+      UserFacingCopy.polish_attrs(%{
+        "title" => "Reply to Michael Berlingo on \"Starteryou UGC Campaigns\".",
+        "summary" =>
+          "Thread: Starteryou UGC Campaigns. Michael Berlingo is tied to this open thread; no later reply or delivery is recorded.",
+        "metadata" => %{
+          "from" => "Michael Berlingo <michael@example.com>",
+          "subject" => "Starteryou UGC Campaigns",
+          "record" => %{"person" => "Michael Berlingo"}
+        }
+      })
+
+    assert attrs["summary"] ==
+             "Thread: Starteryou UGC Campaigns. Michael Berlingo is tied to this open thread; no later reply or delivery is recorded."
   end
 
   test "strips internal source labels from todo-facing copy" do
@@ -196,7 +213,7 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "Send the campaign update with a clear owner and timing."
 
     assert UserFacingCopy.polish_text("Michael is waiting and no later reply was found.") ==
-             "Michael is waiting; no later reply clearly closes the loop."
+             "Michael is waiting; no later reply is recorded."
 
     assert UserFacingCopy.polish_text(
              "Reply now with owner, ETA, and the exact artifact or update you committed to."

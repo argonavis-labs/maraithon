@@ -866,11 +866,11 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp waiting_context_sentence(person) when is_binary(person) do
-    "#{person} is tied to this open thread; no later reply or delivery closes the loop."
+    "#{person} is tied to this open thread; no later reply or delivery is recorded."
   end
 
   defp waiting_context_sentence(_person) do
-    "No later reply or delivery closes this open loop."
+    "No later reply or delivery is recorded."
   end
 
   defp generic_followup_context?(context) when is_binary(context) do
@@ -1486,7 +1486,7 @@ defmodule Maraithon.InsightNotifications.Actions do
     explicit ||
       cond do
         read_string(context, "notification_posture") == "heads_up" ->
-          "Acknowledge the thread is moving, confirm whether you still own the final loop, and avoid implying nobody responded."
+          "Acknowledge the thread is moving, confirm whether you still own the remaining follow-through, and avoid implying nobody responded."
 
         insight.source == "gmail" and read_string(record, "commitment") != nil ->
           "Reply in-thread in your voice with the actual promise, current status, and timing you can safely stand behind."

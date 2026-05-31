@@ -88,7 +88,7 @@ struct ChiefOfStaffCopyTests {
         )
         #expect(
             ChiefOfStaffCopy.clean("Michael is waiting and no later reply was found.") ==
-                "Michael is waiting; no later reply clearly closes the loop."
+                "Michael is waiting; no later reply is recorded."
         )
         #expect(
             ChiefOfStaffCopy.clean(

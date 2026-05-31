@@ -948,9 +948,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
             "category" => "reply_urgent",
             "title" => "Gmail thread moving with Charlie",
             "summary" =>
-              "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+              "Charlie has already responded and the conversation is moving. You may still need to handle the remaining follow-through.",
             "recommended_action" =>
-              "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+              "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours.",
             "priority" => 82,
             "confidence" => 0.86,
             "dedupe_key" => "heads-up-gmail-1",
@@ -974,7 +974,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
                 "status" => "unresolved",
                 "evidence" => ["Charlie replied later in the conversation."],
                 "next_action" =>
-                  "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours."
+                  "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours."
               }
             }
           }
@@ -987,9 +987,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "dedupe_key" => "heads-up-gmail-1",
               "title" => "Gmail thread moving with Charlie",
               "summary" =>
-                "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+                "Charlie has already responded and the conversation is moving. You may still need to handle the remaining follow-through.",
               "recommended_action" =>
-                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+                "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours.",
               "priority" => 82,
               "confidence" => 0.87,
               "telegram_fit_score" => 0.83,
@@ -1004,7 +1004,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
               "status" => "unresolved",
               "evidence" => ["Charlie replied later in the conversation."],
               "next_action" =>
-                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+                "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours.",
               "actionability" => "actionable",
               "obligation_type" => "direct_human_request",
               "human_counterparty" => true,

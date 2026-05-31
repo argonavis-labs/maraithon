@@ -3150,7 +3150,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     deadline = deadline_phrase(due_at)
     deadline = if deadline == "", do: "", else: " #{deadline}"
 
-    "You committed to follow up with #{person}#{topic}#{deadline}. No later reply or delivery clearly closes the loop."
+    "You committed to follow up with #{person}#{topic}#{deadline}. No later reply or delivery is recorded."
   end
 
   defp sent_commitment_context_brief(person, topic, artifact_hint) do

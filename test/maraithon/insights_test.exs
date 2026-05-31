@@ -186,11 +186,11 @@ defmodule Maraithon.InsightsTest do
           }
         ])
 
-      assert insight.summary == "No later reply clearly closes the loop."
+      assert insight.summary == "No later reply is recorded."
       assert insight.recommended_action == "Reply with a clear owner and timing."
 
       assert insight.metadata["why_now"] ==
-               "Michael is waiting; no later reply clearly closes the loop."
+               "Michael is waiting; no later reply is recorded."
 
       assert insight.metadata["decision_prompt"] ==
                "Send the campaign update with a clear owner and timing."

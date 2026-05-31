@@ -7,7 +7,7 @@ defmodule Maraithon.Followthrough.ConversationContextTest do
     summary =
       ConversationContext.conversation_summary(%{"notification_posture" => "interrupt_now"})
 
-    assert summary == "No later reply or delivery clearly closes the loop."
+    assert summary == "No later reply or delivery is recorded."
     refute summary =~ "I found"
   end
 

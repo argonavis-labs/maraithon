@@ -460,7 +460,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "Michael Berlingo"
     assert sent.text =~ "Thread: Starteryou UGC Campaigns"
     assert sent.text =~ "Michael Berlingo is tied to this open thread"
-    assert sent.text =~ "no later reply or delivery closes the loop"
+    assert sent.text =~ "no later reply or delivery is recorded"
     assert sent.text =~ "contact on Starteryou UGC Campaigns thread"
     assert sent.text =~ "Gmail · kent@runner.now"
     assert sent.text =~ "Suggested:"
@@ -708,9 +708,9 @@ defmodule Maraithon.InsightNotificationActionsTest do
           "category" => "reply_urgent",
           "title" => "Gmail thread moving with Charlie",
           "summary" =>
-            "Charlie has already responded and the conversation is moving. You may still need to close the final loop.",
+            "Charlie has already responded and the conversation is moving. You may still need to handle the remaining follow-through.",
           "recommended_action" =>
-            "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours.",
+            "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours.",
           "priority" => 88,
           "confidence" => 0.9,
           "dedupe_key" => "telegram-actions:gmail:heads-up",
@@ -726,7 +726,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
               "commitment" => "Reply to David on Cowrie Agora Update",
               "evidence" => ["Charlie replied later in the conversation."],
               "next_action" =>
-                "Monitor the thread and close the final loop if the owner, artifact, or ETA is still yours."
+                "Monitor the thread and handle the remaining follow-through if the owner, artifact, or ETA is still yours."
             }
           }
         }

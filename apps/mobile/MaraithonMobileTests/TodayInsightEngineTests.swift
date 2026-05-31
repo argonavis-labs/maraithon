@@ -190,7 +190,7 @@ struct TodayInsightEngineTests {
 
         #expect(queue.first?.subtitle == "Send the campaign update with a clear owner and timing.")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("due ") == true)
-        #expect(queue.first?.detail?.contains("Why now: Michael is waiting; no later reply clearly closes the loop.") == true)
+        #expect(queue.first?.detail?.contains("Why now: Michael is waiting; no later reply is recorded.") == true)
         #expect(queue.first?.detail?.contains("Checked Gmail") == true)
     }
 
