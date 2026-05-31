@@ -45,8 +45,9 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
         expires_at: ~U[2026-05-29 12:00:00Z]
       })
 
-    assert summary =~ "Permissions: gmail.readonly"
+    assert summary =~ "1 permission granted"
     assert summary =~ "Access expires May 29, 2026 at 12:00 PM UTC"
+    refute summary =~ "gmail.readonly"
     refute summary =~ "Scopes"
     refute summary =~ "Expires "
   end

@@ -277,6 +277,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "1 GitHub permission granted"
       refute html =~ ">Reconnect<"
       refute html =~ "Scopes:"
+      refute html =~ "Permissions: repo"
       assert html =~ "Disconnect"
     end
 
@@ -364,6 +365,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Task sync endpoint connected"
       assert html =~ "2 Notaui permissions granted"
       refute html =~ ">Reconnect<"
+      refute html =~ "tasks:read"
+      refute html =~ "tasks:write"
       refute html =~ "https://api.notaui.com/mcp"
       refute html =~ "MCP:"
       refute html =~ "Scopes:"

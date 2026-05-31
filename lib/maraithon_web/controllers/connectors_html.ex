@@ -283,7 +283,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
     scopes =
       case Map.get(token, :scopes) || Map.get(token, "scopes") do
         values when is_list(values) and values != [] ->
-          "Permissions: #{Enum.join(values, ", ")}"
+          permission_summary(values)
 
         _ ->
           nil
@@ -354,6 +354,21 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   defp attention_summary(1, unit), do: "1 #{unit} needs attention"
   defp attention_summary(count, unit), do: "#{count} #{unit}s need attention"
+
+  defp permission_summary(scopes) do
+    scopes
+    |> Enum.map(&to_string/1)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> length()
+    |> case do
+      0 -> nil
+      count -> "#{count} #{permission_word(count)} granted"
+    end
+  end
+
+  defp permission_word(1), do: "permission"
+  defp permission_word(_count), do: "permissions"
 
   def format_datetime(value, timezone_info \\ nil)
 
