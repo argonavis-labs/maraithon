@@ -261,9 +261,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     report_json =
       Jason.encode!(%{
         "title" => "Commitment tracker - 2026-05-09",
-        "summary" => "No new commitments were found in checked sources.",
+        "summary" => "No new commitments are ready to save.",
         "body" =>
-          "## Checked\n- Gmail and calendar were checked.\n\n## Unknowns\n- Anything outside checked sources remains unknown.",
+          "## Context Used\n- Gmail and calendar context was available.\n\n## Unknowns\n- Anything outside available context remains unknown.",
         "todos" => []
       })
 
@@ -286,23 +286,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Open work review - 2026-05-09"
-    assert brief.summary =~ "did not complete a fresh source check"
-    assert brief.body =~ "## Checked"
+    assert brief.summary =~ "did not complete a fresh context refresh"
+    assert brief.body =~ "## Context Used"
     assert brief.body =~ "## Unknowns"
-    assert brief.body =~ "Today's move: run a fresh source check"
+    assert brief.body =~ "Today's move: run a fresh context refresh"
     assert brief.metadata["generation_mode"] == "llm"
     refute brief.error_message
-    refute brief.body =~ "Open work review: fresh source check needed"
+    refute brief.body =~ "Open work review: fresh context refresh needed"
     refute brief.body =~ "Commitment Tracker"
     refute brief.summary =~ "No new commitments were found"
     refute brief.summary =~ "No reliable commitment review"
     refute brief.body =~ "refresh Gmail"
   end
 
-  test "invalid model output records a checked fallback without heuristic todo creation", %{
-    user_id: user_id,
-    agent: agent
-  } do
+  test "invalid model output records an available-context fallback without heuristic todo creation",
+       %{
+         user_id: user_id,
+         agent: agent
+       } do
     now = ~U[2026-05-09 15:00:00Z]
 
     state =
@@ -329,18 +330,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     assert payload.generation_mode == "source_fallback"
     assert payload.todo_count == 0
-    assert payload.error_message =~ "checked-source fallback"
+    assert payload.error_message =~ "available-context fallback"
     assert payload.error_message =~ "model_response_invalid"
     refute payload.error_message =~ "model synthesis"
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Open work review: fresh source check needed"
+    assert brief.title == "Open work review: fresh context refresh needed"
     assert brief.cadence == "commitment_tracker"
-    assert brief.error_message =~ "checked-source fallback"
+    assert brief.error_message =~ "available-context fallback"
     assert brief.error_message =~ "model_response_invalid"
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
-    assert brief.summary =~ "did not complete a fresh source check"
+    assert brief.summary =~ "did not complete a fresh context refresh"
     assert brief.body =~ "## Needs Your Attention"
     assert brief.body =~ "## Unknowns"
     assert brief.body =~ "No open commitment is already saved"
@@ -348,7 +349,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.body =~ "Today's move:"
 
     assert brief.body =~
-             "No new commitments were saved because the checked source evidence did not clearly show a new promise"
+             "No new commitments were saved because the available context did not clearly show a new promise"
 
     refute brief.summary =~ "No reliable commitment review"
     refute brief.body =~ "refresh Gmail"
@@ -466,9 +467,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert brief.body =~ "Next: Reply with the current metrics"
     assert brief.body =~ "From Gmail (kent@runner.now)."
     refute brief.body =~ "Source: kent@runner.now"
-    assert brief.body =~ "Gmail checked: 1 recent inbox message and 0 recent sent messages"
-    assert brief.body =~ "Calendar checked: 1 upcoming event"
-    assert brief.body =~ "Existing open work checked: 1 open item"
+    assert brief.body =~ "Gmail context: 1 recent inbox message and 0 recent sent messages"
+    assert brief.body =~ "Calendar context: 1 upcoming event"
+    assert brief.body =~ "Existing open work: 1 open item"
     assert brief.body =~ "## Unknowns"
     assert brief.body =~ "Today's move: clear or explicitly keep the first open item"
     refute brief.body =~ "classified safely"

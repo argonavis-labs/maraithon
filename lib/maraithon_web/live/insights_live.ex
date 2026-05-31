@@ -194,7 +194,7 @@ defmodule MaraithonWeb.InsightsLive do
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
             <h2 class="text-sm/6 font-semibold text-zinc-950">
-              Checked records did not surface people insights.
+              Available records did not surface people insights.
             </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
               Review People directly if you want to edit relationships or merge contacts manually.

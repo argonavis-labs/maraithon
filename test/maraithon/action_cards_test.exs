@@ -582,7 +582,7 @@ defmodule Maraithon.ActionCardsTest do
     assert card["headline"] == "Should this older work item stay active?"
 
     assert card["confidence"]["reason"] ==
-             "Based on saved-work context, evidence, and source freshness."
+             "Based on saved work, evidence, and available context."
 
     rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
     assert rendered =~ "Should this older work item stay active?"

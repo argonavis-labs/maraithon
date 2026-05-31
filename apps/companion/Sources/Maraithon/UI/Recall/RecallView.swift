@@ -215,7 +215,7 @@ private struct RecallResultRow: View {
 enum RecallCopy {
     static let searchingLabel = "Searching…"
     static let searchButtonTitle = "Search"
-    static let noMatchesTitle = "Checked sources did not match"
+    static let noMatchesTitle = "Available context did not match"
 
     static func searchError(_ error: Error) -> String {
         "Search could not finish. \(CompanionErrorCopy.message(for: error))"
@@ -224,9 +224,9 @@ enum RecallCopy {
     static func noMatchesDescription(for query: String) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = trimmed.isEmpty
-            ? "Maraithon checked available sources."
-            : "Maraithon checked available sources for \"\(trimmed)\"."
-        return "\(prefix) Try a person, thread, phrase, or date from sources Maraithon has already checked."
+            ? "Maraithon searched available context."
+            : "Maraithon searched available context for \"\(trimmed)\"."
+        return "\(prefix) Try a person, thread, phrase, or date from context Maraithon has already synced."
     }
 
     static func resultTitle(for hit: RecallResult) -> String {

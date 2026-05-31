@@ -99,7 +99,7 @@ defmodule Maraithon.BriefsTest do
     assert get_in(message.opts, [:reply_markup, "inline_keyboard"]) != nil
   end
 
-  test "empty briefing fallback copy stays scoped to checked sources", %{
+  test "empty briefing fallback copy uses review-ready language", %{
     user_id: user_id,
     agent: agent
   } do
@@ -107,13 +107,13 @@ defmodule Maraithon.BriefsTest do
              Briefs.record(user_id, agent.id, %{
                "cadence" => "morning",
                "title" => "Morning brief fallback copy",
-               "body" => "No checked decision needs your attention right now.",
+               "body" => "No decision needs your attention right now.",
                "status" => "sent",
                "scheduled_for" => DateTime.utc_now(),
                "dedupe_key" => "brief:morning:default-copy"
              })
 
-    assert default_brief.summary == "No priority follow-up surfaced in the checked sources."
+    assert default_brief.summary == "No priority follow-up is ready to review."
     refute default_brief.summary =~ "yet"
 
     assert {:ok, %Brief{}} =
@@ -122,7 +122,7 @@ defmodule Maraithon.BriefsTest do
                "title" => "Morning brief legacy fallback copy",
                "summary" =>
                  "No clear follow-up needs your attention from the connected sources yet.",
-               "body" => "No checked decision needs your attention right now.",
+               "body" => "No decision needs your attention right now.",
                "scheduled_for" => DateTime.utc_now(),
                "dedupe_key" => "brief:morning:legacy-default-copy"
              })
@@ -131,7 +131,7 @@ defmodule Maraithon.BriefsTest do
     assert result.sent == 1
 
     [message] = sent_messages()
-    assert message.text =~ "No priority follow-up surfaced in the checked sources."
+    assert message.text =~ "No priority follow-up is ready to review."
     refute message.text =~ "connected sources yet"
     refute message.text =~ "No clear follow-up"
   end
@@ -260,7 +260,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "Maraithon kept only review-ready next steps."
     assert payload.text =~ "Lead with the CFO ask."
     assert payload.text =~ "Send the revised answer today."
 
@@ -299,7 +299,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "Maraithon kept only review-ready next steps."
     assert payload.text =~ "The receiving window closes before tomorrow's dispatch."
     assert payload.text =~ "Next: Reply with the signed shipment timing before noon."
 
@@ -335,7 +335,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "Maraithon kept only review-ready next steps."
     assert payload.text =~ "No verified recommendation was safe to send yet."
     refute lower_text =~ "generation failed"
     refute lower_text =~ "configured model"
@@ -366,7 +366,7 @@ defmodule Maraithon.BriefsTest do
     lower_text = String.downcase(payload.text)
 
     assert payload.text =~ "Chief of staff brief"
-    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "Maraithon kept only review-ready next steps."
 
     assert payload.text =~
              "No verified recommendation was safe to send yet."

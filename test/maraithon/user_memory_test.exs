@@ -79,7 +79,7 @@ defmodule Maraithon.UserMemoryTest do
              )
 
     assert profile.summary =~ "Focus on clear obligations"
-    assert profile.profile["working_style"] =~ "grounded in checked context"
+    assert profile.profile["working_style"] =~ "grounded in available context"
     assert profile.profile["communication_style"] =~ "Updates should stay concise"
     assert profile.profile["decision_style"] =~ "practical next steps"
     assert profile.profile["current_focus"] =~ "clear obligations"

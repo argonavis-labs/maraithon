@@ -478,7 +478,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        - Write directly to the operator as "you"; never write "the user" or
          "User committed".
        - If no new commitments are saved, do not write an all-clear. State
-         what was checked, what remains unknown, and end with "Today's move:".
+         which context was available, what remains unknown, and end with "Today's move:".
        - Every work item title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,
          and the best next step.
@@ -544,7 +544,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp report_or_error_notice({:error, reason}, response, tracker_input) do
     error_message =
       [
-        "Open work review used checked-source fallback",
+        "Open work review used available-context fallback",
         reason,
         llm_finish_reason(response) && "finish_reason=#{llm_finish_reason(response)}"
       ]
@@ -607,9 +607,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
     [
       body,
-      unless contains_heading?(body, "Checked") do
+      unless contains_heading?(body, "Context Used") do
         fallback_section(
-          "Checked",
+          "Context Used",
           fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count)
         )
       end,
@@ -651,6 +651,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     normalized == "" or
       String.contains?(normalized, "no new commitments were found") or
       String.contains?(normalized, "no new commitments found") or
+      String.contains?(normalized, "no new commitments are ready to save") or
       String.contains?(normalized, "nothing new was found") or
       String.contains?(normalized, "nothing is owed") or
       String.contains?(normalized, "all clear")
@@ -680,7 +681,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           fallback_open_work_lines(open_todos, tracker_input)
         ),
         fallback_section(
-          "Checked",
+          "Context Used",
           fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count)
         ),
         fallback_section(
@@ -709,7 +710,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     if length(open_todos) > 0 do
       "Open work review: check existing work"
     else
-      "Open work review: fresh source check needed"
+      "Open work review: fresh context refresh needed"
     end
   end
 
@@ -722,10 +723,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "Start with #{count_phrase(open_count, "existing open item", "existing open items")} already in open work; this pass did not add a new commitment."
 
       checked_count > 0 ->
-        "Checked sources did not show a new commitment clearly enough to save; keep existing open work as the source of truth."
+        "Available context did not show a new commitment clearly enough to save; keep existing open work as the source of truth."
 
       true ->
-        "Maraithon did not complete a fresh source check for this review, so it did not clear or create open work."
+        "Maraithon did not complete a fresh context refresh for this review, so it did not clear or create open work."
     end
   end
 
@@ -733,7 +734,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     case Enum.take(open_todos, 5) do
       [] ->
         [
-          "- No open commitment is already saved. Treat this review as incomplete until a fresh source check covers the relevant thread."
+          "- No open commitment is already saved. Treat this review as incomplete until a fresh context refresh covers the relevant thread."
         ]
 
       todos ->
@@ -868,9 +869,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp fallback_checked_lines(open_todos, inbox_count, sent_count, calendar_count) do
     [
-      "- Gmail checked: #{count_phrase(inbox_count, "recent inbox message", "recent inbox messages")} and #{count_phrase(sent_count, "recent sent message", "recent sent messages")}.",
-      "- Calendar checked: #{count_phrase(calendar_count, "upcoming event", "upcoming events")}.",
-      "- Existing open work checked: #{count_phrase(length(open_todos), "open item", "open items")}."
+      "- Gmail context: #{count_phrase(inbox_count, "recent inbox message", "recent inbox messages")} and #{count_phrase(sent_count, "recent sent message", "recent sent messages")}.",
+      "- Calendar context: #{count_phrase(calendar_count, "upcoming event", "upcoming events")}.",
+      "- Existing open work: #{count_phrase(length(open_todos), "open item", "open items")}."
     ]
   end
 
@@ -878,11 +879,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     checked_count = inbox_count + sent_count + calendar_count
 
     [
-      "- No new commitments were saved because the checked source evidence did not clearly show a new promise.",
+      "- No new commitments were saved because the available context did not clearly show a new promise.",
       if(checked_count > 0,
-        do:
-          "- Anything outside the checked Gmail, Calendar, and existing open work still needs review.",
-        else: "- Gmail, Calendar, and source threads were not freshly checked in this review."
+        do: "- Anything outside Gmail, Calendar, and existing open work still needs review.",
+        else: "- Gmail, Calendar, and source threads were unavailable for this review."
       )
     ]
   end
@@ -899,7 +899,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "Today's move: review the next meeting for promises you owe before the day gets busy."
 
       true ->
-        "Today's move: run a fresh source check before clearing open work for the day."
+        "Today's move: run a fresh context refresh before clearing open work for the day."
     end
   end
 

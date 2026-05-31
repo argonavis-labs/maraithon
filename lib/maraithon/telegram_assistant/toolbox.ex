@@ -2493,15 +2493,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     |> Enum.reject(&blank_string?/1)
     |> case do
       [] ->
-        "Connected sources looked current for this check."
+        "Connected context looked current for this action."
 
       issues ->
-        "Source verification was incomplete before that action: #{Enum.join(issues, ", ")}."
+        "Context verification was incomplete before that action: #{Enum.join(issues, ", ")}."
     end
   end
 
   defp source_health_line(_freshness),
-    do: "No current source check was available for this action."
+    do: "No current context snapshot was available for this action."
 
   defp source_health_issue_copy(source) when is_map(source) do
     status = source_health_status(source_value(source, :status))
@@ -3896,13 +3896,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
         local_context_next_action(source_health)
 
       true ->
-        "No checked-source follow-up is waiting right now."
+        "No follow-up is waiting right now."
     end
   end
 
   defp open_work_count_line(0, 0, source_health) do
     if source_coverage_gap?(source_health) do
-      "Checked sources do not show pending open work yet, but coverage is incomplete."
+      "No pending open work is ready to review yet, but some context is unavailable."
     else
       open_work_count_line(0, 0)
     end
@@ -3912,7 +3912,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     do: open_work_count_line(insight_count, todo_count)
 
   defp open_work_count_line(0, 0),
-    do: "Checked sources do not show pending open work right now."
+    do: "No pending open work is ready to review right now."
 
   defp open_work_count_line(insight_count, todo_count) do
     parts =

@@ -173,19 +173,19 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.companion_sync(:missing_items, "messages") == %{
              error: "messages_required",
              message:
-               "The Mac sent an incomplete source check. Maraithon will keep the last successful context until the next check."
+               "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
            }
 
     assert ApiErrorCopy.companion_sync(:too_many_items, 200) == %{
              error: "batch_too_large",
              message:
-               "That source check included more than 200 items. Maraithon will keep the last successful context until the next check."
+               "That sync included more than 200 items. Maraithon will keep the last successful context until the next check."
            }
 
     assert ApiErrorCopy.companion_sync(:unknown_event, nil) == %{
              error: "unknown_event",
              message:
-               "The companion app sent a source check this version of Maraithon does not support. Update the app, then check again."
+               "The companion app sent sync data this version of Maraithon does not support. Update the app, then check again."
            }
 
     assert ApiErrorCopy.companion_channel_error(:device_mismatch, nil) == %{

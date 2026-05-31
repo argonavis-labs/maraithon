@@ -1130,8 +1130,8 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
         "decision card must expose safe decision actions"
       )
       |> require_finding(
-        String.contains?(rendered, "Why now:") and String.contains?(rendered, "Checked:"),
-        "Telegram rendering must show why-now and source-health context"
+        String.contains?(rendered, "Why now:") and String.contains?(rendered, "Context used:"),
+        "Telegram rendering must show why-now and context used"
       )
 
     scenario_result(scenario, findings, %{

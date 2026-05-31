@@ -1402,7 +1402,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp brief_or_error_notice({:error, reason}, response, brief_input) do
     error_message =
       [
-        "Morning briefing used checked-source fallback",
+        "Morning briefing used available-context fallback",
         reason,
         llm_finish_reason(response) && "finish_reason=#{llm_finish_reason(response)}"
       ]
@@ -1413,7 +1413,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   @doc """
-  Builds a compact checked brief when generated output cannot produce a
+  Builds a compact context-backed brief when generated output cannot produce a
   valid JSON briefing.
   """
   def build_compact_fallback_brief(brief_input, error_message \\ "brief generation unavailable")
@@ -1558,7 +1558,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "Use today to check next week's meetings, family logistics, and unresolved decisions."
 
       true ->
-        "No priority surfaced in the checked sources; check calendar and open work before committing the day."
+        "No priority is ready to review; check calendar and open work before committing the day."
     end
   end
 
@@ -2755,7 +2755,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       |> String.replace(~r/\bI\s+(?:can't|cannot|could not|couldn't)\b/i, "Could not")
       |> String.replace(
         ~r/\bI\s+(?:don't|do not)\s+see\b/i,
-        "No checked source shows"
+        "Available context does not show"
       )
       |> String.replace(~r/\b(?:I\s+am|I'm)\s+seeing\b/i, "The briefing shows")
       |> String.replace(~r/\bI\s+am\b/i, "The read is")

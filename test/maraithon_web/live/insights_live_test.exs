@@ -67,7 +67,7 @@ defmodule MaraithonWeb.InsightsLiveTest do
 
     html = render(view)
 
-    assert has_element?(view, "h2", "Checked records did not surface people insights.")
+    assert has_element?(view, "h2", "Available records did not surface people insights.")
 
     assert has_element?(
              view,

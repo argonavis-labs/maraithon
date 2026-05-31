@@ -22,9 +22,9 @@ defmodule Maraithon.Briefs do
   require Logger
 
   @brief_title_fallback "Chief of staff brief"
-  @brief_summary_default "No priority follow-up surfaced in the checked sources."
-  @brief_body_default "No checked decision needs your attention right now."
-  @brief_summary_fallback "Maraithon kept only checked next steps."
+  @brief_summary_default "No priority follow-up is ready to review."
+  @brief_body_default "No decision needs your attention right now."
+  @brief_summary_fallback "Maraithon kept only review-ready next steps."
   @brief_body_fallback "No verified recommendation was safe to send yet."
   @internal_brief_markers [
     "<redacted",
@@ -485,7 +485,7 @@ defmodule Maraithon.Briefs do
   defp cadence_label("travel_update"), do: "Travel update"
   defp cadence_label(other), do: other
 
-  # A checked-source fallback is still a usable brief. It can carry diagnostic
+  # A context-backed fallback is still a usable brief. It can carry diagnostic
   # context for operators without losing the executive's follow-up actions.
   defp failed_brief?(%Brief{} = brief) do
     case read_string(brief.metadata || %{}, "generation_mode", nil) do

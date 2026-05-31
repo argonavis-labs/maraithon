@@ -153,15 +153,14 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_sync(:missing_items, batch_key) do
     %{
       error: "#{batch_key}_required",
-      message: "The Mac sent an incomplete source check. #{@companion_context_recovery}"
+      message: "The Mac sent an incomplete context sync. #{@companion_context_recovery}"
     }
   end
 
   def companion_sync(:too_many_items, max_batch) do
     %{
       error: "batch_too_large",
-      message:
-        "That source check included more than #{max_batch} items. #{@companion_context_recovery}"
+      message: "That sync included more than #{max_batch} items. #{@companion_context_recovery}"
     }
   end
 
@@ -176,7 +175,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "unknown_event",
       message:
-        "The companion app sent a source check this version of Maraithon does not support. Update the app, then check again."
+        "The companion app sent sync data this version of Maraithon does not support. Update the app, then check again."
     }
   end
 

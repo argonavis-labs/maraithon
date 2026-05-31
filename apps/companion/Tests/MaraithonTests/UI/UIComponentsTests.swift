@@ -406,7 +406,7 @@ final class UIComponentsTests: XCTestCase {
         ].joined(separator: " ")
 
         XCTAssertTrue(publicCopy.contains("Pair a Mac to start syncing local sources."))
-        XCTAssertTrue(publicCopy.contains("Waiting for the first source check"))
+        XCTAssertTrue(publicCopy.contains("Waiting for the first sync"))
         XCTAssertTrue(publicCopy.contains("Re-pair"))
         XCTAssertTrue(publicCopy.contains("Data already uploaded to Maraithon is kept."))
         XCTAssertTrue(publicCopy.contains("Reconnect Maraithon in General to see paired Macs."))
@@ -467,13 +467,13 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("serverError"))
     }
 
-    func testRecallNoMatchCopyStaysScopedToCheckedSources() {
+    func testRecallNoMatchCopyStaysScopedToAvailableContext() {
         let copy = RecallCopy.noMatchesDescription(for: "  agenda from Dana  ")
 
-        XCTAssertEqual(RecallCopy.noMatchesTitle, "Checked sources did not match")
+        XCTAssertEqual(RecallCopy.noMatchesTitle, "Available context did not match")
         XCTAssertEqual(
             copy,
-            "Maraithon checked available sources for \"agenda from Dana\". Try a person, thread, phrase, or date from sources Maraithon has already checked."
+            "Maraithon searched available context for \"agenda from Dana\". Try a person, thread, phrase, or date from context Maraithon has already synced."
         )
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Nothing matched"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No matches"))

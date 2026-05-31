@@ -559,7 +559,7 @@ defmodule Maraithon.ActionCards do
       "level" => level,
       "reason" =>
         confidence_reason(metadata) ||
-          "Based on saved-work context, evidence, and source freshness."
+          "Based on saved work, evidence, and available context."
     }
   end
 

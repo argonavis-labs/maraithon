@@ -204,8 +204,7 @@ defmodule Maraithon.SecurityAudit do
       id: "connected_accounts_degraded",
       severity: "low",
       message: "#{degraded_count} connected account records are in error or disconnected state.",
-      remediation:
-        "Use source freshness and connector detail pages to reconnect affected accounts."
+      remediation: "Use connector detail pages to reconnect affected accounts."
     })
   end
 

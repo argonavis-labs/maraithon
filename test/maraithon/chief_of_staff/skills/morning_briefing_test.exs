@@ -1134,7 +1134,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief["body"] =~ "provider unavailable"
   end
 
-  test "empty checked fallback scopes the lack of priority to checked sources" do
+  test "empty fallback uses review-ready priority copy" do
     brief =
       MorningBriefing.build_compact_fallback_brief(%{
         "date" => "2026-05-27",
@@ -1144,7 +1144,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       })
 
     assert brief["summary"] ==
-             "No priority surfaced in the checked sources; check calendar and open work before committing the day."
+             "No priority is ready to review; check calendar and open work before committing the day."
 
     refute brief["summary"] =~ "No priority has been verified yet"
   end
@@ -1189,7 +1189,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       MorningBriefing.handle_effect_result({:llm_call, %{content: "not json"}}, state, context)
 
     assert payload.generation_mode == "source_fallback"
-    assert payload.error_message =~ "checked-source fallback"
+    assert payload.error_message =~ "available-context fallback"
     assert payload.error_message =~ "model_response_invalid"
     refute payload.error_message =~ "model synthesis"
 
@@ -1197,7 +1197,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert brief.title == "Thursday, May 7 - Clear open commitments before inbox triage"
     assert brief.status == "pending"
-    assert brief.error_message =~ "checked-source fallback"
+    assert brief.error_message =~ "available-context fallback"
     assert brief.error_message =~ "model_response_invalid"
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
@@ -1212,7 +1212,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief.body =~ "finish_reason"
   end
 
-  test "model provider errors record a compact checked fallback briefing", %{
+  test "model provider errors record a compact context fallback briefing", %{
     user_id: user_id,
     agent: agent
   } do
@@ -1245,13 +1245,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
       )
 
     assert payload.generation_mode == "source_fallback"
-    assert payload.error_message =~ "checked-source fallback"
+    assert payload.error_message =~ "available-context fallback"
     assert payload.error_message =~ "max_output_tokens"
     refute payload.error_message =~ "model synthesis"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
     assert brief.title == "Thursday, May 7 - Verify the day before committing it"
-    assert brief.error_message =~ "checked-source fallback"
+    assert brief.error_message =~ "available-context fallback"
     assert brief.error_message =~ "max_output_tokens"
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["llm_finish_reason"] == "error"

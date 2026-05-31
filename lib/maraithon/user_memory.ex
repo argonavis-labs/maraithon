@@ -275,7 +275,7 @@ defmodule Maraithon.UserMemory do
   defp fallback_profile(bundle) do
     working_style =
       operator_summary(bundle, ["action_style", "interrupt_policy"]) ||
-        "Recommendations should stay concise and grounded in checked context until stronger preferences are confirmed."
+        "Recommendations should stay concise and grounded in available context until stronger preferences are confirmed."
 
     communication_style =
       operator_summary(bundle, ["telegram_behavior", "content_preferences"]) ||

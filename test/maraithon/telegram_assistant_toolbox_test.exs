@@ -181,8 +181,8 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "Checked sources do not show pending open work right now."
-    assert result.next_action == "No checked-source follow-up is waiting right now."
+    assert result.summary == "No pending open work is ready to review right now."
+    assert result.next_action == "No follow-up is waiting right now."
 
     refute result.summary =~ "I do not"
     refute result.next_action =~ "I checked"
@@ -248,7 +248,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "Checked sources do not show pending open work yet, but coverage is incomplete."
+             "No pending open work is ready to review yet, but some context is unavailable."
 
     assert result.summary =~ "The Mac companion has not checked in recently"
 
@@ -464,7 +464,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.explanation.id == action.id
     assert result.explanation.model_summary == "The todo was due today."
     assert result.message =~ "The todo was due today."
-    assert result.message =~ "Connected sources looked current for this check."
+    assert result.message =~ "Connected context looked current for this action."
     assert [%{provider: "telegram", status: "fresh"}] = result.source_freshness
     assert result.explanation.source_evidence["authorization"] == "<redacted>"
     refute result.message =~ "No policy reason"
@@ -506,7 +506,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.message =~
              "This stopped for your confirmation before anything was sent or changed."
 
-    assert result.message =~ "Connected sources looked current for this check."
+    assert result.message =~ "Connected context looked current for this action."
     refute result.message =~ "Policy reason"
     refute result.message =~ "confirmation_required"
   end
@@ -568,7 +568,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{provider: "google", status: "stale"}] = result.source_freshness
 
     assert result.message =~
-             "Source verification was incomplete before that action: work@example.com was out of date."
+             "Context verification was incomplete before that action: work@example.com was out of date."
 
     refute result.message =~ "I could not"
     refute result.message =~ "Source health issues"

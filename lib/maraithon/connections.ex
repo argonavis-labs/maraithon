@@ -740,7 +740,7 @@ defmodule Maraithon.Connections do
   end
 
   defp desktop_device_details(_stats, _revoked?, 0) do
-    ["Paired and waiting for the first local source check."]
+    ["Paired and waiting for the first local sync."]
   end
 
   defp desktop_device_details(stats, _revoked?, _synced_count) do

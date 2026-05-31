@@ -199,15 +199,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["morning"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning brief: no direct action surfaced"
+    assert brief.title == "Morning brief: no direct action ready"
 
     assert brief.summary ==
-             "Checked sources did not surface direct actions or watched threads during this brief window."
+             "No direct action or watched thread is ready for this brief."
 
     assert brief.body =~ "Best use of today:"
-    assert brief.body =~ "No direct action surfaced in this brief window."
+    assert brief.body =~ "No direct action is ready for this brief."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "Checked sources did not surface direct action during this brief window."
+    assert brief.body =~ "No direct action is ready for this brief."
 
     refute brief.summary =~ "urgent"
     refute brief.title =~ "found"
@@ -328,15 +328,15 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["end_of_day"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "End-of-day review: no unresolved work surfaced"
+    assert brief.title == "End-of-day review: no unresolved work ready"
 
     assert brief.summary ==
-             "Checked sources did not surface unresolved action items for tonight's review."
+             "No unresolved action item is ready for tonight's review."
 
     assert brief.body =~ "Tonight's move:"
-    assert brief.body =~ "No direct action surfaced for tonight's review."
+    assert brief.body =~ "No direct action is ready for tonight's review."
     assert brief.body =~ "Status:"
-    assert brief.body =~ "Checked sources did not surface unresolved work for tonight's review."
+    assert brief.body =~ "No unresolved work is ready for tonight's review."
 
     refute brief.body =~ "Pressure:"
     refute brief.body =~ "0 items"
@@ -498,7 +498,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.body =~ "Do: Open the notice now"
     assert brief.body =~ "Why: A blocked or restricted account can stop important work"
     assert brief.body =~ "Overdue since Wed, Mar 11 at 4:05 PM"
-    assert brief.body =~ "Checked: Restriction notice is still active"
+    assert brief.body =~ "Context: Restriction notice is still active"
     assert is_list(brief.metadata["linked_todo_ids"])
     assert length(brief.metadata["linked_todo_ids"]) == 1
     assert brief.metadata["timezone_offset_hours"] == -5
@@ -773,13 +773,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["weekly_review"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Weekly review: no open work surfaced"
-    assert brief.summary == "This week's checked sources did not surface open work."
+    assert brief.title == "Weekly review: no open work ready"
+    assert brief.summary == "No open work is ready from this week's review."
     assert brief.body =~ "Next week's move:"
-    assert brief.body =~ "confirm calendar, source freshness, and any new promises"
-    assert brief.body =~ "- No checked activity surfaced this week"
+    assert brief.body =~ "confirm calendar context and any new promises"
+    assert brief.body =~ "- No activity needed review this week"
     assert brief.body =~ "Most important open items:"
-    assert brief.body =~ "This week's checked sources did not surface open work."
+    assert brief.body =~ "No open work is ready from this week's review."
 
     refute brief.title =~ "0 items"
     refute brief.summary =~ "0"
