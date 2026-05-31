@@ -125,6 +125,27 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     "urgent",
     "waiting"
   ]
+  @meeting_prep_terms [
+    "ask",
+    "before the call",
+    "before the meeting",
+    "bring",
+    "carry",
+    "check",
+    "confirm",
+    "context",
+    "decide",
+    "decision",
+    "fit",
+    "follow up",
+    "follow-up",
+    "prep",
+    "prepare",
+    "review",
+    "risk",
+    "test",
+    "why it matters"
+  ]
   @todo_ingest_retry_delays_ms [1_500, 5_000, 12_000]
 
   @impl true
@@ -1766,7 +1787,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     [
       "- **#{summary}**",
       start && "at #{start}",
-      context && ": #{context}"
+      context && "- Prep: #{context}"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
@@ -3967,7 +3988,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        when is_binary(body) and is_map(brief_input) do
     brief_input
     |> required_schedule_meetings()
-    |> Enum.reject(&body_mentions_coverage_item?(body, required_meeting_labels(&1)))
+    |> Enum.reject(&required_schedule_meeting_covered?(body, &1))
   end
 
   defp missing_required_schedule_meetings(_body, _brief_input), do: []
@@ -4014,6 +4035,111 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp required_meeting_labels(_meeting), do: []
+
+  defp required_schedule_meeting_covered?(body, meeting)
+       when is_binary(body) and is_map(meeting) do
+    body_mentions_coverage_item?(body, required_meeting_labels(meeting)) and
+      required_meeting_time_covered?(body, meeting) and
+      required_meeting_context_covered?(body, meeting)
+  end
+
+  defp required_schedule_meeting_covered?(_body, _meeting), do: false
+
+  defp required_meeting_time_covered?(body, meeting) when is_binary(body) and is_map(meeting) do
+    labels =
+      [
+        read_string(meeting, "display_start", nil),
+        read_string(meeting, "display_end", nil),
+        read_string(meeting, "start", nil),
+        read_string(meeting, "end", nil)
+      ]
+      |> Enum.reject(&blank?/1)
+
+    labels == [] or body_mentions_coverage_item?(body, labels)
+  end
+
+  defp required_meeting_time_covered?(_body, _meeting), do: false
+
+  defp required_meeting_context_covered?(body, meeting)
+       when is_binary(body) and is_map(meeting) do
+    normalized_body = normalize_match_text(body)
+
+    prep_language? = meeting_prep_language_present?(normalized_body)
+
+    context_covered? =
+      meeting
+      |> required_meeting_context_labels()
+      |> case do
+        [] -> false
+        labels -> body_mentions_coverage_item?(body, labels)
+      end
+
+    prep_language? or context_covered?
+  end
+
+  defp required_meeting_context_covered?(_body, _meeting), do: false
+
+  defp meeting_prep_language_present?(normalized_body) when is_binary(normalized_body) do
+    words =
+      normalized_body
+      |> String.split(" ", trim: true)
+      |> MapSet.new()
+
+    Enum.any?(@meeting_prep_terms, fn term ->
+      normalized_term = normalize_match_text(term)
+
+      if String.contains?(normalized_term, " ") do
+        String.contains?(normalized_body, normalized_term)
+      else
+        MapSet.member?(words, normalized_term)
+      end
+    end)
+  end
+
+  defp meeting_prep_language_present?(_normalized_body), do: false
+
+  defp required_meeting_context_labels(meeting) when is_map(meeting) do
+    [
+      read_string(meeting, "briefing_reason", nil),
+      read_string(meeting, "briefing_priority", nil),
+      meeting |> read_list("crm_context") |> Enum.flat_map(&meeting_context_label_values/1),
+      meeting |> read_list("web_context") |> Enum.flat_map(&meeting_context_label_values/1),
+      meeting |> read_list("data_gaps") |> Enum.flat_map(&meeting_context_label_values/1)
+    ]
+    |> List.flatten()
+    |> Enum.reject(&blank?/1)
+  end
+
+  defp required_meeting_context_labels(_meeting), do: []
+
+  defp meeting_context_label_values(value) when is_binary(value), do: [value]
+
+  defp meeting_context_label_values(value) when is_map(value) do
+    nested =
+      ["person", "organization", "company", "account", "profile"]
+      |> Enum.flat_map(fn key -> meeting_context_label_values(read_any(value, key)) end)
+
+    direct =
+      [
+        "relationship",
+        "notes",
+        "summary",
+        "description",
+        "snippet",
+        "title",
+        "company",
+        "organization",
+        "domain"
+      ]
+      |> Enum.map(&read_string(value, &1, nil))
+
+    direct ++ nested
+  end
+
+  defp meeting_context_label_values(value) when is_list(value),
+    do: Enum.flat_map(value, &meeting_context_label_values/1)
+
+  defp meeting_context_label_values(_value), do: []
 
   defp required_commercial_thread_labels(thread) when is_map(thread) do
     [

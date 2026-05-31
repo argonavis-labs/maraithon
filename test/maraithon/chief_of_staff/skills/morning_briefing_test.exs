@@ -825,6 +825,50 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "Charlie Feng"
   end
 
+  test "quality verifier requires required meetings to include time and prep context" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "Start with the external call.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- Dawn Nguyen.\n\nToday's move: start with the calendar.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Dawn Nguyen",
+            "display_start" => "12:00 PM PT",
+            "display_end" => "12:30 PM PT",
+            "external_attendees" => [
+              %{"display_name" => "Dawn Nguyen", "email" => "dawn@gmail.com"}
+            ],
+            "crm_context" => [
+              %{
+                "person" => %{
+                  "display_name" => "Dawn Nguyen",
+                  "relationship" => "Runner enterprise design partner"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~ "## Required Schedule Prep"
+    assert revised["body"] =~ "**Dawn Nguyen** at 12:00 PM PT"
+    assert revised["body"] =~ "Prep: Dawn Nguyen: Runner enterprise design partner"
+  end
+
   test "quality verifier patches omitted message-backed inbox and Slack triage" do
     brief = %{
       "title" => "Tuesday, May 12 - Generic morning",
