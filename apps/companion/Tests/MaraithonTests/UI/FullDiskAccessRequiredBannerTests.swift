@@ -39,6 +39,20 @@ final class FullDiskAccessRequiredBannerTests: XCTestCase {
         )
     }
 
+    func testDetailTextUsesSingularVerbForOneBlockedSource() {
+        XCTAssertEqual(
+            FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["iMessage"]),
+            "iMessage needs one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+        )
+    }
+
+    func testDetailTextUsesPluralVerbForTwoBlockedSources() {
+        XCTAssertEqual(
+            FullDiskAccessRequiredBanner.detailText(blockedSourceNames: ["Notes", "Voice Memos"]),
+            "Notes and Voice Memos need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+        )
+    }
+
     func testDetailTextFallsBackWhenOnlyOnboardingSkipIsKnown() {
         XCTAssertEqual(
             FullDiskAccessRequiredBanner.detailText(blockedSourceNames: []),

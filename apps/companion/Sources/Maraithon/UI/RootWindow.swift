@@ -85,7 +85,7 @@ struct RootWindow: View {
             env.onboarding.recordFullDiskAccessGranted()
             env.sources.syncFullDiskAccessBlockedSources()
         } else {
-            env.sources.syncNow()
+            env.eventLog.info("root_window.fda_probe_still_blocked", source: .ui)
             return true
         }
         return false
@@ -282,7 +282,8 @@ struct FullDiskAccessRequiredBanner: View {
 
     static func detailText(blockedSourceNames: [String]) -> String {
         let subject = readableList(blockedSourceNames, fallback: "iMessage, Notes, and Voice Memos")
-        return "\(subject) need one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
+        let verb = blockedSourceNames.count == 1 ? "needs" : "need"
+        return "\(subject) \(verb) one macOS Full Disk Access grant. Enable the Maraithon app you keep using; the rest of the app can keep checking."
     }
 
     private static func readableList(_ values: [String], fallback: String) -> String {
@@ -353,7 +354,7 @@ struct FullDiskAccessRequiredBanner: View {
             return
         }
 
-        env.sources.syncNow()
+        env.eventLog.info("root_window.fda_banner_check_still_blocked", source: .ui)
     }
 
     @MainActor
