@@ -188,9 +188,14 @@ final class SourceStatusPublisher {
     /// not erase permission blocks until this probe or a healthy cycle
     /// proves the app can read protected stores.
     func clearFullDiskAccessBlock() {
-        guard let reason = blockingPermissionReason,
-              SourceState.isFullDiskAccessReason(reason)
-        else {
+        let hasBlockingPermissionReason = blockingPermissionReason.map {
+            SourceState.isFullDiskAccessReason($0)
+        } ?? false
+        let hasActiveIssue = activeIssue.map {
+            SourceState.isFullDiskAccessReason($0.reason)
+        } ?? false
+
+        guard hasBlockingPermissionReason || hasActiveIssue else {
             return
         }
 

@@ -298,6 +298,47 @@ final class SourceStatusPublisherTests: XCTestCase {
         XCTAssertEqual(publisher.displayedState(), .connected)
     }
 
+    func testClearFullDiskAccessBlockRemovesLegacyPersistedIssue() {
+        let reason = "imessage_full_disk_access_required"
+        let publisher = SourceStatusPublisher(state: .connected)
+        publisher.recordHealthyCycle(at: Date())
+        publisher.recordCycleFailure(at: Date(), reason: reason)
+
+        XCTAssertNil(publisher.blockingPermissionReason)
+        XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+
+        publisher.clearFullDiskAccessBlock()
+
+        XCTAssertNil(publisher.activeIssue)
+        XCTAssertEqual(publisher.displayedState(), .connected)
+    }
+
+    func testRestoredLegacyFullDiskAccessIssueClearsAfterGrantProbe() {
+        let defaults = makeDefaults()
+        let reason = "notes_full_disk_access_required"
+        let publisher = SourceStatusPublisher(
+            sourceID: "notes",
+            state: .connected,
+            defaults: defaults
+        )
+        publisher.recordHealthyCycle(at: Date())
+        publisher.recordCycleFailure(at: Date(), reason: reason)
+
+        let restored = SourceStatusPublisher(
+            sourceID: "notes",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertEqual(restored.displayedState(), .error(reason: reason))
+
+        restored.clearFullDiskAccessBlock()
+
+        XCTAssertNil(restored.activeIssue)
+        XCTAssertEqual(restored.displayedState(), .connected)
+    }
+
     func testClearFullDiskAccessBlockDoesNotClearOtherPermissionFailures() {
         let reason = "calendar_not_authorized"
         let publisher = SourceStatusPublisher(state: .connected)
