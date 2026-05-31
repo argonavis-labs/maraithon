@@ -36,7 +36,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
     cond do
       total_count == 0 ->
-        "No #{unit}s connected"
+        pluralize_units(0, unit, "connected")
 
       total_count == connected_count ->
         pluralize_units(connected_count, unit, "connected")
@@ -49,7 +49,26 @@ defmodule MaraithonWeb.ConnectorsHTML do
     end
   end
 
-  def provider_account_summary(_provider), do: "No accounts connected"
+  def provider_account_summary(_provider), do: "0 accounts connected"
+
+  def empty_accounts_message(%{provider: "desktop"}, _telegram_connected),
+    do: "Install and sign in to the Desktop App to pair this Mac."
+
+  def empty_accounts_message(provider, telegram_connected) when is_map(provider) do
+    cond do
+      requires_telegram_first?(provider) and not telegram_connected ->
+        "Connect Telegram first, then add #{Map.get(provider, :label, "this source")}."
+
+      connection_action_enabled?(provider) ->
+        "#{connection_primary_action(provider)} to start syncing."
+
+      true ->
+        "Finish setup to start syncing this source."
+    end
+  end
+
+  def empty_accounts_message(_provider, _telegram_connected),
+    do: "Finish setup to start syncing this source."
 
   def connection_error_detail(%{details: details}), do: public_error_detail(details)
   def connection_error_detail(_error), do: nil
