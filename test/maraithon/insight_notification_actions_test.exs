@@ -242,6 +242,42 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute completed.text =~ ~r/\d{4}-\d{2}-\d{2}T/
   end
 
+  test "infers the person from a clear insight title when metadata is missing", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [_insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Send Sarah the deck",
+          "summary" => "Explicit promise still appears open.",
+          "recommended_action" => "Reply with a clear owner and timing",
+          "priority" => 94,
+          "confidence" => 0.91,
+          "source_id" => "msg-sarah-title",
+          "dedupe_key" => "telegram-actions:gmail:person-from-title",
+          "metadata" => %{
+            "account" => "kent@example.com",
+            "thread_id" => "thread-sarah-title",
+            "subject" => "Investor deck"
+          }
+        }
+      ])
+
+    result = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    sent = last_telegram_message(:send)
+
+    assert sent.text =~ "<b>Person</b>"
+    assert sent.text =~ "Sarah"
+    assert sent.text =~ "contact on Investor deck thread"
+    assert sent.text =~ "confirm what Sarah is waiting on"
+    refute sent.text =~ "Person not clearly named"
+  end
+
   test "action callback failures do not expose raw provider errors", %{
     agent: agent,
     user_id: user_id

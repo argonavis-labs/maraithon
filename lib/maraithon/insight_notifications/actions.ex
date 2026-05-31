@@ -28,6 +28,10 @@ defmodule Maraithon.InsightNotifications.Actions do
   @max_preview_length 900
   @chief_message_max_length 700
   @section_text_max_length 180
+  @generic_person_candidate_words ~w(
+    Calendar Context Deck Email Finance Gmail Intro Invoice Launch Mail Maraithon Message Next Open
+    Person Product Project Receipt Reminder Reply Slack Status Thread Today Tomorrow Update Video Work
+  )
   @legacy_notification_fragments [
     "I think this needs your attention.",
     "What I'd send",
@@ -703,7 +707,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp todo_text(%Insight{} = insight, metadata) do
-    person = person_name(metadata)
+    person = person_name(insight, metadata)
     subject = read_string(metadata, "subject")
     commitment = record_value(metadata, "commitment")
 
@@ -735,7 +739,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
   defp context_text(%Insight{} = insight, metadata) do
     subject = subject_text(metadata)
-    person = person_name(metadata)
+    person = person_name(insight, metadata)
 
     context =
       read_string(metadata, "context_brief") ||
@@ -760,7 +764,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   end
 
   defp person_text(%Insight{} = insight, metadata) do
-    person = person_name(metadata) || "Person not clearly named"
+    person = person_name(insight, metadata) || "Person not clearly named"
     identity = person_identity_text(metadata)
     source = source_label(insight, metadata)
 
@@ -834,6 +838,71 @@ defmodule Maraithon.InsightNotifications.Actions do
       first_email_name(read_string(metadata, "from")) ||
       first_email_name(read_string(metadata, "to"))
   end
+
+  defp person_name(%Insight{} = insight, metadata) do
+    person_name(metadata) || inferred_person_name(insight)
+  end
+
+  defp inferred_person_name(%Insight{} = insight) do
+    [insight.title, insight.summary, insight.recommended_action]
+    |> Enum.find_value(&inferred_person_from_text/1)
+  end
+
+  defp inferred_person_from_text(value) when is_binary(value) do
+    text =
+      value
+      |> compact_sentence()
+      |> String.replace(~r/^reply owed:\s*/i, "")
+
+    patterns = [
+      ~r/\b(?i:send)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})\s+(?:a|an|her|his|promised|revised|that|the|their|this|updated)\b/u,
+      ~r/\b(?i:(?:reply|respond|follow up|check in|circle back|sync|confirm))\s+(?:with|to)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/\b(?i:(?:ask|call|email|message|ping|text))\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/\b(?i:to)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})(?=\s+(?:about|after|before|by|for|if|on|regarding|re|that|this|today|tomorrow|when|whether|with)|[.!?,;:]|$)/u,
+      ~r/^([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,2})\s+(?i:(?:asked|is waiting|needs|requested|wants))\b/u
+    ]
+
+    Enum.find_value(patterns, fn pattern ->
+      case Regex.run(pattern, text) do
+        [_, candidate] -> normalize_inferred_person(candidate)
+        _ -> nil
+      end
+    end)
+  end
+
+  defp inferred_person_from_text(_value), do: nil
+
+  defp normalize_inferred_person(candidate) when is_binary(candidate) do
+    candidate =
+      candidate
+      |> String.trim()
+      |> String.replace(~r/[.!?,;:]+$/, "")
+
+    words = String.split(candidate, ~r/\s+/, trim: true)
+
+    cond do
+      candidate == "" ->
+        nil
+
+      length(words) > 3 ->
+        nil
+
+      Enum.any?(words, &generic_person_candidate_word?/1) ->
+        nil
+
+      true ->
+        candidate
+    end
+  end
+
+  defp normalize_inferred_person(_candidate), do: nil
+
+  defp generic_person_candidate_word?(word) when is_binary(word) do
+    normalized = String.trim(word, "'-")
+    normalized in @generic_person_candidate_words
+  end
+
+  defp generic_person_candidate_word?(_word), do: false
 
   defp due_sentence(%Insight{due_at: %DateTime{} = due_at}) do
     "Due #{Calendar.strftime(due_at, "%b %d, %H:%M UTC")}."
@@ -1047,7 +1116,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp generic_next_action?(_text), do: false
 
   defp inferred_next_action(%Insight{} = insight, metadata) do
-    person = person_name(metadata) || "them"
+    person = person_name(insight, metadata) || "them"
     subject = subject_text(metadata)
     commitment = record_value(metadata, "commitment")
 
@@ -1087,7 +1156,7 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp proactive_next_step_text(base_text, _insight, _metadata), do: base_text
 
   defp proactive_action_detail(base_text, %Insight{} = insight, metadata) do
-    person = person_name(metadata) || "them"
+    person = person_name(insight, metadata) || "them"
     subject = subject_text(metadata)
 
     cond do
