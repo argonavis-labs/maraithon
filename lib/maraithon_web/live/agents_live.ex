@@ -2054,8 +2054,6 @@ defmodule MaraithonWeb.AgentsLive do
 
   defp visible_agent_events(_events, false), do: []
 
-  defp agent_event_visible?(_event, true), do: true
-
   defp agent_event_visible?(%{event_type: event_type}, false) when is_binary(event_type) do
     normalized = String.downcase(event_type)
     not String.contains?(normalized, ["fail", "error", "exception"])

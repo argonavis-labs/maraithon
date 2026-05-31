@@ -1729,7 +1729,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "linked todo update must use the exact linked todo id"
     )
     |> require_finding(
-      todo && todo.priority == 88 and
+      (todo && todo.priority == 88) and
         contains_all?(todo.next_action || "", ["return", "book", "today"]),
       "linked todo update must persist the requested priority and next action"
     )
@@ -1825,7 +1825,7 @@ defmodule Maraithon.TelegramAssistant.VerificationLoop do
       "CRM merge must use the requested survivor and merged person ids"
     )
     |> require_finding(
-      duplicate && duplicate.status == "merged" and duplicate.merged_into_id == env.matthew.id,
+      (duplicate && duplicate.status == "merged") and duplicate.merged_into_id == env.matthew.id,
       "CRM merge must mark the duplicate person merged into the survivor"
     )
   end

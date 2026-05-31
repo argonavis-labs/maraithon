@@ -385,18 +385,44 @@ final class UIComponentsTests: XCTestCase {
             DevicesSettingsCopy.emptyDevices,
             DevicesSettingsCopy.emptyCounts,
             DevicesSettingsCopy.footer,
-            DevicesSettingsCopy.revokeConfirmation
+            DevicesSettingsCopy.revokeConfirmation,
+            DevicesSettingsCopy.signedOutDevices,
+            DevicesSettingsCopy.loadFailure(error: MaraithonClientError.serverError(status: 503)),
+            DevicesSettingsCopy.loadFailure(error: MaraithonClientError.clientError(
+                status: 400,
+                body: "{\"error\":\"invalid_device\",\"message\":\"Authorization: Bearer abc token=secret\"}"
+            )),
+            DevicesSettingsCopy.revokeFailure(
+                deviceName: "Office Mac",
+                error: MaraithonClientError.transport(message: "NSURLErrorDomain Code=-1009")
+            ),
+            DevicesSettingsCopy.revokeFailure(
+                deviceName: "   ",
+                error: MaraithonClientError.clientError(
+                    status: 400,
+                    body: "{\"error\":\"invalid_device\",\"secret\":\"abc\"}"
+                )
+            )
         ].joined(separator: " ")
 
         XCTAssertTrue(publicCopy.contains("Pair a Mac to start syncing local sources."))
         XCTAssertTrue(publicCopy.contains("Waiting for the first source check"))
         XCTAssertTrue(publicCopy.contains("Re-pair"))
         XCTAssertTrue(publicCopy.contains("Data already uploaded to Maraithon is kept."))
+        XCTAssertTrue(publicCopy.contains("Reconnect Maraithon in General to see paired Macs."))
+        XCTAssertTrue(publicCopy.contains("Paired Macs could not load."))
+        XCTAssertTrue(publicCopy.contains("Could not revoke Office Mac."))
+        XCTAssertTrue(publicCopy.contains("Could not revoke that Mac."))
         XCTAssertFalse(publicCopy.lowercased().contains("server"))
         XCTAssertFalse(publicCopy.lowercased().contains("bearer"))
         XCTAssertFalse(publicCopy.lowercased().contains("token"))
+        XCTAssertFalse(publicCopy.lowercased().contains("invalid_device"))
+        XCTAssertFalse(publicCopy.lowercased().contains("secret"))
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("NSURLErrorDomain"))
         XCTAssertFalse(publicCopy.contains("No Macs paired yet."))
         XCTAssertFalse(publicCopy.contains("No data synced yet"))
+        XCTAssertFalse(publicCopy.contains("Could not load devices:"))
+        XCTAssertFalse(publicCopy.contains("Could not revoke:"))
     }
 
     func testRecallCopyUsesReadableFallbackTitlesAndSources() {

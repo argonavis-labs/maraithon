@@ -91,6 +91,23 @@ enum DevicesSettingsCopy {
     static let emptyCounts = "Waiting for the first source check"
     static let footer = "Each Mac you sign in on appears here. Revoking a Mac signs it out and stops it from sending new data. Re-pair that Mac to start sending data again."
     static let revokeConfirmation = "This signs the Mac out and stops it from sending new data. Data already uploaded to Maraithon is kept."
+    static let signedOutDevices = "Reconnect Maraithon in General to see paired Macs."
+
+    static func loadFailure(error: Error) -> String {
+        "Paired Macs could not load. \(CompanionErrorCopy.message(for: error))"
+    }
+
+    static func revokeFailure(deviceName: String?, error: Error) -> String {
+        "Could not revoke \(deviceLabel(deviceName)). \(CompanionErrorCopy.message(for: error))"
+    }
+
+    private static func deviceLabel(_ name: String?) -> String {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else {
+            return "that Mac"
+        }
+
+        return name
+    }
 }
 
 private struct DeviceRow: View {
@@ -229,9 +246,9 @@ final class DevicesSettingsViewModel {
                 state = .loaded(response.devices)
             }
         } catch MaraithonClientError.unauthorized {
-            state = .error("Signed out. Open General and reconnect to load devices.")
+            state = .error(DevicesSettingsCopy.signedOutDevices)
         } catch {
-            state = .error("Could not load devices: \(humanError(error))")
+            state = .error(DevicesSettingsCopy.loadFailure(error: error))
         }
     }
 
@@ -243,7 +260,7 @@ final class DevicesSettingsViewModel {
             try await client.revokeDevice(id: device.id)
             await load(env: env)
         } catch {
-            state = .error("Could not revoke: \(humanError(error))")
+            state = .error(DevicesSettingsCopy.revokeFailure(deviceName: device.deviceName, error: error))
         }
     }
 
@@ -255,9 +272,6 @@ final class DevicesSettingsViewModel {
         return MaraithonClient(tokenProvider: provider)
     }
 
-    private func humanError(_ error: Error) -> String {
-        CompanionErrorCopy.message(for: error)
-    }
 }
 
 private func formatRelative(_ date: Date?) -> String? {
