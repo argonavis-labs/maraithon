@@ -574,6 +574,42 @@ defmodule Maraithon.BriefsTest do
     assert is_nil(Briefs.todo_digest_prefix_text(brief, second_todo))
   end
 
+  test "check-in todo digest for one item avoids phantom rest copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        todo_attrs("briefs-check-in:single", "Reply to finance about the receipt",
+          source_occurred_at: "2026-04-02T14:00:00Z"
+        )
+      ])
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "check_in",
+               "title" => "Check-in: 1 item still needs movement",
+               "summary" => "One open communication loop still needs movement.",
+               "body" => "Superseded by todo delivery.",
+               "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+               "dedupe_key" => "brief:check-in:single-todo-style",
+               "metadata" => %{
+                 "linked_todo_ids" => [todo.id],
+                 "timezone_offset_hours" => "-4"
+               }
+             })
+
+    [digest_todo] = Briefs.todo_digest_todos(brief)
+
+    intro = Briefs.todo_digest_intro_text(brief, [digest_todo])
+
+    assert intro =~ "Best next move: Reply to finance about the receipt."
+    assert intro =~ "Then choose: mark it done, keep it active, or defer it."
+    assert intro =~ "Open work: 1 new today."
+    refute intro =~ "the rest"
+    refute intro =~ "items still need"
+  end
+
   test "brief todo review sends open work one item at a time and summarizes decisions", %{
     user_id: user_id,
     agent: agent

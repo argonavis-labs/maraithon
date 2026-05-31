@@ -636,6 +636,12 @@ defmodule Maraithon.Briefs do
     end
   end
 
+  defp todo_digest_next_move([todo]) do
+    focus = todo |> todo_digest_focus() |> todo_digest_sentence()
+
+    "#{focus} Then choose: mark it done, keep it active, or defer it."
+  end
+
   defp todo_digest_next_move([todo | _todos]) do
     focus = todo |> todo_digest_focus() |> todo_digest_sentence()
 
