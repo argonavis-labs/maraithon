@@ -33,6 +33,7 @@ struct ChatThreadsCopyTests {
     @Test
     func emptyStatesUseSpecificSentenceCaseCopy() {
         #expect(ChatThreadsCopy.emptyChatsTitle == "No chats yet")
+        #expect(ChatThreadsCopy.emptyThreadPreview == "Start with a priority, draft, or follow-up.")
         #expect(ChatThreadsCopy.noMatchingChatsTitle == "No chats match")
         #expect(ChatThreadsCopy.deletedChatTitle == "Chat unavailable")
         #expect(ChatThreadsCopy.newChatButtonTitle == "New chat")
@@ -46,5 +47,6 @@ struct ChatThreadsCopyTests {
         #expect(!copy.contains("No Matching Chats"))
         #expect(!copy.contains("Chat Deleted"))
         #expect(!copy.contains("New Chat"))
+        #expect(!copy.contains("No messages yet"))
     }
 }

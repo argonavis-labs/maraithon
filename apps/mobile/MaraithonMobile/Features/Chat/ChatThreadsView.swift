@@ -206,6 +206,7 @@ enum ChatThreadsCopy {
     static let createFailedMessage = "Could not start a new chat. Your chat list stayed unchanged."
     static let emptyChatsTitle = "No chats yet"
     static let emptyChatsDescription = "Start a chat to plan the day, draft a follow-up, or turn loose notes into next actions."
+    static let emptyThreadPreview = "Start with a priority, draft, or follow-up."
     static let noMatchingChatsTitle = "No chats match"
     static let noMatchingChatsDescription = "Try another name or message."
     static let deletedChatTitle = "Chat unavailable"
@@ -232,6 +233,7 @@ enum ChatThreadsCopy {
         [
             emptyChatsTitle,
             emptyChatsDescription,
+            emptyThreadPreview,
             noMatchingChatsTitle,
             noMatchingChatsDescription,
             deletedChatTitle,

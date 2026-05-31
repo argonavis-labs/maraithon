@@ -35,6 +35,6 @@ struct ChatThreadRow: View {
     }
 
     private var preview: String {
-        latestMessage?.body ?? "No messages yet"
+        latestMessage?.body ?? ChatThreadsCopy.emptyThreadPreview
     }
 }
