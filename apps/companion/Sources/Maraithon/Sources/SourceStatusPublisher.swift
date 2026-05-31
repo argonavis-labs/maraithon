@@ -22,6 +22,7 @@ final class SourceStatusPublisher {
     private(set) var activeIssue: IssueEvent?
     private(set) var recentIssues: [IssueEvent] = []
     private(set) var blockingPermissionReason: String?
+    private(set) var blockingPermissionRecordedAt: Date?
     private let persistenceKey: String?
     private let defaults: UserDefaults?
     private static let persistencePrefix = "source_status."
@@ -90,6 +91,9 @@ final class SourceStatusPublisher {
     func update(state: SourceState) {
         self.state = state
         if let reason = Self.blockingReason(from: state) {
+            if blockingPermissionReason != reason || blockingPermissionRecordedAt == nil {
+                blockingPermissionRecordedAt = Date()
+            }
             blockingPermissionReason = reason
         }
         persist()
@@ -105,6 +109,7 @@ final class SourceStatusPublisher {
         self.lastFailureAt = nil
         self.lastFailureReason = nil
         self.blockingPermissionReason = nil
+        self.blockingPermissionRecordedAt = nil
         if activeIssue?.severity == .error {
             activeIssue = nil
         }
@@ -130,6 +135,7 @@ final class SourceStatusPublisher {
         self.lastFailureAt = nil
         self.lastFailureReason = nil
         self.blockingPermissionReason = nil
+        self.blockingPermissionRecordedAt = nil
         let bucket = calendar.startOfDay(for: date)
         if bucket != acceptedTodayBucket {
             acceptedToday = 0
@@ -179,6 +185,7 @@ final class SourceStatusPublisher {
         lastFailureAt = nil
         lastFailureReason = nil
         blockingPermissionReason = nil
+        blockingPermissionRecordedAt = nil
         persist()
     }
 
@@ -200,6 +207,7 @@ final class SourceStatusPublisher {
         }
 
         blockingPermissionReason = nil
+        blockingPermissionRecordedAt = nil
 
         if case .needsAttention(let stateReason) = state,
            SourceState.isFullDiskAccessReason(stateReason) {
@@ -218,7 +226,7 @@ final class SourceStatusPublisher {
     }
 
     func displayedState() -> SourceState {
-        if let blockingPermissionReason {
+        if let blockingPermissionReason = currentBlockingPermissionReason() {
             return .error(reason: blockingPermissionReason)
         }
 
@@ -261,6 +269,29 @@ final class SourceStatusPublisher {
             return nil
         }
         return issue
+    }
+
+    private func currentBlockingPermissionReason() -> String? {
+        guard let reason = blockingPermissionReason else { return nil }
+        return isStaleFullDiskAccessBlock(reason) ? nil : reason
+    }
+
+    private func isStaleFullDiskAccessBlock(_ reason: String) -> Bool {
+        guard SourceState.isFullDiskAccessReason(reason),
+              let lastSyncAt else {
+            return false
+        }
+
+        if let blockingPermissionRecordedAt {
+            return blockingPermissionRecordedAt <= lastSyncAt
+        }
+
+        if let activeIssue,
+           SourceState.isFullDiskAccessReason(activeIssue.reason) {
+            return false
+        }
+
+        return true
     }
 
     private func recordIssue(
@@ -331,7 +362,8 @@ final class SourceStatusPublisher {
             recentBatches: recentBatches,
             activeIssue: activeIssue,
             recentIssues: recentIssues,
-            blockingPermissionReason: blockingPermissionReason
+            blockingPermissionReason: blockingPermissionReason,
+            blockingPermissionRecordedAt: blockingPermissionRecordedAt
         )
     }
 
@@ -349,7 +381,20 @@ final class SourceStatusPublisher {
         activeIssue = snapshot.activeIssue
         recentIssues = Array(snapshot.recentIssues.prefix(20))
         blockingPermissionReason = snapshot.blockingPermissionReason
+        blockingPermissionRecordedAt = snapshot.blockingPermissionRecordedAt
         resetAcceptedTodayIfNeeded()
+        clearStaleFullDiskAccessBlockIfNeeded()
+    }
+
+    private func clearStaleFullDiskAccessBlockIfNeeded() {
+        guard let reason = blockingPermissionReason,
+              isStaleFullDiskAccessBlock(reason) else {
+            return
+        }
+
+        blockingPermissionReason = nil
+        blockingPermissionRecordedAt = nil
+        persist()
     }
 
     private func resetAcceptedTodayIfNeeded(referenceDate: Date = Date()) {
@@ -378,5 +423,6 @@ final class SourceStatusPublisher {
         let activeIssue: IssueEvent?
         let recentIssues: [IssueEvent]
         let blockingPermissionReason: String?
+        let blockingPermissionRecordedAt: Date?
     }
 }

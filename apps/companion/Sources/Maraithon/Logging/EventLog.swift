@@ -59,7 +59,7 @@ struct LogEntry: Identifiable, Hashable, Sendable {
 /// helpers (`info`, `warning`, …) which never block.
 ///
 /// Persistence target: `~/Library/Logs/Maraithon/companion.log`, rotated
-/// at 10MB × 5 files (rotation is a follow-up; v1 ships append-only).
+/// at 10 MB × 5 files.
 /// XCTest runs default to memory-only logs so fixture events do not pollute
 /// the user's real companion log.
 @Observable
@@ -68,28 +68,41 @@ final class EventLog {
     private(set) var entries: [LogEntry] = []
     private(set) var logFileURL: URL?
     private let capacity: Int
-    private let fileHandle: FileHandle?
+    private let maximumFileBytes: UInt64
+    private let maximumRotatedFiles: Int
+    private var fileHandle: FileHandle?
     private let dateFormatter: ISO8601DateFormatter
     private let loggers: [LogSource: Logger]
 
     private static let subsystem = "com.maraithon.companion"
+    static let defaultMaximumLogFileBytes: UInt64 = 10 * 1024 * 1024
+    static let defaultMaximumRotatedFiles = 5
 
-    init(capacity: Int = 5_000, persistence: EventLogPersistence = .automatic) {
+    init(
+        capacity: Int = 5_000,
+        persistence: EventLogPersistence = .automatic,
+        maximumFileBytes: UInt64 = EventLog.defaultMaximumLogFileBytes,
+        maximumRotatedFiles: Int = EventLog.defaultMaximumRotatedFiles
+    ) {
         self.capacity = capacity
+        self.maximumFileBytes = maximumFileBytes
+        self.maximumRotatedFiles = maximumRotatedFiles
         self.dateFormatter = ISO8601DateFormatter()
         self.dateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let resolvedLogFileURL = Self.logFileURL(for: persistence)
         self.logFileURL = resolvedLogFileURL
-        self.fileHandle = resolvedLogFileURL.flatMap(Self.openLogFile(at:))
+        self.fileHandle = resolvedLogFileURL.flatMap {
+            Self.openLogFile(
+                at: $0,
+                maximumFileBytes: maximumFileBytes,
+                maximumRotatedFiles: maximumRotatedFiles
+            )
+        }
         self.loggers = Dictionary(
             uniqueKeysWithValues: LogSource.allCases.map { source in
                 (source, Logger(subsystem: Self.subsystem, category: source.rawValue))
             }
         )
-    }
-
-    deinit {
-        try? fileHandle?.close()
     }
 
     func append(_ entry: LogEntry) {
@@ -168,7 +181,30 @@ final class EventLog {
         let line = "[\(ts)] [\(entry.level.rawValue)] [\(entry.source.rawValue)] \(entry.message)\(payload)\n"
         if let data = line.data(using: .utf8) {
             try? handle.write(contentsOf: data)
+            rotatePersistedLogIfNeeded()
         }
+    }
+
+    private func rotatePersistedLogIfNeeded() {
+        guard let logFileURL,
+              maximumFileBytes > 0,
+              let size = Self.fileSize(at: logFileURL),
+              size >= maximumFileBytes else {
+            return
+        }
+
+        try? fileHandle?.close()
+        fileHandle = nil
+        Self.rotateLog(
+            at: logFileURL,
+            maximumFileBytes: maximumFileBytes,
+            maximumRotatedFiles: maximumRotatedFiles
+        )
+        fileHandle = Self.openLogFile(
+            at: logFileURL,
+            maximumFileBytes: maximumFileBytes,
+            maximumRotatedFiles: maximumRotatedFiles
+        )
     }
 
     private static func logFileURL(for persistence: EventLogPersistence) -> URL? {
@@ -201,7 +237,11 @@ final class EventLog {
         return logsDir.appendingPathComponent("companion.log")
     }
 
-    private static func openLogFile(at fileURL: URL) -> FileHandle? {
+    private static func openLogFile(
+        at fileURL: URL,
+        maximumFileBytes: UInt64,
+        maximumRotatedFiles: Int
+    ) -> FileHandle? {
         let fm = FileManager.default
         let logsDir = fileURL.deletingLastPathComponent()
         do {
@@ -209,6 +249,12 @@ final class EventLog {
         } catch {
             return nil
         }
+
+        prepareLogFiles(
+            at: fileURL,
+            maximumFileBytes: maximumFileBytes,
+            maximumRotatedFiles: maximumRotatedFiles
+        )
 
         if !fm.fileExists(atPath: fileURL.path) {
             fm.createFile(atPath: fileURL.path, contents: nil)
@@ -219,6 +265,100 @@ final class EventLog {
             _ = try? handle.seekToEnd()
         }
         return handle
+    }
+
+    private static func prepareLogFiles(
+        at fileURL: URL,
+        maximumFileBytes: UInt64,
+        maximumRotatedFiles: Int
+    ) {
+        guard maximumFileBytes > 0 else { return }
+
+        for index in 1...max(maximumRotatedFiles, 1) {
+            trimLogIfNeeded(
+                at: rotatedLogURL(for: fileURL, index: index),
+                maximumFileBytes: maximumFileBytes
+            )
+        }
+
+        guard let activeSize = fileSize(at: fileURL),
+              activeSize >= maximumFileBytes else {
+            return
+        }
+
+        rotateLog(
+            at: fileURL,
+            maximumFileBytes: maximumFileBytes,
+            maximumRotatedFiles: maximumRotatedFiles
+        )
+    }
+
+    private static func rotateLog(
+        at fileURL: URL,
+        maximumFileBytes: UInt64,
+        maximumRotatedFiles: Int
+    ) {
+        let fm = FileManager.default
+
+        if maximumRotatedFiles <= 0 {
+            try? fm.removeItem(at: fileURL)
+            fm.createFile(atPath: fileURL.path, contents: nil)
+            return
+        }
+
+        trimLogIfNeeded(at: fileURL, maximumFileBytes: maximumFileBytes)
+
+        let oldest = rotatedLogURL(for: fileURL, index: maximumRotatedFiles)
+        if fm.fileExists(atPath: oldest.path) {
+            try? fm.removeItem(at: oldest)
+        }
+
+        if maximumRotatedFiles > 1 {
+            for index in stride(from: maximumRotatedFiles - 1, through: 1, by: -1) {
+                let source = rotatedLogURL(for: fileURL, index: index)
+                guard fm.fileExists(atPath: source.path) else { continue }
+                let destination = rotatedLogURL(for: fileURL, index: index + 1)
+                try? fm.moveItem(at: source, to: destination)
+            }
+        }
+
+        if fm.fileExists(atPath: fileURL.path) {
+            try? fm.moveItem(at: fileURL, to: rotatedLogURL(for: fileURL, index: 1))
+        }
+        fm.createFile(atPath: fileURL.path, contents: nil)
+    }
+
+    private static func trimLogIfNeeded(at fileURL: URL, maximumFileBytes: UInt64) {
+        guard maximumFileBytes > 0,
+              let size = fileSize(at: fileURL),
+              size > maximumFileBytes else {
+            return
+        }
+
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            try? Data().write(to: fileURL)
+            return
+        }
+
+        defer { try? handle.close() }
+        guard (try? handle.seek(toOffset: size - maximumFileBytes)) != nil,
+              let data = try? handle.readToEnd() else {
+            return
+        }
+        try? data.write(to: fileURL, options: .atomic)
+    }
+
+    private static func fileSize(at fileURL: URL) -> UInt64? {
+        guard let size = try? FileManager.default
+            .attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber
+        else {
+            return nil
+        }
+        return size.uint64Value
+    }
+
+    private static func rotatedLogURL(for fileURL: URL, index: Int) -> URL {
+        URL(fileURLWithPath: "\(fileURL.path).\(index)")
     }
 }
 

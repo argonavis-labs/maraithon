@@ -270,6 +270,7 @@ final class SourceStatusPublisherTests: XCTestCase {
         )
 
         XCTAssertEqual(restored.blockingPermissionReason, reason)
+        XCTAssertNotNil(restored.blockingPermissionRecordedAt)
         XCTAssertEqual(restored.displayedState(), .error(reason: reason))
         XCTAssertEqual(restored.fullDiskAccessBlockReason, reason)
 
@@ -281,6 +282,37 @@ final class SourceStatusPublisherTests: XCTestCase {
         restored.recordHealthyCycle(at: now.addingTimeInterval(60))
         restored.update(state: .connected)
         XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertNil(restored.blockingPermissionRecordedAt)
+        XCTAssertNil(restored.fullDiskAccessBlockReason)
+        XCTAssertEqual(restored.displayedState(), .connected)
+    }
+
+    func testPersistentPublisherDropsLegacyFullDiskAccessBlockAfterSuccessfulHistory() throws {
+        let defaults = makeDefaults()
+        let reason = "imessage_full_disk_access_required"
+        let publisher = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        publisher.recordSync(at: Date(), accepted: 12, duplicate: 0)
+        let key = "source_status.imessage"
+        let data = try XCTUnwrap(defaults.data(forKey: key))
+        var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        snapshot["blockingPermissionReason"] = reason
+        snapshot.removeValue(forKey: "blockingPermissionRecordedAt")
+        let legacyData = try JSONSerialization.data(withJSONObject: snapshot)
+        defaults.set(legacyData, forKey: key)
+
+        let restored = SourceStatusPublisher(
+            sourceID: "imessage",
+            state: .connected,
+            defaults: defaults
+        )
+
+        XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertNil(restored.blockingPermissionRecordedAt)
         XCTAssertNil(restored.fullDiskAccessBlockReason)
         XCTAssertEqual(restored.displayedState(), .connected)
     }
@@ -297,6 +329,7 @@ final class SourceStatusPublisherTests: XCTestCase {
         publisher.clearFullDiskAccessBlock()
 
         XCTAssertNil(publisher.blockingPermissionReason)
+        XCTAssertNil(publisher.blockingPermissionRecordedAt)
         XCTAssertNil(publisher.fullDiskAccessBlockReason)
         XCTAssertEqual(publisher.state, .connected)
         XCTAssertEqual(publisher.displayedState(), .connected)
