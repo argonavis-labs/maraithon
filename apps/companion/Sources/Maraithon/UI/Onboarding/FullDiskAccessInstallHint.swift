@@ -11,6 +11,7 @@ import AppKit
 enum FullDiskAccessInstallHint {
     enum InstallError: Error {
         case sourceIsNotAppBundle
+        case stableAppRefreshToolMissing
         case stableAppRefreshFailed(status: Int32)
     }
 
@@ -171,32 +172,11 @@ enum FullDiskAccessInstallHint {
                 return
             }
 
-            if try refreshExistingStableAppWithRsync(
+            try refreshExistingStableAppWithRsync(
                 from: source,
                 to: target,
                 fileManager: fileManager
-            ) {
-                return
-            }
-
-            let existingContents = try fileManager.contentsOfDirectory(
-                at: target,
-                includingPropertiesForKeys: nil
             )
-            for item in existingContents {
-                try fileManager.removeItem(at: item)
-            }
-
-            let sourceContents = try fileManager.contentsOfDirectory(
-                at: source,
-                includingPropertiesForKeys: nil
-            )
-            for item in sourceContents {
-                try fileManager.copyItem(
-                    at: item,
-                    to: target.appendingPathComponent(item.lastPathComponent)
-                )
-            }
         } else {
             try fileManager.copyItem(at: source, to: target)
         }
@@ -206,10 +186,10 @@ enum FullDiskAccessInstallHint {
         from source: URL,
         to target: URL,
         fileManager: FileManager
-    ) throws -> Bool {
+    ) throws {
         let rsyncURL = URL(fileURLWithPath: "/usr/bin/rsync")
         guard fileManager.isExecutableFile(atPath: rsyncURL.path) else {
-            return false
+            throw InstallError.stableAppRefreshToolMissing
         }
 
         let process = Process()
@@ -231,8 +211,6 @@ enum FullDiskAccessInstallHint {
         guard process.terminationStatus == 0 else {
             throw InstallError.stableAppRefreshFailed(status: process.terminationStatus)
         }
-
-        return true
     }
 
     @MainActor

@@ -179,6 +179,32 @@ quit_running_companion_app() {
   done
 }
 
+install_companion_dev_app() {
+  local built_app="$1"
+  local install_app="$2"
+
+  if [[ "${built_app%/}" == "${install_app%/}" ]]; then
+    return
+  fi
+
+  mkdir -p "$(dirname "${install_app}")"
+
+  if [[ -d "${install_app}" ]]; then
+    require_command rsync
+    # Preserve the existing bundle and file identities as much as possible:
+    # macOS privacy grants can be sensitive to dev app replacement even when
+    # the bundle identifier and signing requirement stay the same.
+    rsync -a --checksum --delete --inplace "${built_app}/" "${install_app}/"
+    return
+  fi
+
+  if [[ -e "${install_app}" ]]; then
+    rm -rf "${install_app}"
+  fi
+
+  ditto "${built_app}" "${install_app}"
+}
+
 companion_designated_requirement() {
   local app_path="$1"
 

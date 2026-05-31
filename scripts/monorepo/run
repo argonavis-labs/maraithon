@@ -23,17 +23,7 @@ if selected_component "${component}" "companion"; then
     exit 1
   fi
 
-  if [[ "${built_app%/}" != "${install_app%/}" ]]; then
-    if [[ -d "${install_app}" ]] && command -v rsync >/dev/null 2>&1; then
-      # Preserve the existing bundle and file identities as much as possible:
-      # macOS privacy grants can be sensitive to dev app replacement even when
-      # the bundle identifier and signing requirement stay the same.
-      rsync -a --delete --inplace "${built_app}/" "${install_app}/"
-    else
-      rm -rf "${install_app}"
-      ditto "${built_app}" "${install_app}"
-    fi
-  fi
+  install_companion_dev_app "${built_app}" "${install_app}"
   xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
   if [[ -x "${LSREGISTER}" ]]; then
     unregister_stale_companion_apps "${install_app}"
