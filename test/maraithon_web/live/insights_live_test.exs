@@ -53,9 +53,11 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert html =~ "Relationship suggestions"
     assert html =~ "Possible duplicate: Christina Giannone"
     assert html =~ "Merge contacts"
-    assert html =~ "Suggested action:"
+    assert html =~ "Next move:"
     assert html =~ "Review relationship: Emma Fenwick as your daughter"
     assert html =~ "Confirm before updating Emma Fenwick"
+    refute html =~ "Evidence-backed"
+    refute html =~ "Suggested action:"
     refute html =~ "I think Emma Fenwick is your daughter"
     refute html =~ "confidence"
     refute html =~ "Hidden Person"
@@ -73,21 +75,23 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert has_element?(
              view,
              "p",
-             "Maraithon will add merge or relationship suggestions here when checked records include enough evidence. Open People to edit a record manually."
+             "When checked People records give a clear reason, Maraithon will list merge and relationship suggestions here. Open People to edit a record manually."
            )
 
     assert has_element?(
              view,
              "p",
-             "Merge suggestions will appear here after checked records point to the same person."
+             "When checked records point to the same person, merge suggestions appear here."
            )
 
     assert has_element?(
              view,
              "p",
-             "Relationship suggestions will appear here after checked evidence points to a label you can confirm."
+             "When checked records point to a label you can confirm, relationship suggestions appear here."
            )
 
+    refute html =~ "checked evidence"
+    refute html =~ "Evidence-backed"
     refute html =~ "No people insights right now"
     refute html =~ "No people insights surfaced from checked records."
     refute html =~ "No duplicate candidates surfaced in checked people data."
@@ -123,7 +127,7 @@ defmodule MaraithonWeb.InsightsLiveTest do
       |> List.first()
 
     {:ok, view, html} = live(conn, "/insights")
-    assert html =~ "Suggested action:"
+    assert html =~ "Next move:"
     assert html =~ "keep Christina Giannone"
 
     html =

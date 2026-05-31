@@ -319,7 +319,7 @@ defmodule Maraithon.Crm.Insights do
   end
 
   defp relationship_suggestion_summary(%Person{} = person) do
-    "Maraithon found source evidence for this relationship label. Confirm before updating #{person.display_name}'s People profile."
+    "Maraithon found checked context for this relationship label. Confirm before updating #{person.display_name}'s People profile."
   end
 
   defp relationship_phrase?(text, name, relationship_pattern) do

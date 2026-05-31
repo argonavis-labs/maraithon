@@ -98,7 +98,8 @@ defmodule Maraithon.Crm.InsightsTest do
 
     assert [suggestion] = result.relationship_suggestions
     assert suggestion.title == "Review relationship: Emma Fenwick as your daughter"
-    assert suggestion.summary =~ "source evidence"
+    assert suggestion.summary =~ "checked context"
+    refute suggestion.summary =~ "source evidence"
     refute suggestion.title =~ "I think"
     assert suggestion.relationship == "daughter"
     assert Enum.any?(suggestion.evidence, &(&1.source == "Relationship observation"))

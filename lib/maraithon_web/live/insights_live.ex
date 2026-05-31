@@ -146,7 +146,7 @@ defmodule MaraithonWeb.InsightsLive do
       <div class="space-y-6">
         <.page_header
           title="Insights"
-          subtitle="People cleanup and relationship suggestions Maraithon can review before changing your data."
+          subtitle="Review People cleanup and relationship labels before Maraithon changes your data."
         >
           <:actions>
             <.button navigate="/operator/people" variant="outline">Open People</.button>
@@ -154,7 +154,7 @@ defmodule MaraithonWeb.InsightsLive do
         </.page_header>
 
         <dl class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <.insight_stat label="Open people insights" value={@crm_insights.total_count} />
+          <.insight_stat label="Ready for review" value={@crm_insights.total_count} />
           <.insight_stat label="Duplicate suggestions" value={length(@crm_insights.duplicate_suggestions)} />
           <.insight_stat label="Relationship suggestions" value={length(@crm_insights.relationship_suggestions)} />
         </dl>
@@ -165,7 +165,7 @@ defmodule MaraithonWeb.InsightsLive do
               <div>
                 <h2 class="text-base/7 font-semibold text-zinc-950">People cleanup</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
-                  Possible duplicates and records that may be safe to combine after review.
+                  Review possible duplicate People records before combining them.
                 </p>
               </div>
               <.badge color="zinc"><%= length(@crm_insights.duplicate_suggestions) %></.badge>
@@ -181,7 +181,7 @@ defmodule MaraithonWeb.InsightsLive do
               <div>
                 <h2 class="text-base/7 font-semibold text-zinc-950">Relationship suggestions</h2>
                 <p class="mt-1 text-sm/6 text-zinc-500">
-                  Evidence-backed labels you can apply to people.
+                  Labels to confirm before Maraithon updates People.
                 </p>
               </div>
               <.badge color="zinc"><%= length(@crm_insights.relationship_suggestions) %></.badge>
@@ -197,7 +197,7 @@ defmodule MaraithonWeb.InsightsLive do
               No people changes are ready for review.
             </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              Maraithon will add merge or relationship suggestions here when checked records include enough evidence. Open People to edit a record manually.
+              When checked People records give a clear reason, Maraithon will list merge and relationship suggestions here. Open People to edit a record manually.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People
@@ -228,7 +228,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          Merge suggestions will appear here after checked records point to the same person.
+          When checked records point to the same person, merge suggestions appear here.
         </p>
       </div>
 
@@ -242,7 +242,7 @@ defmodule MaraithonWeb.InsightsLive do
               <h3 class="mt-2 text-sm/6 font-semibold text-zinc-950"><%= suggestion.title %></h3>
               <p class="mt-1 text-sm/6 text-zinc-600"><%= suggestion.summary %></p>
               <p class="mt-2 text-sm/6 text-zinc-950">
-                Suggested action:
+                Next move:
                 <span class="font-medium">
                   merge these records and keep <%= duplicate_survivor_name(suggestion) %>.
                 </span>
@@ -275,7 +275,7 @@ defmodule MaraithonWeb.InsightsLive do
     <div>
       <div :if={@suggestions == []} class="px-5 py-8">
         <p class="text-sm/6 text-zinc-500">
-          Relationship suggestions will appear here after checked evidence points to a label you can confirm.
+          When checked records point to a label you can confirm, relationship suggestions appear here.
         </p>
       </div>
 
