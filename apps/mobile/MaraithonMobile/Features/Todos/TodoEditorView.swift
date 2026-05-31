@@ -44,6 +44,10 @@ struct TodoEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let decisionContext {
+                    decisionReviewSection(decisionContext)
+                }
+
                 Section(TodoEditorCopy.commitmentSectionTitle) {
                     TextField(TodoEditorCopy.titlePlaceholder, text: $title)
                         .accessibilityIdentifier("todo-title-field")
@@ -58,52 +62,6 @@ struct TodoEditorView: View {
                         ForEach(TodoPriority.allCases) { priority in
                             Label(priority.title, systemImage: priority.symbolName)
                                 .tag(priority)
-                        }
-                    }
-                }
-
-                if let decisionContext {
-                    Section(TodoEditorCopy.decisionContextSectionTitle) {
-                        if let contextSummary = decisionContext.contextSummary {
-                            contextLine(
-                                label: TodoEditorCopy.contextSummaryLabel,
-                                value: contextSummary
-                            )
-                        }
-
-                        if let decisionPrompt = decisionContext.decisionPrompt {
-                            contextLine(
-                                label: TodoEditorCopy.decisionPromptLabel,
-                                value: decisionPrompt
-                            )
-                        }
-
-                        if let whyNow = decisionContext.whyNow {
-                            contextLine(
-                                label: TodoEditorCopy.whyNowLabel,
-                                value: whyNow
-                            )
-                        }
-
-                        if let sourceContext = decisionContext.sourceContext {
-                            contextLine(
-                                label: TodoEditorCopy.sourceContextLabel,
-                                value: sourceContext
-                            )
-                        }
-
-                        if let preparedMove = decisionContext.preparedMove {
-                            contextLine(
-                                label: TodoEditorCopy.preparedMoveLabel,
-                                value: preparedMove
-                            )
-                        }
-
-                        if let evidence = decisionContext.evidence {
-                            contextLine(
-                                label: TodoEditorCopy.evidenceLabel,
-                                value: evidence
-                            )
                         }
                     }
                 }
@@ -131,7 +89,12 @@ struct TodoEditorView: View {
                     }
                 }
             }
-            .navigationTitle(todo == nil ? TodoEditorCopy.newNavigationTitle : TodoEditorCopy.editNavigationTitle)
+            .navigationTitle(
+                TodoEditorCopy.navigationTitle(
+                    isNew: todo == nil,
+                    hasDecisionContext: decisionContext != nil
+                )
+            )
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -144,6 +107,53 @@ struct TodoEditorView: View {
                     .accessibilityIdentifier("todo-save-button")
                     .disabled(isSaving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func decisionReviewSection(_ decisionContext: TodoDecisionContext) -> some View {
+        Section(TodoEditorCopy.decisionReviewSectionTitle) {
+            if let decisionPrompt = decisionContext.decisionPrompt {
+                contextLine(
+                    label: TodoEditorCopy.decisionPromptLabel,
+                    value: decisionPrompt
+                )
+            }
+
+            if let preparedMove = decisionContext.preparedMove {
+                contextLine(
+                    label: TodoEditorCopy.preparedMoveLabel,
+                    value: preparedMove
+                )
+            }
+
+            if let whyNow = decisionContext.whyNow {
+                contextLine(
+                    label: TodoEditorCopy.whyNowLabel,
+                    value: whyNow
+                )
+            }
+
+            if let evidence = decisionContext.evidence {
+                contextLine(
+                    label: TodoEditorCopy.evidenceLabel,
+                    value: evidence
+                )
+            }
+
+            if let contextSummary = decisionContext.contextSummary {
+                contextLine(
+                    label: TodoEditorCopy.contextSummaryLabel,
+                    value: contextSummary
+                )
+            }
+
+            if let sourceContext = decisionContext.sourceContext {
+                contextLine(
+                    label: TodoEditorCopy.sourceContextLabel,
+                    value: sourceContext
+                )
             }
         }
     }
@@ -247,13 +257,13 @@ enum TodoEditorCopy {
     static let titlePlaceholder = "What needs to happen"
     static let notesPlaceholder = "Context"
     static let nextActionPlaceholder = "Next move"
-    static let decisionContextSectionTitle = "Decision context"
-    static let contextSummaryLabel = "Who and context"
-    static let decisionPromptLabel = "Decision"
-    static let whyNowLabel = "Why now"
-    static let sourceContextLabel = "Context used"
-    static let preparedMoveLabel = "Prepared move"
-    static let evidenceLabel = "Evidence"
+    static let decisionReviewSectionTitle = "Decision ready for review"
+    static let contextSummaryLabel = "Who and thread"
+    static let decisionPromptLabel = "Decision needed"
+    static let whyNowLabel = "Why this matters now"
+    static let sourceContextLabel = "Context checked"
+    static let preparedMoveLabel = "Suggested move"
+    static let evidenceLabel = "Source evidence"
     static let urgencyPickerTitle = "Urgency"
     static let timingSectionTitle = "Timing"
     static let dueDateToggleTitle = "Add due date"
@@ -263,6 +273,19 @@ enum TodoEditorCopy {
     static let noPersonLabel = "No one linked"
     static let newNavigationTitle = "New work item"
     static let editNavigationTitle = "Edit work item"
+    static let reviewDecisionNavigationTitle = "Review decision"
+
+    static func navigationTitle(isNew: Bool, hasDecisionContext: Bool) -> String {
+        if isNew {
+            return newNavigationTitle
+        }
+
+        if hasDecisionContext {
+            return reviewDecisionNavigationTitle
+        }
+
+        return editNavigationTitle
+    }
 
     static var visibleLabels: [String] {
         [
@@ -270,7 +293,7 @@ enum TodoEditorCopy {
             titlePlaceholder,
             notesPlaceholder,
             nextActionPlaceholder,
-            decisionContextSectionTitle,
+            decisionReviewSectionTitle,
             contextSummaryLabel,
             decisionPromptLabel,
             whyNowLabel,
@@ -285,7 +308,8 @@ enum TodoEditorCopy {
             personPickerTitle,
             noPersonLabel,
             newNavigationTitle,
-            editNavigationTitle
+            editNavigationTitle,
+            reviewDecisionNavigationTitle
         ]
     }
 }
