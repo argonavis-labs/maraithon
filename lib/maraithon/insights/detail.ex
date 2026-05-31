@@ -9,10 +9,10 @@ defmodule Maraithon.Insights.Detail do
 
   @max_summary_evidence 3
 
-  @exact_promise_gap "Exact commitment is not available; open the source before replying or delegating."
+  @exact_promise_gap "Original commitment text is missing; open the source before replying or delegating."
   @requester_gap "Requester is not identified; confirm who is waiting before assigning ownership."
-  @evidence_gap "Source excerpt is not available; review the original thread before acting."
-  @delivery_gap "Delivery history is not available; do not assume the follow-through was sent."
+  @evidence_gap "Source excerpt is missing; review the original thread before acting."
+  @delivery_gap "Delivery history is missing; do not assume the follow-through was sent."
   @reason_gap "Why-now context is incomplete; confirm urgency from the source before acting."
 
   def missing_context_copy(:promise_text), do: @exact_promise_gap

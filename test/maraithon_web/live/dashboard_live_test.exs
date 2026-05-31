@@ -661,7 +661,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Why this still needs attention"
     assert html =~ "Inferred from available context"
     assert html =~ "Missing context"
-    assert html =~ "Source excerpt is not available; review the original thread before acting."
+    assert html =~ "Source excerpt is missing; review the original thread before acting."
     refute_html_contains(html, "This item does not include a source excerpt.")
     refute_html_contains(html, "not captured")
     refute_html_contains(html, "saved evidence was captured")

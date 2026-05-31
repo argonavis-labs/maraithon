@@ -122,7 +122,7 @@ defmodule Maraithon.Insights.DetailTest do
     assert detail.open_loop_reason.text =~ "unresolved"
     assert "The due date is tomorrow." in detail.open_loop_reason.factors
 
-    assert "Delivery history is not available; do not assume the follow-through was sent." in detail.data_gaps
+    assert "Delivery history is missing; do not assume the follow-through was sent." in detail.data_gaps
 
     summary = Detail.summary_text(detail, insight)
 
@@ -203,9 +203,9 @@ defmodule Maraithon.Insights.DetailTest do
 
     assert "Requester is not identified; confirm who is waiting before assigning ownership." in detail.data_gaps
 
-    assert "Source excerpt is not available; review the original thread before acting." in detail.data_gaps
+    assert "Source excerpt is missing; review the original thread before acting." in detail.data_gaps
 
-    assert "Delivery history is not available; do not assume the follow-through was sent." in detail.data_gaps
+    assert "Delivery history is missing; do not assume the follow-through was sent." in detail.data_gaps
 
     summary = Detail.summary_text(detail, insight)
 
