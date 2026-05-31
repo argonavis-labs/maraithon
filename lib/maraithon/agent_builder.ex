@@ -135,7 +135,7 @@ defmodule Maraithon.AgentBuilder do
       suggestions: [
         "Use this when you want one assistant persona instead of separate travel and follow-through automations.",
         "Keep the timezone aligned to your working day so briefs and travel logistics land when you can still react.",
-        "Start on the balanced profile. It gives follow-through enough coverage and keeps travel logistics active without turning every cycle into a deep crawl."
+        "Start on the balanced profile. It gives follow-through enough coverage and keeps travel logistics active without flooding you."
       ]
     },
     %{
@@ -174,7 +174,7 @@ defmodule Maraithon.AgentBuilder do
         "Project context, goals, open tasks, saved project notes, and attached repository activity",
         "GitHub repository metadata, README, root structure, recent commits, open issues, and open pull requests",
         "The base branch you want reviewed, usually `main`",
-        "A weekly wakeup cadence, explicit requests, and GitHub repo events"
+        "A scheduled weekly review, explicit requests, and GitHub repo events"
       ],
       outputs: [
         "Saved recommendations with titles, summaries, first milestones, and evidence",
@@ -226,7 +226,7 @@ defmodule Maraithon.AgentBuilder do
       inputs: [
         "Travel confirmation emails from Gmail",
         "Calendar events that corroborate destination and timing",
-        "A recurring wakeup cadence that catches upcoming trips and email changes"
+        "Recurring checks for upcoming trips and email changes"
       ],
       outputs: [
         "Persisted travel itineraries with normalized flight and hotel items",
@@ -275,7 +275,7 @@ defmodule Maraithon.AgentBuilder do
       ],
       suggestions: [
         "Keep the timezone aligned to your working day so day-before travel briefs land when you still have time to react.",
-        "Use the balanced profile first. It keeps scan volume high enough for travel confirmations without turning every inbox scan into a deep crawl.",
+        "Use the balanced profile first. It keeps enough coverage for travel confirmations without flooding you.",
         "Use selective notifications if you only want confirmed travel briefs and material change alerts."
       ]
     },
@@ -419,7 +419,7 @@ defmodule Maraithon.AgentBuilder do
           provider: "slack",
           service: "dms",
           label: "Slack Personal DMs",
-          description: "Needed to scan direct messages and private follow-ups.",
+          description: "Needed to review direct messages and private follow-ups.",
           required?: true
         }
       ],
@@ -473,7 +473,7 @@ defmodule Maraithon.AgentBuilder do
         }
       ],
       suggestions: [
-        "Start on one repository root and tighten the ignore patterns before widening the scan surface.",
+        "Start on one repository root and tighten the ignore patterns before widening the review surface.",
         "Use a slower check interval for large repositories so reviews do not pile up too quickly.",
         "Point the output path into a tracked workspace if you want to review the markdown report in git."
       ]
@@ -799,7 +799,7 @@ defmodule Maraithon.AgentBuilder do
       %{
         id: "lean",
         label: "Lean",
-        description: "Lowest spend. Tight scans and fewer alerts."
+        description: "Quiet mode. Fewer checks and fewer notifications."
       },
       %{
         id: "balanced",
@@ -809,7 +809,7 @@ defmodule Maraithon.AgentBuilder do
       %{
         id: "thorough",
         label: "Thorough",
-        description: "Higher spend for deeper scanning and more proactive coverage."
+        description: "Broader review for fast-moving work and more proactive coverage."
       }
     ]
   end

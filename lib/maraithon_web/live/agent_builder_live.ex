@@ -1150,9 +1150,9 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body: cost_profile_summary("inbox_calendar_advisor", launch["cost_profile"])
       },
       %{
-        title: "Scan coverage",
+        title: "Context checked",
         body:
-          "Checks up to #{launch["email_scan_limit"]} inbox emails, #{launch["event_scan_limit"]} calendar events, #{launch["channel_scan_limit"]} Slack channel messages, and #{launch["dm_scan_limit"]} Slack DM messages each cycle."
+          "Reviews recent inbox, calendar, Slack channel, and Slack DM activity before deciding what deserves follow-up."
       },
       %{
         title: "Workspace scope",
@@ -1160,14 +1160,14 @@ defmodule MaraithonWeb.AgentBuilderLive do
           slack_scope_sentence(
             launch,
             provider_map,
-            "Scanning all connected Slack workspaces for unresolved commitments.",
+            "Uses all connected Slack workspaces for unresolved commitments.",
             "Scoped to %{workspace}."
           )
       },
       %{
-        title: "Insight tuning",
+        title: "What reaches you",
         body:
-          "Email/calendar follow-up window: #{launch["prep_window_hours"]}h. Slack lookback: #{launch["lookback_hours"]}h. Surfaces up to #{launch["max_insights_per_cycle"]} action-ready items per check with #{notification_selectivity_phrase("inbox_calendar_advisor", launch["min_confidence"])} notifications."
+          "Shows up to #{launch["max_insights_per_cycle"]} action-ready items at a time and keeps notifications #{notification_selectivity_phrase("inbox_calendar_advisor", launch["min_confidence"])}."
       }
     ]
   end
@@ -1181,7 +1181,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Built-in skills",
         body:
-          "Runs follow-through, travel logistics, and recurring briefing inside one assistant."
+          "Covers follow-through, travel logistics, and recurring executive briefs from one assistant."
       },
       %{
         title: "Slack scope",
@@ -1189,7 +1189,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
           slack_scope_sentence(
             launch,
             provider_map,
-            "Scanning all connected Slack workspaces for the follow-through skill.",
+            "Uses all connected Slack workspaces for follow-through.",
             "Scoped to %{workspace} for follow-through."
           )
       },
@@ -1213,19 +1213,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
           slack_scope_sentence(
             launch,
             provider_map,
-            "Scanning all connected Slack workspaces.",
+            "Uses all connected Slack workspaces.",
             "Scoped to %{workspace}."
           )
       },
       %{
-        title: "Scan coverage",
+        title: "Context checked",
         body:
-          "Checks up to #{launch["channel_scan_limit"]} channel messages and #{launch["dm_scan_limit"]} DM messages over the last #{launch["lookback_hours"]} hours each cycle."
+          "Reviews recent Slack channel and DM activity before surfacing commitments that still need a reply."
       },
       %{
-        title: "Escalation tuning",
+        title: "What reaches you",
         body:
-          "Surfaces up to #{launch["max_insights_per_cycle"]} unresolved Slack loops per check with #{notification_selectivity_phrase("slack_followthrough_agent", launch["min_confidence"])} notifications."
+          "Shows up to #{launch["max_insights_per_cycle"]} unresolved Slack commitments at a time and keeps notifications #{notification_selectivity_phrase("slack_followthrough_agent", launch["min_confidence"])}."
       }
     ]
   end
@@ -1305,19 +1305,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
         body: cost_profile_summary("personal_assistant_agent", launch["cost_profile"])
       },
       %{
-        title: "Travel scan coverage",
+        title: "Trip context",
         body:
-          "Checks up to #{launch["email_scan_limit"]} Gmail travel candidates and #{launch["event_scan_limit"]} calendar events over the last #{launch["lookback_hours"]} hours."
+          "Uses Gmail travel confirmations and matching calendar events to assemble the itinerary."
       },
       %{
         title: "Delivery timing",
         body:
-          "Computes the send window from the trip start time, then delivers the day-before brief in your local offset (#{blank_fallback(launch["timezone_offset_hours"], "-5")})."
+          "Sends the prep brief the day before the trip using your local offset (#{blank_fallback(launch["timezone_offset_hours"], "-5")})."
       },
       %{
         title: "Notification selectivity",
         body:
-          "Only sends travel briefs when trip details are clear enough. Current setting: #{notification_selectivity_label("personal_assistant_agent", launch["min_confidence"])}."
+          "Only sends trip briefs when itinerary details are clear enough. Current setting: #{notification_selectivity_label("personal_assistant_agent", launch["min_confidence"])}."
       }
     ]
   end
@@ -1341,7 +1341,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Daily planning scope",
         body:
-          "The planner will shortlist #{blank_fallback(launch["feature_limit"], "3")} feature opportunities per cycle."
+          "The planner will shortlist #{blank_fallback(launch["feature_limit"], "3")} product moves for each review."
       }
     ]
   end
@@ -1934,11 +1934,11 @@ defmodule MaraithonWeb.AgentBuilderLive do
     do: "Checks more frequently with a larger planning window for fast-moving repositories."
 
   defp cost_profile_summary("ai_chief_of_staff", "lean"),
-    do: "Smaller follow-through scans and selective travel alerts for a quieter assistant."
+    do: "Fewer follow-through checks and selective travel alerts for a quieter assistant."
 
   defp cost_profile_summary("ai_chief_of_staff", "balanced"),
     do:
-      "Good default coverage across follow-through, travel logistics, and recurring briefing without turning every cycle into a deep crawl."
+      "Good default coverage across follow-through, travel logistics, and recurring briefing without flooding you."
 
   defp cost_profile_summary("ai_chief_of_staff", "thorough"),
     do:
@@ -1946,7 +1946,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("inbox_calendar_advisor", "lean"),
     do:
-      "Tighter Gmail, Calendar, and Slack scans so only clear action-ready commitments reach you."
+      "Tighter Gmail, Calendar, and Slack review so only clear action-ready commitments reach you."
 
   defp cost_profile_summary("inbox_calendar_advisor", "balanced"),
     do:
@@ -1954,20 +1954,19 @@ defmodule MaraithonWeb.AgentBuilderLive do
 
   defp cost_profile_summary("inbox_calendar_advisor", "thorough"),
     do:
-      "Deeper cross-channel scans and broader follow-through coverage for executives who want fewer missed follow-ups."
+      "Broader cross-channel review and follow-through coverage for executives who want fewer missed follow-ups."
 
   defp cost_profile_summary("slack_followthrough_agent", "lean"),
-    do: "Smaller channel and DM scans with fewer Slack alerts."
+    do: "Smaller channel and DM review with fewer Slack alerts."
 
   defp cost_profile_summary("slack_followthrough_agent", "balanced"),
-    do:
-      "Good default Slack coverage with moderate scanning depth and practical urgency filtering."
+    do: "Good default Slack coverage with practical urgency filtering."
 
   defp cost_profile_summary("slack_followthrough_agent", "thorough"),
     do: "Broader Slack coverage and faster checks when Slack is where most team work happens."
 
   defp cost_profile_summary(_behavior, "lean"),
-    do: "Tighter scans and fewer checks."
+    do: "Tighter review and fewer checks."
 
   defp cost_profile_summary(_behavior, "balanced"),
     do: "Default coverage for most teams."

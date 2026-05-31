@@ -325,6 +325,40 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "Current bar"
     end
 
+    test "preview copy describes outcomes instead of scan internals", %{conn: conn} do
+      {:ok, _view, inbox_html} = live(conn, "/agents/new?behavior=inbox_calendar_advisor")
+
+      assert inbox_html =~ "Context checked"
+      assert inbox_html =~ "Reviews recent inbox, calendar, Slack channel, and Slack DM activity"
+      assert inbox_html =~ "What reaches you"
+      assert inbox_html =~ "keeps notifications standard"
+      refute inbox_html =~ "Scan coverage"
+      refute inbox_html =~ "Insight tuning"
+      refute inbox_html =~ "each cycle"
+
+      {:ok, _view, slack_html} = live(conn, "/agents/new?behavior=slack_followthrough_agent")
+
+      assert slack_html =~ "Context checked"
+      assert slack_html =~ "Reviews recent Slack channel and DM activity"
+      assert slack_html =~ "What reaches you"
+      refute slack_html =~ "Escalation tuning"
+      refute slack_html =~ "over the last 48 hours"
+      refute slack_html =~ "per check"
+
+      {:ok, _view, travel_html} = live(conn, "/agents/new?behavior=personal_assistant_agent")
+
+      assert travel_html =~ "Trip context"
+      assert travel_html =~ "Uses Gmail travel confirmations and matching calendar events"
+      assert travel_html =~ "Sends the prep brief the day before the trip"
+      refute travel_html =~ "Travel scan coverage"
+      refute travel_html =~ "Computes the send window"
+
+      {:ok, _view, planner_html} = live(conn, "/agents/new?behavior=github_product_planner")
+
+      assert planner_html =~ "product moves for each review"
+      refute planner_html =~ "feature opportunities per cycle"
+    end
+
     test "uses outcome-facing capacity language for custom automations", %{conn: conn} do
       {:ok, view, _html} = live(conn, "/agents/new?behavior=prompt_agent")
 
