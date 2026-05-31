@@ -149,11 +149,17 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "Prep me for Matthew tomorrow."},
     "mock_output": {
       "message_class": "assistant_reply",
+      "assistant_message": "Prep for Matthew tomorrow: confirm the setup path, pricing owner, and ETA before the call. I checked calendar context, connected context, and open todos; if no newer reply is found, draft the follow-up for approval.",
       "tool_sequence": ["calendar_events_for_person", "review_connected_context", "list_todos"]
     },
     "expected": {
       "output": {"message_class": "assistant_reply"},
-      "required_tools": ["calendar_events_for_person", "review_connected_context", "list_todos"]
+      "required_tools": ["calendar_events_for_person", "review_connected_context", "list_todos"],
+      "assistant_message_quality": {
+        "min_length": 160,
+        "required_phrases": ["setup path", "pricing owner", "connected context", "open todos", "draft the follow-up"],
+        "forbidden_phrases": ["I found some context", "looks important", "maybe"]
+      }
     }
   },
   {

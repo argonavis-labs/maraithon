@@ -819,7 +819,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "## Required Schedule Prep"
     assert revised["body"] =~ "Dawn Nguyen"
     assert revised["body"] =~ "12:00 PM PT"
+    assert revised["body"] =~ "ends 12:30 PM PT"
     assert revised["body"] =~ "Runner enterprise design partner"
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "Source: saved relationship context"
     assert revised["body"] =~ "## Decisions / Follow-ups"
     assert revised["body"] =~ "Cogniate Enterprise plan discussion"
     assert revised["body"] =~ "Charlie Feng"
@@ -865,8 +868,13 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert verification["final_findings"] == []
 
     assert revised["body"] =~ "## Required Schedule Prep"
-    assert revised["body"] =~ "**Dawn Nguyen** at 12:00 PM PT"
-    assert revised["body"] =~ "Prep: Dawn Nguyen: Runner enterprise design partner"
+    assert revised["body"] =~ "**Dawn Nguyen** at 12:00 PM PT (ends 12:30 PM PT)"
+    assert revised["body"] =~ "Prep: Dawn Nguyen: Runner enterprise design partner."
+
+    assert revised["body"] =~
+             "Carry one decision: confirm the live ask, risk, owner, and next step before the call ends."
+
+    assert revised["body"] =~ "Source: saved relationship context."
   end
 
   test "quality verifier requires prep context on the meeting item" do
@@ -909,8 +917,52 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert verification["final_findings"] == []
 
     assert revised["body"] =~ "## Required Schedule Prep"
-    assert revised["body"] =~ "**Dawn Nguyen** at 12:00 PM PT"
-    assert revised["body"] =~ "Prep: Dawn Nguyen: Runner enterprise design partner"
+    assert revised["body"] =~ "**Dawn Nguyen** at 12:00 PM PT (ends 12:30 PM PT)"
+    assert revised["body"] =~ "Prep: Dawn Nguyen: Runner enterprise design partner."
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "Source: saved relationship context."
+  end
+
+  test "quality verifier patches source-thin meeting prep without inventing background" do
+    brief = %{
+      "title" => "Monday, May 11 - Generic morning",
+      "summary" => "Start with the external call.",
+      "body" =>
+        "This morning has an external meeting.\n\n## Today's Schedule\n- Partnership review.\n\nToday's move: start with the calendar.",
+      "todos" => []
+    }
+
+    input = %{
+      "date" => "2026-05-11",
+      "schedule_coverage" => %{
+        "required_meetings" => [
+          %{
+            "summary" => "Partnership review with Nolan Park",
+            "display_start" => "2:00 PM ET",
+            "display_end" => "2:30 PM ET",
+            "external_attendees" => [
+              %{"display_name" => "Nolan Park", "email" => "nolan@laterco.com"}
+            ],
+            "data_gaps" => [
+              "No saved relationship context found for Nolan Park. Keep the meeting prep cautious and avoid inventing background."
+            ]
+          }
+        ]
+      }
+    }
+
+    {revised, verification} = MorningBriefing.verify_quality(brief, input, "llm")
+
+    assert verification["status"] == "10/10"
+    assert "missing_required_meetings" in verification["initial_findings"]
+    assert verification["final_findings"] == []
+
+    assert revised["body"] =~ "**Partnership review with Nolan Park** at 2:00 PM ET"
+    assert revised["body"] =~ "External attendees: Nolan Park."
+    assert revised["body"] =~ "Carry one decision"
+    assert revised["body"] =~ "avoid inventing background"
+    refute revised["body"] =~ "likely matters"
+    refute revised["body"] =~ "strategic partner"
   end
 
   test "quality verifier accepts required meetings with attached prep context" do

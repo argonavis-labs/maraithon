@@ -1780,19 +1780,38 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp fallback_meeting_line(meeting) when is_map(meeting) do
     summary = read_string(meeting, "summary", "Meeting")
-    start = read_string(meeting, "display_start", nil)
+    time = fallback_meeting_time(meeting)
     context = fallback_meeting_context(meeting)
+    source_note = fallback_meeting_source_note(meeting)
 
     [
       "- **#{summary}**",
-      start && "at #{start}",
-      context && "- Prep: #{context}"
+      time,
+      context && "- Prep: #{context}",
+      "Carry one decision: confirm the live ask, risk, owner, and next step before the call ends.",
+      source_note && "Source: #{source_note}"
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
   end
 
   defp fallback_meeting_line(_meeting), do: nil
+
+  defp fallback_meeting_time(meeting) do
+    start = read_string(meeting, "display_start", nil)
+    finish = read_string(meeting, "display_end", nil)
+
+    cond do
+      not blank?(start) and not blank?(finish) ->
+        "at #{start} (ends #{finish})"
+
+      not blank?(start) ->
+        "at #{start}"
+
+      true ->
+        nil
+    end
+  end
 
   defp fallback_meeting_context(meeting) do
     crm_context =
@@ -1810,10 +1829,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
     cond do
       not blank?(person_name) and not blank?(relationship) ->
-        "#{person_name}: #{truncate_prompt_string(relationship, 180)}"
+        "#{person_name}: #{truncate_prompt_string(relationship, 180)}."
 
       not blank?(relationship) ->
-        truncate_prompt_string(relationship, 180)
+        "#{truncate_prompt_string(relationship, 180)}."
 
       true ->
         meeting
@@ -1826,6 +1845,44 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           attendees -> "External attendees: #{Enum.join(attendees, ", ")}."
         end
     end
+  end
+
+  defp fallback_meeting_source_note(meeting) do
+    cond do
+      read_list(meeting, "crm_context") != [] ->
+        "saved relationship context."
+
+      meeting_has_web_page_context?(meeting) ->
+        "public source pages only; use cautiously."
+
+      read_list(meeting, "web_context") != [] ->
+        "public search snippets only; use cautiously."
+
+      data_gap = first_meeting_data_gap(meeting) ->
+        truncate_prompt_string(data_gap, 180)
+
+      read_list(meeting, "external_attendees") != [] ->
+        "calendar attendees only; avoid inventing background."
+
+      true ->
+        nil
+    end
+  end
+
+  defp meeting_has_web_page_context?(meeting) do
+    meeting
+    |> read_list("web_context")
+    |> Enum.any?(fn context ->
+      context
+      |> read_list("page_contexts")
+      |> Enum.any?()
+    end)
+  end
+
+  defp first_meeting_data_gap(meeting) do
+    meeting
+    |> read_list("data_gaps")
+    |> Enum.find(&is_binary/1)
   end
 
   defp fallback_attendee_label(attendee) when is_map(attendee) do
