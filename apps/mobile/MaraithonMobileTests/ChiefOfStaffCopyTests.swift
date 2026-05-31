@@ -27,6 +27,28 @@ struct ChiefOfStaffCopyTests {
     }
 
     @Test
+    func stripsModelConfidenceProseAndKeepsActionCopy() {
+        let copy = ChiefOfStaffCopy.clean(
+            """
+            90% confidence this matters.
+            Reasoning: model saw an owed reply.
+            Model score says this is urgent.
+            Why now: Sarah needs the answer before today's cutoff.
+            Next action: reply with the approved timing before 3 PM.
+            """
+        )
+
+        #expect(
+            copy ==
+                "Sarah needs the answer before today's cutoff. reply with the approved timing before 3 PM."
+        )
+        #expect(copy?.localizedCaseInsensitiveContains("confidence") == false)
+        #expect(copy?.localizedCaseInsensitiveContains("reasoning") == false)
+        #expect(copy?.localizedCaseInsensitiveContains("model") == false)
+        #expect(copy?.localizedCaseInsensitiveContains("score") == false)
+    }
+
+    @Test
     func preservesProductUserTerminology() {
         #expect(
             ChiefOfStaffCopy.clean("Investigate why the user interface flashes after reload.") ==

@@ -62,6 +62,9 @@ enum ChiefOfStaffCopy {
             "model_name",
             "model_provider",
             "model_response",
+            "model confidence",
+            "model reasoning",
+            "model score",
             "source_health",
             "metadata"
         ]
@@ -72,7 +75,12 @@ enum ChiefOfStaffCopy {
 
         let patterns = [
             #"\b(?:confidence|quality|priority|urgency|relevance|interrupt|telegram_fit)_score\s*[:=]"#,
+            #"\b\d{1,3}%\s+confidence\b"#,
+            #"\bconfidence\s+(?:this|that|was|is)\b"#,
+            #"^\s*reasoning\s*:"#,
+            #"\bmodel\s+(?:classified|confidence|ranked|reasoning|saw|score)\b"#,
             #"\bscore\s*[:=]\s*\d"#,
+            #"\bscore\s+(?:says|was|is)\b"#,
             #"\bthreshold\s*[:=]\s*\d"#,
             #"\bmodel\s*[:=]"#,
             #"^\s*[\{\[]"#
