@@ -307,7 +307,7 @@ record_companion_tcc_requirement() {
   local app_path="$1"
   local marker_path
   local requirement previous_requirement previous_marker_version
-  local marker_version="3"
+  local marker_version="4"
 
   requirement="$(companion_designated_requirement "${app_path}")"
   if [[ -z "${requirement}" ]]; then
@@ -326,18 +326,22 @@ record_companion_tcc_requirement() {
     previous_requirement="$(cat || true)"
   } < <(read_companion_tcc_marker "${marker_path}")
 
-  if [[ "${previous_requirement}" == "${requirement}" ]]; then
-    if [[ "${previous_marker_version}" != "${marker_version}" ]]; then
-      write_companion_tcc_marker "${marker_path}" "${marker_version}" "${requirement}"
-    fi
+  if [[ "${previous_requirement}" == "${requirement}" && "${previous_marker_version}" == "${marker_version}" ]]; then
     return
   fi
 
   if [[ -z "${previous_requirement}" ]]; then
-    echo "Recorded companion signing requirement for persistent Full Disk Access."
+    reset_companion_full_disk_access_entries
+    echo "Reset stale Full Disk Access entries for ${COMPANION_BUNDLE_ID}."
+    echo "Grant ${app_path} once; normal reloads will keep that grant."
+  elif [[ "${previous_requirement}" != "${requirement}" ]]; then
+    reset_companion_full_disk_access_entries
+    echo "Companion signing requirement changed; reset stale Full Disk Access entries."
+    echo "Grant ${app_path} once; normal reloads will keep that grant."
   else
-    echo "Companion signing requirement changed; Full Disk Access was not reset."
-    echo "If macOS still denies access, run make reset-companion-fda once, then grant ${app_path}."
+    reset_companion_full_disk_access_entries
+    echo "Companion Full Disk Access marker upgraded; reset stale privacy entries."
+    echo "Grant ${app_path} once; normal reloads will keep that grant."
   fi
 
   write_companion_tcc_marker "${marker_path}" "${marker_version}" "${requirement}"
@@ -347,7 +351,7 @@ reset_companion_full_disk_access_for_app() {
   local app_path="$1"
   local marker_path
   local requirement
-  local marker_version="3"
+  local marker_version="4"
 
   requirement="$(companion_designated_requirement "${app_path}")"
   if [[ -z "${requirement}" ]]; then

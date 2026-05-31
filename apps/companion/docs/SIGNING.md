@@ -44,8 +44,12 @@ You can still run `make setup-companion-signing` explicitly to prepare signing
 without launching the app.
 
 `make run-companion` records the installed app's designated code-signing
-requirement, but it does **not** reset Full Disk Access during a normal reload.
-That keeps a valid grant from disappearing just because the app was rebuilt.
+requirement. When that requirement is first recorded, upgraded, or changes, the
+launcher clears stale Maraithon Full Disk Access rows once so macOS does not
+keep applying an old development-copy grant to the wrong app. It does **not**
+reset Full Disk Access during a normal reload after the current requirement has
+been recorded, so a valid grant does not disappear just because the app was
+rebuilt.
 
 If Full Disk Access still does not apply after switching to the stable app,
 reset the stale TCC row explicitly and grant the stable installed app again:

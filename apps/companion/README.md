@@ -44,15 +44,17 @@ It builds the Debug app with stable local signing, then refreshes
 `~/Applications/Maraithon.app` in place so macOS keeps granting Full Disk
 Access to the same app copy across rebuilds and reloads.
 
-If macOS keeps pointing Full Disk Access at an old development copy, reset the
-stale privacy row once:
+When the local signing identity is first pinned or changes, the launcher clears
+stale Maraithon Full Disk Access rows once before opening the app. Grant
+`~/Applications/Maraithon.app` after that reset; normal `make run-companion`
+reloads do not reset Full Disk Access.
+
+If macOS still points Full Disk Access at an old development copy, reset the
+privacy row manually:
 
 ```sh
 make reset-companion-fda
 ```
-
-Then grant the revealed `~/Applications/Maraithon.app` copy. Normal
-`make run-companion` reloads do not reset Full Disk Access.
 
 The `.xcodeproj` is **not** committed — it's regenerated from
 [`project.yml`](project.yml) every time. Treat `project.yml` as the source

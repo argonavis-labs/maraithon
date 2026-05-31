@@ -15,7 +15,9 @@
 // need Full Disk Access to persist across rebuilds, run:
 //   make setup-companion-signing
 //   make run-companion
-// If macOS is stuck on an old dev app row, run:
+// make run-companion clears stale Maraithon Full Disk Access rows once when
+// the pinned signing identity is introduced or changes. If macOS is still
+// stuck on an old dev app row, run:
 //   make reset-companion-fda
 
 #include? "Config.local.xcconfig"
