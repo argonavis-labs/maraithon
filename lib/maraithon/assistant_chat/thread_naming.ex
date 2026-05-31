@@ -2,8 +2,12 @@ defmodule Maraithon.AssistantChat.ThreadNaming do
   @moduledoc false
 
   @default_title "New conversation"
+  @credential_title "Credential question"
+  @credential_terms ~r/\b(?:api\s*key|apikey|access\s*key|private\s*key|bearer\s*token|refresh\s*token|access\s*token|auth\s*token|password|credentials?|secret|token\s+value|stored\s+token|configured\s+token|active\s+token|current\s+token)\b/i
+  @provider_key_terms ~r/(?:\bopen\s*router\b|\bopenrouter\b|\bopen\s*ai\b|\bopenai\b|\banthropic\b|\bclaude\b).*\bkey\b|\bkey\b.*(?:\bopen\s*router\b|\bopenrouter\b|\bopen\s*ai\b|\bopenai\b|\banthropic\b|\bclaude\b)/i
 
   def default_title, do: @default_title
+  def credential_title, do: @credential_title
 
   def title_for_message(message, opts \\ [])
 
@@ -14,6 +18,9 @@ defmodule Maraithon.AssistantChat.ThreadNaming do
     cond do
       cleaned == "" ->
         @default_title
+
+      credential_title?(cleaned) ->
+        @credential_title
 
       suggested = suggested_title(cleaned) ->
         suggested
@@ -38,6 +45,21 @@ defmodule Maraithon.AssistantChat.ThreadNaming do
 
   def placeholder?(_value), do: true
 
+  def safe_title(value) when is_binary(value) do
+    if credential_title?(value), do: @credential_title, else: value
+  end
+
+  def safe_title(_value), do: @default_title
+
+  def credential_title?(value) when is_binary(value) do
+    search_text = credential_search_text(value)
+
+    Regex.match?(@credential_terms, search_text) or
+      Regex.match?(@provider_key_terms, search_text)
+  end
+
+  def credential_title?(_value), do: false
+
   def public_title_text(value) when is_binary(value) do
     value
     |> normalize()
@@ -55,6 +77,12 @@ defmodule Maraithon.AssistantChat.ThreadNaming do
     value
     |> String.trim()
     |> String.replace(~r/\s+/, " ")
+  end
+
+  defp credential_search_text(value) do
+    value
+    |> normalize()
+    |> String.replace(~r/[_-]+/, " ")
   end
 
   defp suggested_title(value) do

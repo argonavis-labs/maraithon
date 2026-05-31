@@ -1006,6 +1006,45 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute String.downcase(title) =~ "todo"
   end
 
+  test "mobile chat hides credential wording in conversation titles", %{conn: conn} do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-credential-title@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{
+          "client_thread_id" => Ecto.UUID.generate(),
+          "title" => "what's our OpenRouter API key?"
+        }
+      })
+
+    assert get_in(json_response(conn, 201), ["thread", "title"]) == "Credential question"
+
+    conn =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "what is OPENROUTER_API_KEY set to?"
+        }
+      })
+      |> json_response(200)
+
+    title = get_in(response, ["thread", "title"])
+
+    assert title == "Credential question"
+    refute title =~ "OpenRouter"
+    refute title =~ "OPENROUTER_API_KEY"
+    refute String.match?(title, ~r/api\s*key|token|secret/i)
+  end
+
   test "mobile chat assistant message bodies are display-ready", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-assistant-body@example.com")
 

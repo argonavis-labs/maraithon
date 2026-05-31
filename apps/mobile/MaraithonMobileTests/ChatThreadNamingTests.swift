@@ -27,6 +27,27 @@ struct ChatThreadNamingTests {
     }
 
     @Test
+    func credentialPromptsGetPrivacySafeTitles() {
+        let title = ChatThreadNaming.title(for: "what's our OpenRouter API key?")
+
+        #expect(title == "Credential question")
+        #expect(!title.localizedCaseInsensitiveContains("openrouter"))
+        #expect(!title.localizedCaseInsensitiveContains("api key"))
+        #expect(!title.localizedCaseInsensitiveContains("token"))
+        #expect(!title.localizedCaseInsensitiveContains("secret"))
+    }
+
+    @Test
+    func credentialManualTitlesAreSanitized() {
+        #expect(ChatThreadNaming.manualTitle(for: "what is OPENROUTER_API_KEY set to?") == "Credential question")
+    }
+
+    @Test
+    func nonCredentialTokenLanguageKeepsNormalTitle() {
+        #expect(ChatThreadNaming.title(for: "what token budget is left for this work?") == "What token budget is left for this work")
+    }
+
+    @Test
     func generatedTitlesUseWorkLanguageInsteadOfTodoVocabulary() {
         let title = ChatThreadNaming.title(
             for: "Please summarize todo risks before the board meeting",

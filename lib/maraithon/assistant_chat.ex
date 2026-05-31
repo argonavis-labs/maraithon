@@ -19,7 +19,9 @@ defmodule Maraithon.AssistantChat do
   end
 
   def create_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do
-    TelegramConversations.create_mobile_thread(user_id, attrs)
+    with {:ok, title} <- thread_title(attrs, default: ThreadNaming.default_title()) do
+      TelegramConversations.create_mobile_thread(user_id, Map.put(attrs, "title", title))
+    end
   end
 
   def get_thread(user_id, thread_id) when is_binary(user_id) and is_binary(thread_id) do
@@ -444,7 +446,9 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  defp thread_title(attrs) do
+  defp thread_title(attrs, opts \\ []) do
+    default = Keyword.get(opts, :default)
+
     title =
       attrs
       |> read_string("title")
@@ -452,7 +456,7 @@ defmodule Maraithon.AssistantChat do
         nil -> attrs |> Map.get("thread", %{}) |> read_string("title")
         value -> value
       end
-      |> normalize_title()
+      |> normalize_title(default)
 
     cond do
       is_nil(title) -> {:error, :empty_thread_title}
@@ -461,15 +465,15 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  defp normalize_title(nil), do: nil
+  defp normalize_title(nil, default), do: default
 
-  defp normalize_title(title) when is_binary(title) do
+  defp normalize_title(title, _default) when is_binary(title) do
     title
     |> String.trim()
     |> String.replace(~r/\s+/, " ")
     |> case do
       "" -> nil
-      value -> value
+      value -> ThreadNaming.safe_title(value)
     end
   end
 
