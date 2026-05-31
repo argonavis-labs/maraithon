@@ -184,7 +184,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.companion_sync(:unknown_event, nil) == %{
              error: "unknown_event",
              message:
-               "The companion app sent a source check this server does not support. Update the app, then check again."
+               "The companion app sent a source check this version of Maraithon does not support. Update the app, then check again."
            }
 
     assert ApiErrorCopy.companion_channel_error(:device_mismatch, nil) == %{

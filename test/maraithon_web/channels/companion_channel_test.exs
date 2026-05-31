@@ -453,7 +453,7 @@ defmodule MaraithonWeb.CompanionChannelTest do
                    %{
                      reason: "unknown_event",
                      message:
-                       "The companion app sent a source check this server does not support. Update the app, then check again."
+                       "The companion app sent a source check this version of Maraithon does not support. Update the app, then check again."
                    },
                    @channel_reply_timeout
     end
