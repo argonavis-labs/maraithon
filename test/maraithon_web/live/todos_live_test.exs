@@ -239,6 +239,74 @@ defmodule MaraithonWeb.TodosLiveTest do
     refute html =~ "Boardy follow-up"
   end
 
+  test "source filter includes local companion sources", %{conn: conn} do
+    assert {:ok, [imessage_todo, _notes_todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "imessage",
+                 "kind" => "local_followup",
+                 "title" => "Reply to iMessage thread",
+                 "summary" => "A local message needs a response.",
+                 "next_action" => "Reply with the updated pickup plan.",
+                 "priority" => 82,
+                 "dedupe_key" => "todos-live:source-filter:imessage"
+               },
+               %{
+                 "source" => "notes",
+                 "kind" => "local_note",
+                 "title" => "Review Notes context",
+                 "summary" => "A note captured useful planning context.",
+                 "next_action" => "Pull the note into the plan.",
+                 "priority" => 60,
+                 "dedupe_key" => "todos-live:source-filter:notes"
+               }
+             ])
+
+    {:ok, view, html} = live(conn, "/todos")
+
+    source_filter_html =
+      view
+      |> element("select[name='filters[source]']")
+      |> render()
+
+    assert source_filter_html =~ "Calendar"
+    assert source_filter_html =~ "iMessage"
+    assert source_filter_html =~ "Notes"
+    assert source_filter_html =~ "Reminders"
+    assert source_filter_html =~ "Files"
+    assert source_filter_html =~ "Browser History"
+    assert source_filter_html =~ "Voice Memos"
+
+    assert html =~ "iMessage"
+    assert html =~ "Notes"
+
+    view
+    |> form("#todo-filters",
+      filters: %{
+        "q" => "",
+        "status" => "active",
+        "attention" => "all",
+        "due" => "all",
+        "source" => "imessage"
+      }
+    )
+    |> render_change()
+
+    assert_patch(view, "/todos?source=imessage")
+
+    html = render(view)
+    assert html =~ "Reply to iMessage thread"
+    assert html =~ "iMessage"
+    refute html =~ "Review Notes context"
+
+    imessage_row =
+      view
+      |> element("#todo-#{imessage_todo.id}")
+      |> render()
+
+    refute imessage_row =~ "Google Calendar"
+  end
+
   test "sorts by table columns using database-backed order", %{conn: conn} do
     assert {:ok, _todos} =
              Todos.upsert_many(@user_email, [

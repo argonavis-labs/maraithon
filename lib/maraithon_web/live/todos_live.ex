@@ -40,9 +40,16 @@ defmodule MaraithonWeb.TodosLive do
   @source_options [
     {"All sources", "all"},
     {"Gmail", "gmail"},
-    {"Google Calendar", "calendar"},
+    {"Calendar", "calendar"},
+    {"Google Calendar", "google_calendar"},
     {"Slack", "slack"},
     {"Telegram", "telegram"},
+    {"iMessage", "imessage"},
+    {"Notes", "notes"},
+    {"Reminders", "reminders"},
+    {"Files", "files"},
+    {"Browser History", "browser_history"},
+    {"Voice Memos", "voice_memos"},
     {"GitHub", "github"},
     {"Added by you", "manual"}
   ]
@@ -1047,7 +1054,6 @@ defmodule MaraithonWeb.TodosLive do
   defp attention_mode_label(_attention), do: "Needs action"
 
   defp todo_source_label("gmail"), do: "Gmail"
-  defp todo_source_label("calendar"), do: "Google Calendar"
   defp todo_source_label("google_calendar"), do: "Google Calendar"
 
   defp todo_source_label(source) when is_binary(source) and source != "",
