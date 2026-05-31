@@ -21,9 +21,9 @@ leave an audit trail when it cannot.
 ## Digest Contract
 
 The digest should be useful without reading logs. It reports the trailing
-24-hour uptime window, incident counts, each recent agent crash with its recovery
-outcome, current backlog counts, the latest boot baseline, and the current
-health snapshot.
+24-hour uptime window, human-readable incident counts, each recent agent crash
+with its recovery outcome, current in-flight work, the latest boot baseline, and
+the current health snapshot.
 
 Crash outcomes are derived from the next incident for the same agent:
 

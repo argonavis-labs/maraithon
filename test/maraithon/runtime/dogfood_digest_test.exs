@@ -51,7 +51,8 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
                kind: :agent_crash,
                agent_id: agent.id,
                reason: "killed",
-               occurred_at: ~U[2026-05-20 09:00:00Z]
+               occurred_at: ~U[2026-05-20 09:00:00Z],
+               metadata: %{"behavior" => "ai_chief_of_staff"}
              })
 
     assert {:ok, _} =
@@ -67,7 +68,8 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
                kind: :agent_crash,
                agent_id: unrecovered_agent.id,
                reason: "crash_loop_threshold",
-               occurred_at: ~U[2026-05-20 09:10:00Z]
+               occurred_at: ~U[2026-05-20 09:10:00Z],
+               metadata: %{"behavior" => "ai_chief_of_staff"}
              })
 
     assert {:ok, _} =
@@ -83,14 +85,29 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
         timezone: "America/Toronto"
       )
 
-    assert body =~ "Chief of Staff dogfood digest"
-    assert body =~ "Uptime:"
-    assert body =~ "agent_crash=2"
+    assert body =~ "Chief of Staff daily check"
+    assert body =~ "Runtime:"
+
+    assert body =~
+             "Incidents: 1 restart, 2 agent crashes, 1 agent recovery, 1 agent stopped after retries"
+
     assert body =~ "Agent crashes:"
-    assert body =~ agent.id
-    assert body =~ "#{agent.id}: killed -> recovered"
-    assert body =~ "#{unrecovered_agent.id}: crash_loop_threshold -> not recovered"
-    assert body =~ "Last boot baseline:"
+
+    assert body =~
+             "Chief of Staff agent stopped unexpectedly; process was killed; recovered by the monitor."
+
+    assert body =~
+             "Chief of Staff agent stopped unexpectedly; repeated crashes crossed the recovery limit; not recovered after repeated crashes."
+
+    refute body =~ agent.id
+    refute body =~ unrecovered_agent.id
+    refute body =~ "agent_crash=2"
+    refute body =~ "crash_loop_threshold"
+    refute body =~ "DB "
+    refute body =~ "0 failed delivery jobs"
+    assert body =~ "At last boot:"
+    assert body =~ "1 pending delivery job"
+    assert body =~ "2 scheduled follow-ups"
     assert body =~ "memory "
     assert body =~ " MB"
   end
@@ -111,7 +128,7 @@ defmodule Maraithon.Runtime.DogfoodDigestTest do
 
     [message] = Agent.get(:capturing_telegram_recorder, &Enum.reverse/1)
     assert message.chat_id == "12345"
-    assert message.text =~ "Chief of Staff dogfood digest"
+    assert message.text =~ "Chief of Staff daily check"
   end
 
   test "schedules the next local digest time using the configured offset" do
