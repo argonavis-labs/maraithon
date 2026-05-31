@@ -74,7 +74,7 @@ defmodule Maraithon.ActionCardsTest do
     assert rendered =~ "Why now:"
     assert rendered =~ "Prepared:"
     refute rendered =~ "Can handle:"
-    assert rendered =~ "Checked: Gmail."
+    assert rendered =~ "Context used: Gmail."
   end
 
   test "telegram source verification copy hides raw source health errors", %{user_id: user_id} do
@@ -104,7 +104,7 @@ defmodule Maraithon.ActionCardsTest do
         ]
       )
 
-    assert rendered =~ "Could not fully check Gmail before sending this."
+    assert rendered =~ "Gmail context is incomplete; review the source before sending this."
     refute rendered =~ "Source gap"
     refute rendered =~ "Checked:"
     refute rendered =~ "DBConnection"
@@ -222,7 +222,7 @@ defmodule Maraithon.ActionCardsTest do
     }
 
     assert ActionCards.source_health_note(card) ==
-             "Checked Voice Memos, Browser History, Google Calendar."
+             "Used Voice Memos, Browser History, Google Calendar."
 
     refute ActionCards.source_health_note(card) =~ "_"
   end
@@ -238,7 +238,7 @@ defmodule Maraithon.ActionCardsTest do
     }
 
     assert ActionCards.source_health_note(card) ==
-             "Checked Gmail. Local context from the Mac companion was not checked. Open the Mac companion app to reconnect it."
+             "Used Gmail. Local context from the Mac companion is unavailable. Open the Mac companion app to reconnect it."
 
     refute ActionCards.source_health_note(card) =~ "Could not fully check Desktop App"
   end
@@ -273,7 +273,7 @@ defmodule Maraithon.ActionCardsTest do
         ]
       )
 
-    assert ActionCards.source_health_note(card) == "Checked Gmail."
+    assert ActionCards.source_health_note(card) == "Used Gmail."
     refute ActionCards.source_health_note(card) =~ "Telegram"
   end
 
@@ -314,7 +314,7 @@ defmodule Maraithon.ActionCardsTest do
     card = ActionCards.for_todo(todo, opts)
     rendered = ActionCards.render_telegram_todo(todo, opts)
 
-    assert ActionCards.source_health_note(card) == "Checked Gmail."
+    assert ActionCards.source_health_note(card) == "Used Gmail."
     assert get_in(card, ["source_health", "missing_sources"]) == []
     refute rendered =~ "Mac companion"
     refute rendered =~ "Local context"
@@ -357,10 +357,10 @@ defmodule Maraithon.ActionCardsTest do
     assert get_in(card, ["source_health", "missing_sources"]) == ["desktop"]
 
     assert ActionCards.source_health_note(card) ==
-             "Checked Gmail. Local context from the Mac companion was not checked. Open the Mac companion app to reconnect it."
+             "Used Gmail. Local context from the Mac companion is unavailable. Open the Mac companion app to reconnect it."
 
     assert ActionCards.render_telegram_todo(todo, opts) =~
-             "Local context from the Mac companion was not checked."
+             "Local context from the Mac companion is unavailable."
   end
 
   test "due copy uses the user's Chief of Staff timezone instead of UTC", %{user_id: user_id} do

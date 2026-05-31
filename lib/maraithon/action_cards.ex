@@ -233,7 +233,7 @@ defmodule Maraithon.ActionCards do
 
         [
           if(checked_without_blockers != [],
-            do: "Checked #{source_list(checked_without_blockers)}."
+            do: "Used #{source_list(checked_without_blockers)}."
           ),
           source_gap_note(blocking, blocked_sources),
           source_setup_action(blocked_sources)
@@ -242,7 +242,7 @@ defmodule Maraithon.ActionCards do
         |> Enum.join(" ")
 
       checked != [] ->
-        "Checked #{source_list(checked)}."
+        "Used #{source_list(checked)}."
 
       true ->
         nil
@@ -992,7 +992,7 @@ defmodule Maraithon.ActionCards do
 
   defp telegram_source_health_line(card) do
     case source_health_note(card) do
-      "Checked " <> rest -> "Checked: #{rest}"
+      "Used " <> rest -> "Context used: #{rest}"
       note -> note
     end
   end
@@ -1316,10 +1316,11 @@ defmodule Maraithon.ActionCards do
 
     [
       if(MapSet.member?(blocked_sources, "desktop"),
-        do: "Local context from the Mac companion was not checked."
+        do: "Local context from the Mac companion is unavailable."
       ),
       if(other_gaps != [],
-        do: "Could not fully check #{source_gap_labels(other_gaps)} before sending this."
+        do:
+          "#{source_gap_labels(other_gaps)} context is incomplete; review the source before sending this."
       )
     ]
     |> Enum.reject(&blank?/1)

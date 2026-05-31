@@ -4124,7 +4124,7 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
 
             <div :if={todo_source_health_text(@current_todo_card)} class="mt-5 border-l border-zinc-950/10 pl-3">
-              <p class="text-xs/5 font-medium text-zinc-500">What was checked</p>
+              <p class="text-xs/5 font-medium text-zinc-500">Context used</p>
               <p class="mt-1 text-sm/6 text-zinc-700"><%= todo_source_health_text(@current_todo_card) %></p>
             </div>
 
@@ -4238,10 +4238,10 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="px-4 py-8 sm:px-6">
           <%= if @todos == [] do %>
             <p class="text-sm/6 font-medium text-zinc-950">
-              No open work surfaced in checked sources.
+              No open work is ready to review.
             </p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              When Maraithon surfaces a checked commitment, it will appear here.
+              When Maraithon finds a commitment with enough context, it will appear here.
             </p>
           <% else %>
             <p class="text-sm/6 font-medium text-zinc-950">Review complete for now.</p>
@@ -4704,7 +4704,7 @@ defmodule MaraithonWeb.DashboardLive do
         "Maraithon finished this update."
 
       String.contains?(normalized, ["start", "run", "claim"]) ->
-        "Maraithon is working on this now."
+        "Maraithon is preparing this update."
 
       String.contains?(normalized, "insight") ->
         "Maraithon updated an insight."

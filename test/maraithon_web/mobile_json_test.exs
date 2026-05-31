@@ -39,7 +39,7 @@ defmodule MaraithonWeb.MobileJSONTest do
 
     source_context = get_in(response, [:action_card, :source_context])
 
-    assert source_context == "Could not fully check Gmail before sending this."
+    assert source_context == "Gmail context is incomplete; review the source before sending this."
     refute source_context =~ "DBConnection"
     refute source_context =~ "token=secret"
     refute source_context =~ "stacktrace"

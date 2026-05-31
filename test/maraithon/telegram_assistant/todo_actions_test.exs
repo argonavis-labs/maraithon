@@ -349,10 +349,10 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
         source_health_snapshots: [%{"provider" => "gmail", "status" => "fresh"}]
       )
 
-    assert payload.text =~ "Checked Gmail."
-    assert payload.text =~ "Local context from the Mac companion was not checked."
+    assert payload.text =~ "Used Gmail."
+    assert payload.text =~ "Local context from the Mac companion is unavailable."
     assert payload.text =~ "Open the Mac companion app to reconnect it."
-    refute payload.text =~ "Checked Telegram"
+    refute payload.text =~ "Used Telegram"
   end
 
   test "see less callback records negative memory and dismisses todo", %{user_id: user_id} do

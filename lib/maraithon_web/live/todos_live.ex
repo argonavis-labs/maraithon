@@ -958,7 +958,7 @@ defmodule MaraithonWeb.TodosLive do
               ~w(source_quote source_excerpt evidence_excerpt quote)
             )
         },
-        %{label: "Source check", value: todo_source_check_value(todo)},
+        %{label: "Context used", value: todo_source_check_value(todo)},
         %{label: "Prepared", value: todo.next_action}
       ]
       |> Enum.map(fn field -> %{field | value: normalize_context_value(field.value)} end)
@@ -985,7 +985,7 @@ defmodule MaraithonWeb.TodosLive do
     case todo_source_label(source) do
       nil -> nil
       "" -> nil
-      label -> "Checked #{label}."
+      label -> "Used #{label}."
     end
   end
 
@@ -1068,7 +1068,7 @@ defmodule MaraithonWeb.TodosLive do
         "No work items match this search."
 
       default_filter_view?(filters) ->
-        "No open work surfaced in checked sources."
+        "No open work is ready to review."
 
       true ->
         "No work items match these filters."

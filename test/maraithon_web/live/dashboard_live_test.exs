@@ -1027,7 +1027,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     |> render_click()
 
     html = render(view)
-    assert html =~ "No open work surfaced in checked sources."
+    assert html =~ "No open work is ready to review."
     refute html =~ "No open work items."
     refute html =~ "No open cards."
     refute html =~ "No active work right now"
@@ -1128,7 +1128,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, "/dashboard")
     html = render(view)
 
-    assert html =~ "Could not fully check Gmail"
+    assert html =~ "Gmail context is incomplete"
     assert html =~ "before sending this."
     refute html =~ "Source gap"
     refute html =~ "DBConnection"
@@ -1162,7 +1162,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(view, "#todo-review-card-#{complete_todo.id}")
-    assert html =~ "No open work surfaced in checked sources."
+    assert html =~ "No open work is ready to review."
     refute html =~ "No open work items."
     refute html =~ "No active work right now"
     refute html =~ ":not_found"
@@ -1192,7 +1192,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(important_view, "#todo-review-card-#{important_todo.id}")
-    assert html =~ "No open work surfaced in checked sources."
+    assert html =~ "No open work is ready to review."
     refute html =~ "No open work items."
     refute html =~ "No active work right now"
     refute html =~ ":not_found"
