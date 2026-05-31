@@ -5,6 +5,6 @@ defmodule MaraithonWeb.SettingsHTMLTest do
 
   test "setup badges use product copy" do
     assert SettingsHTML.setting_badge_label(true) == "ready"
-    assert SettingsHTML.setting_badge_label(false) == "needs setup"
+    assert SettingsHTML.setting_badge_label(false) == "needs attention"
   end
 end

@@ -150,15 +150,15 @@ defmodule MaraithonWeb.SettingsController do
   defp assistant_engine_label("openrouter"), do: "OpenRouter"
   defp assistant_engine_label("anthropic"), do: "Anthropic"
   defp assistant_engine_label("mock"), do: "Local test engine"
-  defp assistant_engine_label("unconfigured"), do: "Setup needed"
-  defp assistant_engine_label(nil), do: "Setup needed"
-  defp assistant_engine_label(""), do: "Setup needed"
+  defp assistant_engine_label("unconfigured"), do: "Needs engine"
+  defp assistant_engine_label(nil), do: "Needs engine"
+  defp assistant_engine_label(""), do: "Needs engine"
   defp assistant_engine_label(_other), do: "Custom engine"
 
   defp assistant_access_status(_runtime, "mock"), do: "Local test engine"
-  defp assistant_access_status(_runtime, "unconfigured"), do: "Setup needed"
-  defp assistant_access_status(_runtime, nil), do: "Setup needed"
-  defp assistant_access_status(_runtime, ""), do: "Setup needed"
+  defp assistant_access_status(_runtime, "unconfigured"), do: "Needs access"
+  defp assistant_access_status(_runtime, nil), do: "Needs access"
+  defp assistant_access_status(_runtime, ""), do: "Needs access"
 
   defp assistant_access_status(runtime, "openai"),
     do: key_status(Keyword.get(runtime, :openai_api_key) || Keyword.get(runtime, :llm_api_key))
@@ -173,7 +173,7 @@ defmodule MaraithonWeb.SettingsController do
   defp assistant_access_status(runtime, _other),
     do: key_status(Keyword.get(runtime, :llm_api_key))
 
-  defp key_status(value), do: if(present?(value), do: "Ready", else: "Setup needed")
+  defp key_status(value), do: if(present?(value), do: "Ready", else: "Needs access")
 
   defp reasoning_profile(runtime, "openai"),
     do: analysis_depth(Keyword.get(runtime, :openai_reasoning_effort))
