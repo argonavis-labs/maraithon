@@ -567,11 +567,50 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.message =~ "Maraithon prepared a reply but did not send it."
 
     assert result.message =~
-             "This stopped for your confirmation before anything was sent or changed."
+             "Maraithon stopped before sending or changing anything so you could confirm."
 
     assert result.message =~ "Connected context looked current for this action."
     refute result.message =~ "Policy reason"
     refute result.message =~ "confirmation_required"
+    refute String.downcase(result.message) =~ "guardrail"
+  end
+
+  test "explain_action_ledger hides unknown safety reasons and raw messages" do
+    user_id = "toolbox-explain-unknown-reason-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, _account} =
+      ConnectedAccounts.upsert_manual(user_id, "telegram", %{external_account_id: "12345"})
+
+    {:ok, action} =
+      ActionLedger.record(%{
+        user_id: user_id,
+        surface: "telegram",
+        event_type: "tool.denied",
+        status: "denied",
+        policy_decision: %{
+          "status" => "deny",
+          "reason_code" => "provider_write_blocked",
+          "message" => "Guardrail blocked tool slack_secret_writer."
+        },
+        model_summary: "Maraithon did not send the message."
+      })
+
+    assert {:ok, result} =
+             Toolbox.execute(
+               "explain_action_ledger",
+               %{"action_id" => action.id},
+               %{user_id: user_id, context: %{projects: []}}
+             )
+
+    assert result.message =~ "Maraithon did not send the message."
+
+    assert result.message =~
+             "Maraithon could not verify the requested action, so nothing changed."
+
+    refute String.downcase(result.message) =~ "guardrail"
+    refute result.message =~ "provider_write_blocked"
+    refute result.message =~ "slack_secret_writer"
   end
 
   test "explain_action_ledger fallback avoids internal ledger language" do

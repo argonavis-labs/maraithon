@@ -2447,45 +2447,58 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     |> Enum.join(" ")
   end
 
-  defp action_guardrail_line(%{reason_code: reason_code, message: message})
+  defp action_guardrail_line(%{reason_code: reason_code, message: message} = explanation)
        when is_binary(reason_code) and reason_code != "" do
-    guardrail_reason_copy(reason_code, message)
+    guardrail_reason_copy(reason_code, message, explanation)
   end
 
-  defp action_guardrail_line(%{message: message}) when is_binary(message) and message != "" do
-    "Guardrail: #{String.trim(message)}"
+  defp action_guardrail_line(%{message: message} = explanation)
+       when is_binary(message) and message != "" do
+    action_status_copy(explanation)
   end
 
   defp action_guardrail_line(_explanation), do: nil
 
-  defp guardrail_reason_copy("policy_allowed", _message),
-    do: "This passed Maraithon's action guardrails."
+  defp guardrail_reason_copy("policy_allowed", _message, _explanation),
+    do: "Maraithon was allowed to complete this action."
 
-  defp guardrail_reason_copy("confirmation_required", _message),
-    do: "This stopped for your confirmation before anything was sent or changed."
+  defp guardrail_reason_copy("confirmation_required", _message, _explanation),
+    do: "Maraithon stopped before sending or changing anything so you could confirm."
 
-  defp guardrail_reason_copy("unknown_tool", _message),
+  defp guardrail_reason_copy("unknown_tool", _message, _explanation),
     do: "The requested action was unavailable, so nothing was changed."
 
-  defp guardrail_reason_copy("missing_tool_name", _message),
+  defp guardrail_reason_copy("missing_tool_name", _message, _explanation),
     do: "No action was selected, so nothing was changed."
 
-  defp guardrail_reason_copy("invalid_user_context", _message),
+  defp guardrail_reason_copy("invalid_user_context", _message, _explanation),
     do: "Maraithon could not confirm the account, so nothing was changed."
 
-  defp guardrail_reason_copy("invalid_policy_context", _message),
-    do: "Maraithon could not verify the action context, so nothing was changed."
+  defp guardrail_reason_copy("invalid_policy_context", _message, _explanation),
+    do: "Maraithon could not verify the action, so nothing was changed."
 
-  defp guardrail_reason_copy(reason_code, _message)
+  defp guardrail_reason_copy(reason_code, _message, _explanation)
        when reason_code in ["agent_tool_denied", "agent_tool_not_allowed"],
-       do: "That agent was not allowed to take the requested action, so nothing was changed."
+       do: "That automation was not allowed to take the requested action, so nothing was changed."
 
-  defp guardrail_reason_copy(_reason_code, message) when is_binary(message) and message != "" do
-    "Guardrail: #{String.trim(message)}"
+  defp guardrail_reason_copy(_reason_code, _message, explanation),
+    do: action_status_copy(explanation)
+
+  defp action_status_copy(%{status: status}) when status in ["needs_confirmation", "pending"] do
+    "Maraithon stopped before sending or changing anything so you could confirm."
   end
 
-  defp guardrail_reason_copy(_reason_code, _message),
-    do: "A safety guardrail applied to this action."
+  defp action_status_copy(%{status: status})
+       when status in ["denied", "blocked", "failed", "error"] do
+    "Maraithon could not verify the requested action, so nothing changed."
+  end
+
+  defp action_status_copy(%{status: status}) when status in ["completed", "sent"] do
+    "Maraithon completed this action."
+  end
+
+  defp action_status_copy(_explanation),
+    do: "Maraithon could not verify the requested action, so nothing changed."
 
   defp source_health_line(freshness) when is_list(freshness) do
     freshness
