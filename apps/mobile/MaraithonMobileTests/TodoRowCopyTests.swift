@@ -88,7 +88,7 @@ struct TodoRowCopyTests {
 
         #expect(context.contextSummary == "Michael · UGC campaign · Investor")
         #expect(context.rowContext == "Michael · UGC campaign · Investor")
-        #expect(context.rowReason == "Send the campaign update with a clear owner and timing. Why now: Michael is waiting; no later reply is recorded. Reviewed Gmail")
+        #expect(context.rowReason == "Send the campaign update with a clear owner and timing. Michael is waiting; no later reply is recorded. Reviewed Gmail")
         #expect(context.rowMove == "Approve a short reply.")
         #expect(context.preparedMove == "Approve a short reply.")
         #expect(context.evidence == "Can you send the next update?")
@@ -125,7 +125,8 @@ struct TodoRowCopyTests {
         let context = TodoDecisionContext(todo: todo)
 
         #expect(context.rowContext == "You need to approve the finance reply.")
-        #expect(context.rowReason == "Why now: This needs your attention before noon. Reviewed Gmail")
+        #expect(context.rowReason == "This needs your attention before noon. Reviewed Gmail")
+        #expect(context.rowReason?.localizedCaseInsensitiveContains("why now:") == false)
         #expect(context.rowMove == "You should send the ETA.")
         #expect(context.evidence == "Your last message asked for timing.")
     }

@@ -143,7 +143,6 @@ struct TodoDecisionContext: Equatable {
 
     var rowReason: String? {
         let rowDecisionPrompt = contextSummary == nil ? nil : decisionPrompt
-        let whyNow = whyNow.map { "Why now: \($0)" }
 
         let reason = [rowDecisionPrompt, whyNow, sourceContext]
             .compactMap { $0 }

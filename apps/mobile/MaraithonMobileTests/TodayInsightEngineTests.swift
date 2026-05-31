@@ -191,7 +191,8 @@ struct TodayInsightEngineTests {
 
         #expect(queue.first?.subtitle == "Send the campaign update with a clear owner and timing.")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("due ") == true)
-        #expect(queue.first?.detail?.contains("Why now: Michael is waiting; no later reply is recorded.") == true)
+        #expect(queue.first?.detail?.contains("Michael is waiting; no later reply is recorded.") == true)
+        #expect(queue.first?.detail?.localizedCaseInsensitiveContains("why now:") == false)
         #expect(queue.first?.detail?.contains("Reviewed Gmail") == true)
     }
 
@@ -224,7 +225,8 @@ struct TodayInsightEngineTests {
 
         #expect(queue.map(\.title) == ["Approve Michael follow-up", "Review vendor renewal"])
         #expect(queue.first?.subtitle == "Approve the Michael follow-up.")
-        #expect(queue.first?.detail == "Decision waiting. Due today. Why now: Michael is waiting on your answer. Evidence: Can you send the next campaign update today? Reviewed Gmail")
+        #expect(queue.first?.detail == "Decision waiting. Due today. Michael is waiting on your answer. Can you send the next campaign update today? Reviewed Gmail")
+        #expect(queue.first?.detail?.localizedCaseInsensitiveContains("evidence:") == false)
         #expect(queue.first?.systemImage == "checkmark.seal")
     }
 
@@ -250,8 +252,9 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.subtitle == "You need to approve the finance reply.")
-        #expect(queue.first?.detail == "Decision waiting. Why now: This needs your attention before noon. Reviewed Gmail")
+        #expect(queue.first?.detail == "Decision waiting. This needs your attention before noon. Reviewed Gmail")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("telegram_fit_score") == false)
+        #expect(queue.first?.detail?.localizedCaseInsensitiveContains("why now:") == false)
     }
 
     @Test

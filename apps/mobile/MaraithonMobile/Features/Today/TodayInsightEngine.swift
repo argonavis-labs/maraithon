@@ -462,8 +462,8 @@ enum TodayInsightEngine {
     private static func todoFocusDetail(for todo: TodoItem, context: String?) -> String? {
         let decisionContext = TodoDecisionContext(todo: todo)
         let context = cleanedText(context).map(sentence)
-        let whyNow = decisionContext.whyNow.map { "Why now: \($0)" }
-        let evidence = decisionContext.evidence.map { "Evidence: \(truncate($0, limit: 140))" }
+        let whyNow = decisionContext.whyNow.map(sentence)
+        let evidence = decisionContext.evidence.map { sentence(truncate($0, limit: 140)) }
         let sourceContext = decisionContext.sourceContext
 
         return [context, whyNow, evidence, sourceContext]
