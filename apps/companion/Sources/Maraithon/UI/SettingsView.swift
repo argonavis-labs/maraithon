@@ -324,7 +324,7 @@ private struct DiagnosticsSourceRow: View {
                 MetricCell(title: "Today", value: format(pub?.acceptedToday))
                 MetricCell(title: "Last check", value: format(pub?.lastBatchAccepted))
                 MetricCell(title: "Already known", value: format(pub?.lastBatchDuplicate))
-                MetricCell(title: "Need another check", value: format(pub?.lastBatchFailed))
+                MetricCell(title: DiagnosticsSettingsCopy.needsAnotherCheckMetricTitle, value: format(pub?.lastBatchFailed))
                 MetricCell(title: "Available", value: format(pub?.totalAccepted))
             }
             Text(DiagnosticsSettingsCopy.stateLine(publisher: pub))
@@ -374,6 +374,7 @@ private struct DiagnosticsSourceRow: View {
 enum DiagnosticsSettingsCopy {
     static let intro = "Review check health for each source. Expand a source to see recent checks and the last successful check."
     static let developerModeDescription = "Shows Logs and Diagnostics for check health, recent checks, and support troubleshooting. Off by default."
+    static let needsAnotherCheckMetricTitle = "Needs another check"
 
     @MainActor
     static func stateLine(publisher: SourceStatusPublisher?) -> String {

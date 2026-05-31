@@ -282,9 +282,11 @@ final class UIComponentsTests: XCTestCase {
     func testDiagnosticsSettingsCopyKeepsDeveloperCopyReadable() {
         let publicCopy = [
             DiagnosticsSettingsCopy.intro,
-            DiagnosticsSettingsCopy.developerModeDescription
+            DiagnosticsSettingsCopy.developerModeDescription,
+            DiagnosticsSettingsCopy.needsAnotherCheckMetricTitle
         ].joined(separator: " ")
 
+        XCTAssertEqual(DiagnosticsSettingsCopy.needsAnotherCheckMetricTitle, "Needs another check")
         XCTAssertFalse(publicCopy.lowercased().contains("publisher"))
         XCTAssertFalse(publicCopy.lowercased().contains("cursor"))
         XCTAssertFalse(publicCopy.lowercased().contains("ring buffer"))
