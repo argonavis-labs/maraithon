@@ -4020,32 +4020,62 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp required_commercial_threads(_brief_input), do: []
 
-  defp required_meeting_labels(meeting) when is_map(meeting) do
+  defp required_schedule_meeting_covered?(body, meeting)
+       when is_binary(body) and is_map(meeting) do
+    meeting_units = required_meeting_body_units(body, meeting)
+
+    meeting_units != [] and
+      required_meeting_time_covered?(meeting_units, meeting) and
+      required_meeting_context_covered?(meeting_units, meeting)
+  end
+
+  defp required_schedule_meeting_covered?(_body, _meeting), do: false
+
+  defp required_meeting_body_units(body, meeting) when is_binary(body) and is_map(meeting) do
+    identity_labels = required_meeting_identity_labels(meeting)
+
+    body
+    |> String.split(~r/\R/u, trim: false)
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {line, index} ->
+      if body_mentions_coverage_item?(line, identity_labels) do
+        [meeting_line_window(body, index)]
+      else
+        []
+      end
+    end)
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp required_meeting_body_units(_body, _meeting), do: []
+
+  defp meeting_line_window(body, index) when is_binary(body) and is_integer(index) do
+    lines = String.split(body, ~r/\R/u, trim: false)
+    start = max(index - 1, 0)
+
+    lines
+    |> Enum.slice(start, 3)
+    |> Enum.join("\n")
+    |> String.trim()
+  end
+
+  defp required_meeting_identity_labels(meeting) when is_map(meeting) do
     [
       read_string(meeting, "summary", nil),
       meeting |> read_list("external_attendees") |> Enum.flat_map(&coverage_label_values/1),
       meeting
       |> read_list("candidate_people_and_orgs")
-      |> Enum.flat_map(&coverage_label_values/1),
-      meeting |> read_list("crm_context") |> Enum.flat_map(&coverage_label_values/1),
-      meeting |> read_list("web_context") |> Enum.flat_map(&coverage_label_values/1)
+      |> Enum.flat_map(&coverage_label_values/1)
     ]
     |> List.flatten()
     |> Enum.reject(&blank?/1)
   end
 
-  defp required_meeting_labels(_meeting), do: []
+  defp required_meeting_identity_labels(_meeting), do: []
 
-  defp required_schedule_meeting_covered?(body, meeting)
-       when is_binary(body) and is_map(meeting) do
-    body_mentions_coverage_item?(body, required_meeting_labels(meeting)) and
-      required_meeting_time_covered?(body, meeting) and
-      required_meeting_context_covered?(body, meeting)
-  end
-
-  defp required_schedule_meeting_covered?(_body, _meeting), do: false
-
-  defp required_meeting_time_covered?(body, meeting) when is_binary(body) and is_map(meeting) do
+  defp required_meeting_time_covered?(meeting_units, meeting)
+       when is_list(meeting_units) and is_map(meeting) do
     labels =
       [
         read_string(meeting, "display_start", nil),
@@ -4055,29 +4085,27 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       ]
       |> Enum.reject(&blank?/1)
 
-    labels == [] or body_mentions_coverage_item?(body, labels)
+    labels == [] or Enum.any?(meeting_units, &body_mentions_coverage_item?(&1, labels))
   end
 
-  defp required_meeting_time_covered?(_body, _meeting), do: false
+  defp required_meeting_time_covered?(_meeting_units, _meeting), do: false
 
-  defp required_meeting_context_covered?(body, meeting)
-       when is_binary(body) and is_map(meeting) do
-    normalized_body = normalize_match_text(body)
+  defp required_meeting_context_covered?(meeting_units, meeting)
+       when is_list(meeting_units) and is_map(meeting) do
+    context_labels = required_meeting_context_labels(meeting)
 
-    prep_language? = meeting_prep_language_present?(normalized_body)
-
-    context_covered? =
-      meeting
-      |> required_meeting_context_labels()
-      |> case do
-        [] -> false
-        labels -> body_mentions_coverage_item?(body, labels)
+    Enum.any?(meeting_units, fn unit ->
+      if context_labels == [] do
+        unit
+        |> normalize_match_text()
+        |> meeting_prep_language_present?()
+      else
+        body_mentions_coverage_item?(unit, context_labels)
       end
-
-    prep_language? or context_covered?
+    end)
   end
 
-  defp required_meeting_context_covered?(_body, _meeting), do: false
+  defp required_meeting_context_covered?(_meeting_units, _meeting), do: false
 
   defp meeting_prep_language_present?(normalized_body) when is_binary(normalized_body) do
     words =
