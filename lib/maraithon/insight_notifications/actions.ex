@@ -837,7 +837,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         suggestions
 
       monitor_insight?(insight) ->
-        "Watch for a blocker, a direct ask back to you, or a stall in progress."
+        "Watch for a blocker, a direct request back to you, or a stall in progress."
 
       true ->
         inferred_next_action(insight, metadata)
@@ -1156,6 +1156,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       String.contains?(point, [
         "answer the ask",
         "answer the specific ask",
+        "answer the specific request",
         "name the owner",
         "concrete timing commitment",
         "give timing only if",
@@ -1204,7 +1205,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         "Suggested: verify whether the promised item is ready; if it is, send it, otherwise reply with the current status and realistic timing."
 
       insight.source == "slack" ->
-        "Suggested: open the thread, answer the direct ask, and name the next step or owner only if the conversation needs one."
+        "Suggested: open the thread, answer the direct request, and name the next step or owner only if the conversation needs one."
 
       true ->
         "Suggested: open the source, confirm the specific request, then reply with the concrete next step or dismiss it if it is no longer important."

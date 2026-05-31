@@ -1118,7 +1118,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_suggested_reply_points("reply_urgent", person, due_at, _artifact) do
     [
       "Acknowledge #{person || "the sender"} in-thread.",
-      "Answer the specific ask from the thread or say what you will check next.",
+      "Answer the specific request from the thread or say what you will check next.",
       "Give timing only if the source thread supports it: #{deadline_phrase(due_at)}."
     ]
   end
@@ -1136,7 +1136,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp slack_suggested_reply_points(_category, person, due_at, _artifact) do
     [
       "Acknowledge #{person || "the thread"}.",
-      "Answer the specific ask from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
+      "Answer the specific request from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
     ]
   end
 

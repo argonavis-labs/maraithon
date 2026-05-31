@@ -600,7 +600,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
           "title" => "Monitoring: Meta Ad Account thread",
           "summary" => "The thread is active and being handled, but it still matters.",
           "recommended_action" =>
-            "Watch for a blocker, a direct ask back to you, or a stall in progress.",
+            "Watch for a blocker, a direct request back to you, or a stall in progress.",
           "priority" => 88,
           "confidence" => 0.87,
           "attention_mode" => "monitor",

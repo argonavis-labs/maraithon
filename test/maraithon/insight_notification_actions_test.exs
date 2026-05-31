@@ -940,7 +940,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
           "title" => "Monitoring investor handoff",
           "summary" => "Breck acknowledged the thread and is checking his side.",
           "recommended_action" =>
-            "Watch for a blocker, a direct ask back to you, or a stall in progress.",
+            "Watch for a blocker, a direct request back to you, or a stall in progress.",
           "priority" => 87,
           "confidence" => 0.9,
           "attention_mode" => "monitor",
@@ -957,7 +957,7 @@ defmodule Maraithon.InsightNotificationActionsTest do
               "commitment" => "Monitor investor handoff",
               "evidence" => ["Breck replied and took ownership of the next step."],
               "next_action" =>
-                "Watch for a blocker, a direct ask back to you, or a stall in progress."
+                "Watch for a blocker, a direct request back to you, or a stall in progress."
             }
           }
         }

@@ -79,7 +79,7 @@ defmodule Maraithon.Todos.FeedbackTrainer do
     - Content should be written as a user preference the todo-intelligence model
       can apply later.
     - Include exception signals for personal/family impact, a close relationship,
-      an explicit deadline, a customer/user impact, or a direct ask when relevant.
+      an explicit deadline, a customer/user impact, or a direct request when relevant.
 
     TODO_FEEDBACK_PAYLOAD_JSON:
     #{Jason.encode!(normalize_json_value(payload))}

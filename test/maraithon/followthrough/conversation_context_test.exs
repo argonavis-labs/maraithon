@@ -22,8 +22,10 @@ defmodule Maraithon.Followthrough.ConversationContextTest do
         context
       )
 
-    assert summary =~ "direct ask"
-    assert candidate["recommended_action"] =~ "direct ask"
+    assert summary =~ "direct request"
+    assert candidate["recommended_action"] =~ "direct request"
+    refute summary =~ "direct ask"
+    refute candidate["recommended_action"] =~ "direct ask"
     refute summary =~ "debt"
     refute candidate["recommended_action"] =~ "debt"
   end

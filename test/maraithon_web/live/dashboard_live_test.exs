@@ -909,7 +909,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           "category" => "reply_urgent",
           "title" => "Monitoring investor thread",
           "summary" => "The investor thread is moving and does not need action from you now.",
-          "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+          "recommended_action" => "Watch for a blocker or a direct request back to you.",
           "priority" => 84,
           "confidence" => 0.86,
           "attention_mode" => "monitor",

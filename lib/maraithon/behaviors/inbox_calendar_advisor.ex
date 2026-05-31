@@ -2577,7 +2577,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Drop low-confidence or ambiguous items.
     - Strongly down-rank or exclude automated transactional receipts and notifications
       (payment confirmations, invoices, password resets, marketing/autonotifications)
-      unless there is a clear human ask or explicit operator commitment that is still open.
+      unless there is a clear human request or explicit operator commitment that is still open.
     - Strongly down-rank or exclude unsolicited sales outreach, recruiting pitches, and networking pitches.
     - A real human sender does not imply a reply owed.
     - If the only positive evidence is "a real person followed up", Gmail labels, or unread state, omit the item.
@@ -2599,7 +2599,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     - Examples to exclude:
       1. "Your payment was successful"
       2. "Your Tuesday afternoon order with Uber Eats"
-      3. "Receipt / invoice / order confirmation" with no direct ask
+      3. "Receipt / invoice / order confirmation" with no direct request
       4. "Saw your post, worth a quick call? Here's my Calendly."
       5. "Following up on my outbound prospecting tool" when the user never replied
     - Every returned item must be high-signal and worth keeping open.
@@ -2785,7 +2785,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         not explicit_user_commitment
       )
       |> maybe_append(
-        "Only generic deadline cues were found without a direct ask or prior operator involvement.",
+        "Only generic deadline cues were found without a direct request or prior operator involvement.",
         deadline_matches != [] and not founder_signal?
       )
       |> Enum.take(@max_evidence_points)
@@ -3341,7 +3341,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp gmail_suggested_reply_points("reply_urgent", person, due_at, _artifact_hint) do
     [
       "Acknowledge #{person || "the sender"} directly.",
-      "Answer the specific ask from the thread or say what you will check next.",
+      "Answer the specific request from the thread or say what you will check next.",
       "Give timing only if the source thread supports it: #{deadline_phrase(due_at)}."
     ]
   end
@@ -3359,7 +3359,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   defp gmail_suggested_reply_points(_category, person, due_at, _artifact_hint) do
     [
       "Acknowledge #{person || "the recipient"}.",
-      "Answer the specific ask from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
+      "Answer the specific request from the thread, name the next step, and give timing only if the evidence supports it: #{deadline_phrase(due_at)}."
     ]
   end
 

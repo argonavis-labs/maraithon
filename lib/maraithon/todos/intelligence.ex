@@ -161,7 +161,7 @@ defmodule Maraithon.Todos.Intelligence do
        as the concrete thing the user needs to do.
        - Family relationship policy is an admission rule, not a ranking signal.
        If metadata says `todo_policy: "family_logistics_only"`, create or update
-       only source-backed logistics, deadlines, direct asks, forms, appointments,
+       only source-backed logistics, deadlines, direct requests, forms, appointments,
        pickup/dropoff, school/camp actions, travel, or user-requested reminders.
        If metadata says `todo_policy: "quiet_relationship_support"`, do not
        create standalone check-in/reach-out work items. Only an explicit

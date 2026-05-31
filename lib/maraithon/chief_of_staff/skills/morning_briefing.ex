@@ -2577,10 +2577,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "Today's move: clear or explicitly keep the first open commitment before inbox triage."
 
       inbox_triage_items(brief_input) != [] ->
-        "Today's move: answer the most important email with a concrete ask before opening the rest of inbox."
+        "Today's move: answer the most important email with a specific request before opening the rest of inbox."
 
       slack_triage_items(brief_input) != [] ->
-        "Today's move: resolve the most important Slack ask before passive channel scanning."
+        "Today's move: resolve the most important Slack request before passive channel scanning."
 
       weekend_brief?(brief_input) ->
         "Today's move: prep next week's meetings and family logistics before Monday starts."
@@ -2605,10 +2605,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "The risk is follow-through: clear or explicitly keep the oldest open commitment before new work."
 
       inbox_triage_items(brief_input) != [] ->
-        "The inbox has a concrete ask: answer the most important thread before clearing routine mail."
+        "The inbox has a specific request: answer the most important thread before clearing routine mail."
 
       slack_triage_items(brief_input) != [] ->
-        "Slack has an active ask: name the owner, decision, or next unblock step before passive channel scanning."
+        "Slack has an active request: name the owner, decision, or next unblock step before passive channel scanning."
 
       source_gap_items(brief_input) != [] ->
         "Coverage is incomplete: use checked items, but treat missing source rows as unknown."

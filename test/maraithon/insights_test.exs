@@ -73,7 +73,7 @@ defmodule Maraithon.InsightsTest do
             "category" => "reply_urgent",
             "title" => "Monitoring investor thread",
             "summary" => "Keep watching the investor thread for movement.",
-            "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+            "recommended_action" => "Watch for a blocker or a direct request back to you.",
             "priority" => 75,
             "confidence" => 0.82,
             "attention_mode" => "monitor",
@@ -350,7 +350,7 @@ defmodule Maraithon.InsightsTest do
             "category" => "reply_urgent",
             "title" => "Monitor investor thread",
             "summary" => "The investor thread is active, but no direct action is required now.",
-            "recommended_action" => "Watch for a blocker or a direct ask back to you.",
+            "recommended_action" => "Watch for a blocker or a direct request back to you.",
             "attention_mode" => "monitor",
             "dedupe_key" => "mode:monitor",
             "tracking_key" => "mode:monitor"

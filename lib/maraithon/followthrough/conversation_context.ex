@@ -195,7 +195,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
         end
 
       "insufficient_context" ->
-        "Conversation context could not be fully evaluated, so this should be monitored instead of treated as a direct ask."
+        "Conversation context could not be fully evaluated, so this should be monitored instead of treated as a direct request."
 
       _ ->
         "No later reply or delivery is recorded."
@@ -356,7 +356,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
       metadata
       |> Map.put(
         "why_now",
-        "#{summary} Keep watching for a blocker, a direct ask back to you, or a stall in progress."
+        "#{summary} Keep watching for a blocker, a direct request back to you, or a stall in progress."
       )
       |> Map.put("context_brief", summary)
       |> maybe_adjust_telegram_fit_score()
@@ -370,7 +370,7 @@ defmodule Maraithon.Followthrough.ConversationContext do
     |> Map.put("summary", summary)
     |> Map.put(
       "recommended_action",
-      "Monitor the thread. Full context could not be confirmed, so avoid treating this as a direct ask until the thread updates."
+      "Monitor the thread. Full context could not be confirmed, so avoid treating this as a direct request until the thread updates."
     )
     |> Map.update("priority", 74, &max(&1 - 10, 64))
     |> Map.update("confidence", 0.72, &clamp_float(&1 - 0.08))

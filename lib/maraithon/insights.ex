@@ -447,7 +447,7 @@ defmodule Maraithon.Insights do
     if String.contains?(source || "", "slack") do
       "Name the actual promise from the Slack thread and whether it is ready or still in progress."
     else
-      "Answer the specific ask from the thread or say what you will check next."
+      "Answer the specific request from the thread or say what you will check next."
     end
   end
 
