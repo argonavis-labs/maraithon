@@ -329,7 +329,7 @@ final class UIComponentsTests: XCTestCase {
 
         XCTAssertTrue(publicCopy.contains("Start over"))
         XCTAssertTrue(publicCopy.contains("Delete"))
-        XCTAssertTrue(publicCopy.contains("Deleted 2 records of uploaded iMessage data"))
+        XCTAssertTrue(publicCopy.contains("Deleted 2 uploaded iMessage records"))
         XCTAssertTrue(publicCopy.contains("Local data on this Mac was not changed"))
         XCTAssertTrue(publicCopy.contains("Reconnect Maraithon to continue"))
         XCTAssertFalse(publicCopy.lowercased().contains("clear cloud"))
@@ -487,11 +487,12 @@ final class UIComponentsTests: XCTestCase {
     func testRecallNoMatchCopyStaysScopedToAvailableContext() {
         let copy = RecallCopy.noMatchesDescription(for: "  agenda from Dana  ")
 
-        XCTAssertEqual(RecallCopy.noMatchesTitle, "Available context did not match")
+        XCTAssertEqual(RecallCopy.noMatchesTitle, "No matching context available")
         XCTAssertEqual(
             copy,
-            "Maraithon searched available context for \"agenda from Dana\". Try a person, thread, phrase, or date from context already available to your assistant."
+            "Maraithon searched context already available to your assistant for \"agenda from Dana\". Try another person, thread, phrase, or date from that context."
         )
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("Available context did not match"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Nothing matched"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("No matches"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("all sources"))

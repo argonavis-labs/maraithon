@@ -234,15 +234,15 @@ private struct DataSettingsView: View {
 }
 
 enum DataSettingsCopy {
-    static let intro = "Manage data Maraithon has uploaded from this Mac. Start over checks a source from the beginning; Delete removes Maraithon's uploaded copy and cannot be undone."
+    static let intro = "Manage data Maraithon has uploaded from this Mac. Start over makes a source check from the beginning. Delete removes Maraithon's uploaded copy and cannot be undone."
     static let resyncTitle = "Start over"
     static let deleteTitle = "Delete…"
     static let deleteAllTitle = "Delete uploaded data…"
-    static let deleteAllDescription = "Deletes Maraithon's uploaded copy for every source from this Mac. Local data is not affected; sources can be checked again afterward."
-    static let deleteAllConfirmation = "This deletes every record Maraithon has uploaded from this Mac across all sources. Local data on your device is not affected; sources can be checked again afterward."
+    static let deleteAllDescription = "Removes Maraithon's uploaded copy for every source from this Mac. Local data is not affected; sources can be checked again afterward."
+    static let deleteAllConfirmation = "This removes every record Maraithon has uploaded from this Mac across all sources. Local data on your device is not affected; sources can be checked again afterward."
 
     static func sourceDeleteConfirmation(sourceName: String) -> String {
-        "This deletes every \(sourceName) record Maraithon has uploaded from this Mac. Local data on your device is not affected."
+        "This removes every \(sourceName) record Maraithon has uploaded from this Mac. Local data on your device is not affected."
     }
 
     static func deleteStarted(sourceName: String?) -> String {
@@ -263,10 +263,10 @@ enum DataSettingsCopy {
         }
 
         if let sourceName {
-            return "Deleted \(recordCount(deletedCount)) of uploaded \(sourceName) data from Maraithon. Local data on this Mac was not changed."
+            return "Deleted \(uploadedRecordCount(deletedCount, sourceName: sourceName)) from Maraithon. Local data on this Mac was not changed."
         }
 
-        return "Deleted \(recordCount(deletedCount)) from Maraithon. Local data on this Mac was not changed."
+        return "Deleted \(uploadedRecordCount(deletedCount, sourceName: nil)) from Maraithon. Local data on this Mac was not changed."
     }
 
     static func deleteFailure(sourceName: String?, error: Error) -> String {
@@ -277,8 +277,12 @@ enum DataSettingsCopy {
         return "Could not delete uploaded data. \(CompanionErrorCopy.message(for: error))"
     }
 
-    private static func recordCount(_ count: Int) -> String {
-        count == 1 ? "1 record" : "\(count.formatted()) records"
+    private static func uploadedRecordCount(_ count: Int, sourceName: String?) -> String {
+        let noun = count == 1 ? "record" : "records"
+        if let sourceName {
+            return "\(count.formatted()) uploaded \(sourceName) \(noun)"
+        }
+        return "\(count.formatted()) uploaded \(noun)"
     }
 }
 
