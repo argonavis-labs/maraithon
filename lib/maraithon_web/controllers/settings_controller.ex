@@ -18,13 +18,13 @@ defmodule MaraithonWeb.SettingsController do
 
     [
       %{name: "Workspace URL", value: MaraithonWeb.Endpoint.url()},
-      %{name: "Assistant provider", value: assistant_engine_label(assistant_engine)},
+      %{name: "Assistant service", value: assistant_engine_label(assistant_engine)},
       %{
-        name: "Provider key",
-        value: provider_key_status(runtime, assistant_engine)
+        name: "Assistant access",
+        value: assistant_access_status(runtime, assistant_engine)
       },
       %{
-        name: "Response quality",
+        name: "Response engine",
         value: configured_value(Keyword.get(runtime, :llm_model))
       },
       %{
@@ -155,40 +155,50 @@ defmodule MaraithonWeb.SettingsController do
   defp assistant_engine_label(""), do: "Setup needed"
   defp assistant_engine_label(_other), do: "Custom engine"
 
-  defp provider_key_status(_runtime, "mock"), do: "Local test engine"
-  defp provider_key_status(_runtime, "unconfigured"), do: "Setup needed"
-  defp provider_key_status(_runtime, nil), do: "Setup needed"
-  defp provider_key_status(_runtime, ""), do: "Setup needed"
+  defp assistant_access_status(_runtime, "mock"), do: "Local test engine"
+  defp assistant_access_status(_runtime, "unconfigured"), do: "Setup needed"
+  defp assistant_access_status(_runtime, nil), do: "Setup needed"
+  defp assistant_access_status(_runtime, ""), do: "Setup needed"
 
-  defp provider_key_status(runtime, "openai"),
+  defp assistant_access_status(runtime, "openai"),
     do: key_status(Keyword.get(runtime, :openai_api_key) || Keyword.get(runtime, :llm_api_key))
 
-  defp provider_key_status(runtime, "openrouter"),
+  defp assistant_access_status(runtime, "openrouter"),
     do:
       key_status(Keyword.get(runtime, :openrouter_api_key) || Keyword.get(runtime, :llm_api_key))
 
-  defp provider_key_status(runtime, "anthropic"),
+  defp assistant_access_status(runtime, "anthropic"),
     do: key_status(Keyword.get(runtime, :anthropic_api_key) || Keyword.get(runtime, :llm_api_key))
 
-  defp provider_key_status(runtime, _other), do: key_status(Keyword.get(runtime, :llm_api_key))
+  defp assistant_access_status(runtime, _other),
+    do: key_status(Keyword.get(runtime, :llm_api_key))
 
-  defp key_status(value), do: if(present?(value), do: "Configured", else: "Setup needed")
+  defp key_status(value), do: if(present?(value), do: "Ready", else: "Setup needed")
 
   defp reasoning_profile(runtime, "openai"),
-    do: setting_value(Keyword.get(runtime, :openai_reasoning_effort))
+    do: analysis_depth(Keyword.get(runtime, :openai_reasoning_effort))
 
   defp reasoning_profile(runtime, "openrouter"),
-    do: setting_value(Keyword.get(runtime, :openrouter_reasoning_effort))
+    do: analysis_depth(Keyword.get(runtime, :openrouter_reasoning_effort))
 
   defp reasoning_profile(_runtime, "anthropic"), do: "Default"
   defp reasoning_profile(_runtime, _engine), do: "Not set"
 
-  defp setting_value(value) when is_binary(value) do
-    if String.trim(value) == "", do: "Not set", else: value
+  defp analysis_depth(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "" -> "Not set"
+      "low" -> "Fast"
+      "minimal" -> "Fast"
+      "medium" -> "Standard"
+      "standard" -> "Standard"
+      "high" -> "Deep"
+      "deep" -> "Deep"
+      _other -> "Custom"
+    end
   end
 
-  defp setting_value(nil), do: "Not set"
-  defp setting_value(value), do: to_string(value)
+  defp analysis_depth(nil), do: "Not set"
+  defp analysis_depth(_value), do: "Custom"
 
   defp configured_value(value) when is_binary(value) do
     if String.trim(value) == "", do: "Not set", else: "Ready"

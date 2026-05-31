@@ -11,7 +11,7 @@ defmodule MaraithonWeb.SettingsControllerTest do
     :ok
   end
 
-  test "settings shows provider key status without exposing the key", %{conn: conn} do
+  test "settings shows assistant access status without exposing the key", %{conn: conn} do
     secret = "sk-or-secret-openrouter-key"
 
     Application.put_env(:maraithon, Maraithon.Runtime,
@@ -29,10 +29,12 @@ defmodule MaraithonWeb.SettingsControllerTest do
 
     html = html_response(conn, 200)
 
-    assert html =~ "Assistant provider"
+    assert html =~ "Assistant service"
     assert html =~ "OpenRouter"
-    assert html =~ "Provider key"
-    assert html =~ "Configured"
+    assert html =~ "Assistant access"
+    assert html =~ "Ready"
+    assert html =~ "Standard"
+    refute html =~ "Provider key"
     refute html =~ secret
     refute html =~ "OPENROUTER_API_KEY"
   end
