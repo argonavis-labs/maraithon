@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// Sidebar listing the user's account, the available sources, and the
-/// Logs pane. Polished to match the macOS sidebar idiom (`Section`
-/// headers, secondary metadata text, compact status badge per source).
+/// Recall, source status, and developer tools. Polished to match the
+/// macOS sidebar idiom (`Section` headers, secondary metadata text,
+/// compact status badge per source).
 ///
-/// Invariant: keep the `SidebarItem` enum signature stable — `RootWindow`
-/// switches over it.
+/// Keep `SidebarItem` and `RootWindow.detailView` in sync when adding
+/// top-level destinations.
 struct SidebarView: View {
     @Environment(AppEnvironment.self) private var env
     @Binding var selection: SidebarItem?
@@ -18,6 +19,11 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $selection) {
             accountSection
+
+            Section("Assistant") {
+                Label("Recall", systemImage: "magnifyingglass")
+                    .tag(SidebarItem.recall)
+            }
 
             Section("Sources") {
                 ForEach(env.sources.sources) { source in

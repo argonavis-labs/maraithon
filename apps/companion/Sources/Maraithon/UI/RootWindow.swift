@@ -95,6 +95,8 @@ struct RootWindow: View {
     @ViewBuilder
     private func detailView(for selection: SidebarItem?) -> some View {
         switch selection {
+        case .recall:
+            RecallView()
         case .source(let id) where id == "imessage":
             IMessageDetailView()
         case .source(let id) where id == "notes":
@@ -126,6 +128,7 @@ struct RootWindow: View {
 }
 
 enum SidebarItem: Hashable {
+    case recall
     case source(id: String)
     case logs
     case diagnostics
