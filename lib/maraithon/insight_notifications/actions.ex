@@ -1493,14 +1493,24 @@ defmodule Maraithon.InsightNotifications.Actions do
   defp execution_notice(%{"kind" => "slack_reply"}), do: "Slack reply sent"
   defp execution_notice(_), do: "Action completed"
 
-  defp callback_error_text(:action_not_available), do: "Action not available for this insight"
-  defp callback_error_text(:draft_not_ready), do: "Generate a draft first"
-  defp callback_error_text(:delivery_not_found), do: "Insight delivery not found"
-  defp callback_error_text(:unauthorized_chat), do: "This action is not authorized in this chat"
-  defp callback_error_text(:unsupported_action), do: "Unsupported action"
+  defp callback_error_text(:action_not_available),
+    do:
+      "No quick action is available for this item. Use the latest message or handle it in the source app."
+
+  defp callback_error_text(:draft_not_ready), do: "Draft first, then choose Send Now."
+
+  defp callback_error_text(:delivery_not_found),
+    do: "That item is no longer available. Use the latest Maraithon message."
+
+  defp callback_error_text(:unauthorized_chat),
+    do: "This button belongs to another chat. Use the latest message in this chat."
+
+  defp callback_error_text(:unsupported_action),
+    do:
+      "That button no longer matches this item. Use the latest Maraithon message before deciding."
 
   defp callback_error_text({:telegram_edit_failed, _}),
-    do: "Action ran, but Telegram refresh failed"
+    do: "Action completed. Open the latest Maraithon message for the updated state."
 
   defp callback_error_text("google_account_reauth_required"),
     do: "Reconnect Google before using this action"

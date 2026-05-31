@@ -388,6 +388,79 @@ defmodule Maraithon.InsightNotificationActionsTest do
     refute String.contains?(String.downcase(callback.opts[:text]), "try again")
   end
 
+  test "callback failures give recovery copy instead of system labels", %{
+    agent: agent,
+    user_id: user_id
+  } do
+    {:ok, [insight]} =
+      Insights.record_many(user_id, agent.id, [
+        %{
+          "source" => "gmail",
+          "category" => "commitment_unresolved",
+          "title" => "Follow up on investor deck",
+          "summary" => "The investor deck thread still needs a clear next step.",
+          "recommended_action" => "Reply with the current status and timing.",
+          "priority" => 84,
+          "confidence" => 0.86,
+          "source_id" => "msg-no-quick-action",
+          "dedupe_key" => "telegram-actions:no-quick-action:#{System.unique_integer()}",
+          "metadata" => %{
+            "account" => "kent@example.com",
+            "subject" => "Investor deck"
+          }
+        }
+      ])
+
+    assert %{sent: 1} = InsightNotifications.dispatch_telegram_batch(batch_size: 10)
+
+    delivery =
+      Repo.get_by!(Delivery, insight_id: insight.id, user_id: user_id, channel: "telegram")
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          callback_id: "cb-action-not-available",
+          chat_id: 12345,
+          message_id: 777,
+          data: "insact:#{delivery.id}:draft"
+        }
+      })
+
+    callback = last_telegram_message(:callback)
+
+    assert callback.opts[:text] ==
+             "No quick action is available for this item. Use the latest message or handle it in the source app."
+
+    lower_text = String.downcase(callback.opts[:text])
+    refute lower_text =~ "unsupported"
+    refute lower_text =~ "not available"
+    refute lower_text =~ "insight"
+    refute lower_text =~ "try again"
+
+    :ok =
+      InsightNotifications.handle_telegram_event(%{
+        type: "callback_query",
+        data: %{
+          callback_id: "cb-unsupported-action",
+          chat_id: 12345,
+          message_id: 777,
+          data: "insact:#{delivery.id}:archive"
+        }
+      })
+
+    callback = last_telegram_message(:callback)
+
+    assert callback.opts[:text] ==
+             "That button no longer matches this item. Use the latest Maraithon message before deciding."
+
+    lower_text = String.downcase(callback.opts[:text])
+    refute lower_text =~ "unsupported"
+    refute lower_text =~ "not available"
+    refute lower_text =~ "insight"
+    refute lower_text =~ "try again"
+  end
+
   test "verifies proactive Telegram copy stays concise and chief-of-staff shaped", %{
     agent: agent,
     user_id: user_id
