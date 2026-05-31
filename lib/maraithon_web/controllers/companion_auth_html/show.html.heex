@@ -8,24 +8,34 @@
         <span class="font-medium text-zinc-700">Maraithon Companion</span>
         on
         <span class="font-medium text-zinc-700"><%= device_label(@device_name) %></span>
-        wants to sync local context (iMessages first) to your Maraithon account.
+        will make local context from this Mac available to your assistant.
       </p>
     </header>
 
     <ul class="space-y-2 rounded-lg border border-zinc-950/10 bg-white p-4 text-sm/6 text-zinc-700">
       <li class="flex gap-2">
         <span aria-hidden="true">•</span>
-        <span>Messages are stored encrypted at rest in Maraithon.</span>
+        <span>
+          Local sources can include Messages, Notes, Voice Memos, Calendar, Reminders, files, and browser history, based on the permissions you enable.
+        </span>
       </li>
       <li class="flex gap-2">
         <span aria-hidden="true">•</span>
-        <span>You can revoke this device or wipe its data anytime.</span>
+        <span>Data is encrypted at rest in Maraithon.</span>
+      </li>
+      <li class="flex gap-2">
+        <span aria-hidden="true">•</span>
+        <span>You can revoke this Mac or remove its local data anytime.</span>
       </li>
       <li class="flex gap-2">
         <span aria-hidden="true">•</span>
         <span>Pairing as <span class="font-medium text-zinc-950"><%= @current_user.email %></span>.</span>
       </li>
     </ul>
+
+    <p class="text-sm/6 text-zinc-500">
+      Only approve this request if it was opened from the Mac you are pairing.
+    </p>
 
     <div class="flex flex-wrap items-center gap-3">
       <form action={~p"/companion/auth/approve"} method="post">
@@ -36,7 +46,7 @@
           type="submit"
           class="inline-flex items-center justify-center rounded-md bg-zinc-950 px-4 py-2 text-sm/6 font-medium text-white shadow-sm hover:bg-zinc-800"
         >
-          Approve & connect
+          Approve and connect
         </button>
       </form>
 
@@ -47,9 +57,5 @@
         Deny
       </a>
     </div>
-
-    <p class="text-xs/5 text-zinc-500">
-      device_id: <code class="font-mono text-zinc-600"><%= @device_id %></code>
-    </p>
   </div>
 </Layouts.app>

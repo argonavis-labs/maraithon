@@ -17,7 +17,14 @@ defmodule MaraithonWeb.CompanionAuthControllerTest do
       body = html_response(conn, 200)
       assert body =~ "Pair Companion app"
       assert body =~ "Kent&#39;s MacBook" or body =~ "Kent's MacBook"
-      assert body =~ device_id
+      assert body =~ "will make local context from this Mac available to your assistant"
+      assert body =~ "Only approve this request if it was opened from the Mac you are pairing"
+      assert body =~ "Approve and connect"
+      assert body =~ ~s(name="device_id")
+      assert body =~ ~s(value="#{device_id}")
+      refute body =~ "device_id:"
+      refute body =~ "iMessages first"
+      refute body =~ "sync local context"
     end
 
     test "redirects to / when device_id is missing or malformed", %{conn: conn} do
