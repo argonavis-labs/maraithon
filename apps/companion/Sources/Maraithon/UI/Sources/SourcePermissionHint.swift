@@ -48,7 +48,7 @@ struct SourcePermissionHint: Equatable {
         case "calendar_not_authorized":
             return SourcePermissionHint(
                 title: "Calendar access needed",
-                body: "Calendar access is separate from Full Disk Access. Maraithon needs Calendar Full Access to read your events on this Mac. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
+                body: "Calendar access is separate from Full Disk Access. Maraithon needs permission to read your events on this Mac. Open System Settings → Privacy & Security → Calendars, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"),
                 settingsButtonTitle: "Open Calendar Settings",
                 followUpNote: "After enabling Maraithon, return here and click Check again to recheck Calendar. If Maraithon is already listed, toggle it off and back on."
@@ -56,7 +56,7 @@ struct SourcePermissionHint: Equatable {
         case "reminders_not_authorized":
             return SourcePermissionHint(
                 title: "Reminders access needed",
-                body: "Reminders access is separate from Full Disk Access. Maraithon needs Reminders Full Access to read reminders on this Mac. Open System Settings → Privacy & Security → Reminders, then enable Maraithon.",
+                body: "Reminders access is separate from Full Disk Access. Maraithon needs permission to read reminders on this Mac. Open System Settings → Privacy & Security → Reminders, then enable Maraithon.",
                 settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Reminders"),
                 settingsButtonTitle: "Open Reminders Settings",
                 followUpNote: "After enabling Maraithon, return here and click Check again to recheck Reminders. If Maraithon is already listed, toggle it off and back on."

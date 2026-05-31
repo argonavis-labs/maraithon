@@ -14,6 +14,7 @@ final class SourcePermissionHintTests: XCTestCase {
         )
         XCTAssertEqual(hint.settingsButtonTitle, "Open Calendar Settings")
         XCTAssertTrue(hint.body.contains("separate from Full Disk Access"))
+        XCTAssertFalse(hint.body.contains("Calendar Full Access"))
         XCTAssertNotNil(hint.followUpNote)
     }
 
@@ -26,6 +27,7 @@ final class SourcePermissionHintTests: XCTestCase {
         )
         XCTAssertEqual(hint.settingsButtonTitle, "Open Reminders Settings")
         XCTAssertTrue(hint.body.contains("separate from Full Disk Access"))
+        XCTAssertFalse(hint.body.contains("Reminders Full Access"))
     }
 
     func testVoiceMemosFullDiskAccessReasonHasSettingsDeepLink() {

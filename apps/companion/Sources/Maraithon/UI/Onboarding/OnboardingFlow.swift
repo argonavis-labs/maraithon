@@ -49,6 +49,7 @@ final class OnboardingFlow {
     static let fullDiskAccessSkippedDefaultsKey = "com.maraithon.companion.fda_skipped"
 
     private(set) var current: Step
+    private(set) var fullDiskAccessSkipped: Bool
     private let defaults: UserDefaults
     private let eventLog: EventLog?
 
@@ -58,6 +59,8 @@ final class OnboardingFlow {
     ) {
         self.defaults = defaults
         self.eventLog = eventLog
+        self.fullDiskAccessSkipped = defaults.bool(forKey: Self.fullDiskAccessSkippedDefaultsKey)
+
         if defaults.bool(forKey: Self.completedDefaultsKey) {
             self.current = .done
         } else if let raw = defaults.string(forKey: Self.currentStepDefaultsKey),
@@ -78,7 +81,7 @@ final class OnboardingFlow {
     /// `RootWindow` reads this to render the persistent banner above the
     /// main split view.
     var isFullDiskAccessSkipped: Bool {
-        defaults.bool(forKey: Self.fullDiskAccessSkippedDefaultsKey)
+        fullDiskAccessSkipped
     }
 
     /// Progress through the visible (non-terminal) steps, in [0, 1]. Used
@@ -162,6 +165,7 @@ final class OnboardingFlow {
     /// banner asking them to grant access later.
     func markFullDiskAccessSkipped() {
         guard !isFullDiskAccessSkipped else { return }
+        fullDiskAccessSkipped = true
         defaults.set(true, forKey: Self.fullDiskAccessSkippedDefaultsKey)
         eventLog?.warning("onboarding.full_disk_access.skipped", source: .ui)
     }
@@ -170,6 +174,7 @@ final class OnboardingFlow {
     /// access is granted so the banner disappears without a restart.
     func clearFullDiskAccessSkipped() {
         guard isFullDiskAccessSkipped else { return }
+        fullDiskAccessSkipped = false
         defaults.set(false, forKey: Self.fullDiskAccessSkippedDefaultsKey)
         eventLog?.info("onboarding.full_disk_access.skip_cleared", source: .ui)
     }

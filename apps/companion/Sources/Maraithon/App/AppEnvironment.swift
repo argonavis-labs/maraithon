@@ -146,8 +146,12 @@ final class AppEnvironment {
         )
         registry.register(browserHistory)
 
-        if registry.clearFullDiskAccessBlocksIfGranted() {
+        // The onboarding skip flag is persisted so the banner survives
+        // relaunches, but it must clear once the current app copy proves
+        // macOS Full Disk Access is already granted.
+        if FullDiskAccessProbe.isGranted() {
             onboarding.recordFullDiskAccessGranted()
+            registry.clearFullDiskAccessBlocksIfGranted(isGranted: { true })
         }
 
         if Self.shouldAutoStartLiveServices {

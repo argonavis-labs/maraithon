@@ -6,8 +6,8 @@ import XCTest
 /// model. UI rendering correctness is left to manual verification.
 @MainActor
 final class OnboardingFlowTests: XCTestCase {
-    private var defaults: UserDefaults!
-    private var suiteName: String!
+    nonisolated(unsafe) private var defaults: UserDefaults!
+    nonisolated(unsafe) private var suiteName: String!
 
     override func setUp() {
         super.setUp()
