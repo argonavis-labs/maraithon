@@ -10,6 +10,7 @@ struct TodayView: View {
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
     @State private var editingTodo: TodoItem?
     @State private var refreshErrorMessage: String?
+    @State private var actionErrorMessage: String?
     @State private var isRefreshing = false
 
     private var metrics: TodayMetrics {
@@ -37,6 +38,21 @@ struct TodayView: View {
                             message: refreshErrorMessage,
                             retry: { Task { await refreshLatestData() } },
                             dismiss: { self.refreshErrorMessage = nil }
+                        )
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                    }
+                }
+
+                if let actionErrorMessage {
+                    Section {
+                        SyncIssueBanner(
+                            title: TodayViewCopy.actionWarningTitle,
+                            message: actionErrorMessage,
+                            buttonTitle: nil,
+                            retry: nil,
+                            dismissAccessibilityLabel: TodayViewCopy.dismissActionWarningAccessibilityLabel,
+                            dismiss: { self.actionErrorMessage = nil }
                         )
                         .listRowInsets(EdgeInsets())
                         .listRowSeparator(.hidden)
@@ -209,6 +225,28 @@ struct TodayView: View {
                     TodayFocusRow(item: item)
                 }
                 .buttonStyle(.plain)
+                .swipeActions(edge: .leading) {
+                    Button {
+                        completeFocusTodo(todo)
+                    } label: {
+                        Label(TodayViewCopy.completeFocusActionLabel, systemImage: "checkmark.circle")
+                    }
+                    .tint(.green)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        dismissFocusTodo(todo)
+                    } label: {
+                        Label(TodayViewCopy.dismissFocusActionLabel, systemImage: "trash")
+                    }
+
+                    Button {
+                        editingTodo = todo
+                    } label: {
+                        Label(TodayViewCopy.editFocusActionLabel, systemImage: "pencil")
+                    }
+                    .tint(.blue)
+                }
             } else {
                 TodayFocusRow(item: item)
             }
@@ -227,6 +265,77 @@ struct TodayView: View {
 
     private func todo(for item: TodayFocusItem) -> TodoItem? {
         todos.first { $0.id == item.referenceID }
+    }
+
+    private func completeFocusTodo(_ todo: TodoItem) {
+        actionErrorMessage = nil
+        todo.setCompleted(true)
+        guard saveLocalFocusChange(failureMessage: TodayViewCopy.localCompleteFailedMessage) else {
+            return
+        }
+
+        guard let sessionToken = sessionStore.user?.sessionToken else { return }
+        Task { @MainActor in
+            do {
+                let remote = try await MobileAPIClient().updateTodo(
+                    sessionToken: sessionToken,
+                    id: todo.id,
+                    payload: ["status": "done"]
+                )
+                ProductionDataSync.apply(remote, to: todo)
+                _ = saveLocalFocusChange(failureMessage: TodayViewCopy.remoteCompleteSaveFailedMessage)
+            } catch {
+                todo.setCompleted(false)
+                if saveLocalFocusChange(failureMessage: TodayViewCopy.restoreFocusFailedMessage) {
+                    actionErrorMessage = focusActionMessage(
+                        TodayViewCopy.remoteCompleteFailedPrefix,
+                        error: error
+                    )
+                }
+            }
+        }
+    }
+
+    private func dismissFocusTodo(_ todo: TodoItem) {
+        actionErrorMessage = nil
+
+        guard let sessionToken = sessionStore.user?.sessionToken else {
+            modelContext.delete(todo)
+            _ = saveLocalFocusChange(failureMessage: TodayViewCopy.localDismissFailedMessage)
+            return
+        }
+
+        Task { @MainActor in
+            do {
+                _ = try await MobileAPIClient().deleteTodo(sessionToken: sessionToken, id: todo.id)
+                modelContext.delete(todo)
+                _ = saveLocalFocusChange(failureMessage: TodayViewCopy.remoteDismissSaveFailedMessage)
+            } catch let error as MobileAPIError where error.isNotFound {
+                modelContext.delete(todo)
+                _ = saveLocalFocusChange(failureMessage: TodayViewCopy.remoteDismissSaveFailedMessage)
+            } catch {
+                actionErrorMessage = focusActionMessage(
+                    TodayViewCopy.remoteDismissFailedPrefix,
+                    error: error
+                )
+            }
+        }
+    }
+
+    private func focusActionMessage(_ prefix: String, error: Error) -> String {
+        "\(prefix) \(MobileErrorCopy.message(for: error))"
+    }
+
+    @discardableResult
+    private func saveLocalFocusChange(failureMessage: String) -> Bool {
+        do {
+            try modelContext.save()
+            return true
+        } catch {
+            modelContext.rollback()
+            actionErrorMessage = failureMessage
+            return false
+        }
     }
 
     private func contact(for item: TodayFocusItem) -> CRMContact? {
@@ -265,6 +374,8 @@ enum TodayViewCopy {
     static let actionSectionTitle = "Next actions"
     static let focusSectionTitle = "Today's focus"
     static let recentChatsSectionTitle = "Recent chats"
+    static let actionWarningTitle = "Focus action was not saved"
+    static let dismissActionWarningAccessibilityLabel = "Dismiss focus action warning"
     static let askMaraithonTitle = "Ask Maraithon"
     static let askMaraithonSubtitle = "Plan, draft, or prioritize"
     static let openWorkTitle = "Open work"
@@ -281,12 +392,24 @@ enum TodayViewCopy {
     static let emptyFocusDescription = "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for everything else."
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
+    static let completeFocusActionLabel = "Done"
+    static let dismissFocusActionLabel = "Dismiss"
+    static let editFocusActionLabel = "Edit"
+    static let localCompleteFailedMessage = "Could not complete the focus item on this device. Today stayed unchanged."
+    static let localDismissFailedMessage = "Could not dismiss the focus item on this device. Today stayed unchanged."
+    static let remoteCompleteFailedPrefix = "Could not complete the focus item."
+    static let remoteDismissFailedPrefix = "Could not dismiss the focus item."
+    static let remoteCompleteSaveFailedMessage = "Maraithon completed the focus item, but this device could not save the latest copy. Refresh Today to reconcile."
+    static let remoteDismissSaveFailedMessage = "Maraithon dismissed the focus item, but this device could not remove the local copy. Refresh Today to reconcile."
+    static let restoreFocusFailedMessage = "Could not restore the focus item on this device. Refresh Today to reconcile."
 
     static var actionLabels: [String] {
         [
             actionSectionTitle,
             focusSectionTitle,
             recentChatsSectionTitle,
+            actionWarningTitle,
+            dismissActionWarningAccessibilityLabel,
             askMaraithonTitle,
             askMaraithonSubtitle,
             openWorkTitle,
@@ -302,7 +425,17 @@ enum TodayViewCopy {
             emptyFocusTitle,
             emptyFocusDescription,
             emptyRecentChatsTitle,
-            emptyRecentChatsDescription
+            emptyRecentChatsDescription,
+            completeFocusActionLabel,
+            dismissFocusActionLabel,
+            editFocusActionLabel,
+            localCompleteFailedMessage,
+            localDismissFailedMessage,
+            remoteCompleteFailedPrefix,
+            remoteDismissFailedPrefix,
+            remoteCompleteSaveFailedMessage,
+            remoteDismissSaveFailedMessage,
+            restoreFocusFailedMessage
         ]
     }
 }

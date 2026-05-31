@@ -8,6 +8,9 @@ struct TodayViewCopyTests {
         #expect(TodayViewCopy.actionSectionTitle == "Next actions")
         #expect(TodayViewCopy.focusSectionTitle == "Today's focus")
         #expect(TodayViewCopy.recentChatsSectionTitle == "Recent chats")
+        #expect(TodayViewCopy.completeFocusActionLabel == "Done")
+        #expect(TodayViewCopy.dismissFocusActionLabel == "Dismiss")
+        #expect(TodayViewCopy.editFocusActionLabel == "Edit")
         #expect(TodayViewCopy.askMaraithonTitle == "Ask Maraithon")
         #expect(TodayViewCopy.askMaraithonSubtitle == "Plan, draft, or prioritize")
         #expect(TodayViewCopy.openWorkTitle == "Open work")
@@ -37,6 +40,7 @@ struct TodayViewCopyTests {
         #expect(!copy.contains("outstanding work"))
         #expect(!copy.contains("stale active relationships"))
         #expect(!copy.contains("queue"))
+        #expect(!copy.contains("delete"))
         #expect(!exactCopy.contains("No Recent Chats"))
     }
 }
