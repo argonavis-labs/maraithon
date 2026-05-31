@@ -65,6 +65,15 @@ final class CompanionErrorCopyTests: XCTestCase {
         XCTAssertFalse(copy.contains("NSURLErrorDomain"))
     }
 
+    func testLargeRequestsUsePlainRecoveryCopy() {
+        let copy = CompanionErrorCopy.message(
+            for: MaraithonClientError.clientError(status: 413, body: nil)
+        )
+
+        XCTAssertEqual(copy, "That request was too large. Try fewer items.")
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("sync"))
+    }
+
     func testStringReasonsHideTechnicalValues() {
         XCTAssertEqual(
             CompanionErrorCopy.message(for: "clientError(status: 401, body: nil)"),

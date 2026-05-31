@@ -81,7 +81,7 @@ struct CompanionErrorCopy {
         case 409:
             return "The request was out of date. Refresh before continuing."
         case 413:
-            return "That request was too large. Sync fewer items."
+            return "That request was too large. Try fewer items."
         case 429:
             return "Maraithon is busy right now. Retry in a moment."
         default:
