@@ -184,12 +184,18 @@
     "summary": "Long-running work is queued instead of blocking chat.",
     "input": {"user_id": "assistant-eval@example.com", "text": "Queue a job to review my CRM, calendar, and todos tomorrow morning."},
     "mock_output": {
-      "message_class": "assistant_reply",
+      "message_class": "action_result",
+      "assistant_message": "Queued for tomorrow morning: Maraithon will review People relationship context, calendar, and open work, then send a prep note with the highest-signal changes and next actions. Tell me to change the time or cancel it if this should run on a different cadence.",
       "tool_calls": [{"tool": "create_scheduled_task"}]
     },
     "expected": {
-      "output": {"message_class": "assistant_reply"},
-      "required_tools": ["create_scheduled_task"]
+      "output": {"message_class": "action_result"},
+      "required_tools": ["create_scheduled_task"],
+      "assistant_message_quality": {
+        "min_length": 220,
+        "required_phrases": ["Queued for tomorrow morning", "People relationship context", "calendar", "open work", "prep note", "next actions", "change the time", "cancel it"],
+        "forbidden_phrases": ["Done", "I'll handle it", "CRM"]
+      }
     }
   }
 ]

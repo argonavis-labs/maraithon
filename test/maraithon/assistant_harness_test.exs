@@ -179,6 +179,8 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "message_class:\"todo_digest\""
     assert prompt =~ "state how the open work is ranked and what to start with"
     assert prompt =~ "orient the operator, not dump a second list"
+    assert prompt =~ "After `create_scheduled_task` succeeds"
+    assert prompt =~ "confirm the schedule, review scope, delivery expectation"
     assert proactive_prompt =~ "Reason over open work, open loops"
     assert proactive_prompt =~ "People relationship context"
     assert proactive_prompt =~ "work item cards from the listed todo_ids"

@@ -397,6 +397,7 @@ defmodule Maraithon.AssistantHarness do
     - Use the `briefing_schedule` context snapshot as the source of the current local timezone and existing briefing cadence.
     - If the user names a timezone such as Eastern, Pacific, ET, PT, or an IANA zone, pass it as `timezone` to `update_briefing_schedule` instead of reducing it to `timezone_offset_hours`; named zones preserve daylight-saving changes.
     - If the user asks to queue, schedule, run later, watch, review periodically, or create a background/long-running job, use `create_scheduled_task` with an assistant_prompt command. Include the concrete review scope in the task prompt.
+    - After `create_scheduled_task` succeeds, return `message_class:"action_result"` and confirm the schedule, review scope, delivery expectation, and how the operator can adjust or cancel it. Do not stop at "queued" or "done."
     - If the user states a durable preference about what to ignore, what to prioritize, how to interrupt them, or how concise/focused Maraithon should be, use `remember_preferences` instead of only acknowledging it in prose.
     - If the user asks what Maraithon has learned about them, or asks which durable rules are active, use `list_preferences`.
     - If the user asks Maraithon to forget or remove a remembered rule, use `forget_preference`. If the target rule is ambiguous, call `list_preferences` first and then forget the specific `rule_id`.
@@ -463,6 +464,7 @@ defmodule Maraithon.AssistantHarness do
     - If the user says `Draft a reply to Matthew about setup and pricing`, your next response should usually call `draft_message` with `channel:"gmail"` or `channel:"slack"` based on the requested medium after calling relationship/open-work tools if context is not already current.
     - If the user says `Create a Gmail draft to Matthew`, your next response should usually call `draft_message` with `channel:"gmail"` and `save_to_provider:true`, then confirm the draft was created or explain the connector failure.
     - If the user says `Queue a job tomorrow morning to review open loops and meetings`, your next response should usually call `create_scheduled_task` with a concrete schedule and an assistant_prompt command describing that review.
+    - After that scheduled-task tool succeeds, your final response should usually be `action_result` with the scheduled time, scope, expected deliverable, and "tell me to change or cancel it" path.
     - If the user says `What was I researching online about Matthew's setup project?`, your next response should usually call `browser_history_search` with Matthew/setup/pricing terms.
     - If a Gmail body says "Emma's permission form is due Friday" from a school contact, your next response should usually include `learn_relationship_context` with that source observation and `upsert_todos` for the concrete parent action.
     - If `briefing_schedule` shows morning briefs at `09:00` local and the user says `send my morning briefings at 10 instead of 9`, your next response should usually be `tool_calls` for `update_briefing_schedule` with `briefing_kind:"morning"` and `local_hour:10`.
