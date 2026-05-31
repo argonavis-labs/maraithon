@@ -143,9 +143,9 @@ enum TodayInsightEngine {
         }
 
         return TodayBrief(
-            title: "Saved context is clear",
-            subtitle: "No saved decision, deadline, or relationship follow-up is waiting in Maraithon. Ask for a fresh review when you want a priority call, draft, or summary.",
-            actionTitle: "Review with Maraithon",
+            title: "Nothing needs your review right now",
+            subtitle: "No saved decision, deadline, or relationship follow-up is waiting. Ask Maraithon for a fresh priority call, draft, or summary when you need one.",
+            actionTitle: "Start a review",
             systemImage: "sparkles",
             destination: .chat
         )
@@ -342,7 +342,7 @@ enum TodayInsightEngine {
         }
 
         if count == 1 {
-            return "\(title) needs a decision. \(briefMove(for: lead) ?? "Make the call, delegate it, or dismiss it.")"
+            return "Decision needed: \(title). \(briefMove(for: lead) ?? "Make the call, delegate it, or dismiss it.")"
         }
 
         if let move = briefMove(for: lead) {

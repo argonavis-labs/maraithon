@@ -119,8 +119,8 @@ struct TodoFilteringTests {
             description: "No saved work is past due in this filter. Keep using Today for work that still needs a move."
         ))
 
-        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work in this view")
-        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Reset filters, add a follow-up, or ask Maraithon to keep a commitment visible.")
+        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work matches this filter")
+        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Switch filters, add a follow-up, or ask Maraithon to keep a commitment visible.")
         #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "This filter has no open work. Add a follow-up, or ask Maraithon to keep the next commitment visible.")
         #expect(TodoFilter.decisions.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
             title: "No decisions waiting",

@@ -235,10 +235,10 @@ struct CRMFilteringTests {
             .description
             .localizedCaseInsensitiveContains("stale"))
 
-        #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: true).title == "No people in this view")
-        #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: true).description == "Reset filters or add the relationship Maraithon should remember.")
+        #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: true).title == "No people match this filter")
+        #expect(CRMStatusFilter.all.emptyState(searchText: "", hasAnyPeople: true).description == "Switch filters or add the relationship Maraithon should remember.")
         #expect(CRMStatusFilter.lead.emptyState(searchText: "", hasAnyPeople: true).title == "No new relationships")
-        #expect(CRMStatusFilter.active.emptyState(searchText: "", hasAnyPeople: true).title == "No active relationships in this view")
+        #expect(CRMStatusFilter.active.emptyState(searchText: "", hasAnyPeople: true).title == "No active relationships")
         #expect(CRMStatusFilter.closed.emptyState(searchText: "", hasAnyPeople: true).title == "No archived relationships")
     }
 

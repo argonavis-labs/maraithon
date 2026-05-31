@@ -357,7 +357,7 @@ struct TodayInsightEngineTests {
         let brief = TodayInsightEngine.brief(todos: [decision], contacts: [])
 
         #expect(brief.title == "Make the calls waiting on you")
-        #expect(brief.subtitle == "Approve investor reply needs a decision. Send the revised terms and confirm the review window.")
+        #expect(brief.subtitle == "Decision needed: Approve investor reply. Send the revised terms and confirm the review window.")
         #expect(brief.actionTitle == "Review decisions")
         #expect(brief.destination == .todos(.decisions))
     }
@@ -374,16 +374,16 @@ struct TodayInsightEngineTests {
 
         let brief = TodayInsightEngine.brief(todos: [decision], contacts: [])
 
-        #expect(brief.subtitle == "Reply to Michael needs a decision. Approve the short reply with campaign timing.")
+        #expect(brief.subtitle == "Decision needed: Reply to Michael. Approve the short reply with campaign timing.")
     }
 
     @Test
     func clearDayBriefUsesMaraithonProductLanguage() {
         let brief = TodayInsightEngine.brief(todos: [], contacts: [])
 
-        #expect(brief.title == "Saved context is clear")
-        #expect(brief.subtitle == "No saved decision, deadline, or relationship follow-up is waiting in Maraithon. Ask for a fresh review when you want a priority call, draft, or summary.")
-        #expect(brief.actionTitle == "Review with Maraithon")
+        #expect(brief.title == "Nothing needs your review right now")
+        #expect(brief.subtitle == "No saved decision, deadline, or relationship follow-up is waiting. Ask Maraithon for a fresh priority call, draft, or summary when you need one.")
+        #expect(brief.actionTitle == "Start a review")
         #expect(!brief.actionTitle.localizedCaseInsensitiveContains("chief of staff"))
         #expect(!brief.subtitle.localizedCaseInsensitiveContains("high-priority"))
         #expect(!brief.subtitle.localizedCaseInsensitiveContains("Today. Ask"))

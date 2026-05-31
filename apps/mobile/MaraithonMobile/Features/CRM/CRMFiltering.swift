@@ -51,9 +51,9 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all:
             return PeopleEmptyState(
-                title: "No people in this view",
+                title: "No people match this filter",
                 systemImage: "person.2",
-                description: "Reset filters or add the relationship Maraithon should remember."
+                description: "Switch filters or add the relationship Maraithon should remember."
             )
         case .lead:
             return PeopleEmptyState(
@@ -63,7 +63,7 @@ enum CRMStatusFilter: String, CaseIterable, Hashable, Identifiable {
             )
         case .active:
             return PeopleEmptyState(
-                title: "No active relationships in this view",
+                title: "No active relationships",
                 systemImage: "person.2",
                 description: "Relationships that are current and not flagged for care appear here."
             )

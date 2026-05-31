@@ -69,9 +69,9 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
         switch self {
         case .all:
             return TodoEmptyState(
-                title: "No work in this view",
+                title: "No work matches this filter",
                 systemImage: "checklist",
-                description: "Reset filters, add a follow-up, or ask Maraithon to keep a commitment visible."
+                description: "Switch filters, add a follow-up, or ask Maraithon to keep a commitment visible."
             )
         case .open:
             return TodoEmptyState(
