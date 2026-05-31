@@ -86,6 +86,7 @@ struct RootWindow: View {
             env.sources.syncFullDiskAccessBlockedSources()
         } else {
             env.eventLog.info("root_window.fda_probe_still_blocked", source: .ui)
+            env.sources.recheckFullDiskAccessBlockedSources()
             return true
         }
         return false
@@ -355,6 +356,7 @@ struct FullDiskAccessRequiredBanner: View {
         }
 
         env.eventLog.info("root_window.fda_banner_check_still_blocked", source: .ui)
+        env.sources.recheckFullDiskAccessBlockedSources()
     }
 
     @MainActor

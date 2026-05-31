@@ -170,6 +170,39 @@ final class SourceRegistry {
         }
     }
 
+    /// Re-run every source currently blocked by Full Disk Access without
+    /// clearing the visible blocker first. Used when a user clicks
+    /// "Check again" but the lightweight global probe still cannot prove
+    /// the grant; the real source check remains the authority.
+    func recheckFullDiskAccessBlockedSources() {
+        let blockedIDs = Set(fullDiskAccessBlockedSources().map(\.id))
+
+        guard !blockedIDs.isEmpty else {
+            eventLog.info("source_registry.recheck_fda_blocked_none", source: .system)
+            return
+        }
+
+        eventLog.info(
+            "source_registry.recheck_fda_blocked",
+            source: .system,
+            payload: ["count": String(blockedIDs.count)]
+        )
+
+        for source in registered.values where blockedIDs.contains(source.id) {
+            Task { @MainActor in
+                do {
+                    try await source.syncNow()
+                } catch {
+                    eventLog.error(
+                        "source_registry.recheck_fda_blocked_failed",
+                        source: .system,
+                        payload: ["id": source.id, "error": String(describing: error)]
+                    )
+                }
+            }
+        }
+    }
+
     /// Clear stale Full Disk Access blockers after a relaunch once the
     /// running app proves the grant is present. This keeps macOS reloads
     /// from showing old permission copy when TCC is already satisfied.

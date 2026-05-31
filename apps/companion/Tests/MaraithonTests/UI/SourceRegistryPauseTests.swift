@@ -218,6 +218,45 @@ final class SourceRegistryPauseTests: XCTestCase {
         XCTAssertEqual(calendar.syncCount, 0)
     }
 
+    func testRecheckFullDiskAccessBlockedSourcesDoesNotClearBlockBeforeSourceProvesAccess() async {
+        let log = EventLog()
+        let registry = SourceRegistry(eventLog: log)
+        let imessage = FakeSource(id: "imessage", displayName: "iMessage", symbol: "message")
+        let notes = FakeSource(id: "notes", displayName: "Notes", symbol: "note.text")
+        let calendar = FakeSource(id: "calendar", displayName: "Calendar", symbol: "calendar")
+        registry.register(imessage)
+        registry.register(notes)
+        registry.register(calendar)
+
+        let imessageRechecked = expectation(description: "iMessage source rechecked")
+        let notesRechecked = expectation(description: "Notes source rechecked")
+        imessage.onSync = { imessageRechecked.fulfill() }
+        notes.onSync = { notesRechecked.fulfill() }
+
+        imessage.statusPublisher.recordHealthyCycle(at: Date())
+        notes.statusPublisher.recordHealthyCycle(at: Date())
+        imessage.statusPublisher.update(state: .needsAttention(reason: "imessage_full_disk_access_required"))
+        notes.statusPublisher.update(state: .error(reason: "notes_full_disk_access_required"))
+        calendar.statusPublisher.update(state: .needsAttention(reason: "calendar_not_authorized"))
+
+        registry.recheckFullDiskAccessBlockedSources()
+
+        XCTAssertEqual(
+            imessage.statusPublisher.displayedState(),
+            .error(reason: "imessage_full_disk_access_required")
+        )
+        XCTAssertEqual(
+            notes.statusPublisher.displayedState(),
+            .error(reason: "notes_full_disk_access_required")
+        )
+        XCTAssertEqual(calendar.statusPublisher.displayedState(), .error(reason: "calendar_not_authorized"))
+
+        await fulfillment(of: [imessageRechecked, notesRechecked], timeout: 1.0)
+        XCTAssertEqual(imessage.syncCount, 1)
+        XCTAssertEqual(notes.syncCount, 1)
+        XCTAssertEqual(calendar.syncCount, 0)
+    }
+
     func testClearFullDiskAccessBlocksIfGrantedClearsStaleBlocksWithoutSyncing() {
         let log = EventLog()
         let registry = SourceRegistry(eventLog: log)
@@ -313,6 +352,7 @@ final class FakeSource: SourceProtocol {
     private(set) var startCount = 0
     private(set) var syncCount = 0
     private(set) var clearCount = 0
+    var onSync: (() -> Void)?
 
     init(id: String, displayName: String, symbol: String) {
         self.id = id
@@ -333,6 +373,7 @@ final class FakeSource: SourceProtocol {
 
     func syncNow() async throws {
         syncCount += 1
+        onSync?()
     }
 
     func clearLocalState() {

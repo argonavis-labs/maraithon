@@ -146,6 +146,7 @@ struct SourceUnblockView: View {
                 "\(sourceID).full_disk_access_check_still_blocked",
                 source: .ui
             )
+            env.sources.syncNow(id: sourceID)
             return
         }
 
