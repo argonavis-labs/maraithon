@@ -456,7 +456,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                        "tool" => "open_work",
                        "label" => "Open work",
                        "status" => "completed",
-                       "summary" => "This check surfaced no open work."
+                       "summary" => "No open work matched this request."
                      }
                    ],
                    "steps" => steps
@@ -476,7 +476,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                          %{
                            "tool" => "open_work",
                            "label" => "Open work",
-                           "summary" => "This check surfaced no open work."
+                           "summary" => "No open work matched this request."
                          }
                        ]
                      }

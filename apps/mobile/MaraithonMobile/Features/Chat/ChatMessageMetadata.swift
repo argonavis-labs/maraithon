@@ -713,6 +713,7 @@ private enum ChatWorkSummaryCopy {
     private static func legacyProductTerms(_ value: String) -> String {
         value
             .replacingOccurrences(of: #"(?i)^No open work found\.?$"#, with: "No open work matched this request.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^This check surfaced no open work\.?$"#, with: "No open work matched this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)^No connected accounts found\.?$"#, with: "No connected accounts were available for this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)^No connected sources found\.?$"#, with: "No connected sources were available for this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm context\b"#, with: "relationship context", options: .regularExpression)

@@ -175,6 +175,13 @@ struct ChatWorkSummaryTests {
                   "label": "Open work",
                   "status": "completed",
                   "summary": "No open work found."
+                },
+                {
+                  "id": "tool-3",
+                  "tool": "get_open_work_summary",
+                  "label": "Open work",
+                  "status": "completed",
+                  "summary": "This check surfaced no open work."
                 }
               ],
               "steps": []
@@ -188,9 +195,11 @@ struct ChatWorkSummaryTests {
 
         #expect(summaries == [
             "No open work matched this request.",
+            "No open work matched this request.",
             "No open work matched this request."
         ])
         #expect(visibleText.localizedCaseInsensitiveContains("No open work found") == false)
+        #expect(visibleText.localizedCaseInsensitiveContains("surfaced") == false)
         #expect(visibleText.localizedCaseInsensitiveContains("all clear") == false)
     }
 
