@@ -1907,14 +1907,18 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert intro.text =~ "<b>Chief of staff check-in</b>"
     assert intro.text =~ "<b>Check-in: 2 items still need movement</b>"
-    assert intro.text =~ "here's the open work that needs review today"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 carried over from earlier"
 
     assert intro.text =~ "Best next move: Reply to Charlie about the budget."
+    assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
 
     assert intro.text =~ "Then triage the rest"
     assert intro.text =~ "keep what still needs you"
+    assert {best_index, _} = :binary.match(intro.text, "Best next move")
+    assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
+    assert best_index < open_work_index
+    refute intro.text =~ "here's the open work"
     refute intro.text =~ "not important"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 
@@ -1988,13 +1992,16 @@ defmodule Maraithon.TelegramAssistantTest do
     assert intro.text =~ "<b>End-of-day review</b>"
     assert intro.text =~ "<b>End-of-day review: 2 items still open</b>"
     refute intro.text =~ "debt"
-    assert intro.text =~ "open work still worth a decision before the day closes"
     assert intro.text =~ "1 new today"
     assert intro.text =~ "1 carried over from earlier"
 
     assert intro.text =~ "Best next move: Reply to David about the laptop."
+    assert intro.text =~ "Open work: 1 new today. 1 carried over from earlier."
 
     assert intro.text =~ "defer anything that can wait"
+    assert {best_index, _} = :binary.match(intro.text, "Best next move")
+    assert {open_work_index, _} = :binary.match(intro.text, "Open work:")
+    assert best_index < open_work_index
     refute intro.text =~ "stale"
     refute intro.text =~ "INTERNAL_PLACEHOLDER_SHOULD_NOT_SEND"
 

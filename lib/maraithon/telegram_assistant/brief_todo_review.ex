@@ -388,10 +388,10 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
             |> Enum.join("\n")
 
           """
+          Best next move: #{todo_list_next_move(todos)}
+
           <b>Open work</b>
           #{lines}
-
-          Best next move: #{todo_list_next_move(todos)}
           """
           |> String.trim()
       end

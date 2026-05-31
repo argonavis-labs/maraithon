@@ -304,7 +304,6 @@ defmodule Maraithon.Briefs do
 
   def todo_digest_intro_text(%Brief{} = brief, todos \\ nil) do
     todos = todos || todo_digest_todos(brief)
-    greeting = greeting_line(brief)
     {new_today_count, still_open_count} = todo_digest_counts(brief, todos)
 
     detail_line =
@@ -329,18 +328,12 @@ defmodule Maraithon.Briefs do
       end
 
     if todos == [] do
-      """
-      #{greeting}
-
-      #{detail_line}
-      """
-      |> String.trim()
+      detail_line
     else
       """
-      #{greeting}
-
-      #{detail_line}
       Best next move: #{todo_digest_next_move(todos)}
+
+      Open work: #{detail_line}
       """
       |> String.trim()
     end
@@ -738,77 +731,6 @@ defmodule Maraithon.Briefs do
         0
     end
   end
-
-  defp greeting_line(%Brief{} = brief) do
-    body =
-      case normalize_cadence(brief.cadence) do
-        "end_of_day" -> "here's the open work still worth a decision before the day closes."
-        "morning" -> "here's the open work that needs a decision today."
-        "weekly_review" -> "here's the open work still worth deciding this week."
-        _ -> "here's the open work that needs review today."
-      end
-
-    case greeting_name(brief.user_id) do
-      nil -> "Hey, #{body}"
-      name -> "Hey #{name}, #{body}"
-    end
-  end
-
-  defp greeting_name(user_id) when is_binary(user_id) do
-    case ConnectedAccounts.get(user_id, "telegram") do
-      %{metadata: metadata} when is_map(metadata) ->
-        metadata
-        |> greeting_candidates(user_id)
-        |> Enum.find(&present?/1)
-
-      _ ->
-        email_name(user_id)
-    end
-  end
-
-  defp greeting_name(_user_id), do: nil
-
-  defp greeting_candidates(metadata, user_id) do
-    [
-      normalize_name(Map.get(metadata, "first_name")),
-      normalize_name(Map.get(metadata, "name")),
-      normalize_name(Map.get(metadata, "username")),
-      email_name(user_id)
-    ]
-  end
-
-  defp normalize_name(value) when is_binary(value) do
-    value
-    |> String.trim()
-    |> case do
-      "" ->
-        nil
-
-      trimmed ->
-        trimmed
-        |> String.split(~r/[\s._-]+/u)
-        |> List.first()
-        |> case do
-          nil -> nil
-          part -> String.capitalize(part)
-        end
-    end
-  end
-
-  defp normalize_name(_value), do: nil
-
-  defp email_name(user_id) when is_binary(user_id) do
-    user_id
-    |> String.split("@")
-    |> List.first()
-    |> normalize_name()
-  end
-
-  defp email_name(_user_id), do: nil
-
-  defp normalize_cadence(value) when is_binary(value), do: value
-  defp normalize_cadence(value) when is_atom(value), do: Atom.to_string(value)
-  defp normalize_cadence(_value), do: nil
 
   defp todo_id(%{id: id}) when is_binary(id), do: id
   defp todo_id(%{"id" => id}) when is_binary(id), do: id

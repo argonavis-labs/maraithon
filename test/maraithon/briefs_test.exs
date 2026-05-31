@@ -504,16 +504,18 @@ defmodule Maraithon.BriefsTest do
     assert second_todo.id == older_todo.id
 
     intro = Briefs.todo_digest_intro_text(brief, [first_todo, second_todo])
-    assert intro =~ "here's the open work that needs review today"
     assert intro =~ "1 new today"
     assert intro =~ "1 carried over from earlier"
 
+    assert String.starts_with?(intro, "Best next move: Reply to finance about the receipt.")
     assert intro =~ "Best next move: Reply to finance about the receipt."
-
+    assert intro =~ "Open work: 1 new today. 1 carried over from earlier."
     assert intro =~ "Then triage the rest"
     assert intro =~ "close resolved items"
     assert intro =~ "keep what still needs you"
     assert intro =~ "defer anything that can wait"
+    refute intro =~ "Hey"
+    refute intro =~ "here's the open work"
     refute intro =~ "stale"
     refute intro =~ "not important"
     refute intro =~ "Tap "
@@ -659,6 +661,8 @@ defmodule Maraithon.BriefsTest do
       })
 
     [message] = sent_messages()
+    assert String.starts_with?(message.text, "Best next move: Send finance the corrected receipt")
+    assert message.text =~ "\n\n<b>Open work</b>"
     assert message.text =~ "<b>Open work</b>"
     assert message.text =~ "1. #{first_todo.title}"
     assert message.text =~ "Why now: Finance needs the corrected receipt today."
@@ -997,6 +1001,7 @@ defmodule Maraithon.BriefsTest do
              })
 
     [message] = sent_messages()
+    assert String.starts_with?(message.text, "Best next move: Send the signed pickup form")
     assert message.text =~ "Open work"
     assert message.text =~ "1. #{todo.title}"
     assert message.text =~ "Why now: Pickup-form changes close today."
