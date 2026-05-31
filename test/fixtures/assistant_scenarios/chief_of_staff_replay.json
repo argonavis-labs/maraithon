@@ -134,13 +134,18 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "proactive check-in"},
     "mock_output": {
       "message_class": "todo_digest",
-      "assistant_message": "Older follow-up, not urgent based on the available evidence. Item: Dan Bourke is the A-Team video project contact tied to the artifact-status commitment. Mark it important if it still matters, or dismiss it.",
+      "assistant_message": "Not urgent based on the available evidence: Dan Bourke appears to be the A-Team video project contact tied to the artifact-status commitment. The decision is whether this still matters. Mark it important if you want it kept in the active stack; dismiss it if the artifact-status follow-up can leave the active list.",
       "tool_calls": [{"tool": "list_todos"}]
     },
     "expected": {
       "output": {"message_class": "todo_digest"},
       "required_tools": ["list_todos"],
-      "forbidden_tools": ["gmail_send"]
+      "forbidden_tools": ["gmail_send"],
+      "assistant_message_quality": {
+        "min_length": 280,
+        "required_phrases": ["Not urgent", "available evidence", "Dan Bourke", "A-Team video project", "artifact-status commitment", "The decision", "Mark it important", "dismiss it"],
+        "forbidden_phrases": ["needs immediate attention", "overdue", "todo list", "Priority:"]
+      }
     }
   },
   {

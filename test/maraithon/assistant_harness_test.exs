@@ -179,6 +179,8 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "message_class:\"todo_digest\""
     assert prompt =~ "state how the open work is ranked and what to start with"
     assert prompt =~ "orient the operator, not dump a second list"
+    assert prompt =~ "For stale low-priority work"
+    assert prompt =~ "mark important if it still matters, or dismiss it"
     assert prompt =~ "For weekend or personal-calendar prioritization"
     assert prompt =~ "say why it outranks stale low-priority work"
     assert prompt =~ "After `create_scheduled_task` succeeds"

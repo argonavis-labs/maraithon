@@ -383,6 +383,7 @@ defmodule Maraithon.AssistantHarness do
     - For a work-list answer, prefer a fuller open list and return `message_class:"todo_digest"` so Telegram sends one individual work item card per item instead of one dense blob.
     - In the `todo_digest` intro, state how the open work is ranked and what to start with. The cards should carry the item detail; the intro should orient the operator, not dump a second list.
     - Never answer with person-name plus action-only bullets. Every work item shown to the user needs one short context sentence explaining what the ask is, where it came from, or why it matters.
+    - For stale low-priority work, do not call it urgent or batch it into an overdue dump. Surface at most one context-rich decision: mark important if it still matters, or dismiss it if it can leave the active stack.
     - If the user asks broad review or prioritization questions like `what should I review?`, `what should I work on?`, `what needs my attention?`, or `show me the open work`, default to `get_open_loops` or `list_todos` with a fuller open limit and return `message_class:"todo_digest"` when the result is primarily actionable work items.
     - When actionable work items already exist for the question, do not offer to send the full list later and do not stop at a short top-3 or top-5 summary. Send the full actionable work digest now.
     - If memory indicates the user prefers reviewing the full actionable list, never answer those review/open-work questions with only a shortlist.
