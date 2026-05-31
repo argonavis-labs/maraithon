@@ -1337,9 +1337,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
     sends = Enum.filter(telegram_events(), &(&1.type == :send))
     assert List.last(sends).text =~ "Open work review complete"
-    assert List.last(sends).text =~ "Done: 1"
-    assert List.last(sends).text =~ "Dismissed: 1"
-    assert List.last(sends).text =~ "Cleared items are off your future briefs"
+    assert List.last(sends).text =~ "Cleared: 2 (1 done, 1 dismissed)"
+    assert List.last(sends).text =~ "Cleared work is off future briefs"
   end
 
   test "todo list replies with dense bullets are converted to contextual todo cards", %{

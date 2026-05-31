@@ -29,6 +29,8 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     <redacted authorization bearer dbconnection ecto. http_status internal password phoenix.
     postgrex private_key stacktrace token
   )
+  @no_open_work_review_text "No saved open work is ready for review right now. " <>
+                              "New commitments will appear here after Maraithon catches a source-backed next move."
 
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
@@ -357,7 +359,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
             :ok
 
           nil ->
-            maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work to review")
+            maybe_answer_callback(Keyword.get(opts, :callback_id), "No saved open work to review")
             send_no_todos(chat_id)
             :ok
         end
@@ -378,7 +380,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     text =
       case todos do
         [] ->
-          "No open work is ready for review right now."
+          @no_open_work_review_text
 
         todos ->
           lines =
@@ -429,7 +431,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
 
       nil ->
         brief = complete_review!(brief)
-        maybe_answer_callback(Keyword.get(opts, :callback_id), "No open work to review")
+        maybe_answer_callback(Keyword.get(opts, :callback_id), "No saved open work to review")
         send_summary(chat_id, brief)
     end
   end
@@ -591,7 +593,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   end
 
   defp send_no_todos(chat_id) do
-    text = "No open work is ready for review right now."
+    text = @no_open_work_review_text
 
     case TelegramResponder.send(chat_id, text, parse_mode: "HTML") do
       {:ok, _result} -> :ok
@@ -710,14 +712,15 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
           "Still open: #{length(todos)}\n#{lines}#{extra}"
       end
 
+    cleared_count = length(done) + length(dismissed)
+
     """
     <b>Open work review complete</b>
     Reviewed: #{reviewed_count}
-    Done: #{length(done)}
-    Dismissed: #{length(dismissed)}
+    Cleared: #{cleared_count} (#{length(done)} done, #{length(dismissed)} dismissed)
     #{still_open}
 
-    Cleared items are off your future briefs. Still-open work stays in the queue until you act or defer it.
+    Cleared work is off future briefs. Still-open work stays visible until you act, dismiss, or defer it.
     """
     |> String.trim()
   end

@@ -645,10 +645,9 @@ defmodule Maraithon.BriefsTest do
 
     summary = sent_messages() |> List.last()
     assert summary.text =~ "Open work review complete"
-    assert summary.text =~ "Done: 1"
-    assert summary.text =~ "Dismissed: 1"
+    assert summary.text =~ "Cleared: 2 (1 done, 1 dismissed)"
     assert summary.text =~ "Still open: 0"
-    assert summary.text =~ "Cleared items are off your future briefs"
+    assert summary.text =~ "Cleared work is off future briefs"
 
     updated_brief = Repo.get!(Brief, brief.id)
     assert get_in(updated_brief.metadata, ["todo_review", "status"]) == "completed"
@@ -994,7 +993,10 @@ defmodule Maraithon.BriefsTest do
              })
 
     [message] = sent_messages()
-    assert message.text == "No open work is ready for review right now."
+
+    assert message.text ==
+             "No saved open work is ready for review right now. New commitments will appear here after Maraithon catches a source-backed next move."
+
     refute message.text =~ "I "
     refute message.text =~ "don't"
   end
@@ -1008,10 +1010,12 @@ defmodule Maraithon.BriefsTest do
              })
 
     [callback] = callback_events()
-    assert Keyword.fetch!(callback.opts, :text) == "No open work to review"
+    assert Keyword.fetch!(callback.opts, :text) == "No saved open work to review"
 
     [message] = sent_messages()
-    assert message.text == "No open work is ready for review right now."
+
+    assert message.text ==
+             "No saved open work is ready for review right now. New commitments will appear here after Maraithon catches a source-backed next move."
   end
 
   test "unavailable brief review callback uses product copy" do
