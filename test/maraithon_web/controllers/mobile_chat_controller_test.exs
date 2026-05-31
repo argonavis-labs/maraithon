@@ -288,6 +288,60 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute assistant_body =~ "gpt-test"
   end
 
+  test "mobile chat strips model confidence prose while preserving action copy", %{conn: conn} do
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        next_step: fn _payload ->
+          {:ok,
+           %{
+             "status" => "final",
+             "assistant_message" => """
+             90% confidence this matters.
+             Reasoning: model saw an owed reply.
+             Model score says this is urgent.
+             Why now: Sarah needs the answer before today's cutoff.
+             Next action: reply with the approved timing before 3 PM.
+             """,
+             "message_class" => "assistant_reply",
+             "summary" => "Responded through production assistant runtime."
+           }}
+        end
+      )
+    )
+
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-public-confidence-copy@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "Please check what I should do about Sarah today."
+        }
+      })
+      |> json_response(200)
+
+    assistant_body = get_in(response, ["thread", "messages", Access.at(1), "body"])
+    lower_body = String.downcase(assistant_body)
+
+    assert assistant_body =~ "Why now: Sarah needs the answer before today's cutoff."
+    assert assistant_body =~ "Next action: reply with the approved timing before 3 PM."
+    refute lower_body =~ "90%"
+    refute lower_body =~ "confidence"
+    refute lower_body =~ "reasoning"
+    refute lower_body =~ "model"
+    refute lower_body =~ "score"
+  end
+
   test "mobile chat exposes assistant work as user-facing summaries", %{conn: conn} do
     Application.put_env(
       :maraithon,
