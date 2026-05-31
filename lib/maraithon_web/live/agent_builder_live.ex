@@ -1222,7 +1222,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
       %{
         title: "Context checked",
         body:
-          "Reviews recent Slack channel and DM activity before surfacing commitments that still need a reply."
+          "Reviews recent Slack channel and DM activity before surfacing reply commitments waiting on you."
       },
       %{
         title: "What reaches you",

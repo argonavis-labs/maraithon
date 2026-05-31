@@ -337,7 +337,9 @@ defmodule Maraithon.OnboardingProof do
     recommended_action =
       item
       |> read_string("recommended_action", nil)
-      |> user_facing_preview_text("Watch the thread and escalate only if it still needs you.")
+      |> user_facing_preview_text(
+        "Watch the thread and escalate only if a decision is waiting on you."
+      )
 
     source = normalize_source(read_string(item, "source", nil))
     account_label = read_string(item, "account_label", nil)
@@ -411,6 +413,14 @@ defmodule Maraithon.OnboardingProof do
     |> replace_preview_phrase(
       ~r/\bthis sample(?=\s+(?:does|doesn't|does not|shows?|contains|includes|suggests|indicates|has|lacks)\b)/iu,
       "this connected activity"
+    )
+    |> replace_preview_phrase(
+      ~r/\b([A-Z][\p{L}'-]+(?:\s+[A-Z][\p{L}'-]+)*) thread still needs a promised ([^.!?]+)\.?/u,
+      "\\1 thread is waiting on the promised \\2."
+    )
+    |> replace_preview_phrase(
+      ~r/\bif it is still missing\b/iu,
+      "if the thread does not show delivery"
     )
   end
 

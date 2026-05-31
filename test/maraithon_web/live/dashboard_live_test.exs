@@ -211,9 +211,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
         items: [
           %{
             title: "Deck follow-up for Sarah",
-            summary: "The Sarah thread still needs a promised deck.",
+            summary: "The Sarah thread is waiting on the promised deck.",
             rationale: "Sarah asked for the deck and recent activity does not show delivery.",
-            recommended_action: "Check the thread and send the deck if it is still missing.",
+            recommended_action:
+              "Check the thread and send the deck if the thread does not show delivery.",
             source: "gmail",
             account_label: "preview@example.com",
             suggested_behavior: "founder_followthrough_agent",
@@ -629,7 +630,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           "source" => "gmail",
           "category" => "reply_urgent",
           "title" => "Failed delivery follow-up",
-          "summary" => "A promised update still needs attention.",
+          "summary" => "A promised update is waiting for review.",
           "recommended_action" => "Send the update from the dashboard.",
           "priority" => 93,
           "confidence" => 0.9,
@@ -662,7 +663,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     assert html =~ "Delivery failed. Check the connected channel before sending another delivery."
-    assert html =~ "Why this still needs attention"
+    assert html =~ "Why this is on your review list"
     assert html =~ "Inferred from available context"
     assert html =~ "Missing context"
     assert html =~ "Source excerpt is missing; review the original thread before acting."

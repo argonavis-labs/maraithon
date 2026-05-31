@@ -423,7 +423,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
       "category" => "general",
       "title" => "Open follow-up in note: #{title}",
       "summary" =>
-        "You recently edited \"#{title}\" and left a follow-up cue that still needs a decision.",
+        "You recently edited \"#{title}\" and left a follow-up cue that is ready for a decision.",
       "recommended_action" =>
         "Open the note and decide whether to act now, schedule it, or mark it handled.",
       "priority" => 50,

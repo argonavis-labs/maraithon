@@ -89,13 +89,13 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             return TodoEmptyState(
                 title: "No work due today",
                 systemImage: "calendar",
-                description: "No saved work in this filter is due today. Pull one open item into today when it needs movement before tomorrow."
+                description: "No saved work in this filter is due today. Move one open item into today when the next decision belongs there."
             )
         case .overdue:
             return TodoEmptyState(
                 title: "No past-due work",
                 systemImage: "clock.badge.checkmark",
-                description: "No saved work is past due in this filter. Keep using Today for work that still needs a move."
+                description: "No saved work is past due in this filter. Today will keep decision-ready work visible."
             )
         case .upcoming:
             return TodoEmptyState(

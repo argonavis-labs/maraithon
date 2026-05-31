@@ -4440,7 +4440,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
                         <p class="text-xs/5 font-medium text-zinc-500">
-                          Why this still needs attention
+                          Why this is on your review list
                         </p>
                         <.badge
                           :if={detail.open_loop_reason}

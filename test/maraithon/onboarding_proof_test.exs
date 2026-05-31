@@ -171,7 +171,10 @@ defmodule Maraithon.OnboardingProofTest do
     assert item.rationale ==
              "Sarah asked for the deck and the connected activity does not show delivery."
 
-    assert item.recommended_action == "Check the thread and send the deck if it is still missing."
+    assert item.summary == "The Sarah thread is waiting on the promised deck."
+
+    assert item.recommended_action ==
+             "Check the thread and send the deck if the thread does not show delivery."
 
     visible_copy =
       Enum.join([item.title, item.summary, item.rationale, item.recommended_action], " ")
@@ -182,6 +185,8 @@ defmodule Maraithon.OnboardingProofTest do
     refute String.contains?(String.downcase(visible_copy), "model")
     refute String.contains?(String.downcase(visible_copy), "score")
     refute String.contains?(String.downcase(visible_copy), "reasoning")
+    refute String.contains?(String.downcase(visible_copy), "still needs")
+    refute String.contains?(String.downcase(visible_copy), "still missing")
   end
 
   test "returns an empty preview when no connected data is available" do

@@ -116,7 +116,7 @@ struct TodoFilteringTests {
         #expect(TodoFilter.overdue.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
             title: "No past-due work",
             systemImage: "clock.badge.checkmark",
-            description: "No saved work is past due in this filter. Keep using Today for work that still needs a move."
+            description: "No saved work is past due in this filter. Today will keep decision-ready work visible."
         ))
 
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work matches this filter")
@@ -127,7 +127,11 @@ struct TodoFilteringTests {
             systemImage: "checkmark.seal",
             description: "Decision work appears here when Maraithon has enough context to ask for a call, approval, or keep-or-close choice."
         ))
-        #expect(TodoFilter.today.emptyState(searchText: "", hasAnyWork: true).title == "No work due today")
+        #expect(TodoFilter.today.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
+            title: "No work due today",
+            systemImage: "calendar",
+            description: "No saved work in this filter is due today. Move one open item into today when the next decision belongs there."
+        ))
         #expect(TodoFilter.upcoming.emptyState(searchText: "", hasAnyWork: true).title == "No upcoming work")
         #expect(TodoFilter.completed.emptyState(searchText: "", hasAnyWork: true).title == "No completed work")
     }

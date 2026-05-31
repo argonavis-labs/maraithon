@@ -405,7 +405,7 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
       assert insight.metadata["note_guid"] == "note-1"
       assert insight.title =~ "Open follow-up in note"
       refute insight.title =~ "Open loop"
-      assert insight.summary =~ "left a follow-up cue"
+      assert insight.summary =~ "left a follow-up cue that is ready for a decision"
       refute insight.summary =~ "TODO / later / remember marker"
       assert insight.recommended_action =~ "act now, schedule it, or mark it handled"
       refute insight.recommended_action =~ "close the loop"
