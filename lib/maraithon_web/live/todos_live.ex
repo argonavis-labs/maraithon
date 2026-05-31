@@ -1049,6 +1049,8 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp empty_message(%{"q" => query} = filters) do
+    source_label = source_filter_label(filters)
+
     cond do
       present?(query) ->
         "No work items match this search."
@@ -1056,13 +1058,52 @@ defmodule MaraithonWeb.TodosLive do
       filters["attention"] == "decision" ->
         "No decisions are waiting on you."
 
+      filters["due"] == "overdue" ->
+        "No past-due work is visible in this view."
+
+      filters["due"] == "today" ->
+        "No work due today is visible in this view."
+
+      filters["due"] == "week" ->
+        "No work is due in the next 7 days in this view."
+
+      filters["due"] == "no_due" ->
+        "No unscheduled work is visible in this view."
+
+      filters["status"] == "done" ->
+        "No completed work is visible in this view."
+
+      filters["status"] == "dismissed" ->
+        "No dismissed work is visible in this view."
+
+      filters["status"] == "snoozed" ->
+        "No snoozed work is visible in this view."
+
+      filters["status"] == "open" ->
+        "No open work is visible in this view."
+
+      filters["attention"] == "monitor" ->
+        "No watched work is visible in this view."
+
+      filters["attention"] == "act_now" ->
+        "No action-needed work is visible in this view."
+
+      source_label ->
+        "No work from #{source_label} is visible in this view."
+
       default_filter_view?(filters) ->
         "No open work is ready to review."
 
       true ->
-        "No work items match these filters."
+        "No work is visible in this view."
     end
   end
+
+  defp source_filter_label(%{"source" => source}) when source not in [nil, "", "all"] do
+    option_label(@source_options, source) || todo_source_label(source)
+  end
+
+  defp source_filter_label(_filters), do: nil
 
   defp default_filter_view?(filters) do
     Enum.all?(@empty_state_filter_keys, fn key ->

@@ -88,7 +88,41 @@ defmodule MaraithonWeb.TodosLiveTest do
     )
     |> render_change()
 
-    assert render(view) =~ "No work items match these filters."
+    html = render(view)
+    assert html =~ "No completed work is visible in this view."
+    refute html =~ "No work items match these filters."
+
+    view
+    |> form("#todo-filters",
+      filters: %{
+        "q" => "",
+        "status" => "active",
+        "attention" => "all",
+        "due" => "overdue",
+        "source" => "all"
+      }
+    )
+    |> render_change()
+
+    html = render(view)
+    assert html =~ "No past-due work is visible in this view."
+    refute html =~ "No work items match these filters."
+
+    view
+    |> form("#todo-filters",
+      filters: %{
+        "q" => "",
+        "status" => "active",
+        "attention" => "all",
+        "due" => "all",
+        "source" => "imessage"
+      }
+    )
+    |> render_change()
+
+    html = render(view)
+    assert html =~ "No work from iMessage is visible in this view."
+    refute html =~ "No work items match these filters."
 
     view
     |> form("#todo-filters",
