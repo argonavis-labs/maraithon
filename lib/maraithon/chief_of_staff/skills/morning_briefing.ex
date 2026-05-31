@@ -1566,8 +1566,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         count_phrase(length(personal_events), "personal/family item", "personal/family items"),
         count_phrase(length(today_events), "calendar item", "calendar items"),
         count_phrase(commitment_count, "open commitment", "open commitments"),
-        count_phrase(length(open_todos), "open follow-up", "open follow-ups"),
-        count_phrase(length(required_threads), "commercial thread", "commercial threads")
+        count_phrase(length(required_threads), "commercial thread", "commercial threads"),
+        count_phrase(length(open_todos), "open follow-up", "open follow-ups")
       ]
       |> Enum.reject(&blank?/1)
       |> human_join()
@@ -1606,11 +1606,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         commitment_count > 0 ->
           "Clear open commitments before inbox triage"
 
-        open_todos != [] ->
-          "Clear checked follow-ups"
-
         required_threads != [] ->
           "Commercial threads need a decision"
+
+        open_todos != [] ->
+          "Clear checked follow-ups"
 
         today_events != [] ->
           "Prep the next calendar item before inbox"
@@ -1953,11 +1953,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         commitment_lines != [] ->
           "Today's move: clear or explicitly keep the first open commitment before inbox triage."
 
-        open_todos != [] ->
-          "Today's move: clear or explicitly keep the first open follow-up before inbox triage."
-
         required_threads != [] ->
           "Today's move: decide which commercial thread needs your reply before inbox triage."
+
+        open_todos != [] ->
+          "Today's move: clear or explicitly keep the first open follow-up before inbox triage."
 
         today_events != [] ->
           "Today's move: review the next calendar item and prep the decision or ask before the meeting."

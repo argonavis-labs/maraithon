@@ -1251,6 +1251,54 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert brief["body"] =~ "Today's move:"
   end
 
+  test "checked fallback leads required commercial threads before generic open work" do
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "open_work" => %{
+          "todos" => [
+            %{
+              "title" => "Tidy docs backlog",
+              "summary" => "Clean up internal project notes when there is desk time.",
+              "next_action" => "Batch the notes after higher-priority external decisions.",
+              "priority" => 70
+            }
+          ]
+        },
+        "commercial_coverage" => %{
+          "required_threads" => [
+            %{
+              "subject" => "Cogniate Enterprise plan discussion",
+              "from" => "Charlie Feng <charlie@runner.now>",
+              "body" =>
+                "Charlie looped Kent into Cogniate's Enterprise plan discussion for pricing guidance."
+            }
+          ]
+        }
+      })
+
+    assert brief["title"] == "Wednesday, May 27 - Commercial threads need a decision"
+
+    assert brief["summary"] ==
+             "Start with 1 commercial thread and 1 open follow-up; anything absent here is unknown, not clear."
+
+    [_temperature_read, attention_section | _rest] = String.split(brief["body"], "\n\n")
+
+    {commercial_index, _} =
+      :binary.match(attention_section, "Cogniate Enterprise plan discussion")
+
+    {open_work_index, _} = :binary.match(attention_section, "Tidy docs backlog")
+
+    assert commercial_index < open_work_index
+
+    assert brief["body"] =~
+             "Today's move: decide which commercial thread needs your reply before inbox triage."
+
+    refute brief["body"] =~ "Today's move: clear or explicitly keep the first open follow-up"
+  end
+
   test "no-source fallback avoids first-person assistant copy" do
     brief = MorningBriefing.build_compact_fallback_brief(nil, "provider unavailable")
 
