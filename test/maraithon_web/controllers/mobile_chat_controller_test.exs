@@ -655,11 +655,13 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user"},
                  %{
                    "role" => "assistant",
-                   "body" => "Added to your open work: Confirm the app store checklist",
+                   "body" =>
+                     "Added to open work. It will stay visible until handled: Confirm the app store checklist",
                    "linked_todo" => %{
                      "id" => todo_id,
                      "title" => "Confirm the app store checklist",
-                     "summary" => "You asked Maraithon to track this as open work."
+                     "summary" =>
+                       "Added from this chat so it stays in your active work until handled."
                    }
                  }
                ]
@@ -669,7 +671,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     todo = Todos.get_for_user(user_id, todo_id)
 
     assert todo.title == "Confirm the app store checklist"
-    assert todo.summary == "You asked Maraithon to track this as open work."
+    assert todo.summary == "Added from this chat so it stays in your active work until handled."
     assert todo.next_action == "Confirm the app store checklist"
 
     visible_todo = inspect(get_in(response, ["thread", "messages", Access.at(1), "linked_todo"]))

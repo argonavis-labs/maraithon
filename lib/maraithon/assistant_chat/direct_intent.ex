@@ -117,7 +117,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
            MobileDelivery.deliver_turn(
              conversation,
              conversation.chat_id,
-             "Added to your open work: #{todo.title}",
+             created_todo_reply(todo.title),
              turn_kind: "action_result",
              origin_type: "chat",
              origin_id: user_turn.id,
@@ -304,7 +304,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
       "kind" => "general",
       "attention_mode" => "act_now",
       "title" => title,
-      "summary" => "You asked Maraithon to track this as open work.",
+      "summary" => "Added from this chat so it stays in your active work until handled.",
       "next_action" => title,
       "priority" => 60,
       "status" => "open",
@@ -318,5 +318,9 @@ defmodule Maraithon.AssistantChat.DirectIntent do
         "request_text" => user_turn.text
       }
     }
+  end
+
+  defp created_todo_reply(title) do
+    "Added to open work. It will stay visible until handled: #{title}"
   end
 end
