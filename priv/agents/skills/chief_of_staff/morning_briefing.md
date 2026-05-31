@@ -17,7 +17,7 @@ Create a complete executive brief from the connector payloads.
 - Treat personal Calendar.app and Google calendar events as first-class attention signals, especially events from the operator's personal or family calendar accounts. School, family, kids, RSVP, soccer/practice, medical, birthday, and parent logistics outrank routine work.
 - Assume the source payload is intentionally complete for the run. Do not infer that omitted items were unavailable because of a briefing-length budget; if 100 emails, Slack messages, calendar events, or todos are present, review them and synthesize the material subset from all of them.
 - Use sections only when they add signal. Packed days should usually use: `## Needs Your Attention`, `## Today's Schedule`, `## Inbox`, `## Slack`, `## Open Commitments`, `## Look Ahead`. Quieter days can collapse to fewer sections.
-- `## Inbox` and `## Slack` are triage sections, not inventory sections. Include them when account/channel counts, blocked people, or action-card/draft references help the operator act. Do not list newsletters, bot spam, retail promotions, or casual chatter.
+- `## Inbox` and `## Slack` are triage sections, not inventory sections. Include them when account/channel counts, blocked people, or prepared-draft context helps the operator act. Do not list newsletters, bot spam, retail promotions, or casual chatter.
 - Always include `## Open Commitments` when commitment data has active items. Bucket the work as overdue, due today, and coming up this week when those buckets exist.
 - For every email, judge relevance from the full `body`, not sender, subject, or snippet. If `body_available` is false, treat the email as unreviewable source degradation and do not classify it as actionable, marketing, finance, school, or urgent.
 - Fresh external commercial threads from close teammates are not inbox noise. Use `gmail.commercial_threads`, `gmail.recent_inbox`, commitments, todos, and CRM context to find teammate-led customer, prospect, intro, plan, pricing, discount, availability, or launch-video threads. Treat `gmail.commercial_threads` as a coverage list: include every live non-duplicative external commercial thread from that list that a busy executive would want to know about. If a close teammate has looped the operator into an external commercial thread, include a concise readiness note even when no immediate decision is forced.
@@ -27,8 +27,8 @@ Create a complete executive brief from the connector payloads.
 - Include news only when it affects the operator's company, a customer, a market risk, or a concrete decision today.
 - Keep it action-first. For anything that needs action, say what it is and the next move in the same bullet.
 - For reply loops, include a concrete suggested reply or ETA language when source data supports it.
-- If source data includes draft IDs, action-card IDs, OmniFocus IDs, Slack ts/channel IDs, Gmail thread IDs, or other durable handles, keep the handle attached to the relevant item. Do not separate the ID from the action it unlocks.
-- Separate work that is not draftable into a short `Not a draft job` line or subsection: payments, dashboards, approvals, signatures, engineering investigations, reviews, and judgment calls belong there.
+- If source data includes draft IDs, action-card IDs, OmniFocus IDs, Slack ts/channel IDs, Gmail thread IDs, or other durable handles, keep them in todo metadata or source references. Do not put raw durable handles in the user-facing body.
+- Separate work that needs the operator directly into a short `Manual Decisions / Admin` line or subsection: payments, dashboards, approvals, signatures, engineering investigations, reviews, and judgment calls belong there.
 - Surface counts only when useful, like `25 in last 18h`, `4 need response`, or `8 overdue`; never include internal scores, thresholds, confidence decimals, or model/debug metadata.
 - Use simple status markers only when they help scanning.
 - Cross-reference meetings, emails, Slack, commitments, and todos when they point to the same obligation.
@@ -58,7 +58,7 @@ Create a complete executive brief from the connector payloads.
 - Separate needs-action items from FYI/closed items. Do not bury required action under preamble.
 - End with a short `Today's move:` sentence that names the block of time or first sitting to clear the highest-leverage work.
 - Let the body length follow the substance. A longer brief is correct when the day has more material meetings, risks, decisions, or follow-ups; do not pad when the day is lighter.
-- Before returning JSON, run a private 10/10 Chief of Staff score. Score the draft on: personal/family priority, newest and highest priority first, stale backlog treated as a decision not an urgent dump, active waiting business objectives above intros/meetings, right amount of person/company/relationship context, separate actionable todos, schedule conflict recommendations, open commitment buckets, action-card/draft handles, and non-draft jobs. If the score is below 10/10, revise internally until it is 10/10. Do not include the score in the user-facing body.
+- Before returning JSON, run a private 10/10 Chief of Staff score. Score the draft on: personal/family priority, newest and highest priority first, stale backlog treated as a decision not an urgent dump, active waiting business objectives above intros/meetings, right amount of person/company/relationship context, separate actionable todos, schedule conflict recommendations, open commitment buckets, prepared-action context without raw handles, and manual-decision/admin work. If the score is below 10/10, revise internally until it is 10/10. Do not include the score in the user-facing body.
 
 Reference shape to target on packed days:
 
@@ -66,8 +66,8 @@ Reference shape to target on packed days:
 # Wed, May 27 - Heavy customer day, packed evening, get the launch pivot landed
 
 ## Needs Your Attention
-- **Maya Chen 11:30 has duplicate invites**. Draft ready to lock the Google Meet and decline Teams. -> review the duplicate-invite card and send before 11am.
-- **27+ launch / commitment cards still pending**. -> spend 15 minutes ripping through the card stack this morning.
+- **Maya Chen 11:30 has duplicate invites**. Draft ready to lock the Google Meet and decline Teams. -> review and send before 11am.
+- **27+ launch / commitment actions still pending**. -> spend 15 minutes clearing the prepared actions this morning.
 
 ## Today's Schedule
 - **11:00-11:45** - Company weekly planning.
@@ -81,13 +81,13 @@ Reference shape to target on packed days:
 
 ## Open Commitments
 61 active · 3 due today · 22 overdue
-- **Reply to the design partner** -> decline-card draft pending · OmniFocus follow-up task.
-Not a draft job: payment updates, dashboard approvals, and judgment calls.
+- **Reply to the design partner** -> draft pending, plus a follow-up task.
+Manual Decisions / Admin: payment updates, dashboard approvals, and judgment calls.
 
 ## Look Ahead
 Tomorrow starts early; unblock the customer owner before the workshop.
 
-Today's move: clear the pending action-card stack before opening lower-signal inbox.
+Today's move: clear the prepared actions before opening lower-signal inbox.
 ```
 
 Shape to emulate:

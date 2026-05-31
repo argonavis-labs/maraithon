@@ -1342,8 +1342,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
        leave early, decline, or choose; scoped Inbox and Slack triage with account/channel
        counts only when they change action; Open Commitments with active/overdue/due-today/
        coming-up buckets; draft IDs, action-card IDs, OmniFocus IDs, Gmail thread IDs, and
-       Slack channel/ts handles kept inline with the item they unlock; a separate Not a draft
-       job line for dashboard, payment, review, signature, investigation, or judgment work;
+       Slack channel/ts handles kept in metadata or source references, not the user-facing body;
+       a separate Manual Decisions / Admin line for dashboard, payment, review, signature,
+       investigation, or judgment work;
        and a Look Ahead that names tomorrow/week risks plus one final Today's move directive.
        Before returning JSON, privately score the draft against this reference contract and
        revise until packed-day operational coverage is complete without turning into inventory.
@@ -1648,7 +1649,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         action_stack_items(brief_input)
         |> Enum.take(1)
         |> Enum.map(fn item ->
-          "- **Pending action**: #{action_stack_item_label(item)}. Review or clear it before inbox triage."
+          "- **Prepared action**: #{action_stack_item_label(item)}. Review or send it before inbox triage."
         end),
         required_threads
         |> Enum.take(1)
@@ -2049,7 +2050,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "brief_uses_executive_voice_without_first_person_assistant_framing",
         "schedule_conflicts_called_out_with_recommendations",
         "open_commitments_bucketed_by_overdue_due_today_and_coming_up",
-        "action_card_and_draft_work_is_named_without_internal_handles",
+        "prepared_actions_are_named_without_internal_handles",
         "model_todo_next_actions_visible_in_primary_brief",
         "non_draft_dashboard_payment_review_and_decision_jobs_separated",
         "source_gaps_are_visible_when_connectors_are_stale_or_unavailable",
@@ -2224,7 +2225,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           action_stack_items(brief_input)
           |> Enum.take(2)
           |> Enum.map(fn item ->
-            "- **Pending action**: #{action_stack_item_label(item)}. Review or clear it before inbox triage."
+            "- **Prepared action**: #{action_stack_item_label(item)}. Review or send it before inbox triage."
           end)
         ]
         |> List.flatten()
@@ -2413,7 +2414,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Enum.map(fn item -> "- #{action_stack_item_label(item)}" end)
         |> Enum.reject(&blank?/1)
 
-      append_body_section(brief, "## Action Card Stack\n" <> Enum.join(lines, "\n"))
+      append_body_section(brief, "## Prepared Actions\n" <> Enum.join(lines, "\n"))
     else
       brief
     end
@@ -2428,7 +2429,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         |> Enum.map(fn item -> "- #{non_draft_job_label(item)}" end)
         |> Enum.reject(&blank?/1)
 
-      append_body_section(brief, "## Not a draft job\n" <> Enum.join(lines, "\n"))
+      append_body_section(brief, "## Manual Decisions / Admin\n" <> Enum.join(lines, "\n"))
     else
       brief
     end
@@ -2482,7 +2483,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "Today's move: resolve the first calendar conflict before inbox triage."
 
       action_stack_items(brief_input) != [] ->
-        "Today's move: review or clear the pending action stack before inbox triage."
+        "Today's move: review or send the prepared actions before inbox triage."
 
       commitments_present?(brief_input) ->
         "Today's move: clear or explicitly keep the first open commitment before inbox triage."
@@ -2510,7 +2511,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         "This day has a calendar conflict: resolve the overlap before routine work."
 
       action_stack_items(brief_input) != [] ->
-        "This is an execution-focused morning: clear the pending action stack before passive inbox triage."
+        "This is an execution-focused morning: clear the prepared actions before passive inbox triage."
 
       commitments_present?(brief_input) ->
         "The risk is follow-through: clear or explicitly keep the oldest open commitment before new work."
@@ -3020,7 +3021,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     normalized = normalize_match_text(body)
 
     Enum.any?(
-      ["action card", "card stack", "draft", "draft id", "queued"],
+      [
+        "prepared action",
+        "prepared actions",
+        "pending action",
+        "pending actions",
+        "action card",
+        "card stack",
+        "draft",
+        "draft id",
+        "queued"
+      ],
       &String.contains?(normalized, &1)
     )
   end
@@ -3030,8 +3041,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp non_draft_jobs_present?(body) when is_binary(body) do
     normalized = normalize_match_text(body)
 
-    String.contains?(normalized, "not a draft job") or
-      String.contains?(normalized, "non draft")
+    Enum.any?(
+      [
+        "manual decisions",
+        "manual decision",
+        "manual admin",
+        "admin work",
+        "not a draft job",
+        "non draft"
+      ],
+      &String.contains?(normalized, &1)
+    )
   end
 
   defp non_draft_jobs_present?(_body), do: false
@@ -3791,7 +3811,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         read_string(item, "subject", nil) ||
         read_string(item, "summary", nil) ||
         read_string(item, "text", nil) ||
-        "Pending action"
+        "Prepared action"
 
     context =
       read_string(item, "next_action", nil) ||
@@ -3805,11 +3825,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> Enum.reject(&blank?/1)
     |> Enum.uniq_by(&normalize_match_text/1)
     |> Enum.join(": ")
-    |> default_if_blank("Pending action")
+    |> default_if_blank("Prepared action")
     |> truncate_text(220)
   end
 
-  defp action_stack_item_label(_item), do: "Pending action"
+  defp action_stack_item_label(_item), do: "Prepared action"
 
   defp action_handle(item) when is_map(item) do
     metadata = read_map(item, "metadata")
@@ -3928,7 +3948,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
         read_string(item, "name", nil) ||
         read_string(item, "subject", nil) ||
         read_string(item, "summary", nil) ||
-        "Non-draft work"
+        "Manual decision or admin work"
 
     context =
       read_string(item, "next_action", nil) ||
@@ -3941,7 +3961,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     |> truncate_text(220)
   end
 
-  defp non_draft_job_label(_item), do: "Non-draft work"
+  defp non_draft_job_label(_item), do: "Manual decision or admin work"
 
   defp missing_required_schedule_meetings(body, brief_input)
        when is_binary(body) and is_map(brief_input) do

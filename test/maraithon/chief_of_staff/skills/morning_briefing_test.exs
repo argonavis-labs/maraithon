@@ -287,7 +287,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert prompt =~ "Reference briefing eval"
     assert prompt =~ "Open Commitments with active/overdue/due-today"
     assert prompt =~ "draft IDs, action-card IDs, OmniFocus IDs"
-    assert prompt =~ "Not a draft job"
+    assert prompt =~ "Manual Decisions / Admin"
+    assert prompt =~ "Do not put raw durable handles in the user-facing body"
     assert prompt =~ "work_type"
     assert prompt =~ "## Needs Your Attention"
     assert prompt =~ "## Decisions / Follow-ups"
@@ -578,7 +579,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert "schedule_conflicts_called_out_with_recommendations" in verification["criteria"]
     assert "brief_ends_with_today_move_directive" in verification["criteria"]
 
-    assert "action_card_and_draft_work_is_named_without_internal_handles" in verification[
+    assert "prepared_actions_are_named_without_internal_handles" in verification[
              "criteria"
            ]
 
@@ -592,11 +593,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert revised["body"] =~ "due May 20, 2026 at 12:00 PM ET"
     refute revised["body"] =~ "k2_kp3zotvz"
     refute revised["body"] =~ "2026-05-20T16:00:00Z"
-    assert revised["body"] =~ "## Action Card Stack"
+    assert revised["body"] =~ "## Prepared Actions"
     assert revised["body"] =~ "Resolve duplicate Sara Franca invite"
     assert revised["body"] =~ "Lock Google Meet and decline Teams before 11am."
     refute revised["body"] =~ "actc_"
-    assert revised["body"] =~ "## Not a draft job"
+    assert revised["body"] =~ "## Manual Decisions / Admin"
     assert revised["body"] =~ "Pydantic failed payment"
     assert revised["body"] =~ "Today's move:"
   end
@@ -675,7 +676,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
 
     assert String.ends_with?(
              revised["body"],
-             "Today's move: review or clear the pending action stack before inbox triage."
+             "Today's move: review or send the prepared actions before inbox triage."
            )
 
     refute revised["body"] =~ "actc_"
