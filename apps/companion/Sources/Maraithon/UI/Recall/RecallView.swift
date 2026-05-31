@@ -41,7 +41,7 @@ struct RecallView: View {
                     .frame(maxWidth: 240)
             } else if !lastQuery.isEmpty && results.isEmpty {
                 ContentUnavailableView(
-                    "No matches",
+                    RecallCopy.noMatchesTitle,
                     systemImage: "magnifyingglass",
                     description: Text(RecallCopy.noMatchesDescription(for: lastQuery))
                 )
@@ -215,6 +215,7 @@ private struct RecallResultRow: View {
 enum RecallCopy {
     static let searchingLabel = "Searching…"
     static let searchButtonTitle = "Search"
+    static let noMatchesTitle = "Checked sources did not match"
 
     static func searchError(_ error: Error) -> String {
         "Search could not finish. \(CompanionErrorCopy.message(for: error))"
@@ -222,8 +223,10 @@ enum RecallCopy {
 
     static func noMatchesDescription(for query: String) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prefix = trimmed.isEmpty ? "Nothing matched your search." : "Nothing matched “\(trimmed)”."
-        return "\(prefix) Try a person, thread, or phrase from sources Maraithon has already checked."
+        let prefix = trimmed.isEmpty
+            ? "Maraithon checked available sources."
+            : "Maraithon checked available sources for \"\(trimmed)\"."
+        return "\(prefix) Try a person, thread, phrase, or date from sources Maraithon has already checked."
     }
 
     static func resultTitle(for hit: RecallResult) -> String {

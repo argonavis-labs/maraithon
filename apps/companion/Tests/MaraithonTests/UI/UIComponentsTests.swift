@@ -444,11 +444,13 @@ final class UIComponentsTests: XCTestCase {
     func testRecallNoMatchCopyStaysScopedToCheckedSources() {
         let copy = RecallCopy.noMatchesDescription(for: "  agenda from Dana  ")
 
+        XCTAssertEqual(RecallCopy.noMatchesTitle, "Checked sources did not match")
         XCTAssertEqual(
             copy,
-            "Nothing matched “agenda from Dana”. Try a person, thread, or phrase from sources Maraithon has already checked."
+            "Maraithon checked available sources for \"agenda from Dana\". Try a person, thread, phrase, or date from sources Maraithon has already checked."
         )
-        XCTAssertFalse(copy.localizedCaseInsensitiveContains("source-backed"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("Nothing matched"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("No matches"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("all sources"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("everything"))
     }
