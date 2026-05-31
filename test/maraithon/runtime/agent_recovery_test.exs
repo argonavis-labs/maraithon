@@ -69,6 +69,7 @@ defmodule Maraithon.Runtime.AgentRecoveryTest do
 
     snapshot = wait_for_snapshot(agent.id, marker, 10_000)
     assert snapshot.behavior_state == marker
+    wait_for_idle(original_pid)
 
     # 4. Crash it. `:kill` is an unstoppable abnormal exit — :transient
     #    must restart it.
