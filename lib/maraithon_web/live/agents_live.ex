@@ -575,7 +575,7 @@ defmodule MaraithonWeb.AgentsLive do
           :if={@marketplace_error}
           class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm/6 text-amber-900"
         >
-          <p class="font-medium">Automation library needs attention.</p>
+          <p class="font-medium">Automation library could not load.</p>
           <p class="mt-1"><%= @marketplace_error %></p>
         </section>
 
@@ -1185,7 +1185,7 @@ defmodule MaraithonWeb.AgentsLive do
                       <:header>
                         <.heading level={3} class="text-base/7">Work in progress</.heading>
                         <.text class="mt-1">
-                          See what is waiting, running, or needs attention.
+                          See pending, in-progress, and failed work.
                         </.text>
                       </:header>
                       <div class="space-y-3">
@@ -2131,7 +2131,7 @@ defmodule MaraithonWeb.AgentsLive do
     do: "Daily briefings, follow-through, travel, projects, and reminders."
 
   defp agent_row_summary(%{behavior: "founder_followthrough_agent"}),
-    do: "Reviews commitments and reminds you when one needs action."
+    do: "Reviews commitments and surfaces the next follow-up."
 
   defp agent_row_summary(%{behavior: "inbox_calendar_advisor"}),
     do: "Reviews inbox and calendar context for timely follow-up."

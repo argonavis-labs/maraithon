@@ -1659,7 +1659,7 @@ defmodule Maraithon.Connections do
 
   defp notaui_discovery_detail(token, account) do
     if provider_snapshot_value(account, token, "discovery_error") do
-      "Account discovery needs attention. Reconnect Notaui if account access looks incomplete."
+      "Account discovery could not be completed. Reconnect Notaui if account access looks incomplete."
     end
   end
 

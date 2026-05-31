@@ -59,14 +59,23 @@ defmodule MaraithonWeb.AgentsLiveTest do
         status: "stopped"
       })
 
+    {:ok, _followthrough_agent} =
+      create_agent(%{
+        behavior: "founder_followthrough_agent",
+        config: %{"name" => "follow-through"},
+        status: "stopped"
+      })
+
     {:ok, _view, html} = live(conn, "/agents")
 
     assert html =~ "Automations"
     assert html =~ "Reviews inbox and calendar context"
+    assert html =~ "Reviews commitments and surfaces the next follow-up."
     assert html =~ "Gmail"
     assert html =~ "Slack Channels"
     assert html =~ "Telegram"
     refute html =~ "Google Gmail"
+    refute html =~ "Reviews commitments and reminds you when one needs action."
   end
 
   test "renders automation timestamps in the Chief of Staff timezone", %{conn: conn} do
@@ -343,6 +352,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     html = render(view)
 
     assert html =~ "Work in progress"
+    assert html =~ "See pending, in-progress, and failed work."
     assert html =~ "Action"
     assert html =~ "Upcoming checks"
     assert html =~ "Heartbeat"
@@ -358,6 +368,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert html =~ "review_limit"
     assert html =~ "action_limit"
     assert html =~ "Purpose"
+    refute html =~ "See what is waiting, running, or needs attention."
     assert html =~ "Run instructions"
     assert html =~ "Inspect me"
     assert html =~ "agent inspection log"

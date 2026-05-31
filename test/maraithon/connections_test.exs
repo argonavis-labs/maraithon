@@ -89,5 +89,28 @@ defmodule Maraithon.ConnectionsTest do
 
       refute inspect(notaui) =~ "No accessible Notaui accounts were discovered yet"
     end
+
+    test "uses recovery copy when Notaui account discovery fails" do
+      user_id = "notaui-discovery-error-#{Ecto.UUID.generate()}@example.com"
+
+      assert {:ok, _token} =
+               OAuth.store_tokens(user_id, "notaui", %{
+                 access_token: "notaui-token",
+                 refresh_token: "notaui-refresh",
+                 scopes: ["tasks:read"],
+                 metadata: %{
+                   "discovery_error" => %{"reason" => "mcp_request_failed_500"},
+                   "mcp_url" => "https://api.notaui.com/mcp"
+                 }
+               })
+
+      snapshot = Connections.dashboard_snapshot(user_id)
+      notaui = Enum.find(snapshot.providers, &(&1.provider == "notaui"))
+
+      assert "Account discovery could not be completed. Reconnect Notaui if account access looks incomplete." in notaui.details
+
+      refute inspect(notaui) =~
+               "Account discovery needs attention. Reconnect Notaui if account access looks incomplete."
+    end
   end
 end

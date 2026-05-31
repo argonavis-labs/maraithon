@@ -637,7 +637,7 @@ defmodule MaraithonWeb.OAuthController do
 
         {
           notaui_payload(user_id, scopes, degraded_metadata, "error"),
-          "Notaui connected, but account discovery needs attention."
+          "Notaui connected, but account discovery could not be completed."
         }
     end
   end
