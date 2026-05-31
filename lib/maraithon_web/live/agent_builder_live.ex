@@ -1237,7 +1237,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
     subscriptions =
       case launch["subscriptions"] do
         "" ->
-          "No watched signals yet. This automation will only react when you message it."
+          "This automation responds only to direct messages until you add watched signals."
 
         value ->
           "Watching: #{value}"
@@ -1332,7 +1332,8 @@ defmodule MaraithonWeb.AgentBuilderLive do
         title: "Repository review target",
         body:
           if(launch["repo_full_name"] == "",
-            do: "No repository selected yet. Add one in `owner/repo` format.",
+            do:
+              "Add a repository in `owner/repo` format so the planner can review current product work.",
             else:
               "Reviewing #{launch["repo_full_name"]} on branch #{blank_fallback(launch["base_branch"], "main")}."
           )

@@ -160,7 +160,11 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert html =~ "GitHub"
       assert html =~ "Telegram"
       assert html =~ "Blocked"
-      assert html =~ "owner/repo"
+
+      assert html =~
+               "Add a repository in `owner/repo` format so the planner can review current product work."
+
+      refute html =~ "No repository selected yet."
     end
 
     test "shows blockers when slack followthrough permissions are missing", %{conn: conn} do
@@ -319,10 +323,15 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Permitted actions"
+
+      assert html =~
+               "This automation responds only to direct messages until you add watched signals."
+
       assert html =~ "Review limit"
       assert html =~ "Action limit"
       assert html =~ "room for 200 review passes and 300 permitted actions"
       refute html =~ "Allowed actions"
+      refute html =~ "No watched signals yet."
       refute html =~ "Reasoning allowance"
       refute html =~ "Action allowance"
       refute html =~ "reasoning steps"
