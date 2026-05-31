@@ -55,19 +55,22 @@ private struct MenuBarContent: View {
             Divider()
         }
 
-        Button("Check Now") {
+        Button(CompanionMenuBarCopy.checkNowButtonTitle) {
             env.syncNowFromMenu()
         }
         .keyboardShortcut("r", modifiers: .command)
         .disabled(!env.canSyncNow)
 
-        Button(env.isPaused ? "Resume Sync" : "Pause Sync") {
+        Button(env.isPaused
+            ? CompanionMenuBarCopy.resumeUpdatesButtonTitle
+            : CompanionMenuBarCopy.pauseUpdatesButtonTitle
+        ) {
             env.togglePaused()
         }
 
         Divider()
 
-        Button("Show Window") {
+        Button(CompanionMenuBarCopy.showWindowButtonTitle) {
             #if canImport(AppKit)
             NSApp.activate(ignoringOtherApps: true)
             #endif

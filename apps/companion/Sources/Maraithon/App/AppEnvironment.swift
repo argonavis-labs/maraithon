@@ -243,6 +243,11 @@ final class AppEnvironment {
 /// Product-facing menubar copy. Keeps the tiny menu-bar surface honest:
 /// "checking" only appears while work is actually in flight.
 enum CompanionMenuBarCopy {
+    static let checkNowButtonTitle = "Check now"
+    static let pauseUpdatesButtonTitle = "Pause updates"
+    static let resumeUpdatesButtonTitle = "Resume updates"
+    static let showWindowButtonTitle = "Show Maraithon"
+
     static func symbol(
         isPaused: Bool,
         deviceAuthState: DeviceAuth.State,
@@ -276,11 +281,11 @@ enum CompanionMenuBarCopy {
         deviceAuthState: DeviceAuth.State,
         sourceStates: [SourceState]
     ) -> String {
-        if isPaused { return "Maraithon — sync paused" }
+        if isPaused { return "Maraithon — updates paused" }
 
         switch deviceAuthState {
         case .signedOut:
-            return "Maraithon — not connected"
+            return "Maraithon — sign in required"
         case .error:
             return "Maraithon — needs attention"
         case .connecting, .awaitingApproval:
@@ -292,7 +297,7 @@ enum CompanionMenuBarCopy {
 
     private static func signedInAccessibilityLabel(sourceStates: [SourceState]) -> String {
         if sourceStates.contains(where: { if case .error = $0 { return true } else { return false } }) {
-            return "Maraithon — sync needs attention"
+            return "Maraithon — checks need attention"
         }
         if sourceStates.contains(where: { if case .needsAttention = $0 { return true } else { return false } }) {
             return "Maraithon — needs attention"
@@ -301,7 +306,7 @@ enum CompanionMenuBarCopy {
             return "Maraithon — checking"
         }
         if sourceStates.contains(.paused) {
-            return "Maraithon — sync paused"
+            return "Maraithon — updates paused"
         }
         if sourceStates.contains(.connected) {
             return "Maraithon — assistant ready"

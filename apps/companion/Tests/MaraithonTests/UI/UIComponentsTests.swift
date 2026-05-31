@@ -482,7 +482,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: signedIn,
                 sourceStates: [.error(reason: "serverError(status: 503)")]
             ),
-            "Maraithon — sync needs attention"
+            "Maraithon — checks need attention"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.accessibilityLabel(
@@ -492,6 +492,20 @@ final class UIComponentsTests: XCTestCase {
             ),
             "Maraithon — waiting for first check"
         )
+
+        let signedInCopy = [
+            CompanionMenuBarCopy.accessibilityLabel(
+                isPaused: false,
+                deviceAuthState: signedIn,
+                sourceStates: [.error(reason: "serverError(status: 503)")]
+            ),
+            CompanionMenuBarCopy.accessibilityLabel(
+                isPaused: false,
+                deviceAuthState: signedIn,
+                sourceStates: [.paused]
+            )
+        ].joined(separator: " ")
+        XCTAssertFalse(signedInCopy.localizedCaseInsensitiveContains("sync"))
     }
 
     @MainActor
@@ -504,7 +518,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: .signedIn(account: account),
                 sourceStates: [.syncing]
             ),
-            "Maraithon — sync paused"
+            "Maraithon — updates paused"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.accessibilityLabel(
@@ -512,7 +526,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: .signedOut,
                 sourceStates: [.connected]
             ),
-            "Maraithon — not connected"
+            "Maraithon — sign in required"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.symbol(
@@ -522,6 +536,22 @@ final class UIComponentsTests: XCTestCase {
             ),
             "exclamationmark.octagon.fill"
         )
+    }
+
+    @MainActor
+    func testCompanionMenuBarCommandCopyUsesUserControlLanguage() {
+        let publicCopy = [
+            CompanionMenuBarCopy.checkNowButtonTitle,
+            CompanionMenuBarCopy.pauseUpdatesButtonTitle,
+            CompanionMenuBarCopy.resumeUpdatesButtonTitle,
+            CompanionMenuBarCopy.showWindowButtonTitle
+        ].joined(separator: " ")
+
+        XCTAssertEqual(CompanionMenuBarCopy.checkNowButtonTitle, "Check now")
+        XCTAssertEqual(CompanionMenuBarCopy.pauseUpdatesButtonTitle, "Pause updates")
+        XCTAssertEqual(CompanionMenuBarCopy.resumeUpdatesButtonTitle, "Resume updates")
+        XCTAssertEqual(CompanionMenuBarCopy.showWindowButtonTitle, "Show Maraithon")
+        XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("sync"))
     }
 
     @MainActor

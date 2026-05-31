@@ -145,7 +145,7 @@ struct SourceDetailScaffold: View {
         }
 
         guard let publisher else {
-            return "\(displayName) is not connected"
+            return SourceDetailCopy.disconnectedHeadline(displayName: displayName)
         }
 
         switch publisher.displayedState() {
