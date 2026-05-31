@@ -254,7 +254,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
         XCTAssertEqual(SourceDetailCopy.lastBatchSyncedCaption, "new this check")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedTitle, "Already known")
         XCTAssertEqual(SourceDetailCopy.alreadySyncedCaption, "last check")
-        XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Needs attention")
+        XCTAssertEqual(SourceDetailCopy.notSyncedTitle, "Need another check")
         XCTAssertEqual(SourceDetailCopy.notSyncedCaption, "last check")
         XCTAssertEqual(SourceDetailCopy.totalSyncedTitle, "Assistant context")
         XCTAssertEqual(SourceDetailCopy.totalSyncedCaption, "available now")
@@ -277,7 +277,7 @@ final class SourceDetailScaffoldTests: XCTestCase {
         )
         XCTAssertEqual(SourceDetailCopy.errorHeadline(displayName: "iMessage"), "iMessage could not be checked")
         XCTAssertEqual(SourceDetailCopy.disconnectedHeadline(displayName: "iMessage"), "iMessage is not updating")
-        XCTAssertEqual(SourceDetailCopy.issueAttentionTitle(plural: "messages"), "Some messages need attention")
+        XCTAssertEqual(SourceDetailCopy.issueAttentionTitle(plural: "messages"), "Some messages need another check")
         XCTAssertEqual(SourceDetailCopy.failedItemsLine(1, singular: "message", plural: "messages"), "1 message needs another check.")
         XCTAssertEqual(SourceDetailCopy.failedItemsLine(3, singular: "message", plural: "messages"), "3 messages need another check.")
 

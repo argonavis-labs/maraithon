@@ -49,7 +49,7 @@ struct SourceStatusBadge: View {
             case .connected: return "Assistant ready"
             case .syncing: return "Checking"
             case .paused: return "Paused"
-            case .needsAttention: return "Needs attention"
+            case .needsAttention: return "Needs review"
             case .disconnected: return "Not updating"
             case .error: return "Needs review"
             }

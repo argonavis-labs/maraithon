@@ -233,7 +233,7 @@ struct SourceRowCopy {
         case .paused: return "paused"
         case .disconnected: return "not updating"
         case .needsAttention(let reason):
-            return "needs attention, \(SourceIssueCopy.status(reason))"
+            return "needs review, \(SourceIssueCopy.status(reason))"
         case .error(let reason):
             return "needs review, \(SourceIssueCopy.status(reason))"
         }

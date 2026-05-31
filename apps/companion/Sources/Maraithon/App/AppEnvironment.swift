@@ -287,7 +287,7 @@ enum CompanionMenuBarCopy {
         case .signedOut:
             return "Maraithon — sign in required"
         case .error:
-            return "Maraithon — needs attention"
+            return "Maraithon — sign-in needs review"
         case .connecting, .awaitingApproval:
             return "Maraithon — connecting"
         case .signedIn:
@@ -297,10 +297,10 @@ enum CompanionMenuBarCopy {
 
     private static func signedInAccessibilityLabel(sourceStates: [SourceState]) -> String {
         if sourceStates.contains(where: { if case .error = $0 { return true } else { return false } }) {
-            return "Maraithon — checks need attention"
+            return "Maraithon — checks need review"
         }
         if sourceStates.contains(where: { if case .needsAttention = $0 { return true } else { return false } }) {
-            return "Maraithon — needs attention"
+            return "Maraithon — checks need review"
         }
         if sourceStates.contains(.syncing) {
             return "Maraithon — checking"

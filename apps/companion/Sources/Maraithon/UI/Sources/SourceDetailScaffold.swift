@@ -161,7 +161,7 @@ struct SourceDetailScaffold: View {
         case .paused:
             return SourceDetailCopy.pausedHeadline(displayName: displayName)
         case .needsAttention:
-            return "\(displayName) needs attention"
+            return "\(displayName) needs review"
         case .error:
             return SourceDetailCopy.errorHeadline(displayName: displayName)
         case .disconnected:

@@ -324,7 +324,7 @@ private struct DiagnosticsSourceRow: View {
                 MetricCell(title: "Today", value: format(pub?.acceptedToday))
                 MetricCell(title: "Last check", value: format(pub?.lastBatchAccepted))
                 MetricCell(title: "Already known", value: format(pub?.lastBatchDuplicate))
-                MetricCell(title: "Needs attention", value: format(pub?.lastBatchFailed))
+                MetricCell(title: "Need another check", value: format(pub?.lastBatchFailed))
                 MetricCell(title: "Available", value: format(pub?.totalAccepted))
             }
             Text(DiagnosticsSettingsCopy.stateLine(publisher: pub))
@@ -398,7 +398,8 @@ enum DiagnosticsSettingsCopy {
     }
 
     static func batchLine(_ event: SourceStatusPublisher.BatchEvent) -> String {
-        "\(event.accepted) new · \(event.duplicate) already known · \(event.failed) needs attention · \(durationDescription(milliseconds: event.latencyMS))"
+        let retryCopy = event.failed == 1 ? "1 item needs another check" : "\(event.failed) items need another check"
+        return "\(event.accepted) new · \(event.duplicate) already known · \(retryCopy) · \(durationDescription(milliseconds: event.latencyMS))"
     }
 
     private static func durationDescription(milliseconds: Int) -> String {

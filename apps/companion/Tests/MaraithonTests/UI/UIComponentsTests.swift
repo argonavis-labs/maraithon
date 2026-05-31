@@ -45,6 +45,7 @@ final class UIComponentsTests: XCTestCase {
     func testHealthySourceCopyUsesOutcomeLanguage() {
         XCTAssertEqual(SourceStatusBadge.State.connected.label, "Assistant ready")
         XCTAssertEqual(SourceStatusBadge.State.syncing.label, "Checking")
+        XCTAssertEqual(SourceStatusBadge.State.needsAttention("permission").label, "Needs review")
         XCTAssertEqual(SourceStatusBadge.State.disconnected.label, "Not updating")
         XCTAssertEqual(SourceStatusBadge.State.error("serverError(status: 503)").label, "Needs review")
 
@@ -296,7 +297,7 @@ final class UIComponentsTests: XCTestCase {
 
         let line = DiagnosticsSettingsCopy.batchLine(event)
 
-        XCTAssertEqual(line, "7 new · 2 already known · 1 needs attention · checked in under 1 sec")
+        XCTAssertEqual(line, "7 new · 2 already known · 1 item needs another check · checked in under 1 sec")
         XCTAssertFalse(line.contains("accepted="))
         XCTAssertFalse(line.contains("dup="))
         XCTAssertFalse(line.contains("failed="))
@@ -556,7 +557,7 @@ final class UIComponentsTests: XCTestCase {
                 deviceAuthState: signedIn,
                 sourceStates: [.error(reason: "serverError(status: 503)")]
             ),
-            "Maraithon — checks need attention"
+            "Maraithon — checks need review"
         )
         XCTAssertEqual(
             CompanionMenuBarCopy.accessibilityLabel(

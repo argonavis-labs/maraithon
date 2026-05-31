@@ -17,7 +17,7 @@ enum SourceDetailCopy {
     static let lastBatchSyncedCaption = "new this check"
     static let alreadySyncedTitle = "Already known"
     static let alreadySyncedCaption = "last check"
-    static let notSyncedTitle = "Needs attention"
+    static let notSyncedTitle = "Need another check"
     static let notSyncedCaption = "last check"
     static let totalSyncedTitle = "Assistant context"
     static let totalSyncedCaption = "available now"
@@ -69,7 +69,7 @@ enum SourceDetailCopy {
     }
 
     static func issueAttentionTitle(plural: String) -> String {
-        "Some \(plural) need attention"
+        "Some \(plural) need another check"
     }
 
     static func failedItemsLine(_ count: Int, singular: String, plural: String) -> String {
