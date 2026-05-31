@@ -6,13 +6,14 @@ import Testing
 struct ChatWorkSummaryTests {
     @Test
     func visibleProgressCopyAvoidsAnthropomorphicOrGenericLabels() {
-        #expect(ChatWorkSummaryViewCopy.checkedSectionTitle == "Context checked")
-        #expect(ChatWorkSummaryViewCopy.progressSectionTitle == "Progress")
-        #expect(ChatWorkSummaryViewCopy.completedFallbackTitle == "What Maraithon checked")
-        #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle == "Working on your request")
+        #expect(ChatWorkSummaryViewCopy.checkedSectionTitle == "Sources and actions")
+        #expect(ChatWorkSummaryViewCopy.progressSectionTitle == "Assistant activity")
+        #expect(ChatWorkSummaryViewCopy.completedFallbackTitle == "How Maraithon answered")
+        #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle == "Preparing your answer")
         #expect(ChatWorkSummaryViewCopy.pendingFallbackTitle != "Maraithon is thinking")
         #expect(ChatWorkSummaryViewCopy.checkedSectionTitle != "Checks")
         #expect(ChatWorkSummaryViewCopy.progressSectionTitle != "Work")
+        #expect(ChatWorkSummaryViewCopy.completedFallbackTitle != "What Maraithon checked")
     }
 
     @Test
@@ -37,7 +38,7 @@ struct ChatWorkSummaryTests {
 
         #expect(visiblePayload.contains("list_todos") == false)
         #expect(visiblePayload.contains("Returned") == false)
-        #expect(visiblePayload.contains("Checked 2 open work items.") == true)
+        #expect(visiblePayload.contains("Reviewed 2 open work items.") == true)
         #expect(object["model_name"] == nil)
         #expect(object["model_tier"] == nil)
         #expect(object["model_reasoning_effort"] == nil)
@@ -118,8 +119,8 @@ struct ChatWorkSummaryTests {
         let visiblePayload = String(data: encoded, encoding: .utf8) ?? ""
 
         #expect(summary.toolCalls.map(\.tool) == ["open_work", "supporting_work"])
-        #expect(summary.toolCalls[0].summary == "Checked 1 open work item.")
-        #expect(summary.toolCalls[1].summary == "Completed the check.")
+        #expect(summary.toolCalls[0].summary == "Reviewed 1 open work item.")
+        #expect(summary.toolCalls[1].summary == "Completed.")
         #expect(summary.steps.map(\.type) == ["answer_preparation", "supporting_work"])
         #expect(summary.steps.first?.displayTitle == "Prepared the answer")
         #expect(visiblePayload.contains("list_todos") == false)
@@ -163,8 +164,8 @@ struct ChatWorkSummaryTests {
         let visibleText = summaries.joined(separator: " ")
 
         #expect(summaries == [
-            "This check returned no open work.",
-            "This check returned no open work."
+            "No open work matched this request.",
+            "No open work matched this request."
         ])
         #expect(visibleText.localizedCaseInsensitiveContains("No open work found") == false)
         #expect(visibleText.localizedCaseInsensitiveContains("all clear") == false)
@@ -202,7 +203,7 @@ struct ChatWorkSummaryTests {
         let encoded = try JSONEncoder().encode(summary)
         let visiblePayload = String(data: encoded, encoding: .utf8) ?? ""
 
-        #expect(summary.headline == "Checking relationship context")
+        #expect(summary.headline == "Reviewing relationship context")
         #expect(summary.toolCalls.map(\.tool) == ["work_update", "relationship_context"])
         #expect(summary.toolCalls.map(\.label) == ["Work update", "Relationship context"])
         #expect(summary.toolCalls.map(\.summary) == ["Updated 2 work items.", "Found context in relationship data."])
@@ -314,7 +315,9 @@ struct ChatWorkSummaryTests {
 
         #expect(summary.toolCalls.map(\.tool) == ["people", "memory_update", "messages", "slack", "connected_accounts"])
         #expect(summary.toolCalls.map(\.label) == ["People", "Memory update", "Messages", "Slack", "Connected accounts"])
+        #expect(summary.headline == "Used people, memory, Messages, and 2 more sources before replying")
         #expect(visiblePayload.contains("Supporting work") == false)
+        #expect(visiblePayload.localizedCaseInsensitiveContains("more checks") == false)
         #expect(visiblePayload.contains("list_people") == false)
         #expect(visiblePayload.contains("messages_search") == false)
         #expect(visiblePayload.contains("slack_get_thread_context") == false)
@@ -360,8 +363,8 @@ struct ChatWorkSummaryTests {
 
         #expect(summary.toolCalls.map(\.summary) == [
             "2 connected accounts available.",
-            "Checked 1 message.",
-            "This check returned no calendar events."
+            "Reviewed 1 message.",
+            "No calendar events matched this request."
         ])
         #expect(visibleText.localizedCaseInsensitiveContains("found 2 results") == false)
         #expect(visibleText.localizedCaseInsensitiveContains("returned 1 message") == false)
@@ -490,7 +493,7 @@ struct ChatWorkSummaryTests {
         #expect(summary.status == "completed")
         #expect(summary.summary == nil)
         #expect(summary.toolCalls[0].label == "Gmail")
-        #expect(summary.toolCalls[0].summary == "Gmail check could not finish.")
+        #expect(summary.toolCalls[0].summary == "Gmail could not finish.")
         #expect(summary.toolCalls[1].label == "Reviewed open work")
         #expect(summary.toolCalls[1].summary == "Found 3 priorities.")
         #expect(summary.steps[0].displayTitle == "Prepared the answer")

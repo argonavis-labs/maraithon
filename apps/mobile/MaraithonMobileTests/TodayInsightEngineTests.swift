@@ -191,7 +191,7 @@ struct TodayInsightEngineTests {
         #expect(queue.first?.subtitle == "Send the campaign update with a clear owner and timing.")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("due ") == true)
         #expect(queue.first?.detail?.contains("Why now: Michael is waiting; no later reply is recorded.") == true)
-        #expect(queue.first?.detail?.contains("Checked Gmail") == true)
+        #expect(queue.first?.detail?.contains("Reviewed Gmail") == true)
     }
 
     @Test
@@ -216,7 +216,7 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.subtitle == "You need to approve the finance reply.")
-        #expect(queue.first?.detail == "High priority. Why now: This needs your attention before noon. Checked Gmail")
+        #expect(queue.first?.detail == "High priority. Why now: This needs your attention before noon. Reviewed Gmail")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("telegram_fit_score") == false)
     }
 

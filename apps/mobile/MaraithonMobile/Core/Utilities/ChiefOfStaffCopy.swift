@@ -180,6 +180,8 @@ private extension String {
             (#"\btodo list\b"#, "open work"),
             (#"\btodos\b"#, "work items"),
             (#"\btodo\b"#, "work item"),
+            (#"^\s*Checked\b"#, "Reviewed"),
+            (#"^\s*Checking\b"#, "Reviewing"),
             (#"\bchief_of_staff_morning_briefing\b"#, "morning briefing"),
             (#"\bchief_of_staff_commitment_tracker\b"#, "commitment tracker")
         ]

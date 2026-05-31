@@ -225,7 +225,7 @@ struct ProductionDataSyncTests {
 
         #expect(todo.decisionPrompt == "Send the campaign update with a clear owner and timing.")
         #expect(todo.whyNow == "Michael is waiting; no later reply is recorded.")
-        #expect(todo.sourceContext == "Checked Gmail")
+        #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "Approve a short reply.")
         #expect(todo.evidenceExcerpt == "Can you send the next update?")
     }
@@ -246,7 +246,7 @@ struct ProductionDataSyncTests {
 
         #expect(todo.decisionPrompt == "You need to approve the finance reply.")
         #expect(todo.whyNow == "This needs your attention before noon.")
-        #expect(todo.sourceContext == "Checked Gmail")
+        #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "You should send the ETA.")
         #expect(todo.evidenceExcerpt == "Your last message asked for timing.")
     }

@@ -148,7 +148,7 @@ struct ChatSyncServiceTests {
 
         let thread = try #require(context.fetch(FetchDescriptor<ChatThread>()).first)
         #expect(thread.pendingRunID == runID)
-        #expect(thread.pendingWorkSummary?.headline == "Checking open work")
+        #expect(thread.pendingWorkSummary?.headline == "Reviewing open work")
         #expect(thread.pendingWorkSummary?.toolCalls.first?.status == "running")
     }
 

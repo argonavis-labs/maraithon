@@ -409,7 +409,7 @@ private enum ChatWorkSummaryCopy {
     }
 
     static func safeHeadline(_ value: String?) -> String? {
-        safeText(value, maxLength: maxHeadlineLength, rejectIdentifiers: true).map { legacyProductTerms($0) }
+        safeText(value, maxLength: maxHeadlineLength, rejectIdentifiers: true).map { headlineProductTerms($0) }
     }
 
     static func safeDetail(_ value: String?) -> String? {
@@ -437,7 +437,7 @@ private enum ChatWorkSummaryCopy {
         case "failed":
             failedToolSummary(for: label)
         case "running":
-            "Checking now."
+            "Reviewing now."
         default:
             nil
         }
@@ -446,7 +446,7 @@ private enum ChatWorkSummaryCopy {
     private static func failedToolSummary(for label: String) -> String {
         switch label {
         case "Supporting work":
-            return "Supporting check could not finish."
+            return "Supporting work could not finish."
         case "Work update":
             return "Work update could not finish."
         case "Scheduled task":
@@ -458,11 +458,11 @@ private enum ChatWorkSummaryCopy {
         case "Preference update", "Preference":
             return "Preference update could not finish."
         case "Preferences":
-            return "Preference check could not finish."
+            return "Preferences could not finish."
         case "Feedback":
             return "Feedback update could not finish."
         default:
-            return "\(label) check could not finish."
+            return "\(label) could not finish."
         }
     }
 
@@ -520,9 +520,9 @@ private enum ChatWorkSummaryCopy {
     private static func polishLegacyDetail(_ value: String) -> String {
         switch value.lowercased() {
         case "completed":
-            return "Completed the check."
+            return "Completed."
         case "running":
-            return "Checking now."
+            return "Reviewing now."
         default:
             return returnedSummary(value) ?? prioritySummary(value) ?? legacyProductTerms(value)
         }
@@ -531,9 +531,9 @@ private enum ChatWorkSummaryCopy {
     private static func polishLegacyToolDetail(_ value: String, tool: String, label: String) -> String {
         switch value.lowercased() {
         case "completed":
-            return "Completed the check."
+            return "Completed."
         case "running":
-            return "Checking now."
+            return "Reviewing now."
         default:
             return returnedSummary(value, tool: tool) ??
                 foundResultsSummary(value, tool: tool, label: label) ??
@@ -559,7 +559,7 @@ private enum ChatWorkSummaryCopy {
         }
 
         return count == 0
-            ? "This check returned no priorities."
+            ? "No priorities matched this request."
             : "Found \(count) \(displayNoun(for: count, singular: "priority", plural: "priorities"))."
     }
 
@@ -586,25 +586,25 @@ private enum ChatWorkSummaryCopy {
 
         switch rawNoun {
         case "todo", "todos":
-            return count == 0 ? "This check returned no open work." : "Checked \(count) open work \(displayNoun(for: count, singular: "item"))."
+            return count == 0 ? "No open work matched this request." : "Reviewed \(count) open work \(displayNoun(for: count, singular: "item"))."
         case "result", "results":
             if let tool {
                 return toolCountSummary(count: count, tool: tool)
             }
-            return count == 0 ? "This check returned no results." : "Checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
+            return count == 0 ? "No relevant items matched this request." : "Reviewed \(count) relevant \(displayNoun(for: count, singular: "item"))."
         case "person", "people":
-            return count == 0 ? "This check returned no people." : "Reviewed \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
+            return count == 0 ? "No people matched this request." : "Reviewed \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
         case "message", "messages":
-            return count == 0 ? "This check returned no messages." : "Checked \(count) \(displayNoun(for: count, singular: "message"))."
+            return count == 0 ? "No messages matched this request." : "Reviewed \(count) \(displayNoun(for: count, singular: "message"))."
         case "event", "events":
             if tool == "calendar" {
-                return count == 0 ? "This check returned no calendar events." : "Checked \(count) calendar \(displayNoun(for: count, singular: "event"))."
+                return count == 0 ? "No calendar events matched this request." : "Reviewed \(count) calendar \(displayNoun(for: count, singular: "event"))."
             }
-            return count == 0 ? "This check returned no events." : "Checked \(count) \(displayNoun(for: count, singular: "event"))."
+            return count == 0 ? "No events matched this request." : "Reviewed \(count) \(displayNoun(for: count, singular: "event"))."
         default:
             let singular = rawNoun.hasSuffix("s") ? String(rawNoun.dropLast()) : rawNoun
             let plural = rawNoun.hasSuffix("s") ? rawNoun : "\(rawNoun)s"
-            return count == 0 ? "This check returned no \(plural)." : "Checked \(count) \(displayNoun(for: count, singular: singular, plural: plural))."
+            return count == 0 ? "No \(plural) matched this request." : "Reviewed \(count) \(displayNoun(for: count, singular: singular, plural: plural))."
         }
     }
 
@@ -631,7 +631,7 @@ private enum ChatWorkSummaryCopy {
         if tool == "supporting_work" {
             return count == 0
                 ? "\(label) returned no relevant items."
-                : "\(label) checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
+                : "\(label) reviewed \(count) relevant \(displayNoun(for: count, singular: "item"))."
         }
 
         return toolCountSummary(count: count, tool: tool)
@@ -649,60 +649,60 @@ private enum ChatWorkSummaryCopy {
                 : "\(count) connected \(displayNoun(for: count, singular: "source")) available."
         case "open_work", "open_work_review":
             return count == 0
-                ? "This check returned no open work."
-                : "Checked \(count) open work \(displayNoun(for: count, singular: "item"))."
+                ? "No open work matched this request."
+                : "Reviewed \(count) open work \(displayNoun(for: count, singular: "item"))."
         case "people", "people_update", "relationship_context", "relationship_learning":
             return count == 0
-                ? "This check returned no people."
+                ? "No people matched this request."
                 : "Reviewed \(count) \(displayNoun(for: count, singular: "person", plural: "people"))."
         case "gmail":
             return count == 0
-                ? "This Gmail check returned no messages."
-                : "Checked \(count) Gmail \(displayNoun(for: count, singular: "message"))."
+                ? "No Gmail messages matched this request."
+                : "Reviewed \(count) Gmail \(displayNoun(for: count, singular: "message"))."
         case "slack":
             return count == 0
-                ? "This Slack check returned no messages."
-                : "Checked \(count) Slack \(displayNoun(for: count, singular: "message"))."
+                ? "No Slack messages matched this request."
+                : "Reviewed \(count) Slack \(displayNoun(for: count, singular: "message"))."
         case "messages":
             return count == 0
-                ? "This Messages check returned no messages."
-                : "Checked \(count) \(displayNoun(for: count, singular: "message"))."
+                ? "No Messages matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "message"))."
         case "calendar":
             return count == 0
-                ? "This check returned no calendar events."
-                : "Checked \(count) calendar \(displayNoun(for: count, singular: "event"))."
+                ? "No calendar events matched this request."
+                : "Reviewed \(count) calendar \(displayNoun(for: count, singular: "event"))."
         case "notes":
             return count == 0
-                ? "This Notes check returned no notes."
-                : "Checked \(count) \(displayNoun(for: count, singular: "note"))."
+                ? "No Notes matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "note"))."
         case "voice_memos":
             return count == 0
-                ? "This Voice Memos check returned no memos."
-                : "Checked \(count) voice \(displayNoun(for: count, singular: "memo"))."
+                ? "No Voice Memos matched this request."
+                : "Reviewed \(count) voice \(displayNoun(for: count, singular: "memo"))."
         case "files":
             return count == 0
-                ? "This Files check returned no files."
-                : "Checked \(count) \(displayNoun(for: count, singular: "file"))."
+                ? "No Files matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "file"))."
         case "reminders":
             return count == 0
-                ? "This Reminders check returned no reminders."
-                : "Checked \(count) \(displayNoun(for: count, singular: "reminder"))."
+                ? "No Reminders matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "reminder"))."
         case "browser_history":
             return count == 0
-                ? "This browser history check returned no items."
-                : "Checked \(count) browser history \(displayNoun(for: count, singular: "item"))."
+                ? "No browser history matched this request."
+                : "Reviewed \(count) browser history \(displayNoun(for: count, singular: "item"))."
         case "preferences", "preference":
             return count == 0
-                ? "This check returned no preferences."
-                : "Checked \(count) \(displayNoun(for: count, singular: "preference"))."
+                ? "No preferences matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "preference"))."
         case "memory_check", "memory":
             return count == 0
-                ? "This memory check returned no memories."
-                : "Checked \(count) \(displayNoun(for: count, singular: "memory", plural: "memories"))."
+                ? "No memories matched this request."
+                : "Reviewed \(count) \(displayNoun(for: count, singular: "memory", plural: "memories"))."
         default:
             return count == 0
-                ? "This check returned no relevant items."
-                : "Checked \(count) relevant \(displayNoun(for: count, singular: "item"))."
+                ? "No relevant items matched this request."
+                : "Reviewed \(count) relevant \(displayNoun(for: count, singular: "item"))."
         }
     }
 
@@ -712,13 +712,46 @@ private enum ChatWorkSummaryCopy {
 
     private static func legacyProductTerms(_ value: String) -> String {
         value
-            .replacingOccurrences(of: #"(?i)^No open work found\.?$"#, with: "This check returned no open work.", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^No open work found\.?$"#, with: "No open work matched this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)^No connected accounts found\.?$"#, with: "No connected accounts were available for this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)^No connected sources found\.?$"#, with: "No connected sources were available for this request.", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm context\b"#, with: "relationship context", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\bcrm\b"#, with: "relationship data", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\btodos\b"#, with: "work items", options: .regularExpression)
             .replacingOccurrences(of: #"(?i)\btodo\b"#, with: "work item", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^checked\b"#, with: "Reviewed", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^checking\b"#, with: "Reviewing", options: .regularExpression)
+    }
+
+    private static func headlineProductTerms(_ value: String) -> String {
+        let headline = value
+            .replacingOccurrences(
+                of: #"(?i)^Checked people, updated memory, checked Messages, and ([0-9,]+) more checks before replying\.?$"#,
+                with: "Used people, memory, Messages, and $1 more sources before replying",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?i)^Checked preferences, checked memory, and replied\.?$"#,
+                with: "Reviewed preferences and memory before replying",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?i)^Checked open work and replied\.?$"#,
+                with: "Reviewed open work before replying",
+                options: .regularExpression
+            )
+            .replacingOccurrences(
+                of: #"(?i)\b([0-9,]+)\s+more checks\b"#,
+                with: "$1 more sources",
+                options: .regularExpression
+            )
+            .replacingOccurrences(of: #"(?i)^checked\b"#, with: "Reviewed", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bchecked\b"#, with: "reviewed", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)^checking\b"#, with: "Reviewing", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bchecking\b"#, with: "reviewing", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\band replied\.?$"#, with: "before replying", options: .regularExpression)
+
+        return legacyProductTerms(headline)
     }
 
     private static func legacyLabel(_ value: String) -> String {

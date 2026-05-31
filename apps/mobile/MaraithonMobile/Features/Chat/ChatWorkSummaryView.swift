@@ -63,10 +63,10 @@ struct ChatPendingWorkSummary: View {
 }
 
 enum ChatWorkSummaryViewCopy {
-    static let checkedSectionTitle = "Context checked"
-    static let progressSectionTitle = "Progress"
-    static let completedFallbackTitle = "What Maraithon checked"
-    static let pendingFallbackTitle = "Working on your request"
+    static let checkedSectionTitle = "Sources and actions"
+    static let progressSectionTitle = "Assistant activity"
+    static let completedFallbackTitle = "How Maraithon answered"
+    static let pendingFallbackTitle = "Preparing your answer"
 }
 
 private struct ChatToolCallStrip: View {

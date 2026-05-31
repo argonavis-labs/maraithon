@@ -13,7 +13,7 @@ struct TodoRowCopyTests {
         #expect(TodoEditorCopy.decisionContextSectionTitle == "Decision context")
         #expect(TodoEditorCopy.decisionPromptLabel == "Decision")
         #expect(TodoEditorCopy.whyNowLabel == "Why now")
-        #expect(TodoEditorCopy.sourceContextLabel == "What Maraithon checked")
+        #expect(TodoEditorCopy.sourceContextLabel == "Context used")
         #expect(TodoEditorCopy.preparedMoveLabel == "Prepared move")
         #expect(TodoEditorCopy.evidenceLabel == "Evidence")
         #expect(TodoEditorCopy.timingSectionTitle == "Timing")
@@ -79,7 +79,7 @@ struct TodoRowCopyTests {
         let context = TodoDecisionContext(todo: todo)
 
         #expect(context.rowContext == "Send the campaign update with a clear owner and timing.")
-        #expect(context.rowReason == "Why now: Michael is waiting; no later reply is recorded. Checked Gmail")
+        #expect(context.rowReason == "Why now: Michael is waiting; no later reply is recorded. Reviewed Gmail")
         #expect(context.rowMove == "Approve a short reply.")
         #expect(context.preparedMove == "Approve a short reply.")
         #expect(context.evidence == "Can you send the next update?")
@@ -102,7 +102,7 @@ struct TodoRowCopyTests {
         let context = TodoDecisionContext(todo: todo)
 
         #expect(context.rowContext == "You need to approve the finance reply.")
-        #expect(context.rowReason == "Why now: This needs your attention before noon. Checked Gmail")
+        #expect(context.rowReason == "Why now: This needs your attention before noon. Reviewed Gmail")
         #expect(context.rowMove == "You should send the ETA.")
         #expect(context.evidence == "Your last message asked for timing.")
     }

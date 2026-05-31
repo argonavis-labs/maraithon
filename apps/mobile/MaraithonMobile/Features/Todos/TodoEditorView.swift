@@ -243,7 +243,7 @@ enum TodoEditorCopy {
     static let decisionContextSectionTitle = "Decision context"
     static let decisionPromptLabel = "Decision"
     static let whyNowLabel = "Why now"
-    static let sourceContextLabel = "What Maraithon checked"
+    static let sourceContextLabel = "Context used"
     static let preparedMoveLabel = "Prepared move"
     static let evidenceLabel = "Evidence"
     static let urgencyPickerTitle = "Urgency"
