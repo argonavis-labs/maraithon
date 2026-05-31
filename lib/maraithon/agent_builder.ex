@@ -544,7 +544,7 @@ defmodule Maraithon.AgentBuilder do
       outputs: [
         "Short monitoring updates",
         "Optional endpoint check notes",
-        "A low-touch monitoring loop with minimal setup"
+        "A low-touch monitoring loop with lightweight launch details"
       ],
       fields: ~w(check_url wakeup_interval_ms),
       defaults: %{

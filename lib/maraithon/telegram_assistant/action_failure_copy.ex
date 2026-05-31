@@ -9,8 +9,7 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
 
   @known_tool_error_copy %{
     "action_not_found" => "That action is no longer available. Review the latest action history.",
-    "briefing_agent_not_found" =>
-      "Select an active Chief of Staff setup before changing the schedule.",
+    "briefing_agent_not_found" => "Select an active Chief of Staff before changing the schedule.",
     "calendar_event_not_found" => "That calendar event is no longer available.",
     "file_not_found" => "That file is no longer available.",
     "implementation_run_not_found" =>

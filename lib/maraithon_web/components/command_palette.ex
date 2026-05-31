@@ -418,9 +418,9 @@ defmodule MaraithonWeb.Components.CommandPalette do
         keywords: "slack connect oauth workspace dm",
         priority: 140
       ),
-      command("Review Telegram setup", "/connectors/telegram", :connectors, "Suggested",
-        description: "Check proactive delivery and chat setup.",
-        keywords: "telegram setup delivery chat proactive",
+      command("Review Telegram readiness", "/connectors/telegram", :connectors, "Suggested",
+        description: "Check proactive delivery and chat readiness.",
+        keywords: "telegram readiness delivery chat proactive",
         priority: 135
       )
     ]
@@ -652,7 +652,7 @@ defmodule MaraithonWeb.Components.CommandPalette do
   defp admin_commands(%{is_admin: true}) do
     [
       command("Settings", "/settings", :settings, "Admin",
-        description: "Review workspace setup.",
+        description: "Review workspace readiness.",
         keywords: "settings admin configuration",
         priority: 54
       ),

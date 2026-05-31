@@ -2,7 +2,7 @@ defmodule MaraithonWeb.OperationFailureCopy do
   @moduledoc false
 
   def onboarding_preview(_reason) do
-    "Could not load the setup preview. Refresh the dashboard before continuing."
+    "Could not load the readiness preview. Refresh the dashboard before continuing."
   end
 
   def fly_logs(_reason) do
@@ -34,7 +34,7 @@ defmodule MaraithonWeb.OperationFailureCopy do
   end
 
   def admin(:chief_of_staff_ensure, _reason) do
-    "Could not refresh Chief of Staff setup. Refresh Chief of Staff before continuing."
+    "Could not refresh Chief of Staff readiness. Refresh Chief of Staff before continuing."
   end
 
   def admin(:disconnect_connection, _reason) do
@@ -124,7 +124,7 @@ defmodule MaraithonWeb.OperationFailureCopy do
   end
 
   def briefing_schedule(:morning, :briefing_agent_not_found) do
-    "Select an active Chief of Staff setup before changing the schedule."
+    "Select an active Chief of Staff before changing the schedule."
   end
 
   def briefing_schedule(:morning, :no_briefing_agents) do

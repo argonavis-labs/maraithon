@@ -98,7 +98,7 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
              "Install Chief of Staff before changing the morning briefing schedule."
 
     assert OperationFailureCopy.briefing_schedule(:morning, :briefing_agent_not_found) ==
-             "Select an active Chief of Staff setup before changing the schedule."
+             "Select an active Chief of Staff before changing the schedule."
 
     copy =
       OperationFailureCopy.briefing_schedule(
@@ -131,7 +131,7 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
     assert "Could not fetch recent Gmail messages. Check the Google connection before fetching." in copies
     assert "Could not dismiss this work item. Refresh the list before dismissing it." in copies
 
-    assert "Could not refresh Chief of Staff setup. Refresh Chief of Staff before continuing." in copies
+    assert "Could not refresh Chief of Staff readiness. Refresh Chief of Staff before continuing." in copies
 
     Enum.each(copies, &refute_leaks_internal_reason/1)
     Enum.each(copies, &refute_try_again/1)

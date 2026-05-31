@@ -61,7 +61,7 @@ defmodule MaraithonWeb.Components.CommandPaletteTest do
       """)
 
     assert html =~ "Settings"
-    assert html =~ "Review workspace setup."
+    assert html =~ "Review workspace readiness."
     assert html =~ "Admin dashboard"
     assert html =~ "Companion devices"
     refute html =~ "Manage runtime settings."
