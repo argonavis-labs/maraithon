@@ -65,6 +65,20 @@ final class CompanionErrorCopyTests: XCTestCase {
         XCTAssertFalse(copy.contains("NSURLErrorDomain"))
     }
 
+    func testServerErrorsUseSpecificRecoveryCopy() {
+        XCTAssertEqual(
+            CompanionErrorCopy.message(for: MaraithonClientError.serverError(status: 503)),
+            "Maraithon hit a cloud service problem. Retry in a moment."
+        )
+
+        let stringCopy = CompanionErrorCopy.message(for: "serverError(status: 503)")
+
+        XCTAssertEqual(stringCopy, "Maraithon hit a cloud service problem. Retry in a moment.")
+        XCTAssertFalse(stringCopy.localizedCaseInsensitiveContains("temporarily unavailable"))
+        XCTAssertFalse(stringCopy.localizedCaseInsensitiveContains("serverError"))
+        XCTAssertFalse(stringCopy.contains("503"))
+    }
+
     func testLargeRequestsUsePlainRecoveryCopy() {
         let copy = CompanionErrorCopy.message(
             for: MaraithonClientError.clientError(status: 413, body: nil)

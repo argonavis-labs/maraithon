@@ -8,6 +8,7 @@ import Foundation
 /// domains should reach the screen.
 struct CompanionErrorCopy {
     private static let requestFallback = "Request did not complete. Saved data was left unchanged."
+    private static let serverFallback = "Maraithon hit a cloud service problem. Retry in a moment."
 
     static func message(for error: Error) -> String {
         switch error {
@@ -45,7 +46,7 @@ struct CompanionErrorCopy {
         }
 
         if lower.contains("servererror") || lower.contains("status: 5") {
-            return "Maraithon is temporarily unavailable. Retry in a moment."
+            return serverFallback
         }
 
         if lower.contains("nsurlerrordomain")
@@ -91,7 +92,7 @@ struct CompanionErrorCopy {
 
     private static func serverMessage(status: Int) -> String {
         if status >= 500 {
-            return "Maraithon is temporarily unavailable. Retry in a moment."
+            return serverFallback
         }
 
         return requestFallback

@@ -545,9 +545,10 @@ final class UIComponentsTests: XCTestCase {
     func testRecallErrorCopyUsesSearchLanguage() {
         let copy = RecallCopy.searchError(MaraithonClientError.serverError(status: 503))
 
-        XCTAssertEqual(copy, "Search could not finish. Maraithon is temporarily unavailable. Retry in a moment.")
+        XCTAssertEqual(copy, "Search could not finish. Maraithon hit a cloud service problem. Retry in a moment.")
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("Recall failed"))
         XCTAssertFalse(copy.localizedCaseInsensitiveContains("serverError"))
+        XCTAssertFalse(copy.localizedCaseInsensitiveContains("temporarily unavailable"))
     }
 
     func testRecallNoMatchCopyStaysScopedToAvailableContext() {
