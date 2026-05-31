@@ -194,10 +194,10 @@ defmodule MaraithonWeb.InsightsLive do
         <.panel :if={@crm_insights.total_count == 0} body_class="px-5 py-8">
           <div class="max-w-2xl">
             <h2 class="text-sm/6 font-semibold text-zinc-950">
-              Available records did not surface people insights.
+              No people changes are ready for review.
             </h2>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              Review People directly if you want to edit relationships or merge contacts manually.
+              Maraithon will add merge or relationship suggestions here when checked records include enough evidence. Open People to edit a record manually.
             </p>
             <.button navigate="/operator/people" variant="outline" class="mt-4">
               Open People

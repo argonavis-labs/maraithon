@@ -62,12 +62,19 @@ defmodule MaraithonWeb.InsightsLiveTest do
     assert has_element?(view, "a[href='/insights'][aria-current='page']", "Insights")
   end
 
-  test "empty people insight copy stays scoped to checked records", %{conn: conn} do
+  test "empty people insight copy stays scoped to checked records", %{conn: _conn} do
+    conn = log_in_test_user(build_conn(), "insights-empty-live@example.com")
     {:ok, view, _html} = live(conn, "/insights")
 
     html = render(view)
 
-    assert has_element?(view, "h2", "Available records did not surface people insights.")
+    assert has_element?(view, "h2", "No people changes are ready for review.")
+
+    assert has_element?(
+             view,
+             "p",
+             "Maraithon will add merge or relationship suggestions here when checked records include enough evidence. Open People to edit a record manually."
+           )
 
     assert has_element?(
              view,
