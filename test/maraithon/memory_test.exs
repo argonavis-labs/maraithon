@@ -16,6 +16,15 @@ defmodule Maraithon.MemoryTest do
     refute context.summary =~ "durable"
   end
 
+  test "prompt context without a user uses product-safe empty copy" do
+    context = Memory.prompt_context(nil)
+
+    assert context.summary == "No relevant long-term memories matched this context."
+    assert context.memories == []
+    assert context.count == 0
+    refute context.summary =~ "saved yet"
+  end
+
   test "writes, lists, recalls, and forgets durable memories" do
     user_id = "memory-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

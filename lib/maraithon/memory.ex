@@ -749,7 +749,7 @@ defmodule Maraithon.Memory do
     do: "Memory recall for #{query}: #{memory_summary(memories)}"
 
   defp empty_prompt_context,
-    do: %{summary: "No long-term memories saved yet.", memories: [], count: 0}
+    do: %{summary: "No relevant long-term memories matched this context.", memories: [], count: 0}
 
   defp result_limit(opts, default) do
     opts
