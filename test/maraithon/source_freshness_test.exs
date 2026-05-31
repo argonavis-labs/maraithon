@@ -2,6 +2,7 @@ defmodule Maraithon.SourceFreshnessTest do
   use Maraithon.DataCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.Accounts.ConnectedAccount
   alias Maraithon.ConnectedAccounts
   alias Maraithon.SourceFreshness
   alias Maraithon.TelegramAssistant.Context
@@ -31,11 +32,39 @@ defmodule Maraithon.SourceFreshnessTest do
 
     google = Enum.find(snapshots, &(&1.provider == "google"))
     assert google.status == "stale"
-    assert google.stale_reason =~ "72 hours old"
+    assert google.stale_reason == "Last successful Google check was 3 days ago."
+    refute google.stale_reason =~ "sync"
+    refute google.stale_reason =~ "unknown"
 
     telegram = Enum.find(snapshots, &(&1.provider == "telegram"))
     assert telegram.status == "reauth_required"
     assert telegram.last_error["reason"] =~ "invalid_grant"
+
+    assert %{stale_reason: "Last successful Google check was 3 days ago."} =
+             user_id
+             |> SourceFreshness.compact_for_prompt(now: now)
+             |> Enum.find(&(&1.provider == "google"))
+  end
+
+  test "describes never-checked sources without sync jargon" do
+    now = ~U[2026-05-10 12:00:00Z]
+
+    snapshot =
+      SourceFreshness.for_account(
+        %ConnectedAccount{
+          user_id: "never-checked@example.com",
+          provider: "google",
+          external_account_id: "work@example.com",
+          status: "connected",
+          metadata: %{},
+          updated_at: now
+        },
+        now: now
+      )
+
+    assert snapshot.status == "never_synced"
+    assert snapshot.stale_reason == "Google has not completed a source check yet."
+    refute snapshot.stale_reason =~ "sync"
   end
 
   test "injects compact freshness into Telegram assistant context" do

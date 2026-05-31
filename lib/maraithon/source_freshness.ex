@@ -214,10 +214,14 @@ defmodule Maraithon.SourceFreshness do
     )
   end
 
-  defp stale_reason("stale", account, last_success, _last_error, now) do
-    hours = if last_success, do: DateTime.diff(now, last_success, :hour), else: nil
+  defp stale_reason("stale", account, %DateTime{} = last_success, _last_error, now) do
+    hours = max(DateTime.diff(now, last_success, :hour), 0)
 
-    "last successful #{provider_label(account.provider)} sync is #{hours || "unknown"} hours old"
+    "Last successful #{provider_label(account.provider)} check was #{stale_age(hours)} ago."
+  end
+
+  defp stale_reason("stale", account, _last_success, _last_error, _now) do
+    "#{provider_label(account.provider)} has not completed a source check recently."
   end
 
   defp stale_reason("reauth_required", _account, _last_success, last_error, _now) do
@@ -229,10 +233,26 @@ defmodule Maraithon.SourceFreshness do
   end
 
   defp stale_reason("never_synced", account, _last_success, _last_error, _now) do
-    "#{provider_label(account.provider)} has never synced"
+    "#{provider_label(account.provider)} has not completed a source check yet."
   end
 
   defp stale_reason(_status, _account, _last_success, _last_error, _now), do: nil
+
+  defp stale_age(hours) when hours < 24, do: pluralize(hours, "hour")
+
+  defp stale_age(hours) do
+    days = div(hours, 24)
+    remaining_hours = rem(hours, 24)
+
+    if remaining_hours == 0 do
+      pluralize(days, "day")
+    else
+      "#{pluralize(days, "day")} #{pluralize(remaining_hours, "hour")}"
+    end
+  end
+
+  defp pluralize(1, unit), do: "1 #{unit}"
+  defp pluralize(count, unit), do: "#{count} #{unit}s"
 
   defp last_success_at(account, metadata) do
     metadata_datetime(metadata, "last_successful_sync_at") ||
