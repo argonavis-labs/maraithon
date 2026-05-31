@@ -489,11 +489,13 @@ defmodule MaraithonWeb.AdminControllerTest do
       assert "Pair a Mac securely with Maraithon" in desktop["permissions"]
       assert Enum.any?(desktop["permissions"], &(&1 =~ "Apple Notes"))
 
-      assert "Only the sources you enable are synced, and they stay scoped to your Maraithon account." in desktop[
+      assert "Only the sources you enable are available to your assistant, and they stay scoped to your Maraithon account." in desktop[
                "setup_notes"
              ]
 
       refute Enum.any?(desktop["permissions"], &String.contains?(&1, "one-time token"))
+      refute Enum.any?(desktop["permissions"], &String.match?(&1, ~r/\bsync(ed|ing)?\b/i))
+      refute Enum.any?(desktop["setup_notes"], &String.match?(&1, ~r/\bsync(ed|ing)?\b/i))
       refute Enum.any?(desktop["setup_notes"], &String.contains?(&1, "device token"))
 
       github =

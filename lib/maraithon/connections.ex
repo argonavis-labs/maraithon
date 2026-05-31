@@ -35,43 +35,43 @@ defmodule Maraithon.Connections do
       id: "imessage",
       stat_key: :messages_count,
       label: "iMessage",
-      description: "Sync local conversation context from Messages on the paired Mac."
+      description: "Conversation context from Messages on the paired Mac."
     },
     %{
       id: "notes",
       stat_key: :notes_count,
       label: "Apple Notes",
-      description: "Sync local notes so Maraithon can recall private notes when asked."
+      description: "Private notes Maraithon can recall when asked."
     },
     %{
       id: "voice_memos",
       stat_key: :voice_memos_count,
       label: "Voice Memos",
-      description: "Sync local voice memo metadata and transcripts when available."
+      description: "Voice memo metadata and transcripts when available."
     },
     %{
       id: "calendar",
       stat_key: :calendar_events_count,
       label: "Apple Calendar",
-      description: "Sync local calendar events from the companion app."
+      description: "Calendar events from the paired Mac."
     },
     %{
       id: "reminders",
       stat_key: :reminders_count,
       label: "Reminders",
-      description: "Sync local reminders for personal follow-through."
+      description: "Local reminders for personal follow-through."
     },
     %{
       id: "files",
       stat_key: :files_count,
       label: "Files",
-      description: "Sync selected local file context from the desktop companion."
+      description: "Selected file context from the desktop companion."
     },
     %{
       id: "browser",
       stat_key: :browser_visits_count,
       label: "Browser History",
-      description: "Sync local browser history context when the user enables it."
+      description: "Browser history context when the user enables it."
     }
   ]
 
@@ -435,7 +435,7 @@ defmodule Maraithon.Connections do
       provider: "desktop",
       label: "Maraithon Mac companion",
       description:
-        "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
+        "Securely make iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos available to Maraithon.",
       status: status,
       configured?: true,
       updated_at: latest_device_seen_at(active_entries),
@@ -458,7 +458,7 @@ defmodule Maraithon.Connections do
       provider: "desktop",
       label: "Maraithon Mac companion",
       description:
-        "Secure local sync for iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos.",
+        "Securely make iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memos available to Maraithon.",
       status: :unknown,
       configured?: true,
       updated_at: nil,
@@ -672,8 +672,8 @@ defmodule Maraithon.Connections do
 
   defp desktop_details([], _totals, _timezone_info) do
     [
-      "Pair a Mac to start syncing local sources.",
-      "Install the Maraithon Mac companion app to sync iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
+      "Pair a Mac to make local context available to your assistant.",
+      "Install the Maraithon Mac companion app to include iMessage, Apple Notes, files, reminders, calendar events, browser history, and voice memos securely."
     ]
   end
 
@@ -707,7 +707,7 @@ defmodule Maraithon.Connections do
   defp desktop_service_description(service, 0), do: service.description
 
   defp desktop_service_description(service, count) do
-    "#{service.description} #{desktop_count_label(service.stat_key, count)} synced."
+    "#{service.description} #{desktop_count_label(service.stat_key, count)} available to your assistant."
   end
 
   defp desktop_device_accounts(device_entries) do
@@ -740,7 +740,7 @@ defmodule Maraithon.Connections do
   end
 
   defp desktop_device_details(_stats, _revoked?, 0) do
-    ["Paired and waiting for the first local sync."]
+    ["Paired and waiting for its first context check."]
   end
 
   defp desktop_device_details(stats, _revoked?, _synced_count) do
@@ -751,8 +751,8 @@ defmodule Maraithon.Connections do
 
   defp desktop_source_summary(totals) do
     case desktop_source_labels(totals) do
-      [] -> "Waiting for local sources to finish their first check."
-      labels -> "Synced #{Enum.join(labels, ", ")}."
+      [] -> "Waiting for local sources to finish their first context check."
+      labels -> "Context available: #{Enum.join(labels, ", ")}."
     end
   end
 
@@ -2137,15 +2137,15 @@ defmodule Maraithon.Connections do
       logo: :desktop,
       permissions: [
         "Pair a Mac securely with Maraithon",
-        "Sync local iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memo context",
-        "Scope all synced data to the signed-in Maraithon user"
+        "Make local iMessage, Apple Notes, reminders, calendar, files, browser history, and voice memo context available",
+        "Keep local context scoped to the signed-in Maraithon user"
       ],
       callback_urls: [],
       env_requirements: [],
       setup_notes: [
         "Install the Maraithon Mac companion app on a Mac you control.",
-        "Pair the app with Maraithon, then choose which local sources to sync.",
-        "Only the sources you enable are synced, and they stay scoped to your Maraithon account."
+        "Pair the app with Maraithon, then choose which local sources to make available.",
+        "Only the sources you enable are available to your assistant, and they stay scoped to your Maraithon account."
       ]
     }
   end

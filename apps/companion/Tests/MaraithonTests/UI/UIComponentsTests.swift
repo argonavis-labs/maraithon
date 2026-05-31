@@ -405,8 +405,8 @@ final class UIComponentsTests: XCTestCase {
             )
         ].joined(separator: " ")
 
-        XCTAssertTrue(publicCopy.contains("Pair a Mac to start syncing local sources."))
-        XCTAssertTrue(publicCopy.contains("Waiting for the first sync"))
+        XCTAssertTrue(publicCopy.contains("Pair a Mac to make its local context available to your assistant."))
+        XCTAssertTrue(publicCopy.contains("Waiting for the first context check"))
         XCTAssertTrue(publicCopy.contains("Re-pair"))
         XCTAssertTrue(publicCopy.contains("Data already uploaded to Maraithon is kept."))
         XCTAssertTrue(publicCopy.contains("Reconnect Maraithon in General to see paired Macs."))
@@ -418,6 +418,7 @@ final class UIComponentsTests: XCTestCase {
         XCTAssertFalse(publicCopy.lowercased().contains("token"))
         XCTAssertFalse(publicCopy.lowercased().contains("invalid_device"))
         XCTAssertFalse(publicCopy.lowercased().contains("secret"))
+        XCTAssertFalse(publicCopy.lowercased().contains("sync"))
         XCTAssertFalse(publicCopy.localizedCaseInsensitiveContains("NSURLErrorDomain"))
         XCTAssertFalse(publicCopy.contains("No Macs paired yet."))
         XCTAssertFalse(publicCopy.contains("No data synced yet"))

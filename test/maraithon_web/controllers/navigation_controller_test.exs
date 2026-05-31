@@ -65,7 +65,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
 
       assert html =~ "Maraithon Mac companion"
       assert html =~ "1 Mac connected"
-      assert html =~ "Synced 2 iMessages, 1 Apple Note."
+      assert html =~ "Context available: 2 iMessages, 1 Apple Note."
       assert html =~ "View Mac companion"
 
       detail_conn = conn |> recycle() |> get("/connectors/desktop")
@@ -77,7 +77,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "1 Apple Note"
       assert detail_html =~ "iMessage"
       assert detail_html =~ "Apple Notes"
-      assert detail_html =~ "Secure local sync"
+      assert detail_html =~ "Securely make iMessage"
       refute detail_html =~ "Telegram required"
       refute detail_html =~ "Connection readiness"
       refute detail_html =~ "Disconnect"

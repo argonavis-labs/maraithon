@@ -34,16 +34,17 @@ defmodule Maraithon.ConnectionsTest do
       snapshot = Connections.dashboard_snapshot("desktop-unpaired@example.com")
       desktop = Enum.find(snapshot.providers, &(&1.provider == "desktop"))
 
-      assert "Pair a Mac to start syncing local sources." in desktop.details
+      assert "Pair a Mac to make local context available to your assistant." in desktop.details
 
       assert Enum.any?(desktop.details, fn detail ->
                String.contains?(detail, "Install the Maraithon Mac companion app")
              end)
 
+      refute inspect(desktop) =~ ~r/\bsync(ed|ing)?\b/i
       refute inspect(desktop) =~ "No Mac paired yet"
     end
 
-    test "shows waiting copy when a paired Mac has not completed a local sync" do
+    test "shows waiting copy when a paired Mac has not completed a context check" do
       user_id = "desktop-waiting@example.com"
 
       assert {:ok, _result} =
@@ -53,12 +54,13 @@ defmodule Maraithon.ConnectionsTest do
       desktop = Enum.find(snapshot.providers, &(&1.provider == "desktop"))
 
       assert "1 Mac paired" in desktop.details
-      assert "Waiting for local sources to finish their first check." in desktop.details
+      assert "Waiting for local sources to finish their first context check." in desktop.details
 
       assert [%{account: "Studio Mac", details: device_details}] = desktop.accounts
-      assert "Paired and waiting for the first local sync." in device_details
+      assert "Paired and waiting for its first context check." in device_details
 
       visible_copy = inspect(desktop)
+      refute visible_copy =~ ~r/\bsync(ed|ing)?\b/i
       refute visible_copy =~ "Paired, but no local sources have synced yet"
       refute visible_copy =~ "No local sources synced yet"
     end

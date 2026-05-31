@@ -75,7 +75,7 @@ defmodule MaraithonWeb.ConnectorsHTML do
 
   def provider_local_source_summary(%{provider: "desktop", details: details})
       when is_list(details) do
-    Enum.find(details, &String.starts_with?(&1, "Synced "))
+    Enum.find(details, &String.starts_with?(&1, "Context available: "))
   end
 
   def provider_local_source_summary(_provider), do: nil
