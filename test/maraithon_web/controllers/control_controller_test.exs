@@ -62,13 +62,15 @@ defmodule MaraithonWeb.ControlControllerTest do
 
     assert get_in(missing_key, ["error", "code"]) == -32072
 
+    idempotency_key = "control-key-#{System.unique_integer([:positive])}"
+
     request = %{
       "jsonrpc" => "2.0",
       "id" => 4,
       "method" => "tools.call",
       "params" => %{
         "name" => "gmail_send_message",
-        "idempotency_key" => "control-key-123",
+        "idempotency_key" => idempotency_key,
         "arguments" => %{"user_id" => "control@example.com"}
       }
     }
@@ -78,6 +80,9 @@ defmodule MaraithonWeb.ControlControllerTest do
 
     assert get_in(first, ["error", "code"]) == -32071
     assert get_in(first, ["error", "data", "policy_decision", "status"]) == "needs_confirmation"
+    assert get_in(first, ["error", "message"]) == "Confirm this action before it runs."
+    refute get_in(first, ["error", "data", "policy_decision", "metadata", "tool_name"])
+    refute inspect(first) =~ "gmail_send_message"
     assert get_in(first, ["error", "data", "idempotency_replay"]) == false
 
     assert get_in(second, ["error", "code"]) == -32071
@@ -85,13 +90,15 @@ defmodule MaraithonWeb.ControlControllerTest do
   end
 
   test "rejects reused idempotency key with different payload", %{conn: conn} do
+    idempotency_key = "control-key-conflict-#{System.unique_integer([:positive])}"
+
     base = %{
       "jsonrpc" => "2.0",
       "id" => 5,
       "method" => "tools.call",
       "params" => %{
         "name" => "gmail_send_message",
-        "idempotency_key" => "control-key-conflict",
+        "idempotency_key" => idempotency_key,
         "arguments" => %{"user_id" => "control@example.com", "to" => "a@example.com"}
       }
     }

@@ -9,6 +9,7 @@ defmodule Maraithon.ControlProtocol do
   alias Maraithon.Health
   alias Maraithon.MobileNodes
   alias Maraithon.Normalization
+  alias Maraithon.PolicyDecisionCopy
   alias Maraithon.ScheduledTasks
   alias Maraithon.ToolPolicy
   alias Maraithon.Tools
@@ -338,7 +339,7 @@ defmodule Maraithon.ControlProtocol do
   end
 
   defp policy_error(code, decision) do
-    decision = safe_policy_decision(decision)
+    decision = sanitize_policy_decision(decision)
 
     %{
       "code" => code,
@@ -347,26 +348,11 @@ defmodule Maraithon.ControlProtocol do
     }
   end
 
-  defp safe_policy_decision(decision) when is_map(decision) do
-    decision = normalize_map_keys(decision)
-
-    case Map.get(decision, "reason_code") do
-      "unknown_tool" ->
-        decision
-        |> Map.put("message", "Action is not available.")
-        |> Map.update("metadata", %{}, fn metadata ->
-          metadata
-          |> normalize_map_keys()
-          |> Map.drop(["tool_name"])
-        end)
-
-      _reason_code ->
-        decision
-    end
-  end
-
-  defp safe_policy_decision(_decision) do
-    %{"message" => "Maraithon blocked this action.", "reason_code" => "policy_denied"}
+  defp sanitize_policy_decision(decision) do
+    PolicyDecisionCopy.sanitize(decision,
+      fallback_message: "Maraithon blocked this action.",
+      fallback_reason_code: "policy_denied"
+    )
   end
 
   defp scheduled_task_error_message(:missing_title), do: "Scheduled task needs a title."
@@ -449,7 +435,7 @@ defmodule Maraithon.ControlProtocol do
 
   defp policy_message(decision) do
     decision
-    |> safe_policy_decision()
+    |> sanitize_policy_decision()
     |> Map.get("message", "Maraithon blocked this action.")
   end
 
@@ -512,9 +498,6 @@ defmodule Maraithon.ControlProtocol do
   end
 
   defp normalize(value), do: Normalization.normalize_json_value(value)
-
-  defp normalize_map_keys(map) when is_map(map), do: Normalization.stringify_keys(map)
-  defp normalize_map_keys(_value), do: %{}
 
   defp read_string(map, key), do: Normalization.read_string(map, key)
 

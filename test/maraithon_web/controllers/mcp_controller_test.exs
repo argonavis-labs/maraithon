@@ -488,6 +488,12 @@ defmodule MaraithonWeb.McpControllerTest do
     assert get_in(response, ["error", "data", "policy_decision", "reason_code"]) ==
              "confirmation_required"
 
+    assert get_in(response, ["error", "data", "policy_decision", "message"]) ==
+             "Confirm this action before it runs."
+
+    refute get_in(response, ["error", "data", "policy_decision", "metadata", "tool_name"])
+    refute Jason.encode!(response) =~ "gmail_send_message"
+
     assert [entry] = Maraithon.ActionLedger.list_recent(user_id, limit: 1)
     assert entry.event_type == "tool.needs_confirmation"
     assert entry.metadata["tool_name"] == "gmail_send_message"

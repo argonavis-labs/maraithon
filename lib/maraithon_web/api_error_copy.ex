@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.ApiErrorCopy do
   @moduledoc false
 
+  alias Maraithon.PolicyDecisionCopy
   alias Maraithon.RunErrorCopy
 
   @companion_context_recovery "Maraithon will keep using the last successful source check until the next check."
@@ -213,30 +214,15 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   def mcp_policy_decision(decision) when is_map(decision) do
-    decision = string_key_map(decision)
-
-    case Map.get(decision, "reason_code") do
-      "unknown_tool" ->
-        decision
-        |> Map.put("message", "Action is not available.")
-        |> Map.put("metadata", Map.drop(Map.get(decision, "metadata", %{}), ["tool_name"]))
-
-      _ ->
-        decision
-    end
+    PolicyDecisionCopy.sanitize(decision)
   end
 
   def mcp_policy_decision(_decision) do
-    %{
-      "message" => "Action did not complete. No confirmed change was recorded.",
-      "reason_code" => "tool_failed"
-    }
+    PolicyDecisionCopy.sanitize(nil)
   end
 
   def mcp_policy_message(decision) do
-    decision
-    |> mcp_policy_decision()
-    |> Map.get("message", "Action did not complete. No confirmed change was recorded.")
+    PolicyDecisionCopy.message(decision)
   end
 
   def mcp_tool(:tool_crashed) do
@@ -352,17 +338,4 @@ defmodule MaraithonWeb.ApiErrorCopy do
     String.ends_with?(reason, "_reauth_required") or
       String.ends_with?(reason, "_reconnect_required")
   end
-
-  defp string_key_map(map) when is_map(map) do
-    Map.new(map, fn
-      {key, value} when is_atom(key) or is_binary(key) ->
-        {to_string(key), string_key_value(value)}
-
-      {key, value} ->
-        {key, string_key_value(value)}
-    end)
-  end
-
-  defp string_key_value(value) when is_map(value), do: string_key_map(value)
-  defp string_key_value(value), do: value
 end

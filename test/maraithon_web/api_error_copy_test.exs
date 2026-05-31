@@ -256,6 +256,28 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     refute inspect(decision) =~ "Unknown tool:"
   end
 
+  test "mcp policy decisions hide unsafe free-form messages and metadata" do
+    decision =
+      ApiErrorCopy.mcp_policy_decision(%{
+        "reason_code" => "unexpected_policy_state",
+        "message" => "RuntimeError stacktrace HTTP 500 token=secret",
+        "metadata" => %{
+          "tool_name" => "gmail_send_message",
+          "surface" => "mcp",
+          "side_effect" => "external_send",
+          "debug" => "Authorization: Bearer secret"
+        }
+      })
+
+    assert decision["reason_code"] == "unexpected_policy_state"
+    assert decision["message"] == "Action did not complete. No confirmed change was recorded."
+    assert decision["metadata"] == %{"surface" => "mcp", "side_effect" => "external_send"}
+    refute inspect(decision) =~ "RuntimeError"
+    refute inspect(decision) =~ "token=secret"
+    refute inspect(decision) =~ "gmail_send_message"
+    refute inspect(decision) =~ "Bearer"
+  end
+
   defp refute_leaks_internal_reason(copy) do
     refute copy =~ "db"
     refute copy =~ "timeout"
