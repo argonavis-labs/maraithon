@@ -66,12 +66,18 @@
     "input": {"user_id": "assistant-eval@example.com", "text": "What todos are open?"},
     "mock_output": {
       "message_class": "todo_digest",
+      "assistant_message": "I'll send the current open work as individual work item cards, ranked by what needs a decision first. Start with anything that has an external owner or near-term commitment; each card should include the why now and next action so you can decide quickly.",
       "tool_calls": [{"tool": "list_todos"}]
     },
     "expected": {
       "output": {"message_class": "todo_digest"},
       "required_tools": ["list_todos"],
-      "forbidden_tools": ["upsert_person"]
+      "forbidden_tools": ["upsert_person"],
+      "assistant_message_quality": {
+        "min_length": 220,
+        "required_phrases": ["open work", "work item cards", "ranked by what needs a decision", "Start with", "why now", "next action"],
+        "forbidden_phrases": ["Here are your todos", "todo list", "Priority:"]
+      }
     }
   },
   {

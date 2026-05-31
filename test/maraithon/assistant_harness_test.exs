@@ -177,6 +177,8 @@ defmodule Maraithon.AssistantHarnessTest do
     assert prompt =~ "Do not stop at a contact label"
     assert prompt =~ "identity, company or project, why they are in view now, what you owe next"
     assert prompt =~ "message_class:\"todo_digest\""
+    assert prompt =~ "state how the open work is ranked and what to start with"
+    assert prompt =~ "orient the operator, not dump a second list"
     assert proactive_prompt =~ "Reason over open work, open loops"
     assert proactive_prompt =~ "People relationship context"
     assert proactive_prompt =~ "work item cards from the listed todo_ids"
