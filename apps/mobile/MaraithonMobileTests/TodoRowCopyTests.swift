@@ -11,6 +11,7 @@ struct TodoRowCopyTests {
         #expect(TodoEditorCopy.notesPlaceholder == "Context")
         #expect(TodoEditorCopy.nextActionPlaceholder == "Next move")
         #expect(TodoEditorCopy.decisionContextSectionTitle == "Decision context")
+        #expect(TodoEditorCopy.contextSummaryLabel == "Who and context")
         #expect(TodoEditorCopy.decisionPromptLabel == "Decision")
         #expect(TodoEditorCopy.whyNowLabel == "Why now")
         #expect(TodoEditorCopy.sourceContextLabel == "Context used")
@@ -70,6 +71,7 @@ struct TodoRowCopyTests {
             notes: "Michael asked for campaign status.",
             nextAction: "Reply to Michael",
             decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+            decisionContextSummary: "Michael · UGC campaign · Investor",
             whyNow: "Michael is waiting and no later reply was found.",
             sourceContext: "Checked Gmail",
             nextBestAction: "Approve a short reply.",
@@ -78,8 +80,9 @@ struct TodoRowCopyTests {
 
         let context = TodoDecisionContext(todo: todo)
 
-        #expect(context.rowContext == "Send the campaign update with a clear owner and timing.")
-        #expect(context.rowReason == "Why now: Michael is waiting; no later reply is recorded. Reviewed Gmail")
+        #expect(context.contextSummary == "Michael · UGC campaign · Investor")
+        #expect(context.rowContext == "Michael · UGC campaign · Investor")
+        #expect(context.rowReason == "Send the campaign update with a clear owner and timing. Why now: Michael is waiting; no later reply is recorded. Reviewed Gmail")
         #expect(context.rowMove == "Approve a short reply.")
         #expect(context.preparedMove == "Approve a short reply.")
         #expect(context.evidence == "Can you send the next update?")
@@ -144,6 +147,7 @@ struct TodoRowCopyTests {
             notes: "Review customer plan",
             nextAction: "Review customer plan",
             decisionPrompt: "Review customer plan",
+            decisionContextSummary: "Review customer plan",
             nextBestAction: "Review customer plan",
             evidenceExcerpt: "Customer asked for the revised rollout plan."
         )

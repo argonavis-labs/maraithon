@@ -214,6 +214,11 @@ struct ProductionDataSyncTests {
             nextAction: "Approve the short reply.",
             actionCard: MobileAPIClient.RemoteActionCard(
                 decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+                contextItems: [
+                    .init(label: "Person", value: "Michael"),
+                    .init(label: "Project", value: "UGC campaign"),
+                    .init(label: "Relationship", value: "Investor")
+                ],
                 whyNow: "Michael is waiting and no later reply was found.",
                 sourceContext: "Checked Gmail",
                 nextBestAction: "Approve a short reply.",
@@ -224,6 +229,7 @@ struct ProductionDataSyncTests {
         let todo = ProductionDataSync.todo(from: remote, id: UUID())
 
         #expect(todo.decisionPrompt == "Send the campaign update with a clear owner and timing.")
+        #expect(todo.decisionContextSummary == "Michael · UGC campaign · Investor")
         #expect(todo.whyNow == "Michael is waiting; no later reply is recorded.")
         #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "Approve a short reply.")
@@ -235,6 +241,11 @@ struct ProductionDataSyncTests {
         let remote = remoteTodo(
             actionCard: MobileAPIClient.RemoteActionCard(
                 decisionPrompt: "The user needs to approve the finance reply.",
+                contextItems: [
+                    .init(label: "Person", value: "The operator"),
+                    .init(label: "Person", value: "the operator"),
+                    .init(label: "Project", value: "Finance approval")
+                ],
                 whyNow: "This needs operator attention before noon.",
                 sourceContext: "source_context: Checked Gmail\npriority_score: 97",
                 nextBestAction: "User should send the ETA.",
@@ -245,6 +256,7 @@ struct ProductionDataSyncTests {
         let todo = ProductionDataSync.todo(from: remote, id: UUID())
 
         #expect(todo.decisionPrompt == "You need to approve the finance reply.")
+        #expect(todo.decisionContextSummary == "You · Finance approval")
         #expect(todo.whyNow == "This needs your attention before noon.")
         #expect(todo.sourceContext == "Reviewed Gmail")
         #expect(todo.nextBestAction == "You should send the ETA.")

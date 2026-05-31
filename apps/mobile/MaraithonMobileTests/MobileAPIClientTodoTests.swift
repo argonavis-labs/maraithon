@@ -36,7 +36,7 @@ struct MobileAPIClientTodoTests {
         let request = try #require(recorder.requests.first)
 
         #expect(request.httpMethod == "DELETE")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos/\(todoID.uuidString.lowercased())")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos/\(todoID.uuidString.lowercased())?include_cards=true")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
         #expect(remote.id == todoID.uuidString.lowercased())
         #expect(remote.status == "dismissed")
@@ -88,6 +88,10 @@ struct MobileAPIClientTodoTests {
                       "closed_at": null,
                       "action_card": {
                         "decision_prompt": "Decide whether to send the campaign owner and ETA.",
+                        "context_items": [
+                          {"label": "Person", "value": "Michael"},
+                          {"label": "Project", "value": "UGC campaign"}
+                        ],
                         "why_now": "Michael is waiting and no later reply was found.",
                         "source_context": "Checked Gmail",
                         "next_best_action": "Approve a short reply.",
@@ -106,8 +110,53 @@ struct MobileAPIClientTodoTests {
         #expect(request.httpMethod == "GET")
         #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=true")
         #expect(card.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
+        #expect(card.contextItems.compactMap(\.value) == ["Michael", "UGC campaign"])
         #expect(card.whyNow == "Michael is waiting and no later reply was found.")
         #expect(card.sourceContext == "Checked Gmail")
+    }
+
+    @Test
+    func updateTodoRequestsFreshDecisionCardContext() async throws {
+        let todoID = UUID(uuidString: "22222222-3333-4444-5555-666666666666")!
+        let recorder = HTTPRequestRecorder()
+        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
+        client.session = recorder.session(
+            statusCode: 200,
+            body:
+                """
+                {
+                  "todo": {
+                    "id": "\(todoID.uuidString.lowercased())",
+                    "title": "Reply to Michael",
+                    "summary": "Michael is waiting on the campaign update.",
+                    "next_action": "Approve the short reply.",
+                    "due_at": null,
+                    "notes": null,
+                    "priority": 80,
+                    "status": "open",
+                    "closed_at": null,
+                    "action_card": {
+                      "decision_prompt": "Decide whether to send the campaign owner and ETA.",
+                      "context_items": [
+                        {"label": "Person", "value": "Michael"}
+                      ],
+                      "why_now": "Michael is waiting and no later reply was found."
+                    }
+                  }
+                }
+                """
+        )
+
+        let remote = try await client.updateTodo(
+            sessionToken: "session-token",
+            id: todoID,
+            payload: ["title": "Reply to Michael"]
+        )
+        let request = try #require(recorder.requests.first)
+
+        #expect(request.httpMethod == "PATCH")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos/\(todoID.uuidString.lowercased())?include_cards=true")
+        #expect(remote.actionCard?.contextItems.first?.value == "Michael")
     }
 
     @Test

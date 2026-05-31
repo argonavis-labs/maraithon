@@ -19,7 +19,8 @@ defmodule MaraithonWeb.MobileJSONTest do
       metadata: %{
         "life_domain" => "family",
         "source_evidence" => "The school asked whether Tuesday pickup should move to 4 PM.",
-        "person" => "Oak Street School"
+        "person" => "Oak Street School",
+        "project" => "Tuesday pickup"
       },
       inserted_at: now,
       updated_at: now
@@ -38,8 +39,11 @@ defmodule MaraithonWeb.MobileJSONTest do
       )
 
     source_context = get_in(response, [:action_card, :source_context])
+    context_items = get_in(response, [:action_card, :context_items])
 
     assert source_context == "Gmail context is incomplete; review the source before sending this."
+    assert %{label: "Person", value: "Oak Street School"} in context_items
+    assert %{label: "Project", value: "Tuesday pickup"} in context_items
     refute source_context =~ "DBConnection"
     refute source_context =~ "token=secret"
     refute source_context =~ "stacktrace"

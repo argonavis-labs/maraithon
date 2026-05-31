@@ -156,7 +156,13 @@ struct MobileAPIClient {
     }
 
     struct RemoteActionCard: Decodable, Equatable {
+        struct ContextItem: Decodable, Equatable {
+            let label: String?
+            let value: String?
+        }
+
         let decisionPrompt: String?
+        let contextItems: [ContextItem]
         let whyNow: String?
         let sourceContext: String?
         let nextBestAction: String?
@@ -164,20 +170,33 @@ struct MobileAPIClient {
 
         enum CodingKeys: String, CodingKey {
             case decisionPrompt = "decision_prompt"
+            case contextItems = "context_items"
             case whyNow = "why_now"
             case sourceContext = "source_context"
             case nextBestAction = "next_best_action"
             case evidenceExcerpt = "evidence_excerpt"
         }
 
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            decisionPrompt = try container.decodeIfPresent(String.self, forKey: .decisionPrompt)
+            contextItems = try container.decodeIfPresent([ContextItem].self, forKey: .contextItems) ?? []
+            whyNow = try container.decodeIfPresent(String.self, forKey: .whyNow)
+            sourceContext = try container.decodeIfPresent(String.self, forKey: .sourceContext)
+            nextBestAction = try container.decodeIfPresent(String.self, forKey: .nextBestAction)
+            evidenceExcerpt = try container.decodeIfPresent(String.self, forKey: .evidenceExcerpt)
+        }
+
         init(
             decisionPrompt: String? = nil,
+            contextItems: [ContextItem] = [],
             whyNow: String? = nil,
             sourceContext: String? = nil,
             nextBestAction: String? = nil,
             evidenceExcerpt: String? = nil
         ) {
             self.decisionPrompt = decisionPrompt
+            self.contextItems = contextItems
             self.whyNow = whyNow
             self.sourceContext = sourceContext
             self.nextBestAction = nextBestAction
@@ -336,7 +355,7 @@ struct MobileAPIClient {
 
     func createTodo(sessionToken: String, payload: [String: Any]) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
-            path: "/todos",
+            path: "/todos?include_cards=true",
             method: "POST",
             sessionToken: sessionToken,
             body: ["todo": payload],
@@ -347,7 +366,7 @@ struct MobileAPIClient {
 
     func updateTodo(sessionToken: String, id: UUID, payload: [String: Any]) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
-            path: "/todos/\(id.uuidString.lowercased())",
+            path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
             method: "PATCH",
             sessionToken: sessionToken,
             body: ["todo": payload],
@@ -358,7 +377,7 @@ struct MobileAPIClient {
 
     func deleteTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
-            path: "/todos/\(id.uuidString.lowercased())",
+            path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
             method: "DELETE",
             sessionToken: sessionToken,
             responseType: TodoResponse.self

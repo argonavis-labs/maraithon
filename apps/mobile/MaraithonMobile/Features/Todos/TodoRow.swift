@@ -101,6 +101,7 @@ struct TodoRow: View {
 }
 
 struct TodoDecisionContext: Equatable {
+    let contextSummary: String?
     let decisionPrompt: String?
     let notesContext: String?
     let whyNow: String?
@@ -113,17 +114,22 @@ struct TodoDecisionContext: Equatable {
         let title = Self.cleanedText(todo.title)
         let notes = Self.cleanedText(todo.notes)
         let nextAction = Self.cleanedText(todo.displayNextAction)
+        let contextSummary = Self.uniqueText(
+            todo.decisionContextSummary,
+            excluding: [title, notes, nextAction]
+        )
         let decisionPrompt = Self.uniqueText(
             todo.decisionPrompt,
-            excluding: [title, notes, nextAction]
+            excluding: [title, notes, nextAction, contextSummary]
         )
         let preparedMove = Self.uniqueText(
             todo.nextBestAction,
-            excluding: [title, notes, nextAction, decisionPrompt]
+            excluding: [title, notes, nextAction, contextSummary, decisionPrompt]
         )
 
+        self.contextSummary = contextSummary
         self.decisionPrompt = decisionPrompt
-        self.notesContext = Self.uniqueText(notes, excluding: [title, nextAction, decisionPrompt])
+        self.notesContext = Self.uniqueText(notes, excluding: [title, nextAction, contextSummary, decisionPrompt])
         self.whyNow = Self.cleanedText(todo.whyNow)
         self.sourceContext = Self.cleanedText(todo.sourceContext)
         self.preparedMove = preparedMove
@@ -132,13 +138,14 @@ struct TodoDecisionContext: Equatable {
     }
 
     var rowContext: String? {
-        decisionPrompt ?? notesContext
+        contextSummary ?? decisionPrompt ?? notesContext
     }
 
     var rowReason: String? {
+        let rowDecisionPrompt = contextSummary == nil ? nil : decisionPrompt
         let whyNow = whyNow.map { "Why now: \($0)" }
 
-        let reason = [whyNow, sourceContext]
+        let reason = [rowDecisionPrompt, whyNow, sourceContext]
             .compactMap { $0 }
             .joined(separator: " ")
 
@@ -146,7 +153,8 @@ struct TodoDecisionContext: Equatable {
     }
 
     var hasChiefOfStaffContext: Bool {
-        decisionPrompt != nil ||
+        contextSummary != nil ||
+            decisionPrompt != nil ||
             whyNow != nil ||
             sourceContext != nil ||
             preparedMove != nil ||

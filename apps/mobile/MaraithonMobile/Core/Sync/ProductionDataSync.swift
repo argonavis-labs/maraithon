@@ -187,6 +187,7 @@ enum ProductionDataSync {
             isCompleted: remoteTodo.status == "done",
             completedAt: remoteTodo.closedAt,
             decisionPrompt: cleanedText(remoteTodo.actionCard?.decisionPrompt),
+            decisionContextSummary: actionCardContextSummary(remoteTodo.actionCard),
             whyNow: cleanedText(remoteTodo.actionCard?.whyNow),
             sourceContext: cleanedText(remoteTodo.actionCard?.sourceContext),
             nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
@@ -196,6 +197,7 @@ enum ProductionDataSync {
 
     private static func apply(_ actionCard: MobileAPIClient.RemoteActionCard?, to todo: TodoItem) {
         todo.decisionPrompt = cleanedText(actionCard?.decisionPrompt)
+        todo.decisionContextSummary = actionCardContextSummary(actionCard)
         todo.whyNow = cleanedText(actionCard?.whyNow)
         todo.sourceContext = cleanedText(actionCard?.sourceContext)
         todo.nextBestAction = cleanedText(actionCard?.nextBestAction)
@@ -274,6 +276,27 @@ enum ProductionDataSync {
 
     private static func cleanedText(_ value: String?) -> String? {
         ChiefOfStaffCopy.clean(value)
+    }
+
+    private static func actionCardContextSummary(_ actionCard: MobileAPIClient.RemoteActionCard?) -> String? {
+        guard let actionCard else { return nil }
+
+        let values = actionCard.contextItems.compactMap { item in
+            cleanedText(item.value)
+        }
+
+        guard !values.isEmpty else { return nil }
+
+        let uniqueValues = values.reduce(into: [String]()) { result, value in
+            let duplicate = result.contains { existing in
+                existing.compare(value, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            if !duplicate {
+                result.append(value)
+            }
+        }
+
+        return uniqueValues.joined(separator: " · ")
     }
 
     private static func sameText(_ lhs: String, _ rhs: String?) -> Bool {

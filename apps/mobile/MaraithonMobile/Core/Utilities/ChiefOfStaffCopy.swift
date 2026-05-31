@@ -167,6 +167,8 @@ private extension String {
             (#"\bthe operator's\b"#, "your"),
             (#"^\s*Operator's\b"#, "Your"),
             (#"\boperator's\b"#, "your"),
+            (#"^\s*The operator\b"#, "You"),
+            (#"^\s*Operator\b"#, "You"),
             (#"\bthe operator\b"#, "you"),
             (#"\bKent's\b"#, "your"),
             (#"^\s*Kent needs\b"#, "You need"),

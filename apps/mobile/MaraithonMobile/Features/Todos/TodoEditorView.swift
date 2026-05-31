@@ -64,6 +64,13 @@ struct TodoEditorView: View {
 
                 if let decisionContext {
                     Section(TodoEditorCopy.decisionContextSectionTitle) {
+                        if let contextSummary = decisionContext.contextSummary {
+                            contextLine(
+                                label: TodoEditorCopy.contextSummaryLabel,
+                                value: contextSummary
+                            )
+                        }
+
                         if let decisionPrompt = decisionContext.decisionPrompt {
                             contextLine(
                                 label: TodoEditorCopy.decisionPromptLabel,
@@ -241,6 +248,7 @@ enum TodoEditorCopy {
     static let notesPlaceholder = "Context"
     static let nextActionPlaceholder = "Next move"
     static let decisionContextSectionTitle = "Decision context"
+    static let contextSummaryLabel = "Who and context"
     static let decisionPromptLabel = "Decision"
     static let whyNowLabel = "Why now"
     static let sourceContextLabel = "Context used"
@@ -263,6 +271,7 @@ enum TodoEditorCopy {
             notesPlaceholder,
             nextActionPlaceholder,
             decisionContextSectionTitle,
+            contextSummaryLabel,
             decisionPromptLabel,
             whyNowLabel,
             sourceContextLabel,

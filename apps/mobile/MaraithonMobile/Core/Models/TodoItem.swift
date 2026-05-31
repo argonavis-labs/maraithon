@@ -13,6 +13,7 @@ final class TodoItem {
     var createdAt: Date
     var completedAt: Date?
     var decisionPrompt: String?
+    var decisionContextSummary: String?
     var whyNow: String?
     var sourceContext: String?
     var nextBestAction: String?
@@ -35,6 +36,7 @@ final class TodoItem {
         createdAt: Date = Date(),
         completedAt: Date? = nil,
         decisionPrompt: String? = nil,
+        decisionContextSummary: String? = nil,
         whyNow: String? = nil,
         sourceContext: String? = nil,
         nextBestAction: String? = nil,
@@ -51,6 +53,7 @@ final class TodoItem {
         self.createdAt = createdAt
         self.completedAt = completedAt
         self.decisionPrompt = decisionPrompt
+        self.decisionContextSummary = decisionContextSummary
         self.whyNow = whyNow
         self.sourceContext = sourceContext
         self.nextBestAction = nextBestAction
