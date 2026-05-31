@@ -1110,7 +1110,7 @@ defmodule MaraithonWeb.PeopleLive do
   defp family_sensitivity("child"), do: "child_family"
   defp family_sensitivity(_preset_id), do: "family"
 
-  defp family_context_summary(0, 0), do: "Needs setup"
+  defp family_context_summary(0, 0), do: "No family context yet"
   defp family_context_summary(member_count, 0), do: pluralize(member_count, "family member")
   defp family_context_summary(0, proxy_count), do: pluralize(proxy_count, "family contact")
 

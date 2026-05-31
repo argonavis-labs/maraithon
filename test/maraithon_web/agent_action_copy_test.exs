@@ -36,7 +36,7 @@ defmodule MaraithonWeb.AgentActionCopyTest do
              "Could not update that automation. Review the settings before saving."
 
     assert AgentActionCopy.error(:install, "Authorization: Bearer sk-live request_id=req_123") ==
-             "Could not install that automation. Review the setup before installing."
+             "Could not install that automation. Review the launch details before installing."
 
     assert AgentActionCopy.error(:start, {:supervisor, :timeout}) ==
              "Could not start that automation. Refresh automations before starting it."
@@ -67,7 +67,8 @@ defmodule MaraithonWeb.AgentActionCopyTest do
   test "hides marketplace internals" do
     copy = AgentActionCopy.marketplace_error({:invalid_agent_manifest, [model: "missing"]})
 
-    assert copy == "Some automation templates are unavailable because setup needs attention."
+    assert copy ==
+             "Some automation templates are unavailable because required connections need attention."
 
     refute copy =~ "invalid_agent_manifest"
     refute copy =~ "agent templates"

@@ -12,7 +12,7 @@ defmodule MaraithonWeb.AgentActionCopy do
     with_detail(
       "Could not install that automation.",
       validation_detail(changeset),
-      "Review the setup before installing."
+      "Review the launch details before installing."
     )
   end
 
@@ -20,7 +20,7 @@ defmodule MaraithonWeb.AgentActionCopy do
     with_detail(
       "Could not install that automation.",
       reason,
-      "Review the setup before installing."
+      "Review the launch details before installing."
     )
   end
 
@@ -77,7 +77,7 @@ defmodule MaraithonWeb.AgentActionCopy do
   end
 
   def marketplace_error(_reason) do
-    "Some automation templates are unavailable because setup needs attention."
+    "Some automation templates are unavailable because required connections need attention."
   end
 
   defp success_with_name(display_name, verb) do

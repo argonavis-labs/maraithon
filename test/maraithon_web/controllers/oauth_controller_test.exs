@@ -769,7 +769,7 @@ defmodule MaraithonWeb.OAuthControllerTest do
 
       assert response["watches"]["calendar"] == %{
                "status" => "failed",
-               "reason" => "Calendar watch is not configured yet."
+               "reason" => "Calendar sync needs a webhook URL before it can start."
              }
 
       refute inspect(response) =~ "webhook_url_not_configured"

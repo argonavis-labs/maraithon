@@ -1192,10 +1192,10 @@ defmodule MaraithonWeb.OAuthController do
   defp oauth_error_reason(_error), do: "provider_error"
 
   defp watch_setup_message("calendar", :webhook_url_not_configured),
-    do: "Calendar watch is not configured yet."
+    do: "Calendar sync needs a webhook URL before it can start."
 
   defp watch_setup_message("gmail", :pubsub_topic_not_configured),
-    do: "Gmail watch is not configured yet."
+    do: "Gmail sync needs a Pub/Sub topic before it can start."
 
   defp watch_setup_message(_service, :no_token), do: "Google account needs to reconnect."
 

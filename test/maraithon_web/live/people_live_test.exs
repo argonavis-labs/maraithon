@@ -170,7 +170,7 @@ defmodule MaraithonWeb.PeopleLiveTest do
     {:ok, view, html} = live(conn, "/operator/people")
 
     assert html =~ "Family context"
-    assert html =~ "Needs setup"
+    assert html =~ "No family context yet"
 
     view
     |> element("button[phx-click='show_people_onboarding'][phx-value-mode='member']")

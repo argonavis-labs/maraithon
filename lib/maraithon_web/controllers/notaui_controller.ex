@@ -33,7 +33,7 @@ defmodule MaraithonWeb.NotauiController do
       {:error, :not_configured} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "notaui integration is not configured"})
+        |> json(%{error: "Notaui connection is unavailable. Add credentials before syncing."})
 
       {:error, :invalid_topic} ->
         conn
