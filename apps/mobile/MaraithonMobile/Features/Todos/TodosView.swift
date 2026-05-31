@@ -81,7 +81,7 @@ struct TodosView: View {
                                 Button(role: .destructive) {
                                     delete(todo)
                                 } label: {
-                                    Label("Delete", systemImage: "trash")
+                                    Label(TodosViewCopy.dismissActionLabel, systemImage: "trash")
                                 }
 
                                 Button {
@@ -194,7 +194,7 @@ struct TodosView: View {
                 modelContext.delete(todo)
                 _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteDeleteSaveFailedMessage)
             } catch {
-                actionErrorMessage = todoActionMessage("Could not delete work item.", error: error)
+                actionErrorMessage = todoActionMessage(TodosViewCopy.remoteDismissFailedPrefix, error: error)
             }
         }
     }
@@ -225,18 +225,22 @@ struct TodosView: View {
 enum TodosViewCopy {
     static let actionWarningTitle = "Work item update was not saved"
     static let dismissActionWarningAccessibilityLabel = "Dismiss work item warning"
+    static let dismissActionLabel = "Dismiss"
     static let localUpdateFailedMessage = "Could not update the work item on this device. Your work list stayed unchanged."
-    static let localDeleteFailedMessage = "Could not delete the work item on this device. Your work list stayed unchanged."
+    static let localDeleteFailedMessage = "Could not dismiss the work item on this device. Your work list stayed unchanged."
+    static let remoteDismissFailedPrefix = "Could not dismiss work item."
     static let remoteUpdateSaveFailedMessage = "Maraithon updated the work item. Refresh work to show the latest state on this device."
-    static let remoteDeleteSaveFailedMessage = "Maraithon deleted the work item. Refresh work to remove it from this device."
+    static let remoteDeleteSaveFailedMessage = "Maraithon dismissed the work item. Refresh work to remove it from this device."
     static let restoreFailedMessage = "Could not restore the work item after the update failed. Refresh work to show the latest state."
 
     static var localSaveFailureLabels: [String] {
         [
             actionWarningTitle,
             dismissActionWarningAccessibilityLabel,
+            dismissActionLabel,
             localUpdateFailedMessage,
             localDeleteFailedMessage,
+            remoteDismissFailedPrefix,
             remoteUpdateSaveFailedMessage,
             remoteDeleteSaveFailedMessage,
             restoreFailedMessage

@@ -178,16 +178,19 @@ struct TodoFilteringTests {
     func workListSaveFailureCopyIsVisibleAndSpecific() {
         #expect(TodosViewCopy.actionWarningTitle == "Work item update was not saved")
         #expect(TodosViewCopy.dismissActionWarningAccessibilityLabel == "Dismiss work item warning")
+        #expect(TodosViewCopy.dismissActionLabel == "Dismiss")
         #expect(TodosViewCopy.localUpdateFailedMessage == "Could not update the work item on this device. Your work list stayed unchanged.")
-        #expect(TodosViewCopy.localDeleteFailedMessage == "Could not delete the work item on this device. Your work list stayed unchanged.")
+        #expect(TodosViewCopy.localDeleteFailedMessage == "Could not dismiss the work item on this device. Your work list stayed unchanged.")
+        #expect(TodosViewCopy.remoteDismissFailedPrefix == "Could not dismiss work item.")
         #expect(TodosViewCopy.remoteUpdateSaveFailedMessage == "Maraithon updated the work item. Refresh work to show the latest state on this device.")
-        #expect(TodosViewCopy.remoteDeleteSaveFailedMessage == "Maraithon deleted the work item. Refresh work to remove it from this device.")
+        #expect(TodosViewCopy.remoteDeleteSaveFailedMessage == "Maraithon dismissed the work item. Refresh work to remove it from this device.")
         #expect(TodosViewCopy.restoreFailedMessage == "Could not restore the work item after the update failed. Refresh work to show the latest state.")
-        #expect(TodosViewCopy.localSaveFailureLabels.count == 7)
+        #expect(TodosViewCopy.localSaveFailureLabels.count == 9)
 
         let copy = TodosViewCopy.localSaveFailureLabels.joined(separator: " ").lowercased()
         #expect(!copy.contains("local copy"))
         #expect(!copy.contains("latest copy"))
         #expect(!copy.contains("reconcile"))
+        #expect(!copy.contains("delete"))
     }
 }
