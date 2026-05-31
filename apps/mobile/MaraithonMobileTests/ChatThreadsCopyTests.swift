@@ -32,7 +32,8 @@ struct ChatThreadsCopyTests {
 
     @Test
     func emptyStatesUseSpecificSentenceCaseCopy() {
-        #expect(ChatThreadsCopy.emptyChatsTitle == "No chats yet")
+        #expect(ChatThreadsCopy.emptyChatsTitle == "Start a chat with Maraithon")
+        #expect(ChatThreadsCopy.emptyChatsDescription == "Ask about priorities, draft a follow-up, or turn loose notes into next actions.")
         #expect(ChatThreadsCopy.emptyThreadPreview == "Start with a priority, draft, or follow-up.")
         #expect(ChatThreadsCopy.noMatchingChatsTitle == "No chats match")
         #expect(ChatThreadsCopy.deletedChatTitle == "Chat unavailable")
@@ -44,6 +45,7 @@ struct ChatThreadsCopyTests {
         let copy = ChatThreadsCopy.emptyStateLabels.joined(separator: " ")
 
         #expect(!copy.contains("No Chats"))
+        #expect(!copy.contains("No chats yet"))
         #expect(!copy.contains("No Matching Chats"))
         #expect(!copy.contains("Chat Deleted"))
         #expect(!copy.contains("New Chat"))
