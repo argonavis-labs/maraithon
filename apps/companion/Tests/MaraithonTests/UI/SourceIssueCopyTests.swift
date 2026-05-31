@@ -87,6 +87,22 @@ final class SourceIssueCopyTests: XCTestCase {
         )
     }
 
+    func testStoredSyncFailureSummariesUseCheckLanguage() {
+        let status = SourceIssueCopy.status("2 messages did not sync.")
+        let detail = SourceIssueCopy.detail("1 item did not sync.", sourceName: "iMessage")
+        let visibleCopy = [status, detail].joined(separator: " ")
+
+        XCTAssertEqual(
+            status,
+            "Some items need another check. Maraithon will keep the last successful context until the next check."
+        )
+        XCTAssertEqual(
+            detail,
+            "iMessage could not finish its last check. Some items need another check. Maraithon will keep the last successful context until the next check. Check again when ready."
+        )
+        XCTAssertFalse(visibleCopy.localizedCaseInsensitiveContains("sync"))
+    }
+
     func testDetailUsesVisibleRecoveryActionInsteadOfHiddenLogs() {
         let detail = SourceIssueCopy.detail(
             "Error Domain=NSURLErrorDomain Code=-1009 \"The Internet connection appears to be offline.\"",

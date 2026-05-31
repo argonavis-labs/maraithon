@@ -54,6 +54,10 @@ struct SourceIssueCopy {
             return "Some items could not finish. Maraithon will keep the last successful context until the next check."
         }
 
+        if lower.contains("did not sync") || lower.contains("not synced") {
+            return "Some items need another check. Maraithon will keep the last successful context until the next check."
+        }
+
         if lower.contains("rejected") || lower.contains("by the server") {
             return "Some items could not finish. Maraithon will keep the last successful context until the next check."
         }
