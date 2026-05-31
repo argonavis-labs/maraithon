@@ -35,13 +35,21 @@ struct CRMFilteringTests {
     @Test
     func relationshipDetailSaveFailureCopyIsVisibleAndSpecific() {
         #expect(ContactDetailCopy.localSaveFailedMessage == "Could not save this relationship on this device. Your last change was not kept.")
-        #expect(ContactDetailCopy.remoteSaveFailedMessage == "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile.")
+        #expect(ContactDetailCopy.remoteSaveFailedMessage == "Maraithon updated the relationship. Refresh people to show the latest state on this device.")
         #expect(ContactDetailCopy.remoteUpdateFailedMessage(error: URLError(.notConnectedToInternet)) == "Saved on this device, but Maraithon could not update it online. Connection issue. Retry when you are online.")
         #expect(ContactDetailCopy.localCompleteWorkFailedMessage == "Could not complete the related work on this device. The person detail stayed unchanged.")
         #expect(ContactDetailCopy.localDismissWorkFailedMessage == "Could not dismiss the related work on this device. The person detail stayed unchanged.")
         #expect(ContactDetailCopy.remoteCompleteWorkFailedPrefix == "Could not complete the related work.")
         #expect(ContactDetailCopy.remoteDismissWorkFailedPrefix == "Could not dismiss the related work.")
+        #expect(ContactDetailCopy.remoteCompleteWorkSaveFailedMessage == "Maraithon completed the related work. Refresh people to show the latest state on this device.")
+        #expect(ContactDetailCopy.remoteDismissWorkSaveFailedMessage == "Maraithon dismissed the related work. Refresh people to remove it from this device.")
+        #expect(ContactDetailCopy.restoreWorkFailedMessage == "Could not restore the related work after the update failed. Refresh people to show the latest state.")
         #expect(ContactDetailCopy.saveFailureLabels.count == 12)
+
+        let copy = ContactDetailCopy.saveFailureLabels.joined(separator: " ").lowercased()
+        #expect(!copy.contains("local copy"))
+        #expect(!copy.contains("latest copy"))
+        #expect(!copy.contains("reconcile"))
     }
 
     @Test
@@ -77,9 +85,14 @@ struct CRMFilteringTests {
     @Test
     func relationshipListSaveFailureCopyIsVisibleAndSpecific() {
         #expect(CRMViewCopy.localSaveFailedMessage == "Could not save the relationship update on this device. Your people list stayed unchanged.")
-        #expect(CRMViewCopy.remoteSaveFailedMessage == "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile.")
-        #expect(CRMViewCopy.restoreFailedMessage == "Could not restore this relationship on this device. Refresh people to reconcile.")
+        #expect(CRMViewCopy.remoteSaveFailedMessage == "Maraithon updated the relationship. Refresh people to show the latest state on this device.")
+        #expect(CRMViewCopy.restoreFailedMessage == "Could not restore this relationship after the update failed. Refresh people to show the latest state.")
         #expect(CRMViewCopy.localSaveFailureLabels.count == 5)
+
+        let copy = CRMViewCopy.localSaveFailureLabels.joined(separator: " ").lowercased()
+        #expect(!copy.contains("local copy"))
+        #expect(!copy.contains("latest copy"))
+        #expect(!copy.contains("reconcile"))
     }
 
     @Test

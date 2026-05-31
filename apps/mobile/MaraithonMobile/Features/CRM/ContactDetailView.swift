@@ -388,7 +388,7 @@ enum ContactDetailCopy {
     static let actionWarningTitle = "Update was not saved"
     static let dismissActionWarningAccessibilityLabel = "Dismiss update warning"
     static let localSaveFailedMessage = "Could not save this relationship on this device. Your last change was not kept."
-    static let remoteSaveFailedMessage = "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile."
+    static let remoteSaveFailedMessage = "Maraithon updated the relationship. Refresh people to show the latest state on this device."
     static let contactDetailsSectionTitle = "Contact details"
     static let relationshipSectionTitle = "Relationship status"
     static let notesSectionTitle = "Relationship notes"
@@ -408,9 +408,9 @@ enum ContactDetailCopy {
     static let localDismissWorkFailedMessage = "Could not dismiss the related work on this device. The person detail stayed unchanged."
     static let remoteCompleteWorkFailedPrefix = "Could not complete the related work."
     static let remoteDismissWorkFailedPrefix = "Could not dismiss the related work."
-    static let remoteCompleteWorkSaveFailedMessage = "Maraithon completed the related work, but this device could not save the latest copy. Refresh people to reconcile."
-    static let remoteDismissWorkSaveFailedMessage = "Maraithon dismissed the related work, but this device could not remove the local copy. Refresh people to reconcile."
-    static let restoreWorkFailedMessage = "Could not restore the related work on this device. Refresh people to reconcile."
+    static let remoteCompleteWorkSaveFailedMessage = "Maraithon completed the related work. Refresh people to show the latest state on this device."
+    static let remoteDismissWorkSaveFailedMessage = "Maraithon dismissed the related work. Refresh people to remove it from this device."
+    static let restoreWorkFailedMessage = "Could not restore the related work after the update failed. Refresh people to show the latest state."
 
     static func remoteUpdateFailedMessage(error: Error) -> String {
         "Saved on this device, but Maraithon could not update it online. \(MobileErrorCopy.message(for: error))"

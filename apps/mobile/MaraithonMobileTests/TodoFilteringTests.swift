@@ -161,9 +161,14 @@ struct TodoFilteringTests {
         #expect(TodosViewCopy.dismissActionWarningAccessibilityLabel == "Dismiss work item warning")
         #expect(TodosViewCopy.localUpdateFailedMessage == "Could not update the work item on this device. Your work list stayed unchanged.")
         #expect(TodosViewCopy.localDeleteFailedMessage == "Could not delete the work item on this device. Your work list stayed unchanged.")
-        #expect(TodosViewCopy.remoteUpdateSaveFailedMessage == "Maraithon updated the work item, but this device could not save the latest copy. Refresh work to reconcile.")
-        #expect(TodosViewCopy.remoteDeleteSaveFailedMessage == "Maraithon deleted the work item, but this device could not remove the local copy. Refresh work to reconcile.")
-        #expect(TodosViewCopy.restoreFailedMessage == "Could not restore the work item on this device. Refresh work to reconcile.")
+        #expect(TodosViewCopy.remoteUpdateSaveFailedMessage == "Maraithon updated the work item. Refresh work to show the latest state on this device.")
+        #expect(TodosViewCopy.remoteDeleteSaveFailedMessage == "Maraithon deleted the work item. Refresh work to remove it from this device.")
+        #expect(TodosViewCopy.restoreFailedMessage == "Could not restore the work item after the update failed. Refresh work to show the latest state.")
         #expect(TodosViewCopy.localSaveFailureLabels.count == 7)
+
+        let copy = TodosViewCopy.localSaveFailureLabels.joined(separator: " ").lowercased()
+        #expect(!copy.contains("local copy"))
+        #expect(!copy.contains("latest copy"))
+        #expect(!copy.contains("reconcile"))
     }
 }

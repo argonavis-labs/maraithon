@@ -230,8 +230,8 @@ enum CRMViewCopy {
     static let actionWarningTitle = "Relationship update was not saved"
     static let dismissActionWarningAccessibilityLabel = "Dismiss relationship update warning"
     static let localSaveFailedMessage = "Could not save the relationship update on this device. Your people list stayed unchanged."
-    static let remoteSaveFailedMessage = "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile."
-    static let restoreFailedMessage = "Could not restore this relationship on this device. Refresh people to reconcile."
+    static let remoteSaveFailedMessage = "Maraithon updated the relationship. Refresh people to show the latest state on this device."
+    static let restoreFailedMessage = "Could not restore this relationship after the update failed. Refresh people to show the latest state."
     static let reachedOutActionTitle = "Reached out"
     static let addPersonAccessibilityLabel = "Add person"
 

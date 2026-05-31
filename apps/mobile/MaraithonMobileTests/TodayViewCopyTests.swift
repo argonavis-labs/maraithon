@@ -31,6 +31,18 @@ struct TodayViewCopyTests {
     }
 
     @Test
+    func saveFailureCopyUsesRecoveryLanguage() {
+        #expect(TodayViewCopy.remoteCompleteSaveFailedMessage == "Maraithon completed the focus item. Refresh Today to show the latest state on this device.")
+        #expect(TodayViewCopy.remoteDismissSaveFailedMessage == "Maraithon dismissed the focus item. Refresh Today to remove it from this device.")
+        #expect(TodayViewCopy.restoreFocusFailedMessage == "Could not restore the focus item after the update failed. Refresh Today to show the latest state.")
+
+        let copy = TodayViewCopy.actionLabels.joined(separator: " ").lowercased()
+        #expect(!copy.contains("local copy"))
+        #expect(!copy.contains("latest copy"))
+        #expect(!copy.contains("reconcile"))
+    }
+
+    @Test
     func nextActionsAvoidsGenericOrMisleadingLanguage() {
         let exactCopy = TodayViewCopy.actionLabels.joined(separator: " ")
         let copy = exactCopy.lowercased()

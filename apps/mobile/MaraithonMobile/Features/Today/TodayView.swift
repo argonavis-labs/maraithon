@@ -399,9 +399,9 @@ enum TodayViewCopy {
     static let localDismissFailedMessage = "Could not dismiss the focus item on this device. Today stayed unchanged."
     static let remoteCompleteFailedPrefix = "Could not complete the focus item."
     static let remoteDismissFailedPrefix = "Could not dismiss the focus item."
-    static let remoteCompleteSaveFailedMessage = "Maraithon completed the focus item, but this device could not save the latest copy. Refresh Today to reconcile."
-    static let remoteDismissSaveFailedMessage = "Maraithon dismissed the focus item, but this device could not remove the local copy. Refresh Today to reconcile."
-    static let restoreFocusFailedMessage = "Could not restore the focus item on this device. Refresh Today to reconcile."
+    static let remoteCompleteSaveFailedMessage = "Maraithon completed the focus item. Refresh Today to show the latest state on this device."
+    static let remoteDismissSaveFailedMessage = "Maraithon dismissed the focus item. Refresh Today to remove it from this device."
+    static let restoreFocusFailedMessage = "Could not restore the focus item after the update failed. Refresh Today to show the latest state."
 
     static var actionLabels: [String] {
         [

@@ -227,9 +227,9 @@ enum TodosViewCopy {
     static let dismissActionWarningAccessibilityLabel = "Dismiss work item warning"
     static let localUpdateFailedMessage = "Could not update the work item on this device. Your work list stayed unchanged."
     static let localDeleteFailedMessage = "Could not delete the work item on this device. Your work list stayed unchanged."
-    static let remoteUpdateSaveFailedMessage = "Maraithon updated the work item, but this device could not save the latest copy. Refresh work to reconcile."
-    static let remoteDeleteSaveFailedMessage = "Maraithon deleted the work item, but this device could not remove the local copy. Refresh work to reconcile."
-    static let restoreFailedMessage = "Could not restore the work item on this device. Refresh work to reconcile."
+    static let remoteUpdateSaveFailedMessage = "Maraithon updated the work item. Refresh work to show the latest state on this device."
+    static let remoteDeleteSaveFailedMessage = "Maraithon deleted the work item. Refresh work to remove it from this device."
+    static let restoreFailedMessage = "Could not restore the work item after the update failed. Refresh work to show the latest state."
 
     static var localSaveFailureLabels: [String] {
         [
