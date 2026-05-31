@@ -60,15 +60,16 @@ defmodule Maraithon.Insights.DetailTest do
 
     summary = Detail.summary_text(detail, insight)
 
-    assert summary =~ "Reason sent:"
+    assert summary =~ "What this is:"
 
     assert summary =~
              "Sarah Chen is tied to this unresolved commitment: Send the revised pricing doc to Sarah by Friday."
 
-    assert summary =~ "Why now:"
+    assert summary =~ "Why it needs attention:"
     assert summary =~ "No sent artifact confirms delivery."
-    assert summary =~ "Evidence checked:"
+    assert summary =~ "Source context checked:"
     assert summary =~ "Promise stated in email thread: Send the revised pricing doc by Friday."
+    assert summary =~ "Next move:"
     refute summary =~ "I surfaced"
     refute summary =~ "looks like"
     refute summary =~ "I didn't find"
@@ -209,9 +210,10 @@ defmodule Maraithon.Insights.DetailTest do
 
     summary = Detail.summary_text(detail, insight)
 
-    assert summary =~ "Reason sent:"
+    assert summary =~ "What this is:"
     assert summary =~ "Unresolved commitment: Reply owed: Board deck"
-    assert summary =~ "No completion evidence was found after the original commitment."
+    assert summary =~ "No completion source context was found after the original commitment."
+    assert summary =~ "Next move:"
     refute summary =~ "Persisted"
     refute summary =~ "open loop"
     refute summary =~ "I surfaced"

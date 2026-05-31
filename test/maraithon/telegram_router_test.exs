@@ -412,7 +412,7 @@ defmodule Maraithon.TelegramRouterTest do
     assert reply.opts[:reply_to] == "90045"
   end
 
-  test "question-about-insight replies include why-now and evidence", %{
+  test "question-about-insight replies explain the source context and next move", %{
     user_id: user_id,
     agent: agent
   } do
@@ -464,13 +464,17 @@ defmodule Maraithon.TelegramRouterTest do
       })
 
     reply = last_telegram_message(:send)
-    assert reply.text =~ "Reason sent:"
+    assert reply.text =~ "What this is:"
     assert reply.text =~ "Sarah is tied to this unresolved commitment: Send the deck to Sarah"
     refute reply.text =~ "Why now:"
-    assert reply.text =~ "Evidence checked:"
-    assert reply.text =~ "Recommended action:"
+    assert reply.text =~ "Why it needs attention:"
+    assert reply.text =~ "Source context checked:"
+    assert reply.text =~ "Next move:"
     assert reply.text =~ "Stored detail rationale says the promised deck was never sent."
     assert reply.text =~ "Promise stated in email thread"
+    refute reply.text =~ "Reason sent:"
+    refute reply.text =~ "Evidence checked:"
+    refute reply.text =~ "Recommended action:"
     refute reply.text =~ "I surfaced"
     refute reply.text =~ "looks like"
     refute reply.text =~ "I didn't find"

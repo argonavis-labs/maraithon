@@ -6,6 +6,7 @@ defmodule Maraithon.Insights.Detail do
 
   alias Maraithon.InsightNotifications.Delivery
   alias Maraithon.Insights.Insight
+  alias Maraithon.Todos.UserFacingCopy
 
   @max_summary_evidence 3
 
@@ -73,7 +74,7 @@ defmodule Maraithon.Insights.Detail do
           text
 
         _ ->
-          "Available evidence does not show completion for this item."
+          "Available source context does not show completion for this item."
       end
 
     evidence_text =
@@ -83,7 +84,7 @@ defmodule Maraithon.Insights.Detail do
       |> Enum.reject(&is_nil/1)
       |> Enum.take(@max_summary_evidence)
       |> case do
-        [] -> "No completion evidence was found after the original commitment."
+        [] -> "No completion source context was found after the original commitment."
         lines -> Enum.map_join(lines, "\n", &"- #{&1}")
       end
 
@@ -93,21 +94,21 @@ defmodule Maraithon.Insights.Detail do
       |> normalize_text()
       |> case do
         nil -> ""
-        reply -> "\n\n#{reply}"
+        reply -> "\n\n#{UserFacingCopy.polish_text(reply)}"
       end
 
     """
-    Reason sent:
+    What this is:
     #{reason_sent}
 
-    Why now:
+    Why it needs attention:
     #{reason_text}
 
-    Evidence checked:
+    Source context checked:
     #{evidence_text}
 
-    Recommended action:
-    #{insight.recommended_action}#{extra_reply}
+    Next move:
+    #{UserFacingCopy.polish_text(insight.recommended_action)}#{extra_reply}
     """
     |> String.trim()
   end
@@ -127,7 +128,7 @@ defmodule Maraithon.Insights.Detail do
         "Unresolved commitment involving #{requested_by}."
 
       true ->
-        "Available evidence still shows an unresolved commitment."
+        "Available source context still shows an unresolved commitment."
     end
   end
 
@@ -558,7 +559,7 @@ defmodule Maraithon.Insights.Detail do
       unresolved_status?(metadata, record)
     )
     |> maybe_append(
-      "Available evidence still does not show completion after the original commitment.",
+      "Available source context still does not show completion after the original commitment.",
       missing_completion_evidence?(metadata, record)
     )
     |> maybe_append(deadline_factor(insight, metadata, record, timezone_info, reference_at))
@@ -658,7 +659,7 @@ defmodule Maraithon.Insights.Detail do
   defp source_occurrence_factor(_insight, _timezone_info), do: nil
 
   defp ensure_reason_fallback([], %Insight{}) do
-    ["Available evidence does not show completion for this item."]
+    ["Available source context does not show completion for this item."]
   end
 
   defp ensure_reason_fallback(factors, _insight), do: factors

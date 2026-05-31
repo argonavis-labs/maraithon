@@ -724,7 +724,7 @@ defmodule Maraithon.TelegramRouter do
                   [
                     delivery.insight.summary,
                     "",
-                    "Recommended action:",
+                    "Next move:",
                     delivery.insight.recommended_action
                   ],
                   "\n"
