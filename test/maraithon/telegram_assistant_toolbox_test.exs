@@ -125,12 +125,12 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.insight_count == 1
     assert result.todo_count == 0
     assert result.todos == []
-    assert result.summary =~ "Open work: 1 priority."
-    assert result.summary =~ "Start here: Reply in the old thread."
+    assert result.summary =~ "Open work: 1 priority item."
+    assert result.summary =~ "Start here: Old Gmail insight. Next: Reply in the old thread."
     assert result.summary =~ "Gmail has newer mail than this summary"
 
     assert result.next_action ==
-             "Search Gmail for the latest inbox first. If nothing supersedes it, start here: Reply in the old thread."
+             "Search Gmail for the latest inbox first. If nothing supersedes it, start here: Old Gmail insight. Next: Reply in the old thread."
 
     refute result.summary =~ "open insights"
     refute result.summary =~ "1 insight"
@@ -291,13 +291,15 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              )
 
     assert result.summary =~ "Open work: 1 work item."
-    assert result.summary =~ "Start here: Send the concise investor update."
+
+    assert result.summary =~
+             "Start here: Send investor update. Next: Send the concise investor update."
 
     assert result.summary =~
              "Inbox-backed follow-up is not fully covered because Gmail is not connected."
 
     assert result.next_action ==
-             "Start here: Send the concise investor update. Connect Gmail before relying on this as a complete inbox review."
+             "Start here: Send investor update. Next: Send the concise investor update. Connect Gmail before relying on this as a complete inbox review."
 
     refute result.summary =~ "Tell the user"
     refute result.summary =~ "Maraithon cannot currently inspect"
@@ -366,7 +368,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert result.summary =~ "The Mac companion has not checked in recently"
 
     assert result.next_action ==
-             "Start here: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
+             "Start here: Confirm pickup plan. Next: Confirm the Tuesday pickup plan. Open the Mac companion app before treating local iMessage, Notes, Voice Memos, Calendar, Reminders, Files, and Browser History context as complete."
 
     refute result.next_action =~ "source_health"
     refute result.next_action =~ "last_seen_at"

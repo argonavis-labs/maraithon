@@ -381,6 +381,8 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
     )
     |> replace_result_regex(~r/\bCRM context\b/i, "relationship context")
     |> replace_result_regex(~r/\bCRM\b/i, "relationship data")
+    |> replace_result_regex(~r/\b1 insight\b/i, "1 priority item")
+    |> replace_result_regex(~r/\b([0-9]+) insights\b/i, "\\1 priority items")
     |> replace_result_regex(~r/\binsights\b/i, "priorities")
     |> replace_result_regex(~r/\binsight\b/i, "priority")
     |> replace_result_regex(~r/\btodos\b/i, "work items")

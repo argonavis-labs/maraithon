@@ -714,7 +714,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert String.starts_with?(
              tool_summary,
-             "Open work: 1 priority. Start here: Reply in the old thread."
+             "Open work: 1 priority item. Start here: Reply in the old thread."
            )
 
     refute summary["headline"] =~ "Open work: 1 insight"

@@ -3869,19 +3869,19 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
     cond do
       gmail_stale?(source_health) and focus ->
-        "Search Gmail for the latest inbox first. If nothing supersedes it, start here: #{sentence_fragment(open_work_focus_action(focus))}."
+        "Search Gmail for the latest inbox first. If nothing supersedes it, start here: #{open_work_focus_fragment(focus)}."
 
       gmail_not_connected?(source_health) and focus ->
-        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. Connect Gmail before relying on this as a complete inbox review."
+        "Start here: #{open_work_focus_fragment(focus)}. Connect Gmail before relying on this as a complete inbox review."
 
       gmail_error?(source_health) and focus ->
-        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. Reconnect Gmail before relying on this as a complete inbox review."
+        "Start here: #{open_work_focus_fragment(focus)}. Reconnect Gmail before relying on this as a complete inbox review."
 
       local_context_issue?(source_health) and focus ->
-        "Start here: #{sentence_fragment(open_work_focus_action(focus))}. #{local_context_next_action(source_health)}"
+        "Start here: #{open_work_focus_fragment(focus)}. #{local_context_next_action(source_health)}"
 
       focus ->
-        "Start here: #{sentence_fragment(open_work_focus_action(focus))}."
+        "Start here: #{open_work_focus_fragment(focus)}."
 
       gmail_stale?(source_health) ->
         "Search Gmail before answering questions about the latest inbox or today's priorities."
@@ -3917,7 +3917,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp open_work_count_line(insight_count, todo_count) do
     parts =
       [
-        count_phrase(insight_count, "priority", "priorities"),
+        count_phrase(insight_count, "priority item", "priority items"),
         count_phrase(todo_count, "work item", "work items")
       ]
       |> Enum.reject(&is_nil/1)
@@ -3935,7 +3935,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp open_work_focus_line(insights, todos) do
     case open_work_focus_item(insights, todos) do
       nil -> nil
-      focus -> "Start here: #{sentence_fragment(open_work_focus_action(focus))}."
+      focus -> "Start here: #{open_work_focus_fragment(focus)}."
     end
   end
 
@@ -3980,6 +3980,17 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp open_work_focus_action(%{action: action}) when not is_nil(action), do: action
   defp open_work_focus_action(%{title: title}), do: title
+
+  defp open_work_focus_fragment(focus) when is_map(focus) do
+    title = sentence_fragment(Map.get(focus, :title))
+    action = sentence_fragment(open_work_focus_action(focus))
+
+    cond do
+      blank_string?(title) -> action
+      blank_string?(action) or same_open_work_text?(title, action) -> title
+      true -> "#{title}. Next: #{action}"
+    end
+  end
 
   defp open_work_action_or_title(action, title) do
     action = trim_open_work_text(action)
