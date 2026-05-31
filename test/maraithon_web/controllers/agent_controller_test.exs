@@ -194,7 +194,14 @@ defmodule MaraithonWeb.AgentControllerTest do
     test "returns 404 for unknown behavior", %{conn: conn} do
       conn = get(conn, "/api/v1/agent-architecture", %{behavior: "not_real"})
 
-      assert json_response(conn, 404)["error"] == "not_found"
+      response = json_response(conn, 404)
+      assert response["error"] == "not_found"
+
+      assert response["message"] ==
+               "Automation details are no longer available. Refresh automations before continuing."
+
+      refute String.contains?(String.downcase(response["message"]), "not_real")
+      refute String.contains?(String.downcase(response["message"]), "unknown_behavior")
     end
   end
 
@@ -458,6 +465,9 @@ defmodule MaraithonWeb.AgentControllerTest do
 
       response = json_response(conn, 409)
       assert response["error"] == "agent_stopped"
+
+      assert response["message"] ==
+               "Could not send that message. Start the automation before sending a message."
     end
   end
 
@@ -510,6 +520,22 @@ defmodule MaraithonWeb.AgentControllerTest do
         [{pid, _value}] -> Maraithon.Runtime.AgentSupervisor.stop_agent(pid)
         [] -> :ok
       end
+    end
+
+    test "returns current-state copy when automation is already running", %{conn: conn} do
+      {:ok, agent} =
+        Agents.create_agent(%{
+          behavior: "watchdog_summarizer",
+          config: %{},
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      conn = post(conn, "/api/v1/agents/#{agent.id}/start", %{})
+
+      response = json_response(conn, 409)
+      assert response["error"] == "already_running"
+      assert response["message"] == "That automation is already active."
     end
   end
 

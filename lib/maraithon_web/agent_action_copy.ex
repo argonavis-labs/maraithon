@@ -8,6 +8,14 @@ defmodule MaraithonWeb.AgentActionCopy do
     "That automation is no longer available. Refresh automations before continuing."
   end
 
+  def details_not_found do
+    "Automation details are no longer available. Refresh automations before continuing."
+  end
+
+  def already_active do
+    "That automation is already active."
+  end
+
   def error(:install, %Ecto.Changeset{} = changeset) do
     with_detail(
       "Could not install that automation.",

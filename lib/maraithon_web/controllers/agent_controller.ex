@@ -51,7 +51,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :unknown_behavior} ->
         conn
         |> put_status(:not_found)
-        |> json(%{error: "not_found", message: "Automation details not found"})
+        |> json(%{error: "not_found", message: AgentActionCopy.details_not_found()})
     end
   end
 
@@ -110,7 +110,10 @@ defmodule MaraithonWeb.AgentController do
       {:error, :agent_stopped} ->
         conn
         |> put_status(:conflict)
-        |> json(%{error: "agent_stopped", message: "Automation is not running"})
+        |> json(%{
+          error: "agent_stopped",
+          message: AgentActionCopy.error(:send_message, :agent_stopped)
+        })
     end
   end
 
@@ -127,7 +130,7 @@ defmodule MaraithonWeb.AgentController do
       {:error, :already_running} ->
         conn
         |> put_status(:conflict)
-        |> json(%{error: "already_running", message: "Automation is already running"})
+        |> json(%{error: "already_running", message: AgentActionCopy.already_active()})
 
       {:error, changeset} ->
         conn
