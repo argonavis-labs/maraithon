@@ -40,7 +40,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     assert has_element?(view, "h1", "Control Center")
     assert has_element?(view, "h2", "Overview")
-    assert html =~ "Focus queue"
+    assert html =~ "Open work review"
     assert has_element?(view, "h2", "Today")
     assert has_element?(view, "h2", "Workspace")
     assert has_element?(view, "h2", "Start Chief of Staff")
@@ -48,13 +48,17 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Saved context"
     assert has_element?(view, "h2", "Projects")
     assert html =~ "Automation overview"
-    assert html =~ "No work needs attention right now."
+    assert html =~ "No work is ready for review right now."
+
+    assert html =~
+             "Maraithon will add work here when connected sources find a concrete next move."
+
     assert html =~ "attach an automation to recommend next moves"
     assert html =~ "Follow-ups will appear here after"
     assert html =~ "Connect work apps so Maraithon can see current context."
     assert html =~ "Focus on clear obligations until a project focus is confirmed."
     assert html =~ "begin reviewing active work"
-    assert html =~ "nothing waiting"
+    assert html =~ "no review-ready work"
     refute html =~ "none failed"
     refute html =~ "No projects yet."
     refute html =~ "No open follow-ups yet."
@@ -75,6 +79,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "New agent"
     refute html =~ "All caught up"
     refute html =~ "all clear"
+    refute html =~ "Focus queue"
+    refute html =~ "nothing waiting"
     refute html =~ "high-signal"
     refute html =~ "project-local state"
     refute html =~ "operating system"
@@ -894,7 +900,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "active"
     assert html =~ "need attention"
     assert html =~ "Open work"
-    assert html =~ "nothing waiting"
+    assert html =~ "no review-ready work"
     assert html =~ "Connected services"
     assert html =~ "connect apps for context"
     assert html =~ "Projects"
@@ -994,11 +1000,12 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
 
     assert has_element?(view, "#todo-review")
-    assert html =~ "Focus queue"
+    assert html =~ "Open work review"
     assert html =~ "One commitment at a time"
     assert html =~ "Choose the next move for each open commitment."
     refute html =~ "Today's work"
     refute html =~ "Today's cards"
+    refute html =~ "Focus queue"
     refute html =~ "Review queue"
     assert html =~ "1 of 2"
     assert html =~ "Michael Berlingo"

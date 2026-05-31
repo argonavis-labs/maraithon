@@ -953,7 +953,7 @@ defmodule MaraithonWeb.DashboardLive do
               <%= if @open_todo_count > 0 do %>
                 <%= review_ready_label(@open_todo_count) %>
               <% else %>
-                No work needs attention right now. Maraithon will add items here when connected sources find something actionable.
+                No work is ready for review right now. Maraithon will add work here when connected sources find a concrete next move.
               <% end %>
             </p>
           </div>
@@ -3400,7 +3400,7 @@ defmodule MaraithonWeb.DashboardLive do
     "#{active} active · #{needs_attention} need attention"
   end
 
-  defp open_work_status_note(0), do: "nothing waiting"
+  defp open_work_status_note(0), do: "no review-ready work"
   defp open_work_status_note(1), do: "1 item ready to review"
   defp open_work_status_note(count), do: "#{count} items ready to review"
 
@@ -4068,7 +4068,7 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div class="flex flex-wrap items-center gap-2">
-              <h2 class="text-base/7 font-semibold text-zinc-950">Focus queue</h2>
+              <h2 class="text-base/7 font-semibold text-zinc-950">Open work review</h2>
               <.badge color="emerald" class="bg-white">
                 One commitment at a time
               </.badge>
