@@ -29,13 +29,13 @@ identity instead of letting Xcode choose a different local certificate.
 Once a valid identity is pinned, the setup script keeps that exact identity on
 later runs and only chooses a replacement if the pinned certificate is no
 longer available in the login Keychain.
-`make run-companion` also builds the Debug app directly at
-`~/Applications/Maraithon.app` before launching it. Building at that stable path
-lets Xcode register the app for local execution while keeping Full Disk Access
-attached to one app path instead of an Xcode DerivedData bundle. It removes
-generated DerivedData `Maraithon.app` copies and Xcode's auxiliary product
-files after the build so System Settings does not show multiple
-indistinguishable development builds.
+`make run-companion` builds the Debug app in a local cache, then refreshes the
+existing `~/Applications/Maraithon.app` bundle in place before launching it. The
+installed bundle is the app you grant in System Settings; keeping that bundle in
+place prevents Xcode from replacing the FDA-granted copy during ordinary
+reloads. The launcher removes generated DerivedData `Maraithon.app` copies and
+Xcode's auxiliary product files after the build so System Settings does not show
+multiple indistinguishable development builds.
 
 The companion Debug target also disables Xcode's debug dylib mode. That keeps
 the code that reads protected local stores in the app's main signed executable
@@ -63,8 +63,8 @@ make reset-companion-fda
 
 Then open System Settings -> Privacy & Security -> Full Disk Access and add
 or enable the revealed `~/Applications/Maraithon.app` copy. Future
-`make run-companion` reloads rebuild that same bundle path and remove stale
-DerivedData copies before launching without resetting Full Disk Access.
+`make run-companion` reloads refresh that installed bundle in place and remove
+stale DerivedData copies before launching without resetting Full Disk Access.
 
 ## Apple Developer setup
 

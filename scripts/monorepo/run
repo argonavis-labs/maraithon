@@ -11,15 +11,20 @@ validate_component "${component}" companion mac
 if selected_component "${component}" "companion"; then
   install_app="${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
   install_dir="$(dirname "${install_app}")"
+  build_products_dir="${MARAITHON_COMPANION_BUILD_PRODUCTS_DIR:-${HOME}/Library/Caches/Maraithon/companion-build-products}"
 
   ensure_companion_dev_signing
   quit_running_companion_app
   mkdir -p "${install_dir}"
+  mkdir -p "${build_products_dir}"
 
-  MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${install_dir}" \
+  # Build outside the FDA-granted app copy, then refresh the installed bundle
+  # in place. Building directly into ~/Applications lets Xcode replace the
+  # bundle macOS granted, which makes Full Disk Access appear to reset.
+  MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${build_products_dir}" \
     "${ROOT_DIR}/scripts/monorepo/build" companion
   built_app="$(
-    MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${install_dir}" \
+    MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${build_products_dir}" \
       companion_debug_app_path
   )"
 
@@ -29,6 +34,7 @@ if selected_component "${component}" "companion"; then
   fi
 
   install_companion_dev_app "${built_app}" "${install_app}"
+  cleanup_companion_direct_build_products "${build_products_dir}" "${built_app}"
   cleanup_companion_direct_build_products "${install_dir}" "${install_app}"
   xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
   if [[ -x "${LSREGISTER}" ]]; then
