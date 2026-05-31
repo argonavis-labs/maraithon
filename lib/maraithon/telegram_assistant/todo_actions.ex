@@ -25,7 +25,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   def telegram_payload(todo, opts) when is_map(todo) and is_list(opts) do
     %{
       text: render_message(todo, opts),
-      reply_markup: build_reply_markup(todo)
+      reply_markup: build_reply_markup(todo, opts)
     }
   end
 
@@ -176,20 +176,35 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp build_reply_markup(todo) when is_map(todo) do
+  defp build_reply_markup(todo, opts) when is_map(todo) and is_list(opts) do
+    card = ActionCards.for_todo(todo, action_card_opts(opts))
+
     rows =
       []
       |> maybe_add_draft_row(todo)
-      |> maybe_add_action_row(todo)
-      |> maybe_add_feedback_row(todo)
+      |> maybe_add_action_row(todo, card)
+      |> maybe_add_feedback_row(todo, card)
       |> maybe_add_link_row(todo)
 
     if rows == [], do: nil, else: %{"inline_keyboard" => rows}
   end
 
-  defp maybe_add_action_row(rows, todo) when is_map(todo) do
-    case {todo_id(todo), todo_status(todo)} do
-      {todo_id, status} when is_binary(todo_id) and status in ["open", "snoozed"] ->
+  defp build_reply_markup(_todo, _opts), do: nil
+
+  defp maybe_add_action_row(rows, todo, card) when is_map(todo) do
+    case {todo_id(todo), todo_status(todo), read_string(card, "attention_mode")} do
+      {todo_id, status, "stale_check"}
+      when is_binary(todo_id) and status in ["open", "snoozed"] ->
+        rows ++
+          [
+            [
+              %{"text" => "Keep active", "callback_data" => callback_data(todo_id, "important")},
+              %{"text" => "Dismiss", "callback_data" => callback_data(todo_id, "dismiss")}
+            ]
+          ]
+
+      {todo_id, status, _attention_mode}
+      when is_binary(todo_id) and status in ["open", "snoozed"] ->
         rows ++
           [
             [
@@ -204,7 +219,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp maybe_add_action_row(rows, _todo), do: rows
+  defp maybe_add_action_row(rows, _todo, _card), do: rows
 
   defp maybe_add_draft_row(rows, todo) when is_map(todo) do
     case {todo_id(todo), draft_callback_action(todo)} do
@@ -218,16 +233,19 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp maybe_add_draft_row(rows, _todo), do: rows
 
-  defp maybe_add_feedback_row(rows, todo) when is_map(todo) do
-    case {todo_id(todo), feedback_value(todo)} do
-      {todo_id, value} when is_binary(todo_id) and value in @feedback_values ->
+  defp maybe_add_feedback_row(rows, todo, card) when is_map(todo) do
+    case {todo_id(todo), feedback_value(todo), read_string(card, "attention_mode")} do
+      {todo_id, value, _attention_mode} when is_binary(todo_id) and value in @feedback_values ->
         rows
 
-      {todo_id, _value} when is_binary(todo_id) ->
+      {todo_id, _value, "stale_check"} when is_binary(todo_id) ->
+        rows
+
+      {todo_id, _value, _attention_mode} when is_binary(todo_id) ->
         rows ++
           [
             [
-              %{"text" => "Keep active", "callback_data" => callback_data(todo_id, "important")},
+              %{"text" => "Helpful", "callback_data" => callback_data(todo_id, "helpful")},
               %{
                 "text" => "Less useful",
                 "callback_data" => callback_data(todo_id, "not_helpful")
@@ -244,7 +262,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
     end
   end
 
-  defp maybe_add_feedback_row(rows, _todo), do: rows
+  defp maybe_add_feedback_row(rows, _todo, _card), do: rows
 
   defp maybe_add_link_row(rows, todo) when is_map(todo) do
     buttons =

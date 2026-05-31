@@ -40,6 +40,11 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
   end
 
   test "important callback marks a stale item important", %{user_id: user_id} do
+    five_days_ago =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
     {:ok, [todo]} =
       Todos.upsert_many(user_id, [
         %{
@@ -48,6 +53,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
           "summary" => "This old follow-up may no longer be important.",
           "next_action" => "Confirm whether this is still important to handle.",
           "priority" => 40,
+          "source_occurred_at" => five_days_ago,
           "dedupe_key" => "todo-actions:important"
         }
       ])
@@ -55,6 +61,9 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     payload = TodoActions.telegram_payload(todo)
     buttons = payload.reply_markup["inline_keyboard"] |> List.flatten()
     assert Enum.any?(buttons, &(&1["text"] == "Keep active"))
+    assert Enum.any?(buttons, &(&1["text"] == "Dismiss"))
+    refute Enum.any?(buttons, &(&1["text"] == "Done"))
+    refute Enum.any?(buttons, &(&1["text"] == "Helpful"))
 
     :ok =
       InsightNotifications.handle_telegram_event(%{
@@ -73,6 +82,33 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert get_in(updated.metadata, ["assistant_feedback", "value"]) == "important"
     assert get_in(updated.metadata, ["importance_override", "value"]) == "important"
     assert last_telegram_message(:callback).opts[:text] == "Kept active"
+  end
+
+  test "fresh action cards do not show stale keep-active confirmation" do
+    todo = %{
+      "id" => Ecto.UUID.generate(),
+      "source" => "gmail",
+      "status" => "open",
+      "title" => "Reply to Alex about the launch plan",
+      "summary" => "Alex is waiting on the launch sequencing decision.",
+      "next_action" => "Reply to Alex with the launch sequence and timing.",
+      "source_item_id" => "gmail-thread-alex-launch",
+      "metadata" => %{
+        "source_evidence" => "Alex asked for the launch sequence and timing.",
+        "record" => %{"person" => "Alex Morgan", "company" => "Runway"}
+      }
+    }
+
+    payload = TodoActions.telegram_payload(todo)
+    labels = payload.reply_markup["inline_keyboard"] |> List.flatten() |> Enum.map(& &1["text"])
+
+    assert "Done" in labels
+    assert "Snooze" in labels
+    assert "Dismiss" in labels
+    assert "Helpful" in labels
+    assert "Less useful" in labels
+    assert "Show less" in labels
+    refute "Keep active" in labels
   end
 
   test "commitment cards include company and relationship context" do
