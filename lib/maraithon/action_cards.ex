@@ -1000,7 +1000,7 @@ defmodule Maraithon.ActionCards do
   defp telegram_learning_line(card) do
     case read_field(card, "attention_mode") do
       "stale_check" ->
-        "Your choice will teach Maraithon whether to keep surfacing items like this."
+        "Future open-work reminders will use this keep-or-dismiss choice."
 
       _ ->
         nil

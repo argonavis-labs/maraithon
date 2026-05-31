@@ -547,7 +547,8 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "older todo"
     refute rendered =~ "stale follow-up"
     refute rendered =~ "not treat it as urgent"
-    assert rendered =~ "teach Maraithon"
+    assert rendered =~ "Future open-work reminders will use this keep-or-dismiss choice."
+    refute rendered =~ "teach Maraithon"
   end
 
   test "stale low-priority work without a person avoids legacy todo language", %{user_id: user_id} do
