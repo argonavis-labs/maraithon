@@ -599,6 +599,70 @@ defmodule Maraithon.ActionCardsTest do
     refute visible_copy =~ "LLM"
   end
 
+  test "falls back past internal context metadata before rendering decision cards", %{
+    user_id: user_id
+  } do
+    todo = %Todo{
+      id: Ecto.UUID.generate(),
+      user_id: user_id,
+      source: "gmail",
+      kind: "gmail_triage",
+      attention_mode: "act_now",
+      title: "Reply to financing update",
+      summary: "The investor asked whether the financing update is ready.",
+      next_action: "Reply with the current financing status and review window.",
+      source_item_id: "gmail-thread-context-private-investor",
+      dedupe_key: "action-card:private-context-investor",
+      priority: 90,
+      status: "open",
+      metadata: %{
+        "person" => "source_health: {\"desktop\":\"missing\"}",
+        "contact" => "Avery Investor",
+        "company" => "99% confidence from the model score",
+        "organization" => "Northstar",
+        "relationship_context" => "model_rationale: internal ranking",
+        "context_brief" => "Longtime investor",
+        "subject" => "source_access: %{gmail: ready}",
+        "topic" => "Financing update",
+        "why_now" => "Avery asked for the financing update."
+      },
+      inserted_at: DateTime.utc_now(),
+      updated_at: DateTime.utc_now()
+    }
+
+    card = ActionCards.for_todo(todo, include_disconnected: false)
+    rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
+
+    visible_copy =
+      [
+        card["headline"],
+        card["decision_prompt"],
+        card["why_now"],
+        get_in(card, ["context_pack", "summary"]),
+        get_in(card, ["context_pack", "project_or_topic"]),
+        ActionCards.context_items(card),
+        rendered
+      ]
+      |> List.flatten()
+      |> Enum.map(fn
+        %{label: label, value: value} -> "#{label}: #{value}"
+        value -> value
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n")
+
+    assert visible_copy =~ "Avery Investor"
+    assert visible_copy =~ "Northstar"
+    assert visible_copy =~ "Longtime investor"
+    assert visible_copy =~ "Financing update"
+    refute visible_copy =~ "source_health"
+    refute visible_copy =~ "source_access"
+    refute visible_copy =~ "99%"
+    refute visible_copy =~ "confidence"
+    refute visible_copy =~ "model score"
+    refute visible_copy =~ "model_rationale"
+  end
+
   test "polishes public metadata before rendering decision cards", %{user_id: user_id} do
     todo = %Todo{
       id: Ecto.UUID.generate(),

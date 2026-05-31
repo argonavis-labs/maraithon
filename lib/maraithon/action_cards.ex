@@ -375,12 +375,31 @@ defmodule Maraithon.ActionCards do
     }
   end
 
+  defp first_public_context_string(values) when is_list(values) do
+    Enum.find_value(values, &public_context_string/1)
+  end
+
+  defp public_context_string(value) when is_binary(value) do
+    value =
+      value
+      |> externalize_copy()
+      |> single_line()
+
+    cond do
+      blank?(value) -> nil
+      public_card_text?(value) -> value
+      true -> nil
+    end
+  end
+
+  defp public_context_string(_value), do: nil
+
   defp context_pack(%Todo{} = todo, metadata, profile) do
     record = read_map(metadata, "record")
     person_context = first_person_context(metadata)
 
     person =
-      first_present([
+      first_public_context_string([
         read_string(record, "person"),
         read_string(metadata, "person"),
         read_string(person_context, "display_name"),
@@ -392,7 +411,7 @@ defmodule Maraithon.ActionCards do
       ])
 
     company =
-      first_present([
+      first_public_context_string([
         read_string(record, "company"),
         read_string(metadata, "company"),
         read_string(person_context, "company"),
@@ -403,7 +422,7 @@ defmodule Maraithon.ActionCards do
       ])
 
     relationship =
-      first_present([
+      first_public_context_string([
         read_string(record, "relationship_context"),
         read_string(metadata, "relationship_context"),
         read_string(person_context, "relationship_context"),
@@ -414,7 +433,7 @@ defmodule Maraithon.ActionCards do
       ])
 
     project =
-      first_present([
+      first_public_context_string([
         read_string(metadata, "project"),
         read_string(metadata, "project_name"),
         read_string(metadata, "omni_project"),
