@@ -40,12 +40,24 @@ struct ChiefOfStaffCopyTests {
 
         #expect(
             copy ==
-                "Sarah needs the answer before today's cutoff. reply with the approved timing before 3 PM."
+                "Sarah needs the answer before today's cutoff. Reply with the approved timing before 3 PM."
         )
         #expect(copy?.localizedCaseInsensitiveContains("confidence") == false)
         #expect(copy?.localizedCaseInsensitiveContains("reasoning") == false)
         #expect(copy?.localizedCaseInsensitiveContains("model") == false)
         #expect(copy?.localizedCaseInsensitiveContains("score") == false)
+    }
+
+    @Test
+    func capitalizesActionFragmentsAfterSafeLabels() {
+        #expect(
+            ChiefOfStaffCopy.clean("Next action: approve the finance reply before noon.") ==
+                "Approve the finance reply before noon."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean("Summary: iOS release notes need a final pass.") ==
+                "iOS release notes need a final pass."
+        )
     }
 
     @Test

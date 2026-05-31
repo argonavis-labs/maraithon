@@ -26,6 +26,7 @@ enum ChiefOfStaffCopy {
         let withoutLabel = strippedSafeLabel(trimmed)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .polishingChiefOfStaffRoleLabels
+            .capitalizingChiefOfStaffSentenceStart
 
         guard !withoutLabel.isEmpty, !containsInternalCopy(withoutLabel) else { return nil }
         return withoutLabel
@@ -200,6 +201,22 @@ private extension String {
     var collapsingChiefOfStaffWhitespace: String {
         replacingChiefOfStaffMatches(#"[ \t]{2,}"#, with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var capitalizingChiefOfStaffSentenceStart: String {
+        guard let firstIndex = firstIndex(where: { !$0.isWhitespace }) else {
+            return self
+        }
+
+        let first = self[firstIndex]
+        guard first.isLowercase else { return self }
+
+        let secondIndex = index(after: firstIndex)
+        if secondIndex < endIndex, self[secondIndex].isUppercase {
+            return self
+        }
+
+        return replacingCharacters(in: firstIndex...firstIndex, with: String(first).uppercased())
     }
 
     func replacingChiefOfStaffMatches(_ pattern: String, with replacement: String) -> String {
