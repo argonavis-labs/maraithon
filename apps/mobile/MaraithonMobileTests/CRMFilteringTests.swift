@@ -9,11 +9,15 @@ struct CRMFilteringTests {
         #expect(ContactDetailCopy.contactDetailsSectionTitle == "Contact details")
         #expect(ContactDetailCopy.relationshipSectionTitle == "Relationship status")
         #expect(ContactDetailCopy.lastContactedLabel == "Last reached out")
-        #expect(ContactDetailCopy.actionWarningTitle == "Relationship update was not saved")
-        #expect(ContactDetailCopy.dismissActionWarningAccessibilityLabel == "Dismiss relationship update warning")
+        #expect(ContactDetailCopy.actionWarningTitle == "Update was not saved")
+        #expect(ContactDetailCopy.dismissActionWarningAccessibilityLabel == "Dismiss update warning")
         #expect(ContactDetailCopy.logContactSubtitle == "Record that you reached out")
         #expect(ContactDetailCopy.addFollowUpTitle == "Add follow-up")
         #expect(ContactDetailCopy.addFollowUpSubtitle == "Create a linked next move")
+        #expect(ContactDetailCopy.relatedWorkSectionTitle == "Related work")
+        #expect(ContactDetailCopy.completeWorkActionLabel == "Done")
+        #expect(ContactDetailCopy.dismissWorkActionLabel == "Dismiss")
+        #expect(ContactDetailCopy.editWorkActionLabel == "Edit")
         #expect(ContactEditorCopy.contextPlaceholder == "Company, role, or context")
         #expect(ContactEditorCopy.notesPlaceholder == "What matters about this relationship")
         #expect(ContactEditorCopy.newNavigationTitle == "New person")
@@ -33,7 +37,41 @@ struct CRMFilteringTests {
         #expect(ContactDetailCopy.localSaveFailedMessage == "Could not save this relationship on this device. Your last change was not kept.")
         #expect(ContactDetailCopy.remoteSaveFailedMessage == "Maraithon updated the relationship, but this device could not save the latest copy. Refresh people to reconcile.")
         #expect(ContactDetailCopy.remoteUpdateFailedMessage(error: URLError(.notConnectedToInternet)) == "Saved on this device, but Maraithon could not update it online. Connection issue. Retry when you are online.")
-        #expect(ContactDetailCopy.saveFailureLabels.count == 5)
+        #expect(ContactDetailCopy.localCompleteWorkFailedMessage == "Could not complete the related work on this device. The person detail stayed unchanged.")
+        #expect(ContactDetailCopy.localDismissWorkFailedMessage == "Could not dismiss the related work on this device. The person detail stayed unchanged.")
+        #expect(ContactDetailCopy.remoteCompleteWorkFailedPrefix == "Could not complete the related work.")
+        #expect(ContactDetailCopy.remoteDismissWorkFailedPrefix == "Could not dismiss the related work.")
+        #expect(ContactDetailCopy.saveFailureLabels.count == 12)
+    }
+
+    @Test
+    func linkedWorkRowCopySurfacesTimingAndUrgency() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let overdue = TodoItem(
+            title: "Send investor update",
+            priority: .high,
+            dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60)
+        )
+        let done = TodoItem(
+            title: "Closed loop",
+            priority: .high,
+            dueDate: now.addingTimeInterval(60),
+            isCompleted: true
+        )
+
+        #expect(ContactLinkedWorkRowCopy.detail(
+            for: overdue,
+            now: now,
+            calendar: calendar
+        )?.hasPrefix("Past due ") == true)
+        #expect(ContactLinkedWorkRowCopy.detail(
+            for: overdue,
+            now: now,
+            calendar: calendar
+        )?.hasSuffix(" / High urgency") == true)
+        #expect(ContactLinkedWorkRowCopy.detail(for: done, now: now, calendar: calendar) == "Done")
     }
 
     @Test
