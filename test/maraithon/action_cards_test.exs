@@ -69,6 +69,10 @@ defmodule Maraithon.ActionCardsTest do
     assert "gmail" in get_in(card, ["source_health", "checked_sources"])
     assert card["decision_prompt"] == "Choose the next move with Michael Berlingo."
     refute card["decision_prompt"] =~ "Decide whether"
+    assert "helpful" in card["available_buttons"]
+    assert "not_helpful" in card["available_buttons"]
+    refute "important" in card["available_buttons"]
+    refute "keep_active" in card["available_buttons"]
 
     rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
     assert rendered =~ "Why now:"
@@ -679,8 +683,9 @@ defmodule Maraithon.ActionCardsTest do
     refute card["decision_prompt"] =~ "not treat it as urgent"
     assert card["why_now"] =~ "keep-or-close decision"
     assert card["next_best_action"] =~ "Keep it active only if it still matters"
-    assert "important" in card["available_buttons"]
+    assert "keep_active" in card["available_buttons"]
     assert "dismiss" in card["available_buttons"]
+    refute "important" in card["available_buttons"]
 
     rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
     assert rendered =~ "Should this older follow-up"

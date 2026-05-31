@@ -3827,6 +3827,17 @@ defmodule MaraithonWeb.DashboardLive do
     |> display_metadata_value()
   end
 
+  defp todo_card_headline(card, todo) do
+    card
+    |> Map.get("headline")
+    |> display_metadata_value()
+    |> case do
+      nil -> todo.title
+      "" -> todo.title
+      headline -> headline
+    end
+  end
+
   defp todo_source_health_text(card) do
     ActionCards.source_health_note(card || %{})
   end
@@ -3840,6 +3851,9 @@ defmodule MaraithonWeb.DashboardLive do
         nil
     end
   end
+
+  defp stale_todo_review?(%{"attention_mode" => "stale_check"}), do: true
+  defp stale_todo_review?(_card), do: false
 
   defp fallback_todo_context_items(todo, chief_of_staff_schedule) do
     metadata = public_todo_metadata(todo)
@@ -4091,7 +4105,7 @@ defmodule MaraithonWeb.DashboardLive do
             </div>
 
             <h3 class="mt-3 text-xl/7 font-semibold tracking-tight text-zinc-950 sm:text-lg/7">
-              <%= @current_todo.title %>
+              <%= todo_card_headline(@current_todo_card, @current_todo) %>
             </h3>
             <p :if={@current_todo.summary not in [nil, ""]} class="mt-2 text-sm/6 text-zinc-600">
               <%= @current_todo.summary %>
@@ -4138,6 +4152,7 @@ defmodule MaraithonWeb.DashboardLive do
 
             <div class="mt-6 flex flex-wrap items-center gap-2">
               <.button
+                :if={!stale_todo_review?(@current_todo_card)}
                 type="button"
                 phx-click="review_complete_todo"
                 phx-value-id={@current_todo.id}
@@ -4145,6 +4160,7 @@ defmodule MaraithonWeb.DashboardLive do
                 Done
               </.button>
               <.button
+                :if={stale_todo_review?(@current_todo_card)}
                 type="button"
                 phx-click="review_mark_important"
                 phx-value-id={@current_todo.id}
@@ -4154,6 +4170,7 @@ defmodule MaraithonWeb.DashboardLive do
                 Keep active
               </.button>
               <.button
+                :if={!stale_todo_review?(@current_todo_card)}
                 type="button"
                 phx-click="review_keep_todo"
                 phx-value-id={@current_todo.id}

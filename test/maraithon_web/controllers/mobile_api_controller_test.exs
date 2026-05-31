@@ -295,7 +295,10 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     refute Map.has_key?(action_card, "source_health")
     assert next_action =~ "Draft"
     assert Enum.any?(buttons, &(&1["action"] == "done"))
+    assert Enum.any?(buttons, &(&1["action"] == "helpful" and &1["label"] == "Helpful"))
     assert Enum.any?(buttons, &(&1["action"] == "not_helpful" and &1["label"] == "Less useful"))
+    refute Enum.any?(buttons, &(&1["action"] in ["important", "keep_active"]))
+    refute Enum.any?(buttons, &(&1["label"] == "Keep active"))
 
     conn =
       build_conn()

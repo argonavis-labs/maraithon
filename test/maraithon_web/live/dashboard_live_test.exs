@@ -1009,7 +1009,24 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Maraithon can draft the reply for approval."
     assert html =~ "Can you confirm whether the UGC campaign materials are ready?"
     assert html =~ "Next: Write the top three updates and owner for each."
-    assert html =~ "Keep active"
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{first.id}']",
+             "Done"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_keep_todo'][phx-value-id='#{first.id}']",
+             "Keep for later"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_mark_important'][phx-value-id='#{first.id}']"
+           )
+
     refute html =~ "Why important"
     refute html =~ ">Important<"
 
@@ -1052,6 +1069,59 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ "No open cards."
     refute html =~ "No active work right now"
     assert Todos.get_for_user(@user_email, second.id).status == "dismissed"
+  end
+
+  test "dashboard stale todo review offers keep or dismiss only", %{conn: conn} do
+    five_days_ago =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
+    assert {:ok, [todo]} =
+             Todos.upsert_many(@user_email, [
+               %{
+                 "source" => "gmail",
+                 "kind" => "gmail_triage",
+                 "title" => "Confirm Dan Bourke artifact status",
+                 "summary" => "Dan may no longer need the old artifact status follow-up.",
+                 "next_action" => "Ask whether this still matters before spending time on it.",
+                 "priority" => 40,
+                 "source_occurred_at" => five_days_ago,
+                 "dedupe_key" => "dashboard:todo:stale-keep-dismiss",
+                 "metadata" => %{
+                   "source_evidence" => "Dan asked for artifact status and ETA.",
+                   "record" => %{"person" => "Dan Bourke", "company" => "A-Team"}
+                 }
+               }
+             ])
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
+
+    assert html =~ "Should this older follow-up"
+    assert html =~ "Future open-work reminders will use this keep-or-dismiss choice."
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_mark_important'][phx-value-id='#{todo.id}']",
+             "Keep active"
+           )
+
+    assert has_element?(
+             view,
+             "#todo-review button[phx-click='review_dismiss_todo'][phx-value-id='#{todo.id}']",
+             "Dismiss"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_complete_todo'][phx-value-id='#{todo.id}']"
+           )
+
+    refute has_element?(
+             view,
+             "#todo-review button[phx-click='review_keep_todo'][phx-value-id='#{todo.id}']"
+           )
   end
 
   test "dashboard review avoids generated-work fallback copy", %{conn: conn} do
@@ -1192,6 +1262,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute html =~ ":not_found"
     refute html =~ "not_found"
 
+    stale_at =
+      DateTime.utc_now()
+      |> DateTime.add(-5 * 24 * 60 * 60, :second)
+      |> DateTime.truncate(:second)
+
     assert {:ok, [important_todo]} =
              Todos.upsert_many(@user_email, [
                %{
@@ -1200,7 +1275,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
                  "title" => "Keep-active dashboard work item",
                  "summary" => "This card will be removed before it can be kept active.",
                  "next_action" => "Keep it active.",
-                 "priority" => 90,
+                 "priority" => 40,
+                 "source_occurred_at" => stale_at,
                  "dedupe_key" => "dashboard:stale-important"
                }
              ])
