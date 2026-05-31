@@ -27,7 +27,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
            ] =
              summary["tool_calls"]
 
-    assert [%{"title" => "Checked open work"}] = summary["steps"]
+    assert [%{"title" => "Reviewed open work"}] = summary["steps"]
     refute inspect(summary) =~ "Returned 1 todo"
     refute inspect(summary) =~ "1 todo"
     refute Map.has_key?(summary, "model_name")
@@ -51,7 +51,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_run(run)
 
-    assert summary["headline"] == "Checked open work and replied"
+    assert summary["headline"] == "Reviewed open work before replying"
 
     assert [
              %{
@@ -178,7 +178,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_message(turn)
 
-    assert summary["headline"] == "Updated open work, checked relationship context, and replied"
+    assert summary["headline"] == "Updated open work, reviewed relationship context, and replied"
 
     assert [
              %{
@@ -223,7 +223,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     summary = WorkSummary.for_message(turn)
 
     assert summary["headline"] ==
-             "Reviewed follow-through, checked the selected item, updated relationship notes, and replied"
+             "Reviewed follow-through, reviewed the selected item, updated relationship notes, and replied"
 
     assert [
              %{"tool" => "open_loops", "label" => "Follow-through"},
@@ -295,7 +295,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     summary = WorkSummary.for_message(turn)
 
     assert summary["headline"] ==
-             "Checked people, updated memory, checked Messages, and 2 more checks before replying"
+             "Reviewed people, updated memory, reviewed Messages, and 2 more steps before replying"
 
     assert [
              %{"tool" => "people", "label" => "People", "summary" => "1 person: Dana Chen"},
@@ -442,7 +442,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     summary = WorkSummary.for_message(turn)
 
     assert summary["headline"] ==
-             "Checked Messages, checked calendar, checked people, and replied"
+             "Reviewed Messages, calendar, and people before replying"
 
     assert [
              %{
@@ -544,7 +544,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     summary = WorkSummary.for_message(turn)
 
     assert summary["headline"] ==
-             "Checked projects, checked automations, reviewed scheduled follow-ups, and 1 more check before replying"
+             "Reviewed projects, automations, scheduled follow-ups, and 1 more area before replying"
 
     assert [
              %{
@@ -603,7 +603,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     summary = WorkSummary.for_message(turn)
 
-    assert summary["headline"] == "Checked preferences, checked memory, and replied"
+    assert summary["headline"] == "Reviewed preferences and memory before replying"
 
     assert [
              %{
@@ -740,7 +740,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
       ]
     }
 
-    assert WorkSummary.for_run(run)["headline"] == "Checking relationship context"
+    assert WorkSummary.for_run(run)["headline"] == "Reviewing relationship context"
   end
 
   test "running tool headlines avoid internal workflow language" do
@@ -770,7 +770,7 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
 
     assert headlines == [
              "Reviewing follow-through",
-             "Checking the selected item",
+             "Reviewing the selected item",
              "Updating relationship notes",
              "Working"
            ]

@@ -240,6 +240,15 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
 
     assert UserFacingCopy.polish_text("You want this tracked as an ongoing todo.") ==
              "You want this tracked as an ongoing work item."
+
+    assert UserFacingCopy.open_work_language("No open work found.") ==
+             "No open work matched this request."
+
+    assert UserFacingCopy.open_work_language("No open todos found.") ==
+             "No open work matched this request."
+
+    assert UserFacingCopy.open_work_language("This check surfaced no open work.") ==
+             "No open work matched this request."
   end
 
   test "rewrites internal loop language into executive-facing follow-through copy" do

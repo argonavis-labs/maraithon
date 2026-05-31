@@ -1318,6 +1318,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
       "reviewed",
       "work reviewed",
       "open work reviewed",
+      "checked open work",
+      "reviewed open work",
+      "i checked your open work",
+      "i reviewed your open work",
       "completed",
       "completed the check",
       "finished",
@@ -1357,15 +1361,26 @@ defmodule Maraithon.TelegramAssistant.Runner do
     tool_history
     |> Enum.reverse()
     |> Enum.find_value(fn entry ->
+      tool = map_value(entry, "tool")
       result = map_value(entry, "result")
 
       if is_map(result) do
-        tool_result_summary(result)
+        tool_result_summary(tool, result)
       end
     end)
   end
 
   defp tool_result_text(_tool_history), do: nil
+
+  defp tool_result_summary(tool, result)
+       when tool in ["list_todos", "open_work"] and is_map(result) do
+    case map_value(result, "todos") do
+      [] -> "No open work matched this request."
+      _ -> tool_result_summary(result)
+    end
+  end
+
+  defp tool_result_summary(_tool, result), do: tool_result_summary(result)
 
   defp tool_result_summary(result) when is_map(result) do
     summary = map_value(result, "summary")

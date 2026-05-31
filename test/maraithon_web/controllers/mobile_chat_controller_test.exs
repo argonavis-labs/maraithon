@@ -450,7 +450,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                "status" => "completed",
                "work_summary" =>
                  run_work_summary = %{
-                   "headline" => "Checked open work and replied",
+                   "headline" => "Reviewed open work before replying",
                    "tool_calls" => [
                      %{
                        "tool" => "open_work",
@@ -467,11 +467,11 @@ defmodule MaraithonWeb.MobileChatControllerTest do
                  %{"role" => "user"},
                  %{
                    "role" => "assistant",
-                   "body" => "I checked your open work.",
+                   "body" => "No open work matched this request.",
                    "structured_data" => assistant_structured_data,
                    "work_summary" =>
                      assistant_work_summary = %{
-                       "headline" => "Checked open work and replied",
+                       "headline" => "Reviewed open work before replying",
                        "tool_calls" => [
                          %{
                            "tool" => "open_work",
@@ -485,9 +485,10 @@ defmodule MaraithonWeb.MobileChatControllerTest do
              }
            } = response
 
-    assert Enum.any?(steps, &(&1["title"] == "Checked open work"))
+    assert Enum.any?(steps, &(&1["title"] == "Reviewed open work"))
     assert assistant_structured_data == %{}
     refute get_in(response, ["thread", "messages", Access.at(1), "body"]) =~ "todo"
+    refute get_in(response, ["thread", "messages", Access.at(1), "body"]) =~ "I checked"
     assert_no_work_summary_implementation_keys(run_work_summary)
     assert_no_work_summary_implementation_keys(assistant_work_summary)
     assert captured_telegram_events() == []

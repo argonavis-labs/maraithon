@@ -194,6 +194,14 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   defp replace_todo_language(value) do
     value
+    |> String.replace(
+      ~r/^\s*No open (?:work|todos?) found\.?\s*$/i,
+      "No open work matched this request."
+    )
+    |> String.replace(
+      ~r/^\s*This check surfaced no open work\.?\s*$/i,
+      "No open work matched this request."
+    )
     |> String.replace(~r/\bopen todo list\b/i, "open work")
     |> String.replace(~r/\bopen todos\b/i, "open work")
     |> String.replace(~r/\bopen todo\b/i, "open work item")
