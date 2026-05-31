@@ -611,7 +611,7 @@ defmodule MaraithonWeb.TodosLive do
       </div>
 
       <div :if={@decision_review_fields != []} class="mt-4 border-t border-zinc-950/10 pt-4">
-        <p class="text-xs/5 font-medium text-zinc-500">Decision ready for review</p>
+        <p class="text-xs/5 font-medium text-zinc-500">Decision to make</p>
         <dl class="mt-2 divide-y divide-zinc-950/5">
           <div :for={field <- @decision_review_fields} class="grid grid-cols-1 gap-1 py-2">
             <dt class="text-xs/5 font-medium text-zinc-500"><%= field.label %></dt>
@@ -946,16 +946,16 @@ defmodule MaraithonWeb.TodosLive do
       context = Map.get(card, "context_pack") || %{}
 
       core_fields = [
-        %{label: "Decision needed", value: Map.get(card, "decision_prompt")},
-        %{label: "Suggested move", value: Map.get(card, "next_best_action")},
-        %{label: "Why this matters now", value: Map.get(card, "why_now")},
-        %{label: "Source evidence", value: ActionCards.evidence_excerpt(card)},
+        %{label: "Decision", value: Map.get(card, "decision_prompt")},
+        %{label: "Recommended move", value: Map.get(card, "next_best_action")},
+        %{label: "Why now", value: Map.get(card, "why_now")},
+        %{label: "What this is based on", value: ActionCards.evidence_excerpt(card)},
         %{
-          label: "Context checked",
+          label: "Sources checked",
           value: ActionCards.source_health_note(card) || todo_source_check_value(todo)
         },
         %{label: "Prepared action", value: ActionCards.prepared_action_hint(card)},
-        %{label: "Who and thread", value: Map.get(context, "summary")}
+        %{label: "Person and thread", value: Map.get(context, "summary")}
       ]
 
       context_fields =
@@ -1146,7 +1146,7 @@ defmodule MaraithonWeb.TodosLive do
   defp todo_decision_signal?(_todo), do: false
 
   defp todo_next_action_label(%Todo{} = todo) do
-    if todo_decision_signal?(todo), do: "Suggested", else: "Next"
+    if todo_decision_signal?(todo), do: "Recommended", else: "Next"
   end
 
   defp todo_source_label("gmail"), do: "Gmail"

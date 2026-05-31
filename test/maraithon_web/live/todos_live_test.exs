@@ -359,7 +359,7 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert html =~ "Decisions"
     assert html =~ "Approve investor reply"
     assert html =~ "Decision"
-    assert html =~ "Suggested:"
+    assert html =~ "Recommended:"
     refute html =~ "Next:"
     refute html =~ "Read market update"
 
@@ -369,13 +369,14 @@ defmodule MaraithonWeb.TodosLiveTest do
       |> render_click()
 
     assert_patch(view, "/todos?attention=decision&todo_id=#{decision.id}")
-    assert detail_html =~ "Decision ready for review"
-    assert detail_html =~ "Decision needed"
-    assert detail_html =~ "Suggested move"
-    assert detail_html =~ "Why this matters now"
-    assert detail_html =~ "Source evidence"
-    assert detail_html =~ "Context checked"
-    assert String.match?(detail_html, ~r/Decision ready for review.*Next action/s)
+    assert detail_html =~ "Decision to make"
+    assert detail_html =~ "Recommended move"
+    assert detail_html =~ "Why now"
+    assert detail_html =~ "What this is based on"
+    assert detail_html =~ "Sources checked"
+    assert String.match?(detail_html, ~r/Decision to make.*Next action/s)
+    refute detail_html =~ "Decision ready for review"
+    refute detail_html =~ "Source evidence"
     assert detail_html =~ "Choose the next move with Jordan Lee."
     assert detail_html =~ "Send the revised terms and confirm the review window."
     assert detail_html =~ "Jordan is waiting on your approval."
@@ -618,13 +619,12 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert detail_html =~ "This work item should show a fuller detail view."
     assert detail_html =~ "Open the thread and reply."
     assert detail_html =~ "Keep the answer short."
-    assert detail_html =~ "Decision ready for review"
-    assert detail_html =~ "Decision needed"
+    assert detail_html =~ "Decision to make"
     assert detail_html =~ "Choose the next move with Michael Berlingo."
-    assert detail_html =~ "Suggested move"
-    assert detail_html =~ "Why this matters now"
-    assert detail_html =~ "Source evidence"
-    assert detail_html =~ "Context checked"
+    assert detail_html =~ "Recommended move"
+    assert detail_html =~ "Why now"
+    assert detail_html =~ "What this is based on"
+    assert detail_html =~ "Sources checked"
     assert detail_html =~ @user_email
     assert detail_html =~ "Starteryou campaign reply"
     assert detail_html =~ "Michael is waiting on the campaign decision."
@@ -634,6 +634,8 @@ defmodule MaraithonWeb.TodosLiveTest do
     assert detail_html =~ "Used Gmail."
     refute detail_html =~ "Source metadata"
     refute detail_html =~ "Decision context"
+    refute detail_html =~ "Decision ready for review"
+    refute detail_html =~ "Source evidence"
     refute detail_html =~ "Archive-only implementation detail"
     refute detail_html =~ "Resolution note"
     refute detail_html =~ "Why it matters"
