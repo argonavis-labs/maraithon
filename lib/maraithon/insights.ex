@@ -15,8 +15,8 @@ defmodule Maraithon.Insights do
   @open_statuses ["new", "snoozed"]
   @attention_modes ["act_now", "monitor"]
   @fallback_title "Review open work"
-  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
-  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
+  @fallback_summary "This saved open work needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the request, then keep, delegate, or dismiss it."
 
   def list_open_for_user(user_id, opts \\ []) when is_binary(user_id) do
     limit = Keyword.get(opts, :limit, 20)

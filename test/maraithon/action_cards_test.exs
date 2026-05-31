@@ -314,10 +314,15 @@ defmodule Maraithon.ActionCardsTest do
     assert card["decision_prompt"] ==
              "Choose whether to keep, delegate, or dismiss this work."
 
+    assert card["context_pack"]["summary"] ==
+             "This saved open work needs a keep, delegate, or dismiss decision."
+
     assert rendered =~ "Review open work"
     assert rendered =~ "keep, delegate, or dismiss"
     refute rendered =~ "Review this item"
     refute rendered =~ "Open todo"
+    refute rendered =~ "surfaced"
+    refute rendered =~ "real ask"
   end
 
   test "waiting state copy uses operator-facing language instead of raw state keys",

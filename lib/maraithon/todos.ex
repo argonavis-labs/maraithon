@@ -24,8 +24,8 @@ defmodule Maraithon.Todos do
   @feedback_values ~w(helpful not_helpful)
   @decision_text_pattern "\\m(approve|approval|approved|ask|asked|blocked|blocking|call|choose|commitment|committed|decide|decision|owe|owes|owed|reply|replied|respond|response|wait|waiting)\\M"
   @fallback_title "Review open work"
-  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
-  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
+  @fallback_summary "This saved open work needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the request, then keep, delegate, or dismiss it."
 
   def get_for_user(user_id, todo_id)
       when is_binary(user_id) and is_binary(todo_id) do

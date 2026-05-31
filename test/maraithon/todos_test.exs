@@ -6,6 +6,34 @@ defmodule Maraithon.TodosTest do
   alias Maraithon.Todos
   alias Maraithon.Todos.FeedbackTrainer
 
+  test "fallback todo copy gives a direct saved-work decision frame" do
+    user_id = unique_user_email("todos-fallback-copy")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "manual",
+          "kind" => "general",
+          "title" => "",
+          "summary" => "",
+          "next_action" => "",
+          "dedupe_key" => "todos-fallback-copy"
+        }
+      ])
+
+    assert todo.title == "Review open work"
+    assert todo.summary == "This saved open work needs a keep, delegate, or dismiss decision."
+
+    assert todo.next_action ==
+             "Open the source context, confirm the request, then keep, delegate, or dismiss it."
+
+    rendered = inspect(todo)
+    refute rendered =~ "surfaced"
+    refute rendered =~ "real ask"
+    refute rendered =~ "Review this item"
+  end
+
   test "done todos stay closed when the same work is upserted again" do
     user_id = unique_user_email("todos-closed")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -215,10 +215,10 @@ defmodule Maraithon.InsightsTest do
       assert insight.title == "Review open work"
 
       assert insight.summary ==
-               "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
+               "This saved open work needs a keep, delegate, or dismiss decision."
 
       assert insight.recommended_action ==
-               "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
+               "Open the source context, confirm the request, then keep, delegate, or dismiss it."
 
       [todo] = Todos.list_open_for_user(user_id)
       assert todo.title == insight.title
@@ -229,6 +229,8 @@ defmodule Maraithon.InsightsTest do
       refute rendered =~ "Actionable insight"
       refute rendered =~ "Review this item"
       refute rendered =~ "Review and decide next step"
+      refute rendered =~ "surfaced"
+      refute rendered =~ "real ask"
     end
 
     test "default Slack draft plan avoids internal loop language", %{

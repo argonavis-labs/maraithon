@@ -15,8 +15,8 @@ defmodule Maraithon.ActionCards do
 
   @open_statuses ~w(open snoozed)
   @fallback_title "Review open work"
-  @fallback_summary "Maraithon surfaced open work that needs a keep, delegate, or dismiss decision."
-  @fallback_action "Open the source context, confirm the real ask, then keep, delegate, or dismiss it."
+  @fallback_summary "This saved open work needs a keep, delegate, or dismiss decision."
+  @fallback_action "Open the source context, confirm the request, then keep, delegate, or dismiss it."
   @assistant_sources ~w(
     chief_of_staff_morning_briefing
     chief_of_staff_commitment_tracker
