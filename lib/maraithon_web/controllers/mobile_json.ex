@@ -92,7 +92,7 @@ defmodule MaraithonWeb.MobileJSON do
     card =
       ActionCards.for_todo(
         todo,
-        Keyword.put_new(opts, :include_disconnected, false)
+        Keyword.put_new(opts, :include_disconnected, true)
       )
 
     %{
