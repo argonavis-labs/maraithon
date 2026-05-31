@@ -380,7 +380,7 @@ defmodule Maraithon.TelegramAssistant.VerificationClient do
       read_string(
         candidate,
         "next_action",
-        "Open the source item, confirm the real ask, and decide whether this still matters."
+        "Open the source item, confirm the specific request, and decide whether this still matters."
       )
 
     source_item_id = read_string(candidate, "source_item_id", nil)

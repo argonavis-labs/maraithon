@@ -669,7 +669,7 @@ defmodule Maraithon.ActionCards do
     first_present([
       todo.next_action,
       read_string(todo.metadata || %{}, "next_action"),
-      "Open the source item, confirm the real ask, and decide whether this still matters."
+      "Open the source item, confirm the specific request, and decide whether this still matters."
     ])
     |> naturalize_action_copy()
   end

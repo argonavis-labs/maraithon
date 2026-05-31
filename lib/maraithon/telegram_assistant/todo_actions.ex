@@ -815,15 +815,16 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp todo_next_action(%Todo{next_action: next_action, title: title}),
     do:
       next_action || title ||
-        "Open the source item, confirm the real ask, and decide whether this still matters."
+        "Open the source item, confirm the specific request, and decide whether this still matters."
 
   defp todo_next_action(todo) when is_map(todo),
     do:
       map_string(todo, "next_action") || map_string(todo, "title") ||
-        "Open the source item, confirm the real ask, and decide whether this still matters."
+        "Open the source item, confirm the specific request, and decide whether this still matters."
 
   defp todo_next_action(_todo),
-    do: "Open the source item, confirm the real ask, and decide whether this still matters."
+    do:
+      "Open the source item, confirm the specific request, and decide whether this still matters."
 
   defp display_text(text) when is_binary(text) do
     text

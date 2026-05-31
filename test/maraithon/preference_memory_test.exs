@@ -25,7 +25,7 @@ defmodule Maraithon.PreferenceMemoryTest do
       {:ok,
        Jason.encode!(%{
          "reply" =>
-           "Understood. I'll stop surfacing receipt-style noise unless there's a real ask.",
+           "Understood. I'll stop surfacing receipt-style noise unless there is a clear request.",
          "rules" => [
            %{
              "id" => "ignore_receipts",

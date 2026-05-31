@@ -1198,7 +1198,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         "Suggested: open the #{subject} thread, confirm what #{person} is waiting on, then send the concrete update or mark it not important if it no longer matters."
 
       present?(subject) ->
-        "Suggested: open the #{subject} thread, confirm the owner and real ask, then send the concrete update or mark it not important if it no longer matters."
+        "Suggested: open the #{subject} thread, confirm the owner and specific request, then send the concrete update or mark it not important if it no longer matters."
 
       present?(commitment) ->
         "Suggested: verify whether the promised item is ready; if it is, send it, otherwise reply with the current status and realistic timing."
@@ -1207,7 +1207,7 @@ defmodule Maraithon.InsightNotifications.Actions do
         "Suggested: open the thread, answer the direct ask, and name the next step or owner only if the conversation needs one."
 
       true ->
-        "Suggested: open the source, confirm the real ask, then reply with the concrete next step or dismiss it if it is no longer important."
+        "Suggested: open the source, confirm the specific request, then reply with the concrete next step or dismiss it if it is no longer important."
     end
   end
 
@@ -1258,7 +1258,7 @@ defmodule Maraithon.InsightNotifications.Actions do
 
     String.contains?(text, [
       "confirm what",
-      "confirm the real ask",
+      "confirm the specific request",
       "mark it not important",
       "if it no longer matters"
     ])
@@ -1495,7 +1495,7 @@ defmodule Maraithon.InsightNotifications.Actions do
       "On it.",
       fallback_context_sentence(insight),
       fallback_reply_points_sentence(reply_points),
-      "I'll confirm the actual ask from the thread, send the next step I can stand behind, and only commit to timing the evidence supports."
+      "I'll confirm the specific request from the thread, send the next step I can stand behind, and only commit to timing the evidence supports."
     ]
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")

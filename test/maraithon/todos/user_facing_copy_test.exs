@@ -227,6 +227,14 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
              "The billing account needs your decision."
   end
 
+  test "rewrites assistant jargon around asks into clear request language" do
+    assert UserFacingCopy.polish_text("Open the source item and confirm the real ask.") ==
+             "Open the source item and confirm the specific request."
+
+    assert UserFacingCopy.open_work_language("Confirm the actual ask before drafting.") ==
+             "Confirm the specific request before drafting."
+  end
+
   test "rewrites owner ETA and no later reply boilerplate" do
     assert UserFacingCopy.polish_text("Decide whether to send the campaign owner and ETA.") ==
              "Send the campaign update with a clear owner and timing."

@@ -311,8 +311,9 @@ defmodule Maraithon.InsightNotificationActionsTest do
     assert sent.text =~ "<b>Person</b>"
     assert sent.text =~ "Owner to confirm"
     assert sent.text =~ "Vendor update thread"
-    assert sent.text =~ "confirm the owner and real ask"
+    assert sent.text =~ "confirm the owner and specific request"
     refute sent.text =~ "Person not clearly named"
+    refute sent.text =~ "real ask"
     refute sent.text =~ "what them is waiting on"
   end
 

@@ -54,6 +54,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> strip_safe_label_prefixes()
     |> strip_internal_label_lines()
     |> replace_internal_source_labels()
+    |> replace_operator_jargon()
     |> replace_generic_user_action_language()
     |> replace_direct_role_language()
     |> replace_todo_language()
@@ -68,6 +69,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     value
     |> strip_model_internal_copy()
     |> maybe_strip_safe_label_prefixes(opts)
+    |> replace_operator_jargon()
     |> replace_generic_user_action_language()
     |> replace_direct_role_language()
     |> replace_todo_language()
@@ -451,7 +453,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
         "Draft a reply to #{person} about #{topic} with the promised update, current status, and the next timing you can safely commit to."
 
       _ ->
-        "Draft a reply to #{person} after confirming the real ask, what you promised, and the next timing you can safely commit to."
+        "Draft a reply to #{person} after confirming the specific request, what you promised, and the next timing you can safely commit to."
     end
   end
 
@@ -463,7 +465,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
         "Draft in your voice: reply to #{person} about #{topic} with the actual promise, current status, and timing you can safely stand behind."
 
       _ ->
-        "Draft in your voice: open the source thread, confirm the actual ask, then write the shortest useful reply with the next step and evidence-backed timing."
+        "Draft in your voice: open the source thread, confirm the specific request, then write the shortest useful reply with the next step and evidence-backed timing."
     end
   end
 
@@ -1000,6 +1002,12 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\bchief_of_staff_commitment_tracker\b/i, "the open work review")
     |> String.replace(~r/\bchief_of_staff_holiday(?:_radar)?\b/i, "the holiday review")
     |> String.replace(~r/\bchief_of_staff_weekend\b/i, "the weekend review")
+  end
+
+  defp replace_operator_jargon(text) do
+    text
+    |> String.replace(~r/\breal ask\b/i, "specific request")
+    |> String.replace(~r/\bactual ask\b/i, "specific request")
   end
 
   defp single_line(text) do
