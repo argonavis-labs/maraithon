@@ -275,6 +275,40 @@ defmodule Maraithon.BriefsTest do
     refute payload.text =~ "abc123"
   end
 
+  test "telegram payload strips model confidence prose from delivered brief copy", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "90% confidence: morning follow-up",
+               "summary" => "Model score says finance needs an immediate nudge.",
+               "body" => """
+               90% confidence this matters.
+               Reasoning: model saw an owed reply.
+               Why now: The receiving window closes before tomorrow's dispatch.
+               Next: Reply with the signed shipment timing before noon.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:model-confidence-prose"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+    lower_text = String.downcase(payload.text)
+
+    assert payload.text =~ "Chief of staff brief"
+    assert payload.text =~ "Maraithon kept only checked next steps."
+    assert payload.text =~ "Why now: The receiving window closes before tomorrow's dispatch."
+    assert payload.text =~ "Next: Reply with the signed shipment timing before noon."
+
+    refute lower_text =~ "90%"
+    refute lower_text =~ "confidence"
+    refute lower_text =~ "model"
+    refute lower_text =~ "reasoning"
+    refute lower_text =~ "score"
+  end
+
   test "telegram payload hides legacy generation failure copy", %{
     user_id: user_id,
     agent: agent

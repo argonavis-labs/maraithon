@@ -35,6 +35,9 @@ defmodule Maraithon.Briefs do
     "model_name",
     "model_provider",
     "model_response",
+    "model confidence",
+    "model reasoning",
+    "model score",
     "configured model",
     "model synthesis",
     "generation failed",
@@ -84,7 +87,12 @@ defmodule Maraithon.Briefs do
   ]
   @internal_brief_patterns [
     ~r/\b(?:confidence|quality|priority|urgency|relevance|interrupt)_score\s*[:=]/,
+    ~r/\b\d{1,3}%\s+confidence\b/,
+    ~r/\bconfidence\s+(?:this|that|was|is)\b/,
+    ~r/^\s*reasoning\s*:/,
+    ~r/\bmodel\s+(?:classified|confidence|ranked|reasoning|saw|score)\b/,
     ~r/\bscore\s*[:=]\s*\d/,
+    ~r/\bscore\s+(?:says|was|is)\b/,
     ~r/\bthreshold\s*[:=]\s*\d/,
     ~r/\b(?:token|secret|password|api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]/,
     ~r/\b(?:authorization|bearer)\b/
