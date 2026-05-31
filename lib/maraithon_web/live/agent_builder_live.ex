@@ -819,11 +819,12 @@ defmodule MaraithonWeb.AgentBuilderLive do
                   <.launch_textarea
                     id="launch_config_json"
                     name="launch[config_json]"
-                    label="Support setup JSON"
+                    label="Support-provided setup"
                     value={@launch["config_json"]}
                     rows={6}
                     textarea_class="font-mono"
-                    description="Leave blank unless Maraithon support gives you setup JSON."
+                    placeholder="Paste the setup block from support"
+                    description="Leave blank unless Maraithon support gives you a setup block."
                   />
                 <% end %>
 
