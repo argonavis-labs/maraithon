@@ -436,6 +436,7 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert html =~ "Action window"
       assert html =~ "Check-in cadence"
       assert html =~ "Account owner email"
+      assert html =~ "Primary sign-in account for workspace administration."
       assert html =~ "setup status"
       refute html =~ "Primary model"
       refute html =~ "Connector readiness"
@@ -446,6 +447,8 @@ defmodule MaraithonWeb.NavigationControllerTest do
       refute html =~ "LLM provider module"
       refute html =~ "Tool timeout (ms)"
       refute html =~ "Heartbeat interval (ms)"
+      refute html =~ "PRIMARY_ADMIN_EMAIL"
+      refute html =~ "POSTMARK_SERVER_TOKEN"
     end
 
     test "GET /conenctors redirects to /connectors", %{conn: conn} do

@@ -49,43 +49,43 @@ defmodule MaraithonWeb.SettingsController do
     [
       %{
         name: "Account owner email",
-        key: "PRIMARY_ADMIN_EMAIL",
+        description: "Primary sign-in account for workspace administration.",
         required?: true,
         present?: present?(System.get_env("PRIMARY_ADMIN_EMAIL", ""))
       },
       %{
         name: "Sign-in email service",
-        key: "POSTMARK_SERVER_TOKEN",
+        description: "Sends login links and account notifications.",
         required?: true,
         present?: present?(System.get_env("POSTMARK_SERVER_TOKEN", ""))
       },
       %{
         name: "Magic link sender",
-        key: "AUTH_EMAIL_FROM",
+        description: "Sets the sender shown on sign-in messages.",
         required?: true,
         present?: present?(System.get_env("AUTH_EMAIL_FROM", ""))
       },
       %{
         name: "Service access",
-        key: "API_BEARER_TOKEN",
+        description: "Allows trusted service clients to use protected API endpoints.",
         required?: true,
         present?: present?(Keyword.get(api_auth, :bearer_token))
       },
       %{
         name: "Backup admin username",
-        key: "ADMIN_USERNAME",
+        description: "Optional fallback sign-in for emergency access.",
         required?: false,
         present?: present?(Keyword.get(admin_auth, :username))
       },
       %{
         name: "Backup admin password",
-        key: "ADMIN_PASSWORD",
+        description: "Required only when fallback admin sign-in is enabled.",
         required?: false,
         present?: present?(Keyword.get(admin_auth, :password))
       },
       %{
         name: "Encryption key",
-        key: "CLOAK_KEY",
+        description: "Protects synced local source data at rest.",
         required?: true,
         present?: present?(Application.get_env(:maraithon, Maraithon.Vault)[:ciphers])
       }

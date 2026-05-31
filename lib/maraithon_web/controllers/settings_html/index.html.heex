@@ -31,7 +31,7 @@
             <dt class="text-sm/6 font-medium text-zinc-950"><%= item.name %></dt>
             <dd class="text-xs/5 text-zinc-500">
               <%= if item.required?, do: "Required", else: "Optional" %> ·
-              <span class="font-mono"><%= item.key %></span>
+              <%= item.description %>
             </dd>
           </div>
           <span class={[setting_badge_class(item.present?), "whitespace-nowrap"]}>
@@ -70,7 +70,7 @@
                   </span>
                 </.table_cell>
                 <.table_cell class="font-mono text-xs/5 text-zinc-600">
-                  <%= if item.redirect_uri == "", do: "not set", else: item.redirect_uri %>
+                  <%= if item.redirect_uri == "", do: "Not set", else: item.redirect_uri %>
                 </.table_cell>
               </.table_row>
             <% end %>

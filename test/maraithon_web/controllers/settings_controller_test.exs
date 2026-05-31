@@ -36,4 +36,21 @@ defmodule MaraithonWeb.SettingsControllerTest do
     refute html =~ secret
     refute html =~ "OPENROUTER_API_KEY"
   end
+
+  test "settings readiness copy avoids deployment internals", %{conn: conn} do
+    conn =
+      conn
+      |> log_in_admin_user("settings-copy@example.com")
+      |> get("/settings")
+
+    html = html_response(conn, 200)
+
+    assert html =~ "Sends login links and account notifications."
+    assert html =~ "Protects synced local source data at rest."
+    refute html =~ "POSTMARK_SERVER_TOKEN"
+    refute html =~ "AUTH_EMAIL_FROM"
+    refute html =~ "API_BEARER_TOKEN"
+    refute html =~ "CLOAK_KEY"
+    refute html =~ "ADMIN_PASSWORD"
+  end
 end
