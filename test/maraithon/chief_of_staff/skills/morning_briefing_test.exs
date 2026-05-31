@@ -1299,6 +1299,35 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief["body"] =~ "Today's move: clear or explicitly keep the first open follow-up"
   end
 
+  test "checked fallback links existing open work instead of creating duplicate todo candidates" do
+    existing_todo_id = Ecto.UUID.generate()
+
+    brief =
+      MorningBriefing.build_compact_fallback_brief(%{
+        "date" => "2026-05-27",
+        "calendar" => %{},
+        "schedule_coverage" => %{},
+        "commercial_coverage" => %{},
+        "open_work" => %{
+          "todos" => [
+            %{
+              "id" => existing_todo_id,
+              "title" => "Reply to Maya about launch timing",
+              "summary" => "Maya is waiting on the launch sequencing decision.",
+              "next_action" => "Reply with the launch sequence and timing.",
+              "priority" => 92
+            }
+          ]
+        }
+      })
+
+    assert brief["body"] =~ "Reply to Maya about launch timing"
+    assert brief["linked_todo_ids"] == [existing_todo_id]
+    assert brief["todos"] == []
+    refute inspect(brief) =~ "morning-fallback"
+    refute inspect(brief) =~ "compact_fallback"
+  end
+
   test "no-source fallback avoids first-person assistant copy" do
     brief = MorningBriefing.build_compact_fallback_brief(nil, "provider unavailable")
 
@@ -1347,6 +1376,20 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
         "metadata" => %{"next_action" => "Send the email today."}
       })
 
+    {:ok, [existing_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "title" => "Reply to Maya about launch timing",
+          "summary" => "Maya is waiting on the launch sequencing decision.",
+          "next_action" => "Reply with the launch sequence and timing.",
+          "source_item_id" => "gmail-thread-maya-launch",
+          "dedupe_key" => "morning-briefing-existing-open-work",
+          "priority" => 92
+        }
+      ])
+
     state =
       MorningBriefing.init(%{
         "user_id" => user_id,
@@ -1371,6 +1414,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     assert payload.generation_mode == "source_fallback"
     assert payload.error_message =~ "available-context fallback"
     assert payload.error_message =~ "model_response_invalid"
+    assert payload.todo_count == 0
+    assert payload.linked_todo_ids == [existing_todo.id]
     refute payload.error_message =~ "model synthesis"
 
     brief = Maraithon.Repo.get!(Maraithon.Briefs.Brief, payload.brief_id)
@@ -1382,6 +1427,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief.error_message =~ "model synthesis"
     assert brief.metadata["generation_mode"] == "source_fallback"
     assert brief.metadata["error_message"] =~ "model_response_invalid"
+    assert brief.metadata["linked_todo_ids"] == [existing_todo.id]
     assert brief.summary =~ "Start with"
     assert brief.body =~ "## Unknowns"
     assert brief.body =~ "Only checked data is included"
@@ -1390,6 +1436,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefingTest do
     refute brief.body =~ "model_response_invalid"
     refute brief.body =~ "model synthesis"
     refute brief.body =~ "finish_reason"
+
+    todos = Todos.list_for_user(user_id, limit: 20)
+    assert Enum.count(todos) == 1
+    refute Enum.any?(todos, &(&1.dedupe_key =~ "morning-fallback"))
   end
 
   test "model provider errors record a compact context fallback briefing", %{

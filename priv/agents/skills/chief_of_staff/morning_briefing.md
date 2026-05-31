@@ -107,4 +107,4 @@ Shape to emulate:
 Today's move: use the first desk block to clear the oldest overdue commitment before opening lower-signal inbox.
 ```
 
-If the source data is insufficient or the model cannot be called, return an explicit error instead of a heuristic summary.
+If source data is insufficient, name the source gaps and keep uncertainty visible. Do not invent a clear-day summary or fill missing context with heuristics.

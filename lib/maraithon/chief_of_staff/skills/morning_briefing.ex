@@ -1110,9 +1110,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
 
   defp smoke_review_brief(agent_id, user_id, brief, {:ok, result})
        when is_binary(agent_id) and is_binary(user_id) and is_map(result) do
-    todos = Map.get(result, :todos, [])
+    todos_or_ids =
+      Map.get(result, :todos, []) ++
+        (result |> Map.get(:linked_todo_ids, []) |> List.wrap())
 
-    if todos == [] do
+    if todos_or_ids == [] do
       {nil, nil}
     else
       attrs = %{
@@ -1134,7 +1136,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       }
 
       with {:ok, brief_record} <- Briefs.record(user_id, agent_id, attrs),
-           {:ok, linked_brief} <- Briefs.attach_linked_todos(brief_record, todos) do
+           {:ok, linked_brief} <- Briefs.attach_linked_todos(brief_record, todos_or_ids) do
         payload = Briefs.telegram_payload(linked_brief)
         {linked_brief, payload.reply_markup}
       else
@@ -1536,11 +1538,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
           brief_input
         ),
       "body" => body,
-      "todos" =>
-        open_todos
-        |> Enum.take(10)
-        |> Enum.map(&fallback_todo_card(&1, brief_input))
-        |> Enum.reject(&is_nil/1)
+      "todos" => [],
+      "linked_todo_ids" => fallback_existing_todo_ids(open_todos)
     }
   end
 
@@ -1994,47 +1993,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
     Enum.join(rest, ", ") <> ", and " <> last
   end
 
-  defp fallback_todo_card(todo, brief_input) when is_map(todo) do
-    title = read_string(todo, "title", nil)
-
-    if blank?(title) do
-      nil
-    else
-      source_id = read_string(todo, "id", nil)
-      summary = read_string(todo, "summary", nil) || read_string(todo, "next_action", title)
-      next_action = read_string(todo, "next_action", nil) || title
-
-      %{
-        "source" => "chief_of_staff_morning_briefing",
-        "kind" => read_string(todo, "kind", "follow_up"),
-        "title" => title,
-        "summary" => summary,
-        "next_action" => next_action,
-        "priority" => read_integer(todo, "priority", 50),
-        "source_item_id" => source_id,
-        "source_occurred_at" => read_string(brief_input, "generated_at", nil),
-        "dedupe_key" =>
-          [
-            "morning-fallback",
-            read_string(brief_input, "date", "unknown"),
-            source_id || normalize_match_text(title)
-          ]
-          |> Enum.reject(&blank?/1)
-          |> Enum.join(":"),
-        "metadata" => %{
-          "origin_skill_id" => id(),
-          "origin_cadence" => "morning",
-          "brief_date" => read_string(brief_input, "date", nil),
-          "relationship_context" => read_string(todo, "notes", nil),
-          "why_it_matters" => summary,
-          "source_mode" => "compact_fallback"
-        }
-      }
-      |> compact_map()
-    end
+  defp fallback_existing_todo_ids(open_todos) when is_list(open_todos) do
+    open_todos
+    |> Enum.map(&read_string(&1, "id", nil))
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+    |> Enum.take(10)
   end
 
-  defp fallback_todo_card(_todo, _brief_input), do: nil
+  defp fallback_existing_todo_ids(_open_todos), do: []
 
   @doc """
   Scores and revises a model-produced morning brief against the Chief of Staff
@@ -4464,11 +4431,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   defp important_words(_value), do: []
 
   defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
-    todos = Map.get(result, :todos, [])
+    linked_todo_ids =
+      result
+      |> Map.get(:linked_todo_ids, [])
+      |> List.wrap()
 
-    case Briefs.attach_linked_todos(brief_record, todos) do
+    todos = Map.get(result, :todos, [])
+    todos_or_ids = todos ++ linked_todo_ids
+
+    case Briefs.attach_linked_todos(brief_record, todos_or_ids) do
       {:ok, updated_brief} ->
-        {updated_brief, Enum.map(todos, & &1.id), nil}
+        {updated_brief, todos_or_ids |> Enum.map(&todo_id/1) |> Enum.reject(&blank?/1), nil}
 
       {:error, reason} ->
         {brief_record, [], inspect(reason)}
@@ -4476,6 +4449,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp attach_model_todos_to_brief(brief_record, _todo_result), do: {brief_record, [], nil}
+
+  defp todo_id(%{id: id}) when is_binary(id), do: id
+  defp todo_id(%{"id" => id}) when is_binary(id), do: id
+  defp todo_id(id) when is_binary(id), do: id
+  defp todo_id(_todo), do: nil
+
+  defp persist_model_todos(_user_id, %{"linked_todo_ids" => linked_todo_ids}, _brief_input) do
+    linked_todo_ids =
+      linked_todo_ids
+      |> List.wrap()
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    if linked_todo_ids == [] do
+      {:ok, :no_todos}
+    else
+      {:ok, %{todos: [], linked_todo_ids: linked_todo_ids, skipped_count: 0, usage: %{}}}
+    end
+  end
 
   defp persist_model_todos(_user_id, %{"todos" => []}, _brief_input), do: {:ok, :no_todos}
   defp persist_model_todos(nil, _brief, _brief_input), do: {:ok, :no_todos}
@@ -4582,9 +4574,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
   end
 
   defp todo_event_payload({:ok, result}) when is_map(result) do
+    todos = Map.get(result, :todos, [])
+
     %{
-      todo_count: length(result.todos),
-      todo_skipped_count: result.skipped_count,
+      todo_count: length(todos),
+      todo_skipped_count: Map.get(result, :skipped_count, 0),
       todo_usage: Map.get(result, :usage, %{})
     }
   end
