@@ -210,7 +210,7 @@ defmodule MaraithonWeb.AgentsLive do
            socket
            |> refresh_registry()
            |> refresh_selected_workspace_or_clear()
-           |> put_flash(:info, "Automation is already active")}
+           |> put_flash(:info, AgentActionCopy.already_active())}
 
         {:error, :not_found} ->
           emit_action_telemetry("start", surface, id, :error)

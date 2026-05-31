@@ -29,6 +29,11 @@ defmodule MaraithonWeb.AgentActionCopyTest do
     assert AgentActionCopy.not_found() ==
              "That automation is no longer available. Refresh automations before continuing."
 
+    assert AgentActionCopy.details_not_found() ==
+             "Automation details are no longer available. Refresh automations before continuing."
+
+    assert AgentActionCopy.already_active() == "That automation is already active."
+
     assert AgentActionCopy.error(:create, "DBConnection.ConnectionError token abc123") ==
              "Could not create that automation. Review the settings before saving."
 

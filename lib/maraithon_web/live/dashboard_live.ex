@@ -803,7 +803,7 @@ defmodule MaraithonWeb.DashboardLive do
 
         {:error, :already_running} ->
           {:noreply,
-           socket |> refresh_dashboard() |> put_flash(:info, "Automation is already active")}
+           socket |> refresh_dashboard() |> put_flash(:info, AgentActionCopy.already_active())}
 
         {:error, :not_found} ->
           {:noreply,
@@ -2238,7 +2238,8 @@ defmodule MaraithonWeb.DashboardLive do
          socket |> refresh_dashboard() |> put_flash(:error, AgentActionCopy.not_found())}
 
       {:error, :agent_stopped} ->
-        {:noreply, put_flash(socket, :error, "Automation is paused")}
+        {:noreply,
+         put_flash(socket, :error, AgentActionCopy.error(:send_message, :agent_stopped))}
 
       {:error, reason} ->
         {:noreply, put_flash(socket, :error, AgentActionCopy.error(:send_message, reason))}
