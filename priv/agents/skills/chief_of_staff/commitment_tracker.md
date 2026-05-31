@@ -46,7 +46,7 @@ Output requirements:
 - Work item fields may be sent as Telegram cards. Write `title`, `summary`, and `next_action` like the operator's human chief of staff, not like a raw import. Use `you`, never `the user` or a hardcoded person name, and do not include visible labels like `From:`, `Source:`, `Priority:`, or internal source names such as `chief_of_staff_commitment_tracker` in user-facing fields. Put source identifiers in metadata or notes.
 - Include `missing_sources` for unavailable channels that matter.
 - Use `todos: []` when nothing should be added.
-- If the source data is insufficient or the model cannot safely decide, return an explicit error-style body and no heuristic fallback.
+- If source data is insufficient, name the source gaps, keep uncertainty visible, and use `todos: []`. Do not invent clear-day language, create heuristic work items, or say existing work was cleared.
 
 JSON shape:
 

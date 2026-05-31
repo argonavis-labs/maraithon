@@ -62,6 +62,8 @@ defmodule Maraithon.AgentHarness.MarkdownSkillTest do
     assert skill.instructions =~ "Use `you`, never `the user` or a hardcoded person name"
     assert skill.instructions =~ "\"todos\""
     assert skill.instructions =~ "\"missing_sources\""
+    assert skill.instructions =~ "Do not invent clear-day language"
+    refute skill.instructions =~ "error-style body"
   end
 
   test "product manager skill returns executive-ready ticket JSON" do

@@ -201,7 +201,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         end
 
         todo_result =
-          if generation_mode == "llm" do
+          if generation_mode == "llm" or Map.has_key?(report, "linked_todo_ids") do
             persist_model_todos(context[:user_id] || state.user_id, report, tracker_input)
           else
             {:ok, :no_todos}
@@ -698,7 +698,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "summary" =>
         fallback_commitment_summary(open_todos, inbox_count, sent_count, calendar_count),
       "body" => body,
-      "todos" => []
+      "todos" => [],
+      "linked_todo_ids" => fallback_existing_todo_ids(open_todos)
     }
   end
 
@@ -912,6 +913,30 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp count_phrase(1, singular, _plural), do: "1 #{singular}"
   defp count_phrase(count, _singular, plural), do: "#{count} #{plural}"
 
+  defp fallback_existing_todo_ids(open_todos) when is_list(open_todos) do
+    open_todos
+    |> Enum.map(&read_string(&1, "id", nil))
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+    |> Enum.take(10)
+  end
+
+  defp fallback_existing_todo_ids(_open_todos), do: []
+
+  defp persist_model_todos(_user_id, %{"linked_todo_ids" => linked_todo_ids}, _tracker_input) do
+    linked_todo_ids =
+      linked_todo_ids
+      |> List.wrap()
+      |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
+      |> Enum.uniq()
+
+    if linked_todo_ids == [] do
+      {:ok, :no_todos}
+    else
+      {:ok, %{todos: [], linked_todo_ids: linked_todo_ids, skipped_count: 0, usage: %{}}}
+    end
+  end
+
   defp persist_model_todos(_user_id, %{"todos" => []}, _tracker_input), do: {:ok, :no_todos}
   defp persist_model_todos(nil, _report, _tracker_input), do: {:ok, :no_todos}
 
@@ -937,11 +962,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   defp persist_model_todos(_user_id, _report, _tracker_input), do: {:ok, :no_todos}
 
   defp attach_model_todos_to_brief(brief_record, {:ok, result}) when is_map(result) do
-    todos = Map.get(result, :todos, [])
+    linked_todo_ids =
+      result
+      |> Map.get(:linked_todo_ids, [])
+      |> List.wrap()
 
-    case Briefs.attach_linked_todos(brief_record, todos) do
+    todos = Map.get(result, :todos, [])
+    todos_or_ids = todos ++ linked_todo_ids
+
+    case Briefs.attach_linked_todos(brief_record, todos_or_ids) do
       {:ok, updated_brief} ->
-        {updated_brief, Enum.map(todos, & &1.id), nil}
+        {updated_brief, todos_or_ids |> Enum.map(&todo_id/1) |> Enum.reject(&blank?/1), nil}
 
       {:error, reason} ->
         {brief_record, [], inspect(reason)}
@@ -949,6 +980,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp attach_model_todos_to_brief(brief_record, _todo_result), do: {brief_record, [], nil}
+
+  defp todo_id(%{id: id}) when is_binary(id), do: id
+  defp todo_id(%{"id" => id}) when is_binary(id), do: id
+  defp todo_id(id) when is_binary(id), do: id
+  defp todo_id(_todo), do: nil
 
   defp ingest_todos_with_fallback(user_id, candidates, opts) do
     case OpenLoops.ingest_todos(user_id, candidates, opts) do

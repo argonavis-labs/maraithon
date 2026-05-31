@@ -454,10 +454,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
 
     assert payload.generation_mode == "source_fallback"
     assert payload.todo_count == 0
+    assert payload.linked_todo_ids == [existing_todo.id]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.title == "Open work review: check existing work"
     assert brief.metadata["generation_mode"] == "source_fallback"
+    assert brief.metadata["linked_todo_ids"] == [existing_todo.id]
     assert brief.summary =~ "Start with 1 existing open item"
     assert brief.summary =~ "already in open work"
     assert brief.body =~ "Send Jordan the investor update"
@@ -481,6 +483,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     buttons = telegram_payload.reply_markup["inline_keyboard"] |> List.flatten()
 
     assert Enum.any?(buttons, &(&1["text"] == "Open Maraithon"))
+    assert Enum.any?(buttons, &(&1["text"] == "Review open work"))
+    assert Enum.any?(buttons, &(&1["text"] == "Show list"))
     refute telegram_payload.text =~ "model_response_invalid"
 
     [todo] = Todos.list_for_user(user_id, limit: 5)
