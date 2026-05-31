@@ -418,6 +418,9 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     assert html =~ "Overview"
     assert html =~ "Connected apps"
+    assert html =~ "Telegram ready"
+    assert html =~ "Briefs and follow-ups go to @kentfenwick."
+    refute html =~ "sent from the Maraithon server"
 
     {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}&panel=apps")
     assert html =~ "founder@example.com"
@@ -446,6 +449,28 @@ defmodule MaraithonWeb.AgentsLiveTest do
     assert updated.config["timezone_offset_hours"] == -8
     assert render(view) =~ "9:00 AM"
     assert render(view) =~ "PT"
+  end
+
+  test "chief of staff overview shows when Telegram still needs linking", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "ai_chief_of_staff",
+        config: %{
+          "name" => "Chief of Staff",
+          "enabled_skills" => ["morning_briefing"],
+          "morning_brief_hour_local" => 8,
+          "timezone" => "America/Toronto",
+          "timezone_offset_hours" => -5
+        },
+        status: "stopped"
+      })
+
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
+
+    assert html =~ "Connect Telegram"
+    assert html =~ "Link a Telegram chat before briefings and follow-ups can send."
+    refute html =~ "Telegram ready"
+    refute html =~ "sent from the Maraithon server"
   end
 
   test "morning briefing schedule errors use product copy", %{conn: conn} do

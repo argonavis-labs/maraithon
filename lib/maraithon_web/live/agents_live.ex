@@ -914,6 +914,7 @@ defmodule MaraithonWeb.AgentsLive do
                     <%= if chief_of_staff_agent?(@selected_agent) do %>
                       <% schedule = morning_brief_schedule(@selected_agent) %>
                       <% skills = chief_skill_rows(@selected_agent) %>
+                      <% delivery = chief_delivery_summary(@current_user.id) %>
 
                       <.panel :if={@selected_panel == :inspect} body_class="p-0">
                         <div class="px-5 py-5">
@@ -943,8 +944,10 @@ defmodule MaraithonWeb.AgentsLive do
                             <div class="text-xs/5 font-medium text-zinc-500">
                               Delivered by
                             </div>
-                            <div class="mt-2 text-2xl/8 font-semibold text-zinc-950">Telegram</div>
-                            <div class="mt-1 text-xs/5 text-zinc-500">sent from the Maraithon server</div>
+                            <div class={["mt-2 text-2xl/8 font-semibold", delivery.value_class]}>
+                              <%= delivery.label %>
+                            </div>
+                            <div class="mt-1 text-xs/5 text-zinc-500"><%= delivery.detail %></div>
                           </div>
                           <div class="px-5 py-4">
                             <div class="text-xs/5 font-medium text-zinc-500">
@@ -1580,6 +1583,51 @@ defmodule MaraithonWeb.AgentsLive do
         }
     end
   end
+
+  defp chief_delivery_summary(user_id) when is_binary(user_id) do
+    case Maraithon.ConnectedAccounts.get(user_id, "telegram") do
+      %{status: "connected", metadata: metadata} ->
+        %{
+          label: "Telegram ready",
+          detail: "Briefs and follow-ups go to #{telegram_delivery_name(metadata)}.",
+          value_class: "text-zinc-950"
+        }
+
+      %{status: status} when status in ["needs_refresh", "partial"] ->
+        %{
+          label: "Reconnect Telegram",
+          detail: "Reconnect Telegram before briefings and follow-ups can send.",
+          value_class: "text-amber-700"
+        }
+
+      _ ->
+        %{
+          label: "Connect Telegram",
+          detail: "Link a Telegram chat before briefings and follow-ups can send.",
+          value_class: "text-amber-700"
+        }
+    end
+  end
+
+  defp chief_delivery_summary(_user_id) do
+    %{
+      label: "Connect Telegram",
+      detail: "Link a Telegram chat before briefings and follow-ups can send.",
+      value_class: "text-amber-700"
+    }
+  end
+
+  defp telegram_delivery_name(metadata) when is_map(metadata) do
+    metadata
+    |> Map.get("username")
+    |> presence()
+    |> case do
+      nil -> "your linked Telegram chat"
+      username -> "@#{username}"
+    end
+  end
+
+  defp telegram_delivery_name(_metadata), do: "your linked Telegram chat"
 
   defp refresh_selected_workspace(socket) do
     case socket.assigns.selected_agent_id do
