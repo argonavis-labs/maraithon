@@ -205,6 +205,57 @@ install_companion_dev_app() {
   ditto "${built_app}" "${install_app}"
 }
 
+cleanup_companion_direct_build_products() {
+  local build_dir="$1"
+  local keep_app="$2"
+
+  case "${build_dir}" in
+    "" | "/" | "${HOME}")
+      echo "Refusing to clean companion build products from unsafe directory: ${build_dir}" >&2
+      return 1
+      ;;
+  esac
+
+  local product_names=(
+    "AsyncAlgorithms.appintents"
+    "AsyncAlgorithms.o"
+    "AsyncAlgorithms.swiftmodule"
+    "Autoupdate.dSYM"
+    "ContainersPreview.appintents"
+    "ContainersPreview.o"
+    "ContainersPreview.swiftmodule"
+    "DequeModule.appintents"
+    "DequeModule.o"
+    "DequeModule.swiftmodule"
+    "Downloader.xpc.dSYM"
+    "Installer.xpc.dSYM"
+    "InternalCollectionsUtilities.appintents"
+    "InternalCollectionsUtilities.o"
+    "InternalCollectionsUtilities.swiftmodule"
+    "Maraithon.appintents"
+    "Maraithon.swiftmodule"
+    "OrderedCollections.appintents"
+    "OrderedCollections.o"
+    "OrderedCollections.swiftmodule"
+    "PackageFrameworks"
+    "Sparkle.framework"
+    "Sparkle.framework.dSYM"
+    "Updater.app.dSYM"
+    "include"
+  )
+
+  local product_path
+  for product_name in "${product_names[@]}"; do
+    product_path="${build_dir}/${product_name}"
+    if [[ "${product_path%/}" == "${keep_app%/}" ]]; then
+      continue
+    fi
+    if [[ -e "${product_path}" ]]; then
+      rm -rf "${product_path}"
+    fi
+  done
+}
+
 companion_designated_requirement() {
   local app_path="$1"
 

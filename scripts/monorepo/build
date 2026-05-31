@@ -30,11 +30,22 @@ if selected_component "${component}" "companion"; then
   while IFS= read -r arg; do
     companion_signing_args+=("${arg}")
   done < <(companion_xcode_signing_args)
+
+  companion_build_args=(
+    -project Maraithon.xcodeproj
+    -scheme Maraithon
+    -configuration Debug
+    -destination "platform=macOS"
+  )
+  if [[ -n "${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" ]]; then
+    companion_build_args+=(-derivedDataPath "${MARAITHON_COMPANION_DERIVED_DATA_PATH}")
+  fi
+  if [[ -n "${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" ]]; then
+    companion_build_args+=("CONFIGURATION_BUILD_DIR=${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR}")
+  fi
+
   run_in "${COMPANION_DIR}" xcodebuild \
-    -project Maraithon.xcodeproj \
-    -scheme Maraithon \
-    -configuration Debug \
-    -destination "platform=macOS" \
+    "${companion_build_args[@]}" \
     "${companion_signing_args[@]}" \
     build
 fi

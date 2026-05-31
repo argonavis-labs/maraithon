@@ -40,9 +40,9 @@ root:
 make run-companion
 ```
 
-It installs the Debug app at `~/Applications/Maraithon.app` with stable local
-signing and refreshes that app in place so macOS privacy grants survive
-rebuilds and reloads.
+It builds the Debug app directly at `~/Applications/Maraithon.app` with stable
+local signing, so Xcode can register that exact app for local execution and
+macOS privacy grants survive rebuilds and reloads.
 
 If macOS keeps pointing Full Disk Access at an old development copy, reset the
 stale privacy row once:

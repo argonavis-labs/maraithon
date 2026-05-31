@@ -11,19 +11,35 @@ validate_component "${component}" companion mac
 if selected_component "${component}" "companion"; then
   install_app="${MARAITHON_COMPANION_DEV_APP_PATH:-${HOME}/Applications/Maraithon.app}"
   install_dir="$(dirname "${install_app}")"
+  direct_build=false
+
+  if [[ "$(basename "${install_app}")" == "Maraithon.app" ]]; then
+    direct_build=true
+  fi
 
   ensure_companion_dev_signing
   quit_running_companion_app
   mkdir -p "${install_dir}"
-  "${ROOT_DIR}/scripts/monorepo/build" companion
-  built_app="$(companion_debug_app_path)"
+
+  if [[ "${direct_build}" == true ]]; then
+    MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${install_dir}" \
+      MARAITHON_COMPANION_DERIVED_DATA_PATH="${HOME}/Library/Developer/Xcode/DerivedData/MaraithonStableDev" \
+      "${ROOT_DIR}/scripts/monorepo/build" companion
+    built_app="${install_app}"
+    cleanup_companion_direct_build_products "${install_dir}" "${install_app}"
+  else
+    "${ROOT_DIR}/scripts/monorepo/build" companion
+    built_app="$(companion_debug_app_path)"
+  fi
 
   if [[ ! -d "${built_app}" ]]; then
     echo "Companion app was not built at ${built_app}" >&2
     exit 1
   fi
 
-  install_companion_dev_app "${built_app}" "${install_app}"
+  if [[ "${direct_build}" != true ]]; then
+    install_companion_dev_app "${built_app}" "${install_app}"
+  fi
   xattr -dr com.apple.quarantine "${install_app}" >/dev/null 2>&1 || true
   if [[ -x "${LSREGISTER}" ]]; then
     unregister_stale_companion_apps "${install_app}"
