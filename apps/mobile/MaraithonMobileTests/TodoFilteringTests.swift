@@ -11,12 +11,18 @@ struct TodoFilteringTests {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
         let overdue = TodoItem(title: "Overdue", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
+        let decision = TodoItem(
+            title: "Approve investor reply",
+            decisionPrompt: "Approve the investor reply with the revised terms.",
+            whyNow: "The investor is waiting on your decision."
+        )
         let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
         let upcoming = TodoItem(title: "Upcoming", dueDate: now.addingTimeInterval(3 * 24 * 60 * 60))
         let completed = TodoItem(title: "Completed", dueDate: now, isCompleted: true)
 
-        let todos = [overdue, today, upcoming, completed]
-        #expect(TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar).map(\.title) == ["Overdue", "Today", "Upcoming"])
+        let todos = [overdue, decision, today, upcoming, completed]
+        #expect(TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar).map(\.title) == ["Overdue", "Approve investor reply", "Today", "Upcoming"])
+        #expect(TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar).map(\.title) == ["Approve investor reply"])
         #expect(TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).map(\.title) == ["Today"])
         #expect(TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar).map(\.title) == ["Overdue"])
         #expect(TodoFiltering.filter(todos, by: .upcoming, now: now, calendar: calendar).map(\.title) == ["Upcoming"])
@@ -65,21 +71,26 @@ struct TodoFilteringTests {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
         let overdue = TodoItem(title: "Runner renewal", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
+        let decision = TodoItem(
+            title: "Runner investor reply",
+            decisionPrompt: "Approve the Runner investor reply.",
+            whyNow: "Runner investor is waiting on your decision."
+        )
         let today = TodoItem(title: "Runner prep", dueDate: now.addingTimeInterval(60))
         let upcoming = TodoItem(title: "Runner outreach", dueDate: now.addingTimeInterval(3 * 24 * 60 * 60))
         let completed = TodoItem(title: "Runner recap", dueDate: now, isCompleted: true)
         let other = TodoItem(title: "Clean inbox", dueDate: now.addingTimeInterval(60))
 
         let counts = TodoFiltering.counts(
-            in: [overdue, today, upcoming, completed, other],
+            in: [overdue, decision, today, upcoming, completed, other],
             searchText: "runner",
             now: now,
             calendar: calendar
         )
 
-        #expect(counts == TodoFilterCounts(all: 4, open: 3, today: 1, overdue: 1, upcoming: 1, completed: 1))
+        #expect(counts == TodoFilterCounts(all: 5, open: 4, decisions: 1, today: 1, overdue: 1, upcoming: 1, completed: 1))
         #expect(counts.value(for: .overdue) == TodoFiltering.filter(
-            [overdue, today, upcoming, completed, other],
+            [overdue, decision, today, upcoming, completed, other],
             by: .overdue,
             searchText: "runner",
             now: now,
@@ -90,6 +101,8 @@ struct TodoFilteringTests {
     @Test
     func emptyStateCopyMatchesSelectedFilter() {
         #expect(TodoFilter.open.navigationTitle == "Open Work")
+        #expect(TodoFilter.decisions.title == "Decisions")
+        #expect(TodoFilter.decisions.navigationTitle == "Decisions")
         #expect(TodoFilter.overdue.title == "Past due")
         #expect(TodoFilter.overdue.navigationTitle == "Past-due work")
         #expect(TodoFilter.completed.navigationTitle == "Completed")
@@ -109,6 +122,11 @@ struct TodoFilteringTests {
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work in this view")
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Reset filters or add the next follow-up Maraithon should keep visible.")
         #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "No open work is visible in this filter. Add the next commitment when it should stay on your radar.")
+        #expect(TodoFilter.decisions.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
+            title: "No decisions waiting",
+            systemImage: "checkmark.seal",
+            description: "Decision work appears here when Maraithon has enough context to ask for a call, approval, or keep-or-close choice."
+        ))
         #expect(TodoFilter.today.emptyState(searchText: "", hasAnyWork: true).title == "No work due today")
         #expect(TodoFilter.upcoming.emptyState(searchText: "", hasAnyWork: true).title == "No upcoming work")
         #expect(TodoFilter.completed.emptyState(searchText: "", hasAnyWork: true).title == "No completed work")

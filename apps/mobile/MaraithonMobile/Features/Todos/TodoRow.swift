@@ -46,6 +46,10 @@ struct TodoRow: View {
                 }
 
                 HStack(spacing: 8) {
+                    if let signal = TodoDecisionSignals.signalPillTitle(for: todo) {
+                        StatusPill(title: signal, tint: .purple)
+                    }
+
                     StatusPill(title: todo.priority.title, tint: todo.priority.tint)
 
                     if let dueDate = todo.dueDate {

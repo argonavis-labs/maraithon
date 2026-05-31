@@ -83,6 +83,16 @@ struct TodayView: View {
                         }
                         Divider().padding(.leading, 48)
                         CommandRow(
+                            title: TodayViewCopy.decisionsTitle,
+                            subtitle: TodayViewCopy.decisionsSubtitle,
+                            value: "\(metrics.decisionTodos)",
+                            systemImage: "checkmark.seal",
+                            tint: .purple
+                        ) {
+                            appNavigation.showTodos(.decisions)
+                        }
+                        Divider().padding(.leading, 48)
+                        CommandRow(
                             title: TodayViewCopy.openWorkTitle,
                             subtitle: TodayViewCopy.openWorkSubtitle,
                             value: "\(metrics.openTodos)",
@@ -368,6 +378,8 @@ enum TodayViewCopy {
     static let dismissActionWarningAccessibilityLabel = "Dismiss focus action warning"
     static let askMaraithonTitle = "Ask Maraithon"
     static let askMaraithonSubtitle = "Plan, draft, or prioritize"
+    static let decisionsTitle = "Decisions"
+    static let decisionsSubtitle = "Calls waiting on you"
     static let openWorkTitle = "Open work"
     static let openWorkSubtitle = "Unfinished items"
     static let overdueTitle = "Past due"
@@ -377,7 +389,7 @@ enum TodayViewCopy {
     static let followUpTitle = "Needs follow-up"
     static let followUpSubtitle = "Relationships need attention"
     static let emptyFocusTitle = "Nothing urgent for today"
-    static let emptyFocusDescription = "Today shows past-due, due-today, high-priority work, and relationship follow-ups. Use Open work for everything else."
+    static let emptyFocusDescription = "Today shows past-due work, decisions waiting on you, due-today commitments, high-priority work, and relationship follow-ups. Use Open work for everything else."
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
     static let completeFocusActionLabel = "Done"
@@ -400,6 +412,8 @@ enum TodayViewCopy {
             dismissActionWarningAccessibilityLabel,
             askMaraithonTitle,
             askMaraithonSubtitle,
+            decisionsTitle,
+            decisionsSubtitle,
             openWorkTitle,
             openWorkSubtitle,
             overdueTitle,

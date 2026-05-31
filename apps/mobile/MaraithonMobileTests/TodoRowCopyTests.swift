@@ -84,6 +84,20 @@ struct TodoRowCopyTests {
         #expect(context.preparedMove == "Approve a short reply.")
         #expect(context.evidence == "Can you send the next update?")
         #expect(context.hasChiefOfStaffContext)
+        #expect(TodoDecisionSignals.signalPillTitle(for: todo) == "Decision")
+    }
+
+    @Test
+    func genericActionCardPromptDoesNotCreateADecisionLaneItem() {
+        let todo = TodoItem(
+            title: "Review customer plan",
+            notes: "Customer asked for the revised rollout plan.",
+            nextAction: "Send revised rollout plan.",
+            decisionPrompt: "Handle this now, snooze it, or dismiss it."
+        )
+
+        #expect(!TodoDecisionSignals.needsDecision(todo))
+        #expect(TodoDecisionSignals.signalPillTitle(for: todo) == nil)
     }
 
     @Test

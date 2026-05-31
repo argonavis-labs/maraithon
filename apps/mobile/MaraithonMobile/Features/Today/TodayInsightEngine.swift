@@ -2,6 +2,7 @@ import Foundation
 
 struct TodayMetrics: Equatable {
     let openTodos: Int
+    let decisionTodos: Int
     let dueTodayTodos: Int
     let overdueTodos: Int
     let peopleCount: Int
@@ -50,6 +51,7 @@ enum TodayInsightEngine {
     ) -> TodayMetrics {
         TodayMetrics(
             openTodos: todos.filter { !$0.isCompleted }.count,
+            decisionTodos: TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar).count,
             dueTodayTodos: TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).count,
             overdueTodos: TodoFiltering.overdueCount(in: todos, now: now, calendar: calendar),
             peopleCount: contacts.count,
@@ -65,6 +67,7 @@ enum TodayInsightEngine {
     ) -> TodayBrief {
         let metrics = metrics(todos: todos, contacts: contacts, now: now, calendar: calendar)
         let overdueTodos = TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar)
+        let decisionTodos = TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar)
         let dueTodayTodos = TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar)
         let atRiskContacts = CRMFiltering.filter(
             contacts,
@@ -84,6 +87,19 @@ enum TodayInsightEngine {
                 actionTitle: "Review past-due work",
                 systemImage: "clock.badge.exclamationmark",
                 destination: .todos(.overdue)
+            )
+        }
+
+        if metrics.decisionTodos > 0 {
+            return TodayBrief(
+                title: "Make the calls waiting on you",
+                subtitle: decisionBriefSubtitle(
+                    count: metrics.decisionTodos,
+                    lead: topTodo(decisionTodos)
+                ),
+                actionTitle: "Review decisions",
+                systemImage: "checkmark.seal",
+                destination: .todos(.decisions)
             )
         }
 
@@ -174,6 +190,21 @@ enum TodayInsightEngine {
                     detail: todoFocusDetail(for: todo, context: "Due today"),
                     systemImage: todo.priority.symbolName,
                     priority: 80 + priorityWeight(for: todo.priority)
+                )
+            }
+
+            if TodoDecisionSignals.needsDecision(todo) {
+                return TodayFocusItem(
+                    kind: .todo,
+                    referenceID: todo.id,
+                    title: todo.title,
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallbackAction: "Make the call, delegate it, or dismiss it."
+                    ),
+                    detail: todoFocusDetail(for: todo, context: "Decision waiting"),
+                    systemImage: "checkmark.seal",
+                    priority: 78 + priorityWeight(for: todo.priority)
                 )
             }
 
@@ -297,6 +328,22 @@ enum TodayInsightEngine {
         }
 
         return "\(count) work items are due today. Start with \(title)."
+    }
+
+    private static func decisionBriefSubtitle(count: Int, lead: TodoItem?) -> String {
+        guard let title = briefTitle(for: lead) else {
+            return "\(count) \(plural("decision", count)) \(needsVerb(count)) a call, approval, or keep-or-close choice."
+        }
+
+        if count == 1 {
+            return "\(title) needs a decision. \(briefMove(for: lead) ?? "Make the call, delegate it, or dismiss it.")"
+        }
+
+        if let move = briefMove(for: lead) {
+            return "\(count) decisions are waiting. Start with \(title): \(move)"
+        }
+
+        return "\(count) decisions are waiting. Start with \(title)."
     }
 
     private static func relationshipBriefSubtitle(count: Int, lead: CRMContact?) -> String {

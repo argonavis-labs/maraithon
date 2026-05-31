@@ -36,6 +36,7 @@ struct TodayInsightEngineTests {
         )
 
         #expect(metrics.openTodos == 2)
+        #expect(metrics.decisionTodos == 0)
         #expect(metrics.dueTodayTodos == 1)
         #expect(metrics.overdueTodos == 1)
         #expect(metrics.peopleCount == 2)
@@ -216,7 +217,7 @@ struct TodayInsightEngineTests {
         )
 
         #expect(queue.first?.subtitle == "You need to approve the finance reply.")
-        #expect(queue.first?.detail == "High priority. Why now: This needs your attention before noon. Reviewed Gmail")
+        #expect(queue.first?.detail == "Decision waiting. Why now: This needs your attention before noon. Reviewed Gmail")
         #expect(queue.first?.detail?.localizedCaseInsensitiveContains("telegram_fit_score") == false)
     }
 
@@ -248,11 +249,16 @@ struct TodayInsightEngineTests {
     }
 
     @Test
-    func briefPrioritizesOverdueWorkThenTodayThenRelationshipsThenOpenWorkThenChat() {
+    func briefPrioritizesOverdueWorkThenDecisionsThenTodayThenRelationshipsThenOpenWorkThenChat() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let overdue = TodoItem(title: "Overdue", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))
+        let decision = TodoItem(
+            title: "Approve investor reply",
+            decisionPrompt: "Approve the investor reply with the revised terms.",
+            whyNow: "The investor is waiting on your decision."
+        )
         let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
         let open = TodoItem(title: "Undated follow-up")
         let staleActive = CRMContact(
@@ -269,6 +275,13 @@ struct TodayInsightEngineTests {
             now: now,
             calendar: calendar
         ).destination == .todos(.overdue))
+
+        #expect(TodayInsightEngine.brief(
+            todos: [today, decision],
+            contacts: [staleActive],
+            now: now,
+            calendar: calendar
+        ).destination == .todos(.decisions))
 
         #expect(TodayInsightEngine.brief(
             todos: [today],
@@ -297,6 +310,23 @@ struct TodayInsightEngineTests {
             now: now,
             calendar: calendar
         ).destination == .chat)
+    }
+
+    @Test
+    func decisionBriefNamesTheCallWaitingOnTheExecutive() {
+        let decision = TodoItem(
+            title: "Approve investor reply",
+            nextAction: "Send the revised terms and confirm the review window",
+            decisionPrompt: "Approve the investor reply with the revised terms.",
+            whyNow: "The investor is waiting on your decision."
+        )
+
+        let brief = TodayInsightEngine.brief(todos: [decision], contacts: [])
+
+        #expect(brief.title == "Make the calls waiting on you")
+        #expect(brief.subtitle == "Approve investor reply needs a decision. Send the revised terms and confirm the review window.")
+        #expect(brief.actionTitle == "Review decisions")
+        #expect(brief.destination == .todos(.decisions))
     }
 
     @Test
