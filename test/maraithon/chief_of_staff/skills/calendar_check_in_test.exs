@@ -67,6 +67,72 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     assert pending.pending_check_in_input["openings"] != []
   end
 
+  test "uses named timezone offsets and labels for openings", %{user_id: user_id} = ctx do
+    state =
+      CalendarCheckIn.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -5
+      })
+
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+
+    input =
+      CalendarCheckIn.build_check_in_input(
+        user_id,
+        ctx.now,
+        state,
+        context(ctx, events)
+      )
+
+    [first_opening | _] = input["openings"]
+
+    assert input["timezone"] == "ET"
+    assert input["timezone_offset_hours"] == -4
+    assert input["local_time"] == "11:00:00"
+    assert first_opening["local_start"] == "11:00:00"
+    assert first_opening["local_end"] == "12:00:00"
+    assert first_opening["display_range"] == "11:00 AM-12:00 PM ET"
+  end
+
+  test "anchors named-timezone check-ins with the displayed local opening",
+       %{
+         user_id: user_id,
+         agent: agent
+       } = ctx do
+    state =
+      CalendarCheckIn.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -5
+      })
+
+    events = [event(ctx.date, ~T[16:00:00], ~T[17:00:00])]
+    context = %{context(ctx, events) | agent_id: agent.id}
+
+    {:effect, {:llm_call, _params}, pending} =
+      CalendarCheckIn.handle_wakeup(state, context)
+
+    response = %{
+      content:
+        Jason.encode!(%{
+          "decision" => "send",
+          "title" => "Useful work block",
+          "summary" => "Good moment to unblock pricing.",
+          "body" => "Draft the pricing reply before the next meeting.",
+          "reason" => "There is open calendar time and a useful next move."
+        })
+    }
+
+    assert {:emit, {:briefs_recorded, payload}, _final_state} =
+             CalendarCheckIn.handle_effect_result({:llm_call, response}, pending, context)
+
+    brief = Repo.get!(Brief, payload.brief_id)
+
+    assert brief.body ==
+             "You have 11:00 AM-12:00 PM ET open.\n\nDraft the pricing reply before the next meeting"
+  end
+
   test "idles when the work day is fully booked", %{state: state} = ctx do
     # One event spanning the whole remaining work-day window.
     events = [event(ctx.date, ~T[14:00:00], ~T[23:59:59])]
@@ -133,7 +199,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     brief = Repo.get!(Brief, payload.brief_id)
 
     assert brief.body ==
-             "You have 10:00-11:00 open.\n\nDraft the pricing reply before the next meeting"
+             "You have 10:00-11:00 AM UTC-05:00 open.\n\nDraft the pricing reply before the next meeting"
   end
 
   test "accepts markdown-fenced model JSON as a real check-in", %{state: state} = ctx do
@@ -263,7 +329,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckInTest do
     assert brief.summary ==
              "Best use: Send Alex the revised enterprise price before the 2 PM follow-up."
 
-    assert brief.body =~ "You have 10:00-11:00 open."
+    assert brief.body =~ "You have 10:00-11:00 AM UTC-05:00 open."
 
     assert brief.body =~
              "Best use: Send Alex the revised enterprise price before the 2 PM follow-up."

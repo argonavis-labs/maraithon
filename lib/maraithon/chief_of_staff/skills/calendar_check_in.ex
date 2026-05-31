@@ -17,6 +17,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   alias Maraithon.Briefs
   alias Maraithon.ChiefOfStaff.SourceBundle
+  alias Maraithon.Timezones
   alias Maraithon.Todos
   alias Maraithon.Tracing
 
@@ -94,6 +95,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     %{
       user_id: normalize_string(config["user_id"]),
       assistant_behavior: normalize_string(config["assistant_behavior"]) || "ai_chief_of_staff",
+      timezone: normalize_timezone(config["timezone"] || config["timezone_name"]),
       timezone_offset_hours:
         integer_in_range(config["timezone_offset_hours"], @default_timezone_offset_hours, -12, 14),
       work_day_start_hour:
@@ -201,7 +203,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   @doc false
   def build_check_in_input(user_id, now, state, context) do
-    offset = state.timezone_offset_hours
+    offset = timezone_offset_hours_at(now, state)
+    timezone = timezone_label(state, now)
     local_now = DateTime.add(now, offset, :hour)
     local_date = DateTime.to_date(local_now)
 
@@ -219,6 +222,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       "generated_at" => DateTime.to_iso8601(now),
       "local_time" =>
         local_now |> DateTime.to_time() |> Time.truncate(:second) |> Time.to_iso8601(),
+      "timezone" => timezone,
       "timezone_offset_hours" => offset,
       "window_key" => "#{Date.to_iso8601(local_date)}:#{local_now.hour}",
       "work_day" => %{
@@ -228,7 +232,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       "openings" => openings,
       "todays_events" =>
         events
-        |> Enum.map(&calendar_event_for_prompt(&1, offset))
+        |> Enum.map(&calendar_event_for_prompt(&1, offset, timezone))
         |> Enum.reject(&is_nil/1)
         |> Enum.take(20),
       "open_work" => %{
@@ -244,7 +248,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   # Deterministic interval math: free stretches >= min_opening_minutes between
   # now (or the work-day start) and the work-day end, ignoring all-day events.
   defp compute_openings(events, now, state) do
-    offset = state.timezone_offset_hours
+    offset = timezone_offset_hours_at(now, state)
+    timezone = timezone_label(state, now)
     local_now = DateTime.add(now, offset, :hour)
     local_date = DateTime.to_date(local_now)
 
@@ -276,12 +281,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
       {openings, cursor} =
         Enum.reduce(busy, {[], window_start}, fn {s, e}, {acc, cursor} ->
           gap_end = earliest(s, window_end)
-          acc = maybe_add_opening(acc, cursor, gap_end, offset, state.min_opening_minutes)
+
+          acc =
+            maybe_add_opening(acc, cursor, gap_end, offset, timezone, state.min_opening_minutes)
+
           {acc, latest(e, cursor)}
         end)
 
       openings
-      |> maybe_add_opening(cursor, window_end, offset, state.min_opening_minutes)
+      |> maybe_add_opening(cursor, window_end, offset, timezone, state.min_opening_minutes)
       |> Enum.reverse()
     end
   end
@@ -291,7 +299,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   defp work_day_end_datetime(date, hour),
     do: DateTime.new!(date, Time.new!(hour, 0, 0), "Etc/UTC")
 
-  defp maybe_add_opening(acc, gap_start, gap_end, offset, min_minutes) do
+  defp maybe_add_opening(acc, gap_start, gap_end, offset, timezone, min_minutes) do
     minutes = gap_end |> DateTime.diff(gap_start, :second) |> div(60)
 
     if minutes >= min_minutes do
@@ -301,6 +309,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
           "end" => DateTime.to_iso8601(gap_end),
           "local_start" => local_clock(gap_start, offset),
           "local_end" => local_clock(gap_end, offset),
+          "display_range" => display_clock_range(gap_start, gap_end, offset, timezone),
+          "timezone" => timezone,
           "minutes" => minutes
         }
         | acc
@@ -345,13 +355,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     |> Time.to_iso8601()
   end
 
-  defp calendar_event_for_prompt(event, offset) when is_map(event) do
+  defp calendar_event_for_prompt(event, offset, timezone) when is_map(event) do
     case event_interval(event) do
       {start_at, end_at} ->
         %{
           "summary" => read_string(event, "summary", "Untitled event"),
           "local_start" => local_clock(start_at, offset),
           "local_end" => local_clock(end_at, offset),
+          "display_time" => display_clock_range(start_at, end_at, offset, timezone),
+          "timezone" => timezone,
           "location" => read_string(event, "location", nil),
           "organizer" => read_string(event, "organizer", nil)
         }
@@ -361,7 +373,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
     end
   end
 
-  defp calendar_event_for_prompt(_event, _offset), do: nil
+  defp calendar_event_for_prompt(_event, _offset, _timezone), do: nil
 
   # ==========================================================================
   # Model call + delivery
@@ -688,11 +700,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp opening_range_label_for(opening) when is_map(opening) do
-    start_at = opening |> read_string("local_start", nil) |> clock_label()
-    end_at = opening |> read_string("local_end", nil) |> clock_label()
+    case read_string(opening, "display_range", nil) do
+      nil ->
+        start_at = opening |> read_string("local_start", nil) |> display_clock_label()
+        end_at = opening |> read_string("local_end", nil) |> display_clock_label()
+        timezone = read_string(opening, "timezone", nil)
 
-    if start_at && end_at do
-      "#{start_at}-#{end_at}"
+        if start_at && end_at do
+          compact_clock_range(start_at, end_at, timezone)
+        end
+
+      display_range ->
+        display_range
     end
   end
 
@@ -717,10 +736,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   defp opening_mention_variants_for(opening) when is_map(opening) do
     start_at = opening |> read_string("local_start", nil) |> clock_label()
     end_at = opening |> read_string("local_end", nil) |> clock_label()
+    display_range = read_string(opening, "display_range", nil)
     short_start = short_clock_label(start_at)
     short_end = short_clock_label(end_at)
 
-    range_variants(start_at, end_at) ++ range_variants(short_start, short_end)
+    [display_range] ++ range_variants(start_at, end_at) ++ range_variants(short_start, short_end)
   end
 
   defp opening_mention_variants_for(_opening), do: []
@@ -774,6 +794,63 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
 
   defp sentence(_value), do: ""
 
+  defp display_clock_range(start_at, end_at, offset, timezone)
+       when is_integer(offset) do
+    start_label =
+      start_at
+      |> local_clock(offset)
+      |> display_clock_label()
+
+    end_label =
+      end_at
+      |> local_clock(offset)
+      |> display_clock_label()
+
+    compact_clock_range(start_label, end_label, timezone)
+  end
+
+  defp compact_clock_range(start_label, end_label, timezone)
+       when is_binary(start_label) and is_binary(end_label) do
+    range =
+      case {String.split(start_label, " "), String.split(end_label, " ")} do
+        {[start_time, meridiem], [end_time, end_meridiem]} when meridiem == end_meridiem ->
+          "#{start_time}-#{end_time} #{meridiem}"
+
+        _ ->
+          "#{start_label}-#{end_label}"
+      end
+
+    case normalize_string(timezone) do
+      nil -> range
+      timezone -> "#{range} #{timezone}"
+    end
+  end
+
+  defp compact_clock_range(_start_label, _end_label, _timezone), do: nil
+
+  defp display_clock_label(nil), do: nil
+
+  defp display_clock_label(value) when is_binary(value) do
+    value
+    |> clock_parts()
+    |> case do
+      nil ->
+        nil
+
+      {hour, minute} ->
+        display_hour =
+          case rem(hour, 12) do
+            0 -> 12
+            hour -> hour
+          end
+
+        meridiem = if hour < 12, do: "AM", else: "PM"
+        "#{display_hour}:#{String.pad_leading(Integer.to_string(minute), 2, "0")} #{meridiem}"
+    end
+  end
+
+  defp display_clock_label(_value), do: nil
+
   defp clock_label(nil), do: nil
 
   defp clock_label(value) when is_binary(value) do
@@ -787,6 +864,28 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp clock_label(_value), do: nil
+
+  defp clock_parts(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.split(":")
+    |> case do
+      [hour, minute | _] ->
+        with {hour, ""} <- Integer.parse(hour),
+             {minute, ""} <- Integer.parse(minute),
+             true <- hour in 0..23,
+             true <- minute in 0..59 do
+          {hour, minute}
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp clock_parts(_value), do: nil
 
   defp short_clock_label(nil), do: nil
 
@@ -869,7 +968,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp within_work_day?(now, state) do
-    local = DateTime.add(now, state.timezone_offset_hours, :hour)
+    local = DateTime.add(now, timezone_offset_hours_at(now, state), :hour)
     weekday? = Date.day_of_week(DateTime.to_date(local)) in 1..5
 
     weekday? and local.hour >= state.work_day_start_hour and
@@ -889,6 +988,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp checked_in_recently?(_state, _now), do: false
+
+  defp timezone_offset_hours_at(%DateTime{} = datetime, state) do
+    Timezones.offset_at(Map.get(state, :timezone), datetime, state.timezone_offset_hours)
+  end
+
+  defp timezone_label(state, %DateTime{} = datetime) do
+    offset = timezone_offset_hours_at(datetime, state)
+    Timezones.label(Map.get(state, :timezone), offset)
+  end
 
   # ==========================================================================
   # Small utilities
@@ -1038,6 +1146,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CalendarCheckIn do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp normalize_timezone(value) when is_binary(value) do
+    case Timezones.normalize(value) do
+      normalized when is_binary(normalized) -> normalized
+      _ -> nil
+    end
+  end
+
+  defp normalize_timezone(_value), do: nil
 
   defp normalize_reasoning_effort(value, default) when is_binary(value) do
     normalized = value |> String.trim() |> String.downcase()
