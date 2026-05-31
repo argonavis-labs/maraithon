@@ -141,12 +141,20 @@ struct SourceUnblockView: View {
             return
         }
 
+        if hint.requiresStableFullDiskAccessApp {
+            env.eventLog.info(
+                "\(sourceID).full_disk_access_check_still_blocked",
+                source: .ui
+            )
+            return
+        }
+
         env.sources.syncNow(id: sourceID)
     }
 
     @MainActor
     private func clearFullDiskAccessBlockIfGranted() -> Bool {
-        guard env.sources.statusPublisher(for: sourceID)?.displayedState().requiresFullDiskAccess == true,
+        guard env.sources.statusPublisher(for: sourceID)?.fullDiskAccessBlockReason != nil,
               FullDiskAccessProbe.isGranted()
         else {
             return false

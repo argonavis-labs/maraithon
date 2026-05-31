@@ -136,6 +136,10 @@ final class NotesSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
+        if waitForFullDiskAccessGrantIfNeeded() {
+            return
+        }
+
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
             lastLowPowerState = lowPower
@@ -160,6 +164,29 @@ final class NotesSource: SourceProtocol {
         } catch {
             markCycleFailed(error, event: "notes.cycle_failed")
         }
+    }
+
+    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+        guard let reason = statusPublisher.fullDiskAccessBlockReason else {
+            return false
+        }
+
+        if FullDiskAccessProbe.isGranted() {
+            statusPublisher.clearFullDiskAccessBlock()
+            eventLog.info(
+                "notes.full_disk_access_granted",
+                source: .notes,
+                payload: ["previous_reason": reason]
+            )
+            return false
+        }
+
+        eventLog.debug(
+            "notes.waiting_for_full_disk_access",
+            source: .notes,
+            payload: ["reason": reason]
+        )
+        return true
     }
 
     /// Two-phase newest-first cycle: pull `Z_PK > newestSeen` first,

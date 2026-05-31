@@ -28,7 +28,7 @@ enum FullDiskAccessInstallHint {
     static let revealStableAppButtonTitle = "Show app copy"
     static var stableGrantReminder: String? {
         #if DEBUG
-        return "Full Disk Access is still blocked for this Maraithon app. In System Settings, remove old Maraithon rows, add \(stableDevelopmentAppDisplayPath), enable that row, then click Check again. Reloads use this same app."
+        return "Full Disk Access is still blocked for this app copy. In System Settings, remove old Maraithon rows, add \(stableDevelopmentAppDisplayPath), enable that exact row once, then click Check again. Reloads use this same signed app."
         #else
         return nil
         #endif
@@ -76,7 +76,7 @@ enum FullDiskAccessInstallHint {
         let stableAppAction = stableAppInstalled ? "Open" : "Install"
 
         return Detail(
-            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to one exact app. \(stableAppAction) \(stableDevelopmentAppDisplayPath), then grant access to that app once.",
+            message: "You're running a temporary Maraithon copy. macOS grants Full Disk Access to one exact app, so do not enable this temporary copy. \(stableAppAction) \(stableDevelopmentAppDisplayPath), then grant access to that app once.",
             stableAppURL: stableAppURL,
             stableAppInstalled: stableAppInstalled,
             canInstallStableApp: canInstallStableApp

@@ -49,6 +49,7 @@ final class FullDiskAccessCopyTests: XCTestCase {
         XCTAssertTrue(message?.contains("temporary Maraithon copy") == true)
         XCTAssertTrue(message?.contains("~/Applications/Maraithon.app") == true)
         XCTAssertTrue(message?.localizedCaseInsensitiveContains("one exact app") == true)
+        XCTAssertTrue(message?.localizedCaseInsensitiveContains("do not enable this temporary copy") == true)
         XCTAssertFalse(message?.localizedCaseInsensitiveContains("disappear after reloads") == true)
         XCTAssertFalse(message?.localizedCaseInsensitiveContains("stable app") == true)
         XCTAssertFalse(message?.contains("make run-companion") == true)
@@ -89,10 +90,10 @@ final class FullDiskAccessCopyTests: XCTestCase {
         let reminder = try XCTUnwrap(FullDiskAccessInstallHint.stableGrantReminder)
 
         XCTAssertTrue(reminder.contains("~/Applications/Maraithon.app"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("this Maraithon app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("this app copy"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("remove old Maraithon rows"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("enable that row"))
-        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("reloads use this same app"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("enable that exact row once"))
+        XCTAssertTrue(reminder.localizedCaseInsensitiveContains("reloads use this same signed app"))
         XCTAssertTrue(reminder.localizedCaseInsensitiveContains("Check again"))
         XCTAssertFalse(reminder.localizedCaseInsensitiveContains("DerivedData"))
     }

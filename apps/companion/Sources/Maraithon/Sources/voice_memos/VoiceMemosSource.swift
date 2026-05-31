@@ -194,6 +194,10 @@ final class VoiceMemosSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
+        if waitForFullDiskAccessGrantIfNeeded() {
+            return
+        }
+
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
             lastLowPowerState = lowPower
@@ -218,6 +222,29 @@ final class VoiceMemosSource: SourceProtocol {
         } catch {
             markCycleFailed(error, event: "voice_memos.cycle_failed")
         }
+    }
+
+    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+        guard let reason = statusPublisher.fullDiskAccessBlockReason else {
+            return false
+        }
+
+        if FullDiskAccessProbe.isGranted() {
+            statusPublisher.clearFullDiskAccessBlock()
+            eventLog.info(
+                "voice_memos.full_disk_access_granted",
+                source: .voiceMemos,
+                payload: ["previous_reason": reason]
+            )
+            return false
+        }
+
+        eventLog.debug(
+            "voice_memos.waiting_for_full_disk_access",
+            source: .voiceMemos,
+            payload: ["reason": reason]
+        )
+        return true
     }
 
     /// Single sync cycle: read everything beyond the cursor, build payloads,

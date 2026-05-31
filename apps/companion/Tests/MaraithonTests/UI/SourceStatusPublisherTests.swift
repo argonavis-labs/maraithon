@@ -271,6 +271,7 @@ final class SourceStatusPublisherTests: XCTestCase {
 
         XCTAssertEqual(restored.blockingPermissionReason, reason)
         XCTAssertEqual(restored.displayedState(), .error(reason: reason))
+        XCTAssertEqual(restored.fullDiskAccessBlockReason, reason)
 
         // Source start-up is optimistic; it should not erase a durable
         // permission block until the app proves it can read the source.
@@ -280,6 +281,7 @@ final class SourceStatusPublisherTests: XCTestCase {
         restored.recordHealthyCycle(at: now.addingTimeInterval(60))
         restored.update(state: .connected)
         XCTAssertNil(restored.blockingPermissionReason)
+        XCTAssertNil(restored.fullDiskAccessBlockReason)
         XCTAssertEqual(restored.displayedState(), .connected)
     }
 
@@ -290,10 +292,12 @@ final class SourceStatusPublisherTests: XCTestCase {
         publisher.update(state: .needsAttention(reason: reason))
 
         XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+        XCTAssertEqual(publisher.fullDiskAccessBlockReason, reason)
 
         publisher.clearFullDiskAccessBlock()
 
         XCTAssertNil(publisher.blockingPermissionReason)
+        XCTAssertNil(publisher.fullDiskAccessBlockReason)
         XCTAssertEqual(publisher.state, .connected)
         XCTAssertEqual(publisher.displayedState(), .connected)
     }
@@ -306,10 +310,12 @@ final class SourceStatusPublisherTests: XCTestCase {
 
         XCTAssertNil(publisher.blockingPermissionReason)
         XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+        XCTAssertEqual(publisher.fullDiskAccessBlockReason, reason)
 
         publisher.clearFullDiskAccessBlock()
 
         XCTAssertNil(publisher.activeIssue)
+        XCTAssertNil(publisher.fullDiskAccessBlockReason)
         XCTAssertEqual(publisher.displayedState(), .connected)
     }
 
@@ -348,6 +354,7 @@ final class SourceStatusPublisherTests: XCTestCase {
 
         XCTAssertEqual(publisher.blockingPermissionReason, reason)
         XCTAssertEqual(publisher.displayedState(), .error(reason: reason))
+        XCTAssertNil(publisher.fullDiskAccessBlockReason)
     }
 
     func testPersistentPublisherDoesNotRestoreNonBlockingAttention() {

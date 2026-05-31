@@ -144,6 +144,10 @@ final class IMessageSource: SourceProtocol {
     private var lastTickAt: ContinuousClock.Instant?
 
     private func tickIfNeeded(force: Bool) async {
+        if waitForFullDiskAccessGrantIfNeeded() {
+            return
+        }
+
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
             lastLowPowerState = lowPower
@@ -168,6 +172,29 @@ final class IMessageSource: SourceProtocol {
         } catch {
             markCycleFailed(error, event: "imessage.cycle_failed")
         }
+    }
+
+    private func waitForFullDiskAccessGrantIfNeeded() -> Bool {
+        guard let reason = statusPublisher.fullDiskAccessBlockReason else {
+            return false
+        }
+
+        if FullDiskAccessProbe.isGranted() {
+            statusPublisher.clearFullDiskAccessBlock()
+            eventLog.info(
+                "imessage.full_disk_access_granted",
+                source: .imessage,
+                payload: ["previous_reason": reason]
+            )
+            return false
+        }
+
+        eventLog.debug(
+            "imessage.waiting_for_full_disk_access",
+            source: .imessage,
+            payload: ["reason": reason]
+        )
+        return true
     }
 
     /// Two-phase newest-first cycle:

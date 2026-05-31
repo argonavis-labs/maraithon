@@ -241,6 +241,18 @@ final class SourceStatusPublisher {
         return display
     }
 
+    var fullDiskAccessBlockReason: String? {
+        let display = displayedState()
+        switch display {
+        case .needsAttention(let reason) where SourceState.isFullDiskAccessReason(reason):
+            return reason
+        case .error(let reason) where SourceState.isFullDiskAccessReason(reason):
+            return reason
+        default:
+            return nil
+        }
+    }
+
     var activeBlockingIssue: IssueEvent? {
         guard let issue = activeIssue, issue.severity == .error else {
             return nil
