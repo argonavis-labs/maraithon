@@ -381,12 +381,13 @@ struct TodayInsightEngineTests {
     func clearDayBriefUsesMaraithonProductLanguage() {
         let brief = TodayInsightEngine.brief(todos: [], contacts: [])
 
-        #expect(brief.title == "Clear for now")
-        #expect(brief.subtitle == "No decision, deadline, or relationship follow-up needs action today. Start a planning chat when you want a draft, summary, or priority call.")
-        #expect(brief.actionTitle == "Start a chat")
+        #expect(brief.title == "Saved context is clear")
+        #expect(brief.subtitle == "No saved decision, deadline, or relationship follow-up is waiting in Maraithon. Ask for a fresh review when you want a priority call, draft, or summary.")
+        #expect(brief.actionTitle == "Review with Maraithon")
         #expect(!brief.actionTitle.localizedCaseInsensitiveContains("chief of staff"))
         #expect(!brief.subtitle.localizedCaseInsensitiveContains("high-priority"))
         #expect(!brief.subtitle.localizedCaseInsensitiveContains("Today. Ask"))
+        #expect(!brief.subtitle.localizedCaseInsensitiveContains("needs action today"))
     }
 
     @Test

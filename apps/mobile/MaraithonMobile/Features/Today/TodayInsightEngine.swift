@@ -143,9 +143,9 @@ enum TodayInsightEngine {
         }
 
         return TodayBrief(
-            title: "Clear for now",
-            subtitle: "No decision, deadline, or relationship follow-up needs action today. Start a planning chat when you want a draft, summary, or priority call.",
-            actionTitle: "Start a chat",
+            title: "Saved context is clear",
+            subtitle: "No saved decision, deadline, or relationship follow-up is waiting in Maraithon. Ask for a fresh review when you want a priority call, draft, or summary.",
+            actionTitle: "Review with Maraithon",
             systemImage: "sparkles",
             destination: .chat
         )
