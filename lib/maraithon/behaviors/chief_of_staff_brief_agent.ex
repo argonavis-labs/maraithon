@@ -171,13 +171,13 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
       cond do
         top_items == [] and watching_items == [] ->
           {"Morning brief: no direct action ready",
-           "No direct action or watched thread is ready for this brief."}
+           "No direct action or changed thread is ready for this brief."}
 
         top_items == [] ->
           count = length(watching_items)
 
-          {"Morning brief: watching items only",
-           "#{count_phrase(count, "important thread")} #{be_verb(count)} being watched, with no direct action needed from you right now."}
+          {"Morning brief: #{count_phrase(count, "thread")} on radar",
+           "#{count_phrase(count, "important thread")} #{be_verb(count)} on radar, with no direct action needed from you right now."}
 
         true ->
           count = length(top_items)
@@ -265,8 +265,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         debt_items == [] ->
           count = length(watching_items)
 
-          {"End-of-day review: watching items only",
-           "#{count_phrase(count, "important thread")} #{be_verb(count)} still being watched, with no direct action needed from you tonight."}
+          {"End-of-day review: #{count_phrase(count, "thread")} on radar",
+           "#{count_phrase(count, "important thread")} #{be_verb(count)} on radar, with no direct action needed from you tonight."}
 
         true ->
           count = length(debt_items)
@@ -565,8 +565,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           ),
           count_line(
             length(monitor_insights),
-            "thread is still in Watching",
-            "threads are still in Watching"
+            "thread is on radar",
+            "threads are on radar"
           )
         ],
         "No direct action is ready for this brief."
@@ -609,8 +609,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
           ),
           count_line(
             length(monitor_insights),
-            "thread is still being watched",
-            "threads are still being watched"
+            "thread is on radar",
+            "threads are on radar"
           )
         ],
         "No unresolved work is ready for tonight's review."
@@ -703,8 +703,8 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp watching_section(items, time_context, reference_at) do
     """
-    Watching, not blocking right now:
-    #{format_items(items, time_context, reference_at, "1. No newly changed watched items found.")}
+    On radar, not blocking right now:
+    #{format_items(items, time_context, reference_at, "1. No newly changed radar items found.")}
     """
     |> String.trim()
   end
@@ -786,7 +786,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "overdue across the backlog"
       )
     )
-    |> append_sentence(count_summary(length(monitor_insights), "being watched", "being watched"))
+    |> append_sentence(
+      count_summary(length(monitor_insights), "thread on radar", "threads on radar")
+    )
   end
 
   defp end_of_day_summary(
@@ -806,7 +808,9 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         "overdue tonight"
       )
     )
-    |> append_sentence(count_summary(length(monitor_insights), "being watched", "being watched"))
+    |> append_sentence(
+      count_summary(length(monitor_insights), "thread on radar", "threads on radar")
+    )
   end
 
   defp check_in_summary(top_items, act_now_insights, time_context, reference_at) do

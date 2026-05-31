@@ -78,7 +78,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.title == "Morning brief: 1 action to move"
     assert brief.summary =~ "Most urgent"
     refute brief.summary =~ "0 overdue"
-    refute brief.summary =~ "0 being watched"
+    refute brief.summary =~ "0 threads on radar"
     refute brief.title =~ "1 items"
     refute brief.title =~ "worth watching"
     assert brief.body =~ "Best use of today:"
@@ -270,7 +270,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.title == "Morning brief: no direct action ready"
 
     assert brief.summary ==
-             "No direct action or watched thread is ready for this brief."
+             "No direct action or changed thread is ready for this brief."
 
     assert brief.body =~ "Best use of today:"
     assert brief.body =~ "No direct action is ready for this brief."
@@ -344,12 +344,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["morning"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning brief: watching items only"
+    assert brief.title == "Morning brief: 1 thread on radar"
 
     assert brief.summary ==
-             "1 important thread is being watched, with no direct action needed from you right now."
+             "1 important thread is on radar, with no direct action needed from you right now."
 
-    assert brief.body =~ "Watching, not blocking right now:"
+    assert brief.body =~ "On radar, not blocking right now:"
     refute brief.title =~ "clear"
     refute brief.summary =~ "clear"
     refute brief.summary =~ "founder"
@@ -482,12 +482,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["end_of_day"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "End-of-day review: watching items only"
+    assert brief.title == "End-of-day review: 2 threads on radar"
 
     assert brief.summary ==
-             "2 important threads are still being watched, with no direct action needed from you tonight."
+             "2 important threads are on radar, with no direct action needed from you tonight."
 
-    assert brief.body =~ "Watching, not blocking right now:"
+    assert brief.body =~ "On radar, not blocking right now:"
     refute brief.title =~ "clear"
     refute brief.summary =~ "clear"
     refute brief.summary =~ "founder"
@@ -558,7 +558,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert brief.cadence == "end_of_day"
     assert brief.title == "End-of-day review: 1 item to close or reset"
     assert brief.summary =~ "Most urgent"
-    refute brief.summary =~ "0 being watched"
+    refute brief.summary =~ "0 threads on radar"
     refute brief.title =~ "1 items"
     refute brief.title =~ "still open"
     assert brief.body =~ "Tonight's move:"
@@ -642,10 +642,10 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     assert brief.body =~ "Close or reset:"
     assert brief.body =~ "[Gmail] Send the investor deck"
-    assert brief.body =~ "Watching, not blocking right now:"
+    assert brief.body =~ "On radar, not blocking right now:"
     assert brief.body =~ "[Gmail] Monitoring: Meta Ad Account thread"
     assert brief.body =~ "Track: Watch for a blocker"
-    assert brief.body =~ "1 thread is still being watched"
+    assert brief.body =~ "1 thread is on radar"
   end
 
   test "records an adaptive daytime check-in when important work is still open", %{
