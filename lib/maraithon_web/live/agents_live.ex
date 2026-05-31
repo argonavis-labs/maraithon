@@ -15,6 +15,7 @@ defmodule MaraithonWeb.AgentsLive do
   alias Maraithon.Runtime
   alias Maraithon.Timezones
   alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.AutomationDisplayCopy
   alias MaraithonWeb.LocalTime
   alias MaraithonWeb.OperationFailureCopy
 
@@ -2303,14 +2304,14 @@ defmodule MaraithonWeb.AgentsLive do
   defp subscriptions_preview(config) do
     case config["subscribe"] || [] do
       [] -> "Runs on request"
-      values -> values |> Enum.take(3) |> Enum.join(", ") |> truncate(70)
+      values -> values |> Enum.take(3) |> AutomationDisplayCopy.context_list() |> truncate(70)
     end
   end
 
   defp tools_preview(config) do
     case config["tools"] || [] do
       [] -> "No app actions enabled"
-      values -> values |> Enum.join(", ") |> truncate(70)
+      values -> values |> AutomationDisplayCopy.action_list() |> truncate(70)
     end
   end
 

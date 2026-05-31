@@ -370,9 +370,11 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       html = render(view)
 
       assert html =~ "Allowed actions"
+      assert html =~ "Allowed actions: Read local files, Search local files"
       assert html =~ "Review limit"
       assert html =~ "Action limit"
       assert html =~ "room for 200 review passes and 300 allowed actions"
+      refute html =~ "Allowed actions: read_file,search_files"
       refute html =~ "Sources to watch"
       refute html =~ "source feeds"
       refute html =~ "should inspect"
@@ -383,6 +385,28 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       refute html =~ "reasoning steps"
       refute html =~ "permitted actions"
       refute html =~ "action allowlist"
+    end
+
+    test "builder preview translates configured context and action identifiers", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/agents/new?behavior=prompt_agent")
+
+      _html =
+        view
+        |> form("#agent-builder-form",
+          launch: %{
+            behavior: "prompt_agent",
+            subscriptions: "github:acme/repo,email:founder@example.com",
+            tools: "read_file,search_files"
+          }
+        )
+        |> render_change()
+
+      html = render(view)
+
+      assert html =~ "Context: GitHub acme/repo, Email founder@example.com"
+      assert html =~ "Allowed actions: Read local files, Search local files"
+      refute html =~ "Context: github:acme/repo,email:founder@example.com"
+      refute html =~ "Allowed actions: read_file,search_files"
     end
   end
 

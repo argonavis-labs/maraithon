@@ -9,6 +9,7 @@ defmodule MaraithonWeb.AgentBuilderLive do
   alias Maraithon.Runtime.Config, as: RuntimeConfig
   alias Maraithon.Timezones
   alias MaraithonWeb.AgentActionCopy
+  alias MaraithonWeb.AutomationDisplayCopy
 
   @tool_provider_requirements %{
     "gmail_get_message" => %{provider: "google", service: "gmail", label: "Gmail"},
@@ -1240,13 +1241,13 @@ defmodule MaraithonWeb.AgentBuilderLive do
           "This automation responds only to direct messages until you add context to review."
 
         value ->
-          "Context: #{value}"
+          "Context: #{AutomationDisplayCopy.context_list(value)}"
       end
 
     tools =
       case launch["tools"] do
         "" -> "No actions enabled. The automation will stay text-only."
-        value -> "Allowed actions: #{value}"
+        value -> "Allowed actions: #{AutomationDisplayCopy.action_list(value)}"
       end
 
     [

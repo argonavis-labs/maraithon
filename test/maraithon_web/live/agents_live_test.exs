@@ -309,6 +309,27 @@ defmodule MaraithonWeb.AgentsLiveTest do
     refute html =~ "OTP Agent Runtime"
   end
 
+  test "selected inspection summarizes context and actions in product copy", %{conn: conn} do
+    {:ok, agent} =
+      create_agent(%{
+        behavior: "prompt_agent",
+        config: %{
+          "name" => "labeled-inspection",
+          "subscribe" => ["github:acme/repo", "email:founder@example.com"],
+          "tools" => ["read_file", "search_files"]
+        },
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
+
+    assert html =~ "GitHub acme/repo, Email founder@example.com"
+    assert html =~ "Read local files, Search local files"
+    refute html =~ "github:acme/repo, email:founder@example.com"
+    refute html =~ "read_file, search_files"
+  end
+
   test "selected inspection shows operational diagnostics for admins" do
     admin_email = "agents-admin@example.com"
     agent = create_inspected_agent(admin_email)
