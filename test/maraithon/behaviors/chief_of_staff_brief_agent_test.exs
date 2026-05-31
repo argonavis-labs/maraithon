@@ -842,18 +842,20 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["weekly_review"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Weekly review: no open work ready"
-    assert brief.summary == "No open work is ready from this week's review."
+    assert brief.title == "Weekly review: no saved open work ready"
+    assert brief.summary == "No saved open work is ready from this week's review."
     assert brief.body =~ "Next week's move:"
     assert brief.body =~ "confirm calendar context and any new promises"
     assert brief.body =~ "- No activity needed review this week"
     assert brief.body =~ "Most important open items:"
-    assert brief.body =~ "No open work is ready from this week's review."
+    assert brief.body =~ "No saved open work is ready from this week's review."
 
     refute brief.title =~ "0 items"
     refute brief.summary =~ "0"
+    refute brief.title =~ "no open work ready"
     refute brief.title =~ "found"
     refute brief.summary =~ "found"
+    refute brief.body =~ "No open work is ready"
     refute brief.body =~ "No open work found"
   end
 

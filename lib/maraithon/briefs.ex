@@ -26,6 +26,7 @@ defmodule Maraithon.Briefs do
   @brief_body_default "No decision needs your attention right now."
   @brief_summary_fallback "Maraithon kept only review-ready next steps."
   @brief_body_fallback "No verified recommendation was safe to send yet."
+  @todo_digest_empty_decision_text "No saved open work is ready for a decision right now."
   @internal_brief_markers [
     "<redacted",
     "=>",
@@ -315,7 +316,7 @@ defmodule Maraithon.Briefs do
     detail_line =
       case todos do
         [] ->
-          "No open work needs a decision right now."
+          @todo_digest_empty_decision_text
 
         _ ->
           cond do
@@ -329,7 +330,7 @@ defmodule Maraithon.Briefs do
               "#{still_open_count} carried over from earlier."
 
             true ->
-              "No open work needs a decision right now."
+              @todo_digest_empty_decision_text
           end
       end
 
@@ -648,7 +649,7 @@ defmodule Maraithon.Briefs do
     "#{focus} Then decide the rest: mark done, snooze, keep active, or dismiss each one."
   end
 
-  defp todo_digest_next_move(_todos), do: "No open work needs a decision right now."
+  defp todo_digest_next_move(_todos), do: @todo_digest_empty_decision_text
 
   defp todo_digest_sentence(value) when is_binary(value) do
     value = String.trim(value)

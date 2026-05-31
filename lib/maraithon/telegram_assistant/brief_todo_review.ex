@@ -31,6 +31,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
   )
   @no_open_work_review_text "No saved open work is ready for review right now. " <>
                               "New commitments will appear here once Maraithon has enough context to recommend a concrete next move."
+  @no_open_work_decision_text "No saved open work is ready for a decision right now."
 
   def reviewable?(%Brief{} = brief), do: linked_todo_ids(brief) != []
   def reviewable?(_brief), do: false
@@ -805,7 +806,7 @@ defmodule Maraithon.TelegramAssistant.BriefTodoReview do
     "#{focus} Then decide each remaining item: mark it done, snooze it, keep it active, or dismiss it."
   end
 
-  defp todo_list_next_move(_todos), do: "No open work needs a decision right now."
+  defp todo_list_next_move(_todos), do: @no_open_work_decision_text
 
   defp todo_list_sentence(value) when is_binary(value) do
     value = String.trim(value)

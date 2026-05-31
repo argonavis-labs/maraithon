@@ -628,6 +628,27 @@ defmodule Maraithon.BriefsTest do
     refute intro =~ "items still need"
   end
 
+  test "empty check-in todo digest scopes decision copy to saved open work", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "check_in",
+               "title" => "Check-in: no saved work ready",
+               "summary" => "No saved open work is ready for a decision.",
+               "body" => "Superseded by todo delivery.",
+               "scheduled_for" => ~U[2026-04-02 16:30:00Z],
+               "dedupe_key" => "brief:check-in:empty-todo-style",
+               "metadata" => %{"linked_todo_ids" => []}
+             })
+
+    assert Briefs.todo_digest_intro_text(brief, []) ==
+             "No saved open work is ready for a decision right now."
+
+    refute Briefs.todo_digest_intro_text(brief, []) =~ "No open work needs a decision"
+  end
+
   test "brief todo review sends open work one item at a time and summarizes decisions", %{
     user_id: user_id,
     agent: agent

@@ -26,6 +26,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   @max_items 30
   @default_check_in_slots_per_day 3
   @default_check_in_max_items 2
+  @empty_weekly_open_work_text "No saved open work is ready from this week's review."
 
   @impl true
   def init(config) do
@@ -674,7 +675,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     #{weekly_guidance(top_open)}
 
     Most important open items:
-    #{format_items(top_open, time_context, reference_at, "1. No open work is ready from this week's review.")}
+    #{format_items(top_open, time_context, reference_at, "1. #{@empty_weekly_open_work_text}")}
     """
     |> String.trim()
   end
@@ -849,7 +850,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
     |> summary_sentence()
   end
 
-  defp summary_sentence([]), do: "No open work is ready from this week's review."
+  defp summary_sentence([]), do: @empty_weekly_open_work_text
   defp summary_sentence([part]), do: part <> "."
   defp summary_sentence([first, second]), do: "#{first}, and #{second}."
 
@@ -870,7 +871,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
   defp be_verb(1), do: "is"
   defp be_verb(_count), do: "are"
 
-  defp weekly_title(0), do: "Weekly review: no open work ready"
+  defp weekly_title(0), do: "Weekly review: no saved open work ready"
 
   defp weekly_title(open_count),
     do: "Weekly review: #{count_phrase(open_count, "item")} ready for a decision"
