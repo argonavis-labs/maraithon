@@ -531,6 +531,39 @@ defmodule Maraithon.TelegramAssistant.WorkSummaryTest do
     refute inspect(summary) =~ "Found 2 results"
   end
 
+  test "empty preference summaries explain the default behavior" do
+    turn = %Turn{
+      structured_data: %{
+        "tool_history" => [
+          %{
+            "tool" => "list_preferences",
+            "result" => %{
+              "active_rules" => [],
+              "pending_rules" => [],
+              "active_count" => 0,
+              "pending_count" => 0
+            }
+          }
+        ]
+      }
+    }
+
+    summary = WorkSummary.for_message(turn)
+
+    assert summary["headline"] ==
+             "Preferences: Using source-backed defaults until a standing preference is saved"
+
+    assert [
+             %{
+               "tool" => "preferences",
+               "label" => "Preferences",
+               "summary" => "Using source-backed defaults until a standing preference is saved."
+             }
+           ] = summary["tool_calls"]
+
+    refute inspect(summary) =~ "No preferences saved yet"
+  end
+
   test "open work tool summaries prefer executive summary copy over raw counts" do
     turn = %Turn{
       structured_data: %{

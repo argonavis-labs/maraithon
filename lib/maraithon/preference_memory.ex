@@ -79,7 +79,7 @@ defmodule Maraithon.PreferenceMemory do
     case active_rules(user_id) do
       [] ->
         """
-        No standing preferences saved yet.
+        Maraithon is using source-backed defaults until you save a standing preference.
 
         Send /prefer followed by a standing rule, for example:
         /prefer ignore receipts

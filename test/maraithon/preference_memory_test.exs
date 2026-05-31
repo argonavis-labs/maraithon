@@ -60,6 +60,16 @@ defmodule Maraithon.PreferenceMemoryTest do
     assert PreferenceMemory.render_summary(user_id) =~ "`ignore_receipts`"
   end
 
+  test "empty preference summary explains the default behavior", %{user_id: user_id} do
+    summary = PreferenceMemory.render_summary(user_id)
+
+    assert summary =~
+             "Maraithon is using source-backed defaults until you save a standing preference."
+
+    assert summary =~ "/prefer ignore receipts"
+    refute summary =~ "No standing preferences saved yet"
+  end
+
   test "stores sales outreach content filters as durable preference rules", %{user_id: user_id} do
     llm_complete = fn _prompt ->
       {:ok,
