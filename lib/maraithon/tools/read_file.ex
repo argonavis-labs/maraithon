@@ -16,7 +16,7 @@ defmodule Maraithon.Tools.ReadFile do
         {:error, "path is required"}
 
       true ->
-        with {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+        with {:ok, resolved_path} <- PathPolicy.resolve_content_path(path) do
           read_file(resolved_path)
         end
     end

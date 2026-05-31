@@ -42,6 +42,21 @@ defmodule Maraithon.Tools.FileTreeTest do
       # Should not include deeply nested files when depth is 1
     end
 
+    test "omits hidden and credential-shaped entries" do
+      File.write!(Path.join(@test_dir, ".env"), "OPENROUTER_API_KEY=sk-live-secret")
+      File.write!(Path.join(@test_dir, "credentials.json"), "{}")
+      File.mkdir_p!(Path.join(@test_dir, "secrets"))
+      File.write!(Path.join(@test_dir, "secrets/token.txt"), "sk-live-secret")
+
+      {:ok, result} = FileTree.execute(%{"path" => @test_dir})
+
+      assert String.contains?(result.tree, "file1.txt")
+      refute String.contains?(result.tree, ".env")
+      refute String.contains?(result.tree, "credentials.json")
+      refute String.contains?(result.tree, "secrets/")
+      refute String.contains?(result.tree, "sk-live-secret")
+    end
+
     test "returns error for non-directory path" do
       file_path = Path.join(@test_dir, "file1.txt")
       {:error, message} = FileTree.execute(%{"path" => file_path})

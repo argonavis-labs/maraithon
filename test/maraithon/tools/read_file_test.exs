@@ -48,5 +48,16 @@ defmodule Maraithon.Tools.ReadFileTest do
 
       assert String.contains?(message, "too large")
     end
+
+    test "does not read credential-shaped files inside allowed roots" do
+      env_file = Path.join(@test_dir, ".env")
+      File.write!(env_file, "OPENROUTER_API_KEY=sk-live-secret")
+
+      {:error, message} = ReadFile.execute(%{"path" => env_file})
+
+      assert message == "path is not available to the assistant"
+      refute message =~ "OPENROUTER_API_KEY"
+      refute message =~ "sk-live-secret"
+    end
   end
 end

@@ -12,7 +12,7 @@ defmodule Maraithon.Tools.ListFiles do
     pattern = args["pattern"] || "**/*"
 
     with :ok <- validate_pattern(pattern),
-         {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+         {:ok, resolved_path} <- PathPolicy.resolve_content_path(path) do
       list_files(resolved_path, pattern, path)
     end
   end
@@ -23,7 +23,7 @@ defmodule Maraithon.Tools.ListFiles do
     files =
       Path.wildcard(full_pattern)
       |> Enum.filter(&File.regular?/1)
-      |> Enum.filter(&PathPolicy.allowed_path?/1)
+      |> Enum.filter(&PathPolicy.visible_content_path?/1)
       |> Enum.take(@max_results)
       |> Enum.map(fn file ->
         stat = File.stat!(file)

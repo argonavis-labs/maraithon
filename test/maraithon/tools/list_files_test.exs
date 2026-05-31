@@ -49,6 +49,28 @@ defmodule Maraithon.Tools.ListFilesTest do
       assert result.base_path == "."
     end
 
+    test "omits hidden and credential-shaped files" do
+      File.write!(Path.join(@test_dir, ".env"), "OPENROUTER_API_KEY=sk-live-secret")
+      File.write!(Path.join(@test_dir, "private.pem"), "PRIVATE KEY")
+      File.write!(Path.join(@test_dir, "credentials.json"), "{}")
+
+      {:ok, result} = ListFiles.execute(%{"path" => @test_dir})
+
+      paths = Enum.map(result.files, & &1.path)
+      assert Enum.any?(paths, &String.ends_with?(&1, "file1.txt"))
+      refute Enum.any?(paths, &String.ends_with?(&1, ".env"))
+      refute Enum.any?(paths, &String.ends_with?(&1, "private.pem"))
+      refute Enum.any?(paths, &String.ends_with?(&1, "credentials.json"))
+    end
+
+    test "returns error for hidden or credential-shaped base paths" do
+      hidden_dir = Path.join(@test_dir, ".hidden")
+      File.mkdir_p!(hidden_dir)
+
+      assert {:error, "path is not available to the assistant"} =
+               ListFiles.execute(%{"path" => hidden_dir})
+    end
+
     test "returns error for path outside allowed roots" do
       {:error, message} = ListFiles.execute(%{"path" => "/nonexistent/deeply/nested"})
       assert message == "path is outside allowed roots"

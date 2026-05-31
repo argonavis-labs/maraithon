@@ -20,6 +20,31 @@ defmodule Maraithon.Tools.PathPolicyTest do
     assert String.ends_with?(resolved, "allowed.txt")
   end
 
+  test "allows normal content paths in configured roots" do
+    file_path = Path.join(@test_dir, "allowed.txt")
+    assert {:ok, resolved} = PathPolicy.resolve_content_path(file_path)
+    assert String.ends_with?(resolved, "allowed.txt")
+    assert PathPolicy.visible_content_path?(file_path)
+  end
+
+  test "rejects hidden and credential-shaped content paths" do
+    blocked_paths = [
+      Path.join(@test_dir, ".env"),
+      Path.join(@test_dir, ".ssh/id_ed25519"),
+      Path.join(@test_dir, "config/secrets.yml"),
+      Path.join(@test_dir, "private.pem"),
+      Path.join(@test_dir, "credentials.json"),
+      Path.join(@test_dir, "id_rsa")
+    ]
+
+    for path <- blocked_paths do
+      assert {:error, "path is not available to the assistant"} =
+               PathPolicy.resolve_content_path(path)
+
+      refute PathPolicy.visible_content_path?(path)
+    end
+  end
+
   test "rejects paths outside configured roots" do
     assert {:error, "path is outside allowed roots"} =
              PathPolicy.resolve_allowed_path("/etc/passwd")

@@ -12,7 +12,7 @@ defmodule Maraithon.Tools.FileTree do
     path = args["path"] || "."
     depth = min(args["depth"] || @max_depth, @max_depth)
 
-    with {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+    with {:ok, resolved_path} <- PathPolicy.resolve_content_path(path) do
       build_tree(resolved_path, depth)
     end
   end
@@ -54,12 +54,13 @@ defmodule Maraithon.Tools.FileTree do
       path
       |> File.ls!()
       |> Enum.sort()
-      |> Enum.reject(&String.starts_with?(&1, "."))
+      |> Enum.map(fn entry -> {entry, Path.join(path, entry)} end)
+      |> Enum.filter(fn {_entry, full_path} -> PathPolicy.visible_content_path?(full_path) end)
 
     {lines, final_count} =
       entries
       |> Enum.with_index()
-      |> Enum.reduce({[], count}, fn {entry, idx}, {acc_lines, acc_count} ->
+      |> Enum.reduce({[], count}, fn {{entry, full_path}, idx}, {acc_lines, acc_count} ->
         if acc_count >= @max_entries do
           {acc_lines, acc_count}
         else
@@ -67,7 +68,6 @@ defmodule Maraithon.Tools.FileTree do
           connector = if is_last, do: "└── ", else: "├── "
           child_prefix = if is_last, do: "    ", else: "│   "
 
-          full_path = Path.join(path, entry)
           is_dir = File.dir?(full_path)
 
           entry_str = if is_dir, do: entry <> "/", else: entry

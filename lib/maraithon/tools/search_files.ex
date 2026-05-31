@@ -20,7 +20,7 @@ defmodule Maraithon.Tools.SearchFiles do
 
       true ->
         with :ok <- validate_file_pattern(file_pattern),
-             {:ok, resolved_path} <- PathPolicy.resolve_allowed_path(path) do
+             {:ok, resolved_path} <- PathPolicy.resolve_content_path(path) do
           search_files(resolved_path, pattern, file_pattern, path)
         end
     end
@@ -34,7 +34,7 @@ defmodule Maraithon.Tools.SearchFiles do
         matches =
           Path.wildcard(full_pattern)
           |> Enum.filter(&File.regular?/1)
-          |> Enum.filter(&PathPolicy.allowed_path?/1)
+          |> Enum.filter(&PathPolicy.visible_content_path?/1)
           |> Enum.filter(&searchable_file?/1)
           |> Enum.flat_map(&search_file(&1, regex))
           |> Enum.take(@max_results)

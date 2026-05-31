@@ -77,5 +77,33 @@ defmodule Maraithon.Tools.SearchFilesTest do
       assert result.count == 0
       assert result.matches == []
     end
+
+    test "does not search hidden or credential-shaped files" do
+      File.write!(Path.join(@test_dir, ".env"), "OPENROUTER_API_KEY=sk-live-secret")
+      File.write!(Path.join(@test_dir, "credentials.json"), ~s({"api_key":"sk-live-secret"}))
+      File.write!(Path.join(@test_dir, "visible.txt"), "OPENROUTER appears here")
+
+      {:ok, result} =
+        SearchFiles.execute(%{
+          "path" => @test_dir,
+          "pattern" => "OPENROUTER|api_key"
+        })
+
+      assert result.count == 1
+      match = hd(result.matches)
+      assert String.ends_with?(match.file, "visible.txt")
+      assert match.line == "OPENROUTER appears here"
+      refute inspect(result) =~ "sk-live-secret"
+      refute inspect(result) =~ "credentials.json"
+      refute inspect(result) =~ ".env"
+    end
+
+    test "returns error for hidden or credential-shaped base paths" do
+      hidden_dir = Path.join(@test_dir, ".hidden")
+      File.mkdir_p!(hidden_dir)
+
+      assert {:error, "path is not available to the assistant"} =
+               SearchFiles.execute(%{"path" => hidden_dir, "pattern" => "anything"})
+    end
   end
 end
