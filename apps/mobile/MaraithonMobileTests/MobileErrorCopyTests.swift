@@ -53,6 +53,10 @@ struct MobileErrorCopyTests {
                 "Choose the duplicate person to merge."
         )
         #expect(
+            MobileErrorCopy.message(for: MobileAPIError.server("unsupported_todo_action")) ==
+                "That work item action is not available here."
+        )
+        #expect(
             MobileErrorCopy.message(for: MobileAPIError.server("not_found")) ==
                 "That item is no longer available. Refresh to see current work."
         )

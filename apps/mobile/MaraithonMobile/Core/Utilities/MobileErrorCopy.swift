@@ -51,7 +51,7 @@ enum MobileErrorCopy {
         case "missing_duplicate":
             return "Choose the duplicate person to merge."
         case "unsupported_todo_action":
-            return "That work item action is not available from mobile."
+            return "That work item action is not available here."
         case "invalid_email":
             return "Enter a valid email address."
         case "invalid_or_expired_code", "invalid_or_expired_link":

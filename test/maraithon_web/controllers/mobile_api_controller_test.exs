@@ -122,7 +122,7 @@ defmodule MaraithonWeb.MobileApiControllerTest do
 
     assert json_response(conn, 422) == %{
              "error" => "unsupported_todo_action",
-             "message" => "That work item action is not available from mobile."
+             "message" => "That work item action is not available here."
            }
   end
 
