@@ -109,6 +109,8 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
     assert "Less useful" in labels
     assert "Show less" in labels
     refute "Keep active" in labels
+    assert payload.text =~ "Alex is waiting on the launch sequencing decision."
+    refute payload.text =~ "Why now: Alex is waiting on the launch sequencing decision."
   end
 
   test "commitment cards include company and relationship context" do

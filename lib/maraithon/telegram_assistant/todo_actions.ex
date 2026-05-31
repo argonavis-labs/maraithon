@@ -294,7 +294,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       action_line(next_action, assistant_source?),
       todo_context_line(context, next_action),
       decision_line(card),
-      why_line(card),
+      why_line(card, context),
       prepared_action_line(card),
       evidence_line(card, context),
       source_sentence(source, account, assistant_source?, source_health_note),
@@ -467,15 +467,36 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp decision_line(_card), do: nil
 
-  defp why_line(card) when is_map(card) do
+  defp why_line(card, already_rendered_context) when is_map(card) do
     why_now = Map.get(card, "why_now")
 
-    if present?(why_now) do
+    if present?(why_now) and not repeated_context_line?(why_now, already_rendered_context) do
       "Why now: #{safe(truncate(why_now, 220))}"
     end
   end
 
-  defp why_line(_card), do: nil
+  defp why_line(_card, _already_rendered_context), do: nil
+
+  defp repeated_context_line?(value, already_rendered_context)
+       when is_binary(value) and is_binary(already_rendered_context) do
+    value_key = repetition_key(value)
+    context_key = repetition_key(already_rendered_context)
+
+    present?(value_key) and present?(context_key) and
+      (value_key == context_key or
+         (String.length(value_key) >= 32 and
+            (String.contains?(context_key, value_key) or
+               String.contains?(value_key, context_key))))
+  end
+
+  defp repeated_context_line?(_value, _already_rendered_context), do: false
+
+  defp repetition_key(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.replace(~r/[[:punct:]]+/u, " ")
+    |> normalize_display_whitespace()
+  end
 
   defp prepared_action_line(card) when is_map(card) do
     case ActionCards.prepared_action_hint(card) do
