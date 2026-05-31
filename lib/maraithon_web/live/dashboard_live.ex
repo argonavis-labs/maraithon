@@ -3001,7 +3001,7 @@ defmodule MaraithonWeb.DashboardLive do
     if chief_of_staff_missing_readiness(readiness) == [] do
       "Ready to enable"
     else
-      "Setup required"
+      "Sources needed"
     end
   end
 
@@ -3014,7 +3014,7 @@ defmodule MaraithonWeb.DashboardLive do
     if chief_of_staff_missing_readiness(readiness) == [] do
       "Ready to install"
     else
-      "Setup required"
+      "Sources needed"
     end
   end
 
@@ -3058,9 +3058,9 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp chief_of_staff_install_button_label(%{install_status: "setup_required"}, readiness) do
     if chief_of_staff_missing_readiness(readiness) == [] do
-      "Finish setup"
+      "Enable Chief of Staff"
     else
-      "Open setup"
+      "Save changes"
     end
   end
 
@@ -3068,7 +3068,7 @@ defmodule MaraithonWeb.DashboardLive do
     if chief_of_staff_missing_readiness(readiness) == [] do
       "Install Chief of Staff"
     else
-      "Install for later"
+      "Save for later"
     end
   end
 
@@ -3137,7 +3137,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp chief_of_staff_schedule_label(_schedule), do: "8:00 AM UTC-05:00"
 
   defp install_status_label("enabled"), do: "Enabled"
-  defp install_status_label("setup_required"), do: "Setup required"
+  defp install_status_label("setup_required"), do: "Not enabled"
   defp install_status_label("paused"), do: "Paused"
   defp install_status_label("error"), do: "Error"
   defp install_status_label("removed"), do: "Removed"

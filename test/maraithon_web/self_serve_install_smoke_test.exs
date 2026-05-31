@@ -131,10 +131,10 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     conn = log_in_test_user(conn, user_id)
 
     {:ok, view, _html} = live(conn, "/dashboard")
-    assert has_element?(view, "#chief-of-staff-install", "Setup required")
+    assert has_element?(view, "#chief-of-staff-install", "Sources needed")
     assert has_element?(view, "#chief-of-staff-install a", "Connect Telegram")
     assert has_element?(view, "#chief-of-staff-install a", "Connect Gmail")
-    assert has_element?(view, "#chief-of-staff-install button", "Install for later")
+    assert has_element?(view, "#chief-of-staff-install button", "Save for later")
 
     result =
       view
@@ -203,7 +203,7 @@ defmodule MaraithonWeb.SelfServeInstallSmokeTest do
     {:ok, view, _html} = live(conn, "/dashboard")
 
     assert has_element?(view, "#chief-of-staff-install", "Ready to enable")
-    assert has_element?(view, "#chief-of-staff-install button", "Finish setup")
+    assert has_element?(view, "#chief-of-staff-install button", "Enable Chief of Staff")
 
     result =
       view
