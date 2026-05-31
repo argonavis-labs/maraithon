@@ -2322,7 +2322,7 @@ defmodule MaraithonWeb.DashboardLive do
       )
 
     cards = act_now_cards ++ monitor_cards
-    visible_ids = MapSet.new(Enum.map(cards, & &1.insight.id))
+    visible_ids = MapSet.new(Enum.map(cards, &to_string(&1.insight.id)))
 
     emit_insight_detail_coverage_telemetry(cards)
 
@@ -2338,7 +2338,7 @@ defmodule MaraithonWeb.DashboardLive do
 
   defp insight_card(socket, insight_id) when is_binary(insight_id) do
     Enum.find(socket.assigns.insights, fn
-      %{insight: %{id: ^insight_id}} -> true
+      %{insight: %{id: id}} -> to_string(id) == insight_id
       _ -> false
     end)
   end
@@ -4306,7 +4306,7 @@ defmodule MaraithonWeb.DashboardLive do
         <%= for card <- @cards do %>
           <% insight = card.insight %>
           <% detail = card.detail %>
-          <% expanded? = MapSet.member?(@expanded_insight_ids, insight.id) %>
+          <% expanded? = MapSet.member?(@expanded_insight_ids, to_string(insight.id)) %>
           <div class="px-4 py-4">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
@@ -4343,7 +4343,7 @@ defmodule MaraithonWeb.DashboardLive do
                 <% ideas = insight_follow_up_ideas(insight) %>
                 <%= if ideas != [] do %>
                   <p class="mt-2 text-xs/5 font-medium text-zinc-500">
-                    Ideas
+                    Possible moves
                   </p>
                   <ul class="mt-1 space-y-1 text-sm/6 text-zinc-600">
                     <%= for idea <- ideas do %>
@@ -4360,7 +4360,7 @@ defmodule MaraithonWeb.DashboardLive do
                   variant="outline"
                   class="mt-3 text-xs"
                 >
-                  <%= if expanded?, do: "Hide evidence", else: "Show evidence" %>
+                  <%= if expanded?, do: "Hide source context", else: "Show source context" %>
                 </.button>
 
                 <%= if expanded? do %>
@@ -4369,7 +4369,7 @@ defmodule MaraithonWeb.DashboardLive do
                     class="mt-4 space-y-4 rounded-lg border border-zinc-950/10 bg-zinc-50 p-4"
                   >
                     <.insight_detail_section
-                      title="Exact promise"
+                      title="Request"
                       value={
                         detail_text(detail.promise_text) ||
                           Detail.missing_context_copy(:promise_text)
@@ -4377,14 +4377,14 @@ defmodule MaraithonWeb.DashboardLive do
                       origin={detail_origin_label(detail.promise_text)}
                     />
                     <.insight_detail_section
-                      title="Who asked"
+                      title="Requester"
                       value={detail_text(detail.requested_by) || Detail.missing_context_copy(:requested_by)}
                       origin={detail_origin_label(detail.requested_by)}
                     />
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
                         <p class="text-xs/5 font-medium text-zinc-500">
-                          Evidence checked
+                          Source context checked
                         </p>
                       </div>
                       <%= if detail.evidence_checked == [] do %>
@@ -4410,7 +4410,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
                         <p class="text-xs/5 font-medium text-zinc-500">
-                          Delivery evidence checked
+                          Delivery checked
                         </p>
                       </div>
                       <%= if detail.delivery_evidence == [] do %>
@@ -4441,7 +4441,7 @@ defmodule MaraithonWeb.DashboardLive do
                     <div class="space-y-2">
                       <div class="flex items-center gap-2">
                         <p class="text-xs/5 font-medium text-zinc-500">
-                          Why this is on your review list
+                          Why this needs review
                         </p>
                         <.badge
                           :if={detail.open_loop_reason}

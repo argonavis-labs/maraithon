@@ -179,7 +179,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
       confidence: 0.88
     })
 
-    {:ok, _view, html} = live(conn, "/dashboard")
+    {:ok, view, _html} = live(conn, "/dashboard")
+
+    html = render(view)
 
     assert html =~ "Use concise founder-style status updates."
     assert html =~ "Keep updates direct and decision oriented."
@@ -300,7 +302,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
         "name" => "Board Prep"
       })
 
-    {:ok, _view, html} = live(conn, "/dashboard")
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
 
     assert html =~ "Board Prep"
     assert html =~ "Add a project summary to keep recommendations focused."
@@ -486,7 +489,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
           "summary" => "A renewal thread needs a same-day response from the account team.",
           "recommended_action" =>
             "Reply now, confirm the owner, and send a timeline for the next update.",
-          "priority" => 93,
+          "priority" => 100,
           "confidence" => 0.9,
           "dedupe_key" => "dashboard:enriched:1",
           "metadata" => %{
@@ -500,13 +503,16 @@ defmodule MaraithonWeb.DashboardLiveTest do
         }
       ])
 
-    {:ok, _view, html} = live(conn, "/dashboard")
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render(view)
 
     assert html =~ "Why now"
+    assert html =~ "Possible moves"
     assert html =~ "from Gmail · account dashboard@example.com"
     assert html =~ "The customer asked for an update before today&#39;s review call."
     assert html =~ "Pull the latest status from support before replying."
     assert html =~ "Write down the two risks you need covered on the call."
+    refute_html_contains(html, "Ideas")
   end
 
   test "dashboard due dates use the Chief of Staff timezone", %{conn: conn} do
@@ -601,10 +607,11 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     {:ok, view, _html} = live(conn, "/dashboard")
 
-    html =
-      view
-      |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
-      |> render_click()
+    view
+    |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
+    |> render_click()
+
+    html = render(view)
 
     assert html =~ "Source activity"
     assert html =~ "Seen May 30, 2026 at 2:30 PM ET"
@@ -657,16 +664,28 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     {:ok, view, _html} = live(conn, "/dashboard")
 
-    html =
-      view
-      |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
-      |> render_click()
+    view
+    |> element("button[phx-click='toggle_insight_detail'][phx-value-id='#{insight.id}']")
+    |> render_click()
 
+    html = render(view)
+
+    assert html =~ "Hide source context"
+    assert html =~ "Request"
+    assert html =~ "Requester"
+    assert html =~ "Source context checked"
+    assert html =~ "Delivery checked"
     assert html =~ "Delivery failed. Check the connected channel before sending another delivery."
-    assert html =~ "Why this is on your review list"
+    assert html =~ "Why this needs review"
     assert html =~ "Inferred from available context"
     assert html =~ "Missing context"
     assert html =~ "Source excerpt is missing; review the original thread before acting."
+    refute_html_contains(html, "Hide evidence")
+    refute_html_contains(html, "Exact promise")
+    refute_html_contains(html, "Who asked")
+    refute_html_contains(html, "Evidence checked")
+    refute_html_contains(html, "Delivery evidence checked")
+    refute_html_contains(html, "Why this is on your review list")
     refute_html_contains(html, "This item does not include a source excerpt.")
     refute_html_contains(html, "not captured")
     refute_html_contains(html, "saved evidence was captured")
