@@ -317,7 +317,11 @@ defmodule Maraithon.TelegramAssistant do
 
   def send_turn(%Conversation{} = conversation, chat_id, text, opts \\ [])
       when is_binary(chat_id) and is_binary(text) do
-    text = UserFacingCopy.open_work_language(text)
+    text =
+      UserFacingCopy.open_work_language(text,
+        strip_safe_label_prefixes: not Keyword.get(opts, :preserve_safe_label_prefixes, false)
+      )
+
     reply_to_message_id = Keyword.get(opts, :reply_to_message_id)
     send_mode = resolve_send_mode(reply_to_message_id, Keyword.get(opts, :send_mode, :reply))
     telegram_opts = Keyword.get(opts, :telegram_opts, [])

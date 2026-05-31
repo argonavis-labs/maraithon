@@ -2,6 +2,7 @@ defmodule MaraithonWeb.MobileChatControllerTest do
   use MaraithonWeb.ConnCase, async: false
 
   alias Maraithon.Accounts
+  alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TestSupport.CapturingTelegram
   alias Maraithon.TestSupport.TelegramAssistantClientStub
@@ -489,6 +490,138 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute get_in(response, ["thread", "messages", Access.at(1), "body"]) =~ "todo"
     assert_no_work_summary_implementation_keys(run_work_summary)
     assert_no_work_summary_implementation_keys(assistant_work_summary)
+    assert captured_telegram_events() == []
+  end
+
+  test "mobile todo digests render review-ready action cards", %{conn: conn} do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-action-card-digest@example.com")
+
+    {:ok, _gmail} =
+      ConnectedAccounts.upsert_manual(user_id, "gmail", %{
+        external_account_id: "kent@runner.now"
+      })
+
+    {:ok, [_todo]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "gmail",
+          "kind" => "gmail_triage",
+          "attention_mode" => "act_now",
+          "title" => "Reply to Michael Berlingo on Starteryou UGC Campaigns",
+          "summary" => "Michael Berlingo is waiting on Starteryou UGC campaign next steps.",
+          "next_action" =>
+            "Reply with the recommended campaign next step and ask which asset he wants first.",
+          "source_item_id" => "gmail-thread-michael-starteryou",
+          "dedupe_key" => "mobile-action-card:michael-starteryou",
+          "metadata" => %{
+            "subject" => "Starteryou UGC Campaigns",
+            "why_now" => "Michael is waiting and no later sent reply is recorded.",
+            "source_evidence" =>
+              "Michael asked for Starteryou UGC campaign next steps and timing.",
+            "record" => %{
+              "person" => "Michael Berlingo",
+              "company" => "Starteryou",
+              "relationship_context" => "UGC campaign contact"
+            },
+            "thread_state" => "waiting_on_kent"
+          }
+        }
+      ])
+
+    start_supervised!(%{
+      id: :mobile_action_card_digest_sequence,
+      start: {Agent, :start_link, [fn -> 0 end, [name: :mobile_action_card_digest_sequence]]}
+    })
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(Application.get_env(:maraithon, :telegram_assistant, []),
+        next_step: fn payload ->
+          sequence =
+            Agent.get_and_update(:mobile_action_card_digest_sequence, fn current ->
+              {current, current + 1}
+            end)
+
+          case sequence do
+            0 ->
+              assert Enum.any?(payload.tools, &(&1["name"] == "list_todos"))
+
+              {:ok,
+               %{
+                 "status" => "tool_calls",
+                 "assistant_message" => "",
+                 "message_class" => "assistant_reply",
+                 "tool_calls" => [
+                   %{
+                     "tool" => "list_todos",
+                     "arguments" => %{"statuses" => ["open"], "limit" => 10}
+                   }
+                 ],
+                 "summary" => "Loaded open work for mobile review."
+               }}
+
+            1 ->
+              [history_entry] = payload.tool_history
+              assert history_entry["tool"] == "list_todos"
+              assert history_entry["result"]["count"] == 1
+
+              {:ok,
+               %{
+                 "status" => "final",
+                 "assistant_message" => "Here is the item ready to review.",
+                 "message_class" => "todo_digest",
+                 "tool_calls" => [],
+                 "summary" => "Returned mobile action cards."
+               }}
+          end
+        end
+      )
+    )
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "What should I review?"
+        }
+      })
+      |> json_response(200)
+
+    assert [
+             %{"role" => "user"},
+             %{"role" => "assistant", "body" => "Here is the item ready to review."},
+             %{
+               "role" => "assistant",
+               "body" => todo_body,
+               "message_class" => "todo_item",
+               "linked_todo" => %{
+                 "title" => "Reply to Michael Berlingo on Starteryou UGC Campaigns"
+               }
+             }
+           ] = get_in(response, ["thread", "messages"])
+
+    assert todo_body =~ "Michael Berlingo"
+    assert todo_body =~ "Context: Michael Berlingo is waiting"
+    assert todo_body =~ "Decision: Choose the next move with Michael Berlingo."
+    assert todo_body =~ "Why now: Michael is waiting"
+    assert todo_body =~ "State: Waiting on you"
+    assert todo_body =~ "Next: Reply with the recommended campaign next step"
+    assert todo_body =~ "Prepared: Maraithon can draft the reply for approval."
+    assert todo_body =~ "Evidence: Michael asked for Starteryou UGC campaign next steps"
+    assert todo_body =~ "Context used: Gmail."
+
+    refute todo_body =~ "<b>"
+    refute todo_body =~ "source_health"
+    refute todo_body =~ "Maraithon Todo"
     assert captured_telegram_events() == []
   end
 

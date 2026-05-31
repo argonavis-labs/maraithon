@@ -560,6 +560,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
                turn_kind: "assistant_push",
                origin_type: origin_type(candidate),
                origin_id: candidate.source_id,
+               preserve_safe_label_prefixes: true,
                structured_data: %{
                  "message_class" => "todo_item",
                  "linked_todo" => Todos.serialize_for_prompt(todo),

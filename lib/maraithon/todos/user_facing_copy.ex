@@ -62,16 +62,18 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
   def polish_text(value), do: value
 
-  def open_work_language(value) when is_binary(value) do
+  def open_work_language(value, opts \\ [])
+
+  def open_work_language(value, opts) when is_binary(value) and is_list(opts) do
     value
     |> strip_model_internal_copy()
-    |> strip_safe_label_prefixes()
+    |> maybe_strip_safe_label_prefixes(opts)
     |> replace_generic_user_action_language()
     |> replace_direct_role_language()
     |> replace_todo_language()
   end
 
-  def open_work_language(value), do: value
+  def open_work_language(value, _opts), do: value
 
   defp replace_generic_user_action_language(value) do
     value
@@ -868,6 +870,14 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.split(~r/\R/u)
     |> Enum.map(&strip_safe_label_prefix/1)
     |> Enum.join("\n")
+  end
+
+  defp maybe_strip_safe_label_prefixes(text, opts) do
+    if Keyword.get(opts, :strip_safe_label_prefixes, true) do
+      strip_safe_label_prefixes(text)
+    else
+      text
+    end
   end
 
   defp strip_safe_label_prefix(line) do

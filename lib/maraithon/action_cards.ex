@@ -219,6 +219,33 @@ defmodule Maraithon.ActionCards do
   end
 
   @doc """
+  Renders a plain-text todo card for native mobile chat.
+
+  Mobile uses its own controls for actions, so this keeps the high-signal
+  context from the Telegram card without HTML markup.
+  """
+  def render_mobile_todo(todo, opts \\ []) do
+    card = for_todo(todo, opts)
+    prefix_text = Keyword.get(opts, :prefix_text)
+
+    [
+      plain_line(prefix_text),
+      read_field(card, "headline"),
+      mobile_context_line(card),
+      mobile_decision_line(card),
+      mobile_why_line(card),
+      mobile_thread_line(card),
+      mobile_next_line(card),
+      mobile_prepared_line(card),
+      mobile_evidence_line(card),
+      mobile_source_health_line(card),
+      mobile_learning_line(card)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n")
+  end
+
+  @doc """
   Renders source freshness as executive-facing copy.
 
   Source freshness metadata can contain connector identifiers or transport
@@ -1125,6 +1152,84 @@ defmodule Maraithon.ActionCards do
     end
   end
 
+  defp mobile_context_line(card) do
+    context = read_map(card, "context_pack")
+    summary = read_field(context, "summary")
+
+    if present?(summary), do: "Context: #{summary}"
+  end
+
+  defp mobile_decision_line(card) do
+    decision = read_field(card, "decision_prompt")
+
+    if present?(decision), do: "Decision: #{decision}"
+  end
+
+  defp mobile_why_line(card) do
+    why_now = read_field(card, "why_now")
+
+    if present?(why_now), do: "Why now: #{why_now}"
+  end
+
+  defp mobile_thread_line(card) do
+    context = read_map(card, "context_pack")
+    thread_state = state_label(read_field(context, "thread_state"))
+    owed = owed_label(read_field(context, "owed_direction"))
+
+    cond do
+      present?(thread_state) and thread_state == owed ->
+        "State: #{thread_state}"
+
+      present?(thread_state) and present?(owed) ->
+        "State: #{thread_state} · #{owed}"
+
+      present?(thread_state) ->
+        "State: #{thread_state}"
+
+      present?(owed) ->
+        "State: #{owed}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp mobile_next_line(card) do
+    next = read_field(card, "next_best_action")
+    if present?(next), do: "Next: #{next}"
+  end
+
+  defp mobile_prepared_line(card) do
+    case read_field(card, "prepared_actions") do
+      [%{"label" => label} | _] when is_binary(label) -> "Prepared: #{label}"
+      _other -> nil
+    end
+  end
+
+  defp mobile_evidence_line(card) do
+    case evidence_excerpt(card) do
+      value when is_binary(value) -> "Evidence: #{truncate(value, 180)}"
+      _ -> nil
+    end
+  end
+
+  defp mobile_source_health_line(card) do
+    case source_health_note(card) do
+      "Used " <> rest -> "Context used: #{rest}"
+      note -> note
+    end
+  end
+
+  defp mobile_learning_line(card) do
+    case read_field(card, "attention_mode") do
+      "stale_check" ->
+        "Future open-work reminders will use this keep-or-dismiss choice."
+
+      _ ->
+        nil
+    end
+  end
+
   defp source_health_present?(source_health) do
     checked =
       read_field(source_health, "checked_sources") |> List.wrap() |> Enum.reject(&blank?/1)
@@ -1922,6 +2027,12 @@ defmodule Maraithon.ActionCards do
   end
 
   defp html_line(_value), do: nil
+
+  defp plain_line(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp plain_line(_value), do: nil
 
   defp safe(value) when is_binary(value) do
     value

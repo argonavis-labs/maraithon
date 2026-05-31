@@ -5,6 +5,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
 
   alias Maraithon.AssistantHarness
   alias Maraithon.ActionLedger
+  alias Maraithon.ActionCards
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ContextEngine
   alias Maraithon.Projects
@@ -1051,6 +1052,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
         send_mode: if(surface(attrs) == "mobile", do: :persist, else: :send),
         turn_kind: "assistant_reply",
         origin_type: "chat",
+        preserve_safe_label_prefixes: true,
         structured_data: %{
           "run_id" => run.id,
           "surface" => surface(attrs),
@@ -1104,13 +1106,7 @@ defmodule Maraithon.TelegramAssistant.Runner do
   end
 
   defp mobile_todo_text(todo) do
-    title = map_value(todo, "title") || map_value(todo, "todo") || "Work item"
-    next_action = map_value(todo, "next_action")
-
-    case next_action do
-      value when is_binary(value) and value != "" -> "#{title}\n#{value}"
-      _ -> title
-    end
+    ActionCards.render_mobile_todo(todo, include_disconnected: false)
   end
 
   defp latest_todo_items(tool_history) when is_list(tool_history) do

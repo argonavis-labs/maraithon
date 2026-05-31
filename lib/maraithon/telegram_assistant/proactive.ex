@@ -250,6 +250,7 @@ defmodule Maraithon.TelegramAssistant.Proactive do
                send_mode: :send,
                turn_kind: "assistant_push",
                origin_type: "assistant_digest",
+               preserve_safe_label_prefixes: true,
                structured_data: %{
                  "message_class" => "todo_item",
                  "linked_todo" => Todos.serialize_for_prompt(todo)

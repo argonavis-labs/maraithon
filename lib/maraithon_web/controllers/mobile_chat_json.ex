@@ -103,6 +103,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     {"inserted_at", :inserted_at},
     {"updated_at", :updated_at}
   ]
+  @action_card_label_pattern ~r/^(\s*(?:Context used|Context|Decision|Why now|State|Next|Prepared|Evidence):\s*)(.*)$/i
 
   def thread_index(threads) when is_list(threads) do
     %{threads: Enum.map(threads, &thread_summary/1), next_cursor: nil}
@@ -202,10 +203,16 @@ defmodule MaraithonWeb.MobileChatJSON do
     }
   end
 
-  defp public_message_body(%Turn{role: "assistant", text: text}) when is_binary(text) do
+  defp public_message_body(%Turn{role: "assistant", text: text} = turn) when is_binary(text) do
     text
     |> strip_message_role_prefix()
-    |> public_assistant_message_text()
+    |> then(fn stripped_text ->
+      if action_card_message?(turn.structured_data) do
+        public_action_card_message_text(stripped_text)
+      else
+        public_assistant_message_text(stripped_text)
+      end
+    end)
   end
 
   defp public_message_body(%Turn{text: text}), do: text
@@ -240,6 +247,34 @@ defmodule MaraithonWeb.MobileChatJSON do
     end
   end
 
+  defp public_action_card_message_text(value) do
+    safe_text =
+      value
+      |> String.split("\n", trim: false)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&unsafe_assistant_line?/1)
+      |> Enum.map(&product_action_card_message_text/1)
+      |> Enum.join("\n")
+      |> String.trim()
+
+    cond do
+      safe_text != "" ->
+        safe_text
+
+      unsafe_assistant_text?(value) ->
+        ApiErrorCopy.mobile_chat_run_error(value)
+
+      true ->
+        value
+        |> product_action_card_message_text()
+        |> String.trim()
+    end
+  end
+
+  defp action_card_message?(%{"message_class" => "todo_item"}), do: true
+  defp action_card_message?(%{message_class: "todo_item"}), do: true
+  defp action_card_message?(_structured_data), do: false
+
   defp unsafe_assistant_line?(line) do
     trimmed = String.trim(line)
 
@@ -273,6 +308,15 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp product_message_text(value), do: value
+
+  defp product_action_card_message_text(value) when is_binary(value) do
+    case Regex.run(@action_card_label_pattern, value, capture: :all_but_first) do
+      [label, body] -> label <> product_message_text(body)
+      _other -> product_message_text(value)
+    end
+  end
+
+  defp product_action_card_message_text(value), do: value
 
   defp technical_message_body?(value) do
     Regex.match?(
