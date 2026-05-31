@@ -196,6 +196,39 @@ struct TodayInsightEngineTests {
     }
 
     @Test
+    func focusQueueKeepsDueTodayDecisionCardsActionableAndEvidenceBacked() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let decision = TodoItem(
+            title: "Approve Michael follow-up",
+            nextAction: "Send the follow-up.",
+            dueDate: now.addingTimeInterval(60),
+            decisionPrompt: "Approve the Michael follow-up.",
+            whyNow: "Michael is waiting on your answer.",
+            sourceContext: "Checked Gmail",
+            evidenceExcerpt: "Can you send the next campaign update today?"
+        )
+        let dueToday = TodoItem(
+            title: "Review vendor renewal",
+            nextAction: "Move or reschedule the vendor renewal.",
+            dueDate: now.addingTimeInterval(120)
+        )
+
+        let queue = TodayInsightEngine.focusQueue(
+            todos: [dueToday, decision],
+            contacts: [],
+            now: now,
+            calendar: calendar
+        )
+
+        #expect(queue.map(\.title) == ["Approve Michael follow-up", "Review vendor renewal"])
+        #expect(queue.first?.subtitle == "Approve the Michael follow-up.")
+        #expect(queue.first?.detail == "Decision waiting. Due today. Why now: Michael is waiting on your answer. Evidence: Can you send the next campaign update today? Reviewed Gmail")
+        #expect(queue.first?.systemImage == "checkmark.seal")
+    }
+
+    @Test
     func focusQueuePolishesSyncedChiefOfStaffCopy() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -327,6 +360,21 @@ struct TodayInsightEngineTests {
         #expect(brief.subtitle == "Approve investor reply needs a decision. Send the revised terms and confirm the review window.")
         #expect(brief.actionTitle == "Review decisions")
         #expect(brief.destination == .todos(.decisions))
+    }
+
+    @Test
+    func decisionBriefPrefersPreparedMoveFromActionCard() {
+        let decision = TodoItem(
+            title: "Reply to Michael",
+            nextAction: "Reply to Michael.",
+            decisionPrompt: "Choose the reply to Michael.",
+            whyNow: "Michael is waiting on your answer.",
+            nextBestAction: "Approve the short reply with campaign timing."
+        )
+
+        let brief = TodayInsightEngine.brief(todos: [decision], contacts: [])
+
+        #expect(brief.subtitle == "Reply to Michael needs a decision. Approve the short reply with campaign timing.")
     }
 
     @Test

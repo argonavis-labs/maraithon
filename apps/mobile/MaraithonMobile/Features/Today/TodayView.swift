@@ -510,7 +510,7 @@ private struct TodayFocusRow: View {
                     Text(detail)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(3)
                 }
             }
         } icon: {

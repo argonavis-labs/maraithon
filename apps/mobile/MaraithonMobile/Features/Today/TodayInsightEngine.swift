@@ -171,9 +171,30 @@ enum TodayInsightEngine {
                         for: todo,
                         fallbackAction: "Handle, move, or dismiss it."
                     ),
-                    detail: todoFocusDetail(for: todo, context: dueSubtitle(for: dueDate, now: now)),
+                    detail: todoFocusDetail(
+                        for: todo,
+                        context: overdueFocusContext(for: todo, dueDate: dueDate, now: now, calendar: calendar)
+                    ),
                     systemImage: "clock.badge.exclamationmark",
                     priority: 100 + priorityWeight(for: todo.priority)
+                )
+            }
+
+            if TodoDecisionSignals.needsDecision(todo) {
+                return TodayFocusItem(
+                    kind: .todo,
+                    referenceID: todo.id,
+                    title: todo.title,
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallbackAction: "Make the call, delegate it, or dismiss it."
+                    ),
+                    detail: todoFocusDetail(
+                        for: todo,
+                        context: decisionFocusContext(for: todo, now: now, calendar: calendar)
+                    ),
+                    systemImage: "checkmark.seal",
+                    priority: 88 + priorityWeight(for: todo.priority)
                 )
             }
 
@@ -190,21 +211,6 @@ enum TodayInsightEngine {
                     detail: todoFocusDetail(for: todo, context: "Due today"),
                     systemImage: todo.priority.symbolName,
                     priority: 80 + priorityWeight(for: todo.priority)
-                )
-            }
-
-            if TodoDecisionSignals.needsDecision(todo) {
-                return TodayFocusItem(
-                    kind: .todo,
-                    referenceID: todo.id,
-                    title: todo.title,
-                    subtitle: todoFocusSubtitle(
-                        for: todo,
-                        fallbackAction: "Make the call, delegate it, or dismiss it."
-                    ),
-                    detail: todoFocusDetail(for: todo, context: "Decision waiting"),
-                    systemImage: "checkmark.seal",
-                    priority: 78 + priorityWeight(for: todo.priority)
                 )
             }
 
@@ -413,7 +419,11 @@ enum TodayInsightEngine {
     }
 
     private static func briefMove(for todo: TodoItem?) -> String? {
-        let move = cleanedText(todo?.displayNextAction) ?? cleanedText(todo?.decisionPrompt)
+        let move =
+            cleanedText(todo?.nextBestAction) ??
+            cleanedText(todo?.displayNextAction) ??
+            cleanedText(todo?.decisionPrompt)
+
         return move.map(sentence)
     }
 
@@ -450,14 +460,57 @@ enum TodayInsightEngine {
     }
 
     private static func todoFocusDetail(for todo: TodoItem, context: String?) -> String? {
+        let decisionContext = TodoDecisionContext(todo: todo)
         let context = cleanedText(context).map(sentence)
-        let whyNow = cleanedText(todo.whyNow).map { "Why now: \($0)" }
-        let sourceContext = cleanedText(todo.sourceContext)
+        let whyNow = decisionContext.whyNow.map { "Why now: \($0)" }
+        let evidence = decisionContext.evidence.map { "Evidence: \(truncate($0, limit: 140))" }
+        let sourceContext = decisionContext.sourceContext
 
-        return [context, whyNow, sourceContext]
+        return [context, whyNow, evidence, sourceContext]
             .compactMap { $0 }
             .joined(separator: " ")
             .nilIfBlank
+    }
+
+    private static func decisionFocusContext(
+        for todo: TodoItem,
+        now: Date,
+        calendar: Calendar
+    ) -> String {
+        if let dueDate = todo.dueDate {
+            if dueDate < now, !calendar.isDate(dueDate, inSameDayAs: now) {
+                return "Decision waiting. \(dueSubtitle(for: dueDate, now: now))"
+            }
+
+            if calendar.isDate(dueDate, inSameDayAs: now) {
+                return "Decision waiting. Due today"
+            }
+        }
+
+        return "Decision waiting"
+    }
+
+    private static func overdueFocusContext(
+        for todo: TodoItem,
+        dueDate: Date,
+        now: Date,
+        calendar: Calendar
+    ) -> String {
+        if hasExplicitDecisionCard(todo) {
+            return decisionFocusContext(for: todo, now: now, calendar: calendar)
+        }
+
+        return dueSubtitle(for: dueDate, now: now)
+    }
+
+    private static func hasExplicitDecisionCard(_ todo: TodoItem) -> Bool {
+        let context = TodoDecisionContext(todo: todo)
+
+        if context.decisionPrompt != nil {
+            return true
+        }
+
+        return context.preparedMove != nil && context.evidence != nil
     }
 
     private static func relationshipDetail(
@@ -519,6 +572,13 @@ enum TodayInsightEngine {
             return trimmed
         }
         return "\(trimmed)."
+    }
+
+    private static func truncate(_ value: String, limit: Int) -> String {
+        guard value.count > limit else { return value }
+
+        let index = value.index(value.startIndex, offsetBy: limit)
+        return "\(value[..<index].trimmingCharacters(in: .whitespacesAndNewlines))..."
     }
 }
 
