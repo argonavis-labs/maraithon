@@ -75,11 +75,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "morning"
-    assert brief.title == "Morning brief: 1 item worth watching"
+    assert brief.title == "Morning brief: 1 action to move"
     assert brief.summary =~ "Most urgent"
     refute brief.summary =~ "0 overdue"
     refute brief.summary =~ "0 being watched"
     refute brief.title =~ "1 items"
+    refute brief.title =~ "worth watching"
     assert brief.body =~ "Best use of today:"
     assert brief.body =~ "Send the investor deck"
     assert is_list(brief.metadata["linked_todo_ids"])
@@ -213,7 +214,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
     assert payload.cadences == ["morning"]
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
-    assert brief.title == "Morning brief: 7 items worth watching"
+    assert brief.title == "Morning brief: 7 actions to move"
     assert brief.summary =~ "6 more open items"
 
     for index <- 1..7 do
@@ -555,10 +556,11 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgentTest do
 
     [brief] = Briefs.list_recent_for_user(user_id, limit: 1)
     assert brief.cadence == "end_of_day"
-    assert brief.title == "End-of-day review: 1 item still open"
+    assert brief.title == "End-of-day review: 1 item to close or reset"
     assert brief.summary =~ "Most urgent"
     refute brief.summary =~ "0 being watched"
     refute brief.title =~ "1 items"
+    refute brief.title =~ "still open"
     assert brief.body =~ "Tonight's move:"
     assert brief.body =~ "Close or reset:"
     assert brief.body =~ "Waiting on: Growth team"

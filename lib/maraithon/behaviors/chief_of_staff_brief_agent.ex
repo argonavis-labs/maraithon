@@ -182,7 +182,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         true ->
           count = length(top_items)
 
-          {"Morning brief: #{count_phrase(count, "item")} worth watching",
+          {"Morning brief: #{action_move_phrase(count)}",
            morning_summary(
              top_items,
              due_today,
@@ -271,7 +271,7 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
         true ->
           count = length(debt_items)
 
-          {"End-of-day review: #{count_phrase(count, "item")} still open",
+          {"End-of-day review: #{close_or_reset_phrase(count)}",
            end_of_day_summary(
              debt_items,
              debt_candidates,
@@ -858,6 +858,12 @@ defmodule Maraithon.Behaviors.ChiefOfStaffBriefAgent do
 
   defp count_phrase(1, noun), do: "1 #{noun}"
   defp count_phrase(count, noun) when is_integer(count), do: "#{count} #{noun}s"
+
+  defp action_move_phrase(1), do: "1 action to move"
+  defp action_move_phrase(count) when is_integer(count), do: "#{count} actions to move"
+
+  defp close_or_reset_phrase(1), do: "1 item to close or reset"
+  defp close_or_reset_phrase(count) when is_integer(count), do: "#{count} items to close or reset"
 
   defp be_verb(1), do: "is"
   defp be_verb(_count), do: "are"
