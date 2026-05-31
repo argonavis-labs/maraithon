@@ -236,6 +236,26 @@ defmodule Maraithon.BriefsTest do
     refute payload.text =~ "max_output_tokens"
   end
 
+  test "commitment tracker cadence renders as open work review", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "commitment_tracker",
+               "title" => "Open work review - 2026-05-09",
+               "summary" => "One checked follow-up should be saved.",
+               "body" => "Today's move: send Priya the revised investor pack.",
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:commitment-tracker:public-label"
+             })
+
+    payload = Briefs.telegram_payload(brief)
+
+    assert payload.text =~ "<b>Open work review</b>"
+    refute payload.text =~ "Commitment tracker"
+  end
+
   test "telegram payload strips diagnostics and credentials from delivered brief copy", %{
     user_id: user_id,
     agent: agent
