@@ -44,7 +44,8 @@ defmodule MaraithonWeb.AgentsLiveTest do
   test "renders empty registry and empty workspace states", %{conn: conn} do
     {:ok, _view, html} = live(conn, "/agents")
 
-    assert html =~ "No automations yet."
+    assert html =~ "Start your first automation from a template."
+    assert html =~ "Choose a focused workflow, connect the apps it needs, then launch it."
     assert html =~ "Start with a template"
   end
 
@@ -242,7 +243,7 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     html = render(view)
     refute html =~ agent.id
-    assert html =~ "No automations yet."
+    assert html =~ "Start your first automation from a template."
   end
 
   test "selected inspection hides operational diagnostics for standard users", %{conn: conn} do
@@ -356,9 +357,12 @@ defmodule MaraithonWeb.AgentsLiveTest do
 
     {:ok, _view, html} = live(conn, "/agents?id=#{agent.id}")
 
-    assert html =~ "No pending automation work right now."
-    assert html =~ "No automation notes yet."
+    assert html =~ "No work is waiting or running for this automation."
+    assert html =~ "No follow-ups are queued for this automation."
+    assert html =~ "This automation has not reported an update yet."
+    assert html =~ "No automation notes are available for this automation."
     refute html =~ "No queued work recorded yet."
+    refute html =~ "No automation notes yet."
     refute html =~ "captured"
   end
 

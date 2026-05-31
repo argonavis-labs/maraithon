@@ -538,9 +538,9 @@ defmodule MaraithonWeb.AgentsLive do
                 <%= if @all_agents == [] do %>
                   <.table_row>
                     <.table_cell colspan="4" class="py-12 text-center">
-                      <p class="text-sm/6 text-zinc-700">No automations yet.</p>
+                      <p class="text-sm/6 text-zinc-700">Start your first automation from a template.</p>
                       <p class="mt-1 text-sm/6 text-zinc-500">
-                        Build one from a template — connect the apps it needs and launch it from there.
+                        Choose a focused workflow, connect the apps it needs, then launch it.
                       </p>
                       <.link
                         navigate={~p"/agents/new"}
@@ -1202,7 +1202,7 @@ defmodule MaraithonWeb.AgentsLive do
                           <% end %>
 
                           <%= if @inspection.recent_effects == [] do %>
-                            <p class="text-sm/6 text-zinc-500">No pending automation work right now.</p>
+                            <p class="text-sm/6 text-zinc-500">No work is waiting or running for this automation.</p>
                           <% end %>
                         </div>
                       </div>
@@ -1246,7 +1246,7 @@ defmodule MaraithonWeb.AgentsLive do
                           <% end %>
 
                           <%= if @inspection.recent_jobs == [] do %>
-                            <p class="text-sm/6 text-zinc-500">No scheduled work recorded yet.</p>
+                            <p class="text-sm/6 text-zinc-500">No follow-ups are queued for this automation.</p>
                           <% end %>
                         </div>
                       </div>
@@ -1273,7 +1273,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <% end %>
 
                         <%= if @events == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No updates yet.</p>
+                          <p class="text-sm/6 text-zinc-500">This automation has not reported an update yet.</p>
                         <% end %>
                       </div>
                     </.panel>
@@ -1302,7 +1302,7 @@ defmodule MaraithonWeb.AgentsLive do
                         <% end %>
 
                         <%= if @inspection.recent_logs == [] do %>
-                          <p class="text-sm/6 text-zinc-500">No automation notes yet.</p>
+                          <p class="text-sm/6 text-zinc-500">No automation notes are available for this automation.</p>
                         <% end %>
                       </div>
                     </section>
