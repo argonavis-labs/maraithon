@@ -425,13 +425,75 @@ defmodule Maraithon.ActionCards do
     "Keep it active if it still matters, or dismiss it so it stops resurfacing."
   end
 
-  defp decision_prompt(_todo, context, _attention_mode) do
+  defp decision_prompt(todo, context, _attention_mode) do
     person = primary_person_name(context)
 
-    if present?(person) do
-      "Choose the next move with #{person}."
-    else
-      "Handle this now, snooze it, or dismiss it."
+    cond do
+      present?(person) ->
+        "Choose the next move with #{person}."
+
+      true ->
+        fallback_decision_prompt(todo, context)
+    end
+  end
+
+  defp fallback_decision_prompt(todo, context) do
+    first_present([
+      decision_prompt_from_action(todo.next_action),
+      decision_prompt_from_action(todo.title),
+      contextual_decision_prompt(todo, context)
+    ])
+  end
+
+  defp decision_prompt_from_action(value) when is_binary(value) do
+    action =
+      value
+      |> naturalize_action_copy()
+      |> strip_leading_action_label()
+      |> strip_operator_action_prefix()
+      |> String.trim()
+
+    cond do
+      blank?(action) ->
+        nil
+
+      Regex.match?(~r/^(decide|choose)\s+whether\b/i, action) ->
+        ensure_terminal_punctuation(action)
+
+      Regex.match?(~r/^confirm\s+whether\b/i, action) ->
+        ensure_terminal_punctuation(action)
+
+      Regex.match?(
+        ~r/^(approve|ask|check|choose|confirm|decide|dismiss|keep|mark|reply|respond|review|send)\b/i,
+        action
+      ) ->
+        action =
+          action
+          |> strip_terminal_punctuation()
+          |> lowercase_first_character()
+
+        "Decide whether to #{action}."
+
+      true ->
+        nil
+    end
+  end
+
+  defp decision_prompt_from_action(_value), do: nil
+
+  defp contextual_decision_prompt(todo, context) do
+    source = source_label(todo.source)
+    project = read_field(context, "project_or_topic")
+
+    cond do
+      present?(project) and project != source ->
+        "Decide the next move for #{project}."
+
+      present?(source) and source != "Maraithon" ->
+        "Decide the next move for this #{String.downcase(source)} item."
+
+      true ->
+        "Decide the next move for this work item."
     end
   end
 
@@ -1467,6 +1529,36 @@ defmodule Maraithon.ActionCards do
     |> String.split(" ", trim: true)
     |> Enum.map_join(" ", &String.capitalize/1)
   end
+
+  defp strip_leading_action_label(text) when is_binary(text) do
+    String.replace(text, ~r/^\s*(next step|next|action|todo|decision)\s*:\s*/i, "")
+  end
+
+  defp strip_operator_action_prefix(text) when is_binary(text) do
+    text
+    |> String.replace(~r/^\s*(you should|you need to|you need|please)\s+/i, "")
+    |> String.replace(~r/^\s*(i should|i need to|i need)\s+/i, "")
+  end
+
+  defp ensure_terminal_punctuation(text) when is_binary(text) do
+    text = String.trim(text)
+
+    if String.match?(text, ~r/[.!?]$/) do
+      text
+    else
+      "#{text}."
+    end
+  end
+
+  defp strip_terminal_punctuation(text) when is_binary(text) do
+    String.replace(text, ~r/[.!?]\s*$/, "")
+  end
+
+  defp lowercase_first_character(<<first::utf8, rest::binary>>) do
+    String.downcase(<<first::utf8>>) <> rest
+  end
+
+  defp lowercase_first_character(value), do: value
 
   defp naturalize_action_copy(value) when is_binary(value) do
     value

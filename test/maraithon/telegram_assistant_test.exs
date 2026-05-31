@@ -1474,9 +1474,11 @@ defmodule Maraithon.TelegramAssistantTest do
     assert payload.text =~ "Reply with the owner and the exact billing contact."
     assert payload.text =~ "Finance needs an owner confirmation for the invoice thread."
 
-    assert payload.text =~ "Decision: Handle this now, snooze it, or dismiss it."
+    assert payload.text =~
+             "Decision: Decide whether to reply with the owner and the exact billing contact."
 
     assert payload.text =~ "From Gmail."
+    refute payload.text =~ "Handle this now"
     refute payload.text =~ "Choose whether this Gmail thread"
     refute payload.text =~ "I found this in"
     refute payload.text =~ "Priority:"

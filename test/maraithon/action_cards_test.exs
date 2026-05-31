@@ -137,7 +137,12 @@ defmodule Maraithon.ActionCardsTest do
     missing_context = get_in(card, ["context_pack", "missing_context"])
 
     assert missing_context == "No person has been confirmed for this item yet."
+
+    assert card["decision_prompt"] ==
+             "Decide whether to review the note and approve the reimbursement reply."
+
     refute missing_context =~ "CRM"
+    refute card["decision_prompt"] =~ "Handle this now"
   end
 
   test "cards do not surface unknown or unclear state filler", %{user_id: user_id} do
