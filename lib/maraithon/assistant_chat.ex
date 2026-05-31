@@ -4,7 +4,7 @@ defmodule Maraithon.AssistantChat do
   """
 
   alias Maraithon.Repo
-  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard}
+  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ModelRouting
   alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
@@ -488,15 +488,8 @@ defmodule Maraithon.AssistantChat do
   defp mobile_title(%Conversation{} = conversation, body) do
     current = get_in(conversation.metadata || %{}, ["title"])
 
-    if current in [nil, "", "New conversation"] do
-      body
-      |> String.split(~r/\s+/, trim: true)
-      |> Enum.take(8)
-      |> Enum.join(" ")
-      |> case do
-        "" -> "New conversation"
-        value -> value
-      end
+    if ThreadNaming.placeholder?(current) do
+      ThreadNaming.title_for_message(body)
     else
       current
     end

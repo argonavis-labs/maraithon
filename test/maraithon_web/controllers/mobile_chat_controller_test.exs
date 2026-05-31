@@ -882,6 +882,66 @@ defmodule MaraithonWeb.MobileChatControllerTest do
     refute title =~ "assistant:"
   end
 
+  test "mobile chat generates executive titles for common chief-of-staff prompts", %{conn: conn} do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-chief-title@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" =>
+            "Plan my day like my chief of staff. Start with the single next move, then list the past-due work."
+        }
+      })
+      |> json_response(200)
+
+    assert get_in(response, ["thread", "title"]) == "Daily plan"
+
+    response =
+      build_mobile_conn(user_id)
+      |> get(~p"/api/mobile/chat/threads")
+      |> json_response(200)
+
+    thread_json = Enum.find(response["threads"], &(&1["id"] == thread_id))
+    assert thread_json["title"] == "Daily plan"
+  end
+
+  test "mobile chat generated titles use work language instead of todo vocabulary", %{
+    conn: conn
+  } do
+    {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-work-title@example.com")
+
+    conn =
+      post(conn, ~p"/api/mobile/chat/threads", %{
+        "thread" => %{"client_thread_id" => Ecto.UUID.generate(), "title" => "New conversation"}
+      })
+
+    thread_id = json_response(conn, 201)["thread"]["id"]
+
+    response =
+      build_mobile_conn(user_id)
+      |> post(~p"/api/mobile/chat/threads/#{thread_id}/messages", %{
+        "message" => %{
+          "client_message_id" => Ecto.UUID.generate(),
+          "body" => "Please summarize todo risks before the board meeting"
+        }
+      })
+      |> json_response(200)
+
+    title = get_in(response, ["thread", "title"])
+
+    assert title == "Summarize work item risks before the board"
+    refute String.downcase(title) =~ "todo"
+  end
+
   test "mobile chat assistant message bodies are display-ready", %{conn: conn} do
     {conn, user_id} = authenticated_mobile_conn(conn, "mobile-chat-assistant-body@example.com")
 

@@ -38,6 +38,16 @@ struct ChatThreadNamingTests {
     }
 
     @Test
+    func generatedTitlesKeepCompleteBoundaryWords() {
+        let title = ChatThreadNaming.title(
+            for: "Please summarize todo risks before the board meeting"
+        )
+
+        #expect(title == "Summarize work item risks before the board")
+        #expect(!title.localizedCaseInsensitiveContains("todo"))
+    }
+
+    @Test
     func manualTitleRejectsBlankInput() {
         #expect(ChatThreadNaming.manualTitle(for: " \n\t ") == nil)
     }

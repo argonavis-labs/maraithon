@@ -83,12 +83,28 @@ enum ChatThreadNaming {
     private static func clipped(_ value: String, maxLength: Int) -> String {
         guard value.count > maxLength else { return value }
 
-        let prefix = String(value.prefix(maxLength))
+        let endIndex = value.index(value.startIndex, offsetBy: maxLength)
+        let prefix = String(value[..<endIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if wordBoundary(in: value, at: endIndex) {
+            return prefix
+        }
+
         let trimmedPrefix = prefix
             .split(separator: " ")
             .dropLast()
             .joined(separator: " ")
 
         return trimmedPrefix.isEmpty ? prefix : trimmedPrefix
+    }
+
+    private static func wordBoundary(in value: String, at index: String.Index) -> Bool {
+        guard index < value.endIndex else { return true }
+
+        let scalarView = String(value[index]).unicodeScalars
+        return scalarView.allSatisfy {
+            CharacterSet.whitespacesAndNewlines.contains($0) ||
+                CharacterSet.punctuationCharacters.contains($0)
+        }
     }
 }

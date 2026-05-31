@@ -5,6 +5,7 @@ defmodule MaraithonWeb.MobileChatJSON do
   alias Maraithon.TelegramAssistant.WorkSummary
   alias Maraithon.TelegramConversations.{Conversation, Turn}
   alias Maraithon.Todos.{Todo, UserFacingCopy}
+  alias Maraithon.AssistantChat.ThreadNaming
   alias Maraithon.Repo
   alias MaraithonWeb.{ApiErrorCopy, MobileJSON}
 
@@ -524,7 +525,7 @@ defmodule MaraithonWeb.MobileChatJSON do
     |> Enum.find(&(&1.role == "user"))
     |> case do
       %Turn{text: text} when is_binary(text) ->
-        text |> String.split(~r/\s+/, trim: true) |> Enum.take(8) |> Enum.join(" ")
+        ThreadNaming.title_for_message(text)
 
       _ ->
         nil
