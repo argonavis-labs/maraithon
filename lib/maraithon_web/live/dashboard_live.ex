@@ -3449,7 +3449,6 @@ defmodule MaraithonWeb.DashboardLive do
   defp insight_category_label(_), do: "Insight"
 
   defp insight_source_label("gmail"), do: "Gmail"
-  defp insight_source_label("calendar"), do: "Google Calendar"
   defp insight_source_label("google_calendar"), do: "Google Calendar"
   defp insight_source_label(source) when is_binary(source), do: SourceLabels.label(source)
 

@@ -939,10 +939,6 @@ defmodule Maraithon.Todos do
   defp maybe_filter_source(query, ""), do: query
   defp maybe_filter_source(query, "all"), do: query
 
-  defp maybe_filter_source(query, "calendar") do
-    where(query, [todo], todo.source in ["calendar", "google_calendar"])
-  end
-
   defp maybe_filter_source(query, source) when is_binary(source) do
     where(query, [todo], todo.source == ^source)
   end

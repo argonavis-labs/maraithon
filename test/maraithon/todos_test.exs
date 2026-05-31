@@ -62,6 +62,43 @@ defmodule Maraithon.TodosTest do
     assert done_todo.status == "done"
   end
 
+  test "source filters distinguish local Calendar from Google Calendar" do
+    user_id = unique_user_email("todos-source")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [local_calendar, google_calendar]} =
+      Todos.upsert_many(user_id, [
+        %{
+          "source" => "calendar",
+          "kind" => "local_calendar",
+          "title" => "Prepare for the local calendar review",
+          "summary" => "A local Calendar.app event needs prep.",
+          "next_action" => "Review the local calendar event.",
+          "priority" => 80,
+          "dedupe_key" => "todos-source-filter:local-calendar"
+        },
+        %{
+          "source" => "google_calendar",
+          "kind" => "google_calendar",
+          "title" => "Prepare for the Google calendar review",
+          "summary" => "A Google Calendar event needs prep.",
+          "next_action" => "Review the Google Calendar event.",
+          "priority" => 79,
+          "dedupe_key" => "todos-source-filter:google-calendar"
+        }
+      ])
+
+    assert [local_calendar.id] ==
+             user_id
+             |> Todos.list_for_user(source: "calendar", limit: 10)
+             |> Enum.map(& &1.id)
+
+    assert [google_calendar.id] ==
+             user_id
+             |> Todos.list_for_user(source: "google_calendar", limit: 10)
+             |> Enum.map(& &1.id)
+  end
+
   test "todos persist durable source, owner, due date, notes, and action draft details" do
     user_id = unique_user_email("todos-detail")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

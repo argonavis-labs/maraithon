@@ -527,6 +527,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
 
     assert html =~ "May 30, 2:30 PM ET"
     assert html =~ "Due May 30 at 2:30 PM ET."
+    assert html =~ "from Calendar"
     refute html =~ "2026-05-30 18:30:00 UTC"
     refute html =~ "6:30 PM UTC"
   end
@@ -997,6 +998,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
     |> render_click()
 
     assert render(view) =~ "Prepare Monday board notes"
+
+    calendar_card =
+      view
+      |> element("#todo-review-card-#{second.id}")
+      |> render()
+
+    assert calendar_card =~ "Calendar"
+    refute calendar_card =~ "Google Calendar"
 
     view
     |> element("#todo-review button[phx-click='review_previous_todo']")
