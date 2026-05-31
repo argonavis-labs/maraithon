@@ -1094,7 +1094,7 @@ defmodule MaraithonWeb.TodosLive do
         "No work from #{source_label} is visible in this view."
 
       default_filter_view?(filters) ->
-        "No open work is ready to review."
+        "Nothing needs review right now. Add a follow-up manually, or let Maraithon surface commitments when the next move is clear."
 
       true ->
         "No work is visible in this view."

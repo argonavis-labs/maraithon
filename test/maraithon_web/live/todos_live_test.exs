@@ -1,14 +1,18 @@
 defmodule MaraithonWeb.TodosLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias Maraithon.{Agents, Memory, Timezones}
+  alias Maraithon.{Agents, Memory, Repo, Timezones}
   alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
 
   @user_email "todos-live@example.com"
 
   setup %{conn: conn} do
+    Repo.delete_all(from todo in Todo, where: todo.user_id == ^@user_email)
+
     {:ok, conn: log_in_test_user(conn, @user_email)}
   end
 
@@ -73,7 +77,8 @@ defmodule MaraithonWeb.TodosLiveTest do
   test "empty work list copy stays user-facing", %{conn: conn} do
     {:ok, view, html} = live(conn, "/todos")
 
-    assert html =~ "No open work is ready to review."
+    assert html =~ "Nothing needs review right now."
+    assert html =~ "when the next move is clear"
     refute html =~ "No work items match these filters."
     refute html =~ "No active work right now"
     refute html =~ "No todos"

@@ -953,7 +953,7 @@ defmodule MaraithonWeb.DashboardLive do
               <%= if @open_todo_count > 0 do %>
                 <%= review_ready_label(@open_todo_count) %>
               <% else %>
-                No work is ready for review right now. Maraithon will add work here when connected sources find a concrete next move.
+                Nothing needs your review right now. Maraithon will add work here when messages, meetings, notes, or local context produce a concrete next move.
               <% end %>
             </p>
           </div>
@@ -4263,10 +4263,10 @@ defmodule MaraithonWeb.DashboardLive do
         <div class="px-4 py-8 sm:px-6">
           <%= if @todos == [] do %>
             <p class="text-sm/6 font-medium text-zinc-950">
-              No open work is ready to review.
+              Nothing needs your review right now.
             </p>
             <p class="mt-1 text-sm/6 text-zinc-500">
-              When Maraithon finds a commitment with enough context, it will appear here.
+              When a message, meeting, note, or local signal has a clear next move, it will appear here.
             </p>
           <% else %>
             <p class="text-sm/6 font-medium text-zinc-950">Review complete for now.</p>

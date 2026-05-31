@@ -71,13 +71,13 @@ enum TodoFilter: String, CaseIterable, Hashable, Identifiable {
             return TodoEmptyState(
                 title: "No work in this view",
                 systemImage: "checklist",
-                description: "Reset filters or add the next follow-up Maraithon should keep visible."
+                description: "Reset filters, add a follow-up, or ask Maraithon to keep a commitment visible."
             )
         case .open:
             return TodoEmptyState(
                 title: "No open work",
                 systemImage: "checklist",
-                description: "No open work is visible in this filter. Add the next commitment when it should stay on your radar."
+                description: "This filter has no open work. Add a follow-up, or ask Maraithon to keep the next commitment visible."
             )
         case .decisions:
             return TodoEmptyState(

@@ -120,8 +120,8 @@ struct TodoFilteringTests {
         ))
 
         #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).title == "No work in this view")
-        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Reset filters or add the next follow-up Maraithon should keep visible.")
-        #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "No open work is visible in this filter. Add the next commitment when it should stay on your radar.")
+        #expect(TodoFilter.all.emptyState(searchText: "", hasAnyWork: true).description == "Reset filters, add a follow-up, or ask Maraithon to keep a commitment visible.")
+        #expect(TodoFilter.open.emptyState(searchText: "", hasAnyWork: true).description == "This filter has no open work. Add a follow-up, or ask Maraithon to keep the next commitment visible.")
         #expect(TodoFilter.decisions.emptyState(searchText: "", hasAnyWork: true) == TodoEmptyState(
             title: "No decisions waiting",
             systemImage: "checkmark.seal",

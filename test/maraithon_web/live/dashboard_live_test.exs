@@ -1,6 +1,7 @@
 defmodule MaraithonWeb.DashboardLiveTest do
   use MaraithonWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Maraithon.Agents
@@ -17,11 +18,14 @@ defmodule MaraithonWeb.DashboardLiveTest do
   alias Maraithon.Runtime.BackgroundJob
   alias Maraithon.SourceFreshness
   alias Maraithon.Todos
+  alias Maraithon.Todos.Todo
   alias Maraithon.UserMemory.Profile, as: UserMemoryProfile
 
   @user_email "dashboard@example.com"
 
   setup %{conn: conn} do
+    Repo.delete_all(from todo in Todo, where: todo.user_id == ^@user_email)
+
     {:ok, user} = Maraithon.Accounts.get_or_create_user_by_email(@user_email)
     {:ok, user} = Repo.update(Ecto.Changeset.change(user, is_admin: false))
     {:ok, %{token: token}} = Maraithon.Accounts.create_session_for_user(user)
@@ -48,10 +52,10 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Saved context"
     assert has_element?(view, "h2", "Projects")
     assert html =~ "Automation overview"
-    assert html =~ "No work is ready for review right now."
+    assert html =~ "Nothing needs your review right now."
 
     assert html =~
-             "Maraithon will add work here when connected sources find a concrete next move."
+             "Maraithon will add work here when messages, meetings, notes, or local context produce a concrete next move."
 
     assert html =~ "attach an automation to recommend next moves"
     assert html =~ "Follow-ups will appear here after"
@@ -1071,7 +1075,8 @@ defmodule MaraithonWeb.DashboardLiveTest do
     |> render_click()
 
     html = render(view)
-    assert html =~ "No open work is ready to review."
+    assert html =~ "Nothing needs your review right now."
+    assert html =~ "When a message, meeting, note, or local signal has a clear next move"
     refute html =~ "No open work items."
     refute html =~ "No open cards."
     refute html =~ "No active work right now"
@@ -1265,7 +1270,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(view, "#todo-review-card-#{complete_todo.id}")
-    assert html =~ "No open work is ready to review."
+    assert html =~ "Nothing needs your review right now."
     refute html =~ "No open work items."
     refute html =~ "No active work right now"
     refute html =~ ":not_found"
@@ -1301,7 +1306,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
       |> render_click()
 
     refute has_element?(important_view, "#todo-review-card-#{important_todo.id}")
-    assert html =~ "No open work is ready to review."
+    assert html =~ "Nothing needs your review right now."
     refute html =~ "No open work items."
     refute html =~ "No active work right now"
     refute html =~ ":not_found"
