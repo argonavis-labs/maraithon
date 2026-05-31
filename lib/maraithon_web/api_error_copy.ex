@@ -3,7 +3,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
 
   alias Maraithon.RunErrorCopy
 
-  @companion_context_recovery "Maraithon will keep the last successful context until the next check."
+  @companion_context_recovery "Maraithon will keep using the last successful source check until the next check."
 
   @mobile_code_errors ~w(not_found invalid_email invalid_or_expired_code invalid_or_expired_link)a
   @mobile_chat_code_errors ~w(
@@ -101,7 +101,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "device_not_found",
       message:
-        "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+        "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
     }
   end
 
@@ -115,7 +115,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
   def companion_device(:unsupported_source) do
     %{
       error: "unsupported_source",
-      message: "Choose an available source before deleting synced data."
+      message: "Choose an available source before deleting uploaded data."
     }
   end
 
@@ -130,7 +130,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "missing_key_id",
       message:
-        "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+        "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
     }
   end
 
@@ -138,7 +138,7 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "missing_public_key",
       message:
-        "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+        "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
     }
   end
 
@@ -146,21 +146,22 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "invalid_device_key",
       message:
-        "Maraithon could not save this Mac's encryption key. Re-pair this Mac before syncing encrypted sources."
+        "Maraithon could not save this Mac's encryption key. Re-pair this Mac before checking encrypted sources."
     }
   end
 
   def companion_sync(:missing_items, batch_key) do
     %{
       error: "#{batch_key}_required",
-      message: "The Mac sent an incomplete context sync. #{@companion_context_recovery}"
+      message: "The Mac sent incomplete source data. #{@companion_context_recovery}"
     }
   end
 
   def companion_sync(:too_many_items, max_batch) do
     %{
       error: "batch_too_large",
-      message: "That sync included more than #{max_batch} items. #{@companion_context_recovery}"
+      message:
+        "That check tried to upload more than #{max_batch} items. #{@companion_context_recovery}"
     }
   end
 
@@ -175,14 +176,14 @@ defmodule MaraithonWeb.ApiErrorCopy do
     %{
       error: "unknown_event",
       message:
-        "The companion app sent sync data this version of Maraithon does not support. Update the app, then check again."
+        "The companion app sent source data this version of Maraithon does not support. Update the app, then check again."
     }
   end
 
   def companion_sync(_reason, _context) do
     %{
       error: "invalid_batch",
-      message: "Some items could not finish. #{@companion_context_recovery}"
+      message: "Some items could not be saved. #{@companion_context_recovery}"
     }
   end
 
@@ -198,7 +199,10 @@ defmodule MaraithonWeb.ApiErrorCopy do
   end
 
   def notaui_sync(_reason) do
-    %{error: "Notaui tasks did not sync. Check the Notaui connection before syncing again."}
+    %{
+      error:
+        "Notaui tasks did not update. Check the Notaui connection before running another update."
+    }
   end
 
   def mcp_batch(_reason) do

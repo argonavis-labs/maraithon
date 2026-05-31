@@ -33,7 +33,9 @@ defmodule MaraithonWeb.NotauiController do
       {:error, :not_configured} ->
         conn
         |> put_status(:bad_request)
-        |> json(%{error: "Notaui connection is unavailable. Add credentials before syncing."})
+        |> json(%{
+          error: "Notaui connection is unavailable. Add credentials before running a task update."
+        })
 
       {:error, :invalid_topic} ->
         conn

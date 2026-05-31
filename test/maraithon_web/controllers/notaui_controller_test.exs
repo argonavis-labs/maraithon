@@ -74,7 +74,7 @@ defmodule MaraithonWeb.NotauiControllerTest do
       conn = post(conn, "/api/v1/integrations/notaui/sync", %{})
 
       assert json_response(conn, 400)["error"] ==
-               "Notaui connection is unavailable. Add credentials before syncing."
+               "Notaui connection is unavailable. Add credentials before running a task update."
     end
 
     test "hides upstream Notaui failure internals", %{conn: conn} do
@@ -97,7 +97,7 @@ defmodule MaraithonWeb.NotauiControllerTest do
 
       assert json_response(conn, 400) == %{
                "error" =>
-                 "Notaui tasks did not sync. Check the Notaui connection before syncing again."
+                 "Notaui tasks did not update. Check the Notaui connection before running another update."
              }
     end
   end

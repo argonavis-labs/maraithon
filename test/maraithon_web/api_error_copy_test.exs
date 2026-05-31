@@ -107,7 +107,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert %{
              error: "invalid_batch",
              message:
-               "Some items could not finish. Maraithon will keep the last successful context until the next check."
+               "Some items could not be saved. Maraithon will keep using the last successful source check until the next check."
            } in copies
 
     assert %{
@@ -118,7 +118,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert %{
              error: "invalid_device_key",
              message:
-               "Maraithon could not save this Mac's encryption key. Re-pair this Mac before syncing encrypted sources."
+               "Maraithon could not save this Mac's encryption key. Re-pair this Mac before checking encrypted sources."
            } in copies
 
     Enum.each(copies, fn copy ->
@@ -138,7 +138,7 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
     assert ApiErrorCopy.companion_device(:not_found) == %{
              error: "device_not_found",
              message:
-               "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+               "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
            }
 
     assert ApiErrorCopy.companion_device(:delete_failed) == %{
@@ -148,19 +148,19 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     assert ApiErrorCopy.companion_device(:unsupported_source) == %{
              error: "unsupported_source",
-             message: "Choose an available source before deleting synced data."
+             message: "Choose an available source before deleting uploaded data."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_key_id) == %{
              error: "missing_key_id",
              message:
-               "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+               "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
            }
 
     assert ApiErrorCopy.companion_device_key(:missing_public_key) == %{
              error: "missing_public_key",
              message:
-               "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+               "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
            }
 
     assert ApiErrorCopy.companion_recall(:missing_query) == %{
@@ -169,23 +169,23 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
            }
   end
 
-  test "companion sync payloads pair stable codes with product copy" do
+  test "companion source payloads pair stable codes with product copy" do
     assert ApiErrorCopy.companion_sync(:missing_items, "messages") == %{
              error: "messages_required",
              message:
-               "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+               "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
            }
 
     assert ApiErrorCopy.companion_sync(:too_many_items, 200) == %{
              error: "batch_too_large",
              message:
-               "That sync included more than 200 items. Maraithon will keep the last successful context until the next check."
+               "That check tried to upload more than 200 items. Maraithon will keep using the last successful source check until the next check."
            }
 
     assert ApiErrorCopy.companion_sync(:unknown_event, nil) == %{
              error: "unknown_event",
              message:
-               "The companion app sent sync data this version of Maraithon does not support. Update the app, then check again."
+               "The companion app sent source data this version of Maraithon does not support. Update the app, then check again."
            }
 
     assert ApiErrorCopy.companion_channel_error(:device_mismatch, nil) == %{
@@ -205,6 +205,9 @@ defmodule MaraithonWeb.ApiErrorCopyTest do
 
     refute recovery_copy =~ "last successful data"
     refute recovery_copy =~ "sync batch"
+    refute recovery_copy =~ "context sync"
+    refute recovery_copy =~ "That sync"
+    refute recovery_copy =~ "sent sync data"
     refute recovery_copy =~ "Sync again"
   end
 

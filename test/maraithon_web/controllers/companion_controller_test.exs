@@ -227,7 +227,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "messages_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
 
@@ -323,7 +323,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 404) == %{
                "error" => "device_not_found",
                "message" =>
-                 "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+                 "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
              }
     end
   end
@@ -397,7 +397,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
 
       assert json_response(conn, 400) == %{
                "error" => "unsupported_source",
-               "message" => "Choose an available source before deleting synced data."
+               "message" => "Choose an available source before deleting uploaded data."
              }
     end
 
@@ -415,7 +415,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 404) == %{
                "error" => "device_not_found",
                "message" =>
-                 "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+                 "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
              }
     end
   end
@@ -476,7 +476,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "notes_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
 
@@ -564,7 +564,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "voice_memos_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
 
@@ -697,7 +697,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "reminders_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
   end
@@ -814,7 +814,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "calendar_events_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
   end
@@ -875,7 +875,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "files_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
 
@@ -928,7 +928,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "batch_too_large",
                "message" =>
-                 "That sync included more than 200 items. Maraithon will keep the last successful context until the next check."
+                 "That check tried to upload more than 200 items. Maraithon will keep using the last successful source check until the next check."
              }
     end
   end
@@ -1060,7 +1060,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 404) == %{
                "error" => "device_not_found",
                "message" =>
-                 "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+                 "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
              }
     end
   end
@@ -1113,7 +1113,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 404) == %{
                "error" => "device_not_found",
                "message" =>
-                 "That Mac is no longer paired. Refresh the device list; pair it again if it should still sync."
+                 "That Mac is no longer paired. Refresh the device list; pair it again if it should keep checking this Mac."
              }
     end
   end
@@ -1221,7 +1221,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "visits_required",
                "message" =>
-                 "The Mac sent an incomplete context sync. Maraithon will keep the last successful context until the next check."
+                 "The Mac sent incomplete source data. Maraithon will keep using the last successful source check until the next check."
              }
     end
   end
@@ -1260,7 +1260,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "missing_key_id",
                "message" =>
-                 "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+                 "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
              }
     end
 
@@ -1275,7 +1275,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert json_response(conn, 400) == %{
                "error" => "missing_public_key",
                "message" =>
-                 "Encrypted source access is not ready. Re-pair this Mac before syncing encrypted sources."
+                 "Encrypted source access is not ready. Re-pair this Mac before checking encrypted sources."
              }
     end
 
@@ -1318,7 +1318,7 @@ defmodule MaraithonWeb.CompanionControllerTest do
       assert body == %{
                "error" => "invalid_device_key",
                "message" =>
-                 "Maraithon could not save this Mac's encryption key. Re-pair this Mac before syncing encrypted sources."
+                 "Maraithon could not save this Mac's encryption key. Re-pair this Mac before checking encrypted sources."
              }
 
       refute inspect(body) =~ "should be at most"
