@@ -20,6 +20,7 @@ defmodule Maraithon.OpenLoops do
   @default_limit 12
   @max_limit 50
   @prompt_limit 8
+  @empty_open_loops_prompt "No saved open work is waiting in Maraithon. Only use open-loop tools when current connected context provides a concrete next move."
   @todo_ingest_busy_retry_delays_ms [1_000, 2_000, 5_000, 10_000, 15_000]
   @open_statuses ~w(open snoozed)
   @open_loop_tool_names ~w(get_open_loops get_todo list_todos upsert_todos update_todo resolve_todo delete_todo list_people get_relationship_context learn_relationship_context recall_memory write_memory record_memory_feedback update_memory_confidence)
@@ -1039,7 +1040,7 @@ defmodule Maraithon.OpenLoops do
     |> Enum.reject(&(&1 == ""))
     |> case do
       [] ->
-        "Nothing needs review right now. Only use open-loop tools when connected context provides a concrete next move."
+        @empty_open_loops_prompt
 
       sections ->
         Enum.join(sections, "\n")

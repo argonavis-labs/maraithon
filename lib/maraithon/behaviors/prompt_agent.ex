@@ -26,6 +26,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
 
   @default_memory_limit 50
   @empty_user_memory_guidance "Use current context and confirmed preferences until a long-term user profile is ready."
+  @empty_open_loops_guidance "No saved open work is waiting in Maraithon. Only create or mention follow-up when current connected context provides a concrete next move."
 
   alias Maraithon.LLM
   alias Maraithon.Tools.ActionHelpers
@@ -505,7 +506,7 @@ defmodule Maraithon.Behaviors.PromptAgent do
     total = Map.get(totals, "open_todos") || Map.get(totals, :open_todos) || 0
 
     if total == 0 do
-      "Nothing needs review right now. Only create or mention follow-up when connected context provides a concrete next move."
+      @empty_open_loops_guidance
     else
       rendered =
         [
@@ -519,16 +520,14 @@ defmodule Maraithon.Behaviors.PromptAgent do
         |> Enum.join("\n")
 
       if rendered == "" do
-        "Nothing needs review right now. Only create or mention follow-up when connected context provides a concrete next move."
+        @empty_open_loops_guidance
       else
         rendered
       end
     end
   end
 
-  defp format_open_loops(_snapshot),
-    do:
-      "Nothing needs review right now. Only create or mention follow-up when connected context provides a concrete next move."
+  defp format_open_loops(_snapshot), do: @empty_open_loops_guidance
 
   defp format_open_loop_bucket(_label, []), do: ""
 
