@@ -639,7 +639,7 @@ defmodule Maraithon.ActionCards do
   end
 
   defp fallback_why_now do
-    "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+    "No deadline or waiting signal is clear, so review it once and either keep it active or dismiss it."
   end
 
   defp next_best_action(_todo, "stale_check") do
@@ -1006,7 +1006,7 @@ defmodule Maraithon.ActionCards do
   defp missing_context(todo, metadata, person) do
     cond do
       blank?(person) ->
-        "No person has been confirmed for this item yet."
+        "No specific person is linked to this item yet."
 
       read_field(metadata, "source_health_missing") ->
         read_string(metadata, "source_health_missing")
@@ -1669,7 +1669,8 @@ defmodule Maraithon.ActionCards do
 
     [
       if(MapSet.member?(blocked_sources, "desktop"),
-        do: "Local context from the Mac companion is unavailable."
+        do:
+          "Mac companion context was not available, so iMessage, Notes, files, reminders, and browser context may be missing."
       ),
       if(other_gaps != [],
         do:
@@ -1700,7 +1701,7 @@ defmodule Maraithon.ActionCards do
 
   defp source_setup_action(blocked_sources) do
     if MapSet.member?(blocked_sources, "desktop") do
-      "Open the Mac companion app to reconnect it."
+      "Open the Mac companion to refresh it."
     end
   end
 

@@ -9,7 +9,7 @@ defmodule Maraithon.ActionCardsTest do
   alias Maraithon.Todos.Todo
 
   setup do
-    user_id = "action-cards-#{System.unique_integer([:positive])}@example.com"
+    user_id = "action-cards-#{Ecto.UUID.generate()}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
 
     {:ok, _gmail} =
@@ -140,7 +140,7 @@ defmodule Maraithon.ActionCardsTest do
     card = ActionCards.for_todo(todo, include_disconnected: false)
     missing_context = get_in(card, ["context_pack", "missing_context"])
 
-    assert missing_context == "No person has been confirmed for this item yet."
+    assert missing_context == "No specific person is linked to this item yet."
 
     assert card["decision_prompt"] ==
              "Decide whether to review the note and approve the reimbursement reply."
@@ -207,7 +207,7 @@ defmodule Maraithon.ActionCardsTest do
     refute Enum.any?(ActionCards.context_items(card), &(&1.label == "Person"))
 
     assert get_in(card, ["context_pack", "missing_context"]) ==
-             "No person has been confirmed for this item yet."
+             "No specific person is linked to this item yet."
   end
 
   test "cards do not surface unknown or unclear state filler", %{user_id: user_id} do
@@ -270,10 +270,10 @@ defmodule Maraithon.ActionCardsTest do
     rendered = ActionCards.render_telegram_todo(todo, include_disconnected: false)
 
     assert card["why_now"] ==
-             "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+             "No deadline or waiting signal is clear, so review it once and either keep it active or dismiss it."
 
     assert rendered =~
-             "Why now: No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+             "Why now: No deadline or waiting signal is clear, so review it once and either keep it active or dismiss it."
 
     refute rendered =~ "This is still open and needs a clear next decision"
     refute rendered =~ "this Maraithon item"
@@ -383,7 +383,7 @@ defmodule Maraithon.ActionCardsTest do
     }
 
     assert ActionCards.source_health_note(card) ==
-             "Used Gmail. Local context from the Mac companion is unavailable. Open the Mac companion app to reconnect it."
+             "Used Gmail. Mac companion context was not available, so iMessage, Notes, files, reminders, and browser context may be missing. Open the Mac companion to refresh it."
 
     refute ActionCards.source_health_note(card) =~ "Could not fully check Desktop App"
   end
@@ -502,10 +502,10 @@ defmodule Maraithon.ActionCardsTest do
     assert get_in(card, ["source_health", "missing_sources"]) == ["desktop"]
 
     assert ActionCards.source_health_note(card) ==
-             "Used Gmail. Local context from the Mac companion is unavailable. Open the Mac companion app to reconnect it."
+             "Used Gmail. Mac companion context was not available, so iMessage, Notes, files, reminders, and browser context may be missing. Open the Mac companion to refresh it."
 
     assert ActionCards.render_telegram_todo(todo, opts) =~
-             "Local context from the Mac companion is unavailable."
+             "Mac companion context was not available"
   end
 
   test "due copy uses the user's Chief of Staff timezone instead of UTC", %{user_id: user_id} do

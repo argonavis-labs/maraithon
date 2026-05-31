@@ -1151,7 +1151,7 @@ defmodule MaraithonWeb.DashboardLiveTest do
     assert html =~ "Review generated operating note"
 
     assert html =~
-             "No deadline or waiting signal is attached; decide whether to keep it active or dismiss it."
+             "No deadline or waiting signal is clear, so review it once and either keep it active or dismiss it."
 
     refute html =~ "This is still open and needs a clear next decision."
     refute html =~ "This is an open Maraithon item."

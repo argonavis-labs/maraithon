@@ -413,8 +413,8 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
       )
 
     assert payload.text =~ "Used Gmail."
-    assert payload.text =~ "Local context from the Mac companion is unavailable."
-    assert payload.text =~ "Open the Mac companion app to reconnect it."
+    assert payload.text =~ "Mac companion context was not available"
+    assert payload.text =~ "Open the Mac companion to refresh it."
     refute payload.text =~ "From Gmail."
     refute payload.text =~ "Used Telegram"
   end
