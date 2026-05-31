@@ -137,7 +137,7 @@ struct SourceUnblockView: View {
     }
 
     private func checkAgain() {
-        if clearFullDiskAccessBlockIfGranted() {
+        if verifyFullDiskAccessGrant() {
             return
         }
 
@@ -154,7 +154,7 @@ struct SourceUnblockView: View {
     }
 
     @MainActor
-    private func clearFullDiskAccessBlockIfGranted() -> Bool {
+    private func verifyFullDiskAccessGrant() -> Bool {
         guard env.sources.statusPublisher(for: sourceID)?.fullDiskAccessBlockReason != nil,
               FullDiskAccessProbe.isGranted()
         else {
@@ -168,7 +168,7 @@ struct SourceUnblockView: View {
 
     private func pollFullDiskAccessGrant() async {
         while !Task.isCancelled {
-            if clearFullDiskAccessBlockIfGranted() {
+            if verifyFullDiskAccessGrant() {
                 return
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)

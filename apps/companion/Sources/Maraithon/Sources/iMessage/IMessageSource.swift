@@ -147,7 +147,7 @@ final class IMessageSource: SourceProtocol {
     private var lastTickAt: ContinuousClock.Instant?
 
     private func tickIfNeeded(force: Bool) async {
-        clearFullDiskAccessBlockIfGranted()
+        logFullDiskAccessRecheck()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -175,15 +175,14 @@ final class IMessageSource: SourceProtocol {
         }
     }
 
-    private func clearFullDiskAccessBlockIfGranted() {
+    private func logFullDiskAccessRecheck() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
             return
         }
 
         if fullDiskAccessProbe() {
-            statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
-                "imessage.full_disk_access_granted",
+                "imessage.full_disk_access_probe_granted",
                 source: .imessage,
                 payload: ["previous_reason": reason]
             )

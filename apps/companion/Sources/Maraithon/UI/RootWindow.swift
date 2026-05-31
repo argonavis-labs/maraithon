@@ -354,7 +354,7 @@ struct FullDiskAccessRequiredBanner: View {
     }
 
     private func checkAgain() {
-        if clearFullDiskAccessBlockIfGranted() {
+        if verifyFullDiskAccessGrant() {
             return
         }
 
@@ -363,7 +363,7 @@ struct FullDiskAccessRequiredBanner: View {
     }
 
     @MainActor
-    private func clearFullDiskAccessBlockIfGranted() -> Bool {
+    private func verifyFullDiskAccessGrant() -> Bool {
         guard FullDiskAccessProbe.isGranted() else {
             return false
         }
@@ -375,7 +375,7 @@ struct FullDiskAccessRequiredBanner: View {
 
     private func pollFullDiskAccessGrant() async {
         while !Task.isCancelled {
-            if clearFullDiskAccessBlockIfGranted() {
+            if verifyFullDiskAccessGrant() {
                 return
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)

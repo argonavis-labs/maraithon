@@ -139,7 +139,7 @@ final class NotesSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
-        clearFullDiskAccessBlockIfGranted()
+        logFullDiskAccessRecheck()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -167,15 +167,14 @@ final class NotesSource: SourceProtocol {
         }
     }
 
-    private func clearFullDiskAccessBlockIfGranted() {
+    private func logFullDiskAccessRecheck() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
             return
         }
 
         if fullDiskAccessProbe() {
-            statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
-                "notes.full_disk_access_granted",
+                "notes.full_disk_access_probe_granted",
                 source: .notes,
                 payload: ["previous_reason": reason]
             )

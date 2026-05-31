@@ -199,7 +199,7 @@ final class VoiceMemosSource: SourceProtocol {
     }
 
     private func tickIfNeeded(force: Bool) async {
-        clearFullDiskAccessBlockIfGranted()
+        logFullDiskAccessRecheck()
 
         let lowPower = lowPowerProbe()
         if lowPower != lastLowPowerState {
@@ -227,15 +227,14 @@ final class VoiceMemosSource: SourceProtocol {
         }
     }
 
-    private func clearFullDiskAccessBlockIfGranted() {
+    private func logFullDiskAccessRecheck() {
         guard let reason = statusPublisher.fullDiskAccessBlockReason else {
             return
         }
 
         if fullDiskAccessProbe() {
-            statusPublisher.clearFullDiskAccessBlock()
             eventLog.info(
-                "voice_memos.full_disk_access_granted",
+                "voice_memos.full_disk_access_probe_granted",
                 source: .voiceMemos,
                 payload: ["previous_reason": reason]
             )

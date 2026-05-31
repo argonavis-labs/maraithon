@@ -132,9 +132,10 @@ final class SourceRegistry {
     }
 
     /// Recheck every source currently blocked by macOS Full Disk
-    /// Access. The grant is app-wide, so checking one blocked local
-    /// source should immediately unblock the others instead of making the
-    /// user wait for each source's next polling tick.
+    /// Access. The lightweight grant probe only tells us it is worth
+    /// retrying; the visible blocker stays in place until each source's
+    /// real protected-store read records a healthy cycle or a successful
+    /// batch.
     func syncFullDiskAccessBlockedSources() {
         let blockedIDs = Set(fullDiskAccessBlockedSources().map(\.id))
 
@@ -148,12 +149,6 @@ final class SourceRegistry {
             source: .system,
             payload: ["count": String(blockedIDs.count)]
         )
-
-        for source in registered.values where blockedIDs.contains(source.id) {
-            source.statusPublisher.clearFullDiskAccessBlock()
-        }
-
-        refreshStates()
 
         for source in registered.values where blockedIDs.contains(source.id) {
             Task { @MainActor in
@@ -203,11 +198,12 @@ final class SourceRegistry {
         }
     }
 
-    /// Clear stale Full Disk Access blockers after a relaunch once the
-    /// running app proves the grant is present. This keeps macOS reloads
-    /// from showing old permission copy when TCC is already satisfied.
+    /// Recheck stale Full Disk Access blockers after a relaunch once the
+    /// running app's lightweight probe says the grant is present. The
+    /// sources still have to prove access themselves before the blocker
+    /// disappears, which keeps reloads from flashing a false green state.
     @discardableResult
-    func clearFullDiskAccessBlocksIfGranted(
+    func verifyFullDiskAccessBlocksIfGranted(
         isGranted: () -> Bool = { FullDiskAccessProbe.isGranted() }
     ) -> Bool {
         let blockedIDs = Set(fullDiskAccessBlockedSources().map(\.id))
@@ -216,16 +212,25 @@ final class SourceRegistry {
         guard isGranted() else { return false }
 
         eventLog.info(
-            "source_registry.clear_fda_blocks_granted",
+            "source_registry.verify_fda_blocks_granted",
             source: .system,
             payload: ["count": String(blockedIDs.count)]
         )
 
         for source in registered.values where blockedIDs.contains(source.id) {
-            source.statusPublisher.clearFullDiskAccessBlock()
+            Task { @MainActor in
+                do {
+                    try await source.syncNow()
+                } catch {
+                    eventLog.error(
+                        "source_registry.verify_fda_blocks_failed",
+                        source: .system,
+                        payload: ["id": source.id, "error": String(describing: error)]
+                    )
+                }
+            }
         }
 
-        refreshStates()
         return true
     }
 
