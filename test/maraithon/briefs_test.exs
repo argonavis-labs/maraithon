@@ -10,6 +10,7 @@ defmodule Maraithon.BriefsTest do
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.BriefTodoReview
+  alias Maraithon.TelegramAssistant.ProactiveCandidate
   alias Maraithon.TelegramAssistant.TodoActions
   alias Maraithon.TelegramConversations
   alias Maraithon.Todos
@@ -342,6 +343,56 @@ defmodule Maraithon.BriefsTest do
     refute lower_text =~ "model synthesis"
     refute lower_text =~ "checked source view"
     refute lower_text =~ "rate_limited"
+  end
+
+  test "unified proactive brief candidates hide legacy generation failure metadata", %{
+    user_id: user_id,
+    agent: agent
+  } do
+    assistant_config = Application.get_env(:maraithon, :telegram_assistant, [])
+
+    Application.put_env(
+      :maraithon,
+      :telegram_assistant,
+      Keyword.merge(assistant_config,
+        telegram_full_chat_enabled: true,
+        telegram_unified_push_enabled: true,
+        proactive_delivery_planner_enabled: true
+      )
+    )
+
+    assert {:ok, %Brief{} = brief} =
+             Briefs.record(user_id, agent.id, %{
+               "cadence" => "morning",
+               "title" => "Morning briefing generation failed",
+               "summary" => "The configured model did not produce a valid brief.",
+               "body" => """
+               Morning briefing model synthesis failed.
+               Try the checked source view instead.
+               """,
+               "scheduled_for" => DateTime.utc_now(),
+               "dedupe_key" => "brief:morning:legacy-generation-failure-candidate",
+               "error_message" =>
+                 "Morning briefing model synthesis failed: {:rate_limited, 60000}",
+               "metadata" => %{"generation_mode" => "error"}
+             })
+
+    result = Briefs.dispatch_telegram_batch(batch_size: 10)
+    assert result.sent == 1
+
+    candidate =
+      Repo.get_by!(ProactiveCandidate, user_id: user_id, dedupe_key: "brief:#{brief.id}")
+
+    assert candidate.title == "Chief of staff brief"
+    assert candidate.why_now == "Maraithon kept only review-ready next steps."
+    assert candidate.body =~ "No verified recommendation was safe to send yet."
+
+    visible_candidate = inspect(candidate)
+    refute visible_candidate =~ "generation failed"
+    refute visible_candidate =~ "configured model"
+    refute visible_candidate =~ "model synthesis"
+    refute visible_candidate =~ "checked source view"
+    refute visible_candidate =~ "rate_limited"
   end
 
   test "telegram payload uses a decision-safe fallback when all brief copy is unsafe", %{

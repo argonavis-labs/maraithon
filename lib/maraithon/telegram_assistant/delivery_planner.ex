@@ -7,6 +7,7 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
 
   alias Maraithon.ActionLedger
   alias Maraithon.AssistantHarness
+  alias Maraithon.Briefs
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Repo
   alias Maraithon.TelegramAssistant
@@ -142,11 +143,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       source: candidate.source,
       source_id: candidate.source_id,
       dedupe_key: candidate.dedupe_key,
-      title: candidate.title,
+      title: candidate_title(candidate),
       body: delivery_text(candidate.body),
       urgency: candidate.urgency,
-      why_now: candidate.why_now,
-      structured_data: candidate.structured_data || %{},
+      why_now: candidate_why_now(candidate),
+      structured_data: candidate_structured_data(candidate),
       inserted_at: candidate.inserted_at,
       expires_at: candidate.expires_at,
       planning_rank: rank,
@@ -502,11 +503,11 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
       linked_delivery_id: get_in(candidate.structured_data || %{}, ["linked_delivery_id"]),
       linked_insight_id: get_in(candidate.structured_data || %{}, ["linked_insight_id"]),
       dedupe_key: candidate.dedupe_key,
-      title: candidate.title,
+      title: candidate_title(candidate),
       body: delivery_text(candidate.body),
       urgency: candidate.urgency,
       interrupt_now: Keyword.get(opts, :interrupt_now, false),
-      why_now: candidate.why_now,
+      why_now: candidate_why_now(candidate),
       structured_data:
         candidate_structured_data(candidate)
         |> Map.put("candidate_id", candidate.id)
@@ -581,13 +582,25 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlanner do
   end
 
   defp candidate_structured_data(%ProactiveCandidate{} = candidate) do
-    %{
-      "title" => candidate.title,
-      "why_now" => candidate.why_now,
+    (candidate.structured_data || %{})
+    |> Map.merge(%{
+      "title" => candidate_title(candidate),
+      "why_now" => candidate_why_now(candidate),
       "urgency" => candidate.urgency
-    }
-    |> Map.merge(candidate.structured_data || %{})
+    })
   end
+
+  defp candidate_title(%ProactiveCandidate{source: "brief", title: title}) do
+    Briefs.public_title(title)
+  end
+
+  defp candidate_title(%ProactiveCandidate{title: title}), do: delivery_text(title)
+
+  defp candidate_why_now(%ProactiveCandidate{source: "brief", why_now: why_now}) do
+    Briefs.public_summary(why_now)
+  end
+
+  defp candidate_why_now(%ProactiveCandidate{why_now: why_now}), do: delivery_text(why_now)
 
   defp telegram_opts_to_keyword(%{} = opts) do
     []

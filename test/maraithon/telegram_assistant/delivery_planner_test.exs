@@ -171,6 +171,57 @@ defmodule Maraithon.TelegramAssistant.DeliveryPlannerTest do
     assert Enum.sort(merged) == Enum.sort([first.dedupe_key, second.dedupe_key])
   end
 
+  test "planner payload hides legacy briefing failure metadata", %{user_id: user_id} do
+    {:ok, candidate} =
+      ProactiveQueue.enqueue(
+        candidate_attrs(user_id, %{
+          source: "brief",
+          title: "Morning briefing generation failed",
+          body: "Maraithon kept only review-ready next steps.",
+          why_now: "The configured model did not produce a valid brief.",
+          structured_data: %{
+            "source" => "test",
+            "title" => "Morning briefing generation failed",
+            "why_now" => "The configured model did not produce a valid brief."
+          },
+          dedupe_key: "brief:planner-legacy-failure"
+        })
+      )
+
+    llm_complete = fn params ->
+      prompt = get_in(params, ["messages", Access.at(1), "content"])
+
+      assert prompt =~ "Chief of staff brief"
+      assert prompt =~ "Maraithon kept only review-ready next steps."
+      refute prompt =~ "Morning briefing generation failed"
+      refute prompt =~ "configured model"
+      refute prompt =~ "did not produce a valid brief"
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "dispositions" => [
+               %{
+                 "candidate_id" => candidate.id,
+                 "disposition" => "hold",
+                 "reason" => "No verified recommendation is ready."
+               }
+             ],
+             "digest_intro" => "",
+             "summary" => "Held the unsafe brief candidate."
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             DeliveryPlanner.run_for_user(user_id, context: %{}, llm_complete: llm_complete)
+
+    assert result.planned == 1
+    assert result.held == 1
+    assert telegram_messages() == []
+  end
+
   test "hold candidates are marked held without sending", %{user_id: user_id} do
     {:ok, candidate} = ProactiveQueue.enqueue(candidate_attrs(user_id))
 

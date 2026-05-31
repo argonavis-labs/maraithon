@@ -429,10 +429,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       source: "brief",
       source_id: brief.id,
       dedupe_key: "brief:#{brief.id}",
-      title: brief.title,
+      title: Briefs.public_title(brief),
       body: payload.text,
       urgency: 0.7,
-      why_now: brief.summary,
+      why_now: Briefs.public_summary(brief),
       structured_data: brief_structured_data(brief),
       telegram_opts:
         compact_map(%{"parse_mode" => "HTML", "reply_markup" => payload.reply_markup})
@@ -447,10 +447,10 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
       source: "brief",
       source_id: brief.id,
       dedupe_key: "brief:#{brief.id}",
-      title: brief.title,
+      title: Briefs.public_title(brief),
       body: payload.text,
       urgency: 0.7,
-      why_now: brief.summary,
+      why_now: Briefs.public_summary(brief),
       structured_data:
         brief_structured_data(brief)
         |> Map.put("message_class", "todo_digest")
@@ -477,11 +477,11 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
            origin_type: "brief",
            origin_id: brief.id,
            dedupe_key: "brief:#{brief.id}",
-           title: brief.title,
+           title: Briefs.public_title(brief),
            body: payload.text,
            urgency: 0.7,
            interrupt_now: true,
-           why_now: brief.summary,
+           why_now: Briefs.public_summary(brief),
            structured_data: brief_structured_data(brief),
            conversation_metadata: brief_conversation_metadata(brief),
            telegram_opts: [parse_mode: "HTML", reply_markup: payload.reply_markup]
@@ -511,11 +511,11 @@ defmodule Maraithon.TelegramAssistant.PushBroker do
              origin_type: "brief",
              origin_id: brief.id,
              dedupe_key: "brief:#{brief.id}",
-             title: brief.title,
+             title: Briefs.public_title(brief),
              body: payload.text,
              urgency: 0.7,
              interrupt_now: true,
-             why_now: brief.summary,
+             why_now: Briefs.public_summary(brief),
              structured_data:
                brief_structured_data(brief)
                |> Map.put("message_class", "todo_digest")

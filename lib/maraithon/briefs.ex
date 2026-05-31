@@ -264,6 +264,12 @@ defmodule Maraithon.Briefs do
     }
   end
 
+  def public_title(%Brief{} = brief), do: public_brief_title(brief.title)
+  def public_title(value), do: public_brief_title(value)
+
+  def public_summary(%Brief{} = brief), do: public_brief_summary(brief.summary)
+  def public_summary(value), do: public_brief_summary(value)
+
   def todo_digest_telegram_payload(%Brief{} = brief, todos \\ nil) do
     todos = todos || todo_digest_todos(brief)
 
@@ -371,8 +377,8 @@ defmodule Maraithon.Briefs do
       |> Maraithon.TelegramMarkdown.to_html()
     else
       cadence_label = cadence_label(brief.cadence)
-      title = public_brief_title(brief.title)
-      summary = public_brief_summary(brief.summary)
+      title = public_title(brief)
+      summary = public_summary(brief)
       body = public_brief_body(brief.body)
 
       """
@@ -393,7 +399,7 @@ defmodule Maraithon.Briefs do
 
     """
     <b>#{safe(cadence_label)}</b>
-    <b>#{safe(public_brief_title(brief.title))}</b>
+    <b>#{safe(public_title(brief))}</b>
 
     #{Maraithon.TelegramMarkdown.to_html(intro)}
     """
