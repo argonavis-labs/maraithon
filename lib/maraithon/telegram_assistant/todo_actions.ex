@@ -293,7 +293,7 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
       display_text(prefix_text),
       action_line(next_action, assistant_source?),
       todo_context_line(context, next_action),
-      decision_line(card),
+      decision_line(card, next_action),
       why_line(card, context),
       prepared_action_line(card),
       evidence_line(card, context),
@@ -457,15 +457,37 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp source_health_note_mentions_source?(_note, _source), do: false
 
-  defp decision_line(card) when is_map(card) do
+  defp decision_line(card, next_action) when is_map(card) do
     decision = Map.get(card, "decision_prompt")
 
-    if present?(decision) do
+    if present?(decision) and not decision_restates_action?(decision, next_action) do
       "Decision: #{safe(truncate(decision, 220))}"
     end
   end
 
-  defp decision_line(_card), do: nil
+  defp decision_line(_card, _next_action), do: nil
+
+  defp decision_restates_action?(decision, next_action)
+       when is_binary(decision) and is_binary(next_action) do
+    action_key = repetition_key(next_action)
+    decision_key = decision |> strip_decision_label() |> repetition_key()
+
+    unwrapped_decision_key =
+      decision |> strip_decision_label() |> strip_decision_wrapper() |> repetition_key()
+
+    present?(action_key) and
+      (action_key == decision_key or action_key == unwrapped_decision_key)
+  end
+
+  defp decision_restates_action?(_decision, _next_action), do: false
+
+  defp strip_decision_label(value) when is_binary(value) do
+    String.replace(value, ~r/^\s*Decision:\s*/i, "")
+  end
+
+  defp strip_decision_wrapper(value) when is_binary(value) do
+    String.replace(value, ~r/^\s*(?:decide|choose)\s+whether\s+to\s+/i, "")
+  end
 
   defp why_line(card, already_rendered_context) when is_map(card) do
     why_now = Map.get(card, "why_now")

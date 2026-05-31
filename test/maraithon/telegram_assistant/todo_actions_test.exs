@@ -156,7 +156,7 @@ defmodule Maraithon.TelegramAssistant.TodoActionsTest do
 
     payload = TodoActions.telegram_payload(todo)
 
-    assert payload.text =~ "Decision: Decide whether to renew the domain and confirm it is done."
+    refute payload.text =~ "Decision: Decide whether to renew the domain and confirm it is done."
 
     assert payload.text =~
              "Why now: You asked Maraithon to track this as open work, and it is still open."

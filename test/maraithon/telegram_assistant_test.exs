@@ -1140,7 +1140,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert List.last(sends).text =~ "Renew the domain and confirm it is done."
     assert List.last(sends).text =~ "You want this tracked as an ongoing work item."
 
-    assert List.last(sends).text =~
+    refute List.last(sends).text =~
              "Decision: Decide whether to renew the domain and confirm it is done."
 
     assert List.last(sends).text =~
@@ -1483,7 +1483,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert payload.text =~ "Reply with the owner and the exact billing contact."
     assert payload.text =~ "Finance needs an owner confirmation for the invoice thread."
 
-    assert payload.text =~
+    refute payload.text =~
              "Decision: Decide whether to reply with the owner and the exact billing contact."
 
     refute payload.text =~ "Why now: Finance needs an owner confirmation for the invoice thread."
