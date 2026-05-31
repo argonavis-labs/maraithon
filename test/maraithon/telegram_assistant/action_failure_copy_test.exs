@@ -70,7 +70,9 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
       {:error, "DBConnection.ConnectionError token=secret stacktrace"},
       %{reason: :timeout, query: "select * from oauth_tokens"},
       "linear_lookup_failed: %{token: \"secret\" => :timeout}",
-      "missing_user_id"
+      "missing_user_id",
+      "Provider returned bad JSON while loading issues",
+      "Gateway timeout from Linear API"
     ]
 
     for reason <- reasons do
@@ -84,6 +86,8 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
       refute copy =~ "oauth_tokens"
       refute copy =~ "linear_lookup_failed"
       refute copy =~ "missing_user_id"
+      refute copy =~ "Provider returned"
+      refute copy =~ "Gateway timeout"
       refute String.contains?(String.downcase(copy), "try again")
     end
   end
@@ -132,6 +136,34 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopyTest do
     refute confirmation_copy =~ "tool_policy"
     refute denied_copy =~ "unknown_tool"
     refute denied_copy =~ "assistant action"
+  end
+
+  test "tool policy copy hides unsafe free-form messages" do
+    unsafe_copy =
+      ActionFailureCopy.tool_error(
+        {:tool_policy_denied,
+         %{
+           "reason_code" => "unexpected_policy_state",
+           "message" => "RuntimeError stacktrace HTTP 500 token=secret"
+         }}
+      )
+
+    safe_copy =
+      ActionFailureCopy.tool_error(
+        {:tool_policy_denied,
+         %{
+           "reason_code" => "custom_scope",
+           "message" => "That action is outside this automation's scope."
+         }}
+      )
+
+    assert unsafe_copy ==
+             "Check did not complete. No result was saved; use the latest message before continuing."
+
+    assert safe_copy == "That action is outside this automation's scope."
+    refute unsafe_copy =~ "RuntimeError"
+    refute unsafe_copy =~ "token=secret"
+    refute unsafe_copy =~ "HTTP 500"
   end
 
   test "linear lookup and prepared action copy hide raw persistence failures" do

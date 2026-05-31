@@ -70,13 +70,22 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
     "dbconnection",
     "ecto.",
     "external_account_id",
+    "gateway",
+    "http ",
+    "http_",
     "http_status",
+    "json",
     "oauth_tokens",
+    "password",
     "postgrex",
     "refresh_token",
+    "runtimeerror",
+    "secret",
     "stacktrace",
+    "timeout",
     "token=",
-    "traceback"
+    "traceback",
+    "upstream"
   ]
 
   def insight_action("google_account_reauth_required") do
@@ -122,6 +131,13 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   def todo_callback("google_account_not_connected"), do: "Connect Google first."
   def todo_callback("slack_workspace_not_connected"), do: "Connect Slack first."
   def todo_callback(_reason), do: @generic_todo_failure
+
+  def tool_error({:error, reason}), do: tool_error(reason)
+
+  def tool_error({policy_reason, decision})
+      when policy_reason in [:tool_policy_denied, :tool_policy_needs_confirmation] do
+    policy_decision_copy(policy_reason, decision)
+  end
 
   def tool_error(reason), do: reason |> normalize_reason() |> tool_error_for_code()
 
@@ -223,18 +239,12 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
         @generic_tool_failure
 
       true ->
-        reason
+        if safe_freeform_copy?(reason), do: reason, else: @generic_tool_failure
     end
   end
 
   defp tool_error_for_code(_reason), do: @generic_tool_failure
 
-  defp normalize_reason({policy_reason, decision})
-       when policy_reason in [:tool_policy_denied, :tool_policy_needs_confirmation] do
-    policy_decision_copy(policy_reason, decision)
-  end
-
-  defp normalize_reason({:error, reason}), do: normalize_reason(reason)
   defp normalize_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_reason(reason) when is_binary(reason), do: String.trim(reason)
   defp normalize_reason(_reason), do: @generic_tool_failure
@@ -271,14 +281,17 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
   defp policy_decision_message(decision) do
     case decision_value(decision, :message) do
       value when is_binary(value) ->
-        case String.trim(value) do
-          "" -> nil
-          trimmed -> trimmed
-        end
+        value
+        |> String.trim()
+        |> safe_policy_message()
 
       _ ->
         nil
     end
+  end
+
+  defp safe_policy_message(message) do
+    if safe_freeform_copy?(message), do: message
   end
 
   defp decision_value(decision, key) when is_map(decision) and is_atom(key) do
@@ -291,7 +304,16 @@ defmodule Maraithon.TelegramAssistant.ActionFailureCopy do
     lower = String.downcase(message)
 
     Enum.any?(@technical_message_markers, &String.contains?(lower, &1)) or
+      String.match?(lower, ~r/\bapi\b/) or
       String.contains?(message, ["{", "}", "=>"])
+  end
+
+  defp safe_freeform_copy?(""), do: false
+
+  defp safe_freeform_copy?(message) do
+    String.length(message) <= 220 and
+      not technical_message?(message) and
+      not code_like?(message)
   end
 
   defp code_like?(message) do
