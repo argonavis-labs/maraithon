@@ -60,7 +60,7 @@
               <%= @provider[:connect_block_reason] %>
             </span>
           <% @provider.provider == "desktop" -> %>
-            <span class="text-xs/5 text-zinc-400">Local sync</span>
+            <span class="text-xs/5 text-zinc-400">Local context</span>
           <% connection_primary_action_visible_on_detail?(@provider) -> %>
             <.link
               href={connection_primary_url(@provider)}
@@ -183,7 +183,7 @@
                 Updated <%= format_datetime(@token.updated_at, @timezone_info) %>
               </p>
             <% else %>
-              <p class="text-zinc-500">Connect this account to begin syncing.</p>
+              <p class="text-zinc-500">Connect this account to make context available.</p>
             <% end %>
 
             <%= if @provider[:disconnectable?] do %>

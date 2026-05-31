@@ -209,11 +209,12 @@ defmodule MaraithonWeb.NavigationControllerTest do
       assert detail_html =~ "founder@example.com"
 
       assert detail_html =~
-               "Reconnect this account so Maraithon can keep syncing in the background."
+               "Reconnect this account so Maraithon can keep this context current."
 
       assert detail_html =~ "reconnect needed"
       assert detail_html =~ "Reconnect"
       assert detail_html =~ "Disconnect"
+      refute detail_html =~ "keep syncing"
       refute detail_html =~ "Stored Grant"
       refute detail_html =~ "Token refresh failed"
       refute detail_html =~ "refresh token"

@@ -60,15 +60,15 @@ defmodule MaraithonWeb.ConnectorsHTML do
         "Connect Telegram first, then add #{Map.get(provider, :label, "this source")}."
 
       connection_action_enabled?(provider) ->
-        "#{connection_primary_action(provider)} to start syncing."
+        "#{connection_primary_action(provider)} to make context available."
 
       true ->
-        "Finish connecting this source to start syncing."
+        "Finish connecting this source to make context available."
     end
   end
 
   def empty_accounts_message(_provider, _telegram_connected),
-    do: "Finish connecting this source to start syncing."
+    do: "Finish connecting this source to make context available."
 
   def connection_error_detail(%{details: details}), do: public_error_detail(details)
   def connection_error_detail(_error), do: nil

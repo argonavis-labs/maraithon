@@ -40,6 +40,31 @@ defmodule MaraithonWeb.ConnectorsHTMLTest do
     refute ConnectorsHTML.provider_subtitle(%{}) =~ "No details yet"
   end
 
+  test "empty account messages describe the user outcome" do
+    configured_provider = %{
+      provider: "google",
+      label: "Google",
+      configured?: true,
+      requires_telegram?: false
+    }
+
+    blocked_provider = %{
+      provider: "slack",
+      label: "Slack",
+      configured?: false,
+      requires_telegram?: false
+    }
+
+    assert ConnectorsHTML.empty_accounts_message(configured_provider, true) ==
+             "Connect Google to make context available."
+
+    assert ConnectorsHTML.empty_accounts_message(blocked_provider, true) ==
+             "Finish connecting this source to make context available."
+
+    refute ConnectorsHTML.empty_accounts_message(configured_provider, true) =~ "sync"
+    refute ConnectorsHTML.empty_accounts_message(blocked_provider, true) =~ "sync"
+  end
+
   test "connection token summary avoids implementation terms" do
     summary =
       ConnectorsHTML.connection_token_summary(%{

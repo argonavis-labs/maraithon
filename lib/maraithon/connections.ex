@@ -1489,7 +1489,7 @@ defmodule Maraithon.Connections do
   defp token_account_status_note(_token, _account_by_provider), do: "Healthy"
 
   defp reconnect_account_status_note,
-    do: "Reconnect this account so Maraithon can keep syncing in the background."
+    do: "Reconnect this account so Maraithon can keep this context current."
 
   defp token_or_account_updated_at(%Token{} = token, account_by_provider)
        when is_map(account_by_provider) do
