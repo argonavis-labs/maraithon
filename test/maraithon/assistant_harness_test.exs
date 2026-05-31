@@ -97,7 +97,13 @@ defmodule Maraithon.AssistantHarnessTest do
       "try again",
       "ask me for a narrower",
       "taking longer than it should",
-      "model is still busy"
+      "model",
+      "llm",
+      "reasoning",
+      "tool",
+      "budget",
+      "run context",
+      "same_tool_args"
     ]
 
     messages = [
@@ -106,6 +112,12 @@ defmodule Maraithon.AssistantHarnessTest do
       AssistantHarness.failure_message(:tool_step_limit),
       AssistantHarness.failure_message({:llm_busy, 1_000}),
       AssistantHarness.failure_message({:assistant_harness_tool_loop_detected, "list_todos", 3}),
+      AssistantHarness.failure_message(
+        {:assistant_harness_tool_loop_detected, "get_open_loops", 3}
+      ),
+      AssistantHarness.failure_message(
+        {:assistant_harness_tool_loop_detected, "not_real_tool", 3}
+      ),
       AssistantHarness.failure_message(
         {:assistant_harness_tool_loop_detected, "list_todos", 3, "same_tool_args", %{}}
       ),
@@ -122,6 +134,7 @@ defmodule Maraithon.AssistantHarnessTest do
 
     refute Enum.any?(messages, &String.contains?(&1, "I "))
     refute Enum.any?(messages, &String.contains?(&1, "partial evidence"))
+    assert Enum.any?(messages, &String.contains?(&1, "open work"))
   end
 
   test "builds model requests with runtime policy instead of prompt text alone" do

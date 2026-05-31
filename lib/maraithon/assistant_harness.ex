@@ -192,31 +192,31 @@ defmodule Maraithon.AssistantHarness do
   end
 
   def failure_message(:timeout) do
-    "Maraithon saved the context gathered so far and stopped before relying on incomplete evidence."
+    "Maraithon saved what it found and stopped before making a weak call from incomplete evidence."
   end
 
   def failure_message(:llm_turn_limit) do
-    "Maraithon saved the run context after the reasoning loop stopped adding useful evidence, avoiding repeated work."
+    "Maraithon saved what it found and stopped before repeating the same checks."
   end
 
   def failure_message(:tool_step_limit) do
-    "Maraithon saved the evidence gathered so far after reaching the tool budget before a complete answer."
+    "Maraithon saved what it found and stopped before a complete answer would require more checking."
   end
 
   def failure_message({:llm_busy, _retry_after}) do
-    "Maraithon saved the request context because model capacity stayed saturated before the turn could finish."
+    "Maraithon saved the request and stopped before sending an answer it could not verify."
   end
 
   def failure_message({:assistant_harness_tool_loop_detected, tool, _count}) do
-    "Maraithon saved the useful evidence after repeated identical results from #{human_tool_name(tool)}, avoiding the same call."
+    "Maraithon saved the useful evidence after repeated identical results from #{human_tool_name(tool)}, instead of checking the same place again."
   end
 
-  def failure_message({:assistant_harness_tool_loop_detected, tool, _count, class, _loop}) do
-    "Maraithon saved the useful evidence after a #{String.replace(to_string(class), "_", " ")} loop with #{human_tool_name(tool)}, avoiding the same call."
+  def failure_message({:assistant_harness_tool_loop_detected, tool, _count, _class, _loop}) do
+    "Maraithon saved the useful evidence after repeated checks in #{human_tool_name(tool)}, instead of checking the same place again."
   end
 
   def failure_message(_reason) do
-    "Maraithon saved the run context because the turn did not finish cleanly, avoiding guesses from incomplete evidence."
+    "Maraithon saved what it found and stopped before guessing from incomplete evidence."
   end
 
   def build_step_request(payload, opts \\ []) when is_map(payload) and is_list(opts) do
@@ -1802,13 +1802,154 @@ defmodule Maraithon.AssistantHarness do
   defp normalize_message(value) when is_binary(value), do: String.trim(value)
   defp normalize_message(_value), do: ""
 
+  defp human_tool_name(tool)
+       when tool in [
+              "get_open_work_summary",
+              "get_open_loops",
+              "list_todos",
+              "upsert_todos",
+              "update_todo",
+              "resolve_todo",
+              "delete_todo"
+            ],
+       do: "open work"
+
+  defp human_tool_name("list_connected_accounts"), do: "connected accounts"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "gmail_search_messages",
+              "gmail_get_message",
+              "gmail_send_message",
+              "gmail_drafts",
+              "draft_message",
+              "messages_search",
+              "messages_get",
+              "messages_list_recent",
+              "messages_chats_recent"
+            ],
+       do: "messages"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "calendar_list_events",
+              "calendar_events_around",
+              "calendar_events_for_person",
+              "calendar_search",
+              "calendar_event_get"
+            ],
+       do: "calendar"
+
+  defp human_tool_name(tool)
+       when tool in ["slack_search_messages", "slack_get_thread_context", "slack_post_message"],
+       do: "Slack"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "linear_list_or_lookup",
+              "linear_create_issue",
+              "linear_create_comment",
+              "linear_update_issue_state"
+            ],
+       do: "Linear"
+
+  defp human_tool_name(tool)
+       when tool in ["notaui_list_tasks", "notaui_complete_task", "notaui_update_task"],
+       do: "Notaui"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_people",
+              "get_relationship_context",
+              "learn_relationship_context",
+              "link_person_data",
+              "upsert_person",
+              "merge_people",
+              "delete_person"
+            ],
+       do: "people"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_preferences",
+              "remember_preferences",
+              "forget_preference",
+              "record_memory_feedback"
+            ],
+       do: "preferences"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_memories",
+              "recall_memory",
+              "write_memory",
+              "update_memory_confidence",
+              "forget_memory"
+            ],
+       do: "memory"
+
+  defp human_tool_name(tool)
+       when tool in ["list_projects", "inspect_project", "update_project_scope"],
+       do: "projects"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_scheduled_tasks",
+              "create_scheduled_task",
+              "pause_scheduled_task",
+              "cancel_scheduled_task"
+            ],
+       do: "scheduled work"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "list_implementation_runs",
+              "start_implementation_run",
+              "update_implementation_run"
+            ],
+       do: "implementation work"
+
+  defp human_tool_name(tool)
+       when tool in ["list_agents", "inspect_agent", "prepare_agent_action", "query_agent"],
+       do: "automations"
+
+  defp human_tool_name(tool)
+       when tool in ["notes_search", "notes_get", "notes_list_recent"],
+       do: "Notes"
+
+  defp human_tool_name(tool)
+       when tool in ["reminders_open", "reminders_due_soon", "reminders_search", "reminders_get"],
+       do: "Reminders"
+
+  defp human_tool_name(tool)
+       when tool in ["files_search", "files_get", "files_list_recent"],
+       do: "files"
+
+  defp human_tool_name(tool)
+       when tool in [
+              "browser_history_recent",
+              "browser_history_by_host",
+              "browser_history_search",
+              "browser_history_get"
+            ],
+       do: "browser history"
+
+  defp human_tool_name("review_connected_context"), do: "connected context"
+  defp human_tool_name("recall_anywhere"), do: "connected context"
+
   defp human_tool_name(tool) when is_binary(tool) do
     tool
-    |> String.replace("_", " ")
-    |> String.replace(".", " ")
+    |> String.replace(~r/(?:^|[_.\s-])tool(?:$|[_.\s-])/i, " ")
+    |> String.replace(~r/[_.-]+/, " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> case do
+      "" -> "that source"
+      name -> name
+    end
   end
 
-  defp human_tool_name(_tool), do: "that tool"
+  defp human_tool_name(_tool), do: "that source"
 
   defp map_value(map, key, default) when is_map(map) do
     Map.get(map, key) || Map.get(map, existing_atom_key(key)) || default
