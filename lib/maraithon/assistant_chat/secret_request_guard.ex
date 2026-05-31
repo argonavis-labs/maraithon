@@ -3,6 +3,7 @@ defmodule Maraithon.AssistantChat.SecretRequestGuard do
 
   @credential_terms ~r/\b(api\s*key|apikey|access\s*key|private\s*key|bearer\s*token|refresh\s*token|access\s*token|token|secret|password|credential|credentials)\b/i
   @disclosure_terms ~r/\b(what'?s|what\s+is|show|send|give|display|print|tell|paste|copy|reveal|read|share)\b/i
+  @credential_value_terms ~r/\b(which|current|configured|using|used|active|actual|value|set\s+to|stored|have)\b/i
 
   @providers [
     %{
@@ -56,7 +57,9 @@ defmodule Maraithon.AssistantChat.SecretRequestGuard do
   defp normalize_runtime(_runtime), do: []
 
   def disclosure_request?(text) when is_binary(text) do
-    Regex.match?(@disclosure_terms, text) and secret_reference?(text)
+    secret_reference?(text) and
+      (Regex.match?(@disclosure_terms, text) or
+         Regex.match?(@credential_value_terms, text))
   end
 
   def disclosure_request?(_text), do: false
