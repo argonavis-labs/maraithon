@@ -255,6 +255,46 @@ defmodule MaraithonWeb.DashboardLiveTest do
     refute_html_contains(html, "99.0%")
   end
 
+  test "onboarding preview errors stay product-facing", %{conn: conn} do
+    original_module = Application.get_env(:maraithon, :onboarding_proof_module)
+    original_response = Application.get_env(:maraithon, :onboarding_proof_stub_response)
+
+    on_exit(fn ->
+      restore_env(:onboarding_proof_module, original_module)
+      restore_env(:onboarding_proof_stub_response, original_response)
+    end)
+
+    Application.put_env(
+      :maraithon,
+      :onboarding_proof_module,
+      Maraithon.TestSupport.OnboardingProofStub
+    )
+
+    Application.put_env(
+      :maraithon,
+      :onboarding_proof_stub_response,
+      {:error, {:internal, "google_account_not_connected", "proof_build_failed"}}
+    )
+
+    {:ok, _token} =
+      OAuth.store_tokens(@user_email, "google:preview@example.com", %{
+        access_token: "preview-token",
+        scopes: [],
+        metadata: %{"account_email" => "preview@example.com"}
+      })
+
+    {:ok, view, _html} = live(conn, "/dashboard")
+    html = render_async(view)
+
+    assert html =~ "Could not prepare recent examples."
+    assert html =~ "Maraithon could not prepare recent examples from your connected accounts."
+    assert html =~ "Refresh the preview"
+    refute_html_contains(html, "onboarding proof")
+    refute_html_contains(html, "proof_build_failed")
+    refute_html_contains(html, "google_account_not_connected")
+    refute_html_contains(html, "temporarily unavailable")
+  end
+
   test "creates a project and project context from the dashboard", %{conn: conn} do
     {:ok, view, _html} = live(conn, "/dashboard")
 

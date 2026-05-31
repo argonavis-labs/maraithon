@@ -79,6 +79,8 @@ defmodule MaraithonWeb.OperationFailureCopyTest do
       OperationFailureCopy.memory(:archive, @internal_reason)
     ]
 
+    assert "Maraithon could not prepare recent examples from your connected accounts. Refresh the preview, or start with the automation builder." in copies
+
     assert "Could not fetch platform logs right now. Refresh logs before reviewing incidents." in copies
 
     assert "Could not archive that saved context. Refresh saved context before archiving it." in copies

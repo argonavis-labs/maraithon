@@ -2,7 +2,7 @@ defmodule MaraithonWeb.OperationFailureCopy do
   @moduledoc false
 
   def onboarding_preview(_reason) do
-    "Could not load the readiness preview. Refresh the dashboard before continuing."
+    "Maraithon could not prepare recent examples from your connected accounts. Refresh the preview, or start with the automation builder."
   end
 
   def fly_logs(_reason) do

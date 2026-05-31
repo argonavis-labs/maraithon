@@ -1736,9 +1736,12 @@ defmodule MaraithonWeb.DashboardLive do
                 <% end %>
               <% :error -> %>
                 <div class="px-4 py-6 sm:px-6">
-                  <p class="text-sm/6 font-medium text-zinc-950">Preview temporarily unavailable.</p>
+                  <p class="text-sm/6 font-medium text-zinc-950">
+                    Could not prepare recent examples.
+                  </p>
                   <p class="mt-1 text-sm/6 text-zinc-600">
-                    Maraithon could not build the onboarding proof just now. You can refresh this preview or go straight to the automation builder.
+                    <%= @onboarding_preview.error ||
+                      "Refresh the preview, or start with the automation builder." %>
                   </p>
                 </div>
               <% _ -> %>
