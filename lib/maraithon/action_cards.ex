@@ -1233,7 +1233,7 @@ defmodule Maraithon.ActionCards do
   defp telegram_learning_line(card) do
     case read_field(card, "attention_mode") do
       "stale_check" ->
-        "Future open-work reminders will use this keep-or-dismiss choice."
+        "This choice helps Maraithon keep older work visible only when it still matters."
 
       _ ->
         nil
@@ -1311,7 +1311,7 @@ defmodule Maraithon.ActionCards do
   defp mobile_learning_line(card) do
     case read_field(card, "attention_mode") do
       "stale_check" ->
-        "Future open-work reminders will use this keep-or-dismiss choice."
+        "This choice helps Maraithon keep older work visible only when it still matters."
 
       _ ->
         nil

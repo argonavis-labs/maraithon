@@ -3845,7 +3845,7 @@ defmodule MaraithonWeb.DashboardLive do
   defp todo_learning_text(card) do
     case card do
       %{"attention_mode" => "stale_check"} ->
-        "Future open-work reminders will use this keep-or-dismiss choice."
+        "This choice helps Maraithon keep older work visible only when it still matters."
 
       _ ->
         nil

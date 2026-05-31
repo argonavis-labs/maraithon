@@ -693,7 +693,10 @@ defmodule Maraithon.ActionCardsTest do
     refute rendered =~ "older todo"
     refute rendered =~ "stale follow-up"
     refute rendered =~ "not treat it as urgent"
-    assert rendered =~ "Future open-work reminders will use this keep-or-dismiss choice."
+
+    assert rendered =~
+             "This choice helps Maraithon keep older work visible only when it still matters."
+
     refute rendered =~ "teach Maraithon"
   end
 

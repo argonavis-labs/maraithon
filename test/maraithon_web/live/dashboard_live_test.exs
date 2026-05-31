@@ -1106,7 +1106,9 @@ defmodule MaraithonWeb.DashboardLiveTest do
     html = render(view)
 
     assert html =~ "Should this older follow-up"
-    assert html =~ "Future open-work reminders will use this keep-or-dismiss choice."
+
+    assert html =~
+             "This choice helps Maraithon keep older work visible only when it still matters."
 
     assert has_element?(
              view,
