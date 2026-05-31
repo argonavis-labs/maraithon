@@ -973,7 +973,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert billing_message
     assert oauth_message
     assert billing_message.text =~ "Reply in-thread and send the follow-through."
-    assert billing_message.text =~ "This thread still needs a reply from you."
+    assert billing_message.text =~ "This thread is waiting on your reply."
     refute billing_message.text =~ "Billing account past due"
     refute billing_message.text =~ "Maraithon Todo"
     refute billing_message.text =~ "About:"
@@ -1004,6 +1004,8 @@ defmodule Maraithon.TelegramAssistantTest do
 
     assert Enum.count(sends_after_resolution) == 5
     assert Enum.at(sends_after_resolution, 3).text =~ "Billing is closed"
+    assert Enum.at(sends_after_resolution, 3).text =~ "remaining work is ready for a decision"
+    refute Enum.at(sends_after_resolution, 3).text =~ "still open"
 
     assert List.last(sends_after_resolution).text =~
              "Reply in-thread and send the follow-through."

@@ -1206,8 +1206,25 @@ defmodule Maraithon.TelegramAssistant.Runner do
       end
 
     UserFacingCopy.open_work_language(intro)
+    |> polish_todo_digest_remaining_intro()
     |> polish_todo_digest_first_person_intro()
   end
+
+  defp polish_todo_digest_remaining_intro(value) when is_binary(value) do
+    value
+    |> String.replace(
+      ~r/\bhere(?:'s|\s+is)\s+what\s+is\s+still\s+open\.?/iu,
+      "The remaining work is ready for a decision."
+    )
+    |> String.replace(
+      ~r/\bhere(?:'s|\s+is)\s+what(?:'s|\s+is)\s+still\s+open\.?/iu,
+      "The remaining work is ready for a decision."
+    )
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp polish_todo_digest_remaining_intro(value), do: value
 
   defp process_todo_digest_intro?(value) when is_binary(value) do
     String.match?(

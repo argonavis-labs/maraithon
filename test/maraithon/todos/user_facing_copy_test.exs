@@ -207,7 +207,10 @@ defmodule Maraithon.Todos.UserFacingCopyTest do
 
   test "rewrites generic user response and decision copy into direct action copy" do
     assert UserFacingCopy.polish_text("This Gmail thread still needs a user response.") ==
-             "This Gmail thread still needs your reply."
+             "This Gmail thread is waiting on your reply."
+
+    assert UserFacingCopy.polish_text("This thread still needs a reply from you.") ==
+             "This thread is waiting on your reply."
 
     assert UserFacingCopy.polish_text(
              "Rippling needs a user response before onboarding can continue."

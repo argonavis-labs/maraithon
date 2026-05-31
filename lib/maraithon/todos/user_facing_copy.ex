@@ -138,6 +138,14 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/\bopen loops\b/i, "open follow-ups")
     |> String.replace(~r/\bopen loop\b/i, "open follow-up")
     |> String.replace(~r/\breply loops\b/i, "reply threads")
+    |> String.replace(
+      ~r/\bThis((?:\s+\w+)?\s+thread)\s+still\s+needs\s+a\s+reply\s+from\s+you\.?/i,
+      "This\\1 is waiting on your reply."
+    )
+    |> String.replace(
+      ~r/\bThis((?:\s+\w+)?\s+thread)\s+still\s+needs\s+(?:your\s+reply|a\s+user\s+response)\.?/i,
+      "This\\1 is waiting on your reply."
+    )
     |> String.replace(~r/\bneeds a user response\b/i, "needs your reply")
     |> String.replace(~r/\bneeds user response\b/i, "needs your reply")
     |> String.replace(~r/\brequires a user response\b/i, "needs your reply")

@@ -121,6 +121,8 @@ private extension String {
             (#"\bopen loops\b"#, "open follow-ups"),
             (#"\bopen loop\b"#, "open follow-up"),
             (#"\breply loops\b"#, "reply threads"),
+            (#"\bThis((?:\s+\w+)?\s+thread)\s+still\s+needs\s+a\s+reply\s+from\s+you\.?"#, "This$1 is waiting on your reply."),
+            (#"\bThis((?:\s+\w+)?\s+thread)\s+still\s+needs\s+(?:your\s+reply|a\s+user\s+response)\.?"#, "This$1 is waiting on your reply."),
             (#"\bneeds a user response\b"#, "needs your reply"),
             (#"\bneeds user response\b"#, "needs your reply"),
             (#"\brequires a user response\b"#, "needs your reply"),

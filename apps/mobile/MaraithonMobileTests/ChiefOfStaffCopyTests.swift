@@ -68,7 +68,11 @@ struct ChiefOfStaffCopyTests {
     func rewritesGenericUserResponseAndDecisionCopy() {
         #expect(
             ChiefOfStaffCopy.clean("This Gmail thread still needs a user response.") ==
-                "This Gmail thread still needs your reply."
+                "This Gmail thread is waiting on your reply."
+        )
+        #expect(
+            ChiefOfStaffCopy.clean("This thread still needs a reply from you.") ==
+                "This thread is waiting on your reply."
         )
         #expect(
             ChiefOfStaffCopy.clean("Rippling needs a user response before onboarding can continue.") ==
