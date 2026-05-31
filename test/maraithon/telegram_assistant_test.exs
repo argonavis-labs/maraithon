@@ -2151,7 +2151,7 @@ defmodule Maraithon.TelegramAssistantTest do
     assert Enum.count(Enum.filter(events, &(&1.type == :edit))) == 1
 
     final_edit = Enum.find(events, &(&1.type == :edit))
-    assert final_edit.text =~ "No pending open work is ready to review"
+    assert final_edit.text =~ "Nothing needs review right now"
     assert final_edit.text =~ "Inbox-backed follow-up is not fully covered"
     assert final_edit.text =~ "Next: Connect Gmail"
     refute final_edit.text == "Open work reviewed."

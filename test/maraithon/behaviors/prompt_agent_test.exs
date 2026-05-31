@@ -95,7 +95,11 @@ defmodule Maraithon.Behaviors.PromptAgentTest do
 
       assert prompt =~ "## Related Long-Term Memory"
       assert prompt =~ "No relevant long-term memories matched this context."
-      assert prompt =~ "No open work is ready to review."
+      assert prompt =~ "Nothing needs review right now."
+
+      assert prompt =~
+               "Only create or mention follow-up when connected context provides a concrete next move."
+
       refute prompt =~ "No confirmed long-term user profile yet"
       refute prompt =~ "No open work found"
       refute prompt =~ "durable"

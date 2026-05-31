@@ -3902,7 +3902,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
 
   defp open_work_count_line(0, 0, source_health) do
     if source_coverage_gap?(source_health) do
-      "No pending open work is ready to review yet, but some context is unavailable."
+      "Nothing needs review right now, but some context is unavailable."
     else
       open_work_count_line(0, 0)
     end
@@ -3912,7 +3912,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     do: open_work_count_line(insight_count, todo_count)
 
   defp open_work_count_line(0, 0),
-    do: "No pending open work is ready to review right now."
+    do: "Nothing needs review right now."
 
   defp open_work_count_line(insight_count, todo_count) do
     parts =

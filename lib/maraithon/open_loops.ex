@@ -1038,8 +1038,11 @@ defmodule Maraithon.OpenLoops do
     ]
     |> Enum.reject(&(&1 == ""))
     |> case do
-      [] -> "No open work is ready to review."
-      sections -> Enum.join(sections, "\n")
+      [] ->
+        "Nothing needs review right now. Only use open-loop tools when connected context provides a concrete next move."
+
+      sections ->
+        Enum.join(sections, "\n")
     end
   end
 

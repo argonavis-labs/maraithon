@@ -181,7 +181,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
     assert [%{status: "empty", latest_visible_email_at: nil}] =
              get_in(result, [:source_health, :gmail, :accounts])
 
-    assert result.summary == "No pending open work is ready to review right now."
+    assert result.summary == "Nothing needs review right now."
     assert result.next_action == "No follow-up is waiting right now."
 
     refute result.summary =~ "I do not"
@@ -248,7 +248,7 @@ defmodule Maraithon.TelegramAssistantToolboxTest do
              "Open the Mac companion app"
 
     assert result.summary =~
-             "No pending open work is ready to review yet, but some context is unavailable."
+             "Nothing needs review right now, but some context is unavailable."
 
     assert result.summary =~ "The Mac companion has not checked in recently"
 
