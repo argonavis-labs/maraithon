@@ -242,6 +242,9 @@ configured_llm_provider = System.get_env("LLM_PROVIDER", "") |> String.trim() |>
 proactive_check_in_interval_ms =
   String.to_integer(System.get_env("PROACTIVE_CHECK_IN_INTERVAL_MS", "600000"))
 
+todo_completion_sweep_interval_ms =
+  String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_INTERVAL_MS", "1800000"))
+
 optional_boolean_env = fn name ->
   case System.get_env(name) do
     nil -> nil
@@ -426,6 +429,16 @@ config :maraithon, Maraithon.Runtime,
     ),
   proactive_check_in_batch_size:
     String.to_integer(System.get_env("PROACTIVE_CHECK_IN_BATCH_SIZE", "25")),
+  todo_completion_sweep_interval_ms: todo_completion_sweep_interval_ms,
+  todo_completion_sweep_initial_delay_ms:
+    String.to_integer(
+      System.get_env(
+        "TODO_COMPLETION_SWEEP_INITIAL_DELAY_MS",
+        Integer.to_string(todo_completion_sweep_interval_ms)
+      )
+    ),
+  todo_completion_sweep_user_limit:
+    String.to_integer(System.get_env("TODO_COMPLETION_SWEEP_USER_LIMIT", "100")),
   oauth_refresh_interval_ms:
     String.to_integer(System.get_env("OAUTH_REFRESH_INTERVAL_MS", "300000")),
   oauth_refresh_lookahead_seconds:

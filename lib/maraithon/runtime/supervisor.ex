@@ -48,6 +48,7 @@ defmodule Maraithon.Runtime.Supervisor do
           Maraithon.Runtime.DogfoodDigest,
           Maraithon.Runtime.BriefNotifier,
           Maraithon.Runtime.ProactiveCheckIn,
+          Maraithon.Runtime.TodoCompletionSweep,
           Maraithon.Runtime.TokenRefresher,
           Maraithon.TelegramAssistant.RunReaper
         ]
