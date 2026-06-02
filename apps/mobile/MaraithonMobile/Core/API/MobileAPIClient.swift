@@ -81,6 +81,10 @@ struct MobileAPIClient {
         let todos: [RemoteTodo]
     }
 
+    struct TodoActivityResponse: Decodable {
+        let activity: [RemoteTodoActivity]
+    }
+
     struct TodoResponse: Decodable {
         let todo: RemoteTodo
     }
@@ -152,6 +156,70 @@ struct MobileAPIClient {
             self.status = status
             self.closedAt = closedAt
             self.actionCard = actionCard
+        }
+    }
+
+    struct RemoteTodoActivity: Decodable, Equatable, Identifiable {
+        let id: String
+        let eventType: String
+        let actorType: String
+        let actorID: String?
+        let actorLabel: String?
+        let todoID: String?
+        let todoTitle: String?
+        let todoSource: String?
+        let metadata: [String: StringValue]
+        let occurredAt: Date
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case eventType = "event_type"
+            case actorType = "actor_type"
+            case actorID = "actor_id"
+            case actorLabel = "actor_label"
+            case todoID = "todo_id"
+            case todoTitle = "todo_title"
+            case todoSource = "todo_source"
+            case metadata
+            case occurredAt = "occurred_at"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            eventType = try container.decode(String.self, forKey: .eventType)
+            actorType = try container.decode(String.self, forKey: .actorType)
+            actorID = try container.decodeIfPresent(String.self, forKey: .actorID)
+            actorLabel = try container.decodeIfPresent(String.self, forKey: .actorLabel)
+            todoID = try container.decodeIfPresent(String.self, forKey: .todoID)
+            todoTitle = try container.decodeIfPresent(String.self, forKey: .todoTitle)
+            todoSource = try container.decodeIfPresent(String.self, forKey: .todoSource)
+            metadata = try container.decodeIfPresent([String: StringValue].self, forKey: .metadata) ?? [:]
+            occurredAt = try container.decode(Date.self, forKey: .occurredAt)
+        }
+
+        init(
+            id: String,
+            eventType: String,
+            actorType: String,
+            actorID: String? = nil,
+            actorLabel: String? = nil,
+            todoID: String? = nil,
+            todoTitle: String? = nil,
+            todoSource: String? = nil,
+            metadata: [String: StringValue] = [:],
+            occurredAt: Date
+        ) {
+            self.id = id
+            self.eventType = eventType
+            self.actorType = actorType
+            self.actorID = actorID
+            self.actorLabel = actorLabel
+            self.todoID = todoID
+            self.todoTitle = todoTitle
+            self.todoSource = todoSource
+            self.metadata = metadata
+            self.occurredAt = occurredAt
         }
     }
 
@@ -356,6 +424,16 @@ struct MobileAPIClient {
             responseType: TodosResponse.self
         )
         return response.todos
+    }
+
+    func listTodoActivity(sessionToken: String, limit: Int = 100) async throws -> [RemoteTodoActivity] {
+        let clampedLimit = max(1, min(limit, 200))
+        let response: TodoActivityResponse = try await send(
+            path: "/todo-activity?limit=\(clampedLimit)",
+            sessionToken: sessionToken,
+            responseType: TodoActivityResponse.self
+        )
+        return response.activity
     }
 
     func createTodo(sessionToken: String, payload: [String: Any]) async throws -> RemoteTodo {

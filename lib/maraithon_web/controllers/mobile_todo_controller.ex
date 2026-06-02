@@ -32,12 +32,21 @@ defmodule MaraithonWeb.MobileTodoController do
     json(conn, %{todos: Enum.map(todos, &MobileJSON.todo(&1, json_opts))})
   end
 
+  def activity(conn, params) do
+    events =
+      conn.assigns.current_user.id
+      |> Todos.list_activity_for_user(limit: limit(params))
+      |> Enum.map(&MobileJSON.todo_activity_event/1)
+
+    json(conn, %{activity: events})
+  end
+
   def create(conn, params) do
     user_id = conn.assigns.current_user.id
     attrs = todo_params(params)
     json_opts = json_opts(params, user_id)
 
-    case Todos.upsert_many(user_id, [attrs]) do
+    case Todos.upsert_many(user_id, [attrs], user_actor_opts(user_id)) do
       {:ok, [todo]} ->
         conn
         |> put_status(:created)
@@ -69,7 +78,7 @@ defmodule MaraithonWeb.MobileTodoController do
     user_id = conn.assigns.current_user.id
     json_opts = json_opts(params, user_id)
 
-    case Todos.update_for_user(user_id, todo_id, todo_params(params)) do
+    case Todos.update_for_user(user_id, todo_id, todo_params(params), user_actor_opts(user_id)) do
       {:ok, todo} ->
         json(conn, %{todo: MobileJSON.todo(todo, json_opts)})
 
@@ -90,7 +99,7 @@ defmodule MaraithonWeb.MobileTodoController do
     note = text_param(params, "note") || "Dismissed from mobile."
     json_opts = json_opts(params, user_id)
 
-    case Todos.dismiss(user_id, todo_id, note: note) do
+    case Todos.dismiss(user_id, todo_id, Keyword.put(user_actor_opts(user_id), :note, note)) do
       {:ok, todo} ->
         json(conn, %{
           ok: true,
@@ -132,13 +141,15 @@ defmodule MaraithonWeb.MobileTodoController do
 
   defp apply_todo_action(user_id, todo_id, action, params) do
     note = text_param(params, "note")
+    actor_opts = user_actor_opts(user_id)
+    note_opts = Keyword.put(actor_opts, :note, note)
 
     case normalize_action(action) do
       "done" ->
-        Todos.mark_done(user_id, todo_id, note: note)
+        Todos.mark_done(user_id, todo_id, note_opts)
 
       "dismiss" ->
-        Todos.dismiss(user_id, todo_id, note: note)
+        Todos.dismiss(user_id, todo_id, note_opts)
 
       "important" ->
         Todos.mark_important(user_id, todo_id, source: "mobile")
@@ -150,7 +161,7 @@ defmodule MaraithonWeb.MobileTodoController do
         Todos.snooze(user_id, todo_id, snooze_until(params), note: note)
 
       "see_less" ->
-        case Todos.see_less_like(user_id, todo_id, source: "mobile") do
+        case Todos.see_less_like(user_id, todo_id, Keyword.put(actor_opts, :source, "mobile")) do
           {:ok, %{todo: todo}} -> {:ok, todo}
           {:error, reason} -> {:error, reason}
         end
@@ -180,6 +191,10 @@ defmodule MaraithonWeb.MobileTodoController do
   end
 
   defp normalize_action(_action), do: ""
+
+  defp user_actor_opts(user_id) do
+    [actor_type: "user", actor_id: user_id, actor_label: "User"]
+  end
 
   defp snooze_until(params) do
     case text_param(params, "snoozed_until") || text_param(params, "until") do

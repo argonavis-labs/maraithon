@@ -5,12 +5,21 @@ struct AccountMenuButton: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(SessionStore.self) private var sessionStore
     @State private var isConfirmingReset = false
+    @State private var isShowingActivityLog = false
     @State private var resetError: String?
 
     var body: some View {
         Menu {
             if let email = sessionStore.user?.email {
                 Label(email, systemImage: "person.crop.circle")
+            }
+
+            if sessionStore.user?.sessionToken != nil {
+                Button {
+                    isShowingActivityLog = true
+                } label: {
+                    Label(AccountMenuCopy.activityLogLabel, systemImage: "list.bullet.rectangle")
+                }
             }
 
             if showsStarterDataReset {
@@ -53,6 +62,9 @@ struct AccountMenuButton: View {
         } message: {
             Text(resetError ?? AccountMenuCopy.resetFailedFallback)
         }
+        .sheet(isPresented: $isShowingActivityLog) {
+            TodoActivityLogView()
+        }
     }
 
     private var showsStarterDataReset: Bool {
@@ -73,6 +85,7 @@ struct AccountMenuButton: View {
 }
 
 enum AccountMenuCopy {
+    static let activityLogLabel = "Activity Log"
     static let resetLocalWorkspaceLabel = "Reset Local Workspace"
     static let resetLocalWorkspaceTitle = "Reset local workspace?"
     static let resetLocalWorkspaceMessage =

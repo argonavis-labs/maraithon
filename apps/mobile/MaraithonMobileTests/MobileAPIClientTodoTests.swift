@@ -118,6 +118,47 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
+    func listTodoActivityRequestsDebugActivityLog() async throws {
+        let recorder = HTTPRequestRecorder()
+        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
+        client.session = recorder.session(
+            statusCode: 200,
+            body:
+                """
+                {
+                  "activity": [
+                    {
+                      "id": "activity-1",
+                      "event_type": "marked_done",
+                      "actor_type": "agent",
+                      "actor_id": "completion_sweep",
+                      "actor_label": "Maraithon",
+                      "todo_id": "11111111-2222-3333-4444-555555555555",
+                      "todo_title": "Send investor update",
+                      "todo_source": "gmail",
+                      "metadata": {"note": "Detected completion."},
+                      "occurred_at": "2026-06-02T05:00:00Z"
+                    }
+                  ]
+                }
+                """
+        )
+
+        let activity = try await client.listTodoActivity(sessionToken: "session-token", limit: 500)
+        let request = try #require(recorder.requests.first)
+        let event = try #require(activity.first)
+
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todo-activity?limit=200")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
+        #expect(event.eventType == "marked_done")
+        #expect(event.actorType == "agent")
+        #expect(event.actorID == "completion_sweep")
+        #expect(event.todoTitle == "Send investor update")
+        #expect(event.metadata["note"]?.string == "Detected completion.")
+    }
+
+    @Test
     func updateTodoRequestsFreshDecisionCardContext() async throws {
         let todoID = UUID(uuidString: "22222222-3333-4444-5555-666666666666")!
         let recorder = HTTPRequestRecorder()

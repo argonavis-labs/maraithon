@@ -10,6 +10,7 @@ defmodule Maraithon.Todos do
   alias Maraithon.Repo
 
   alias Maraithon.Todos.{
+    ActivityEvent,
     AttentionRanker,
     DecisionSignals,
     FeedbackTrainer,
@@ -83,6 +84,24 @@ defmodule Maraithon.Todos do
     |> Enum.map(&polish_todo_copy/1)
   end
 
+  def list_activity_for_user(user_id, opts \\ [])
+
+  def list_activity_for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
+    limit =
+      opts
+      |> Keyword.get(:limit, 50)
+      |> normalize_limit(50)
+      |> min(200)
+
+    ActivityEvent
+    |> where([event], event.user_id == ^user_id)
+    |> order_by([event], desc: event.occurred_at, desc: event.inserted_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def list_activity_for_user(_user_id, _opts), do: []
+
   def list_by_ids(user_id, todo_ids, opts \\ [])
 
   def list_by_ids(user_id, todo_ids, opts)
@@ -151,10 +170,13 @@ defmodule Maraithon.Todos do
 
   def sync_from_insight(_insight), do: {:error, :invalid_insight}
 
-  def upsert_many(user_id, attrs_list) when is_binary(user_id) and is_list(attrs_list) do
+  def upsert_many(user_id, attrs_list, opts \\ [])
+
+  def upsert_many(user_id, attrs_list, opts)
+      when is_binary(user_id) and is_list(attrs_list) and is_list(opts) do
     attrs_list
     |> Enum.reduce({:ok, []}, fn attrs, {:ok, acc} ->
-      case upsert_one(user_id, attrs) do
+      case upsert_one(user_id, attrs, opts) do
         {:ok, todo} -> {:ok, [todo | acc]}
         {:error, reason} -> {:error, reason}
       end
@@ -165,7 +187,7 @@ defmodule Maraithon.Todos do
     end
   end
 
-  def upsert_many(_user_id, _attrs_list), do: {:error, :invalid_todo_attrs}
+  def upsert_many(_user_id, _attrs_list, _opts), do: {:error, :invalid_todo_attrs}
 
   def ingest_many(user_id, attrs_list, opts \\ [])
 
@@ -180,7 +202,7 @@ defmodule Maraithon.Todos do
 
   def mark_done(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
     note = Keyword.get(opts, :note)
-    update_status(user_id, todo_id, "done", note)
+    update_status(user_id, todo_id, "done", note, %{}, opts)
   end
 
   def mark_done(_user_id, _todo_id, _opts), do: {:error, :not_found}
@@ -195,7 +217,14 @@ defmodule Maraithon.Todos do
     # contrast to checking it off (high-signal "done"). We record it as such and
     # let the preference learner gently improve future surfacing — best-effort,
     # so a learning hiccup never blocks the dismissal itself.
-    case update_status(user_id, todo_id, "dismissed", note, put_dismissal_signal(%{}, source)) do
+    case update_status(
+           user_id,
+           todo_id,
+           "dismissed",
+           note,
+           put_dismissal_signal(%{}, source),
+           opts
+         ) do
       {:ok, todo} ->
         _ = maybe_learn_from_feedback(todo, "not_helpful")
         {:ok, todo}
@@ -322,7 +351,8 @@ defmodule Maraithon.Todos do
              todo_id,
              "dismissed",
              see_less_resolution_note(source),
-             put_see_less_feedback(%{}, source, memory, training)
+             put_see_less_feedback(%{}, source, memory, training),
+             opts
            ) do
       {:ok, %{todo: dismissed, memory: memory, training: training}}
     else
@@ -334,8 +364,10 @@ defmodule Maraithon.Todos do
 
   def see_less_like(_user_id, _todo_id, _opts), do: {:error, :not_found}
 
-  def update_for_user(user_id, todo_id, attrs)
-      when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) do
+  def update_for_user(user_id, todo_id, attrs, opts \\ [])
+
+  def update_for_user(user_id, todo_id, attrs, opts)
+      when is_binary(user_id) and is_binary(todo_id) and is_map(attrs) and is_list(opts) do
     Repo.transaction(fn ->
       with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id) do
         changes = update_attrs(todo, attrs)
@@ -344,7 +376,8 @@ defmodule Maraithon.Todos do
           Repo.rollback(:empty_update)
         else
           with {:ok, updated} <- todo |> Todo.changeset(changes) |> Repo.update(),
-               {:ok, _insight} <- sync_linked_insight(updated) do
+               {:ok, _insight} <- sync_linked_insight(updated),
+               {:ok, _event} <- maybe_record_status_activity(todo, updated, updated.status, opts) do
             updated
           else
             {:error, reason} -> Repo.rollback(reason)
@@ -362,7 +395,7 @@ defmodule Maraithon.Todos do
     end
   end
 
-  def update_for_user(_user_id, _todo_id, _attrs), do: {:error, :not_found}
+  def update_for_user(_user_id, _todo_id, _attrs, _opts), do: {:error, :not_found}
 
   def annotate_scope(user_id, todo_id, attrs \\ [])
 
@@ -464,7 +497,7 @@ defmodule Maraithon.Todos do
     }
   end
 
-  defp upsert_one(user_id, attrs) when is_binary(user_id) and is_map(attrs) do
+  defp upsert_one(user_id, attrs, opts) when is_binary(user_id) and is_map(attrs) do
     normalized_attrs =
       user_id
       |> normalize_attrs(attrs)
@@ -477,9 +510,14 @@ defmodule Maraithon.Todos do
         |> Repo.update()
 
       nil ->
-        %Todo{}
-        |> Todo.changeset(normalized_attrs)
-        |> Repo.insert()
+        Repo.transaction(fn ->
+          with {:ok, inserted} <- %Todo{} |> Todo.changeset(normalized_attrs) |> Repo.insert(),
+               {:ok, _event} <- record_activity_event(inserted, "created", opts) do
+            inserted
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
     end
   end
 
@@ -497,13 +535,20 @@ defmodule Maraithon.Todos do
         end
 
       nil ->
-        %Todo{}
-        |> Todo.changeset(attrs)
-        |> Repo.insert()
+        Repo.transaction(fn ->
+          with {:ok, inserted} <- %Todo{} |> Todo.changeset(attrs) |> Repo.insert(),
+               {:ok, _event} <- record_activity_event(inserted, "created", []) do
+            inserted
+          else
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
     end
   end
 
-  defp update_status(user_id, todo_id, status, note, extra_metadata \\ %{}) do
+  defp update_status(user_id, todo_id, status, note, extra_metadata, opts) do
+    activity_opts = Keyword.put_new(opts, :note, note)
+
     Repo.transaction(fn ->
       with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id),
            {:ok, updated} <-
@@ -518,7 +563,8 @@ defmodule Maraithon.Todos do
                  |> Map.merge(extra_metadata || %{})
              })
              |> Repo.update(),
-           {:ok, _insight} <- sync_linked_insight(updated) do
+           {:ok, _insight} <- sync_linked_insight(updated),
+           {:ok, _event} <- maybe_record_status_activity(todo, updated, status, activity_opts) do
         updated
       else
         nil -> Repo.rollback(:not_found)
@@ -530,6 +576,65 @@ defmodule Maraithon.Todos do
       {:error, :not_found} -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp maybe_record_status_activity(%Todo{status: status}, %Todo{}, status, _opts), do: {:ok, nil}
+
+  defp maybe_record_status_activity(_previous, %Todo{} = updated, status, opts) do
+    case activity_event_type_for_status(status) do
+      nil -> {:ok, nil}
+      event_type -> record_activity_event(updated, event_type, opts)
+    end
+  end
+
+  defp activity_event_type_for_status("done"), do: "marked_done"
+  defp activity_event_type_for_status("dismissed"), do: "deleted"
+  defp activity_event_type_for_status(_status), do: nil
+
+  defp record_activity_event(%Todo{} = todo, event_type, opts) do
+    actor = activity_actor_attrs(opts)
+
+    attrs =
+      %{
+        user_id: todo.user_id,
+        todo_id: todo.id,
+        event_type: event_type,
+        todo_title: todo.title,
+        todo_source: todo.source,
+        metadata: activity_event_metadata(todo, opts),
+        occurred_at: DateTime.utc_now()
+      }
+      |> Map.merge(actor)
+
+    %ActivityEvent{}
+    |> ActivityEvent.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  defp activity_actor_attrs(opts) do
+    actor_type = normalize_actor_type(Keyword.get(opts, :actor_type, "agent"))
+
+    %{
+      actor_type: actor_type,
+      actor_id: normalize_optional_string(Keyword.get(opts, :actor_id)),
+      actor_label:
+        normalize_optional_string(Keyword.get(opts, :actor_label)) ||
+          default_actor_label(actor_type)
+    }
+  end
+
+  defp normalize_actor_type(:user), do: "user"
+  defp normalize_actor_type(:agent), do: "agent"
+  defp normalize_actor_type("user"), do: "user"
+  defp normalize_actor_type("agent"), do: "agent"
+  defp normalize_actor_type(_value), do: "agent"
+
+  defp default_actor_label("user"), do: "User"
+  defp default_actor_label("agent"), do: "Maraithon"
+
+  defp activity_event_metadata(%Todo{} = todo, opts) do
+    %{"todo_status" => todo.status}
+    |> maybe_put("note", normalize_optional_string(Keyword.get(opts, :note)))
   end
 
   defp sync_linked_insight(%Todo{} = todo) do

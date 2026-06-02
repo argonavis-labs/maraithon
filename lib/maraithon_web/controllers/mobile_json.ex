@@ -5,7 +5,7 @@ defmodule MaraithonWeb.MobileJSON do
   alias Maraithon.Accounts.{User, UserSession}
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
-  alias Maraithon.Todos.{PublicMetadata, Todo, UserFacingCopy}
+  alias Maraithon.Todos.{ActivityEvent, PublicMetadata, Todo, UserFacingCopy}
   alias MaraithonWeb.ApiErrorCopy
 
   def user(%User{} = user, %UserSession{} = session) do
@@ -58,6 +58,22 @@ defmodule MaraithonWeb.MobileJSON do
     else
       base
     end
+  end
+
+  def todo_activity_event(%ActivityEvent{} = event) do
+    %{
+      id: event.id,
+      event_type: event.event_type,
+      actor_type: event.actor_type,
+      actor_id: event.actor_id,
+      actor_label: event.actor_label,
+      todo_id: event.todo_id,
+      todo_title: event.todo_title,
+      todo_source: event.todo_source,
+      metadata: event.metadata || %{},
+      occurred_at: json_value(event.occurred_at),
+      inserted_at: json_value(event.inserted_at)
+    }
   end
 
   def person(%Person{} = person) do

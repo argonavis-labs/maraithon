@@ -5,6 +5,7 @@ import Testing
 struct AccountMenuCopyTests {
     @Test
     func resetCopyUsesUserFacingWorkspaceLanguage() {
+        #expect(AccountMenuCopy.activityLogLabel == "Activity Log")
         #expect(AccountMenuCopy.resetLocalWorkspaceLabel == "Reset Local Workspace")
         #expect(AccountMenuCopy.resetLocalWorkspaceTitle == "Reset local workspace?")
         #expect(AccountMenuCopy.resetFailedTitle == "Could Not Reset Workspace")

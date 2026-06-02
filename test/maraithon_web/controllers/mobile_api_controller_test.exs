@@ -213,6 +213,62 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     assert default_dismissed.metadata["resolution_note"] == "Dismissed from mobile."
   end
 
+  test "mobile todo activity lists user-created, done, and deleted events", %{conn: conn} do
+    email = "mobile-todo-activity-#{System.unique_integer([:positive])}@example.com"
+    {:ok, user} = Accounts.get_or_create_user_by_email(email)
+    {:ok, %{token: session_token}} = Accounts.create_session_for_user(user)
+
+    conn =
+      conn
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> post(~p"/api/mobile/todos", %{
+        "todo" => %{
+          "source" => "mobile",
+          "title" => "Check activity logging",
+          "summary" => "Confirm lifecycle activity appears in the mobile debug log.",
+          "next_action" => "Create, complete, and delete this item.",
+          "status" => "open"
+        }
+      })
+
+    assert %{"todo" => %{"id" => todo_id}} = json_response(conn, 201)
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> post(~p"/api/mobile/todos/#{todo_id}/actions/done", %{"note" => "Finished on mobile."})
+
+    assert %{"todo" => %{"status" => "done"}} = json_response(conn, 200)
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> delete(~p"/api/mobile/todos/#{todo_id}", %{"note" => "No longer relevant from mobile."})
+
+    assert %{"todo" => %{"status" => "dismissed"}} = json_response(conn, 200)
+
+    conn =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{session_token}")
+      |> get(~p"/api/mobile/todo-activity?limit=10")
+
+    assert %{"activity" => [deleted, done, created]} = json_response(conn, 200)
+
+    assert deleted["event_type"] == "deleted"
+    assert deleted["actor_type"] == "user"
+    assert deleted["actor_id"] == user.id
+    assert deleted["todo_id"] == todo_id
+    assert deleted["todo_title"] == "Check activity logging"
+    assert deleted["metadata"]["note"] == "No longer relevant from mobile."
+
+    assert done["event_type"] == "marked_done"
+    assert done["actor_type"] == "user"
+    assert done["metadata"]["note"] == "Finished on mobile."
+
+    assert created["event_type"] == "created"
+    assert created["actor_type"] == "user"
+  end
+
   test "mobile todos expose action cards and one-tap actions", %{conn: conn} do
     email = "mobile-todo-actions-#{System.unique_integer([:positive])}@example.com"
     {:ok, user} = Accounts.get_or_create_user_by_email(email)

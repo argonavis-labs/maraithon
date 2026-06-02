@@ -92,14 +92,22 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
 
   defp dispatch_action(user_id, %Todo{id: todo_id}, "done") do
     with {:ok, todo} <-
-           Todos.mark_done(user_id, todo_id, note: "Completed from Telegram work item message.") do
+           Todos.mark_done(
+             user_id,
+             todo_id,
+             todo_action_opts(user_id, "Completed from Telegram work item message.")
+           ) do
       {:ok, {:todo_updated, todo}}
     end
   end
 
   defp dispatch_action(user_id, %Todo{id: todo_id}, "dismiss") do
     with {:ok, todo} <-
-           Todos.dismiss(user_id, todo_id, note: "Dismissed from Telegram work item message.") do
+           Todos.dismiss(
+             user_id,
+             todo_id,
+             todo_action_opts(user_id, "Dismissed from Telegram work item message.")
+           ) do
       {:ok, {:todo_updated, todo}}
     end
   end
@@ -125,7 +133,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   end
 
   defp dispatch_action(user_id, %Todo{id: todo_id}, "see_less") do
-    case Todos.see_less_like(user_id, todo_id, source: "telegram") do
+    case Todos.see_less_like(
+           user_id,
+           todo_id,
+           Keyword.put(todo_actor_opts(user_id), :source, "telegram")
+         ) do
       {:ok, %{todo: todo}} -> {:ok, {:todo_updated, todo}}
       {:error, reason} -> {:error, reason}
     end
@@ -145,6 +157,11 @@ defmodule Maraithon.TelegramAssistant.TodoActions do
   defp dispatch_action(user_id, %Todo{} = todo, "draft_slack") do
     generate_todo_draft(user_id, todo, "slack")
   end
+
+  defp todo_action_opts(user_id, note), do: Keyword.put(todo_actor_opts(user_id), :note, note)
+
+  defp todo_actor_opts(user_id),
+    do: [actor_type: "user", actor_id: user_id, actor_label: "User"]
 
   defp refresh_message(chat_id, message_id, todo)
        when is_binary(chat_id) and is_binary(message_id) do

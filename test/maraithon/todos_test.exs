@@ -81,6 +81,71 @@ defmodule Maraithon.TodosTest do
     assert get_in(dismissed.metadata, ["resolution_note"]) == "Not worth my time."
   end
 
+  test "todo activity records creates, completions, and deletes with actors" do
+    user_id = unique_user_email("todos-activity")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    attrs = gmail_todo_attrs("thread-activity", "Reply to activity thread")
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [attrs],
+        actor_type: "user",
+        actor_id: user_id,
+        actor_label: "User"
+      )
+
+    {:ok, [same_todo]} = Todos.upsert_many(user_id, [attrs])
+    assert same_todo.id == todo.id
+
+    {:ok, _done_todo} =
+      Todos.mark_done(user_id, todo.id,
+        actor_type: "agent",
+        actor_id: "completion_sweep",
+        actor_label: "Maraithon",
+        note: "Detected completion from source."
+      )
+
+    {:ok, [delete_todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-delete-activity", "Dismiss stale activity thread")
+      ])
+
+    {:ok, _dismissed_todo} =
+      Todos.dismiss(user_id, delete_todo.id,
+        actor_type: "user",
+        actor_id: user_id,
+        actor_label: "User",
+        note: "No longer needed."
+      )
+
+    events = Todos.list_activity_for_user(user_id, limit: 10)
+
+    assert Enum.count(events, &(&1.event_type == "created")) == 2
+
+    assert %{
+             event_type: "created",
+             actor_type: "user",
+             actor_id: ^user_id,
+             todo_id: created_todo_id
+           } = Enum.find(events, &(&1.todo_id == todo.id and &1.event_type == "created"))
+
+    assert created_todo_id == todo.id
+
+    assert %{
+             event_type: "marked_done",
+             actor_type: "agent",
+             actor_id: "completion_sweep",
+             metadata: %{"note" => "Detected completion from source.", "todo_status" => "done"}
+           } = Enum.find(events, &(&1.event_type == "marked_done"))
+
+    assert %{
+             event_type: "deleted",
+             actor_type: "user",
+             actor_id: ^user_id,
+             metadata: %{"note" => "No longer needed.", "todo_status" => "dismissed"}
+           } = Enum.find(events, &(&1.event_type == "deleted"))
+  end
+
   test "todos can be searched by query and filtered by status" do
     user_id = unique_user_email("todos-search")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

@@ -142,7 +142,9 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   def handle_event("complete_todo", %{"id" => todo_id}, socket) do
-    case Todos.mark_done(current_user_id(socket), todo_id, note: "Completed from Work page.") do
+    user_id = current_user_id(socket)
+
+    case Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, "Completed from Work page.")) do
       {:ok, _todo} ->
         {:noreply,
          socket
@@ -158,7 +160,9 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   def handle_event("dismiss_todo", %{"id" => todo_id}, socket) do
-    case Todos.dismiss(current_user_id(socket), todo_id, note: "Dismissed from Work page.") do
+    user_id = current_user_id(socket)
+
+    case Todos.dismiss(user_id, todo_id, todo_action_opts(user_id, "Dismissed from Work page.")) do
       {:ok, _todo} ->
         {:noreply,
          socket
@@ -175,8 +179,13 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("see_less_todo", %{"id" => todo_id}, socket) do
     selected? = socket.assigns.selected_todo_id == todo_id
+    user_id = current_user_id(socket)
 
-    case Todos.see_less_like(current_user_id(socket), todo_id, source: "todos_page") do
+    case Todos.see_less_like(
+           user_id,
+           todo_id,
+           Keyword.put(todo_actor_opts(user_id), :source, "todos_page")
+         ) do
       {:ok, _result} ->
         socket =
           socket
@@ -698,17 +707,26 @@ defmodule MaraithonWeb.TodosLive do
   end
 
   defp run_todo_action(:complete, user_id, todo_id, note),
-    do: Todos.mark_done(user_id, todo_id, note: note)
+    do: Todos.mark_done(user_id, todo_id, todo_action_opts(user_id, note))
 
   defp run_todo_action(:dismiss, user_id, todo_id, note),
-    do: Todos.dismiss(user_id, todo_id, note: note)
+    do: Todos.dismiss(user_id, todo_id, todo_action_opts(user_id, note))
 
   defp run_todo_action(:see_less, user_id, todo_id, _note) do
-    case Todos.see_less_like(user_id, todo_id, source: "todos_page_bulk") do
+    case Todos.see_less_like(
+           user_id,
+           todo_id,
+           Keyword.put(todo_actor_opts(user_id), :source, "todos_page_bulk")
+         ) do
       {:ok, %{todo: todo}} -> {:ok, todo}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp todo_action_opts(user_id, note), do: Keyword.put(todo_actor_opts(user_id), :note, note)
+
+  defp todo_actor_opts(user_id),
+    do: [actor_type: "user", actor_id: user_id, actor_label: "User"]
 
   defp bulk_todo_note(:complete), do: "Completed from Work bulk action."
   defp bulk_todo_note(:dismiss), do: "Dismissed from Work bulk action."
