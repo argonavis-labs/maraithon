@@ -189,7 +189,20 @@ defmodule Maraithon.Todos do
 
   def dismiss(user_id, todo_id, opts) when is_binary(user_id) and is_binary(todo_id) do
     note = Keyword.get(opts, :note)
-    update_status(user_id, todo_id, "dismissed", note)
+    source = normalize_feedback_source(Keyword.get(opts, :source, "dismiss"))
+
+    # Dismissing/deleting a todo is a low-signal "this wasn't important" cue, in
+    # contrast to checking it off (high-signal "done"). We record it as such and
+    # let the preference learner gently improve future surfacing — best-effort,
+    # so a learning hiccup never blocks the dismissal itself.
+    case update_status(user_id, todo_id, "dismissed", note, put_dismissal_signal(%{}, source)) do
+      {:ok, todo} ->
+        _ = maybe_learn_from_feedback(todo, "not_helpful")
+        {:ok, todo}
+
+      other ->
+        other
+    end
   end
 
   def dismiss(_user_id, _todo_id, _opts), do: {:error, :not_found}
@@ -475,9 +488,13 @@ defmodule Maraithon.Todos do
 
     case Repo.get_by(Todo, user_id: insight.user_id, dedupe_key: attrs.dedupe_key) do
       %Todo{} = todo ->
-        todo
-        |> Todo.changeset(attrs)
-        |> Repo.update()
+        if preserve_closed_synced_todo?(todo, attrs) do
+          {:ok, todo}
+        else
+          todo
+          |> Todo.changeset(attrs)
+          |> Repo.update()
+        end
 
       nil ->
         %Todo{}
@@ -916,6 +933,25 @@ defmodule Maraithon.Todos do
     |> maybe_put("confidence", insight.confidence)
   end
 
+  defp preserve_closed_synced_todo?(%Todo{} = todo, attrs) when is_map(attrs) do
+    incoming_status = Map.get(attrs, :status) || Map.get(attrs, "status")
+
+    incoming_source_at =
+      Map.get(attrs, :source_occurred_at) || Map.get(attrs, "source_occurred_at")
+
+    todo.status in ["done", "dismissed"] and incoming_status == "open" and
+      not source_newer_than_closed_todo?(incoming_source_at, todo)
+  end
+
+  defp source_newer_than_closed_todo?(%DateTime{} = incoming_source_at, %Todo{} = todo) do
+    case todo.closed_at || todo.source_occurred_at || todo.updated_at || todo.inserted_at do
+      %DateTime{} = previous_at -> DateTime.compare(incoming_source_at, previous_at) == :gt
+      _ -> true
+    end
+  end
+
+  defp source_newer_than_closed_todo?(_incoming_source_at, _todo), do: false
+
   defp filtered_todo_query(user_id, opts) do
     source = Keyword.get(opts, :source)
     source_account_id = Keyword.get(opts, :source_account_id)
@@ -1240,6 +1276,17 @@ defmodule Maraithon.Todos do
       "value" => feedback,
       "source" => source,
       "recorded_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+    })
+  end
+
+  defp put_dismissal_signal(metadata, source) when is_map(metadata) do
+    recorded_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    Map.put(metadata, "assistant_feedback", %{
+      "value" => "not_important",
+      "signal_strength" => "low",
+      "source" => source,
+      "recorded_at" => recorded_at
     })
   end
 

@@ -22,7 +22,7 @@ defmodule Maraithon.InsightsTest do
   end
 
   describe "record_many/3" do
-    test "inserts and upserts by dedupe key", %{user_id: user_id, agent: agent} do
+    test "inserts and upserts open insights by dedupe key", %{user_id: user_id, agent: agent} do
       {:ok, [first]} =
         Insights.record_many(user_id, agent.id, [
           %{
@@ -39,8 +39,6 @@ defmodule Maraithon.InsightsTest do
 
       assert first.status == "new"
       assert first.priority == 72
-
-      {:ok, _} = Insights.acknowledge(user_id, first.id)
 
       {:ok, [updated]} =
         Insights.record_many(user_id, agent.id, [
@@ -60,6 +58,182 @@ defmodule Maraithon.InsightsTest do
       assert updated.status == "new"
       assert updated.priority == 92
       assert updated.title == "Reply to contract email now"
+    end
+
+    test "keeps resolved insights resolved when an agent re-detects the same work",
+         %{user_id: user_id, agent: agent} do
+      occurred_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      base = fn ->
+        %{
+          "source" => "slack",
+          "category" => "commitment_unresolved",
+          "title" => "Send the launch timing to Priya",
+          "summary" => "Priya is waiting on launch timing.",
+          "recommended_action" => "Reply in the Slack thread with timing.",
+          "priority" => 80,
+          "confidence" => 0.85,
+          "source_occurred_at" => occurred_at,
+          "dedupe_key" => "slack:commitment:team:channel:thread"
+        }
+      end
+
+      {:ok, [acknowledged]} = Insights.record_many(user_id, agent.id, [base.()])
+      {:ok, _} = Insights.acknowledge(user_id, acknowledged.id)
+
+      # The agent re-scans the same Slack thread on its next cycle. Nothing new
+      # happened, so the resolved decision must stick — no fresh reminder.
+      {:ok, [redetected]} = Insights.record_many(user_id, agent.id, [base.()])
+
+      assert redetected.id == acknowledged.id
+      assert redetected.status == "acknowledged"
+      assert Insights.list_open_for_user(user_id) == []
+
+      {:ok, [dismissed]} =
+        Insights.record_many(user_id, agent.id, [
+          Map.put(base.(), "dedupe_key", "slack:commitment:team:channel:thread-2")
+        ])
+
+      {:ok, _} = Insights.dismiss(user_id, dismissed.id)
+
+      {:ok, [redetected_dismissed]} =
+        Insights.record_many(user_id, agent.id, [
+          Map.put(base.(), "dedupe_key", "slack:commitment:team:channel:thread-2")
+        ])
+
+      assert redetected_dismissed.id == dismissed.id
+      assert redetected_dismissed.status == "dismissed"
+    end
+
+    test "re-opens a resolved insight when genuinely newer source activity arrives",
+         %{user_id: user_id, agent: agent} do
+      old_time = DateTime.utc_now() |> DateTime.add(-7200, :second) |> DateTime.truncate(:second)
+
+      {:ok, [first]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to the billing thread",
+            "summary" => "Billing needs a response.",
+            "recommended_action" => "Reply in-thread now.",
+            "source_occurred_at" => old_time,
+            "dedupe_key" => "gmail:thread:billing:reply_owed"
+          }
+        ])
+
+      {:ok, _} = Insights.acknowledge(user_id, first.id)
+
+      new_time = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, [reopened]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Billing replied again and needs another response",
+            "summary" => "A new reply landed on the billing thread.",
+            "recommended_action" => "Reply in-thread now.",
+            "source_occurred_at" => new_time,
+            "dedupe_key" => "gmail:thread:billing:reply_owed"
+          }
+        ])
+
+      assert reopened.id == first.id
+      assert reopened.status == "new"
+      assert Enum.map(Insights.list_open_for_user(user_id), & &1.id) == [first.id]
+    end
+
+    test "a checked-off todo stays done when its source insight is re-detected",
+         %{user_id: user_id, agent: agent} do
+      occurred_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      attrs = %{
+        "source" => "gmail",
+        "category" => "reply_urgent",
+        "title" => "Reply to the billing thread",
+        "summary" => "Billing needs a same-day response.",
+        "recommended_action" => "Reply in-thread now with the payment status.",
+        "priority" => 88,
+        "confidence" => 0.91,
+        "source_occurred_at" => occurred_at,
+        "dedupe_key" => "billing-thread:reply_owed",
+        "tracking_key" => "billing-thread",
+        "source_id" => "thread-billing"
+      }
+
+      {:ok, [insight]} = Insights.record_many(user_id, agent.id, [attrs])
+      [todo] = Todos.list_open_for_user(user_id)
+
+      assert {:ok, _done} = Todos.mark_done(user_id, todo.id, note: "Handled with finance.")
+
+      # The advisor agent re-scans Gmail and still sees the thread, but the user
+      # already checked the work off — it must not bubble back up as a reminder.
+      {:ok, [redetected]} = Insights.record_many(user_id, agent.id, [attrs])
+
+      assert redetected.id == insight.id
+      assert redetected.status == "acknowledged"
+      assert Insights.list_open_act_now_for_user(user_id) == []
+
+      refreshed_todo = Repo.get!(Maraithon.Todos.Todo, todo.id)
+      assert refreshed_todo.status == "done"
+      assert Todos.list_open_for_user(user_id) == []
+    end
+
+    test "source resolution evidence acknowledges the insight and checks off its todo",
+         %{user_id: user_id, agent: agent} do
+      occurred_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      resolution_at = DateTime.add(occurred_at, 1800, :second)
+
+      attrs = %{
+        "source" => "gmail",
+        "category" => "reply_urgent",
+        "title" => "Reply to the billing thread",
+        "summary" => "Billing needs a same-day response.",
+        "recommended_action" => "Reply in-thread now with the payment status.",
+        "source_occurred_at" => occurred_at,
+        "dedupe_key" => "gmail:thread:billing:reply_owed:v1",
+        "tracking_key" => "gmail:thread:billing:reply_owed",
+        "source_id" => "msg-billing-request"
+      }
+
+      {:ok, [insight]} = Insights.record_many(user_id, agent.id, [attrs])
+      [todo] = Todos.list_open_for_user(user_id)
+
+      {:ok, [resolved]} =
+        Insights.resolve_many_from_source(user_id, [
+          %{
+            "source" => "gmail",
+            "tracking_key" => "gmail:thread:billing:reply_owed",
+            "source_occurred_at" => resolution_at,
+            "metadata" => %{
+              "source_resolution" => true,
+              "auto_resolution" => %{
+                "reason" => "A sent Gmail reply was found after the original request.",
+                "evidence" => ["Sent reply found in the source thread."]
+              }
+            }
+          }
+        ])
+
+      assert resolved.id == insight.id
+      assert resolved.status == "acknowledged"
+      assert DateTime.compare(resolved.source_occurred_at, resolution_at) == :eq
+      assert get_in(resolved.metadata, ["auto_resolution", "status"]) == "done"
+
+      refreshed_todo = Repo.get!(Maraithon.Todos.Todo, todo.id)
+      assert refreshed_todo.status == "done"
+      assert Todos.list_open_for_user(user_id) == []
+
+      {:ok, [redetected]} = Insights.record_many(user_id, agent.id, [attrs])
+
+      assert redetected.status == "acknowledged"
+      assert DateTime.compare(redetected.source_occurred_at, resolution_at) == :eq
+      assert Repo.get!(Maraithon.Todos.Todo, todo.id).status == "done"
     end
 
     test "dismisses prior open revisions that share a tracking key", %{

@@ -10,6 +10,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
   alias Maraithon.OAuth
   alias Maraithon.PreferenceMemory
   alias Maraithon.Repo
+  alias Maraithon.Todos
 
   setup do
     original_gmail_config = Application.get_env(:maraithon, :gmail)
@@ -934,6 +935,84 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisorTest do
       assert result.count == 0
       assert final_state.pending_candidates == []
       assert Insights.list_open_for_user(user_id) == []
+    end
+
+    test "checks off an existing Gmail todo when the latest sync finds a sent reply", %{
+      user_id: user_id,
+      agent: agent,
+      context: context
+    } do
+      state = InboxCalendarAdvisor.init(%{"user_id" => user_id})
+
+      occurred_at =
+        DateTime.utc_now() |> DateTime.add(-3600, :second) |> DateTime.truncate(:second)
+
+      reply_at = DateTime.add(occurred_at, 1800, :second)
+
+      {:ok, [_insight]} =
+        Insights.record_many(user_id, agent.id, [
+          %{
+            "source" => "gmail",
+            "category" => "reply_urgent",
+            "title" => "Reply to billing about payment status",
+            "summary" => "Billing asked for the payment status today.",
+            "recommended_action" => "Reply in the source thread with the payment status.",
+            "source_occurred_at" => occurred_at,
+            "dedupe_key" => "gmail:thread:thread-billing-sync:reply_owed:v1",
+            "tracking_key" => "gmail:thread:thread-billing-sync:reply_owed",
+            "source_id" => "msg-billing-request"
+          }
+        ])
+
+      [todo] = Todos.list_open_for_user(user_id)
+
+      sent_reply = %{
+        "message_id" => "msg-billing-reply",
+        "thread_id" => "thread-billing-sync",
+        "subject" => "Re: Payment status",
+        "snippet" => "Sent the payment status and next step.",
+        "from" => user_id,
+        "to" => "billing@example.com",
+        "internal_date" => reply_at
+      }
+
+      source_bundle =
+        context
+        |> SourceBundle.empty()
+        |> SourceBundle.put_gmail(%{"sent_messages" => [sent_reply]})
+
+      payload = %{
+        "source" => "gmail",
+        "data" => %{
+          "messages" => [
+            %{
+              "message_id" => "msg-billing-request",
+              "thread_id" => "thread-billing-sync",
+              "subject" => "Payment status",
+              "snippet" => "Can you please send the payment status today?",
+              "from" => "Billing <billing@example.com>",
+              "to" => user_id,
+              "labels" => ["INBOX", "IMPORTANT"],
+              "internal_date" => occurred_at
+            }
+          ]
+        }
+      }
+
+      _result =
+        InboxCalendarAdvisor.handle_wakeup(
+          state,
+          context
+          |> Map.put(:source_bundle, source_bundle)
+          |> Map.put(:event, %{payload: payload})
+        )
+
+      assert Insights.list_open_for_user(user_id) == []
+      assert Todos.list_open_for_user(user_id) == []
+      assert [done_todo | _] = Todos.list_recent_for_user(user_id)
+      assert done_todo.id == todo.id
+      assert done_todo.status == "done"
+      assert get_in(done_todo.metadata, ["auto_resolution", "status"]) == "done"
     end
 
     test "persists heads_up Gmail insights when the LLM keeps interrupt_now false", %{

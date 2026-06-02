@@ -12,7 +12,7 @@ defmodule Maraithon.ChiefOfStaff.Skills.TravelLogistics do
   @default_event_scan_limit 25
   @default_lookback_hours 24 * 30
   @default_min_confidence 0.8
-  @default_wakeup_interval_ms :timer.minutes(30)
+  @default_wakeup_interval_ms :timer.hours(1)
 
   @impl true
   def id, do: "travel_logistics"

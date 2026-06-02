@@ -97,6 +97,26 @@ defmodule Maraithon.Insights do
     update_status(user_id, insight_id, "dismissed")
   end
 
+  def resolve_many_from_source(user_id, resolutions)
+      when is_binary(user_id) and is_list(resolutions) do
+    now = DateTime.utc_now()
+
+    resolutions
+    |> Enum.reduce({:ok, []}, fn resolution_attrs, {:ok, acc} ->
+      case resolve_from_source(user_id, resolution_attrs, now) do
+        {:ok, insights} -> {:ok, insights ++ acc}
+        {:error, :invalid_source_resolution} -> {:ok, acc}
+        {:error, reason} -> {:error, reason}
+      end
+    end)
+    |> case do
+      {:ok, insights} -> {:ok, Enum.reverse(insights)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def resolve_many_from_source(_user_id, _resolutions), do: {:error, :invalid_source_resolution}
+
   def snooze(user_id, insight_id, until_datetime)
       when is_binary(user_id) and is_binary(insight_id) and is_struct(until_datetime, DateTime) do
     with %Insight{} = insight <- Repo.get_by(Insight, id: insight_id, user_id: user_id),
@@ -138,33 +158,180 @@ defmodule Maraithon.Insights do
     end
   end
 
+  # When an agent re-detects the same loop (same user_id + dedupe_key), a status
+  # the operator or source evidence already resolved must stick. We only re-open
+  # a resolved insight when the incoming source activity is newer than the last
+  # source/sync timestamp we recorded for that insight.
   defp upsert(attrs, now) do
     %Insight{}
     |> Insight.changeset(attrs)
     |> Repo.insert(
-      on_conflict: [
-        set: [
-          source: attrs["source"],
-          category: attrs["category"],
-          title: attrs["title"],
-          summary: attrs["summary"],
-          recommended_action: attrs["recommended_action"],
-          priority: attrs["priority"],
-          confidence: attrs["confidence"],
-          status: "new",
-          attention_mode: attrs["attention_mode"],
-          snoozed_until: nil,
-          due_at: attrs["due_at"],
-          source_id: attrs["source_id"],
-          source_occurred_at: attrs["source_occurred_at"],
-          tracking_key: attrs["tracking_key"],
-          metadata: attrs["metadata"],
-          updated_at: now
-        ]
-      ],
+      on_conflict: insight_on_conflict(now),
       conflict_target: [:user_id, :dedupe_key],
       returning: true
     )
+  end
+
+  defp insight_on_conflict(now) do
+    from(i in Insight,
+      update: [
+        set: [
+          source: fragment("EXCLUDED.source"),
+          category: fragment("EXCLUDED.category"),
+          title: fragment("EXCLUDED.title"),
+          summary: fragment("EXCLUDED.summary"),
+          recommended_action: fragment("EXCLUDED.recommended_action"),
+          priority: fragment("EXCLUDED.priority"),
+          confidence: fragment("EXCLUDED.confidence"),
+          attention_mode: fragment("EXCLUDED.attention_mode"),
+          due_at: fragment("EXCLUDED.due_at"),
+          source_id:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE EXCLUDED.source_id END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.source_id
+            ),
+          source_occurred_at:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE EXCLUDED.source_occurred_at END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.source_occurred_at
+            ),
+          tracking_key: fragment("EXCLUDED.tracking_key"),
+          metadata:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE EXCLUDED.metadata END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.metadata
+            ),
+          status:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE 'new' END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.status
+            ),
+          snoozed_until:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE NULL END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.snoozed_until
+            ),
+          updated_at:
+            fragment(
+              "CASE WHEN ? IN ('acknowledged','dismissed') AND NOT (EXCLUDED.source_occurred_at IS NOT NULL AND EXCLUDED.source_occurred_at > COALESCE(?, ?, ?)) THEN ? ELSE ? END",
+              i.status,
+              i.source_occurred_at,
+              i.updated_at,
+              i.inserted_at,
+              i.updated_at,
+              ^now
+            )
+        ]
+      ]
+    )
+  end
+
+  defp resolve_from_source(user_id, resolution_attrs, now) when is_map(resolution_attrs) do
+    keys = source_resolution_keys(resolution_attrs)
+
+    resolved_source_at =
+      case resolution_attrs |> read_datetime("source_occurred_at") |> ensure_usec_datetime() do
+        %DateTime{} = datetime -> datetime
+        nil -> now
+      end
+
+    if keys == [] do
+      {:error, :invalid_source_resolution}
+    else
+      insights =
+        Insight
+        |> where([i], i.user_id == ^user_id)
+        |> where([i], i.status in ^@open_statuses)
+        |> where([i], i.tracking_key in ^keys or i.dedupe_key in ^keys)
+        |> Repo.all()
+
+      insights
+      |> Enum.reduce({:ok, []}, fn insight, {:ok, acc} ->
+        if source_resolution_current_for_insight?(insight, resolved_source_at) do
+          case acknowledge_from_source(insight, resolution_attrs, resolved_source_at, now) do
+            {:ok, updated} -> {:ok, [updated | acc]}
+            {:error, reason} -> {:error, reason}
+          end
+        else
+          {:ok, acc}
+        end
+      end)
+    end
+  end
+
+  defp resolve_from_source(_user_id, _resolution_attrs, _now),
+    do: {:error, :invalid_source_resolution}
+
+  defp source_resolution_keys(attrs) do
+    [read_string(attrs, "tracking_key", nil), read_string(attrs, "dedupe_key", nil)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp source_resolution_current_for_insight?(%Insight{} = insight, %DateTime{} = resolved_at) do
+    case insight.source_occurred_at || insight.updated_at || insight.inserted_at do
+      %DateTime{} = previous_at -> DateTime.compare(resolved_at, previous_at) != :lt
+      _ -> true
+    end
+  end
+
+  defp ensure_usec_datetime(%DateTime{microsecond: {usec, _precision}} = datetime) do
+    %{datetime | microsecond: {usec, 6}}
+  end
+
+  defp ensure_usec_datetime(_datetime), do: nil
+
+  defp acknowledge_from_source(%Insight{} = insight, attrs, resolved_source_at, now) do
+    changes = %{
+      status: "acknowledged",
+      snoozed_until: nil,
+      source_occurred_at: resolved_source_at,
+      metadata: source_resolution_metadata(insight, attrs, resolved_source_at, now)
+    }
+
+    with {:ok, updated} <- insight |> Ecto.Changeset.change(changes) |> Repo.update(),
+         {:ok, _todo} <- Todos.sync_from_insight(updated) do
+      {:ok, updated}
+    end
+  end
+
+  defp source_resolution_metadata(%Insight{} = insight, attrs, resolved_source_at, now) do
+    incoming_metadata =
+      attrs
+      |> read_map("metadata")
+      |> stringify_keys()
+
+    auto_resolution =
+      incoming_metadata
+      |> read_map("auto_resolution")
+      |> Map.put_new("status", "done")
+      |> Map.put_new("source", read_string(attrs, "source", insight.source || "source"))
+      |> Map.put_new("resolved_at", DateTime.to_iso8601(now))
+      |> Map.put_new("source_occurred_at", DateTime.to_iso8601(resolved_source_at))
+
+    (insight.metadata || %{})
+    |> Map.merge(incoming_metadata)
+    |> Map.put("auto_resolution", auto_resolution)
   end
 
   defp open_for_user_query(user_id, attention_mode) when is_binary(user_id) do

@@ -53,10 +53,10 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
     assert get_in(state.skill_configs, ["alpha", "timezone"]) == "America/Toronto"
     assert get_in(state.skill_configs, ["alpha", "timezone_name"]) == "America/Toronto"
     assert get_in(state.skill_configs, ["alpha", "timezone_offset_hours"]) == -5
-    assert {:relative, 300_000} = AIChiefOfStaff.next_wakeup(state)
+    assert {:relative, 3_600_000} = AIChiefOfStaff.next_wakeup(state)
   end
 
-  test "keeps an always-on scan floor even when skills only schedule daily work" do
+  test "keeps an hourly scan floor even when persisted config is lower" do
     state =
       AIChiefOfStaff.init(%{
         "user_id" => "chief@example.com",
@@ -67,7 +67,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaffTest do
         }
       })
 
-    assert {:relative, 600_000} = AIChiefOfStaff.next_wakeup(state)
+    assert {:relative, 3_600_000} = AIChiefOfStaff.next_wakeup(state)
   end
 
   test "can register additional compiled skills without replacing the built-in registry" do

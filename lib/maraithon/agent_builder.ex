@@ -82,7 +82,7 @@ defmodule Maraithon.AgentBuilder do
         "memory_limit" => "",
         "team_id" => "",
         "timezone_offset_hours" => "-5",
-        "wakeup_interval_ms" => "600000",
+        "wakeup_interval_ms" => "3600000",
         "morning_brief_hour_local" => "8",
         "end_of_day_brief_hour_local" => "18",
         "weekly_review_day_local" => "5",
@@ -304,7 +304,7 @@ defmodule Maraithon.AgentBuilder do
         "prompt" => "",
         "tools" => "",
         "memory_limit" => "",
-        "wakeup_interval_ms" => "600000",
+        "wakeup_interval_ms" => "3600000",
         "email_scan_limit" => "14",
         "event_scan_limit" => "12",
         "prep_window_hours" => "36",
@@ -403,7 +403,7 @@ defmodule Maraithon.AgentBuilder do
         "lookback_hours" => "48",
         "max_insights_per_cycle" => "5",
         "min_confidence" => "0.75",
-        "wakeup_interval_ms" => "600000"
+        "wakeup_interval_ms" => "3600000"
       },
       requirements: [
         %{
@@ -570,7 +570,7 @@ defmodule Maraithon.AgentBuilder do
   @cost_profiles %{
     "ai_chief_of_staff" => %{
       "lean" => %{
-        "wakeup_interval_ms" => "900000",
+        "wakeup_interval_ms" => "3600000",
         "follow_email_scan_limit" => "8",
         "follow_event_scan_limit" => "6",
         "follow_prep_window_hours" => "24",
@@ -588,7 +588,7 @@ defmodule Maraithon.AgentBuilder do
         "budget_tool_calls" => "320"
       },
       "balanced" => %{
-        "wakeup_interval_ms" => "600000",
+        "wakeup_interval_ms" => "3600000",
         "follow_email_scan_limit" => "14",
         "follow_event_scan_limit" => "12",
         "follow_prep_window_hours" => "36",
@@ -601,12 +601,12 @@ defmodule Maraithon.AgentBuilder do
         "travel_event_scan_limit" => "25",
         "travel_lookback_hours" => "720",
         "travel_min_confidence" => "0.8",
-        "travel_wakeup_interval_ms" => "1800000",
+        "travel_wakeup_interval_ms" => "3600000",
         "budget_llm_calls" => "300",
         "budget_tool_calls" => "520"
       },
       "thorough" => %{
-        "wakeup_interval_ms" => "600000",
+        "wakeup_interval_ms" => "3600000",
         "follow_email_scan_limit" => "24",
         "follow_event_scan_limit" => "18",
         "follow_prep_window_hours" => "48",
@@ -619,7 +619,7 @@ defmodule Maraithon.AgentBuilder do
         "travel_event_scan_limit" => "40",
         "travel_lookback_hours" => "1080",
         "travel_min_confidence" => "0.74",
-        "travel_wakeup_interval_ms" => "900000",
+        "travel_wakeup_interval_ms" => "3600000",
         "budget_llm_calls" => "520",
         "budget_tool_calls" => "850"
       }
@@ -735,7 +735,7 @@ defmodule Maraithon.AgentBuilder do
         "lookback_hours" => "24",
         "max_insights_per_cycle" => "3",
         "min_confidence" => "0.82",
-        "wakeup_interval_ms" => "900000",
+        "wakeup_interval_ms" => "3600000",
         "budget_llm_calls" => "90",
         "budget_tool_calls" => "180"
       },
@@ -745,7 +745,7 @@ defmodule Maraithon.AgentBuilder do
         "lookback_hours" => "48",
         "max_insights_per_cycle" => "5",
         "min_confidence" => "0.75",
-        "wakeup_interval_ms" => "600000",
+        "wakeup_interval_ms" => "3600000",
         "budget_llm_calls" => "180",
         "budget_tool_calls" => "320"
       },
@@ -755,7 +755,7 @@ defmodule Maraithon.AgentBuilder do
         "lookback_hours" => "72",
         "max_insights_per_cycle" => "7",
         "min_confidence" => "0.68",
-        "wakeup_interval_ms" => "300000",
+        "wakeup_interval_ms" => "3600000",
         "budget_llm_calls" => "320",
         "budget_tool_calls" => "550"
       }

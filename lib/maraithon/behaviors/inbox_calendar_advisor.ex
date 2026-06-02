@@ -29,7 +29,7 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
   require Logger
 
-  @default_wakeup_interval_ms :timer.minutes(10)
+  @default_wakeup_interval_ms :timer.hours(1)
   @default_email_scan_limit 14
   @default_event_scan_limit 12
   @default_follow_up_window_hours 36
@@ -286,6 +286,12 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
               candidates_from_periodic_scan(state, context, watch_rules)
           end
 
+        _ =
+          scan_result
+          |> Map.get(:resolved_source_matches, [])
+          |> dedupe_source_resolutions()
+          |> resolve_source_matches(state)
+
         candidates =
           scan_result.llm_candidates
           |> dedupe_candidates()
@@ -479,22 +485,32 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
     sent_messages = fetch_recent_sent_messages(state)
     events = fetch_recent_calendar_events(state)
 
-    incoming_reply_candidates =
+    incoming_results =
       emails
       |> Enum.flat_map(&incoming_email_candidates(&1, state, sent_messages))
 
-    explicit_promise_candidates =
+    {incoming_resolutions, incoming_reply_candidates} = split_source_resolutions(incoming_results)
+
+    explicit_promise_results =
       sent_messages
       |> Enum.flat_map(&sent_commitment_candidates(&1, state, sent_messages))
 
-    meeting_follow_up_candidates =
+    {explicit_promise_resolutions, explicit_promise_candidates} =
+      split_source_resolutions(explicit_promise_results)
+
+    meeting_follow_up_results =
       events
       |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages))
+
+    {meeting_follow_up_resolutions, meeting_follow_up_candidates} =
+      split_source_resolutions(meeting_follow_up_results)
 
     %{
       llm_candidates:
         incoming_reply_candidates ++ explicit_promise_candidates ++ meeting_follow_up_candidates,
       direct_insights: important_fyi_candidates(emails, state, watch_rules),
+      resolved_source_matches:
+        incoming_resolutions ++ explicit_promise_resolutions ++ meeting_follow_up_resolutions,
       relationship_observations:
         relationship_observations_from_sources(emails, sent_messages, events)
     }
@@ -522,19 +538,24 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         google_source = google_source_from_context(state, context)
         incoming_messages = extract_email_batch(data, google_source)
 
-        incoming =
+        incoming_results =
           incoming_messages
           |> Enum.flat_map(&incoming_email_candidates(&1, state, sent_messages))
 
+        {incoming_resolutions, incoming} = split_source_resolutions(incoming_results)
+
         important_fyi = important_fyi_candidates(incoming_messages, state, watch_rules)
 
-        outgoing =
+        outgoing_results =
           sent_messages
           |> Enum.flat_map(&sent_commitment_candidates(&1, state, sent_messages))
+
+        {outgoing_resolutions, outgoing} = split_source_resolutions(outgoing_results)
 
         %{
           llm_candidates: incoming ++ outgoing,
           direct_insights: important_fyi,
+          resolved_source_matches: incoming_resolutions ++ outgoing_resolutions,
           relationship_observations:
             relationship_observations_from_sources(incoming_messages, sent_messages, [])
         }
@@ -542,11 +563,16 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       "google_calendar" ->
         events = extract_calendar_batch(data)
 
+        meeting_results =
+          events
+          |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages))
+
+        {meeting_resolutions, meeting_candidates} = split_source_resolutions(meeting_results)
+
         %{
-          llm_candidates:
-            events
-            |> Enum.flat_map(&meeting_follow_up_candidates(&1, state, sent_messages)),
+          llm_candidates: meeting_candidates,
           direct_insights: [],
+          resolved_source_matches: meeting_resolutions,
           relationship_observations:
             relationship_observations_from_sources([], sent_messages, events)
         }
@@ -1454,13 +1480,43 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         []
 
       not unresolved? ->
-        []
+        [
+          gmail_source_resolution_candidate(
+            "reply_urgent",
+            gmail_tracking_key("reply_urgent", thread_id),
+            message_id,
+            message_timestamp(followthrough_email) || occurred_at,
+            "A sent Gmail reply was found after the original request.",
+            nil,
+            %{
+              "thread_id" => thread_id,
+              "subject" => subject,
+              "from" => from,
+              "to" => to
+            }
+          )
+        ]
 
       true ->
         conversation_context = build_gmail_conversation_context(state, thread_id, email)
 
         if resolved_conversation?(conversation_context) do
-          []
+          [
+            gmail_source_resolution_candidate(
+              "reply_urgent",
+              gmail_tracking_key("reply_urgent", thread_id),
+              message_id,
+              read_datetime(conversation_context, "latest_activity_at") || occurred_at,
+              "Later Gmail thread activity resolved the reply obligation.",
+              conversation_context,
+              %{
+                "thread_id" => thread_id,
+                "subject" => subject,
+                "from" => from,
+                "to" => to
+              }
+            )
+          ]
         else
           triage =
             gmail_reply_triage(
@@ -1628,13 +1684,43 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         []
 
       not unresolved? ->
-        []
+        [
+          gmail_source_resolution_candidate(
+            "commitment_unresolved",
+            gmail_tracking_key("commitment_unresolved", thread_id),
+            message_id,
+            message_timestamp(completion) || occurred_at,
+            "A later sent Gmail follow-through was found for the commitment.",
+            nil,
+            %{
+              "thread_id" => thread_id,
+              "subject" => subject,
+              "from" => from,
+              "to" => to
+            }
+          )
+        ]
 
       true ->
         conversation_context = build_gmail_conversation_context(state, thread_id, sent_email)
 
         if resolved_conversation?(conversation_context) do
-          []
+          [
+            gmail_source_resolution_candidate(
+              "commitment_unresolved",
+              gmail_tracking_key("commitment_unresolved", thread_id),
+              message_id,
+              read_datetime(conversation_context, "latest_activity_at") || occurred_at,
+              "Later Gmail thread activity resolved the commitment.",
+              conversation_context,
+              %{
+                "thread_id" => thread_id,
+                "subject" => subject,
+                "from" => from,
+                "to" => to
+              }
+            )
+          ]
         else
           person = primary_contact(to) || "the recipient"
           inferred_deadline = infer_deadline_from_text(body, occurred_at)
@@ -1804,7 +1890,22 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
         []
 
       not unresolved? ->
-        []
+        [
+          gmail_source_resolution_candidate(
+            "meeting_follow_up",
+            "calendar:follow_up:#{event_id}",
+            event_id,
+            message_timestamp(follow_up_email) || end_at,
+            "A later sent meeting follow-up email was found.",
+            nil,
+            %{
+              "summary" => summary,
+              "organizer" => organizer,
+              "attendee_preview" => attendee_preview
+            },
+            "calendar"
+          )
+        ]
 
       true ->
         person =
@@ -1885,6 +1986,110 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
   end
 
   defp meeting_follow_up_candidates(_event, _state, _sent_messages), do: []
+
+  defp split_source_resolutions(results) when is_list(results) do
+    Enum.split_with(results, &source_resolution_candidate?/1)
+  end
+
+  defp source_resolution_candidate?(candidate) when is_map(candidate) do
+    get_in(candidate, ["metadata", "source_resolution"]) == true or
+      get_in(candidate, [:metadata, "source_resolution"]) == true
+  end
+
+  defp source_resolution_candidate?(_candidate), do: false
+
+  defp resolve_source_matches([], _state), do: {:ok, []}
+
+  defp resolve_source_matches(matches, state) do
+    Insights.resolve_many_from_source(state.user_id, matches)
+  rescue
+    _error -> {:ok, []}
+  end
+
+  defp dedupe_source_resolutions(matches) when is_list(matches) do
+    matches
+    |> Enum.reduce(%{}, fn match, acc ->
+      key =
+        read_string(match, "tracking_key", read_string(match, "dedupe_key", Ecto.UUID.generate()))
+
+      case Map.get(acc, key) do
+        nil ->
+          Map.put(acc, key, match)
+
+        existing ->
+          if source_resolution_sort_key(match) >= source_resolution_sort_key(existing) do
+            Map.put(acc, key, match)
+          else
+            acc
+          end
+      end
+    end)
+    |> Map.values()
+  end
+
+  defp source_resolution_sort_key(match) do
+    match
+    |> read_datetime("source_occurred_at")
+    |> source_resolution_datetime_sort_key()
+  end
+
+  defp source_resolution_datetime_sort_key(%DateTime{} = value),
+    do: DateTime.to_unix(value, :microsecond)
+
+  defp source_resolution_datetime_sort_key(_value), do: 0
+
+  defp gmail_source_resolution_candidate(
+         category,
+         tracking_key,
+         source_id,
+         source_occurred_at,
+         reason,
+         conversation_context,
+         metadata,
+         source \\ "gmail"
+       ) do
+    source_occurred_at = source_occurred_at || DateTime.utc_now()
+    evidence = gmail_source_resolution_evidence(conversation_context, reason)
+
+    %{
+      source: source,
+      source_id: source_id,
+      source_occurred_at: source_occurred_at,
+      category: category,
+      tracking_key: tracking_key,
+      dedupe_key: tracking_key,
+      metadata:
+        metadata
+        |> Map.merge(%{
+          "source_resolution" => true,
+          "conversation_context" => conversation_context,
+          "auto_resolution" => %{
+            "status" => "done",
+            "reason" => reason,
+            "evidence" => evidence,
+            "latest_activity_at" => DateTime.to_iso8601(source_occurred_at)
+          },
+          "record" => %{
+            "status" => "resolved",
+            "source" => "#{source}:#{source_id}",
+            "evidence" => evidence
+          }
+        })
+        |> compact_map()
+    }
+  end
+
+  defp gmail_source_resolution_evidence(nil, reason), do: [reason]
+
+  defp gmail_source_resolution_evidence(context, reason) when is_map(context) do
+    context
+    |> read_list("completion_evidence")
+    |> Kernel.++(read_list(context, "coverage_evidence"))
+    |> Kernel.++([reason])
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+    |> Enum.take(@max_evidence_points)
+  end
 
   defp persist_insights([], _state, _context), do: {:ok, []}
 

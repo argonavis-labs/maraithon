@@ -836,7 +836,7 @@ defmodule MaraithonWeb.AgentBuilderLiveTest do
       assert agent.config["timezone"] == "America/Los_Angeles"
       assert agent.config["timezone_name"] == "America/Los_Angeles"
       assert agent.config["timezone_offset_hours"] == -8
-      assert agent.config["wakeup_interval_ms"] == 600_000
+      assert agent.config["wakeup_interval_ms"] == 3_600_000
       assert agent.config["brief_max_items"] == 12
 
       assert agent.config["subscribe"] == [

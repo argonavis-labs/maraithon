@@ -5,6 +5,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
   alias Maraithon.Agents
   alias Maraithon.Behaviors.SlackFollowthroughAgent
   alias Maraithon.Insights
+  alias Maraithon.Todos
 
   setup do
     user_id = "slack-advisor@example.com"
@@ -118,6 +119,84 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgentTest do
         SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: payload}})
 
       assert Insights.list_open_for_user(user_id) == []
+    end
+
+    test "checks off an existing Slack todo when the latest scan finds completion evidence", %{
+      user_id: user_id,
+      context: context
+    } do
+      state =
+        SlackFollowthroughAgent.init(%{
+          "user_id" => user_id,
+          "min_confidence" => "0.7",
+          "max_insights_per_cycle" => "3"
+        })
+
+      open_payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I will send the notes to <@U_TEAM> today",
+              "ts" => "1762502400.000001"
+            }
+          ]
+        }
+      }
+
+      {:emit, {:insights_recorded, _recorded}, state} =
+        SlackFollowthroughAgent.handle_wakeup(state, %{context | event: %{payload: open_payload}})
+
+      [todo] = Todos.list_open_for_user(user_id)
+      assert todo.status == "open"
+
+      resolved_payload = %{
+        "source" => "slack",
+        "data" => %{
+          "messages" => [
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "I will send the notes to <@U_TEAM> today",
+              "ts" => "1762502400.000001"
+            },
+            %{
+              "source" => "slack",
+              "team_id" => "T123",
+              "channel_id" => "C456",
+              "channel_name" => "planning",
+              "user_id" => "U_SELF",
+              "self_user_id" => "U_SELF",
+              "text" => "Sent the notes here",
+              "thread_ts" => "1762502400.000001",
+              "ts" => "1762503000.000001"
+            }
+          ]
+        }
+      }
+
+      assert {:idle, _state} =
+               SlackFollowthroughAgent.handle_wakeup(state, %{
+                 context
+                 | event: %{payload: resolved_payload}
+               })
+
+      assert Insights.list_open_for_user(user_id) == []
+      assert Todos.list_open_for_user(user_id) == []
+      assert [done_todo | _] = Todos.list_recent_for_user(user_id)
+      assert done_todo.id == todo.id
+      assert done_todo.status == "done"
+      assert get_in(done_todo.metadata, ["auto_resolution", "status"]) == "done"
     end
 
     test "downgrades Slack follow-through when another participant already replied", %{

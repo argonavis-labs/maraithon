@@ -62,6 +62,25 @@ defmodule Maraithon.TodosTest do
     assert Todos.list_open_for_user(user_id, kind: "gmail_triage") == []
   end
 
+  test "dismissing a todo records a low-signal not-important learning marker" do
+    user_id = unique_user_email("todos-dismiss-signal")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-newsletter", "Skim vendor newsletter")
+      ])
+
+    assert {:ok, dismissed} =
+             Todos.dismiss(user_id, todo.id, note: "Not worth my time.", source: "mobile")
+
+    assert dismissed.status == "dismissed"
+    assert get_in(dismissed.metadata, ["assistant_feedback", "value"]) == "not_important"
+    assert get_in(dismissed.metadata, ["assistant_feedback", "signal_strength"]) == "low"
+    assert get_in(dismissed.metadata, ["assistant_feedback", "source"]) == "mobile"
+    assert get_in(dismissed.metadata, ["resolution_note"]) == "Not worth my time."
+  end
+
   test "todos can be searched by query and filtered by status" do
     user_id = unique_user_email("todos-search")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

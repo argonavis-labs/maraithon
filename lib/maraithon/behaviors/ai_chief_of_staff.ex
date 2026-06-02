@@ -10,7 +10,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
 
   alias Maraithon.ChiefOfStaff.{Acquisition, AttentionArbiter, Skills}
 
-  @default_wakeup_interval_ms :timer.minutes(10)
+  @default_wakeup_interval_ms :timer.hours(1)
 
   @impl true
   def init(config) do
@@ -29,8 +29,6 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       enabled_skill_ids: enabled_skill_ids,
       skill_configs: skill_configs,
       skill_states: skill_states,
-      wakeup_interval_ms:
-        positive_integer(config["wakeup_interval_ms"], @default_wakeup_interval_ms),
       cycle_skill_ids: nil,
       assistant_cycle_id: nil,
       source_bundle: nil,
@@ -38,7 +36,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       pending_emit: nil,
       pending_emits: [],
       pending_effect_skill_id: nil,
-      resume_index: 0
+      resume_index: 0,
+      wakeup_interval_ms:
+        config
+        |> Map.get("wakeup_interval_ms")
+        |> positive_integer(@default_wakeup_interval_ms)
+        |> max(@default_wakeup_interval_ms)
     }
   end
 
@@ -140,6 +143,7 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
       skill_state = Map.fetch!(state.skill_states, skill_id)
       merge_wakeup(schedule, module.next_wakeup(skill_state))
     end)
+    |> clamp_relative_scan_floor()
   end
 
   def default_skill_ids, do: Skills.default_enabled_ids()
@@ -468,6 +472,12 @@ defmodule Maraithon.Behaviors.AIChiefOfStaff do
     do: merge_wakeup({:absolute, absolute}, {:relative, ms})
 
   defp merge_wakeup(_left, right), do: right
+
+  defp clamp_relative_scan_floor({:relative, ms}) when is_integer(ms) do
+    {:relative, max(ms, @default_wakeup_interval_ms)}
+  end
+
+  defp clamp_relative_scan_floor(other), do: other
 
   defp acquisition_module do
     Application.get_env(:maraithon, __MODULE__, [])
