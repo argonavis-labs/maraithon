@@ -33,14 +33,11 @@ enum ChiefOfStaffCopy {
     }
 
     private static func strippedSafeLabel(_ value: String) -> String {
+        guard let regex = ChiefOfStaffRegex.safeLabel else { return value }
+
         var current = value
-
         for _ in 0..<3 {
-            let next = current.replacingChiefOfStaffMatches(
-                #"^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary|source)\s*[:=-]\s*"#,
-                with: ""
-            )
-
+            let next = current.replacingChiefOfStaffMatches(regex, with: "")
             if next == current { return current }
             current = next
         }
@@ -74,31 +71,43 @@ enum ChiefOfStaffCopy {
             return true
         }
 
-        let patterns = [
-            #"\b(?:confidence|quality|priority|urgency|relevance|interrupt|telegram_fit)_score\s*[:=]"#,
-            #"\b\d{1,3}%\s+confidence\b"#,
-            #"\bconfidence\s+(?:this|that|was|is)\b"#,
-            #"^\s*reasoning\s*:"#,
-            #"\bmodel\s+(?:classified|confidence|ranked|reasoning|saw|score)\b"#,
-            #"\bscore\s*[:=]\s*\d"#,
-            #"\bscore\s+(?:says|was|is)\b"#,
-            #"\bthreshold\s*[:=]\s*\d"#,
-            #"\bmodel\s*[:=]"#,
-            #"^\s*[\{\[]"#
-        ]
-
-        return patterns.contains { pattern in
-            lower.range(of: pattern, options: .regularExpression) != nil
+        let range = NSRange(lower.startIndex..<lower.endIndex, in: lower)
+        return ChiefOfStaffRegex.internalPatterns.contains { regex in
+            regex.firstMatch(in: lower, options: [], range: range) != nil
         }
     }
 }
 
-private extension String {
-    var polishingChiefOfStaffRoleLabels: String {
-        var text = self
+/// All ChiefOfStaffCopy regexes compiled exactly once. Compiling `NSRegularExpression`
+/// is expensive; `clean(_:)` runs on every todo merge and every Today render, so compiling
+/// per call previously blocked the main thread for seconds on large accounts.
+/// `NSRegularExpression` is immutable and thread-safe, so these statics are safe to share.
+private enum ChiefOfStaffRegex {
+    static let safeLabel = caseInsensitive(
+        #"^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary|source)\s*[:=-]\s*"#
+    )
+
+    static let whitespace = caseSensitive(#"[ \t]{2,}"#)
+
+    // Matched against lowercased text (case-sensitive, mirroring the previous
+    // `range(of:options:.regularExpression)` behavior).
+    static let internalPatterns: [NSRegularExpression] = [
+        #"\b(?:confidence|quality|priority|urgency|relevance|interrupt|telegram_fit)_score\s*[:=]"#,
+        #"\b\d{1,3}%\s+confidence\b"#,
+        #"\bconfidence\s+(?:this|that|was|is)\b"#,
+        #"^\s*reasoning\s*:"#,
+        #"\bmodel\s+(?:classified|confidence|ranked|reasoning|saw|score)\b"#,
+        #"\bscore\s*[:=]\s*\d"#,
+        #"\bscore\s+(?:says|was|is)\b"#,
+        #"\bthreshold\s*[:=]\s*\d"#,
+        #"\bmodel\s*[:=]"#,
+        #"^\s*[\{\[]"#
+    ].compactMap(caseSensitive)
+
+    static let roleLabelReplacements: [(regex: NSRegularExpression, replacement: String)] = {
         let productUserContextPattern = #"account|accounts|dashboard|dashboards|data|email|emails|event|events|experience|feedback|flow|flows|interface|journey|journeys|list|lists|login|message|messages|name|names|onboarding|page|pages|permission|permissions|persona|personas|plan|plans|preference|preferences|profile|profiles|record|records|research|response|responses|role|roles|screen|screens|segment|segments|session|sessions|setting|settings|sign-up|signup|story|stories|test|tests|testing"#
 
-        let replacements = [
+        let raw: [(String, String)] = [
             (#"^\s*The user's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "Your"),
             (#"\bthe user's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "your"),
             (#"^\s*User's\b(?![-\s]+(?:\#(productUserContextPattern))\b)"#, "Your"),
@@ -191,16 +200,34 @@ private extension String {
             (#"\bchief_of_staff_commitment_tracker\b"#, "commitment tracker")
         ]
 
-        for (pattern, replacement) in replacements {
-            text = text.replacingChiefOfStaffMatches(pattern, with: replacement)
+        return raw.compactMap { pattern, replacement in
+            caseInsensitive(pattern).map { (regex: $0, replacement: replacement) }
         }
+    }()
 
+    private static func caseInsensitive(_ pattern: String) -> NSRegularExpression? {
+        try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+    }
+
+    private static func caseSensitive(_ pattern: String) -> NSRegularExpression? {
+        try? NSRegularExpression(pattern: pattern, options: [])
+    }
+}
+
+private extension String {
+    var polishingChiefOfStaffRoleLabels: String {
+        var text = self
+        for (regex, replacement) in ChiefOfStaffRegex.roleLabelReplacements {
+            text = text.replacingChiefOfStaffMatches(regex, with: replacement)
+        }
         return text
     }
 
     var collapsingChiefOfStaffWhitespace: String {
-        replacingChiefOfStaffMatches(#"[ \t]{2,}"#, with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let collapsed = ChiefOfStaffRegex.whitespace.map {
+            replacingChiefOfStaffMatches($0, with: " ")
+        } ?? self
+        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var capitalizingChiefOfStaffSentenceStart: String {
@@ -219,11 +246,7 @@ private extension String {
         return replacingCharacters(in: firstIndex...firstIndex, with: String(first).uppercased())
     }
 
-    func replacingChiefOfStaffMatches(_ pattern: String, with replacement: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return self
-        }
-
+    func replacingChiefOfStaffMatches(_ regex: NSRegularExpression, with replacement: String) -> String {
         let range = NSRange(startIndex..<endIndex, in: self)
         return regex.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: replacement)
     }

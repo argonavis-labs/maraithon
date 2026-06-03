@@ -327,6 +327,40 @@ struct ProductionDataSyncTests {
         #expect(todo.nextBestAction == "Approve a short reply.")
     }
 
+    @Test
+    func bulkTodoMappingStaysFastForLargeAccounts() {
+        let remotes = (0..<200).map { index in
+            remoteTodo(
+                summary: "The user committed to send the campaign update to the operator.",
+                nextAction: "Reply now with owner and ETA.",
+                actionCard: MobileAPIClient.RemoteActionCard(
+                    decisionPrompt: "Decide whether to send the campaign owner and ETA.",
+                    contextItems: [
+                        .init(label: "Person", value: "Michael \(index)"),
+                        .init(label: "Project", value: "UGC campaign"),
+                        .init(label: "Relationship", value: "Investor")
+                    ],
+                    whyNow: "The user is waiting and no later reply was found.",
+                    sourceContext: "Checked Gmail",
+                    nextBestAction: "Approve a short reply.",
+                    draftPreview: "Thanks Michael. I can send the campaign timing today.",
+                    evidenceExcerpt: "Can you send the next update?"
+                )
+            )
+        }
+
+        let elapsed = ContinuousClock().measure {
+            for remote in remotes {
+                _ = ProductionDataSync.todo(from: remote, id: UUID())
+            }
+        }
+
+        // Each todo runs ~10 ChiefOfStaffCopy.clean passes. Compiling the regexes per
+        // call (the old behavior) made this take many seconds and froze/crashed the app
+        // on large accounts; cached regexes keep a full 200-todo merge well under a second.
+        #expect(elapsed < .seconds(5))
+    }
+
     private func todoPayloadPriority(_ priority: TodoPriority) -> Int? {
         ProductionDataSync.todoPayload(
             title: "Send investor update",
