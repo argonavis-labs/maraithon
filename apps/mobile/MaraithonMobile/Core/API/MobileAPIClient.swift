@@ -1,6 +1,6 @@
 import Foundation
 
-enum MobileAPIError: LocalizedError, Equatable {
+enum MobileAPIError: LocalizedError, Equatable, Sendable {
     case invalidResponse
     case unauthorized
     case server(String)
@@ -31,10 +31,11 @@ enum MobileAPIError: LocalizedError, Equatable {
     }
 }
 
-@MainActor
-struct MobileAPIClient {
-    struct MagicLinkResponse: Decodable {
-        struct MagicLink: Decodable {
+struct MobileAPIClient: Sendable {
+    typealias RequestBody = [String: JSONValue]
+
+    struct MagicLinkResponse: Decodable, Sendable {
+        struct MagicLink: Decodable, Sendable {
             let email: String
             let expiresInSeconds: TimeInterval
             let delivery: String?
@@ -63,7 +64,7 @@ struct MobileAPIClient {
         }
     }
 
-    struct AuthResponse: Decodable {
+    struct AuthResponse: Decodable, Sendable {
         let sessionToken: String
         let user: RemoteUser
 
@@ -73,31 +74,31 @@ struct MobileAPIClient {
         }
     }
 
-    struct MeResponse: Decodable {
+    struct MeResponse: Decodable, Sendable {
         let user: RemoteUser
     }
 
-    struct TodosResponse: Decodable {
+    struct TodosResponse: Decodable, Sendable {
         let todos: [RemoteTodo]
     }
 
-    struct TodoActivityResponse: Decodable {
+    struct TodoActivityResponse: Decodable, Sendable {
         let activity: [RemoteTodoActivity]
     }
 
-    struct TodoResponse: Decodable {
+    struct TodoResponse: Decodable, Sendable {
         let todo: RemoteTodo
     }
 
-    struct PeopleResponse: Decodable {
+    struct PeopleResponse: Decodable, Sendable {
         let people: [RemotePerson]
     }
 
-    struct PersonResponse: Decodable {
+    struct PersonResponse: Decodable, Sendable {
         let person: RemotePerson
     }
 
-    struct RemoteUser: Decodable, Equatable {
+    struct RemoteUser: Decodable, Equatable, Sendable {
         let id: String
         let email: String
         let sessionExpiresAt: Date
@@ -109,7 +110,7 @@ struct MobileAPIClient {
         }
     }
 
-    struct RemoteTodo: Decodable, Equatable {
+    struct RemoteTodo: Decodable, Equatable, Sendable {
         let id: String
         let title: String
         let summary: String?
@@ -159,7 +160,7 @@ struct MobileAPIClient {
         }
     }
 
-    struct RemoteTodoActivity: Decodable, Equatable, Identifiable {
+    struct RemoteTodoActivity: Decodable, Equatable, Identifiable, Sendable {
         let id: String
         let eventType: String
         let actorType: String
@@ -223,8 +224,8 @@ struct MobileAPIClient {
         }
     }
 
-    struct RemoteActionCard: Decodable, Equatable {
-        struct ContextItem: Decodable, Equatable {
+    struct RemoteActionCard: Decodable, Equatable, Sendable {
+        struct ContextItem: Decodable, Equatable, Sendable {
             let label: String?
             let value: String?
         }
@@ -277,7 +278,7 @@ struct MobileAPIClient {
         }
     }
 
-    struct RemotePerson: Decodable, Equatable {
+    struct RemotePerson: Decodable, Equatable, Sendable {
         let id: String
         let displayName: String
         let contactDetails: [String: [String]]
@@ -316,7 +317,7 @@ struct MobileAPIClient {
         }
     }
 
-    struct FlexibleStringArray: Decodable, Equatable {
+    struct FlexibleStringArray: Decodable, Equatable, Sendable {
         let values: [String]
 
         init(from decoder: Decoder) throws {
@@ -331,7 +332,7 @@ struct MobileAPIClient {
         }
     }
 
-    enum StringValue: Decodable, Equatable {
+    enum StringValue: Decodable, Equatable, Sendable {
         case string(String)
         case int(Int)
         case double(Double)
@@ -372,17 +373,28 @@ struct MobileAPIClient {
     }
 
     let baseURL: URL
-    var session: URLSession = .shared
+    let session: URLSession
 
-    init(baseURL: URL = AppConfiguration.mobileAPIBaseURL) {
+    /// Shared session with bounded timeouts so a slow or hung request never leaves the
+    /// UI spinning indefinitely (the default `.shared` request timeout is 60s).
+    static let defaultSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 30
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }()
+
+    init(baseURL: URL = AppConfiguration.mobileAPIBaseURL, session: URLSession = MobileAPIClient.defaultSession) {
         self.baseURL = baseURL
+        self.session = session
     }
 
     func requestMagicLink(email: String) async throws -> MagicLinkResponse {
         try await send(
             path: "/auth/magic-link",
             method: "POST",
-            body: ["email": email],
+            body: ["email": .string(email)],
             responseType: MagicLinkResponse.self
         )
     }
@@ -399,7 +411,7 @@ struct MobileAPIClient {
         try await send(
             path: "/auth/magic-code",
             method: "POST",
-            body: ["code": code],
+            body: ["code": .string(code)],
             responseType: AuthResponse.self
         )
     }
@@ -436,23 +448,23 @@ struct MobileAPIClient {
         return response.activity
     }
 
-    func createTodo(sessionToken: String, payload: [String: Any]) async throws -> RemoteTodo {
+    func createTodo(sessionToken: String, payload: RequestBody) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
             path: "/todos?include_cards=true",
             method: "POST",
             sessionToken: sessionToken,
-            body: ["todo": payload],
+            body: ["todo": .object(payload)],
             responseType: TodoResponse.self
         )
         return response.todo
     }
 
-    func updateTodo(sessionToken: String, id: UUID, payload: [String: Any]) async throws -> RemoteTodo {
+    func updateTodo(sessionToken: String, id: UUID, payload: RequestBody) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
             path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
             method: "PATCH",
             sessionToken: sessionToken,
-            body: ["todo": payload],
+            body: ["todo": .object(payload)],
             responseType: TodoResponse.self
         )
         return response.todo
@@ -477,23 +489,23 @@ struct MobileAPIClient {
         return response.people
     }
 
-    func createPerson(sessionToken: String, payload: [String: Any]) async throws -> RemotePerson {
+    func createPerson(sessionToken: String, payload: RequestBody) async throws -> RemotePerson {
         let response: PersonResponse = try await send(
             path: "/people",
             method: "POST",
             sessionToken: sessionToken,
-            body: ["person": payload],
+            body: ["person": .object(payload)],
             responseType: PersonResponse.self
         )
         return response.person
     }
 
-    func updatePerson(sessionToken: String, id: UUID, payload: [String: Any]) async throws -> RemotePerson {
+    func updatePerson(sessionToken: String, id: UUID, payload: RequestBody) async throws -> RemotePerson {
         let response: PersonResponse = try await send(
             path: "/people/\(id.uuidString.lowercased())",
             method: "PATCH",
             sessionToken: sessionToken,
-            body: ["person": payload],
+            body: ["person": .object(payload)],
             responseType: PersonResponse.self
         )
         return response.person
@@ -503,7 +515,7 @@ struct MobileAPIClient {
         path: String,
         method: String = "GET",
         sessionToken: String? = nil,
-        body: [String: Any]? = nil,
+        body: RequestBody? = nil,
         responseType: Response.Type
     ) async throws -> Response {
         let base = baseURL.absoluteString.hasSuffix("/")
@@ -522,7 +534,7 @@ struct MobileAPIClient {
 
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.httpBody = try JSONEncoder().encode(JSONValue.object(body))
         }
 
         let (data, response) = try await session.data(for: request)
@@ -571,23 +583,23 @@ struct MobileAPIClient {
         return decoder
     }
 
-    private struct ServerError: Decodable {
+    private struct ServerError: Decodable, Sendable {
         let error: String?
         let message: String?
     }
 
-    private struct EmptyResponse: Decodable {
+    private struct EmptyResponse: Decodable, Sendable {
         init() {}
     }
 
+    private static let iso8601WithFractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let iso8601 = Date.ISO8601FormatStyle(includingFractionalSeconds: false)
+
     nonisolated private static func date(from value: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: value) {
+        if let date = try? iso8601WithFractionalSeconds.parse(value) {
             return date
         }
 
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: value)
+        return try? iso8601.parse(value)
     }
 }

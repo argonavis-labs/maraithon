@@ -1,6 +1,6 @@
 import Foundation
 
-enum JSONValue: Codable, Equatable {
+enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)
@@ -49,6 +49,43 @@ enum JSONValue: Codable, Equatable {
             try container.encode(value)
         case .null:
             try container.encodeNil()
+        }
+    }
+
+    var string: String? {
+        switch self {
+        case .string(let value):
+            value
+        case .int(let value):
+            String(value)
+        case .double(let value):
+            String(value)
+        case .bool(let value):
+            String(value)
+        case .object, .array, .null:
+            nil
+        }
+    }
+
+    var int: Int? {
+        switch self {
+        case .int(let value):
+            value
+        case .string(let value):
+            Int(value)
+        case .double(let value):
+            Int(value)
+        case .bool, .object, .array, .null:
+            nil
+        }
+    }
+
+    var object: [String: JSONValue]? {
+        switch self {
+        case .object(let value):
+            value
+        case .string, .int, .double, .bool, .array, .null:
+            nil
         }
     }
 }

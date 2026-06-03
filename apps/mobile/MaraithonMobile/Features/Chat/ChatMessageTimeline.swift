@@ -41,9 +41,18 @@ enum ChatMessageTimeline {
         calendar: Calendar = .current
     ) -> [ChatTimelineRow] {
         let sortedMessages = sorted(messages)
-        let layouts = layouts(for: sortedMessages, calendar: calendar)
-        return zip(sortedMessages, layouts).map { message, layout in
-            ChatTimelineRow(message: message, layout: layout)
+        return sortedMessages.enumerated().map { index, message in
+            let previous = index > 0 ? sortedMessages[index - 1] : nil
+            let next = index < sortedMessages.count - 1 ? sortedMessages[index + 1] : nil
+            let sameAsPrevious = isGrouped(message, with: previous, calendar: calendar)
+            let sameAsNext = isGrouped(message, with: next, calendar: calendar)
+            let layout = ChatMessageLayout(
+                id: message.id,
+                showsDateHeader: previous.map { !calendar.isDate($0.sentAt, inSameDayAs: message.sentAt) } ?? true,
+                startsGroup: !sameAsPrevious,
+                endsGroup: !sameAsNext
+            )
+            return ChatTimelineRow(message: message, layout: layout)
         }
     }
 

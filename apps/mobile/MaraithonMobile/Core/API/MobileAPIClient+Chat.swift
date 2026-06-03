@@ -1,7 +1,6 @@
 import Foundation
 
-@MainActor
-protocol MobileChatAPI {
+protocol MobileChatAPI: Sendable {
     func listChatThreads(sessionToken: String) async throws -> [MobileAPIClient.RemoteChatThread]
     func createChatThread(
         sessionToken: String,
@@ -35,24 +34,24 @@ protocol MobileChatAPI {
 }
 
 extension MobileAPIClient: MobileChatAPI {
-    struct ChatThreadsResponse: Decodable {
+    struct ChatThreadsResponse: Decodable, Sendable {
         let threads: [RemoteChatThread]
     }
 
-    struct ChatThreadResponse: Decodable {
+    struct ChatThreadResponse: Decodable, Sendable {
         let thread: RemoteChatThread
     }
 
-    struct ChatMessageResponse: Decodable {
+    struct ChatMessageResponse: Decodable, Sendable {
         let thread: RemoteChatThread
         let run: RemoteChatRun?
     }
 
-    struct ChatRunResponse: Decodable {
+    struct ChatRunResponse: Decodable, Sendable {
         let run: RemoteChatRun
     }
 
-    struct ChatActionResultResponse: Decodable {
+    struct ChatActionResultResponse: Decodable, Sendable {
         let preparedAction: RemotePreparedAction?
         let thread: RemoteChatThread
 
@@ -62,7 +61,7 @@ extension MobileAPIClient: MobileChatAPI {
         }
     }
 
-    struct RemotePreparedAction: Decodable, Equatable, Identifiable {
+    struct RemotePreparedAction: Decodable, Equatable, Identifiable, Sendable {
         let id: UUID
         let status: String
         let actionType: String
@@ -80,7 +79,7 @@ extension MobileAPIClient: MobileChatAPI {
         }
     }
 
-    struct RemoteChatThread: Decodable, Equatable, Identifiable {
+    struct RemoteChatThread: Decodable, Equatable, Identifiable, Sendable {
         let id: UUID
         let title: String
         let status: String
@@ -139,7 +138,7 @@ extension MobileAPIClient: MobileChatAPI {
         }
     }
 
-    struct RemoteChatMessage: Decodable, Equatable, Identifiable {
+    struct RemoteChatMessage: Decodable, Equatable, Identifiable, Sendable {
         let id: UUID
         let clientMessageID: UUID?
         let role: String
@@ -218,7 +217,7 @@ extension MobileAPIClient: MobileChatAPI {
         }
     }
 
-    struct RemoteChatAction: Decodable, Equatable, Identifiable {
+    struct RemoteChatAction: Decodable, Equatable, Identifiable, Sendable {
         let id: UUID
         let kind: String
         let label: String
@@ -226,7 +225,7 @@ extension MobileAPIClient: MobileChatAPI {
         let style: String
     }
 
-    struct RemoteChatRun: Decodable, Equatable, Identifiable {
+    struct RemoteChatRun: Decodable, Equatable, Identifiable, Sendable {
         let id: UUID
         let threadID: UUID
         let status: String
@@ -303,10 +302,10 @@ extension MobileAPIClient: MobileChatAPI {
             method: "POST",
             sessionToken: sessionToken,
             body: [
-                "thread": [
-                    "client_thread_id": clientThreadID.uuidString.lowercased(),
-                    "title": title
-                ]
+                "thread": .object([
+                    "client_thread_id": .string(clientThreadID.uuidString.lowercased()),
+                    "title": .string(title)
+                ])
             ],
             responseType: ChatThreadResponse.self
         )
@@ -332,9 +331,9 @@ extension MobileAPIClient: MobileChatAPI {
             method: "PATCH",
             sessionToken: sessionToken,
             body: [
-                "thread": [
-                    "title": title
-                ]
+                "thread": .object([
+                    "title": .string(title)
+                ])
             ],
             responseType: ChatThreadResponse.self
         )
@@ -352,10 +351,10 @@ extension MobileAPIClient: MobileChatAPI {
             method: "POST",
             sessionToken: sessionToken,
             body: [
-                "message": [
-                    "client_message_id": clientMessageID.uuidString.lowercased(),
-                    "body": body
-                ]
+                "message": .object([
+                    "client_message_id": .string(clientMessageID.uuidString.lowercased()),
+                    "body": .string(body)
+                ])
             ],
             responseType: ChatMessageResponse.self
         )
@@ -395,8 +394,8 @@ extension MobileAPIClient: MobileChatAPI {
             method: "POST",
             sessionToken: sessionToken,
             body: [
-                "decision": decision.rawValue,
-                "client_message_id": clientMessageID.uuidString.lowercased()
+                "decision": .string(decision.rawValue),
+                "client_message_id": .string(clientMessageID.uuidString.lowercased())
             ],
             responseType: ChatActionResultResponse.self
         )

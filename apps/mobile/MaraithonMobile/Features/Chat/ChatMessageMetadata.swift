@@ -1,6 +1,6 @@
 import Foundation
 
-struct ChatMessageStoredMetadata: Codable, Equatable {
+struct ChatMessageStoredMetadata: Codable, Equatable, Sendable {
     var actions: [ChatMessageAction] = []
     var linkedTodo: JSONValue?
     var workSummary: ChatWorkSummary?
@@ -14,7 +14,7 @@ struct ChatMessageStoredMetadata: Codable, Equatable {
     }
 }
 
-struct ChatWorkSummary: Codable, Equatable {
+struct ChatWorkSummary: Codable, Equatable, Sendable {
     var headline: String?
     var status: String?
     var summary: String?
@@ -57,7 +57,7 @@ struct ChatWorkSummary: Codable, Equatable {
     }
 }
 
-struct ChatToolCallSummary: Codable, Equatable, Identifiable {
+struct ChatToolCallSummary: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var tool: String
     var label: String
@@ -123,7 +123,7 @@ struct ChatToolCallSummary: Codable, Equatable, Identifiable {
     }
 }
 
-struct ChatWorkStepSummary: Codable, Equatable, Identifiable {
+struct ChatWorkStepSummary: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var sequence: Int?
     var type: String?
@@ -794,7 +794,7 @@ private enum ChatWorkSummaryCopy {
     }
 }
 
-struct ChatMessageAction: Codable, Equatable, Identifiable {
+struct ChatMessageAction: Codable, Equatable, Identifiable, Sendable {
     let actionID: UUID
     let kind: String
     let label: String

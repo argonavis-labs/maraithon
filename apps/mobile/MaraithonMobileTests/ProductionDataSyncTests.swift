@@ -18,7 +18,7 @@ struct ProductionDataSyncTests {
             notes: ""
         )
 
-        #expect(payload["relationship"] as? String == "Personal")
+        #expect(payload["relationship"]?.string == "Personal")
     }
 
     @Test
@@ -36,7 +36,7 @@ struct ProductionDataSyncTests {
             lastContactedAt: date
         )
 
-        #expect(payload["last_interaction_at"] as? String == ISO8601DateFormatter().string(from: date))
+        #expect(payload["last_interaction_at"]?.string == ISO8601DateFormatter().string(from: date))
     }
 
     @Test
@@ -55,13 +55,13 @@ struct ProductionDataSyncTests {
         )
 
         let payload = ProductionDataSync.personPayload(from: contact)
-        let metadata = payload["metadata"] as? [String: String]
+        let metadata = payload["metadata"]?.object
 
-        #expect(payload["display_name"] as? String == "Ada Chen")
-        #expect(payload["relationship"] as? String == "Northstar")
-        #expect(payload["last_interaction_at"] as? String == ISO8601DateFormatter().string(from: date))
-        #expect(metadata?["mobile_status"] == "active")
-        #expect(metadata?["deal_stage"] == "qualified")
+        #expect(payload["display_name"]?.string == "Ada Chen")
+        #expect(payload["relationship"]?.string == "Northstar")
+        #expect(payload["last_interaction_at"]?.string == ISO8601DateFormatter().string(from: date))
+        #expect(metadata?["mobile_status"]?.string == "active")
+        #expect(metadata?["deal_stage"]?.string == "qualified")
     }
 
     @Test
@@ -153,7 +153,7 @@ struct ProductionDataSyncTests {
             nextAction: nextAction
         )
 
-        #expect(payload["next_action"] as? String == "Send the financing packet and confirm the next review window.")
+        #expect(payload["next_action"]?.string == "Send the financing packet and confirm the next review window.")
     }
 
     @Test
@@ -176,7 +176,7 @@ struct ProductionDataSyncTests {
             nextAction: nextAction
         )
 
-        #expect(payload["next_action"] as? String == "Send the packet, then ask whether Friday still works.")
+        #expect(payload["next_action"]?.string == "Send the packet, then ask whether Friday still works.")
     }
 
     @Test
@@ -274,7 +274,7 @@ struct ProductionDataSyncTests {
             priority: priority,
             dueDate: nil,
             isCompleted: false
-        )["priority"] as? Int
+        )["priority"]?.int
     }
 
     private func remotePerson(

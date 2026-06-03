@@ -49,9 +49,15 @@ struct ChatSyncService {
     func refreshThreads(modelContext: ModelContext, sessionStore: SessionStore) async throws {
         let sessionToken = try sessionToken(from: sessionStore)
         let remoteThreads = try await api.listChatThreads(sessionToken: sessionToken)
+        let localThreads = try localThreadsByRemoteID(modelContext: modelContext)
 
         for remoteThread in remoteThreads {
-            try merge(remoteThread, modelContext: modelContext)
+            try merge(
+                remoteThread,
+                modelContext: modelContext,
+                preferredThread: localThreads[remoteThread.id],
+                localThreadsByRemoteID: localThreads
+            )
         }
 
         try modelContext.save()
@@ -286,12 +292,14 @@ struct ChatSyncService {
         _ remoteThread: MobileAPIClient.RemoteChatThread,
         modelContext: ModelContext,
         preferredThread: ChatThread? = nil,
+        localThreadsByRemoteID: [UUID: ChatThread]? = nil,
         reconcileMessages: Bool = false
     ) throws {
         let thread = try localThread(
             for: remoteThread,
             modelContext: modelContext,
-            preferredThread: preferredThread
+            preferredThread: preferredThread,
+            localThreadsByRemoteID: localThreadsByRemoteID
         )
 
         thread.remoteID = remoteThread.id
@@ -309,6 +317,14 @@ struct ChatSyncService {
         }
 
         let remoteMessageList = remoteMessages(from: remoteThread)
+        var messagesByRemoteID = thread.messages.reduce(into: [UUID: ChatMessage]()) { result, message in
+            guard let remoteID = message.remoteID else { return }
+            result[remoteID] = message
+        }
+        var messagesByClientID = thread.messages.reduce(into: [UUID: ChatMessage]()) { result, message in
+            guard let clientMessageID = message.clientMessageID else { return }
+            result[clientMessageID] = message
+        }
 
         if reconcileMessages {
             removeMessagesMissingFromRemote(
@@ -319,7 +335,13 @@ struct ChatSyncService {
         }
 
         for remoteMessage in remoteMessageList {
-            try merge(remoteMessage, into: thread, modelContext: modelContext)
+            try merge(
+                remoteMessage,
+                into: thread,
+                modelContext: modelContext,
+                messagesByRemoteID: &messagesByRemoteID,
+                messagesByClientID: &messagesByClientID
+            )
         }
     }
 
@@ -335,15 +357,22 @@ struct ChatSyncService {
     private func localThread(
         for remoteThread: MobileAPIClient.RemoteChatThread,
         modelContext: ModelContext,
-        preferredThread: ChatThread?
+        preferredThread: ChatThread?,
+        localThreadsByRemoteID: [UUID: ChatThread]?
     ) throws -> ChatThread {
         if let preferredThread {
             return preferredThread
         }
 
-        let threads = try modelContext.fetch(FetchDescriptor<ChatThread>())
-        if let existing = threads.first(where: { $0.remoteID == remoteThread.id }) {
-            return existing
+        if let localThreadsByRemoteID {
+            if let existing = localThreadsByRemoteID[remoteThread.id] {
+                return existing
+            }
+        } else {
+            let threads = try modelContext.fetch(FetchDescriptor<ChatThread>())
+            if let existing = threads.first(where: { $0.remoteID == remoteThread.id }) {
+                return existing
+            }
         }
 
         let thread = ChatThread(
@@ -358,12 +387,26 @@ struct ChatSyncService {
         return thread
     }
 
+    private func localThreadsByRemoteID(modelContext: ModelContext) throws -> [UUID: ChatThread] {
+        let threads = try modelContext.fetch(FetchDescriptor<ChatThread>())
+        return threads.reduce(into: [:]) { result, thread in
+            guard let remoteID = thread.remoteID else { return }
+            result[remoteID] = thread
+        }
+    }
+
     private func merge(
         _ remoteMessage: MobileAPIClient.RemoteChatMessage,
         into thread: ChatThread,
-        modelContext: ModelContext
+        modelContext: ModelContext,
+        messagesByRemoteID: inout [UUID: ChatMessage],
+        messagesByClientID: inout [UUID: ChatMessage]
     ) throws {
-        let message = localMessage(for: remoteMessage, in: thread) ?? {
+        let message = localMessage(
+            for: remoteMessage,
+            messagesByRemoteID: messagesByRemoteID,
+            messagesByClientID: messagesByClientID
+        ) ?? {
             let message = ChatMessage(
                 body: remoteMessage.body,
                 sentAt: remoteMessage.sentAt ?? now(),
@@ -391,18 +434,24 @@ struct ChatSyncService {
         message.messageClass = remoteMessage.messageClass
         message.remoteRunID = remoteMessage.runID
         message.structuredData = try encodedMetadata(for: remoteMessage)
+
+        messagesByRemoteID[remoteMessage.id] = message
+        if let clientMessageID = message.clientMessageID {
+            messagesByClientID[clientMessageID] = message
+        }
     }
 
     private func localMessage(
         for remoteMessage: MobileAPIClient.RemoteChatMessage,
-        in thread: ChatThread
+        messagesByRemoteID: [UUID: ChatMessage],
+        messagesByClientID: [UUID: ChatMessage]
     ) -> ChatMessage? {
-        if let match = thread.messages.first(where: { $0.remoteID == remoteMessage.id }) {
+        if let match = messagesByRemoteID[remoteMessage.id] {
             return match
         }
 
         if let clientMessageID = remoteMessage.clientMessageID {
-            return thread.messages.first { $0.clientMessageID == clientMessageID }
+            return messagesByClientID[clientMessageID]
         }
 
         return nil

@@ -81,22 +81,22 @@ enum ProductionDataSync {
         dueDate: Date?,
         isCompleted: Bool,
         nextAction: String? = nil
-    ) -> [String: Any] {
+    ) -> MobileAPIClient.RequestBody {
         let nextAction = cleanedText(nextAction) ?? cleanedText(title) ?? cleanedText(notes) ?? "Review this item."
 
-        var payload: [String: Any] = [
-            "source": "mobile",
-            "kind": "general",
-            "title": title,
-            "summary": notes.isEmpty ? title : notes,
-            "next_action": nextAction,
-            "notes": notes,
-            "priority": priorityValue(from: priority),
-            "status": isCompleted ? "done" : "open"
+        var payload: MobileAPIClient.RequestBody = [
+            "source": .string("mobile"),
+            "kind": .string("general"),
+            "title": .string(title),
+            "summary": .string(notes.isEmpty ? title : notes),
+            "next_action": .string(nextAction),
+            "notes": .string(notes),
+            "priority": .int(priorityValue(from: priority)),
+            "status": .string(isCompleted ? "done" : "open")
         ]
 
         if let dueDate {
-            payload["due_at"] = isoString(for: dueDate)
+            payload["due_at"] = .string(isoString(for: dueDate))
         }
 
         return payload
@@ -133,32 +133,32 @@ enum ProductionDataSync {
         dealValue: Decimal,
         notes: String,
         lastContactedAt: Date? = nil
-    ) -> [String: Any] {
+    ) -> MobileAPIClient.RequestBody {
         let relationship = company.trimmingCharacters(in: .whitespacesAndNewlines)
-        var payload: [String: Any] = [
-            "display_name": name,
-            "relationship": relationship.isEmpty ? "Personal" : relationship,
-            "email": email,
-            "notes": notes,
-            "metadata": [
-                "mobile_status": status.rawValue,
-                "deal_stage": dealStage.rawValue,
-                "deal_value": NSDecimalNumber(decimal: dealValue).stringValue
-            ]
+        var payload: MobileAPIClient.RequestBody = [
+            "display_name": .string(name),
+            "relationship": .string(relationship.isEmpty ? "Personal" : relationship),
+            "email": .string(email),
+            "notes": .string(notes),
+            "metadata": .object([
+                "mobile_status": .string(status.rawValue),
+                "deal_stage": .string(dealStage.rawValue),
+                "deal_value": .string(NSDecimalNumber(decimal: dealValue).stringValue)
+            ])
         ]
 
         if !phone.isEmpty {
-            payload["phone"] = phone
+            payload["phone"] = .string(phone)
         }
 
         if let lastContactedAt {
-            payload["last_interaction_at"] = isoString(for: lastContactedAt)
+            payload["last_interaction_at"] = .string(isoString(for: lastContactedAt))
         }
 
         return payload
     }
 
-    static func personPayload(from contact: CRMContact) -> [String: Any] {
+    static func personPayload(from contact: CRMContact) -> MobileAPIClient.RequestBody {
         personPayload(
             name: contact.name,
             company: contact.company,
@@ -273,7 +273,7 @@ enum ProductionDataSync {
     }
 
     private static func isoString(for date: Date) -> String {
-        ISO8601DateFormatter().string(from: date)
+        Date.ISO8601FormatStyle(includingFractionalSeconds: false).format(date)
     }
 
     private static func cleanedText(_ value: String?) -> String? {

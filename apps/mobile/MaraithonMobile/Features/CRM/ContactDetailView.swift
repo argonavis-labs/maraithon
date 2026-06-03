@@ -269,7 +269,7 @@ struct ContactDetailView: View {
                 let remote = try await MobileAPIClient().updateTodo(
                     sessionToken: sessionToken,
                     id: todo.id,
-                    payload: ["status": "done"]
+                    payload: ["status": .string("done")]
                 )
                 ProductionDataSync.apply(remote, to: todo)
                 _ = saveLocalDetailChange(failureMessage: ContactDetailCopy.remoteCompleteWorkSaveFailedMessage)

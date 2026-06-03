@@ -158,7 +158,7 @@ struct TodosView: View {
                 let remote = try await MobileAPIClient().updateTodo(
                     sessionToken: sessionToken,
                     id: todo.id,
-                    payload: ["status": completed ? "done" : "open"]
+                    payload: ["status": .string(completed ? "done" : "open")]
                 )
                 ProductionDataSync.apply(remote, to: todo)
                 _ = saveLocalWorkChange(failureMessage: TodosViewCopy.remoteUpdateSaveFailedMessage)

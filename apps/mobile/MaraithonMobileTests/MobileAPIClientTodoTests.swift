@@ -9,8 +9,9 @@ struct MobileAPIClientTodoTests {
     func deleteTodoUsesRemoteDeleteEndpoint() async throws {
         let todoID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body:
                 """
@@ -30,6 +31,7 @@ struct MobileAPIClientTodoTests {
                   }
                 }
                 """
+            )
         )
 
         let remote = try await client.deleteTodo(sessionToken: "session-token", id: todoID)
@@ -45,8 +47,9 @@ struct MobileAPIClientTodoTests {
     @Test
     func serverErrorKeepsMachineCodeAndUsesRecoveryCopy() async throws {
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 404,
             body:
                 """
@@ -55,6 +58,7 @@ struct MobileAPIClientTodoTests {
                   "message": "That item is no longer available."
                 }
                 """
+            )
         )
 
         do {
@@ -69,8 +73,9 @@ struct MobileAPIClientTodoTests {
     @Test
     func listTodosRequestsDecisionCardsForMobileContext() async throws {
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body:
                 """
@@ -102,6 +107,7 @@ struct MobileAPIClientTodoTests {
                   ]
                 }
                 """
+            )
         )
 
         let todos = try await client.listTodos(sessionToken: "session-token")
@@ -120,8 +126,9 @@ struct MobileAPIClientTodoTests {
     @Test
     func listTodoActivityRequestsDebugActivityLog() async throws {
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body:
                 """
@@ -142,6 +149,7 @@ struct MobileAPIClientTodoTests {
                   ]
                 }
                 """
+            )
         )
 
         let activity = try await client.listTodoActivity(sessionToken: "session-token", limit: 500)
@@ -162,8 +170,9 @@ struct MobileAPIClientTodoTests {
     func updateTodoRequestsFreshDecisionCardContext() async throws {
         let todoID = UUID(uuidString: "22222222-3333-4444-5555-666666666666")!
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body:
                 """
@@ -188,12 +197,13 @@ struct MobileAPIClientTodoTests {
                   }
                 }
                 """
+            )
         )
 
         let remote = try await client.updateTodo(
             sessionToken: "session-token",
             id: todoID,
-            payload: ["title": "Reply to Michael"]
+            payload: ["title": .string("Reply to Michael")]
         )
         let request = try #require(recorder.requests.first)
 
@@ -205,10 +215,12 @@ struct MobileAPIClientTodoTests {
     @Test
     func listPeopleRequestsAllRelationshipStates() async throws {
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body: #"{"people":[]}"#
+            )
         )
 
         let people = try await client.listPeople(sessionToken: "session-token")
@@ -224,8 +236,9 @@ struct MobileAPIClientTodoTests {
     func updatePersonPersistsRelationshipQuickActionPayload() async throws {
         let personID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
         let recorder = HTTPRequestRecorder()
-        var client = MobileAPIClient(baseURL: URL(string: "https://mobile.example.test/api/mobile")!)
-        client.session = recorder.session(
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
             statusCode: 200,
             body:
                 """
@@ -242,21 +255,22 @@ struct MobileAPIClientTodoTests {
                   }
                 }
                 """
+            )
         )
 
         let remote = try await client.updatePerson(
             sessionToken: "session-token",
             id: personID,
             payload: [
-                "display_name": "Ada Chen",
-                "relationship": "Northstar",
-                "email": "ada@example.com",
-                "notes": "Board prep contact.",
-                "last_interaction_at": "2026-05-26T13:45:00Z",
-                "metadata": [
-                    "mobile_status": "active",
-                    "deal_stage": "qualified"
-                ]
+                "display_name": .string("Ada Chen"),
+                "relationship": .string("Northstar"),
+                "email": .string("ada@example.com"),
+                "notes": .string("Board prep contact."),
+                "last_interaction_at": .string("2026-05-26T13:45:00Z"),
+                "metadata": .object([
+                    "mobile_status": .string("active"),
+                    "deal_stage": .string("qualified")
+                ])
             ]
         )
         let request = try #require(recorder.requests.first)
