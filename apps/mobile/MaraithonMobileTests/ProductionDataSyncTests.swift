@@ -267,6 +267,66 @@ struct ProductionDataSyncTests {
         #expect(todo.evidenceExcerpt == "Your last message asked for timing.")
     }
 
+    @Test
+    func cardsOmittedRefreshPreservesExistingDecisionContext() {
+        let card = MobileAPIClient.RemoteActionCard(
+            decisionPrompt: "Decide whether to send the campaign update.",
+            contextItems: [.init(label: "Person", value: "Michael")],
+            whyNow: "Michael is waiting.",
+            sourceContext: "Checked Gmail",
+            nextBestAction: "Approve a short reply.",
+            draftPreview: "Thanks Michael.",
+            evidenceExcerpt: "Can you send the update?"
+        )
+        let todo = ProductionDataSync.todo(from: remoteTodo(actionCard: card), id: UUID())
+
+        let storedPrompt = todo.decisionPrompt
+        let storedWhyNow = todo.whyNow
+        let storedNextBest = todo.nextBestAction
+        let storedDraft = todo.draftPreview
+        #expect(storedPrompt != nil)
+
+        // A fast first-paint refresh (cards omitted) updates core fields but must not
+        // wipe the decision context that the background card pass populates.
+        ProductionDataSync.apply(
+            remoteTodo(status: "open", priority: 80, summary: "A board member is waiting."),
+            to: todo,
+            includeCards: false
+        )
+
+        #expect(todo.priority == .high)
+        #expect(todo.notes == "A board member is waiting.")
+        #expect(todo.decisionPrompt == storedPrompt)
+        #expect(todo.whyNow == storedWhyNow)
+        #expect(todo.nextBestAction == storedNextBest)
+        #expect(todo.draftPreview == storedDraft)
+    }
+
+    @Test
+    func cardsIncludedRefreshUpdatesDecisionContext() {
+        let todo = ProductionDataSync.todo(from: remoteTodo(), id: UUID())
+        #expect(todo.decisionPrompt == nil)
+
+        ProductionDataSync.apply(
+            remoteTodo(
+                actionCard: MobileAPIClient.RemoteActionCard(
+                    decisionPrompt: "Decide whether to send the campaign update.",
+                    contextItems: [.init(label: "Person", value: "Michael")],
+                    whyNow: "Michael is waiting.",
+                    sourceContext: "Checked Gmail",
+                    nextBestAction: "Approve a short reply.",
+                    draftPreview: "Thanks Michael.",
+                    evidenceExcerpt: "Can you send the update?"
+                )
+            ),
+            to: todo,
+            includeCards: true
+        )
+
+        #expect(todo.decisionPrompt != nil)
+        #expect(todo.nextBestAction == "Approve a short reply.")
+    }
+
     private func todoPayloadPriority(_ priority: TodoPriority) -> Int? {
         ProductionDataSync.todoPayload(
             title: "Send investor update",

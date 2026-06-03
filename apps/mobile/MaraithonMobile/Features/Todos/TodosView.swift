@@ -134,14 +134,23 @@ struct TodosView: View {
         defer { isRefreshing = false }
 
         do {
+            // First paint: load the list fast without server-generated decision cards.
             try await ProductionDataSync.refreshTodos(
                 sessionStore: sessionStore,
-                modelContext: modelContext
+                modelContext: modelContext,
+                includeCards: false
             )
             refreshErrorMessage = nil
         } catch {
             refreshErrorMessage = "Could not refresh work. \(MobileErrorCopy.message(for: error))"
         }
+
+        // Enrich with decision cards in the background; the list is already on screen.
+        try? await ProductionDataSync.refreshTodos(
+            sessionStore: sessionStore,
+            modelContext: modelContext,
+            includeCards: true
+        )
     }
 
     private func toggle(_ todo: TodoItem) {

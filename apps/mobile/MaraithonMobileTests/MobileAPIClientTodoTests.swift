@@ -124,6 +124,24 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
+    func listTodosCanOmitDecisionCardsForFastFirstPaint() async throws {
+        let recorder = HTTPRequestRecorder()
+        let client = MobileAPIClient(
+            baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
+            session: recorder.session(
+                statusCode: 200,
+                body: #"{"todos":[]}"#
+            )
+        )
+
+        _ = try await client.listTodos(sessionToken: "session-token", includeCards: false)
+        let request = try #require(recorder.requests.first)
+
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=false")
+    }
+
+    @Test
     func listTodoActivityRequestsDebugActivityLog() async throws {
         let recorder = HTTPRequestRecorder()
         let client = MobileAPIClient(

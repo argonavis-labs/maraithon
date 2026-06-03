@@ -49,6 +49,16 @@ final class ProductionMagicAuthProvider: AuthProviding {
         return user
     }
 
+    func locallyStoredUser() -> AuthenticatedUser? {
+        guard let data = userDefaults.data(forKey: AuthSessionStorageKeys.authenticatedUser),
+              let savedUser = try? JSONDecoder().decode(AuthenticatedUser.self, from: data),
+              savedUser.sessionExpiresAt > now(),
+              savedUser.sessionToken != nil else {
+            return nil
+        }
+        return savedUser
+    }
+
     func restoreSession() async throws -> AuthenticatedUser? {
         guard let data = userDefaults.data(forKey: AuthSessionStorageKeys.authenticatedUser) else {
             return nil
@@ -68,7 +78,14 @@ final class ProductionMagicAuthProvider: AuthProviding {
             return nil
         }
 
-        let response = try await apiClient.me(sessionToken: sessionToken)
+        let response: MobileAPIClient.MeResponse
+        do {
+            response = try await apiClient.me(sessionToken: sessionToken)
+        } catch MobileAPIError.unauthorized {
+            // The session is genuinely invalid; drop it so we don't keep retrying it.
+            userDefaults.removeObject(forKey: AuthSessionStorageKeys.authenticatedUser)
+            throw MobileAPIError.unauthorized
+        }
         let restored = AuthenticatedUser(
             id: response.user.id,
             email: response.user.email,

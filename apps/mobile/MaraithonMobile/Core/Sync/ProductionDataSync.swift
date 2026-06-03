@@ -3,14 +3,29 @@ import SwiftData
 
 @MainActor
 enum ProductionDataSync {
-    static func refreshAll(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+    static func refreshAll(
+        sessionStore: SessionStore,
+        modelContext: ModelContext,
+        includeCards: Bool = true
+    ) async throws {
         try await refreshPeople(sessionStore: sessionStore, modelContext: modelContext)
-        try await refreshTodos(sessionStore: sessionStore, modelContext: modelContext)
+        try await refreshTodos(
+            sessionStore: sessionStore,
+            modelContext: modelContext,
+            includeCards: includeCards
+        )
     }
 
-    static func refreshTodos(sessionStore: SessionStore, modelContext: ModelContext) async throws {
+    static func refreshTodos(
+        sessionStore: SessionStore,
+        modelContext: ModelContext,
+        includeCards: Bool = true
+    ) async throws {
         guard let sessionToken = sessionStore.user?.sessionToken else { return }
-        let remoteTodos = try await MobileAPIClient().listTodos(sessionToken: sessionToken)
+        let remoteTodos = try await MobileAPIClient().listTodos(
+            sessionToken: sessionToken,
+            includeCards: includeCards
+        )
         let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
         let localByID = Dictionary(uniqueKeysWithValues: localTodos.map { ($0.id, $0) })
 
@@ -24,7 +39,7 @@ enum ProductionDataSync {
             }
 
             if let todo = localByID[id] {
-                apply(remoteTodo, to: todo)
+                apply(remoteTodo, to: todo, includeCards: includeCards)
             } else {
                 modelContext.insert(todo(from: remoteTodo, id: id))
             }
@@ -51,7 +66,11 @@ enum ProductionDataSync {
         try modelContext.save()
     }
 
-    static func apply(_ remoteTodo: MobileAPIClient.RemoteTodo, to todo: TodoItem) {
+    static func apply(
+        _ remoteTodo: MobileAPIClient.RemoteTodo,
+        to todo: TodoItem,
+        includeCards: Bool = true
+    ) {
         todo.title = remoteTodo.title
         todo.notes = remoteTodo.notes ?? remoteTodo.summary ?? ""
         todo.nextAction = remoteTodo.nextAction
@@ -59,7 +78,11 @@ enum ProductionDataSync {
         todo.dueDate = remoteTodo.dueAt
         todo.isCompleted = remoteTodo.status == "done"
         todo.completedAt = remoteTodo.closedAt
-        apply(remoteTodo.actionCard, to: todo)
+        // A cards-omitted refresh must not wipe existing decision-card context; those
+        // fields are filled by the background card pass.
+        if includeCards {
+            apply(remoteTodo.actionCard, to: todo)
+        }
     }
 
     static func apply(_ remotePerson: MobileAPIClient.RemotePerson, to contact: CRMContact) {

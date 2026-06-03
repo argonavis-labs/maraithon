@@ -429,9 +429,9 @@ struct MobileAPIClient: Sendable {
         )
     }
 
-    func listTodos(sessionToken: String) async throws -> [RemoteTodo] {
+    func listTodos(sessionToken: String, includeCards: Bool = true) async throws -> [RemoteTodo] {
         let response: TodosResponse = try await send(
-            path: "/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=true",
+            path: "/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
             sessionToken: sessionToken,
             responseType: TodosResponse.self
         )

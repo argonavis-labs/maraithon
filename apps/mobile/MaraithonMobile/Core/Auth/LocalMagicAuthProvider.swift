@@ -89,6 +89,15 @@ final class LocalMagicAuthProvider: AuthProviding {
         return user
     }
 
+    func locallyStoredUser() -> AuthenticatedUser? {
+        guard let data = userDefaults.data(forKey: AuthSessionStorageKeys.authenticatedUser),
+              let user = try? JSONDecoder().decode(AuthenticatedUser.self, from: data),
+              user.sessionExpiresAt > now() else {
+            return nil
+        }
+        return user
+    }
+
     func restoreSession() async throws -> AuthenticatedUser? {
         guard let data = userDefaults.data(forKey: AuthSessionStorageKeys.authenticatedUser) else {
             return nil

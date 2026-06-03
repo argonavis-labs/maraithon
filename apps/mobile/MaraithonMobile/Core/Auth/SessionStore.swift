@@ -20,6 +20,14 @@ final class SessionStore {
         isBusy = true
         defer { isBusy = false }
 
+        // Local-first: if a valid session is stored, show the app immediately and
+        // validate with the server in the background — launch never waits on the network.
+        let localUser = authProvider.locallyStoredUser()
+        if let localUser {
+            user = localUser
+            phase = .signedIn
+        }
+
         do {
             if let restoredUser = try await authProvider.restoreSession() {
                 user = restoredUser
@@ -28,10 +36,18 @@ final class SessionStore {
                 user = nil
                 phase = .signedOut
             }
-        } catch {
-            errorMessage = MobileErrorCopy.message(for: error)
+        } catch MobileAPIError.unauthorized {
+            // Session is genuinely invalid — sign out even if we showed it optimistically.
             user = nil
             phase = .signedOut
+        } catch {
+            // Background validation failed (offline/transient). Keep the optimistic
+            // session if we had one; only surface an error when we had nothing local.
+            if localUser == nil {
+                errorMessage = MobileErrorCopy.message(for: error)
+                user = nil
+                phase = .signedOut
+            }
         }
     }
 
