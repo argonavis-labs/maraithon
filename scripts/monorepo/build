@@ -48,6 +48,13 @@ if selected_component "${component}" "companion"; then
     "${companion_build_args[@]}" \
     "${companion_signing_args[@]}" \
     build
+
+  companion_built_app="$(
+    MARAITHON_COMPANION_DERIVED_DATA_PATH="${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" \
+      MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR="${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" \
+      companion_debug_app_path
+  )"
+  verify_companion_app_signature "${companion_built_app}"
 fi
 
 if selected_component "${component}" "mobile"; then

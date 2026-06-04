@@ -20,7 +20,7 @@ source "${CONFIG_FILE}"
 # shellcheck source=/dev/null
 source "${HELPER_FILE}"
 
-: "${FLY_APP:?FLY_APP is required in ${CONFIG_FILE}}"
+: "${MARAITHON_FLY_APP:?MARAITHON_FLY_APP or FLY_APP is required in ${CONFIG_FILE}}"
 : "${MARAITHON_VERIFY_EMAIL:?MARAITHON_VERIFY_EMAIL is required in ${CONFIG_FILE}}"
 : "${SIMULATOR_UDID:?SIMULATOR_UDID is required in ${CONFIG_FILE}}"
 
@@ -63,7 +63,7 @@ xcrun simctl bootstatus "${SIMULATOR_UDID}" -b >/dev/null
 xcrun simctl ui "${SIMULATOR_UDID}" appearance "${APPEARANCE}"
 mkdir -p "${SNAPSHOT_DIR}"
 
-MAGIC_CODE="$(generate_maraithon_magic_code "${FLY_APP}" "${MARAITHON_VERIFY_EMAIL}" "mobile-visual-smoke-${RUN_ID}")"
+MAGIC_CODE="$(generate_maraithon_magic_code "${MARAITHON_FLY_APP}" "${MARAITHON_VERIFY_EMAIL}" "mobile-visual-smoke-${RUN_ID}")"
 CONFIG_PATH="/tmp/maraithon-visual-smoke.json"
 trap 'rm -f "${CONFIG_PATH}"' EXIT
 

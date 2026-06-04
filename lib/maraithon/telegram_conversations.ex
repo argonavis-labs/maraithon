@@ -77,24 +77,52 @@ defmodule Maraithon.TelegramConversations do
     client_thread_id = read_string(attrs, "client_thread_id") || Ecto.UUID.generate()
     title = read_string(attrs, "title", "New conversation")
     chat_id = "mobile:#{user_id}:#{client_thread_id}"
+    root_message_id = read_string(attrs, "root_message_id")
     now = DateTime.utc_now()
+    metadata =
+      attrs
+      |> read_map("metadata")
+      |> Map.merge(%{
+        "mobile_thread" => true,
+        "client_thread_id" => client_thread_id,
+        "title" => title,
+        "last_mobile_run_id" => nil
+      })
 
     %Conversation{}
     |> Conversation.changeset(%{
       user_id: user_id,
       chat_id: chat_id,
       surface: "mobile",
+      root_message_id: root_message_id,
       status: "open",
       last_turn_at: now,
-      metadata: %{
-        "mobile_thread" => true,
-        "client_thread_id" => client_thread_id,
-        "title" => title,
-        "last_mobile_run_id" => nil
-      }
+      metadata: metadata
     })
     |> Repo.insert()
   end
+
+  def get_mobile_thread_for_todo(user_id, todo_id)
+      when is_binary(user_id) and is_binary(todo_id) do
+    root_message_id = "todo:#{todo_id}"
+    client_thread_id = "todo-#{todo_id}"
+    chat_id = "mobile:#{user_id}:#{client_thread_id}"
+
+    Conversation
+    |> where([c], c.user_id == ^user_id and c.surface == "mobile")
+    |> where(
+      [c],
+      c.root_message_id == ^root_message_id or
+        c.chat_id == ^chat_id or
+        fragment("?->>'linked_todo_id' = ?", c.metadata, ^todo_id)
+    )
+    |> order_by([c], desc_nulls_last: c.last_turn_at, desc: c.updated_at)
+    |> preload(:turns)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def get_mobile_thread_for_todo(_user_id, _todo_id), do: nil
 
   def list_mobile_threads(user_id, opts \\ []) when is_binary(user_id) do
     limit = opts |> Keyword.get(:limit, 50) |> max(1) |> min(100)

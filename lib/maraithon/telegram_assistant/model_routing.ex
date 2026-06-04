@@ -182,6 +182,9 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
 
   defp request_focus_for_attrs(attrs, text) do
     cond do
+      explicit_request_focus(attrs) ->
+        explicit_request_focus(attrs)
+
       linked_reply?(attrs) && linked_item_action_request?(text) ->
         :linked_item_context
 
@@ -192,6 +195,36 @@ defmodule Maraithon.TelegramAssistant.ModelRouting do
         request_focus_for_text(text)
     end
   end
+
+  defp explicit_request_focus(attrs) when is_map(attrs) do
+    attrs
+    |> Map.get(:request_focus, Map.get(attrs, "request_focus"))
+    |> normalize_focus_value()
+  end
+
+  defp explicit_request_focus(_attrs), do: nil
+
+  defp normalize_focus_value(value) when is_atom(value), do: value
+
+  defp normalize_focus_value(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> String.downcase()
+    |> String.replace("-", "_")
+    |> case do
+      "connector_status" -> :connector_status
+      "source_hint_identity" -> :source_hint_identity
+      "linked_item_context" -> :linked_item_context
+      "quick_chat" -> :quick_chat
+      "today_mode" -> :today_mode
+      "meeting_prep" -> :meeting_prep
+      "waiting_on" -> :waiting_on
+      "person_context" -> :person_context
+      _other -> nil
+    end
+  end
+
+  defp normalize_focus_value(_value), do: nil
 
   defp request_focus_for_text(text) when is_binary(text) do
     normalized = normalize_text(text)

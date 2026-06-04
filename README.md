@@ -683,9 +683,33 @@ Recommended shape:
 - Migrations use `DIRECT_DATABASE_URL`
 - `POOL_SIZE=8`, `DB_QUEUE_TARGET_MS=250`, `DB_QUEUE_INTERVAL_MS=2000`
 
-```bash
-flyctl auth login
+Local deploys should use a production Fly token instead of the active
+`flyctl` login. This matters on workstations with multiple Fly accounts.
 
+```bash
+mkdir -p ~/.config/maraithon
+chmod 700 ~/.config/maraithon
+
+cat > ~/.config/maraithon/fly-prod.env <<'EOF'
+export FLY_API_TOKEN="replace-with-fly-deploy-token"
+export MARAITHON_FLY_APP="maraithon"
+export MARAITHON_FLY_CONFIG="fly.toml"
+EOF
+
+chmod 600 ~/.config/maraithon/fly-prod.env
+make deploy
+```
+
+`make deploy` sources that env file, verifies token access to the Fly app,
+takes a local deploy lock, runs `flyctl deploy --remote-only`, and checks
+`/health` on the live app. Deploys are not tied to local Docker or the current
+Fly CLI account. Production helpers that use Fly SSH, including mobile
+verification, source the same env file and prefer `MARAITHON_FLY_APP`; `FLY_APP`
+is only a compatibility alias.
+
+Initial app and secret setup still uses Fly commands:
+
+```bash
 fly mpg create --name maraithon-pg -r yyz
 fly mpg attach maraithon-pg -a maraithon
 
@@ -709,8 +733,6 @@ flyctl secrets set -a maraithon \
   POOL_SIZE="8" \
   DB_QUEUE_TARGET_MS="250" \
   DB_QUEUE_INTERVAL_MS="2000"
-
-flyctl deploy -a maraithon
 ```
 
 ### GitHub Actions Auto-Deploy

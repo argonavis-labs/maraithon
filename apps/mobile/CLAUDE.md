@@ -34,6 +34,7 @@ The app uses SwiftUI, SwiftData, Observation, Swift Testing, and XcodeGen. Do no
 - Keep UI code declarative and direct.
 - Keep business logic testable without launching the app.
 - Avoid secrets, backend assumptions, and production credentials.
+- Production verification that reaches Fly must use the shared `FLY_API_TOKEN` env file and pinned `MARAITHON_FLY_APP`; never depend on the active `flyctl` account.
 
 ## Implementation Rules
 
@@ -69,6 +70,8 @@ The app uses SwiftUI, SwiftData, Observation, Swift Testing, and XcodeGen. Do no
 
 ### Testing
 
+- Current mode: do not run Xcode tests or broad test suites by default. Kent is testing live in production until he explicitly says to harden the app again.
+- Do not delete or weaken tests; this only changes routine verification.
 - Use Swift Testing.
 - Test pure helpers directly.
 - Add tests for new domain behavior before or alongside implementation.
@@ -95,6 +98,8 @@ Test:
 xcodebuild -quiet -project MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,id=D8E48B6C-EC1D-40AF-9D4E-913F531CACCC' test
 ```
 
+Do not run this test command by default during the current product-iteration mode.
+
 If a destination fails because a simulator is unavailable or busy, inspect available simulators:
 
 ```sh
@@ -107,10 +112,10 @@ Before finalizing a change:
 
 - Confirm the change follows the existing `Core/` and `Features/` boundaries.
 - Confirm repeated logic is extracted into focused helpers.
-- Confirm new helpers have tests.
+- Confirm new helpers are structured so tests can be added when hardening resumes.
 - Confirm user-visible mutations save or surface errors.
 - Confirm UI uses native controls and remains accessible.
-- Run generation/build/tests as relevant.
+- Run generation/build as relevant; skip tests unless Kent asks for them.
 - State any skipped check clearly.
 
 ## Anti-Patterns

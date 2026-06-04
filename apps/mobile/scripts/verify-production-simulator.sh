@@ -20,7 +20,7 @@ source "${CONFIG_FILE}"
 # shellcheck source=/dev/null
 source "${HELPER_FILE}"
 
-: "${FLY_APP:?FLY_APP is required in ${CONFIG_FILE}}"
+: "${MARAITHON_FLY_APP:?MARAITHON_FLY_APP or FLY_APP is required in ${CONFIG_FILE}}"
 : "${MARAITHON_VERIFY_EMAIL:?MARAITHON_VERIFY_EMAIL is required in ${CONFIG_FILE}}"
 : "${MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN:?MARAITHON_VERIFY_CONTACT_EMAIL_DOMAIN is required in ${CONFIG_FILE}}"
 : "${MARAITHON_PRODUCTION_BASE_URL:?MARAITHON_PRODUCTION_BASE_URL is required in ${CONFIG_FILE}}"
@@ -68,7 +68,7 @@ run_ui_attempt() {
   local config_path="/tmp/maraithon-production-verification.json"
   local status=0
 
-  simulator_magic_code="$(generate_maraithon_magic_code "${FLY_APP}" "${VERIFY_EMAIL}" "mobile-verification-loop")"
+  simulator_magic_code="$(generate_maraithon_magic_code "${MARAITHON_FLY_APP}" "${VERIFY_EMAIL}" "mobile-verification-loop")"
 
   jq -n \
     --arg magicCode "${simulator_magic_code}" \
@@ -115,15 +115,15 @@ if [[ -z "${SUCCESS_RUN_ID}" ]]; then
 fi
 
 RUN_ID="${SUCCESS_RUN_ID}"
-TODO_TITLE="iOS prod todo ${RUN_ID}"
+TODO_TITLE="iOS prod work item ${RUN_ID}"
 CONTACT_NAME="iOS Prod Person ${RUN_ID}"
 UPDATED_CONTACT_NOTES="Updated from simulator ${RUN_ID}"
 CHAT_PROBE_TEXT="Hey"
-CHAT_TODO_TITLE="iOS chat assistant todo ${RUN_ID}"
+CHAT_TODO_TITLE="iOS chat assistant work item ${RUN_ID}"
 FAST_CHAT_TEXT="Hey"
 DEEP_CHAT_TEXT="Look up the contact named ${CONTACT_NAME} from my production contacts. What notes are stored for them? Include the exact stored notes string."
 
-ASSERTION_MAGIC_CODE="$(generate_maraithon_magic_code "${FLY_APP}" "${VERIFY_EMAIL}" "mobile-verification-loop")"
+ASSERTION_MAGIC_CODE="$(generate_maraithon_magic_code "${MARAITHON_FLY_APP}" "${VERIFY_EMAIL}" "mobile-verification-loop")"
 AUTH_JSON="$(curl -fsS -X POST "${MARAITHON_MOBILE_API_BASE_URL}/auth/magic-code" \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
@@ -136,7 +136,7 @@ if [[ -z "${SESSION_TOKEN}" || "${SESSION_TOKEN}" == "null" ]]; then
 fi
 
 echo "Refreshing production local-pattern reminders for ${VERIFY_EMAIL}"
-flyctl ssh console -a "${FLY_APP}" \
+flyctl ssh console -a "${MARAITHON_FLY_APP}" \
   -C "env MARAITHON_VERIFY_EMAIL='${VERIFY_EMAIL}' bin/maraithon eval 'Application.load(:maraithon); Application.ensure_all_started(:ssl); Application.ensure_all_started(:cloak); Application.ensure_all_started(:cloak_ecto); {:ok, _vault} = Maraithon.Vault.start_link(); Application.ensure_all_started(:postgrex); Application.ensure_all_started(:ecto_sql); {:ok, _repo} = Maraithon.Repo.start_link(); email = System.fetch_env!(\"MARAITHON_VERIFY_EMAIL\"); IO.inspect(Maraithon.Proactive.LocalPatterns.run_for_user(email), label: \"local_patterns\")'" \
   >/dev/null
 
@@ -240,7 +240,7 @@ FAST_CHAT_THREAD_JSON="$(curl -fsS "${MARAITHON_MOBILE_API_BASE_URL}/chat/thread
 jq -e '.thread.pending_run == null' <<<"${FAST_CHAT_THREAD_JSON}" >/dev/null
 
 jq -e \
-  '.thread.messages[] | select(.role == "assistant" and ((.body // "") != "") and .structured_data.direct_intent == "fast_chat_reply")' \
+  '.thread.messages[] | select(.role == "assistant" and ((.run_id // "") != "") and ((.body // "") != "") and (((.body // "") | startswith("Captured. Next best action")) | not))' \
   <<<"${FAST_CHAT_THREAD_JSON}" >/dev/null
 
 DEEP_CHAT_THREAD_ID="$(curl -fsS -X POST "${MARAITHON_MOBILE_API_BASE_URL}/chat/threads" \
@@ -300,7 +300,7 @@ API_CHAT_THREAD_ID="$(curl -fsS -X POST "${MARAITHON_MOBILE_API_BASE_URL}/chat/t
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d "$(jq -n --arg client_thread_id "$(uuidgen | tr '[:upper:]' '[:lower:]')" \
-    '{thread: {client_thread_id: $client_thread_id, title: "Mobile verification todo"}}')" |
+    '{thread: {client_thread_id: $client_thread_id, title: "Mobile verification work item"}}')" |
   jq -r '.thread.id')"
 
 SEND_CHAT_JSON="$(curl -fsS -X POST "${MARAITHON_MOBILE_API_BASE_URL}/chat/threads/${API_CHAT_THREAD_ID}/messages" \
@@ -366,7 +366,7 @@ CHAT_TODO_JSON="$(curl -G -fsS "${MARAITHON_MOBILE_API_BASE_URL}/todos" \
 jq -e --arg title "${CHAT_TODO_TITLE}" '.todos[] | select(.title == $title)' <<<"${CHAT_TODO_JSON}" >/dev/null
 
 echo "Production simulator verification passed for ${RUN_ID}"
-echo "Todo: ${TODO_TITLE} (done)"
+echo "Work item: ${TODO_TITLE} (done)"
 echo "Person: ${CONTACT_NAME} (notes updated)"
 echo "Cold-thread todos: ${COLD_THREAD_TODO_COUNT} active rows verified for useful copy"
 echo "Fast chat: ${FAST_CHAT_TEXT} replied in ${FAST_CHAT_ELAPSED_SECONDS}s without a pending run"

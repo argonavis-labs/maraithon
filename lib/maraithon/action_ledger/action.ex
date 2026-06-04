@@ -29,7 +29,7 @@ defmodule Maraithon.ActionLedger.Action do
     secret_ref.checked
   )
 
-  @statuses ~w(allowed denied needs_confirmation completed failed held sent)
+  @statuses ~w(allowed denied needs_confirmation completed failed held running sent)
 
   schema "action_ledger_actions" do
     field :user_id, :string

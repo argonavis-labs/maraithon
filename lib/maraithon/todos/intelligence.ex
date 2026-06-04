@@ -9,7 +9,7 @@ defmodule Maraithon.Todos.Intelligence do
 
   alias Maraithon.{Crm, LLM, Memory}
   alias Maraithon.Todos
-  alias Maraithon.Todos.{SurfaceQuality, UserFacingCopy}
+  alias Maraithon.Todos.{SignalGate, SurfaceQuality, UserFacingCopy}
   alias Maraithon.Todos.Todo
 
   @sentinel "TODO_INTELLIGENCE_JSON_V1"
@@ -133,6 +133,9 @@ defmodule Maraithon.Todos.Intelligence do
        Requirements:
        - Return one decision for every candidate_todos item. `candidate_todos`,
          `existing_todo_id`, and the `todo` response object are internal JSON contract names.
+       - Executive bar: if a busy operator would reasonably feel their time was
+         wasted by seeing this as a separate work item, return action "skip".
+         Favor fewer, sharper items over broad capture.
        - Use action "update" with existing_todo_id when the candidate is the same
          underlying work as an existing saved work item and should refresh it.
        - Use action "skip" only when no write should happen.
@@ -156,6 +159,21 @@ defmodule Maraithon.Todos.Intelligence do
          another owner.
        - Use source bodies and metadata when available. Do not infer finance, tax,
          urgency, or relationship context from an ambiguous subject token alone.
+       - For Gmail and content-sourced candidates, distinguish actual work from
+         informational or educational content. Skip newsletters, articles,
+         podcasts, videos, market commentary, and learning material unless the
+         source body shows a direct ask, operator promise, deadline/deliverable,
+         specific decision, human counterparty waiting, or concrete
+         personal/business consequence if ignored.
+       - Skip passive status notifications and FYI-only system updates unless
+         the source requires a concrete operator action such as fix, approve,
+         submit, decide, reply, pay, schedule, or unblock. "Acknowledge",
+         "monitor", "keep an eye on it", or "step in if it changes" is not a
+         durable work item by itself.
+       - Relationship-maintenance nudges, cold/quiet-thread detectors, and raw
+         calendar conflict detections are not durable work by default. Keep them
+         out unless the source evidence shows a direct ask, real waiting person,
+         concrete decision, deadline, or material consequence.
        - For school, classroom, child, camp, or family logistics, identify the
        child/person from People or memory when possible and write the next_action
        as the concrete thing the user needs to do.
@@ -172,6 +190,13 @@ defmodule Maraithon.Todos.Intelligence do
          Use `you`, never `the user` or a hardcoded person name. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
+       - Every create/update todo must include action_draft.text before it is saved.
+         If a reply, email, Slack message, iMessage, or other sent message makes sense,
+         make it a concise first-person draft or a conversational suggested wording in
+         the operator's style, using memory_context and source evidence. If a full
+         draft does not make sense, still write a clear next-step sentence the operator
+         can act on, for example: `You should message the requester and say:
+         "Thanks, yes that would be great."`
        - Use product language for user-facing fields: say `work item`, `open work`,
          `People`, or `relationship context`; do not write `todo` or `CRM` in
          title, summary, next_action, notes, or action_plan unless quoting source text.
@@ -201,6 +226,12 @@ defmodule Maraithon.Todos.Intelligence do
        - If a candidate matches negative work-relevance memory and no exception
          signal applies, return action "skip" and explain the matching memory in
          reasoning.
+       - For chief_of_staff_commitment_tracker candidates, metadata.completion_check
+         is mandatory evidence that the work is still open. If completion_check.status
+         is missing, unclear, or completed_or_closed, return action "skip". When you
+         create/update one of these candidates, preserve metadata.completion_check
+         exactly enough to show the later evidence checked and why the loop still
+         needs action.
        - If a candidate partly matches negative feedback but may be worth keeping
          for later, create/update it as `attention_mode: "monitor"` with lower
          priority instead of putting it in act-now.
@@ -235,7 +266,9 @@ defmodule Maraithon.Todos.Intelligence do
                "due_at": "ISO-8601 datetime or omitted",
                "notes": "notes and metadata context",
                "action_plan": "draft or plan of the next action",
-               "action_draft": {},
+               "action_draft": {
+                 "text": "ready suggested wording or a conversational next step"
+               },
                "owner_user_id": "#{user_id}",
                "owner_label": null,
                "source_account_id": null,
@@ -451,6 +484,11 @@ defmodule Maraithon.Todos.Intelligence do
         family_policy_skip_reason(candidate, proposed_todo_attrs)
       end
 
+    signal_gate_skip_reason =
+      if is_map(candidate) and is_map(proposed_todo_attrs) do
+        SignalGate.skip_reason(candidate, proposed_todo_attrs)
+      end
+
     cond do
       not is_integer(candidate_index) or is_nil(candidate) ->
         {:error, :todo_intelligence_invalid_candidate_index}
@@ -478,6 +516,16 @@ defmodule Maraithon.Todos.Intelligence do
            todo_attrs: nil
          }}
 
+      is_binary(signal_gate_skip_reason) ->
+        {:ok,
+         %{
+           action: "skip",
+           candidate_index: candidate_index,
+           existing_todo_id: nil,
+           reasoning: signal_gate_skip_reason,
+           todo_attrs: nil
+         }}
+
       true ->
         normalize_persist_decision(
           decision,
@@ -486,6 +534,7 @@ defmodule Maraithon.Todos.Intelligence do
           existing_todo_id,
           existing_by_id,
           reasoning,
+          candidate,
           summary,
           opts
         )
@@ -682,6 +731,7 @@ defmodule Maraithon.Todos.Intelligence do
          existing_todo_id,
          existing_by_id,
          reasoning,
+         candidate,
          summary,
          opts
        ) do
@@ -705,6 +755,7 @@ defmodule Maraithon.Todos.Intelligence do
     todo_attrs =
       todo_attrs
       |> Map.put("dedupe_key", dedupe_key)
+      |> preserve_candidate_completion_check(candidate)
       |> put_intelligence_metadata(
         action,
         candidate_index,
@@ -735,6 +786,27 @@ defmodule Maraithon.Todos.Intelligence do
            reasoning: reasoning,
            todo_attrs: todo_attrs
          }}
+    end
+  end
+
+  defp preserve_candidate_completion_check(todo_attrs, candidate) do
+    todo_metadata = read_map(todo_attrs, "metadata")
+    candidate_metadata = read_map(candidate || %{}, "metadata")
+    candidate_completion_check = read_map(candidate_metadata, "completion_check")
+
+    cond do
+      read_map(todo_metadata, "completion_check") != %{} ->
+        todo_attrs
+
+      candidate_completion_check != %{} ->
+        Map.put(
+          todo_attrs,
+          "metadata",
+          Map.put(todo_metadata, "completion_check", candidate_completion_check)
+        )
+
+      true ->
+        todo_attrs
     end
   end
 

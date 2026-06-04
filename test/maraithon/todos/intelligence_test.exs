@@ -148,6 +148,10 @@ defmodule Maraithon.Todos.IntelligenceTest do
       assert prompt =~ "Use product language for user-facing fields"
       assert prompt =~ "do not write `todo` or `CRM`"
       assert prompt =~ "Family relationship policy is an admission rule"
+      assert prompt =~ "distinguish actual work from"
+      assert prompt =~ "informational or educational content"
+      assert prompt =~ "podcasts, videos, market commentary, and learning material"
+      assert prompt =~ "direct ask, operator promise, deadline/deliverable"
 
       refute prompt =~ "Maraithon's built-in todo intelligence layer"
       refute prompt =~ "Include CRM enrichment whenever source evidence identifies people"

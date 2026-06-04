@@ -21,11 +21,19 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   @default_timezone_offset_hours -5
   @default_review_hour 7
-  @default_email_scan_limit 80
-  @default_event_scan_limit 40
-  @default_lookback_hours 24
-  @default_calendar_forward_days 7
-  @default_llm_max_tokens 8_000
+  @default_email_scan_limit 200
+  @default_event_scan_limit 80
+  @default_slack_message_scan_limit 300
+  @default_local_message_scan_limit 300
+  @default_local_chat_scan_limit 120
+  @default_local_voice_memo_scan_limit 100
+  @default_local_note_scan_limit 120
+  @default_local_reminder_scan_limit 120
+  @default_local_file_scan_limit 100
+  @default_local_browser_visit_scan_limit 200
+  @default_lookback_hours 24 * 14
+  @default_calendar_forward_days 14
+  @default_llm_max_tokens 12_000
   @default_llm_reasoning_effort "high"
   @skill_path "priv/agents/skills/chief_of_staff/commitment_tracker.md"
 
@@ -48,6 +56,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "commitment_review_hour_local" => @default_review_hour,
       "email_scan_limit" => @default_email_scan_limit,
       "event_scan_limit" => @default_event_scan_limit,
+      "slack_message_scan_limit" => @default_slack_message_scan_limit,
+      "local_message_scan_limit" => @default_local_message_scan_limit,
+      "local_chat_scan_limit" => @default_local_chat_scan_limit,
+      "local_voice_memo_scan_limit" => @default_local_voice_memo_scan_limit,
+      "local_note_scan_limit" => @default_local_note_scan_limit,
+      "local_reminder_scan_limit" => @default_local_reminder_scan_limit,
+      "local_file_scan_limit" => @default_local_file_scan_limit,
+      "local_browser_visit_scan_limit" => @default_local_browser_visit_scan_limit,
       "lookback_hours" => @default_lookback_hours,
       "calendar_forward_days" => @default_calendar_forward_days,
       "llm_max_tokens" => @default_llm_max_tokens,
@@ -75,6 +91,30 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         required?: true
       },
       %{
+        kind: :provider_service,
+        provider: "slack",
+        service: "channels",
+        label: "Slack Channels",
+        description: "Required to scan channel discussions for actionable commitments.",
+        required?: true
+      },
+      %{
+        kind: :provider_service,
+        provider: "slack",
+        service: "dms",
+        label: "Slack DMs",
+        description: "Required to scan direct and group messages for actionable commitments.",
+        required?: true
+      },
+      %{
+        kind: :provider,
+        provider: "desktop",
+        label: "Mac companion",
+        description:
+          "Optional local context source for iMessage, voice notes, Apple Notes, Reminders, local calendar, files, and browser history.",
+        required?: false
+      },
+      %{
         kind: :provider,
         provider: "telegram",
         label: "Telegram",
@@ -93,10 +133,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   @impl true
   def interested_in?(_config, context) do
-    case get_in(context, [:trigger, :type]) do
-      :message -> false
-      :pubsub_event -> false
-      _ -> true
+    cond do
+      force_review_trigger?(context) ->
+        true
+
+      true ->
+        case get_in(context, [:trigger, :type]) do
+          :message -> false
+          :pubsub_event -> false
+          _ -> true
+        end
     end
   end
 
@@ -114,7 +160,63 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         integer_in_range(config["email_scan_limit"], @default_email_scan_limit, 1, 200),
       event_scan_limit:
         integer_in_range(config["event_scan_limit"], @default_event_scan_limit, 1, 120),
-      lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 168),
+      slack_message_scan_limit:
+        integer_in_range(
+          config["slack_message_scan_limit"],
+          @default_slack_message_scan_limit,
+          1,
+          500
+        ),
+      local_message_scan_limit:
+        integer_in_range(
+          config["local_message_scan_limit"],
+          @default_local_message_scan_limit,
+          1,
+          500
+        ),
+      local_chat_scan_limit:
+        integer_in_range(
+          config["local_chat_scan_limit"],
+          @default_local_chat_scan_limit,
+          1,
+          200
+        ),
+      local_voice_memo_scan_limit:
+        integer_in_range(
+          config["local_voice_memo_scan_limit"],
+          @default_local_voice_memo_scan_limit,
+          1,
+          200
+        ),
+      local_note_scan_limit:
+        integer_in_range(
+          config["local_note_scan_limit"],
+          @default_local_note_scan_limit,
+          1,
+          200
+        ),
+      local_reminder_scan_limit:
+        integer_in_range(
+          config["local_reminder_scan_limit"],
+          @default_local_reminder_scan_limit,
+          1,
+          200
+        ),
+      local_file_scan_limit:
+        integer_in_range(
+          config["local_file_scan_limit"],
+          @default_local_file_scan_limit,
+          1,
+          200
+        ),
+      local_browser_visit_scan_limit:
+        integer_in_range(
+          config["local_browser_visit_scan_limit"],
+          @default_local_browser_visit_scan_limit,
+          1,
+          250
+        ),
+      lookback_hours: integer_in_range(config["lookback_hours"], @default_lookback_hours, 1, 336),
       calendar_forward_days:
         integer_in_range(
           config["calendar_forward_days"],
@@ -138,7 +240,8 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     user_id = state.user_id || normalize_string(context[:user_id])
     now = context[:timestamp] || DateTime.utc_now()
     period_key = local_period_key(now, timezone_offset_hours_at(now, state))
-    dedupe_key = "commitment_tracker:#{period_key}"
+    force_review? = force_review_trigger?(context)
+    dedupe_key = commitment_dedupe_key(period_key, context)
 
     cond do
       is_nil(user_id) ->
@@ -147,10 +250,10 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       not scheduled_trigger?(context) ->
         {:idle, %{state | user_id: user_id}}
 
-      Map.get(state.last_run_keys, "daily") == period_key ->
+      not force_review? and Map.get(state.last_run_keys, "daily") == period_key ->
         {:idle, %{state | user_id: user_id}}
 
-      not due_now?(now, state) ->
+      not force_review? and not due_now?(now, state) ->
         {:idle, %{state | user_id: user_id}}
 
       true ->
@@ -254,45 +357,73 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           }
         }
 
-        case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
-          {:ok, brief_record} ->
-            period_key = read_string(tracker_input, "date", nil)
+        if admin_open_work_rebuild_context?(context) do
+          period_key = read_string(tracker_input, "date", nil)
 
-            {brief_record, linked_todo_ids, todo_link_error} =
-              attach_model_todos_to_brief(brief_record, todo_result)
+          todo_payload =
+            todo_result
+            |> todo_event_payload()
+            |> Map.put(:linked_todo_ids, [])
 
-            event_type =
-              if generation_mode in ["llm", "source_fallback"],
-                do: :briefs_recorded,
-                else: :brief_generation_failed
+          {:emit,
+           {:open_work_rebuilt,
+            %{
+              count: 0,
+              error_message: error_message,
+              generation_mode: generation_mode,
+              user_id: context[:user_id] || state.user_id,
+              cadences: ["commitment_tracker"],
+              source_backed: true,
+              brief_id: nil
+            }
+            |> Map.merge(todo_payload)},
+           %{
+             state
+             | pending_tracker_input: nil,
+               pending_dedupe_key: nil,
+               last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
+           }}
+        else
+          case Briefs.record(context[:user_id] || state.user_id, context[:agent_id], attrs) do
+            {:ok, brief_record} ->
+              period_key = read_string(tracker_input, "date", nil)
 
-            todo_payload =
-              todo_result
-              |> todo_event_payload()
-              |> Map.put(:linked_todo_ids, linked_todo_ids)
-              |> maybe_put(:todo_link_error, todo_link_error)
+              {brief_record, linked_todo_ids, todo_link_error} =
+                attach_model_todos_to_brief(brief_record, todo_result)
 
-            {:emit,
-             {event_type,
-              %{
-                count: 1,
-                error_message: error_message,
-                generation_mode: generation_mode,
-                user_id: context[:user_id] || state.user_id,
-                cadences: ["commitment_tracker"],
-                source_backed: true,
-                brief_id: brief_record.id
-              }
-              |> Map.merge(todo_payload)},
-             %{
-               state
-               | pending_tracker_input: nil,
-                 pending_dedupe_key: nil,
-                 last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
-             }}
+              event_type =
+                if generation_mode in ["llm", "source_fallback"],
+                  do: :briefs_recorded,
+                  else: :brief_generation_failed
 
-          {:error, _reason} ->
-            {:idle, %{state | pending_tracker_input: nil, pending_dedupe_key: nil}}
+              todo_payload =
+                todo_result
+                |> todo_event_payload()
+                |> Map.put(:linked_todo_ids, linked_todo_ids)
+                |> maybe_put(:todo_link_error, todo_link_error)
+
+              {:emit,
+               {event_type,
+                %{
+                  count: 1,
+                  error_message: error_message,
+                  generation_mode: generation_mode,
+                  user_id: context[:user_id] || state.user_id,
+                  cadences: ["commitment_tracker"],
+                  source_backed: true,
+                  brief_id: brief_record.id
+                }
+                |> Map.merge(todo_payload)},
+               %{
+                 state
+                 | pending_tracker_input: nil,
+                   pending_dedupe_key: nil,
+                   last_run_keys: Map.put(state.last_run_keys, "daily", period_key)
+               }}
+
+            {:error, _reason} ->
+              {:idle, %{state | pending_tracker_input: nil, pending_dedupe_key: nil}}
+          end
         end
       end
     )
@@ -345,6 +476,62 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       |> Enum.filter(&event_in_date_window?(&1, local_date, calendar_end, offset_hours))
       |> Enum.sort_by(&event_sort_key/1)
 
+    local_calendar_events =
+      source_bundle
+      |> SourceBundle.calendar_local_events()
+      |> Enum.filter(&event_in_date_window?(&1, local_date, calendar_end, offset_hours))
+      |> Enum.sort_by(&event_sort_key/1)
+
+    slack_messages =
+      source_bundle
+      |> SourceBundle.slack_messages()
+      |> Enum.filter(&recent_slack_message?(&1, lookback_start))
+      |> Enum.reject(&(read_string(&1, "text", nil) in [nil, ""]))
+      |> Enum.sort_by(&slack_message_sort_key/1, :desc)
+
+    slack_mentions =
+      source_bundle
+      |> SourceBundle.slack_mentions()
+      |> Enum.reject(&(read_string(&1, "text", nil) in [nil, ""]))
+      |> Enum.sort_by(&slack_message_sort_key/1, :desc)
+
+    imessage_messages =
+      source_bundle
+      |> SourceBundle.imessage_messages()
+      |> Enum.filter(&recent_local_message?(&1, lookback_start))
+      |> Enum.reject(&(read_string(&1, "text", nil) in [nil, ""]))
+      |> Enum.sort_by(&local_message_sort_key/1, :desc)
+
+    imessage_chats =
+      source_bundle
+      |> SourceBundle.imessage_chats()
+      |> Enum.sort_by(&local_chat_sort_key/1, :desc)
+
+    voice_memos =
+      source_bundle
+      |> SourceBundle.voice_memos()
+      |> Enum.sort_by(&voice_memo_sort_key/1, :desc)
+
+    notes =
+      source_bundle
+      |> SourceBundle.notes()
+      |> Enum.sort_by(&note_sort_key/1, :desc)
+
+    reminders =
+      source_bundle
+      |> SourceBundle.reminders()
+      |> Enum.sort_by(&reminder_sort_key/1, :asc)
+
+    files =
+      source_bundle
+      |> SourceBundle.files()
+      |> Enum.sort_by(&file_sort_key/1, :desc)
+
+    browser_visits =
+      source_bundle
+      |> SourceBundle.browser_visits()
+      |> Enum.sort_by(&browser_visit_sort_key/1, :desc)
+
     %{
       "date" => Date.to_iso8601(local_date),
       "generated_at" => DateTime.to_iso8601(now),
@@ -375,6 +562,78 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
           |> Enum.map(&calendar_event_for_prompt/1)
           |> Enum.take(state.event_scan_limit),
         "counts" => %{"upcoming_events" => length(calendar_events)}
+      },
+      "local_calendar" => %{
+        "window_start" => Date.to_iso8601(local_date),
+        "window_end" => Date.to_iso8601(calendar_end),
+        "upcoming_events" =>
+          local_calendar_events
+          |> Enum.map(&calendar_event_for_prompt/1)
+          |> Enum.take(state.event_scan_limit),
+        "counts" => %{"upcoming_events" => length(local_calendar_events)}
+      },
+      "slack" => %{
+        "recent_messages" =>
+          slack_messages
+          |> Enum.map(&slack_message_for_prompt/1)
+          |> Enum.take(state.slack_message_scan_limit),
+        "mentions" =>
+          slack_mentions
+          |> Enum.map(&slack_message_for_prompt/1)
+          |> Enum.take(state.slack_message_scan_limit),
+        "counts" => %{
+          "recent_messages" => length(slack_messages),
+          "mentions" => length(slack_mentions)
+        }
+      },
+      "imessage" => %{
+        "recent_messages" =>
+          imessage_messages
+          |> Enum.map(&imessage_message_for_prompt/1)
+          |> Enum.take(state.local_message_scan_limit),
+        "chats" =>
+          imessage_chats
+          |> Enum.map(&imessage_chat_for_prompt/1)
+          |> Enum.take(state.local_chat_scan_limit),
+        "counts" => %{
+          "recent_messages" => length(imessage_messages),
+          "chats" => length(imessage_chats)
+        }
+      },
+      "voice_memos" => %{
+        "items" =>
+          voice_memos
+          |> Enum.map(&voice_memo_for_prompt/1)
+          |> Enum.take(state.local_voice_memo_scan_limit),
+        "counts" => %{"items" => length(voice_memos)}
+      },
+      "notes" => %{
+        "items" =>
+          notes
+          |> Enum.map(&note_for_prompt/1)
+          |> Enum.take(state.local_note_scan_limit),
+        "counts" => %{"items" => length(notes)}
+      },
+      "reminders" => %{
+        "due_soon" =>
+          reminders
+          |> Enum.map(&reminder_for_prompt/1)
+          |> Enum.take(state.local_reminder_scan_limit),
+        "counts" => %{"due_soon" => length(reminders)}
+      },
+      "files" => %{
+        "recent" =>
+          files
+          |> Enum.map(&file_for_prompt/1)
+          |> Enum.take(state.local_file_scan_limit),
+        "counts" => %{"recent" => length(files)}
+      },
+      "browser_history" => %{
+        "recent" =>
+          browser_visits
+          |> Enum.map(&browser_visit_for_prompt/1)
+          |> Enum.take(state.local_browser_visit_scan_limit),
+        "counts" => %{"recent" => length(browser_visits)}
       },
       "open_work" => %{
         "todos" =>
@@ -434,13 +693,16 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
          "missing_sources": [],
          "todos": [
            {
-             "source": "gmail | calendar | imessage | whatsapp | chief_of_staff_commitment_tracker",
+             "source": "gmail | calendar | local_calendar | slack | imessage | voice_memos | notes | reminders | files | browser_history | whatsapp | chief_of_staff_commitment_tracker",
              "title": "concise action title",
              "summary": "actual todo",
              "next_action": "suggested next action",
              "due_at": "ISO-8601 datetime or omitted",
              "notes": "source evidence and metadata",
              "action_plan": "draft or plan of next action",
+             "action_draft": {
+               "text": "ready suggested wording or a conversational next step"
+             },
              "owner_user_id": null,
              "owner_label": "null for the main user, or named non-user owner",
              "source_account_label": "email/calendar account when known",
@@ -451,6 +713,12 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
              "memories": [],
              "metadata": {
                "commitment_direction": "i_owe | asked_of_me | pending_reply",
+               "completion_check": {
+                 "status": "open | completed_or_closed | unclear",
+                 "reasoning": "why later source evidence proves this is still open, closed, or unclear",
+                 "latest_source_checked_at": "ISO-8601 datetime or omitted",
+                 "later_evidence": []
+               },
                "source_ref": "...",
                "source_tags": ["project","gmail"],
                "quote": "...",
@@ -482,6 +750,25 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        - Every work item title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,
          and the best next step.
+       - Before returning any work item, reconcile the original ask/promise against
+         later evidence in every available supplied source: Gmail inbox and sent,
+         Calendar, Slack, iMessage/Messages, voice notes, Notes, Reminders,
+         files, browser history, existing open work, People, and memory. If later
+         evidence shows the loop was replied to, declined, hired, sent, decided,
+         resolved, canceled, or otherwise closed, do not return a work item. Put
+         it in already_tracked with the closing evidence. If the available source
+         window is not enough to tell whether it is still open, skip it and name
+         the source gap; do not create "check if it still matters" work.
+       - Every saved work item must include metadata.completion_check.status =
+         "open" with source-backed reasoning and latest_source_checked_at. Never
+         write "no later reply or delivery is recorded" unless you actually checked
+         the later supplied source material for the same person/thread/topic and
+         found no closure evidence.
+       - Every saved work item must include action_draft.text. If a reply or
+         message makes sense, write concise suggested wording in the operator's
+         style. If a full draft does not make sense, write a conversational next
+         step the operator can act on, for example: `You should message the
+         requester and say: "Thanks, yes that would be great."`
        - If the exact ask is ambiguous, say "open the source thread to confirm
          the exact promise" rather than creating a generic follow-up item.
        - Include company, organization, relationship context, project, source
@@ -1003,18 +1290,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       candidate_count: length(candidates)
     )
 
-    case Todos.upsert_many(user_id, candidates) do
+    {allowed_candidates, skipped_candidates} =
+      Maraithon.Todos.SignalGate.partition_candidates(candidates)
+
+    case Todos.upsert_many(user_id, allowed_candidates) do
       {:ok, todos} ->
         {:ok,
          %{
            todos: todos,
            decisions:
-             todos
-             |> Enum.with_index()
-             |> Enum.map(fn {todo, index} ->
-               %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
-             end),
-           skipped_count: 0,
+             direct_upsert_decisions(todos) ++ signal_gate_skip_decisions(skipped_candidates),
+           skipped_count: length(skipped_candidates),
            usage: %{},
            fallback_reason: inspect(reason)
          }}
@@ -1022,6 +1308,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       {:error, direct_reason} ->
         {:error, {:todo_ingest_failed, reason, direct_reason}}
     end
+  end
+
+  defp direct_upsert_decisions(todos) do
+    todos
+    |> Enum.with_index()
+    |> Enum.map(fn {todo, index} ->
+      %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
+    end)
+  end
+
+  defp signal_gate_skip_decisions(skipped_candidates) do
+    skipped_candidates
+    |> Enum.with_index()
+    |> Enum.map(fn {%{reason: reason}, index} ->
+      %{candidate_index: index, mode: "signal_gate_skip", reasoning: reason}
+    end)
   end
 
   defp commitment_todo_candidate(todo, tracker_input) when is_map(todo) do
@@ -1181,6 +1483,137 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
+  defp slack_message_for_prompt(message) when is_map(message) do
+    ts = read_string(message, "ts", nil)
+    channel_id = read_string(message, "channel_id", nil)
+
+    %{
+      "team_id" => read_string(message, "team_id", nil),
+      "team_name" => read_string(message, "team_name", nil),
+      "channel_id" => channel_id,
+      "channel_name" => read_string(message, "channel_name", nil),
+      "conversation_kind" => read_string(message, "conversation_kind", nil),
+      "ts" => ts,
+      "thread_ts" => read_string(message, "thread_ts", nil),
+      "date" => prompt_time(slack_message_datetime(message)),
+      "user" => read_string(message, "user", nil),
+      "user_display_name" => read_string(message, "user_display_name", nil),
+      "mentioned_users" => read_list(message, "mentioned_users"),
+      "bot_id" => read_string(message, "bot_id", nil),
+      "text" =>
+        truncate(
+          read_string(message, "text_resolved", read_string(message, "text", "")),
+          2_000
+        ),
+      "raw_text" => truncate(read_string(message, "text", ""), 2_000),
+      "reply_count" => read_any(message, "reply_count"),
+      "permalink" => read_string(message, "permalink", nil),
+      "source_item_id" => slack_source_item_id(channel_id, ts)
+    }
+  end
+
+  defp imessage_message_for_prompt(message) when is_map(message) do
+    %{
+      "message_id" => read_string(message, "message_id", read_string(message, "guid", nil)),
+      "source" => read_string(message, "source", "imessage"),
+      "chat_key" => read_string(message, "chat_key", nil),
+      "chat_display_name" => read_string(message, "chat_display_name", nil),
+      "sender_handle" => read_string(message, "sender_handle", nil),
+      "is_from_me" => read_any(message, "is_from_me"),
+      "sent_at" => prompt_time(read_any(message, "sent_at")),
+      "text" => truncate(read_string(message, "text", ""), 2_000),
+      "has_attachments" => read_any(message, "has_attachments"),
+      "source_item_id" =>
+        read_string(message, "source_item_id", read_string(message, "guid", nil)),
+      "source_occurred_at" => read_string(message, "source_occurred_at", nil)
+    }
+  end
+
+  defp imessage_chat_for_prompt(chat) when is_map(chat) do
+    %{
+      "chat_key" => read_string(chat, "chat_key", nil),
+      "chat_display_name" => read_string(chat, "chat_display_name", nil),
+      "message_count_last_7d" => read_any(chat, "message_count_last_7d"),
+      "latest_snippet" => truncate(read_string(chat, "latest_snippet", ""), 800),
+      "latest_sender" => read_string(chat, "latest_sender", nil),
+      "latest_is_from_me" => read_any(chat, "latest_is_from_me"),
+      "latest_sent_at" => read_string(chat, "latest_sent_at", nil)
+    }
+  end
+
+  defp voice_memo_for_prompt(memo) when is_map(memo) do
+    %{
+      "memo_id" => read_string(memo, "memo_id", read_string(memo, "guid", nil)),
+      "title" => read_string(memo, "title", "(untitled voice memo)"),
+      "snippet" => truncate(read_string(memo, "snippet", ""), 800),
+      "transcript" => truncate(read_string(memo, "transcript", ""), 3_000),
+      "duration_seconds" => read_any(memo, "duration_seconds"),
+      "created_at" => read_string(memo, "created_at", nil),
+      "has_transcript" => read_any(memo, "has_transcript"),
+      "source_item_id" => read_string(memo, "source_item_id", read_string(memo, "guid", nil)),
+      "source_occurred_at" => read_string(memo, "source_occurred_at", nil)
+    }
+  end
+
+  defp note_for_prompt(note) when is_map(note) do
+    %{
+      "note_id" => read_string(note, "note_id", read_string(note, "guid", nil)),
+      "title" => read_string(note, "title", "(untitled note)"),
+      "snippet" => truncate(read_string(note, "snippet", ""), 800),
+      "body" => truncate(read_string(note, "body", ""), 3_000),
+      "folder" => read_string(note, "folder", nil),
+      "is_pinned" => read_any(note, "is_pinned"),
+      "modified_at" => read_string(note, "modified_at", nil),
+      "source_item_id" => read_string(note, "source_item_id", read_string(note, "guid", nil)),
+      "source_occurred_at" => read_string(note, "source_occurred_at", nil)
+    }
+  end
+
+  defp reminder_for_prompt(reminder) when is_map(reminder) do
+    %{
+      "reminder_id" => read_string(reminder, "reminder_id", read_string(reminder, "guid", nil)),
+      "title" => read_string(reminder, "title", "(untitled reminder)"),
+      "notes" => truncate(read_string(reminder, "notes", ""), 1_500),
+      "list_name" => read_string(reminder, "list_name", nil),
+      "priority" => read_any(reminder, "priority"),
+      "due_at" => read_string(reminder, "due_at", nil),
+      "has_alarm" => read_any(reminder, "has_alarm"),
+      "url_attachment" => read_string(reminder, "url_attachment", nil),
+      "source_item_id" =>
+        read_string(reminder, "source_item_id", read_string(reminder, "guid", nil)),
+      "source_occurred_at" => read_string(reminder, "source_occurred_at", nil)
+    }
+  end
+
+  defp file_for_prompt(file) when is_map(file) do
+    %{
+      "file_id" => read_string(file, "file_id", read_string(file, "guid", nil)),
+      "filename" => read_string(file, "filename", nil),
+      "path" => read_string(file, "path", nil),
+      "extension" => read_string(file, "extension", nil),
+      "mime_type" => read_string(file, "mime_type", nil),
+      "text_content" => truncate(read_string(file, "text_content", ""), 2_000),
+      "text_truncated" => read_any(file, "text_truncated"),
+      "modified_at" => read_string(file, "modified_at", nil),
+      "source_item_id" => read_string(file, "source_item_id", read_string(file, "guid", nil)),
+      "source_occurred_at" => read_string(file, "source_occurred_at", nil)
+    }
+  end
+
+  defp browser_visit_for_prompt(visit) when is_map(visit) do
+    %{
+      "visit_id" => read_string(visit, "visit_id", read_string(visit, "guid", nil)),
+      "browser" => read_string(visit, "browser", nil),
+      "title" => truncate(read_string(visit, "title", ""), 400),
+      "url" => read_string(visit, "url", nil),
+      "host" => read_string(visit, "host", nil),
+      "last_visited_at" => read_string(visit, "last_visited_at", nil),
+      "visit_count" => read_any(visit, "visit_count"),
+      "source_item_id" => read_string(visit, "source_item_id", read_string(visit, "guid", nil)),
+      "source_occurred_at" => read_string(visit, "source_occurred_at", nil)
+    }
+  end
+
   defp todo_for_prompt(todo) do
     %{
       "id" => todo.id,
@@ -1226,10 +1659,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     %{
       "gmail" => source_status(freshness, "gmail"),
       "google_calendar" => source_status(freshness, "calendar"),
-      "imessage" => %{
-        "status" => "unavailable",
-        "reason" => "imessage_connector_not_available_in_runtime"
-      },
+      "local_calendar" => source_status(freshness, "calendar_local"),
+      "slack" => source_status(freshness, "slack"),
+      "imessage" => source_status(freshness, "imessage"),
+      "voice_memos" => source_status(freshness, "voice_memos"),
+      "notes" => source_status(freshness, "notes"),
+      "reminders" => source_status(freshness, "reminders"),
+      "files" => source_status(freshness, "files"),
+      "browser_history" => source_status(freshness, "browser_history"),
       "whatsapp" => %{
         "status" => "unavailable",
         "reason" => "whatsapp_connector_not_available_in_runtime"
@@ -1263,6 +1700,18 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
         "gmail_recent_sent" => length(get_in(input, ["gmail", "recent_sent"]) || []),
         "calendar_upcoming_events" =>
           length(get_in(input, ["calendar", "upcoming_events"]) || []),
+        "local_calendar_upcoming_events" =>
+          length(get_in(input, ["local_calendar", "upcoming_events"]) || []),
+        "slack_recent_messages" => length(get_in(input, ["slack", "recent_messages"]) || []),
+        "slack_mentions" => length(get_in(input, ["slack", "mentions"]) || []),
+        "imessage_recent_messages" =>
+          length(get_in(input, ["imessage", "recent_messages"]) || []),
+        "imessage_chats" => length(get_in(input, ["imessage", "chats"]) || []),
+        "voice_memos" => length(get_in(input, ["voice_memos", "items"]) || []),
+        "notes" => length(get_in(input, ["notes", "items"]) || []),
+        "reminders_due_soon" => length(get_in(input, ["reminders", "due_soon"]) || []),
+        "files_recent" => length(get_in(input, ["files", "recent"]) || []),
+        "browser_history_recent" => length(get_in(input, ["browser_history", "recent"]) || []),
         "open_todos" => length(get_in(input, ["open_work", "todos"]) || []),
         "relationships" => length(get_in(input, ["relationships"]) || []),
         "deep_memory" => deep_memory_count(input)
@@ -1287,6 +1736,24 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
 
   defp recent_gmail_message?(_message, _lookback_start), do: false
 
+  defp recent_slack_message?(message, lookback_start) when is_map(message) do
+    case slack_message_datetime(message) do
+      nil -> true
+      timestamp -> DateTime.compare(timestamp, lookback_start) != :lt
+    end
+  end
+
+  defp recent_slack_message?(_message, _lookback_start), do: false
+
+  defp recent_local_message?(message, lookback_start) when is_map(message) do
+    case local_message_datetime(message) do
+      nil -> true
+      timestamp -> DateTime.compare(timestamp, lookback_start) != :lt
+    end
+  end
+
+  defp recent_local_message?(_message, _lookback_start), do: false
+
   defp event_in_date_window?(event, start_date, end_date, offset_hours) when is_map(event) do
     case event |> read_any("start") |> local_date_from_value(offset_hours) do
       nil ->
@@ -1308,6 +1775,118 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       _ -> 0
     end
   end
+
+  defp slack_message_sort_key(message) when is_map(message) do
+    case slack_message_datetime(message) do
+      %DateTime{} = value -> DateTime.to_unix(value, :microsecond)
+      _ -> 0
+    end
+  end
+
+  defp slack_message_sort_key(_message), do: 0
+
+  defp local_message_sort_key(message) when is_map(message),
+    do: datetime_sort_key(local_message_datetime(message), 0)
+
+  defp local_message_sort_key(_message), do: 0
+
+  defp local_chat_sort_key(chat) when is_map(chat),
+    do: datetime_sort_key(read_datetime(chat, "latest_sent_at"), 0)
+
+  defp local_chat_sort_key(_chat), do: 0
+
+  defp voice_memo_sort_key(memo) when is_map(memo),
+    do:
+      datetime_sort_key(
+        read_datetime(memo, "created_at") || read_datetime(memo, "source_occurred_at"),
+        0
+      )
+
+  defp voice_memo_sort_key(_memo), do: 0
+
+  defp note_sort_key(note) when is_map(note),
+    do:
+      datetime_sort_key(
+        read_datetime(note, "modified_at") ||
+          read_datetime(note, "created_at") ||
+          read_datetime(note, "source_occurred_at"),
+        0
+      )
+
+  defp note_sort_key(_note), do: 0
+
+  defp reminder_sort_key(reminder) when is_map(reminder),
+    do: datetime_sort_key(read_datetime(reminder, "due_at"), 9_999_999_999_999_999)
+
+  defp reminder_sort_key(_reminder), do: 9_999_999_999_999_999
+
+  defp file_sort_key(file) when is_map(file),
+    do:
+      datetime_sort_key(
+        read_datetime(file, "modified_at") ||
+          read_datetime(file, "created_at") ||
+          read_datetime(file, "source_occurred_at"),
+        0
+      )
+
+  defp file_sort_key(_file), do: 0
+
+  defp browser_visit_sort_key(visit) when is_map(visit),
+    do:
+      datetime_sort_key(
+        read_datetime(visit, "last_visited_at") || read_datetime(visit, "source_occurred_at"),
+        0
+      )
+
+  defp browser_visit_sort_key(_visit), do: 0
+
+  defp datetime_sort_key(%DateTime{} = datetime, _default),
+    do: DateTime.to_unix(datetime, :microsecond)
+
+  defp datetime_sort_key(_datetime, default), do: default
+
+  defp local_message_datetime(message) when is_map(message) do
+    read_datetime(message, "sent_at") || read_datetime(message, "source_occurred_at")
+  end
+
+  defp local_message_datetime(_message), do: nil
+
+  defp slack_message_datetime(message) when is_map(message) do
+    read_datetime(message, "date") ||
+      read_datetime(message, "created_at") ||
+      slack_ts_datetime(read_string(message, "ts", nil))
+  end
+
+  defp slack_message_datetime(_message), do: nil
+
+  defp slack_ts_datetime(ts) when is_binary(ts) do
+    ts
+    |> String.split(".", parts: 2)
+    |> List.first()
+    |> case do
+      seconds when is_binary(seconds) ->
+        case Integer.parse(seconds) do
+          {value, ""} ->
+            case DateTime.from_unix(value, :second) do
+              {:ok, datetime} -> datetime
+              _ -> nil
+            end
+
+          _ ->
+            nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp slack_ts_datetime(_ts), do: nil
+
+  defp slack_source_item_id(channel_id, ts) when is_binary(channel_id) and is_binary(ts),
+    do: "#{channel_id}:#{ts}"
+
+  defp slack_source_item_id(_channel_id, _ts), do: nil
 
   defp llm_finish_reason(%{finish_reason: reason}) when is_binary(reason), do: reason
   defp llm_finish_reason(%{"finish_reason" => reason}) when is_binary(reason), do: reason
@@ -1339,10 +1918,85 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
   end
 
   defp scheduled_trigger?(context) do
-    case get_in(context, [:trigger, :type]) do
-      nil -> is_nil(context[:event]) and is_nil(context[:last_message])
-      :wakeup -> true
-      _ -> false
+    cond do
+      force_review_trigger?(context) ->
+        true
+
+      true ->
+        case get_in(context, [:trigger, :type]) do
+          nil -> is_nil(context[:event]) and is_nil(context[:last_message])
+          :wakeup -> true
+          _ -> false
+        end
+    end
+  end
+
+  defp admin_open_work_rebuild_context?(context) when is_map(context) do
+    trigger = context[:trigger] || %{}
+
+    payload =
+      get_in(context, [:trigger, :payload]) || get_in(context, [:trigger, "payload"]) || %{}
+
+    metadata = context[:last_message_metadata] || %{}
+
+    source =
+      read_string(trigger, "source", nil) ||
+        read_string(payload, "source", nil) ||
+        read_string(metadata, "source", nil)
+
+    action =
+      read_string(payload, "action", nil) ||
+        read_string(metadata, "action", nil)
+
+    source in ["admin_open_work_rebuild", "open_work_rebuild"] or
+      action == "rebuild_open_work"
+  end
+
+  defp admin_open_work_rebuild_context?(_context), do: false
+
+  defp force_review_trigger?(context) when is_map(context) do
+    metadata = read_map(context[:last_message_metadata] || %{}, "metadata")
+
+    metadata =
+      if map_size(metadata) == 0, do: context[:last_message_metadata] || %{}, else: metadata
+
+    trigger_payload =
+      get_in(context, [:trigger, :payload]) || get_in(context, [:trigger, "payload"])
+
+    action =
+      read_string(metadata, "action", nil) ||
+        read_string(trigger_payload || %{}, "action", nil) ||
+        read_string(context, :action, nil)
+
+    source =
+      read_string(metadata, "source", nil) ||
+        read_string(trigger_payload || %{}, "source", nil) ||
+        read_string(context, :source, nil)
+
+    message = normalize_string(context[:last_message])
+
+    action in ["refresh_open_work", "rebuild_open_work"] or
+      source in ["admin_open_work_rebuild", "open_work_rebuild"] or
+      message in ["refresh_open_work", "rebuild_open_work"]
+  end
+
+  defp force_review_trigger?(_context), do: false
+
+  defp commitment_dedupe_key(period_key, context) do
+    if force_review_trigger?(context) do
+      suffix =
+        [
+          context[:last_message_id],
+          get_in(context, [:trigger, :job_id]),
+          get_in(context, [:trigger, "job_id"]),
+          context[:assistant_cycle_id],
+          Ecto.UUID.generate()
+        ]
+        |> Enum.find(&(is_binary(&1) and String.trim(&1) != ""))
+
+      "commitment_tracker:#{period_key}:#{String.slice(suffix, 0, 48)}"
+    else
+      "commitment_tracker:#{period_key}"
     end
   end
 

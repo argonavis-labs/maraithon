@@ -18,7 +18,7 @@ final class ProductionIntegrationUITests: XCTestCase {
     }
 
     private var todoTitle: String {
-        "iOS prod todo \(runID)"
+        "iOS prod work item \(runID)"
     }
 
     private var contactName: String {
@@ -40,7 +40,7 @@ final class ProductionIntegrationUITests: XCTestCase {
         guard isUsableCode(verificationConfig.magicCode) else { return }
         let app = launchApp()
 
-        XCTAssertTrue(app.tabBars.buttons["Todos"].waitForExistence(timeout: 60), app.debugDescription)
+        XCTAssertTrue(workTab(app: app).waitForExistence(timeout: 60), app.debugDescription)
 
         createAndCompleteTodo(app: app)
         createAndUpdateContact(app: app)
@@ -99,18 +99,13 @@ final class ProductionIntegrationUITests: XCTestCase {
 
     @MainActor
     private func createAndCompleteTodo(app: XCUIApplication) {
-        app.tabBars.buttons["Todos"].tap()
-        app.buttons["Add Todo"].tap()
+        workTab(app: app).tap()
+        let addButton = addWorkItemButton(app: app)
+        XCTAssertTrue(addButton.waitForExistence(timeout: 10), app.debugDescription)
+        addButton.tap()
 
-        let titleField = app.textFields["todo-title-field"]
-        XCTAssertTrue(titleField.waitForExistence(timeout: 10), app.debugDescription)
-        titleField.tap()
-        titleField.typeText(todoTitle)
-
-        let notesField = app.textFields["todo-notes-field"]
-        XCTAssertTrue(notesField.waitForExistence(timeout: 5), app.debugDescription)
-        notesField.tap()
-        notesField.typeText("Created from simulator \(runID)")
+        type("todo-title-field", value: todoTitle, app: app)
+        type("todo-notes-field", value: "Created from simulator \(runID)", app: app)
 
         app.buttons["todo-save-button"].tap()
         XCTAssertTrue(app.staticTexts[todoTitle].waitForExistence(timeout: 30), app.debugDescription)
@@ -128,7 +123,9 @@ final class ProductionIntegrationUITests: XCTestCase {
     @MainActor
     private func createAndUpdateContact(app: XCUIApplication) {
         app.tabBars.buttons["People"].tap()
-        app.buttons["Add Person"].tap()
+        let addButton = addPersonButton(app: app)
+        XCTAssertTrue(addButton.waitForExistence(timeout: 10), app.debugDescription)
+        addButton.tap()
 
         type("contact-name-field", value: contactName, app: app)
         type("contact-company-field", value: "Simulator Verification", app: app)
@@ -142,7 +139,7 @@ final class ProductionIntegrationUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[contactName].waitForExistence(timeout: 30), app.debugDescription)
         app.staticTexts[contactName].tap()
 
-        let editButton = app.buttons["Edit Person"]
+        let editButton = editPersonButton(app: app)
         XCTAssertTrue(editButton.waitForExistence(timeout: 10), app.debugDescription)
         editButton.tap()
 
@@ -158,13 +155,18 @@ final class ProductionIntegrationUITests: XCTestCase {
     @MainActor
     private func chatWithAssistant(app: XCUIApplication) {
         app.tabBars.buttons["Chat"].tap()
-        app.buttons["New Chat"].firstMatch.tap()
+        let newButton = newChatButton(app: app)
+        XCTAssertTrue(newButton.waitForExistence(timeout: 10), app.debugDescription)
+        newButton.tap()
 
         sendChatMessage(chatProbeText, app: app)
         waitForAssistantTurn(app: app)
 
         XCTAssertTrue(
-            app.staticTexts["I'm here. What needs attention?"].waitForExistence(timeout: 10),
+            app.staticTexts
+                .containing(NSPredicate(format: "label CONTAINS %@", "What needs attention?"))
+                .firstMatch
+                .waitForExistence(timeout: 10),
             app.debugDescription
         )
 
@@ -175,11 +177,44 @@ final class ProductionIntegrationUITests: XCTestCase {
     }
 
     @MainActor
+    private func workTab(app: XCUIApplication) -> XCUIElement {
+        app.tabBars.buttons
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Work", "Todos"))
+            .firstMatch
+    }
+
+    @MainActor
+    private func addWorkItemButton(app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Add work item", "Add Todo"))
+            .firstMatch
+    }
+
+    @MainActor
+    private func addPersonButton(app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Add person", "Add Person"))
+            .firstMatch
+    }
+
+    @MainActor
+    private func editPersonButton(app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "Edit person", "Edit Person"))
+            .firstMatch
+    }
+
+    @MainActor
+    private func newChatButton(app: XCUIApplication) -> XCUIElement {
+        app.buttons
+            .matching(NSPredicate(format: "label == %@ OR label == %@", "New chat", "New Chat"))
+            .firstMatch
+    }
+
+    @MainActor
     private func sendChatMessage(_ text: String, app: XCUIApplication) {
         let field = element(identifier: "chat-message-field", app: app)
-        XCTAssertTrue(field.waitForExistence(timeout: 20), app.debugDescription)
-        field.tap()
-        field.typeText(text)
+        type(field, value: text, app: app, timeout: 20)
 
         let sendButton = app.buttons["chat-send-button"]
         XCTAssertTrue(sendButton.waitForExistence(timeout: 10), app.debugDescription)
@@ -201,17 +236,33 @@ final class ProductionIntegrationUITests: XCTestCase {
     @MainActor
     private func filterPeople(for value: String, app: XCUIApplication) {
         let searchField = app.searchFields.firstMatch
-        XCTAssertTrue(searchField.waitForExistence(timeout: 10), app.debugDescription)
-        searchField.tap()
-        searchField.typeText(value)
+        type(searchField, value: value, app: app)
     }
 
     @MainActor
     private func type(_ identifier: String, value: String, app: XCUIApplication) {
         let field = element(identifier: identifier, app: app)
-        XCTAssertTrue(field.waitForExistence(timeout: 10), app.debugDescription)
-        field.tap()
-        field.typeText(value)
+        type(field, value: value, app: app)
+    }
+
+    @MainActor
+    private func type(_ element: XCUIElement, value: String, app: XCUIApplication, timeout: TimeInterval = 10) {
+        XCTAssertTrue(element.waitForExistence(timeout: timeout), app.debugDescription)
+        element.tap()
+
+        if !waitForKeyboardFocus(element, timeout: 1) {
+            element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+
+        XCTAssertTrue(waitForKeyboardFocus(element, timeout: 3), element.debugDescription)
+        element.typeText(value)
+    }
+
+    @MainActor
+    private func waitForKeyboardFocus(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let hasFocus = NSPredicate(format: "hasKeyboardFocus == true")
+        let expectation = XCTNSPredicateExpectation(predicate: hasFocus, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     @MainActor

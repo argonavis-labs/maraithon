@@ -234,18 +234,18 @@ enum TodoDecisionSignals {
     static func needsDecision(_ todo: TodoItem) -> Bool {
         guard !todo.isCompleted else { return false }
 
-        let context = TodoDecisionContext(todo: todo)
-
-        if let decisionPrompt = context.decisionPrompt,
+        if let decisionPrompt = ChiefOfStaffCopy.clean(todo.decisionPrompt),
            !isGenericDecisionPrompt(decisionPrompt) {
             return true
         }
 
-        if waitingSignal(in: context.whyNow) || waitingSignal(in: context.notesContext) {
+        if waitingSignal(in: todo.whyNow) ||
+            waitingSignal(in: todo.notes) ||
+            waitingSignal(in: todo.decisionContextSummary) {
             return true
         }
 
-        if context.preparedMove != nil, context.evidence != nil {
+        if hasSignalText(todo.nextBestAction), hasSignalText(todo.evidenceExcerpt) {
             return true
         }
 
@@ -275,6 +275,7 @@ enum TodoDecisionSignals {
             "waiting",
             "needs your reply",
             "needs your decision",
+            "needs operator attention",
             "no later reply",
             "you owe",
             "you need to approve",
@@ -291,5 +292,10 @@ enum TodoDecisionSignals {
             .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    }
+
+    private static func hasSignalText(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }

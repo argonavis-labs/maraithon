@@ -1,7 +1,8 @@
 defmodule MaraithonWeb.MobileTodoController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.{SourceFreshness, Todos}
+  alias Maraithon.{AssistantChat, SourceFreshness, Todos}
+  alias MaraithonWeb.MobileChatJSON
   alias MaraithonWeb.MobileJSON
   alias MaraithonWeb.MobileParams
 
@@ -74,6 +75,25 @@ defmodule MaraithonWeb.MobileTodoController do
     end
   end
 
+  def chat_thread(conn, %{"id" => todo_id}) do
+    user_id = conn.assigns.current_user.id
+
+    case AssistantChat.get_or_create_todo_thread(user_id, todo_id) do
+      {:ok, thread} ->
+        json(conn, MobileChatJSON.thread(thread))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(MobileChatJSON.error(:not_found))
+
+      {:error, reason} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(MobileChatJSON.error(reason))
+    end
+  end
+
   def update(conn, %{"id" => todo_id} = params) do
     user_id = conn.assigns.current_user.id
     json_opts = json_opts(params, user_id)
@@ -97,7 +117,7 @@ defmodule MaraithonWeb.MobileTodoController do
   def delete(conn, %{"id" => todo_id} = params) do
     user_id = conn.assigns.current_user.id
     note = text_param(params, "note") || "Dismissed from mobile."
-    json_opts = json_opts(params, user_id)
+    json_opts = [include_card: false]
 
     case Todos.dismiss(user_id, todo_id, Keyword.put(user_actor_opts(user_id), :note, note)) do
       {:ok, todo} ->

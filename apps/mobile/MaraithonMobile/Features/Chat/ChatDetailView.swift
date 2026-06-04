@@ -10,6 +10,8 @@ struct ChatDetailView: View {
     var initialPrompt: String?
     var autoSendInitialPrompt = false
     var onInitialPromptConsumed: () -> Void = {}
+    var contextHeader: ChatContextHeader?
+    var quickPrompts: [ChiefOfStaffPrompt]
     @State private var draft = ""
     @State private var errorMessage: String?
     @State private var lastFailedMessage: String?
@@ -23,8 +25,25 @@ struct ChatDetailView: View {
     @FocusState private var isComposerFocused: Bool
 
     private let chatSyncService = ChatSyncService()
-    private let quickPrompts = ChiefOfStaffPrompt.chat
     private let bottomAnchorID = "chat-bottom-anchor"
+
+    init(
+        thread: ChatThread,
+        focusComposerOnAppear: Bool = false,
+        initialPrompt: String? = nil,
+        autoSendInitialPrompt: Bool = false,
+        onInitialPromptConsumed: @escaping () -> Void = {},
+        contextHeader: ChatContextHeader? = nil,
+        quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat
+    ) {
+        self.thread = thread
+        self.focusComposerOnAppear = focusComposerOnAppear
+        self.initialPrompt = initialPrompt
+        self.autoSendInitialPrompt = autoSendInitialPrompt
+        self.onInitialPromptConsumed = onInitialPromptConsumed
+        self.contextHeader = contextHeader
+        self.quickPrompts = quickPrompts
+    }
 
     private var timelineRows: [ChatTimelineRow] {
         ChatMessageTimeline.rows(for: thread.messages)
@@ -38,9 +57,14 @@ struct ChatDetailView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
+                        if let contextHeader {
+                            contextHeaderView(contextHeader)
+                                .padding(.bottom, 12)
+                        }
+
                         if timelineRows.isEmpty {
                             emptyConversation
-                                .padding(.top, 80)
+                                .padding(.top, contextHeader == nil ? 80 : 24)
                         } else {
                             ForEach(timelineRows) { row in
                                 if row.layout.showsDateHeader {
@@ -74,7 +98,7 @@ struct ChatDetailView: View {
                         }
 
                         if thread.pendingRunID != nil {
-                            assistantThinkingRow
+                            assistantPendingRow
                                 .padding(.top, 8)
                         }
 
@@ -235,7 +259,54 @@ struct ChatDetailView: View {
         )
     }
 
-    private var assistantThinkingRow: some View {
+    private func contextHeaderView(_ header: ChatContextHeader) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: header.systemImage)
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 28, height: 28)
+                    .background(Color.accentColor.opacity(0.12), in: Circle())
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(header.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let subtitle = header.subtitle {
+                        Text(subtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                if let status = header.status {
+                    StatusPill(title: status.title, tint: status.tint)
+                }
+            }
+
+            ForEach(header.items) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(item.title, systemImage: item.systemImage)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    Text(item.body)
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var assistantPendingRow: some View {
         HStack(alignment: .bottom, spacing: 7) {
             ChatAvatar(title: "Maraithon", systemImage: "sparkles", size: 28, tint: .accentColor)
 
@@ -477,6 +548,26 @@ enum ChatDetailCopy {
             emptyDescription
         ]
     }
+}
+
+struct ChatContextHeader {
+    struct Status {
+        let title: String
+        let tint: Color
+    }
+
+    struct Item: Identifiable {
+        let id: String
+        let title: String
+        let body: String
+        let systemImage: String
+    }
+
+    let title: String
+    let subtitle: String?
+    let systemImage: String
+    let status: Status?
+    let items: [Item]
 }
 
 private struct ChatDateHeader: View {

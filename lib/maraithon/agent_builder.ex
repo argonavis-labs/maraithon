@@ -1213,8 +1213,10 @@ defmodule Maraithon.AgentBuilder do
               "commitment_review_hour_local" => 7,
               "email_scan_limit" => follow_email_scan_limit,
               "event_scan_limit" => follow_event_scan_limit,
-              "lookback_hours" => 24,
-              "calendar_forward_days" => 7
+              "slack_message_scan_limit" => follow_dm_scan_limit,
+              "local_message_scan_limit" => follow_dm_scan_limit,
+              "lookback_hours" => 24 * 14,
+              "calendar_forward_days" => 14
             },
             compact_timezone_config
           ),

@@ -9,10 +9,11 @@
 // their own Apple Developer team ID. See docs/SIGNING.md.
 //
 // The "#include?" form is the optional include: if the local file is
-// missing (e.g. a fresh clone), xcodebuild simply continues without it,
-// which is what we want — Debug builds use ad-hoc signing ("-") and
-// only Release archives need a real team. For local companion runs that
-// need Full Disk Access to persist across rebuilds, run:
+// missing (e.g. a fresh clone), xcodebuild simply continues without it.
+// The monorepo build scripts supply an ad-hoc Debug signing fallback ("-")
+// so fresh-clone builds still produce launchable app bundles; only Release
+// archives need a real team. For local companion runs that need Full Disk
+// Access to persist across rebuilds, run:
 //   make setup-companion-signing
 //   make run-companion
 // make run-companion clears stale Maraithon Full Disk Access rows once when

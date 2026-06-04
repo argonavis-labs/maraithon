@@ -638,11 +638,17 @@ defmodule Maraithon.Followthrough.ConversationContext do
   defp normalize_slack_message(message, self_user_ids) when is_map(message) do
     user_id = read_string(message, "user_id") || read_string(message, "user")
 
+    actor =
+      read_string(message, "user_display_name") ||
+        read_string(message, "user_name") ||
+        read_string(message, "display_name") ||
+        "Slack user"
+
     %{
       "id" => read_string(message, "ts"),
-      "actor" => user_id,
+      "actor" => actor,
       "actor_role" => slack_actor_role(user_id, self_user_ids),
-      "text" => read_string(message, "text", ""),
+      "text" => read_string(message, "text_resolved", read_string(message, "text", "")),
       "occurred_at" =>
         read_datetime(message, "occurred_at") || parse_slack_timestamp(read_string(message, "ts"))
     }

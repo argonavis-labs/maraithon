@@ -26,14 +26,15 @@ Use Apple frameworks first. Add third-party packages only when they remove meani
 xcodegen generate
 ```
 
-6. Run the app build and relevant tests before finishing:
+6. Current product-iteration mode: run the app build before finishing, but do not run Xcode tests or broad test suites unless Kent explicitly re-enables tests or asks for them.
 
 ```sh
 xcodebuild -quiet -project MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.4.1' build
-xcodebuild -quiet -project MaraithonMobile.xcodeproj -scheme MaraithonMobile -destination 'platform=iOS Simulator,id=D8E48B6C-EC1D-40AF-9D4E-913F531CACCC' test
 ```
 
-If a simulator is unavailable or busy, list available devices with `xcrun simctl list devices available` and use another iOS 26 simulator.
+If a simulator is unavailable or busy, list available devices with `xcrun simctl list devices available` and use another iOS 26 simulator. Do not delete or weaken tests; this is only a temporary no-test execution mode for faster live iteration.
+
+Production verification scripts that call Fly must source the shared deploy env from `~/.config/maraithon/fly-prod.env` or `MARAITHON_DEPLOY_ENV_FILE`, require `FLY_API_TOKEN`, and use `MARAITHON_FLY_APP` as the pinned Fly app. Do not depend on the active `flyctl` account.
 
 ## Architecture Rules
 
@@ -85,6 +86,7 @@ Do not move feature-specific logic into `Core/` unless at least two features use
 
 ## Testing Rules
 
+- Current mode: do not run Xcode tests by default. Kent is testing live in production until he says to harden the app again.
 - Add or update tests for every nontrivial domain rule, validator, formatter, filter, naming algorithm, auth behavior, and persistence helper.
 - Keep pure helper tests independent of SwiftUI and simulator UI whenever possible.
 - Use Swift Testing with `@Suite`, `@Test`, and `#expect`.
@@ -106,7 +108,7 @@ Before finishing a code change, report:
 - Files changed at a high level.
 - Whether `xcodegen generate` was needed and whether it passed.
 - Build result.
-- Test result.
+- Test result, or that tests were intentionally not run under the current product-iteration mode.
 - Any skipped verification and the reason.
 
 Official Apple references used as the baseline for this guidance:

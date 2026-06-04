@@ -16,6 +16,13 @@ defmodule MaraithonWeb.TodosLive do
     "sort" => "rank",
     "dir" => "desc"
   }
+  @default_new_todo_params %{
+    "title" => "",
+    "next_action" => "",
+    "due_at" => "",
+    "priority" => "50",
+    "notes" => ""
+  }
   @empty_state_filter_keys ~w(q status attention due source)
   @status_options [
     {"Active", "active"},
@@ -54,6 +61,11 @@ defmodule MaraithonWeb.TodosLive do
     {"GitHub", "github"},
     {"Added by you", "manual"}
   ]
+  @priority_options [
+    {"Normal", "50"},
+    {"High", "75"},
+    {"Critical", "90"}
+  ]
 
   @impl true
   def mount(_params, _session, socket) do
@@ -67,6 +79,9 @@ defmodule MaraithonWeb.TodosLive do
        attention_options: @attention_options,
        due_options: @due_options,
        source_options: @source_options,
+       priority_options: @priority_options,
+       new_todo_form: to_form(@default_new_todo_params, as: :todo),
+       new_todo_errors: %{},
        todos: [],
        total_count: 0,
        selected_todo_ids: MapSet.new(),
@@ -99,6 +114,47 @@ defmodule MaraithonWeb.TodosLive do
 
   def handle_event("clear_filters", _params, socket) do
     {:noreply, push_patch(socket, to: ~p"/todos")}
+  end
+
+  def handle_event("create_todo", %{"todo" => params}, socket) do
+    params = normalize_new_todo_params(params)
+    user_id = current_user_id(socket)
+
+    case build_manual_todo_attrs(user_id, params, socket.assigns.timezone_info) do
+      {:ok, attrs} ->
+        case Todos.upsert_many(
+               user_id,
+               [attrs],
+               todo_action_opts(user_id, "Added from Work page.")
+             ) do
+          {:ok, [todo]} ->
+            {:noreply,
+             socket
+             |> assign(:new_todo_form, to_form(@default_new_todo_params, as: :todo))
+             |> assign(:new_todo_errors, %{})
+             |> put_flash(:info, "Added follow-up.")
+             |> push_patch(to: todos_path(@default_filters, %{"todo_id" => todo.id}))}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:new_todo_form, to_form(params, as: :todo))
+             |> assign(:new_todo_errors, %{})
+             |> refresh_todos()
+             |> put_flash(:error, TodoActionCopy.error(:create, reason))}
+        end
+
+      {:error, errors} ->
+        {:noreply,
+         socket
+         |> assign(:new_todo_form, to_form(params, as: :todo))
+         |> assign(:new_todo_errors, errors)
+         |> put_flash(:error, "Check the follow-up details and try again.")}
+    end
+  end
+
+  def handle_event("create_todo", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Enter a follow-up before adding it.")}
   end
 
   def handle_event("toggle_todo_selection", %{"id" => todo_id}, socket) do
@@ -264,6 +320,88 @@ defmodule MaraithonWeb.TodosLive do
             <.button navigate="/dashboard" variant="outline">Dashboard</.button>
           </:actions>
         </.page_header>
+
+        <.panel body_class="px-5 py-4">
+          <:header>
+            <div>
+              <h2 class="text-sm/6 font-semibold text-zinc-950">Add follow-up</h2>
+              <p class="text-sm/6 text-zinc-500">Capture a user-owned open loop.</p>
+            </div>
+          </:header>
+
+          <.form
+            for={@new_todo_form}
+            id="new-todo-form"
+            phx-submit="create_todo"
+            class="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(16rem,1.25fr)_12rem_9rem_auto]"
+          >
+            <.field
+              label="Work item"
+              for={@new_todo_form[:title].id}
+              error={new_todo_error(@new_todo_errors, "title")}
+            >
+              <.c_input
+                id={@new_todo_form[:title].id}
+                name={@new_todo_form[:title].name}
+                value={@new_todo_form[:title].value}
+                placeholder="Close the loop with..."
+                maxlength="240"
+                required
+              />
+            </.field>
+
+            <.field
+              label="Next action"
+              for={@new_todo_form[:next_action].id}
+              error={new_todo_error(@new_todo_errors, "next_action")}
+            >
+              <.c_input
+                id={@new_todo_form[:next_action].id}
+                name={@new_todo_form[:next_action].name}
+                value={@new_todo_form[:next_action].value}
+                placeholder="Send reply, decide owner, confirm ETA"
+                maxlength="1000"
+                required
+              />
+            </.field>
+
+            <.field
+              label="Due"
+              for={@new_todo_form[:due_at].id}
+              error={new_todo_error(@new_todo_errors, "due_at")}
+            >
+              <.c_input
+                id={@new_todo_form[:due_at].id}
+                name={@new_todo_form[:due_at].name}
+                type="datetime-local"
+                value={@new_todo_form[:due_at].value}
+              />
+            </.field>
+
+            <.field label="Urgency" for={@new_todo_form[:priority].id}>
+              <.c_select id={@new_todo_form[:priority].id} name={@new_todo_form[:priority].name}>
+                <option :for={{label, value} <- @priority_options} value={value} selected={@new_todo_form[:priority].value == value}>
+                  <%= label %>
+                </option>
+              </.c_select>
+            </.field>
+
+            <div class="flex items-end">
+              <.button type="submit" phx-disable-with="Adding...">Add</.button>
+            </div>
+
+            <.field label="Notes" for={@new_todo_form[:notes].id} class="lg:col-span-4">
+              <.c_textarea
+                id={@new_todo_form[:notes].id}
+                name={@new_todo_form[:notes].name}
+                value={@new_todo_form[:notes].value}
+                rows={2}
+                maxlength="8000"
+                placeholder="Context, source, or reply constraints"
+              />
+            </.field>
+          </.form>
+        </.panel>
 
         <.panel body_class="px-5 py-4">
           <.form
@@ -751,6 +889,120 @@ defmodule MaraithonWeb.TodosLive do
 
   defp pluralize_work_item(1), do: "1 work item"
   defp pluralize_work_item(count), do: "#{count} work items"
+
+  defp normalize_new_todo_params(params) when is_map(params) do
+    %{
+      "title" => normalize_text(Map.get(params, "title")) || "",
+      "next_action" => normalize_text(Map.get(params, "next_action")) || "",
+      "due_at" => normalize_text(Map.get(params, "due_at")) || "",
+      "priority" => normalize_new_todo_priority(Map.get(params, "priority")),
+      "notes" => normalize_text(Map.get(params, "notes")) || ""
+    }
+  end
+
+  defp normalize_new_todo_params(_params), do: @default_new_todo_params
+
+  defp build_manual_todo_attrs(user_id, params, timezone_info) do
+    title = normalize_text(params["title"])
+    next_action = normalize_text(params["next_action"])
+    notes = normalize_text(params["notes"])
+    due_at_result = parse_new_todo_due_at(params["due_at"], timezone_info)
+
+    errors =
+      %{}
+      |> maybe_put_text_error("title", title, "Enter a work item with at least 4 characters.")
+      |> maybe_put_text_error(
+        "next_action",
+        next_action,
+        "Enter a next action with at least 4 characters."
+      )
+      |> maybe_put_due_error(due_at_result)
+
+    if map_size(errors) == 0 do
+      {:ok,
+       %{
+         "source" => "manual",
+         "kind" => "general",
+         "title" => title,
+         "summary" => manual_todo_summary(notes, next_action),
+         "next_action" => next_action,
+         "due_at" => elem(due_at_result, 1),
+         "notes" => notes,
+         "priority" => String.to_integer(params["priority"]),
+         "dedupe_key" => "manual:web:#{Ecto.UUID.generate()}",
+         "metadata" => %{
+           "created_from" => "todos_web",
+           "created_by_user_id" => user_id
+         }
+       }}
+    else
+      {:error, errors}
+    end
+  end
+
+  defp manual_todo_summary(notes, _next_action) when is_binary(notes), do: notes
+  defp manual_todo_summary(_notes, next_action), do: next_action
+
+  defp maybe_put_text_error(errors, key, value, message) do
+    if is_binary(value) and String.length(value) >= 4 do
+      errors
+    else
+      Map.put(errors, key, message)
+    end
+  end
+
+  defp maybe_put_due_error(errors, {:error, _reason}) do
+    Map.put(errors, "due_at", "Enter a valid due date and time.")
+  end
+
+  defp maybe_put_due_error(errors, {:ok, _due_at}), do: errors
+
+  defp new_todo_error(errors, key) when is_map(errors), do: Map.get(errors, key)
+  defp new_todo_error(_errors, _key), do: nil
+
+  defp normalize_new_todo_priority(value) when value in ~w(50 75 90), do: value
+  defp normalize_new_todo_priority(_value), do: "50"
+
+  defp parse_new_todo_due_at(nil, _timezone_info), do: {:ok, nil}
+  defp parse_new_todo_due_at("", _timezone_info), do: {:ok, nil}
+
+  defp parse_new_todo_due_at(value, timezone_info) when is_binary(value) do
+    value
+    |> normalize_datetime_local_value()
+    |> NaiveDateTime.from_iso8601()
+    |> case do
+      {:ok, naive_datetime} -> {:ok, local_naive_to_utc(naive_datetime, timezone_info)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp parse_new_todo_due_at(_value, _timezone_info), do: {:error, :invalid_due_at}
+
+  defp normalize_datetime_local_value(value) do
+    value = String.trim(value)
+
+    if Regex.match?(~r/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, value) do
+      value <> ":00"
+    else
+      value
+    end
+  end
+
+  defp local_naive_to_utc(%NaiveDateTime{} = naive_datetime, timezone_info) do
+    timezone_info = normalize_timezone_info(timezone_info)
+
+    local_datetime =
+      DateTime.new!(
+        NaiveDateTime.to_date(naive_datetime),
+        NaiveDateTime.to_time(naive_datetime),
+        "Etc/UTC"
+      )
+
+    offset =
+      Timezones.offset_for_local(timezone_info.name, local_datetime, timezone_info.offset_hours)
+
+    DateTime.add(local_datetime, -offset, :hour)
+  end
 
   defp selected_visible_todo_ids(socket) do
     socket.assigns.selected_todo_ids

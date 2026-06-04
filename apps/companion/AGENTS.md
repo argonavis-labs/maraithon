@@ -74,11 +74,13 @@ This app must feel native. Every UI ticket is judged against these rules.
 
 ## Testing
 
+- Current mode: do not run `swift test` or broad test suites by default. Kent is testing live in production until he explicitly says to harden the app again.
+- Do not delete or weaken tests; this only changes routine verification.
 - Every parser change ships with a fixture (`Tests/MaraithonTests/Fixtures/`).
 - iMessage parser: golden fixtures per macOS major version.
 - `SyncEngine`: tests cover retry, backoff, offline-resume, idempotency.
 - `DeviceAuth`: tests cover full state machine, including 401 → re-pair.
-- Run `swift test` locally before pushing.
+- Run `swift build` for compile sanity before finishing companion changes.
 
 ## Style
 

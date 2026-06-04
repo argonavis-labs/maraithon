@@ -10,6 +10,7 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   alias Maraithon.AssistantChat.{CalculationIntent, MobileDelivery}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.Run
+  alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.Conversation
   alias Maraithon.TelegramConversations.Turn
   alias Maraithon.Todos
@@ -20,6 +21,44 @@ defmodule Maraithon.AssistantChat.DirectIntent do
     ~r/^\s*(?:create|make|add)\s+(?:(?:a|an|new)\s+)*todo\s*[:\-]\s*(.+?)(?:[.!?]\s+|[.!?]?$|$)/iu,
     ~r/^\s*add\s+(.+?)\s+to\s+(?:my\s+)?(?:todo|to-do|task)\s+list(?:[.!?]\s*|$)/iu
   ]
+  @linked_done_phrases MapSet.new([
+                         "done",
+                         "it is done",
+                         "it's done",
+                         "this is done",
+                         "mark done",
+                         "mark it done",
+                         "mark this done",
+                         "mark complete",
+                         "mark it complete",
+                         "mark this complete",
+                         "complete this",
+                         "completed",
+                         "handled",
+                         "this is handled",
+                         "resolved",
+                         "this is resolved"
+                       ])
+  @linked_dismiss_phrases MapSet.new([
+                            "dismiss",
+                            "dismiss this",
+                            "delete this",
+                            "delete this todo",
+                            "remove this",
+                            "remove this todo",
+                            "not relevant",
+                            "this is not relevant",
+                            "no longer relevant",
+                            "this is no longer relevant"
+                          ])
+  @linked_snooze_phrases MapSet.new([
+                           "snooze",
+                           "snooze this",
+                           "snooze this todo",
+                           "remind me tomorrow",
+                           "tomorrow",
+                           "later"
+                         ])
 
   @fast_chat_replies %{
     greeting: "Ready. What needs attention?",
@@ -103,6 +142,68 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   end
 
   def classify(_text), do: :nomatch
+
+  def classify(text, %Conversation{} = conversation) when is_binary(text) do
+    case linked_todo_action(text, conversation) do
+      {:ok, action} -> {:ok, %{type: :linked_todo_action, action: action}}
+      :nomatch -> classify(text)
+    end
+  end
+
+  def classify(text, _conversation), do: classify(text)
+
+  def execute(
+        %Conversation{} = conversation,
+        %Run{} = run,
+        %Turn{} = user_turn,
+        %{type: :linked_todo_action, action: action}
+      ) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(conversation),
+         {:ok, todo} <- apply_linked_todo_action(conversation.user_id, todo_id, action),
+         {:ok, _updated_conversation} <-
+           TelegramConversations.update_metadata(conversation, %{
+             "linked_todo" => Todos.serialize_for_prompt(todo),
+             "linked_todo_status" => todo.status
+           }),
+         {:ok, _conversation, _turn, _delivery} <-
+           MobileDelivery.deliver_turn(
+             conversation,
+             conversation.chat_id,
+             linked_todo_action_reply(action, todo),
+             turn_kind: "action_result",
+             origin_type: "chat",
+             origin_id: user_turn.id,
+             structured_data: %{
+               "surface" => "mobile",
+               "run_id" => run.id,
+               "message_class" => "action_result",
+               "direct_intent" => "linked_todo_action",
+               "linked_todo_action" => Atom.to_string(action),
+               "linked_todo" => Todos.serialize_for_prompt(todo)
+             }
+           ) do
+      TelegramAssistant.complete_run(run, %{
+        status: "completed",
+        result_summary: %{
+          surface: "mobile",
+          model_tier: "deterministic",
+          model_name: "direct_intent",
+          model_reasoning_effort: "none",
+          task_class: "linked_todo_action",
+          route_reason: "direct_intent:linked_todo_action",
+          message_class: "action_result",
+          direct_intent: "linked_todo_action",
+          linked_todo_action: Atom.to_string(action),
+          todo_id: todo.id,
+          tool_steps: 0,
+          llm_turns: 0
+        }
+      })
+    else
+      nil -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   def execute(
         %Conversation{} = conversation,
@@ -297,6 +398,92 @@ defmodule Maraithon.AssistantChat.DirectIntent do
   defp context_request?(text) do
     Enum.any?(@context_keyword_patterns, &Regex.match?(&1, text))
   end
+
+  defp linked_todo_action(text, %Conversation{} = conversation) do
+    if linked_todo_id(conversation) do
+      text
+      |> normalize_fast_chat_text()
+      |> classify_linked_todo_action()
+    else
+      :nomatch
+    end
+  end
+
+  defp classify_linked_todo_action(normalized) do
+    cond do
+      MapSet.member?(@linked_done_phrases, normalized) ->
+        {:ok, :done}
+
+      Regex.match?(~r/\b(mark|set|move)\b.*\b(done|complete|completed|handled|resolved)\b/u, normalized) ->
+        {:ok, :done}
+
+      Regex.match?(~r/\b(this|it)\b.*\b(is|was)\b.*\b(done|complete|completed|handled|resolved)\b/u, normalized) ->
+        {:ok, :done}
+
+      MapSet.member?(@linked_dismiss_phrases, normalized) ->
+        {:ok, :dismiss}
+
+      Regex.match?(~r/\b(dismiss|delete|remove)\b.*\b(this|todo|task|work item)\b/u, normalized) ->
+        {:ok, :dismiss}
+
+      Regex.match?(~r/\b(no longer relevant|not relevant|irrelevant)\b/u, normalized) ->
+        {:ok, :dismiss}
+
+      MapSet.member?(@linked_snooze_phrases, normalized) ->
+        {:ok, :snooze}
+
+      Regex.match?(~r/\b(snooze|remind me|later|tomorrow)\b/u, normalized) ->
+        {:ok, :snooze}
+
+      true ->
+        :nomatch
+    end
+  end
+
+  defp linked_todo_id(%Conversation{} = conversation) do
+    case get_in(conversation.metadata || %{}, ["linked_todo_id"]) do
+      value when is_binary(value) -> value
+      value when is_integer(value) -> Integer.to_string(value)
+      _ -> nil
+    end
+  end
+
+  defp apply_linked_todo_action(user_id, todo_id, :done) do
+    Todos.mark_done(user_id, todo_id,
+      actor_type: "user",
+      actor_id: user_id,
+      actor_label: "User",
+      note: "Completed from mobile todo chat."
+    )
+  end
+
+  defp apply_linked_todo_action(user_id, todo_id, :dismiss) do
+    Todos.dismiss(user_id, todo_id,
+      actor_type: "user",
+      actor_id: user_id,
+      actor_label: "User",
+      source: "mobile_todo_chat",
+      note: "Dismissed from mobile todo chat."
+    )
+  end
+
+  defp apply_linked_todo_action(user_id, todo_id, :snooze) do
+    until_datetime =
+      DateTime.utc_now()
+      |> DateTime.add(24, :hour)
+      |> DateTime.truncate(:second)
+
+    Todos.snooze(user_id, todo_id, until_datetime,
+      actor_type: "user",
+      actor_id: user_id,
+      actor_label: "User",
+      note: "Snoozed from mobile todo chat."
+    )
+  end
+
+  defp linked_todo_action_reply(:done, todo), do: "Marked done: #{todo.title}"
+  defp linked_todo_action_reply(:dismiss, todo), do: "Dismissed: #{todo.title}"
+  defp linked_todo_action_reply(:snooze, todo), do: "Snoozed until tomorrow: #{todo.title}"
 
   defp todo_attrs(%Conversation{} = conversation, %Run{} = run, %Turn{} = user_turn, title) do
     %{

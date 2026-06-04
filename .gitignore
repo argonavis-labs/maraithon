@@ -52,6 +52,8 @@ erl_crash.dump
 .env.*
 .env.local
 .envrc
+fly-prod.env
+fly-*.env
 
 # Secret config files
 *.secret.exs

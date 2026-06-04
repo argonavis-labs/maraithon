@@ -472,7 +472,7 @@ struct MobileAPIClient: Sendable {
 
     func deleteTodo(sessionToken: String, id: UUID) async throws -> RemoteTodo {
         let response: TodoResponse = try await send(
-            path: "/todos/\(id.uuidString.lowercased())?include_cards=true",
+            path: "/todos/\(id.uuidString.lowercased())",
             method: "DELETE",
             sessionToken: sessionToken,
             responseType: TodoResponse.self

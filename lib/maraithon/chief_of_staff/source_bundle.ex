@@ -330,7 +330,7 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
 
   defp read_workspace_messages(workspace) when is_map(workspace) do
     workspace
-    |> read_list("key_channels")
+    |> read_workspace_channels()
     |> Enum.flat_map(fn channel ->
       channel
       |> read_list("messages")
@@ -346,6 +346,13 @@ defmodule Maraithon.ChiefOfStaff.SourceBundle do
   end
 
   defp read_workspace_messages(_workspace), do: []
+
+  defp read_workspace_channels(workspace) when is_map(workspace) do
+    case read_list(workspace, "channels") do
+      [] -> read_list(workspace, "key_channels")
+      channels -> channels
+    end
+  end
 
   defp stringify_keys(%_{} = struct), do: struct
 

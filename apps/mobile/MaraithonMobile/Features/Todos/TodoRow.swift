@@ -117,26 +117,29 @@ struct TodoDecisionContext: Equatable {
         let nextAction = Self.cleanedText(todo.displayNextAction)
         let contextSummary = Self.uniqueText(
             todo.decisionContextSummary,
-            excluding: [title, notes, nextAction]
+            excludingCleaned: [title, notes, nextAction]
         )
         let decisionPrompt = Self.uniqueText(
             todo.decisionPrompt,
-            excluding: [title, notes, nextAction, contextSummary]
+            excludingCleaned: [title, notes, nextAction, contextSummary]
         )
         let preparedMove = Self.uniqueText(
             todo.nextBestAction,
-            excluding: [title, notes, nextAction, contextSummary, decisionPrompt]
+            excludingCleaned: [title, notes, nextAction, contextSummary, decisionPrompt]
         )
 
         self.contextSummary = contextSummary
         self.decisionPrompt = decisionPrompt
-        self.notesContext = Self.uniqueText(notes, excluding: [title, nextAction, contextSummary, decisionPrompt])
+        self.notesContext = Self.uniqueCleanedText(
+            notes,
+            excludingCleaned: [title, nextAction, contextSummary, decisionPrompt]
+        )
         self.whyNow = Self.cleanedText(todo.whyNow)
         self.sourceContext = Self.cleanedText(todo.sourceContext)
         self.preparedMove = preparedMove
         self.draftPreview = Self.uniqueText(
             todo.draftPreview,
-            excluding: [title, notes, nextAction, contextSummary, decisionPrompt, preparedMove]
+            excludingCleaned: [title, notes, nextAction, contextSummary, decisionPrompt, preparedMove]
         )
         self.rowMove = preparedMove ?? nextAction
         self.evidence = Self.cleanedText(todo.evidenceExcerpt)
@@ -166,10 +169,14 @@ struct TodoDecisionContext: Equatable {
             evidence != nil
     }
 
-    private static func uniqueText(_ value: String?, excluding values: [String?]) -> String? {
-        guard let cleaned = cleanedText(value) else { return nil }
+    private static func uniqueText(_ value: String?, excludingCleaned values: [String?]) -> String? {
+        uniqueCleanedText(cleanedText(value), excludingCleaned: values)
+    }
+
+    private static func uniqueCleanedText(_ cleaned: String?, excludingCleaned values: [String?]) -> String? {
+        guard let cleaned else { return nil }
         let isDuplicate = values.contains { other in
-            guard let other = cleanedText(other) else { return false }
+            guard let other else { return false }
             return cleaned.compare(other, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }
         return isDuplicate ? nil : cleaned

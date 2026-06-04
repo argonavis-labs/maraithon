@@ -38,7 +38,7 @@ struct MobileAPIClientTodoTests {
         let request = try #require(recorder.requests.first)
 
         #expect(request.httpMethod == "DELETE")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos/\(todoID.uuidString.lowercased())?include_cards=true")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos/\(todoID.uuidString.lowercased())")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
         #expect(remote.id == todoID.uuidString.lowercased())
         #expect(remote.status == "dismissed")

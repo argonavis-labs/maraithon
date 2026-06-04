@@ -4,6 +4,7 @@ defmodule Maraithon.Drafts do
   """
 
   alias Maraithon.LLM
+  alias Maraithon.Memory
   alias Maraithon.Memory.UserVoice
   alias Maraithon.OperatorMemory
   alias Maraithon.PreferenceMemory
@@ -90,7 +91,8 @@ defmodule Maraithon.Drafts do
       preference_memory: PreferenceMemory.prompt_context(user_id),
       operator_summaries: OperatorMemory.summaries_for_prompt(user_id),
       user_memory_profile: UserMemory.prompt_context(user_id),
-      channel_voice: voice_context
+      channel_voice: voice_context,
+      deep_memory: Memory.prompt_context(user_id, query: purpose, limit: 8)
     }
 
     response_shape =

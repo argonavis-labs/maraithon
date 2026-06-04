@@ -13,6 +13,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   alias Maraithon.Followthrough.ConversationContext
   alias Maraithon.Insights
   alias Maraithon.OAuth
+  alias Maraithon.Slack.UserDirectory
 
   require Logger
 
@@ -22,7 +23,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   @default_lookback_hours 48
   @default_max_insights_per_cycle 5
   @default_min_confidence 0.75
-  @max_scan_conversations 12
+  @slack_conversations_page_limit 1_000
   @max_evidence_points 3
   @max_insights_scan_multiplier 2
 
@@ -226,6 +227,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       source == "slack" ->
         payload
         |> extract_pubsub_messages()
+        |> enrich_inline_slack_messages(state)
         |> scan_message_batch(state, timestamp)
 
       true ->
@@ -291,42 +293,45 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   defp scan_conversations(team_id, access_token, self_user_ids, state, oldest, opts) do
     types = Keyword.get(opts, :types, ["public_channel"])
     scan_limit = Keyword.get(opts, :scan_limit, 30)
-    conversation_limit = min(@max_scan_conversations, max(div(scan_limit, 8), 3))
-    per_conversation = max(div(scan_limit, max(conversation_limit, 1)), 4)
 
-    with {:ok, response} <-
-           Slack.list_conversations(access_token,
-             types: types,
-             exclude_archived: true,
-             limit: conversation_limit
-           ) do
-      response["channels"]
-      |> normalize_list()
-      |> Enum.take(conversation_limit)
-      |> Enum.flat_map(fn conversation ->
-        channel_id = conversation["id"]
+    with {:ok, conversations} <- list_all_conversations(access_token, types) do
+      per_conversation = max(div(scan_limit, max(length(conversations), 1)), 4)
 
-        case Slack.get_conversation_history(access_token, channel_id,
-               limit: per_conversation,
-               oldest: oldest
-             ) do
-          {:ok, history} ->
-            history["messages"]
-            |> normalize_list()
-            |> Enum.map(&normalize_message(&1, team_id, conversation))
-            |> scan_message_batch(state, DateTime.utc_now(), self_user_ids)
+      {candidates, _user_directory} =
+        Enum.reduce(conversations, {[], %{}}, fn conversation, {candidate_acc, directory_acc} ->
+          channel_id = conversation["id"]
 
-          {:error, reason} ->
-            Logger.debug("SlackFollowthroughAgent failed conversation history",
-              team_id: team_id,
-              channel_id: channel_id,
-              reason: inspect(reason)
-            )
+          case Slack.get_conversation_history(access_token, channel_id,
+                 limit: per_conversation,
+                 oldest: oldest
+               ) do
+            {:ok, history} ->
+              raw_messages =
+                history["messages"]
+                |> normalize_list()
 
-            []
-        end
-      end)
-      |> Enum.take(scan_limit)
+              user_directory =
+                slack_user_directory(access_token, raw_messages, conversation, directory_acc)
+
+              conversation_candidates =
+                raw_messages
+                |> Enum.map(&normalize_message(&1, team_id, conversation, user_directory))
+                |> scan_message_batch(state, DateTime.utc_now(), self_user_ids)
+
+              {candidate_acc ++ conversation_candidates, user_directory}
+
+            {:error, reason} ->
+              Logger.debug("SlackFollowthroughAgent failed conversation history",
+                team_id: team_id,
+                channel_id: channel_id,
+                reason: inspect(reason)
+              )
+
+              {candidate_acc, directory_acc}
+          end
+        end)
+
+      Enum.take(candidates, scan_limit)
     else
       {:error, reason} ->
         Logger.debug("SlackFollowthroughAgent failed conversation list",
@@ -337,6 +342,47 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
         []
     end
   end
+
+  defp list_all_conversations(access_token, types) do
+    list_all_conversations(access_token, types, nil, [])
+  end
+
+  defp list_all_conversations(access_token, types, cursor, acc) do
+    opts =
+      [
+        types: types,
+        exclude_archived: true,
+        limit: @slack_conversations_page_limit
+      ]
+      |> maybe_put_cursor(cursor)
+
+    case Slack.list_conversations(access_token, opts) do
+      {:ok, response} ->
+        conversations =
+          response
+          |> Map.get("channels", [])
+          |> normalize_list()
+
+        next_cursor =
+          response
+          |> get_in(["response_metadata", "next_cursor"])
+          |> normalize_string()
+
+        acc = acc ++ conversations
+
+        if next_cursor do
+          list_all_conversations(access_token, types, next_cursor, acc)
+        else
+          {:ok, acc}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_put_cursor(opts, nil), do: opts
+  defp maybe_put_cursor(opts, cursor), do: Keyword.put(opts, :cursor, cursor)
 
   defp scan_message_batch(messages, state, timestamp, explicit_self_ids \\ [])
 
@@ -368,6 +414,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
   defp commitment_candidates(message, all_messages, self_user_ids, state) do
     text = message.text || ""
+    display_text = message.text_resolved || text
     normalized = String.downcase(text)
     promise_matches = matched_terms(normalized, @promise_terms)
     action_matches = matched_terms(normalized, @commitment_action_terms)
@@ -394,6 +441,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
         true ->
           person = commitment_person(text, message)
+          person_user_id = commitment_person_user_id(text, message)
           due_at = infer_deadline_from_text(normalized, message.occurred_at)
           due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 24, :hour)
           artifact = artifact_hint(normalized)
@@ -449,7 +497,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
           record =
             commitment_record(
-              "Follow through on Slack commitment: #{truncate(text, 120)}",
+              "Follow through on Slack commitment: #{truncate(display_text, 120)}",
               person,
               source_id,
               due_at,
@@ -476,6 +524,8 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                 "channel_id" => message.channel_id,
                 "channel_name" => message.channel_name,
                 "thread_ts" => message.thread_ts,
+                "person" => person,
+                "person_slack_user_id" => person_user_id,
                 "signals" => Enum.uniq(promise_matches ++ action_matches ++ planning_matches),
                 "missing_inputs" =>
                   slack_missing_inputs("commitment_unresolved", artifact, due_at),
@@ -531,7 +581,7 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
               )
             ]
           else
-            person = message.user_id || "the sender"
+            person = slack_user_display_name(message, message.user_id) || "the sender"
             due_at = infer_deadline_from_text(normalized, message.occurred_at)
             due_at = due_at || DateTime.add(message.occurred_at || DateTime.utc_now(), 8, :hour)
 
@@ -589,6 +639,8 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                   "channel_id" => message.channel_id,
                   "channel_name" => message.channel_name,
                   "thread_ts" => message.thread_ts,
+                  "person" => person,
+                  "person_slack_user_id" => message.user_id,
                   "signals" => reply_matches,
                   "missing_inputs" => slack_missing_inputs("reply_urgent", nil, due_at),
                   "suggested_reply_points" =>
@@ -889,10 +941,14 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
                  limit: 50
                ) do
             {:ok, response} ->
-              messages =
+              raw_messages =
                 response["messages"]
                 |> normalize_list()
-                |> Enum.map(&thread_reply_message(&1, message))
+
+              user_directory = slack_user_directory(access_token, raw_messages, nil)
+
+              messages =
+                Enum.map(raw_messages, &thread_reply_message(&1, message, user_directory))
 
               {:ok, messages}
 
@@ -913,7 +969,10 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       end
   end
 
-  defp thread_reply_message(reply, message) when is_map(reply) do
+  defp thread_reply_message(reply, message, user_directory) when is_map(reply) do
+    user_id = read_string(reply, "user", nil)
+    text = read_string(reply, "text", "")
+
     %{
       "source" => "slack",
       "team_id" => message.team_id,
@@ -922,15 +981,19 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
       "is_dm" => message.is_dm,
       "is_mpim" => message.is_mpim,
       "counterparty_id" => message.counterparty_id,
+      "counterparty_display_name" => message.counterparty_display_name,
       "self_user_id" => message.self_user_id,
-      "user_id" => read_string(reply, "user", nil),
-      "text" => read_string(reply, "text", ""),
+      "user_id" => user_id,
+      "user_display_name" => UserDirectory.display_name(user_directory, user_id),
+      "mentioned_users" => UserDirectory.mentioned_users(text, user_directory),
+      "text" => text,
+      "text_resolved" => UserDirectory.replace_mentions(text, user_directory),
       "ts" => read_string(reply, "ts", nil),
       "thread_ts" => read_string(reply, "thread_ts", message.thread_ts || message.ts)
     }
   end
 
-  defp thread_reply_message(_reply, _message), do: %{}
+  defp thread_reply_message(_reply, _message, _user_directory), do: %{}
 
   defp resolved_conversation?(context) when is_map(context) do
     read_string(context, "notification_posture", nil) == "resolved"
@@ -991,13 +1054,49 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
 
     cond do
       mentions != [] ->
-        hd(mentions)
+        display_name_for_mentioned_user(message, hd(mentions)) || "the recipient"
 
       message.is_dm and present?(message.counterparty_id) ->
-        message.counterparty_id
+        message.counterparty_display_name || "the sender"
 
       true ->
         "the recipient"
+    end
+  end
+
+  defp commitment_person_user_id(text, message) do
+    mentions =
+      Regex.scan(~r/<@([A-Z0-9]+)>/, text || "", capture: :all_but_first)
+      |> List.flatten()
+
+    cond do
+      mentions != [] -> hd(mentions)
+      message.is_dm and present?(message.counterparty_id) -> message.counterparty_id
+      true -> nil
+    end
+  end
+
+  defp display_name_for_mentioned_user(message, user_id) do
+    message
+    |> Map.get(:mentioned_users, [])
+    |> normalize_list()
+    |> Enum.find_value(fn mentioned ->
+      if read_string(mentioned, "id", nil) == user_id do
+        read_string(mentioned, "display_name", nil)
+      end
+    end)
+  end
+
+  defp slack_user_display_name(message, user_id) do
+    cond do
+      not present?(user_id) ->
+        nil
+
+      read_string(message, "user_id", nil) == user_id ->
+        read_string(message, "user_display_name", nil)
+
+      true ->
+        nil
     end
   end
 
@@ -1012,20 +1111,28 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     end
   end
 
-  defp normalize_message(message, team_id, conversation) do
+  defp normalize_message(message, team_id, conversation, user_directory) do
+    user_id = read_string(message, "user", nil)
+    counterparty_id = conversation["user"]
+    text = read_string(message, "text", "")
+
     %{
       team_id: team_id,
       channel_id: conversation["id"],
       channel_name: conversation["name"] || conversation["id"],
       is_dm: conversation["is_im"] || false,
       is_mpim: conversation["is_mpim"] || false,
-      counterparty_id: conversation["user"],
+      counterparty_id: counterparty_id,
+      counterparty_display_name: UserDirectory.display_name(user_directory, counterparty_id),
       self_user_id: nil,
       ts: read_string(message, "ts", nil),
       thread_ts: read_string(message, "thread_ts", nil),
-      user_id: read_string(message, "user", nil),
+      user_id: user_id,
+      user_display_name: UserDirectory.display_name(user_directory, user_id),
+      mentioned_users: UserDirectory.mentioned_users(text, user_directory),
       subtype: read_string(message, "subtype", nil),
-      text: read_string(message, "text", ""),
+      text: text,
+      text_resolved: UserDirectory.replace_mentions(text, user_directory),
       occurred_at: parse_slack_timestamp(read_string(message, "ts", nil))
     }
   end
@@ -1044,12 +1151,21 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
         is_dm: read_bool(message, "is_dm", dm_channel?(channel_id)),
         is_mpim: read_bool(message, "is_mpim", false),
         counterparty_id: read_string(message, "counterparty_id", nil),
+        counterparty_display_name: read_string(message, "counterparty_display_name", nil),
         self_user_id: read_string(message, "self_user_id", nil),
         ts: ts,
         thread_ts: read_string(message, "thread_ts", nil),
         user_id: read_string(message, "user_id", read_string(message, "user", nil)),
+        user_display_name:
+          read_string(
+            message,
+            "user_display_name",
+            read_string(message, "user_name", read_string(message, "display_name", nil))
+          ),
+        mentioned_users: read_list(message, "mentioned_users"),
         subtype: read_string(message, "subtype", nil),
         text: read_string(message, "text", ""),
+        text_resolved: read_string(message, "text_resolved", nil),
         occurred_at: parse_slack_timestamp(ts)
       }
     else
@@ -1058,6 +1174,70 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
   end
 
   defp normalize_inline_message(_message), do: nil
+
+  defp enrich_inline_slack_messages(messages, state) when is_list(messages) do
+    team_id =
+      messages
+      |> Enum.find_value(&read_string(&1, "team_id", nil))
+
+    access_token = team_id && slack_access_token_for_thread(state.user_id, team_id)
+
+    if is_binary(access_token) do
+      user_directory = slack_user_directory(access_token, messages, nil)
+
+      Enum.map(messages, fn message ->
+        user_id = read_string(message, "user_id", read_string(message, "user", nil))
+        counterparty_id = read_string(message, "counterparty_id", nil)
+        text = read_string(message, "text", "")
+
+        message
+        |> Map.put_new("user_display_name", UserDirectory.display_name(user_directory, user_id))
+        |> Map.put_new(
+          "counterparty_display_name",
+          UserDirectory.display_name(user_directory, counterparty_id)
+        )
+        |> Map.put_new("mentioned_users", UserDirectory.mentioned_users(text, user_directory))
+        |> Map.put_new("text_resolved", UserDirectory.replace_mentions(text, user_directory))
+      end)
+    else
+      messages
+    end
+  end
+
+  defp enrich_inline_slack_messages(messages, _state), do: messages
+
+  defp slack_user_directory(access_token, messages, conversation, directory \\ %{}) do
+    message_user_ids =
+      messages
+      |> normalize_list()
+      |> Enum.flat_map(&slack_user_ids_from_message/1)
+
+    user_ids = message_user_ids ++ slack_user_ids_from_conversation(conversation)
+    missing_user_ids = missing_slack_user_ids(user_ids, directory)
+
+    Map.merge(directory, UserDirectory.resolve(access_token, missing_user_ids))
+  end
+
+  defp missing_slack_user_ids(user_ids, directory) do
+    user_ids
+    |> UserDirectory.normalize_user_ids()
+    |> Enum.reject(&Map.has_key?(directory, &1))
+  end
+
+  defp slack_user_ids_from_conversation(conversation) when is_map(conversation) do
+    [conversation["user"]]
+  end
+
+  defp slack_user_ids_from_conversation(_conversation), do: []
+
+  defp slack_user_ids_from_message(message) when is_map(message) do
+    [
+      read_string(message, "user", read_string(message, "user_id", nil)),
+      read_string(message, "counterparty_id", nil)
+    ] ++ UserDirectory.user_ids_from_text(read_string(message, "text", ""))
+  end
+
+  defp slack_user_ids_from_message(_message), do: []
 
   defp extract_pubsub_messages(payload) do
     data = read_map(payload, "data")
@@ -1091,7 +1271,17 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
               ),
             "channel_name" => read_string(event, "channel_name", nil),
             "user_id" => read_string(event, "user_id", read_string(event, "user", nil)),
+            "user_display_name" =>
+              read_string(
+                event,
+                "user_display_name",
+                read_string(event, "user_name", read_string(event, "display_name", nil))
+              ),
+            "counterparty_id" => read_string(event, "counterparty_id", nil),
+            "counterparty_display_name" => read_string(event, "counterparty_display_name", nil),
             "text" => read_string(event, "text", ""),
+            "text_resolved" => read_string(event, "text_resolved", nil),
+            "mentioned_users" => read_list(event, "mentioned_users"),
             "ts" => read_string(event, "ts", nil),
             "thread_ts" => read_string(event, "thread_ts", nil),
             "is_dm" => read_bool(event, "is_dm", false),
@@ -1469,6 +1659,13 @@ defmodule Maraithon.Behaviors.SlackFollowthroughAgent do
     case fetch_attr(attrs, key) do
       value when is_map(value) -> value
       _ -> %{}
+    end
+  end
+
+  defp read_list(attrs, key) when is_map(attrs) do
+    case fetch_attr(attrs, key) do
+      value when is_list(value) -> value
+      _ -> []
     end
   end
 

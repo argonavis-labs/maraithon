@@ -8,6 +8,7 @@ defmodule MaraithonWeb.AdminController do
   alias Maraithon.Agents
   alias Maraithon.ActionLedger
   alias Maraithon.Briefs.Brief
+  alias Maraithon.ChiefOfStaff.OpenWorkRebuild
   alias Maraithon.ChiefOfStaff.SourceScope
   alias Maraithon.ConnectedAccounts
   alias Maraithon.Connections
@@ -277,6 +278,100 @@ defmodule MaraithonWeb.AdminController do
     end
   end
 
+  def rebuild_open_work(conn, params) do
+    user_id = parse_user_id(params["user_id"])
+
+    with {:ok, lookback_hours} <-
+           parse_positive_integer_param(params["lookback_hours"], 24 * 14, "lookback_hours"),
+         {:ok, result_limit} <-
+           parse_positive_integer_param(params["result_limit"], 100, "result_limit") do
+      opts = [
+        lookback_hours: lookback_hours,
+        result_limit: result_limit,
+        allow_empty?: truthy_param?(params["allow_empty"]),
+        dismiss_existing?: not falsey_param?(params["dismiss_existing"]),
+        reason:
+          blank_to_nil(params["reason"]) ||
+            "Cleared before an admin open-work rebuild."
+      ]
+
+      if truthy_param?(params["sync"]) do
+        case OpenWorkRebuild.run(user_id, opts) do
+          {:ok, result} ->
+            json(conn, normalize_json(result))
+
+          {:error, reason} ->
+            conn
+            |> put_status(:bad_gateway)
+            |> json(%{
+              error: "open_work_rebuild_failed",
+              message: admin_error(:open_work_rebuild, reason)
+            })
+        end
+      else
+        case OpenWorkRebuild.queue_job(user_id, opts) do
+          {:ok, result} ->
+            json(conn, normalize_json(result))
+
+          {:error, reason} ->
+            conn
+            |> put_status(:bad_gateway)
+            |> json(%{
+              error: "open_work_rebuild_failed",
+              message: admin_error(:open_work_rebuild, reason)
+            })
+        end
+      end
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
+  def open_work_rebuild_status(conn, %{"job_id" => job_id} = params) do
+    user_id = parse_user_id(params["user_id"])
+
+    case OpenWorkRebuild.job_status(user_id, job_id) do
+      {:ok, result} ->
+        json(conn, normalize_json(result))
+
+      {:error, :not_found} ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{error: "not_found", message: "Open work rebuild job not found."})
+    end
+  end
+
+  def restore_recent_open_work(conn, params) do
+    with {:ok, limit} <- parse_positive_integer_param(params["limit"], 100, "limit"),
+         {:ok, since} <- parse_datetime_param(params["since"], "since") do
+      user_id = parse_user_id(params["user_id"])
+
+      case OpenWorkRebuild.restore_recent_admin_dismissals(user_id,
+             limit: limit,
+             since: since
+           ) do
+        {:ok, result} ->
+          json(conn, normalize_json(Map.put(result, "user_id", user_id)))
+
+        {:error, reason} ->
+          conn
+          |> put_status(:bad_gateway)
+          |> json(%{
+            error: "open_work_restore_failed",
+            message: admin_error(:open_work_restore, reason)
+          })
+      end
+    else
+      {:error, message} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_params", message: message})
+    end
+  end
+
   def reset_operator_state(conn, params) do
     user_id = parse_user_id(params["user_id"])
 
@@ -485,12 +580,26 @@ defmodule MaraithonWeb.AdminController do
   defp parse_positive_integer_param(nil, default, _field_name), do: {:ok, default}
   defp parse_positive_integer_param("", default, _field_name), do: {:ok, default}
 
+  defp parse_positive_integer_param(value, _default, _field_name)
+       when is_integer(value) and value > 0,
+       do: {:ok, value}
+
   defp parse_positive_integer_param(value, _default, field_name) when is_binary(value) do
     case Integer.parse(value) do
       {parsed, ""} when parsed > 0 -> {:ok, parsed}
       _ -> {:error, "#{field_name} must be a positive integer"}
     end
   end
+
+  defp parse_datetime_param(value, field_name) when is_binary(value) do
+    case DateTime.from_iso8601(String.trim(value)) do
+      {:ok, datetime, _offset} -> {:ok, datetime}
+      _other -> {:error, "#{field_name} must be an ISO-8601 datetime"}
+    end
+  end
+
+  defp parse_datetime_param(_value, field_name),
+    do: {:error, "#{field_name} must be an ISO-8601 datetime"}
 
   defp parse_todo_statuses(nil), do: {:ok, ["open", "snoozed"]}
   defp parse_todo_statuses(""), do: {:ok, ["open", "snoozed"]}
@@ -538,6 +647,9 @@ defmodule MaraithonWeb.AdminController do
 
   defp truthy_param?(value) when value in [true, "true", "1", 1, "yes", "on"], do: true
   defp truthy_param?(_value), do: false
+
+  defp falsey_param?(value) when value in [false, "false", "0", 0, "no", "off"], do: true
+  defp falsey_param?(_value), do: false
 
   defp telegram_chat_id(user_id) when is_binary(user_id) do
     case ConnectedAccounts.get(user_id, "telegram") do

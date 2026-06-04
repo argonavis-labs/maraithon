@@ -105,9 +105,14 @@ stale DerivedData copies before launching without resetting Full Disk Access.
   `#include? "Config.local.xcconfig"` (optional include).
 - `Config.local.xcconfig` is **gitignored** and supplies your
   local signing values.
-- On a fresh clone with no local file, the include is silently skipped:
-  Debug still builds (ad-hoc signing, identity `"-"`); only Release
-  archives need a real Developer ID.
+- On a fresh clone with no local file, the include is silently skipped.
+  The monorepo build/test helpers pass `CODE_SIGN_IDENTITY=-` so Debug still
+  builds as an ad-hoc-signed app. They must not disable code signing entirely:
+  an unsigned `.app` can compile cleanly, but macOS taskgated kills it at
+  launch with `Code Signature Invalid`.
+- After the companion `.app` build completes, the monorepo build helper runs
+  `codesign --verify --deep --strict` against the produced bundle so an invalid
+  launch signature fails the build instead of becoming a local crash report.
 
 ## Verify
 

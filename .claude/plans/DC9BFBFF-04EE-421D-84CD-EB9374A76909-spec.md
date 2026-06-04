@@ -1,5 +1,5 @@
 ---
-status: planning
+status: ready
 ticket: DC9BFBFF
 title: Fast & Context-Aware Telegram Answers
 ---

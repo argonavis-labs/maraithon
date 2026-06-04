@@ -4,5 +4,56 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
+deploy_env_file="${MARAITHON_DEPLOY_ENV_FILE:-${HOME}/.config/maraithon/fly-prod.env}"
+
+if [[ -f "${deploy_env_file}" ]]; then
+  # Keep Maraithon deploys independent from whichever Fly account is active
+  # in the terminal. The env file is outside the repo and should be chmod 600.
+  # shellcheck disable=SC1090
+  source "${deploy_env_file}"
+fi
+
+fly_app="${MARAITHON_FLY_APP:-maraithon}"
+fly_config="${MARAITHON_FLY_CONFIG:-fly.toml}"
+fly_strategy="${MARAITHON_FLY_DEPLOY_STRATEGY:-rolling}"
+fly_wait_timeout="${MARAITHON_FLY_WAIT_TIMEOUT:-10m}"
+fly_release_command_timeout="${MARAITHON_FLY_RELEASE_COMMAND_TIMEOUT:-10m}"
+health_base_url="${MARAITHON_BASE_URL:-https://${fly_app}.fly.dev}"
+health_path="${MARAITHON_HEALTH_PATH:-/health}"
+health_url="${health_base_url%/}${health_path}"
+deploy_lock_dir="${MARAITHON_DEPLOY_LOCK_DIR:-${TMPDIR:-/tmp}/maraithon-fly-deploy.lock}"
+
 require_command flyctl
-run_in "${ROOT_DIR}" flyctl deploy --app maraithon --config fly.toml
+require_command curl
+
+if [[ -z "${FLY_API_TOKEN:-}" ]]; then
+  echo "FLY_API_TOKEN is required for deploys." >&2
+  echo "Set it in ${deploy_env_file} or export it before running make deploy." >&2
+  echo "This prevents accidental deploys through the active flyctl account." >&2
+  exit 1
+fi
+
+if ! mkdir "${deploy_lock_dir}" 2>/dev/null; then
+  echo "Another Maraithon Fly deploy appears to be running: ${deploy_lock_dir}" >&2
+  echo "Remove that directory only after confirming no deploy is active." >&2
+  exit 75
+fi
+trap 'rmdir "${deploy_lock_dir}" 2>/dev/null || true' EXIT
+
+export FLY_API_TOKEN
+export MARAITHON_FLY_APP="${fly_app}"
+export FLY_APP="${fly_app}"
+
+run_in "${ROOT_DIR}" flyctl auth whoami --json >/dev/null
+run_in "${ROOT_DIR}" flyctl status --app "${fly_app}" --config "${fly_config}" --json >/dev/null
+run_in "${ROOT_DIR}" flyctl deploy \
+  --remote-only \
+  --now \
+  --strategy "${fly_strategy}" \
+  --wait-timeout "${fly_wait_timeout}" \
+  --release-command-timeout "${fly_release_command_timeout}" \
+  --app "${fly_app}" \
+  --config "${fly_config}"
+
+run_in "${ROOT_DIR}" curl --fail --silent --show-error "${health_url}" >/dev/null
+echo "Deploy health check passed: ${health_url}"

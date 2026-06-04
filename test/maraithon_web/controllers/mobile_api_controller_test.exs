@@ -177,13 +177,17 @@ defmodule MaraithonWeb.MobileApiControllerTest do
     conn =
       build_conn()
       |> put_req_header("authorization", "Bearer #{session_token}")
-      |> delete(~p"/api/mobile/todos/#{todo_id}", %{"note" => "No longer relevant from mobile."})
+      |> delete(~p"/api/mobile/todos/#{todo_id}?include_cards=true", %{
+        "note" => "No longer relevant from mobile."
+      })
 
     assert %{
              "deleted" => true,
              "delete_mode" => "dismiss_as_no_longer_relevant",
-             "todo" => %{"id" => ^todo_id, "status" => "dismissed"}
+             "todo" => %{"id" => ^todo_id, "status" => "dismissed"} = todo_response
            } = json_response(conn, 200)
+
+    refute Map.has_key?(todo_response, "action_card")
 
     dismissed = Todos.get_for_user(user.id, todo_id)
     assert dismissed.status == "dismissed"

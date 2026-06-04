@@ -77,6 +77,7 @@ defmodule MaraithonWeb.TodosLiveTest do
   test "empty work list copy stays user-facing", %{conn: conn} do
     {:ok, view, html} = live(conn, "/todos")
 
+    assert html =~ "Add follow-up"
     assert html =~ "Your open work list is clear."
     assert html =~ "when the next move is clear"
     refute html =~ "No work items match these filters."
@@ -147,6 +148,72 @@ defmodule MaraithonWeb.TodosLiveTest do
     |> render_change()
 
     assert render(view) =~ "No work matches that search."
+  end
+
+  test "creates manual follow-ups scoped to the signed-in user", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/todos")
+
+    view
+    |> form("#new-todo-form",
+      todo: %{
+        "title" => "Call Sarah about renewal",
+        "next_action" => "Confirm renewal timeline and owner.",
+        "due_at" => "2026-06-04T09:30",
+        "priority" => "75",
+        "notes" => "Mention budget sensitivity before confirming the ETA."
+      }
+    )
+    |> render_submit()
+
+    [todo] = Todos.list_for_user(@user_email, source: "manual", limit: 5)
+
+    assert_patch(view, "/todos?todo_id=#{todo.id}")
+
+    html = render(view)
+    assert html =~ "Added follow-up."
+    assert html =~ "Call Sarah about renewal"
+    assert html =~ "Confirm renewal timeline and owner."
+    assert html =~ "Mention budget sensitivity before confirming the ETA."
+    assert html =~ "Added by you"
+    assert html =~ "High"
+
+    assert todo.user_id == @user_email
+    assert todo.owner_user_id == @user_email
+    assert todo.source == "manual"
+    assert todo.priority == 75
+    assert DateTime.truncate(todo.due_at, :second) == ~U[2026-06-04 14:30:00Z]
+    assert todo.metadata["created_from"] == "todos_web"
+
+    other_email = "todos-live-other-#{System.unique_integer([:positive])}@example.com"
+    other_conn = log_in_test_user(build_conn(), other_email)
+
+    {:ok, _other_view, other_html} = live(other_conn, "/todos")
+
+    refute other_html =~ "Call Sarah about renewal"
+  end
+
+  test "manual follow-up form validates user input", %{conn: conn} do
+    {:ok, view, _html} = live(conn, "/todos")
+
+    html =
+      view
+      |> form("#new-todo-form",
+        todo: %{
+          "title" => "Pay",
+          "next_action" => "ok",
+          "due_at" => "not-a-date",
+          "priority" => "90",
+          "notes" => "Keep this note in the form."
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Check the follow-up details and try again."
+    assert html =~ "Enter a work item with at least 4 characters."
+    assert html =~ "Enter a next action with at least 4 characters."
+    assert html =~ "Enter a valid due date and time."
+    assert html =~ "Keep this note in the form."
+    assert Todos.list_for_user(@user_email, source: "manual", limit: 5) == []
   end
 
   test "generated work source is labeled as Maraithon", %{conn: conn} do

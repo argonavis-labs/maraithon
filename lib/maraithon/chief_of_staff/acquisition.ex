@@ -5,8 +5,16 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.LocalBrowserHistory
+  alias Maraithon.LocalCalendar
+  alias Maraithon.LocalFiles
+  alias Maraithon.LocalMessages
+  alias Maraithon.LocalNotes
+  alias Maraithon.LocalReminders
+  alias Maraithon.LocalVoiceMemos
   alias Maraithon.News
   alias Maraithon.OAuth
+  alias Maraithon.Slack.UserDirectory
   alias Maraithon.Tools.SlackHelpers
 
   require Logger
@@ -15,6 +23,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_calendar_limit 250
   @default_slack_channel_limit 12
   @default_slack_message_limit 100
+  @slack_conversations_page_limit 1_000
   @default_lookback_hours 24 * 14
   @default_timezone_offset_hours -5
   @commercial_gmail_lookback_days 7
@@ -22,6 +31,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   @default_forward_days 14
   @default_commercial_gmail_queries []
   @default_slack_key_channels []
+  @default_local_calendar_limit 250
+  @default_local_message_limit 200
+  @default_local_chat_limit 100
+  @default_local_voice_memo_limit 80
+  @default_local_note_limit 100
+  @default_local_reminder_limit 100
+  @default_local_file_limit 100
+  @default_local_browser_visit_limit 250
 
   def build(user_id, skill_ids, skill_configs, context)
       when is_binary(user_id) and is_list(skill_ids) and is_map(skill_configs) and is_map(context) do
@@ -34,6 +51,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       |> maybe_fetch_gmail(user_id, source_scope, plan, context)
       |> maybe_fetch_calendar(user_id, source_scope, plan, context)
       |> maybe_fetch_slack(user_id, source_scope, plan, context)
+      |> maybe_fetch_companion_sources(user_id, plan, context)
       |> maybe_fetch_news(user_id, source_scope, plan, context)
       |> then(fn {telemetry, bundle} -> {bundle, telemetry} end)
 
@@ -135,7 +153,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     else
       oldest =
         (context[:timestamp] || DateTime.utc_now())
-        |> DateTime.add(-min(plan.lookback_hours, 24), :hour)
+        |> DateTime.add(-plan.lookback_hours, :hour)
         |> DateTime.to_unix(:second)
         |> Integer.to_string()
 
@@ -173,6 +191,11 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         workspaces
         |> Enum.flat_map(&slack_workspace_messages/1)
 
+      conversation_count =
+        workspaces
+        |> Enum.flat_map(&Map.get(&1, "channels", []))
+        |> length()
+
       status = if workspaces == [], do: "partial", else: "ready"
 
       bundle =
@@ -193,11 +216,210 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
           "status" => status,
           "teams" => team_ids,
           "workspace_count" => length(workspaces),
+          "conversation_count" => conversation_count,
           "message_count" => length(messages)
         })
 
       {telemetry, bundle}
     end
+  end
+
+  defp maybe_fetch_companion_sources({telemetry, bundle}, user_id, plan, context)
+       when is_binary(user_id) do
+    now = context[:timestamp] || DateTime.utc_now()
+    lookback_start = DateTime.add(now, -plan.lookback_hours, :hour)
+    calendar_end = DateTime.add(now, plan.forward_days, :day)
+
+    {telemetry, bundle}
+    |> fetch_companion_source(
+      "calendar_local",
+      fn ->
+        events =
+          user_id
+          |> LocalCalendar.events_around(
+            since: lookback_start,
+            until: calendar_end,
+            limit: plan.local_calendar_limit
+          )
+          |> Enum.map(&local_calendar_event_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_calendar_local(&1, %{
+           "events" => events,
+           "counts" => %{"event_count" => length(events)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"event_count" => length(events)}}
+      end
+    )
+    |> fetch_companion_source(
+      "imessage",
+      fn ->
+        messages =
+          user_id
+          |> LocalMessages.recent_for_user(limit: plan.local_message_limit)
+          |> Enum.map(&local_message_for_bundle/1)
+
+        chats =
+          user_id
+          |> LocalMessages.chats_recent(limit: plan.local_chat_limit, now: now)
+          |> Enum.map(&local_chat_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_imessage(&1, %{
+           "messages" => messages,
+           "chats" => chats,
+           "counts" => %{"message_count" => length(messages), "chat_count" => length(chats)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"message_count" => length(messages), "chat_count" => length(chats)}}
+      end
+    )
+    |> fetch_companion_source(
+      "voice_memos",
+      fn ->
+        memos =
+          user_id
+          |> LocalVoiceMemos.recent_for_user(limit: plan.local_voice_memo_limit)
+          |> Enum.map(&voice_memo_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_voice_memos(&1, %{
+           "memos" => memos,
+           "counts" => %{"memo_count" => length(memos)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"memo_count" => length(memos)}}
+      end
+    )
+    |> fetch_companion_source(
+      "notes",
+      fn ->
+        notes =
+          user_id
+          |> LocalNotes.recent_for_user(limit: plan.local_note_limit)
+          |> Enum.map(&note_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_notes(&1, %{
+           "notes" => notes,
+           "counts" => %{"note_count" => length(notes)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"note_count" => length(notes)}}
+      end
+    )
+    |> fetch_companion_source(
+      "reminders",
+      fn ->
+        reminders =
+          user_id
+          |> LocalReminders.due_soon(
+            days_ahead: plan.forward_days,
+            limit: plan.local_reminder_limit
+          )
+          |> Enum.map(&reminder_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_reminders(&1, %{
+           "reminders" => reminders,
+           "counts" => %{"open_due_soon" => length(reminders)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"open_due_soon" => length(reminders)}}
+      end
+    )
+    |> fetch_companion_source(
+      "files",
+      fn ->
+        files =
+          user_id
+          |> LocalFiles.recent_for_user(limit: plan.local_file_limit)
+          |> Enum.map(&file_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_files(&1, %{
+           "files" => files,
+           "counts" => %{"recent_count" => length(files)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"recent_count" => length(files)}}
+      end
+    )
+    |> fetch_companion_source(
+      "browser_history",
+      fn ->
+        visits =
+          user_id
+          |> LocalBrowserHistory.recent_visits(limit: plan.local_browser_visit_limit)
+          |> Enum.map(&browser_visit_for_bundle/1)
+
+        {:ok,
+         &SourceBundle.put_browser_history(&1, %{
+           "visits" => visits,
+           "counts" => %{"visit_count" => length(visits)},
+           "metadata" => %{"mode" => "companion"}
+         }), %{"visit_count" => length(visits)}}
+      end
+    )
+  end
+
+  defp maybe_fetch_companion_sources({telemetry, bundle}, _user_id, _plan, _context),
+    do: {telemetry, bundle}
+
+  defp fetch_companion_source({telemetry, bundle}, source, fetch_fun) do
+    case fetch_fun.() do
+      {:ok, put_fun, counts} when is_function(put_fun, 1) ->
+        bundle = put_fun.(bundle)
+
+        telemetry =
+          telemetry
+          |> Map.update("fetches", [], fn fetches ->
+            [
+              %{
+                "source" => source,
+                "mode" => "companion",
+                "status" => "ok"
+              }
+              |> Map.merge(counts)
+              | fetches
+            ]
+          end)
+          |> put_source_summary(
+            source,
+            %{"mode" => "companion", "status" => "ready"} |> Map.merge(counts)
+          )
+
+        {telemetry, bundle}
+
+      {:error, reason} ->
+        companion_source_error({telemetry, bundle}, source, reason)
+    end
+  rescue
+    exception ->
+      companion_source_error({telemetry, bundle}, source, Exception.message(exception))
+  catch
+    kind, reason ->
+      companion_source_error({telemetry, bundle}, source, "#{kind}: #{inspect(reason)}")
+  end
+
+  defp companion_source_error({telemetry, bundle}, source, reason) do
+    bundle = SourceBundle.mark_unavailable(bundle, source, inspect(reason))
+
+    telemetry =
+      telemetry
+      |> Map.update("fetches", [], fn fetches ->
+        [
+          %{
+            "source" => source,
+            "mode" => "companion",
+            "status" => "error",
+            "reason" => inspect(reason)
+          }
+          | fetches
+        ]
+      end)
+      |> put_source_summary(source, %{
+        "mode" => "companion",
+        "status" => "error",
+        "reason" => inspect(reason)
+      })
+
+    {telemetry, bundle}
   end
 
   defp maybe_fetch_news({telemetry, bundle}, _user_id, _source_scope, %{news: false}, _context),
@@ -249,24 +471,19 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   defp fetch_slack_workspace(user_id, source_scope, team_id, plan, oldest) do
     with {:ok, token} <-
            SlackHelpers.resolve_access_token(user_id, team_id, token_preference: "auto"),
-         {:ok, response} <-
-           slack_module().list_conversations(token.access_token,
-             types: ["public_channel", "private_channel", "mpim", "im"],
-             limit: max(plan.slack_channel_limit * 10, 200),
-             exclude_archived: true
+         {:ok, conversations} <-
+           list_all_slack_conversations(token.access_token,
+             types: ["public_channel", "private_channel", "mpim", "im"]
            ) do
       workspace = SourceScope.slack_workspace_for_team(source_scope, team_id) || %{}
 
-      key_channels =
-        response
-        |> Map.get("channels", [])
-        |> normalize_list()
-        |> Enum.filter(&key_slack_channel?(&1, plan.slack_key_channels))
+      conversations =
+        conversations
         |> Enum.sort_by(&slack_channel_priority(&1, plan.slack_key_channels))
-        |> Enum.take(plan.slack_channel_limit)
 
-      {channels, fetches} =
-        Enum.reduce(key_channels, {[], []}, fn channel, {channel_acc, fetch_acc} ->
+      {channels, fetches, _user_directory} =
+        Enum.reduce(conversations, {[], [], %{}}, fn channel,
+                                                     {channel_acc, fetch_acc, directory_acc} ->
           channel_id = channel["id"]
 
           case slack_module().get_conversation_history(token.access_token, channel_id,
@@ -274,15 +491,24 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                  oldest: oldest
                ) do
             {:ok, history} ->
-              messages =
+              raw_messages =
                 history
                 |> Map.get("messages", [])
                 |> normalize_list()
-                |> Enum.map(&serialize_slack_message(&1, channel, team_id, workspace))
+
+              user_directory =
+                slack_user_directory(token.access_token, raw_messages, channel, directory_acc)
+
+              messages =
+                raw_messages
+                |> Enum.map(
+                  &serialize_slack_message(&1, channel, team_id, workspace, user_directory)
+                )
 
               channel_payload =
                 channel
                 |> serialize_slack_channel()
+                |> put_slack_channel_user_fields(channel, user_directory)
                 |> Map.put("messages", messages)
 
               {
@@ -292,12 +518,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "source" => "slack",
                     "team_id" => team_id,
                     "channel_id" => channel_id,
+                    "conversation_kind" => slack_conversation_kind(channel),
                     "mode" => "connector",
                     "status" => "ok",
                     "count" => length(messages)
                   }
                   | fetch_acc
-                ]
+                ],
+                user_directory
               }
 
             {:error, reason} ->
@@ -308,12 +536,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                     "source" => "slack",
                     "team_id" => team_id,
                     "channel_id" => channel_id,
+                    "conversation_kind" => slack_conversation_kind(channel),
                     "mode" => "connector",
                     "status" => "error",
                     "reason" => inspect(reason)
                   }
                   | fetch_acc
-                ]
+                ],
+                directory_acc
               }
           end
         end)
@@ -324,9 +554,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       workspace_payload = %{
         "team_id" => team_id,
         "team_name" => Map.get(workspace, "team_name"),
+        "channels" => Enum.reverse(channels),
         "key_channels" => Enum.reverse(channels),
         "mentions" => mentions,
-        "metadata" => %{"token_provider" => token.provider}
+        "metadata" => %{
+          "conversation_count" => length(conversations),
+          "conversation_scope" => "all_connected_conversations",
+          "token_provider" => token.provider
+        }
       }
 
       {:ok, workspace_payload, mention_fetches ++ fetches}
@@ -355,11 +590,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
                sort: "timestamp",
                sort_dir: "desc"
              ) do
-        matches =
+        raw_matches =
           response
           |> get_in(["messages", "matches"])
           |> normalize_list()
-          |> Enum.map(&serialize_slack_match(&1, team_id, workspace))
+
+        user_directory = slack_user_directory(token.access_token, raw_matches, nil)
+
+        matches =
+          Enum.map(raw_matches, &serialize_slack_match(&1, team_id, workspace, user_directory))
 
         {
           mention_acc ++ matches,
@@ -649,7 +888,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       calendar:
         service_required?(requirements, "google", "calendar") and
           event_allows_source?(event_source, "google_calendar"),
-      slack: service_required?(requirements, "slack", nil),
+      slack: true,
       news: morning_brief_trigger?(skill_ids, context) and news_enabled?(news_config),
       news_config: news_config,
       web_context: morning_brief_trigger?(skill_ids, context),
@@ -670,6 +909,57 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         ),
       slack_key_channels: slack_key_channels(skill_ids, skill_configs),
       commercial_gmail_queries: commercial_gmail_queries(skill_ids, skill_configs),
+      local_calendar_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_calendar_limit",
+          @default_local_calendar_limit
+        ),
+      local_message_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_message_limit",
+          @default_local_message_limit
+        ),
+      local_chat_limit:
+        max_skill_integer(skill_ids, skill_configs, "local_chat_limit", @default_local_chat_limit),
+      local_voice_memo_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_voice_memo_limit",
+          @default_local_voice_memo_limit
+        ),
+      local_note_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_note_limit",
+          @default_local_note_limit
+        ),
+      local_reminder_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_reminder_limit",
+          @default_local_reminder_limit
+        ),
+      local_file_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_file_limit",
+          @default_local_file_limit
+        ),
+      local_browser_visit_limit:
+        max_skill_integer(
+          skill_ids,
+          skill_configs,
+          "local_browser_visit_limit",
+          @default_local_browser_visit_limit
+        ),
       lookback_hours: max(max_lookback_hours, 24),
       forward_days: @default_forward_days
     }
@@ -1084,21 +1374,173 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp filter_messages_by_label(_messages, _label, _limit), do: []
 
-  defp key_slack_channel?(channel, key_channels) when is_map(channel) and is_list(key_channels) do
-    name = normalize_channel_name(channel["name"])
-
-    cond do
-      is_nil(name) -> false
-      name in key_channels -> true
-      String.starts_with?(name, "exec-") -> true
-      String.starts_with?(name, "founders-") -> true
-      channel["is_im"] == true -> true
-      channel["is_mpim"] == true -> true
-      true -> false
-    end
+  defp local_calendar_event_for_bundle(%Maraithon.LocalCalendar.LocalEvent{} = event) do
+    %{
+      "event_id" => event.guid || event.id,
+      "source" => "local_calendar",
+      "calendar_name" => event.calendar_name,
+      "summary" => event.title || "Untitled event",
+      "notes" => truncate_string(event.notes, 2_000),
+      "start" => timestamp(event.start_at),
+      "end" => timestamp(event.end_at),
+      "location" => event.location,
+      "attendees" => event.attendee_emails || [],
+      "organizer" => event.organizer_email,
+      "is_all_day" => event.is_all_day,
+      "source_account_label" => event.calendar_name,
+      "source_item_id" => event.guid || event.id,
+      "source_occurred_at" => timestamp(event.start_at)
+    }
   end
 
-  defp key_slack_channel?(_channel, _key_channels), do: false
+  defp local_calendar_event_for_bundle(event) when is_map(event), do: stringify_keys(event)
+
+  defp local_message_for_bundle(%Maraithon.LocalMessages.LocalMessage{} = message) do
+    %{
+      "message_id" => message.guid || message.id,
+      "guid" => message.guid,
+      "local_id" => message.local_id,
+      "source" => message.source || "imessage",
+      "chat_key" => message.chat_key,
+      "chat_display_name" => message.chat_display_name,
+      "chat_style" => message.chat_style,
+      "sender_handle" => message.sender_handle,
+      "is_from_me" => message.is_from_me,
+      "text" => truncate_string(message.text, 2_000),
+      "sent_at" => timestamp(message.sent_at),
+      "has_attachments" => message.has_attachments,
+      "attachments" => message.attachments || %{},
+      "source_item_id" => message.guid || message.id,
+      "source_occurred_at" => timestamp(message.sent_at)
+    }
+  end
+
+  defp local_message_for_bundle(message) when is_map(message), do: stringify_keys(message)
+
+  defp local_chat_for_bundle(%{chat_key: chat_key} = chat) do
+    latest = Map.get(chat, :latest_message) || Map.get(chat, "latest_message")
+    latest_message = if latest, do: local_message_for_bundle(latest), else: nil
+
+    %{
+      "chat_key" => chat_key,
+      "chat_display_name" =>
+        Map.get(chat, :chat_display_name) || Map.get(chat, "chat_display_name"),
+      "message_count_last_7d" =>
+        Map.get(chat, :message_count_last_7d) || Map.get(chat, "message_count_last_7d") || 0,
+      "latest_message" => latest_message,
+      "latest_snippet" => latest_message && Map.get(latest_message, "text"),
+      "latest_sender" => latest_message && Map.get(latest_message, "sender_handle"),
+      "latest_is_from_me" => latest_message && Map.get(latest_message, "is_from_me"),
+      "latest_sent_at" => latest_message && Map.get(latest_message, "sent_at")
+    }
+  end
+
+  defp local_chat_for_bundle(chat) when is_map(chat), do: stringify_keys(chat)
+
+  defp voice_memo_for_bundle(%Maraithon.LocalVoiceMemos.LocalVoiceMemo{} = memo) do
+    %{
+      "memo_id" => memo.guid || memo.id,
+      "guid" => memo.guid,
+      "local_id" => memo.local_id,
+      "source" => memo.source || "voice_memos",
+      "title" => memo.title || "(untitled voice memo)",
+      "snippet" => memo.snippet || "",
+      "transcript" => truncate_string(memo.transcript, 4_000),
+      "duration_seconds" => memo.duration_seconds,
+      "created_at" => timestamp(memo.created_at),
+      "has_transcript" => present_string?(memo.transcript),
+      "transcript_engine" => memo.transcript_engine,
+      "transcript_lang" => memo.transcript_lang,
+      "source_item_id" => memo.guid || memo.id,
+      "source_occurred_at" => timestamp(memo.created_at)
+    }
+  end
+
+  defp voice_memo_for_bundle(memo) when is_map(memo), do: stringify_keys(memo)
+
+  defp note_for_bundle(%Maraithon.LocalNotes.LocalNote{} = note) do
+    %{
+      "note_id" => note.guid || note.id,
+      "guid" => note.guid,
+      "local_id" => note.local_id,
+      "source" => note.source || "notes",
+      "title" => note.title || "(untitled note)",
+      "snippet" => note.snippet || "",
+      "body" => truncate_string(note.body, 4_000),
+      "folder" => note.folder,
+      "is_pinned" => note.is_pinned,
+      "created_at" => timestamp(note.created_at),
+      "modified_at" => timestamp(note.modified_at),
+      "source_item_id" => note.guid || note.id,
+      "source_occurred_at" => timestamp(note.modified_at || note.created_at)
+    }
+  end
+
+  defp note_for_bundle(note) when is_map(note), do: stringify_keys(note)
+
+  defp reminder_for_bundle(%Maraithon.LocalReminders.LocalReminder{} = reminder) do
+    %{
+      "reminder_id" => reminder.guid || reminder.id,
+      "guid" => reminder.guid,
+      "local_id" => reminder.local_id,
+      "source" => reminder.source || "reminders",
+      "title" => reminder.title || "(untitled reminder)",
+      "notes" => truncate_string(reminder.notes, 2_000),
+      "list_name" => reminder.list_name,
+      "priority" => reminder.priority,
+      "due_at" => timestamp(reminder.due_at),
+      "is_completed" => reminder.is_completed,
+      "has_alarm" => reminder.has_alarm,
+      "url_attachment" => reminder.url_attachment,
+      "created_at" => timestamp(reminder.created_at),
+      "modified_at" => timestamp(reminder.modified_at),
+      "source_item_id" => reminder.guid || reminder.id,
+      "source_occurred_at" => timestamp(reminder.modified_at || reminder.created_at)
+    }
+  end
+
+  defp reminder_for_bundle(reminder) when is_map(reminder), do: stringify_keys(reminder)
+
+  defp file_for_bundle(%Maraithon.LocalFiles.LocalFile{} = file) do
+    %{
+      "file_id" => file.guid || file.id,
+      "guid" => file.guid,
+      "local_id" => file.local_id,
+      "source" => file.source || "files",
+      "filename" => file.filename,
+      "path" => file.path,
+      "extension" => file.extension,
+      "mime_type" => file.mime_type,
+      "byte_size" => file.byte_size,
+      "text_content" => truncate_string(file.text_content, 3_000),
+      "text_truncated" => file.text_truncated,
+      "created_at" => timestamp(file.created_at),
+      "modified_at" => timestamp(file.modified_at),
+      "source_item_id" => file.guid || file.id,
+      "source_occurred_at" => timestamp(file.modified_at || file.created_at)
+    }
+  end
+
+  defp file_for_bundle(file) when is_map(file), do: stringify_keys(file)
+
+  defp browser_visit_for_bundle(%Maraithon.LocalBrowserHistory.LocalVisit{} = visit) do
+    %{
+      "visit_id" => visit.guid || visit.id,
+      "guid" => visit.guid,
+      "local_id" => visit.local_id,
+      "source" => visit.source || "browser_history",
+      "browser" => visit.browser,
+      "title" => visit.title,
+      "url" => visit.url,
+      "host" => visit.host,
+      "last_visited_at" => timestamp(visit.last_visited_at),
+      "visit_count" => visit.visit_count,
+      "source_item_id" => visit.guid || visit.id,
+      "source_occurred_at" => timestamp(visit.last_visited_at)
+    }
+  end
+
+  defp browser_visit_for_bundle(visit) when is_map(visit), do: stringify_keys(visit)
 
   defp serialize_slack_channel(channel) when is_map(channel) do
     %{
@@ -1112,7 +1554,23 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
     }
   end
 
-  defp serialize_slack_message(message, channel, team_id, workspace) when is_map(message) do
+  defp put_slack_channel_user_fields(channel_payload, channel, user_directory)
+       when is_map(channel_payload) and is_map(channel) do
+    counterparty_id = channel["user"]
+
+    channel_payload
+    |> maybe_put("counterparty_user_id", counterparty_id)
+    |> maybe_put(
+      "counterparty_display_name",
+      UserDirectory.display_name(user_directory, counterparty_id)
+    )
+  end
+
+  defp serialize_slack_message(message, channel, team_id, workspace, user_directory)
+       when is_map(message) do
+    user_id = message["user"]
+    text = message["text"]
+
     %{
       "team_id" => team_id,
       "team_name" => Map.get(workspace, "team_name"),
@@ -1121,29 +1579,82 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
       "conversation_kind" => slack_conversation_kind(channel),
       "ts" => message["ts"],
       "thread_ts" => message["thread_ts"],
-      "user" => message["user"],
+      "user" => user_id,
+      "user_display_name" => UserDirectory.display_name(user_directory, user_id),
+      "mentioned_users" => UserDirectory.mentioned_users(text, user_directory),
+      "text_resolved" => UserDirectory.replace_mentions(text, user_directory),
       "bot_id" => message["bot_id"],
       "subtype" => message["subtype"],
-      "text" => message["text"],
+      "text" => text,
       "reply_count" => message["reply_count"],
       "latest_reply" => message["latest_reply"],
       "reactions" => normalize_list(message["reactions"])
     }
   end
 
-  defp serialize_slack_match(match, team_id, workspace) when is_map(match) do
+  defp serialize_slack_match(match, team_id, workspace, user_directory) when is_map(match) do
+    user_id = match["user"]
+    text = match["text"]
+    channel = match["channel"]
+
     %{
       "team_id" => team_id,
       "team_name" => Map.get(workspace, "team_name"),
-      "channel_id" => get_in(match, ["channel", "id"]),
-      "channel_name" => get_in(match, ["channel", "name"]),
+      "channel_id" => slack_match_channel_id(channel),
+      "channel_name" => slack_match_channel_name(channel),
       "ts" => match["ts"],
       "thread_ts" => match["thread_ts"],
-      "user" => match["user"],
-      "text" => match["text"],
+      "user" => user_id,
+      "user_display_name" => UserDirectory.display_name(user_directory, user_id),
+      "mentioned_users" => UserDirectory.mentioned_users(text, user_directory),
+      "text_resolved" => UserDirectory.replace_mentions(text, user_directory),
+      "text" => text,
       "permalink" => match["permalink"]
     }
   end
+
+  defp slack_user_directory(access_token, messages, channel, directory \\ %{}) do
+    message_user_ids =
+      messages
+      |> normalize_list()
+      |> Enum.flat_map(&slack_user_ids_from_message/1)
+
+    user_ids = message_user_ids ++ slack_user_ids_from_channel(channel)
+    missing_user_ids = missing_slack_user_ids(user_ids, directory)
+
+    Map.merge(directory, UserDirectory.resolve(access_token, missing_user_ids))
+  end
+
+  defp missing_slack_user_ids(user_ids, directory) do
+    user_ids
+    |> UserDirectory.normalize_user_ids()
+    |> Enum.reject(&Map.has_key?(directory, &1))
+  end
+
+  defp slack_user_ids_from_channel(channel) when is_map(channel) do
+    [channel["user"]]
+  end
+
+  defp slack_user_ids_from_channel(_channel), do: []
+
+  defp slack_user_ids_from_message(message) when is_map(message) do
+    [
+      message["user"],
+      slack_message_channel_user(message["channel"])
+    ] ++ UserDirectory.user_ids_from_text(message["text"])
+  end
+
+  defp slack_user_ids_from_message(_message), do: []
+
+  defp slack_message_channel_user(%{} = channel), do: channel["user"]
+  defp slack_message_channel_user(_channel), do: nil
+
+  defp slack_match_channel_id(%{} = channel), do: channel["id"]
+  defp slack_match_channel_id(channel) when is_binary(channel), do: channel
+  defp slack_match_channel_id(_channel), do: nil
+
+  defp slack_match_channel_name(%{} = channel), do: channel["name"]
+  defp slack_match_channel_name(_channel), do: nil
 
   defp slack_user_ids_for_team(user_id, team_id) do
     pattern = ~r/^slack:#{Regex.escape(team_id)}:user:([^:]+)$/
@@ -1176,7 +1687,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp slack_workspace_messages(workspace) when is_map(workspace) do
     workspace
-    |> Map.get("key_channels", [])
+    |> Map.get("channels", Map.get(workspace, "key_channels", []))
     |> normalize_list()
     |> Enum.flat_map(fn channel ->
       channel
@@ -1224,6 +1735,45 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp slack_channel_priority(_channel, _key_channels), do: 6
+
+  defp list_all_slack_conversations(access_token, opts) when is_binary(access_token) do
+    list_all_slack_conversations(access_token, opts, nil, [])
+  end
+
+  defp list_all_slack_conversations(access_token, opts, cursor, acc) do
+    request_opts =
+      opts
+      |> Keyword.put(:exclude_archived, true)
+      |> Keyword.put(:limit, @slack_conversations_page_limit)
+      |> maybe_put_cursor(cursor)
+
+    case slack_module().list_conversations(access_token, request_opts) do
+      {:ok, response} ->
+        channels =
+          response
+          |> Map.get("channels", [])
+          |> normalize_list()
+
+        next_cursor =
+          response
+          |> get_in(["response_metadata", "next_cursor"])
+          |> normalize_string()
+
+        acc = acc ++ channels
+
+        if next_cursor do
+          list_all_slack_conversations(access_token, opts, next_cursor, acc)
+        else
+          {:ok, acc}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp maybe_put_cursor(opts, nil), do: opts
+  defp maybe_put_cursor(opts, cursor), do: Keyword.put(opts, :cursor, cursor)
 
   defp slack_conversation_kind(%{"is_im" => true}), do: "dm"
   defp slack_conversation_kind(%{"is_mpim" => true}), do: "group_dm"
@@ -1292,6 +1842,22 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp timestamp(%DateTime{} = value), do: DateTime.to_iso8601(value)
+
+  defp timestamp(%NaiveDateTime{} = value),
+    do: value |> DateTime.from_naive!("Etc/UTC") |> timestamp()
+
+  defp timestamp(value) when is_binary(value), do: normalize_string(value)
+  defp timestamp(_value), do: nil
+
+  defp truncate_string(value, limit) when is_binary(value) and is_integer(limit) and limit > 0 do
+    value
+    |> String.trim()
+    |> String.slice(0, limit)
+  end
+
+  defp truncate_string(_value, _limit), do: nil
 
   defp message_sort_key(%{"internal_date" => %DateTime{} = value}),
     do: DateTime.to_unix(value, :microsecond)

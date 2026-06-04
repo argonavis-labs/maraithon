@@ -10,6 +10,7 @@ struct TodosView: View {
     @State private var searchText = ""
     @State private var isAddingTodo = false
     @State private var editingTodo: TodoItem?
+    @State private var selectedTodo: TodoItem?
     @State private var actionErrorMessage: String?
     @State private var refreshErrorMessage: String?
     @State private var isRefreshing = false
@@ -64,7 +65,7 @@ struct TodosView: View {
                             }
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                editingTodo = todo
+                                selectedTodo = todo
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
@@ -117,6 +118,9 @@ struct TodosView: View {
             }
             .sheet(item: $editingTodo) { todo in
                 TodoEditorView(todo: todo)
+            }
+            .navigationDestination(item: $selectedTodo) { todo in
+                TodoDetailView(todo: todo)
             }
             .task {
                 await refreshLatestWork()

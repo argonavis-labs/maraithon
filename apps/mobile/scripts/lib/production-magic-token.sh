@@ -1,5 +1,28 @@
 #!/usr/bin/env bash
 
+load_maraithon_fly_env() {
+  local deploy_env_file="${MARAITHON_DEPLOY_ENV_FILE:-${HOME}/.config/maraithon/fly-prod.env}"
+
+  if [[ -f "${deploy_env_file}" ]]; then
+    # Keep production verification independent from the active Fly account.
+    # shellcheck disable=SC1090
+    source "${deploy_env_file}"
+  fi
+
+  export MARAITHON_FLY_APP="${MARAITHON_FLY_APP:-${FLY_APP:-maraithon}}"
+  export FLY_APP="${MARAITHON_FLY_APP}"
+
+  if [[ -z "${FLY_API_TOKEN:-}" ]]; then
+    echo "FLY_API_TOKEN is required for production Fly operations." >&2
+    echo "Set it in ${deploy_env_file} or export it before running production verification." >&2
+    exit 1
+  fi
+
+  export FLY_API_TOKEN
+}
+
+load_maraithon_fly_env
+
 generate_maraithon_magic_token() {
   local fly_app="$1"
   local email="$2"

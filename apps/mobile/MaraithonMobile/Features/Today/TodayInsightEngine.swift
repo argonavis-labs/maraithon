@@ -42,6 +42,12 @@ struct TodayFocusItem: Equatable, Identifiable {
     }
 }
 
+private struct TodayFocusCandidate {
+    let title: String
+    let priority: Int
+    let item: () -> TodayFocusItem
+}
+
 enum TodayInsightEngine {
     static func metrics(
         todos: [TodoItem],
@@ -157,107 +163,123 @@ enum TodayInsightEngine {
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [TodayFocusItem] {
-        let todoItems = todos.compactMap { todo -> TodayFocusItem? in
+        let todoItems = todos.compactMap { todo -> TodayFocusCandidate? in
             guard !todo.isCompleted else { return nil }
 
             if let dueDate = todo.dueDate,
                dueDate < now,
                !calendar.isDate(dueDate, inSameDayAs: now) {
-                return TodayFocusItem(
-                    kind: .todo,
-                    referenceID: todo.id,
-                    title: todo.title,
-                    subtitle: todoFocusSubtitle(
-                        for: todo,
-                        fallbackAction: "Handle, move, or dismiss it."
-                    ),
-                    detail: todoFocusDetail(
-                        for: todo,
-                        context: overdueFocusContext(for: todo, dueDate: dueDate, now: now, calendar: calendar)
-                    ),
-                    systemImage: "clock.badge.exclamationmark",
-                    priority: 100 + priorityWeight(for: todo.priority)
-                )
+                let priority = 100 + priorityWeight(for: todo.priority)
+                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                    TodayFocusItem(
+                        kind: .todo,
+                        referenceID: todo.id,
+                        title: todo.title,
+                        subtitle: todoFocusSubtitle(
+                            for: todo,
+                            fallbackAction: "Handle, move, or dismiss it."
+                        ),
+                        detail: todoFocusDetail(
+                            for: todo,
+                            context: overdueFocusContext(for: todo, dueDate: dueDate, now: now, calendar: calendar)
+                        ),
+                        systemImage: "clock.badge.exclamationmark",
+                        priority: priority
+                    )
+                }
             }
 
             if TodoDecisionSignals.needsDecision(todo) {
-                return TodayFocusItem(
-                    kind: .todo,
-                    referenceID: todo.id,
-                    title: todo.title,
-                    subtitle: todoFocusSubtitle(
-                        for: todo,
-                        fallbackAction: "Make the call, delegate it, or dismiss it."
-                    ),
-                    detail: todoFocusDetail(
-                        for: todo,
-                        context: decisionFocusContext(for: todo, now: now, calendar: calendar)
-                    ),
-                    systemImage: "checkmark.seal",
-                    priority: 88 + priorityWeight(for: todo.priority)
-                )
+                let priority = 88 + priorityWeight(for: todo.priority)
+                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                    TodayFocusItem(
+                        kind: .todo,
+                        referenceID: todo.id,
+                        title: todo.title,
+                        subtitle: todoFocusSubtitle(
+                            for: todo,
+                            fallbackAction: "Make the call, delegate it, or dismiss it."
+                        ),
+                        detail: todoFocusDetail(
+                            for: todo,
+                            context: decisionFocusContext(for: todo, now: now, calendar: calendar)
+                        ),
+                        systemImage: "checkmark.seal",
+                        priority: priority
+                    )
+                }
             }
 
             if let dueDate = todo.dueDate,
                calendar.isDate(dueDate, inSameDayAs: now) {
-                return TodayFocusItem(
-                    kind: .todo,
-                    referenceID: todo.id,
-                    title: todo.title,
-                    subtitle: todoFocusSubtitle(
-                        for: todo,
-                        fallbackAction: "Finish, move, or reschedule it before tomorrow."
-                    ),
-                    detail: todoFocusDetail(for: todo, context: "Due today"),
-                    systemImage: todo.priority.symbolName,
-                    priority: 80 + priorityWeight(for: todo.priority)
-                )
+                let priority = 80 + priorityWeight(for: todo.priority)
+                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                    TodayFocusItem(
+                        kind: .todo,
+                        referenceID: todo.id,
+                        title: todo.title,
+                        subtitle: todoFocusSubtitle(
+                            for: todo,
+                            fallbackAction: "Finish, move, or reschedule it before tomorrow."
+                        ),
+                        detail: todoFocusDetail(for: todo, context: "Due today"),
+                        systemImage: todo.priority.symbolName,
+                        priority: priority
+                    )
+                }
             }
 
             if todo.priority == .critical || todo.priority == .high {
-                return TodayFocusItem(
-                    kind: .todo,
-                    referenceID: todo.id,
-                    title: todo.title,
-                    subtitle: todoFocusSubtitle(
-                        for: todo,
-                        fallbackAction: "Decide, delegate, or schedule a concrete next move."
-                    ),
-                    detail: todoFocusDetail(for: todo, context: "\(todo.priority.title) priority"),
-                    systemImage: todo.priority.symbolName,
-                    priority: todo.priority == .critical ? 85 : 65
-                )
+                let priority = todo.priority == .critical ? 85 : 65
+                return TodayFocusCandidate(title: todo.title, priority: priority) {
+                    TodayFocusItem(
+                        kind: .todo,
+                        referenceID: todo.id,
+                        title: todo.title,
+                        subtitle: todoFocusSubtitle(
+                            for: todo,
+                            fallbackAction: "Decide, delegate, or schedule a concrete next move."
+                        ),
+                        detail: todoFocusDetail(for: todo, context: "\(todo.priority.title) priority"),
+                        systemImage: todo.priority.symbolName,
+                        priority: priority
+                    )
+                }
             }
 
             return nil
         }
 
-        let contactItems = contacts.compactMap { contact -> TodayFocusItem? in
+        let contactItems = contacts.compactMap { contact -> TodayFocusCandidate? in
             guard !CRMFiltering.isArchived(contact) else { return nil }
 
             if isAtRisk(contact, now: now, calendar: calendar) {
-                return TodayFocusItem(
-                    kind: .contact,
-                    referenceID: contact.id,
-                    title: contact.name,
-                    subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
-                    detail: relationshipDetail(for: contact, now: now),
-                    systemImage: "person.crop.circle.badge.exclamationmark",
-                    priority: 75
-                )
+                return TodayFocusCandidate(title: contact.name, priority: 75) {
+                    TodayFocusItem(
+                        kind: .contact,
+                        referenceID: contact.id,
+                        title: contact.name,
+                        subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
+                        detail: relationshipDetail(for: contact, now: now),
+                        systemImage: "person.crop.circle.badge.exclamationmark",
+                        priority: 75
+                    )
+                }
             }
 
             if contact.dealStage == .proposal,
                isStale(contact, now: now, calendar: calendar) {
-                return TodayFocusItem(
-                    kind: .contact,
-                    referenceID: contact.id,
-                    title: contact.name,
-                    subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
-                    detail: relationshipDetail(for: contact, now: now),
-                    systemImage: "person.wave.2",
-                    priority: 60
-                )
+                return TodayFocusCandidate(title: contact.name, priority: 60) {
+                    TodayFocusItem(
+                        kind: .contact,
+                        referenceID: contact.id,
+                        title: contact.name,
+                        subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
+                        detail: relationshipDetail(for: contact, now: now),
+                        systemImage: "person.wave.2",
+                        priority: 60
+                    )
+                }
             }
 
             return nil
@@ -272,7 +294,7 @@ enum TodayInsightEngine {
                 }
             }
             .prefix(6)
-            .map(\.self)
+            .map { $0.item() }
     }
 
     static func isAtRisk(

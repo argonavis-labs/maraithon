@@ -274,6 +274,7 @@ defmodule MaraithonWeb.CoreComponents do
   attr :autocomplete, :string, default: nil
   attr :min, :any, default: nil
   attr :max, :any, default: nil
+  attr :maxlength, :any, default: nil
   attr :required, :boolean, default: false
   attr :rest, :global
 
@@ -288,6 +289,7 @@ defmodule MaraithonWeb.CoreComponents do
         autocomplete={@autocomplete}
         min={@min}
         max={@max}
+        maxlength={@maxlength}
         required={@required}
         class="relative block w-full appearance-none rounded-lg border border-zinc-950/10 bg-white px-3.5 py-2.5 text-base/6 text-zinc-950 shadow-sm placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 sm:px-3 sm:py-1.5 sm:text-sm/6 disabled:opacity-50"
         {@rest}

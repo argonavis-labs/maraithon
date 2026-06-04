@@ -33,6 +33,10 @@ xcodebuild -project Maraithon.xcodeproj -scheme Maraithon \
            -configuration Debug -destination 'platform=macOS' test
 ```
 
+From the repository root, prefer `make build-companion` for CLI app-bundle
+builds. The monorepo helper supplies an ad-hoc signing fallback on fresh clones
+and verifies the built `.app` signature before reporting success.
+
 For local runs that need Full Disk Access, use the root launcher from the repo
 root:
 

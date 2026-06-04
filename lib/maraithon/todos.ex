@@ -10,11 +10,13 @@ defmodule Maraithon.Todos do
   alias Maraithon.Repo
 
   alias Maraithon.Todos.{
+    ActionDrafts,
     ActivityEvent,
     AttentionRanker,
     DecisionSignals,
     FeedbackTrainer,
     Intelligence,
+    SignalGate,
     SurfaceQuality
   }
 
@@ -149,7 +151,8 @@ defmodule Maraithon.Todos do
     |> Enum.reduce({:ok, []}, fn
       %Insight{} = insight, {:ok, acc} ->
         case sync_from_insight(insight) do
-          {:ok, todo} -> {:ok, [todo | acc]}
+          {:ok, %Todo{} = todo} -> {:ok, [todo | acc]}
+          {:ok, nil} -> {:ok, acc}
           {:error, reason} -> {:error, reason}
         end
 
@@ -165,7 +168,10 @@ defmodule Maraithon.Todos do
   def sync_many_from_insights(_insights), do: {:error, :invalid_insights}
 
   def sync_from_insight(%Insight{} = insight) do
-    upsert_synced_insight_todo(insight)
+    case SignalGate.allow_insight?(insight) do
+      {:ok, _reason} -> upsert_synced_insight_todo(insight)
+      {:skip, _reason} -> {:ok, nil}
+    end
   end
 
   def sync_from_insight(_insight), do: {:error, :invalid_insight}
@@ -226,7 +232,13 @@ defmodule Maraithon.Todos do
            opts
          ) do
       {:ok, todo} ->
-        _ = maybe_learn_from_feedback(todo, "not_helpful")
+        if Keyword.get(opts, :skip_feedback?, false) do
+          :ok
+        else
+          _ = maybe_learn_from_feedback(todo, "not_helpful")
+          :ok
+        end
+
         {:ok, todo}
 
       other ->
@@ -371,6 +383,7 @@ defmodule Maraithon.Todos do
     Repo.transaction(fn ->
       with %Todo{} = todo <- Repo.get_by(Todo, id: todo_id, user_id: user_id) do
         changes = update_attrs(todo, attrs)
+        changes = if changes == %{}, do: changes, else: ActionDrafts.ensure(changes, todo)
 
         if changes == %{} do
           Repo.rollback(:empty_update)
@@ -502,6 +515,7 @@ defmodule Maraithon.Todos do
       user_id
       |> normalize_attrs(attrs)
       |> UserFacingCopy.polish_attrs()
+      |> ActionDrafts.ensure()
 
     case Repo.get_by(Todo, user_id: user_id, dedupe_key: normalized_attrs["dedupe_key"]) do
       %Todo{} = todo ->
@@ -962,6 +976,7 @@ defmodule Maraithon.Todos do
         read_string(attrs, "dedupe_key", dedupe_key_for(source, kind, source_item_id, metadata)),
       "metadata" => metadata
     }
+    |> ActionDrafts.ensure()
   end
 
   defp dedupe_key_for(source, kind, source_item_id, metadata) do
@@ -1004,6 +1019,7 @@ defmodule Maraithon.Todos do
       metadata: todo_metadata_from_insight(insight)
     }
     |> UserFacingCopy.polish_attrs()
+    |> ActionDrafts.ensure()
   end
 
   defp todo_kind_from_insight(%Insight{source: "gmail"}), do: "gmail_triage"

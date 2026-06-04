@@ -4,12 +4,13 @@ defmodule Maraithon.AssistantChat do
   """
 
   alias Maraithon.Repo
-  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming}
+  alias Maraithon.AssistantChat.{DirectIntent, SecretRequestGuard, ThreadNaming, TodoThreadPrimer}
   alias Maraithon.TelegramAssistant
   alias Maraithon.TelegramAssistant.ModelRouting
   alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Todos
 
   @max_message_bytes 16_384
   @max_thread_title_bytes 160
@@ -21,6 +22,46 @@ defmodule Maraithon.AssistantChat do
   def create_thread(user_id, attrs \\ %{}) when is_binary(user_id) and is_map(attrs) do
     with {:ok, title} <- thread_title(attrs, default: ThreadNaming.default_title()) do
       TelegramConversations.create_mobile_thread(user_id, Map.put(attrs, "title", title))
+    end
+  end
+
+  def get_or_create_todo_thread(user_id, todo_id)
+      when is_binary(user_id) and is_binary(todo_id) do
+    case Todos.get_for_user(user_id, todo_id) do
+      nil ->
+        {:error, :not_found}
+
+      todo ->
+        metadata = todo_thread_metadata(todo)
+
+        case TelegramConversations.get_mobile_thread_for_todo(user_id, todo.id) do
+          %Conversation{} = conversation ->
+            conversation
+            |> TelegramConversations.update_metadata(metadata)
+            |> case do
+              {:ok, updated_conversation} -> prime_todo_thread(updated_conversation, todo)
+              {:error, reason} -> {:error, reason}
+            end
+
+          nil ->
+            attrs = %{
+              "client_thread_id" => "todo-#{todo.id}",
+              "root_message_id" => "todo:#{todo.id}",
+              "title" => todo_thread_title(todo),
+              "metadata" => metadata
+            }
+
+            case TelegramConversations.create_mobile_thread(user_id, attrs) do
+              {:ok, conversation} ->
+                prime_todo_thread(conversation, todo)
+
+              {:error, _changeset} ->
+                case TelegramConversations.get_mobile_thread_for_todo(user_id, todo.id) do
+                  %Conversation{} = conversation -> prime_todo_thread(conversation, todo)
+                  nil -> {:error, :thread_create_failed}
+                end
+            end
+        end
     end
   end
 
@@ -144,6 +185,8 @@ defmodule Maraithon.AssistantChat do
         conversation: conversation,
         user_turn: user_turn,
         surface: "mobile",
+        request_focus: request_focus_for(conversation),
+        linked_todo_id: linked_todo_id(conversation),
         run: run,
         started_at: run.started_at
       })
@@ -161,8 +204,9 @@ defmodule Maraithon.AssistantChat do
 
   defp insert_message_and_run(%Conversation{} = conversation, body, client_message_id) do
     now = DateTime.utc_now()
-    local_intent = local_intent_for(body)
-    route_profile = route_profile_for(body, local_intent)
+    linked_todo = linked_todo_for(conversation)
+    local_intent = local_intent_for(body, conversation)
+    route_profile = route_profile_for(body, local_intent, conversation)
 
     with {:ok, {updated_conversation, user_turn}} <-
            TelegramConversations.append_turn(conversation, %{
@@ -172,10 +216,12 @@ defmodule Maraithon.AssistantChat do
              "text" => body,
              "turn_kind" => "user_message",
              "origin_type" => "chat",
-             "structured_data" => %{
-               "surface" => "mobile",
-               "client_message_id" => client_message_id
-             }
+             "structured_data" =>
+               %{
+                 "surface" => "mobile",
+                 "client_message_id" => client_message_id
+               }
+               |> maybe_put_linked_todo(linked_todo)
            }),
          {:ok, run} <- create_queued_run(updated_conversation, now, route_profile),
          {:ok, updated_conversation} <-
@@ -195,7 +241,7 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
-  defp local_intent_for(body) do
+  defp local_intent_for(body, conversation) do
     case SecretRequestGuard.response(body) do
       {:ok, reply, structured_data} ->
         {:ok,
@@ -206,7 +252,7 @@ defmodule Maraithon.AssistantChat do
          }}
 
       :pass ->
-        DirectIntent.classify(body)
+        DirectIntent.classify(body, conversation)
     end
   end
 
@@ -301,7 +347,7 @@ defmodule Maraithon.AssistantChat do
     })
   end
 
-  defp route_profile_for(_body, {:ok, %{type: type}}) do
+  defp route_profile_for(_body, {:ok, %{type: type}}, _conversation) do
     type = Atom.to_string(type)
 
     %{
@@ -314,9 +360,15 @@ defmodule Maraithon.AssistantChat do
     }
   end
 
-  defp route_profile_for(body, :nomatch) do
+  defp route_profile_for(body, :nomatch, conversation) do
     body
-    |> then(&ModelRouting.profile_for(%{text: &1}))
+    |> then(
+      &ModelRouting.profile_for(%{
+        text: &1,
+        request_focus: request_focus_for(conversation),
+        linked_todo_id: linked_todo_id(conversation)
+      })
+    )
     |> Map.put(:model_provider, TelegramAssistant.model_provider_name())
   end
 
@@ -497,6 +549,64 @@ defmodule Maraithon.AssistantChat do
     else
       current
     end
+  end
+
+  defp todo_thread_title(todo) do
+    todo.title
+    |> then(&"Work: #{&1}")
+    |> ThreadNaming.safe_title()
+  end
+
+  defp todo_thread_metadata(todo) do
+    %{
+      "thread_kind" => "todo_detail",
+      "source" => "mobile_todo_detail",
+      "request_focus" => "linked_item_context",
+      "linked_todo_id" => todo.id,
+      "linked_todo" => Todos.serialize_for_prompt(todo),
+      "title" => todo_thread_title(todo)
+    }
+  end
+
+  defp prime_todo_thread(%Conversation{} = conversation, todo) do
+    with {:ok, primed_conversation} <- TodoThreadPrimer.ensure(conversation, todo) do
+      {:ok, reload_thread(primed_conversation)}
+    end
+  end
+
+  defp request_focus_for(%Conversation{} = conversation) do
+    case get_in(conversation.metadata || %{}, ["request_focus"]) do
+      "linked_item_context" -> :linked_item_context
+      :linked_item_context -> :linked_item_context
+      _ -> nil
+    end
+  end
+
+  defp request_focus_for(_conversation), do: nil
+
+  defp linked_todo_id(%Conversation{} = conversation) do
+    case get_in(conversation.metadata || %{}, ["linked_todo_id"]) do
+      value when is_binary(value) -> value
+      value when is_integer(value) -> Integer.to_string(value)
+      _ -> nil
+    end
+  end
+
+  defp linked_todo_id(_conversation), do: nil
+
+  defp linked_todo_for(%Conversation{} = conversation) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(conversation),
+         todo when not is_nil(todo) <- Todos.get_for_user(conversation.user_id, todo_id) do
+      todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp maybe_put_linked_todo(structured_data, nil), do: structured_data
+
+  defp maybe_put_linked_todo(structured_data, todo) do
+    Map.put(structured_data, "linked_todo", Todos.serialize_for_prompt(todo))
   end
 
   defp normalize_decision("confirm"), do: :confirm

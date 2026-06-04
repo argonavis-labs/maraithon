@@ -169,12 +169,12 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
   end
 
   defp step_title(%Step{step_type: "context_fetch"}), do: "Loaded context"
-  defp step_title(%Step{step_type: "llm_request"}), do: "Prepared the answer"
+  defp step_title(%Step{step_type: "llm_request"}), do: "Choosing next action"
 
   defp step_title(%Step{step_type: "llm_response", response_payload: response}) do
     case map_value(response || %{}, "status") do
       "tool_calls" -> "Planned supporting checks"
-      _ -> "Wrote the reply"
+      _ -> "Drafted reply"
     end
   end
 
@@ -752,10 +752,10 @@ defmodule Maraithon.TelegramAssistant.WorkSummary do
         "Reading context"
 
       %Step{step_type: "llm_request"} ->
-        "Preparing the answer"
+        "Choosing the next action"
 
       %Step{step_type: "llm_response"} ->
-        "Reviewing the answer"
+        "Checking the plan"
 
       %Step{step_type: "tool_call", request_payload: request} ->
         tool_running_headline(map_value(request || %{}, "tool", "tool"))

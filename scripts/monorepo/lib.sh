@@ -72,7 +72,12 @@ companion_xcode_signing_args() {
   local config="${COMPANION_DIR}/Config.local.xcconfig"
 
   if ! companion_has_persistent_signing_config; then
-    printf '%s\n' "CODE_SIGNING_ALLOWED=NO"
+    # A completely unsigned .app can build successfully but macOS kills it
+    # at launch with "Taskgated Invalid Signature". Fresh clones should still
+    # produce a launchable Debug bundle, so fall back to ad-hoc signing.
+    printf '%s\n' "CODE_SIGN_STYLE=Manual"
+    printf '%s\n' "CODE_SIGN_IDENTITY=-"
+    printf '%s\n' "CODE_SIGNING_ALLOWED=YES"
     return
   fi
 
@@ -132,7 +137,11 @@ xcconfig_value() {
 }
 
 companion_debug_app_path() {
+  local build_location_args=()
   local build_setting_overrides=()
+  if [[ -n "${MARAITHON_COMPANION_DERIVED_DATA_PATH:-}" ]]; then
+    build_location_args+=(-derivedDataPath "${MARAITHON_COMPANION_DERIVED_DATA_PATH}")
+  fi
   if [[ -n "${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR:-}" ]]; then
     build_setting_overrides+=("CONFIGURATION_BUILD_DIR=${MARAITHON_COMPANION_CONFIGURATION_BUILD_DIR}")
   fi
@@ -144,6 +153,7 @@ companion_debug_app_path() {
         -project Maraithon.xcodeproj \
         -scheme Maraithon \
         -configuration Debug \
+        "${build_location_args[@]}" \
         "${build_setting_overrides[@]}" \
         -showBuildSettings 2>/dev/null |
       awk -F= '
@@ -162,6 +172,21 @@ companion_debug_app_path() {
   fi
 
   printf '%s\n' "${build_dir}/Maraithon.app"
+}
+
+verify_companion_app_signature() {
+  local app_path="$1"
+
+  if [[ ! -d "${app_path}" ]]; then
+    echo "Companion app was not built at ${app_path}" >&2
+    exit 1
+  fi
+
+  if ! codesign --verify --deep --strict --verbose=2 "${app_path}"; then
+    echo "Companion app has an invalid code signature: ${app_path}" >&2
+    echo "Run make setup-companion-signing for stable local signing, or rebuild with the ad-hoc fallback." >&2
+    exit 1
+  fi
 }
 
 quit_running_companion_app() {

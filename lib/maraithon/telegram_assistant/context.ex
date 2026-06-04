@@ -948,6 +948,33 @@ defmodule Maraithon.TelegramAssistant.Context do
   defp timezone_info(user_id), do: LocalTime.timezone_info_for_user(user_id)
 
   defp linked_todo(attrs, user_id) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(attrs),
+         todo when not is_nil(todo) <- Todos.get_for_user(user_id, todo_id) do
+      todo
+    else
+      _ -> nil
+    end
+  end
+
+  defp linked_todo_id(attrs) when is_map(attrs) do
+    explicit_id =
+      Map.get(attrs, :linked_todo_id) ||
+        Map.get(attrs, "linked_todo_id") ||
+        get_in(attrs, [:conversation, Access.key(:metadata), "linked_todo_id"]) ||
+        get_in(attrs, ["conversation", "metadata", "linked_todo_id"])
+
+    case normalize_id(explicit_id) do
+      todo_id when is_binary(todo_id) ->
+        todo_id
+
+      _ ->
+        linked_todo_id_from_reply(attrs)
+    end
+  end
+
+  defp linked_todo_id(_attrs), do: nil
+
+  defp linked_todo_id_from_reply(attrs) do
     chat_id = Map.get(attrs, :chat_id)
     reply_to_message_id = Map.get(attrs, :reply_to_message_id)
 
@@ -958,9 +985,8 @@ defmodule Maraithon.TelegramAssistant.Context do
          %{} = todo_data <-
            Map.get(turn.structured_data || %{}, "linked_todo") ||
              Map.get(turn.structured_data || %{}, :linked_todo),
-         todo_id when is_binary(todo_id) <- Map.get(todo_data, "id") || Map.get(todo_data, :id),
-         todo when not is_nil(todo) <- Todos.get_for_user(user_id, todo_id) do
-      todo
+         todo_id when is_binary(todo_id) <- Map.get(todo_data, "id") || Map.get(todo_data, :id) do
+      todo_id
     else
       _ -> nil
     end

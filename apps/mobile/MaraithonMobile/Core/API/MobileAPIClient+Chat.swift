@@ -7,6 +7,10 @@ protocol MobileChatAPI: Sendable {
         title: String,
         clientThreadID: UUID
     ) async throws -> MobileAPIClient.RemoteChatThread
+    func getOrCreateTodoChatThread(
+        sessionToken: String,
+        todoID: UUID
+    ) async throws -> MobileAPIClient.RemoteChatThread
     func getChatThread(sessionToken: String, id: UUID) async throws -> MobileAPIClient.RemoteChatThread
     func updateChatThread(
         sessionToken: String,
@@ -307,6 +311,19 @@ extension MobileAPIClient: MobileChatAPI {
                     "title": .string(title)
                 ])
             ],
+            responseType: ChatThreadResponse.self
+        )
+        return response.thread
+    }
+
+    func getOrCreateTodoChatThread(
+        sessionToken: String,
+        todoID: UUID
+    ) async throws -> RemoteChatThread {
+        let response: ChatThreadResponse = try await send(
+            path: "/todos/\(todoID.uuidString.lowercased())/chat",
+            method: "POST",
+            sessionToken: sessionToken,
             responseType: ChatThreadResponse.self
         )
         return response.thread

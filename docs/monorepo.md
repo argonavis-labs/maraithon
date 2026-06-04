@@ -59,6 +59,12 @@ cp apps/mobile/Config/production-verification.env.example \
 Fill in a local simulator UDID and verification account values before running
 `make verify-production-mobile`.
 
+Production Fly commands are token-scoped for multi-account terminals. Put
+`FLY_API_TOKEN` and `MARAITHON_FLY_APP=maraithon` in
+`~/.config/maraithon/fly-prod.env` or point `MARAITHON_DEPLOY_ENV_FILE` at an
+equivalent ignored file. The deploy and production mobile verification helpers
+source that file and do not rely on the active `flyctl` login.
+
 ## CI Shape
 
 The default local loop is deterministic and does not depend on a fresh

@@ -437,7 +437,7 @@ private enum ChatWorkSummaryCopy {
         case "failed":
             failedToolSummary(for: label)
         case "running":
-            "Reviewing now."
+            "Checking now."
         default:
             nil
         }
@@ -490,11 +490,11 @@ private enum ChatWorkSummaryCopy {
         case "context":
             "Loaded context"
         case "answer_preparation":
-            "Prepared the answer"
+            "Choosing next action"
         case "supporting_plan":
             "Planned supporting checks"
         case "reply":
-            "Wrote the reply"
+            "Drafted reply"
         case "supporting_check":
             "Completed a check"
         default:
@@ -522,7 +522,7 @@ private enum ChatWorkSummaryCopy {
         case "completed":
             return "Completed."
         case "running":
-            return "Reviewing now."
+            return "Checking now."
         default:
             return returnedSummary(value) ?? prioritySummary(value) ?? legacyProductTerms(value)
         }
@@ -533,7 +533,7 @@ private enum ChatWorkSummaryCopy {
         case "completed":
             return "Completed."
         case "running":
-            return "Reviewing now."
+            return "Checking now."
         default:
             return returnedSummary(value, tool: tool) ??
                 foundResultsSummary(value, tool: tool, label: label) ??

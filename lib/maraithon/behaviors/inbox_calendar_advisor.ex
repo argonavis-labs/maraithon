@@ -2770,6 +2770,8 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
 
     Task:
     - Your first job is disqualification, not escalation.
+    - Executive bar: if a busy operator would reasonably feel their time was wasted
+      by seeing this as a separate open-work card, omit it.
     - Keep only unresolved commitments that either need direct operator action now or should stay monitored as a high-signal tracked thread.
     - Prioritize explicit promises, missed replies, and post-meeting follow-ups after disqualifying weak candidates.
     - Apply a reasoning-first decision, not keyword heuristics:
@@ -2808,6 +2810,9 @@ defmodule Maraithon.Behaviors.InboxCalendarAdvisor do
       4. "Saw your post, worth a quick call? Here's my Calendly."
       5. "Following up on my outbound prospecting tool" when the user never replied
     - Every returned item must be high-signal and worth keeping open.
+    - Relationship-maintenance nudges, cold/quiet-thread detections, and raw calendar
+      conflict detections are not durable work unless the evidence shows a direct ask,
+      real waiting person, concrete decision, deadline, or material consequence.
     - Return at most #{output_item_limit} items. If more than #{output_item_limit} qualify, return only the highest-priority,
       highest-confidence items.
     - Keep every string field to one short sentence. Keep list fields to at most 3 concise entries.

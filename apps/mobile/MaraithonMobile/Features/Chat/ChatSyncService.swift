@@ -80,6 +80,25 @@ struct ChatSyncService {
         try modelContext.save()
     }
 
+    func openTodoThread(
+        for todo: TodoItem,
+        modelContext: ModelContext,
+        sessionStore: SessionStore
+    ) async throws -> ChatThread {
+        let sessionToken = try sessionToken(from: sessionStore)
+        let remoteThread = try await api.getOrCreateTodoChatThread(
+            sessionToken: sessionToken,
+            todoID: todo.id
+        )
+        let thread = try merge(
+            remoteThread,
+            modelContext: modelContext,
+            reconcileMessages: true
+        )
+        try modelContext.save()
+        return thread
+    }
+
     func renameThread(
         _ thread: ChatThread,
         title rawTitle: String,
@@ -288,13 +307,14 @@ struct ChatSyncService {
         return remoteThread
     }
 
+    @discardableResult
     private func merge(
         _ remoteThread: MobileAPIClient.RemoteChatThread,
         modelContext: ModelContext,
         preferredThread: ChatThread? = nil,
         localThreadsByRemoteID: [UUID: ChatThread]? = nil,
         reconcileMessages: Bool = false
-    ) throws {
+    ) throws -> ChatThread {
         let thread = try localThread(
             for: remoteThread,
             modelContext: modelContext,
@@ -343,6 +363,8 @@ struct ChatSyncService {
                 messagesByClientID: &messagesByClientID
             )
         }
+
+        return thread
     }
 
     private func remoteMessages(from remoteThread: MobileAPIClient.RemoteChatThread) -> [MobileAPIClient.RemoteChatMessage] {
@@ -434,6 +456,7 @@ struct ChatSyncService {
         message.messageClass = remoteMessage.messageClass
         message.remoteRunID = remoteMessage.runID
         message.structuredData = try encodedMetadata(for: remoteMessage)
+        try applyLinkedTodo(remoteMessage.linkedTodo, modelContext: modelContext)
 
         messagesByRemoteID[remoteMessage.id] = message
         if let clientMessageID = message.clientMessageID {
@@ -538,6 +561,59 @@ struct ChatSyncService {
         structuredData.filter { key, _ in
             key == "calculation"
         }
+    }
+
+    private func applyLinkedTodo(_ linkedTodo: JSONValue?, modelContext: ModelContext) throws {
+        guard let todoData = linkedTodo?.object,
+              let idText = todoData["id"]?.string,
+              let id = UUID(uuidString: idText) else {
+            return
+        }
+
+        let todos = try modelContext.fetch(FetchDescriptor<TodoItem>())
+        guard let todo = todos.first(where: { $0.id == id }) else { return }
+
+        if todoData["status"]?.string == "dismissed" {
+            modelContext.delete(todo)
+            return
+        }
+
+        if let title = todoData["title"]?.string, !title.isEmpty {
+            todo.title = title
+        }
+
+        if let notes = todoData["notes"]?.string ?? todoData["summary"]?.string {
+            todo.notes = notes
+        }
+
+        todo.nextAction = todoData["next_action"]?.string ?? todo.nextAction
+
+        if let priorityValue = todoData["priority"]?.int {
+            todo.priority = priority(from: priorityValue)
+        }
+
+        if let dueAt = date(from: todoData["due_at"]) {
+            todo.dueDate = dueAt
+        }
+
+        if let status = todoData["status"]?.string {
+            todo.isCompleted = status == "done"
+            todo.completedAt = status == "done" ? (date(from: todoData["closed_at"]) ?? now()) : nil
+        }
+    }
+
+    private func priority(from value: Int) -> TodoPriority {
+        switch value {
+        case 90...: .critical
+        case 75..<90: .high
+        case 50..<75: .medium
+        default: .low
+        }
+    }
+
+    private func date(from value: JSONValue?) -> Date? {
+        guard let string = value?.string else { return nil }
+        return ISO8601DateFormatter().date(from: string)
     }
 
     private func encodedWorkSummary(_ workSummary: ChatWorkSummary?) -> Data? {

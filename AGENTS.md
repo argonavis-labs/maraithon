@@ -17,8 +17,17 @@ This is a web application written using the Phoenix web framework.
 
 ## Project guidelines
 
-- Use `mix precommit` alias when you are done with all changes and fix any pending issues
 - Use the already included and available `:req` (`Req`) library for HTTP requests, **avoid** `:httpoison`, `:tesla`, and `:httpc`. Req is included by default and is the preferred HTTP client for Phoenix apps
+- Deploy production with `make deploy`. The deploy script must use `FLY_API_TOKEN` from the environment or `~/.config/maraithon/fly-prod.env`; do not rely on the active `flyctl` login because this workstation may have multiple Fly accounts.
+- Any production Fly command path, including deploys, logs, SSH helpers, and production mobile verification, must be token-scoped with `FLY_API_TOKEN` and the pinned `MARAITHON_FLY_APP` value. Prefer `MARAITHON_FLY_APP` over legacy `FLY_APP`.
+- Keep Fly tokens and operator credentials outside the repo. Never commit `FLY_API_TOKEN`, admin passwords, API bearer tokens, database URLs, or OAuth secrets.
+
+## Current verification mode
+
+- Product iteration is currently production-first. Until Kent explicitly re-enables broad test runs, do not run `mix test`, `mix precommit`, `make test`, `make verify`, Xcode test actions, SwiftPM tests, or other expensive test suites by default.
+- Use compile/build sanity checks instead: `mix compile`, `make build-web`, `make build-api`, `make build-mobile`, `swift build`, or the narrowest build command relevant to the changed slice.
+- If a narrow test would materially reduce risk, ask first or explain why it is necessary before running it. Prefer getting the change deployed quickly for live product feedback.
+- Do not delete, gut, skip, or game the existing test suite. This is an operating mode for faster iteration, not permission to remove coverage. When Kent says to harden again, restore normal test/precommit discipline.
 
 ## Testing principle
 

@@ -44,6 +44,35 @@ struct TodayInsightEngineTests {
     }
 
     @Test
+    func metricsStayFastForLargeDecisionReadyAccounts() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let todos = (0..<500).map { index in
+            TodoItem(
+                title: "Decision \(index)",
+                notes: "A customer is waiting on the update.",
+                whyNow: "The customer is waiting and no later reply was found.",
+                nextBestAction: "Send the update.",
+                evidenceExcerpt: "Can you send the update?"
+            )
+        }
+
+        var metrics: TodayMetrics?
+        let elapsed = ContinuousClock().measure {
+            metrics = TodayInsightEngine.metrics(
+                todos: todos,
+                contacts: [],
+                now: now,
+                calendar: calendar
+            )
+        }
+
+        #expect(metrics?.decisionTodos == 500)
+        #expect(elapsed < .seconds(1))
+    }
+
+    @Test
     func focusQueuePrioritizesOverdueTodosThenStaleRelationships() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!

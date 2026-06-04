@@ -67,6 +67,8 @@ struct ChatPendingWorkSummary: View {
 
             if let summary, !summary.toolCalls.isEmpty {
                 ChatToolCallStrip(toolCalls: summary.toolCalls)
+            } else if let summary, !summary.steps.isEmpty {
+                ChatWorkStepStrip(steps: summary.steps)
             }
         }
     }
@@ -76,7 +78,7 @@ enum ChatWorkSummaryViewCopy {
     static let checkedSectionTitle = "Sources and actions"
     static let progressSectionTitle = "Assistant activity"
     static let completedFallbackTitle = "How Maraithon answered"
-    static let pendingFallbackTitle = "Preparing your answer"
+    static let pendingFallbackTitle = "Starting assistant work"
 }
 
 private struct ChatToolCallStrip: View {
@@ -87,6 +89,38 @@ private struct ChatToolCallStrip: View {
             HStack(spacing: 6) {
                 ForEach(toolCalls.prefix(4)) { toolCall in
                     Label(toolCall.label, systemImage: statusSymbol(for: toolCall.status))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(uiColor: .tertiarySystemGroupedBackground), in: Capsule())
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private func statusSymbol(for status: String?) -> String {
+        switch status {
+        case "failed":
+            "exclamationmark.triangle"
+        case "running":
+            "arrow.triangle.2.circlepath"
+        default:
+            "checkmark.circle"
+        }
+    }
+}
+
+private struct ChatWorkStepStrip: View {
+    let steps: [ChatWorkStepSummary]
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(steps.prefix(4)) { step in
+                    Label(step.displayTitle, systemImage: statusSymbol(for: step.status))
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)

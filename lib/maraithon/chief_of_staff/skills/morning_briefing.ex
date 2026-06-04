@@ -4630,18 +4630,17 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       candidate_count: length(candidates)
     )
 
-    case Todos.upsert_many(user_id, candidates) do
+    {allowed_candidates, skipped_candidates} =
+      Maraithon.Todos.SignalGate.partition_candidates(candidates)
+
+    case Todos.upsert_many(user_id, allowed_candidates) do
       {:ok, todos} ->
         {:ok,
          %{
            todos: todos,
            decisions:
-             todos
-             |> Enum.with_index()
-             |> Enum.map(fn {todo, index} ->
-               %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
-             end),
-           skipped_count: 0,
+             direct_upsert_decisions(todos) ++ signal_gate_skip_decisions(skipped_candidates),
+           skipped_count: length(skipped_candidates),
            usage: %{},
            fallback_reason: inspect(reason)
          }}
@@ -4649,6 +4648,22 @@ defmodule Maraithon.ChiefOfStaff.Skills.MorningBriefing do
       {:error, direct_reason} ->
         {:error, {:todo_ingest_failed, reason, direct_reason}}
     end
+  end
+
+  defp direct_upsert_decisions(todos) do
+    todos
+    |> Enum.with_index()
+    |> Enum.map(fn {todo, index} ->
+      %{persisted_todo_id: todo.id, candidate_index: index, mode: "direct_upsert"}
+    end)
+  end
+
+  defp signal_gate_skip_decisions(skipped_candidates) do
+    skipped_candidates
+    |> Enum.with_index()
+    |> Enum.map(fn {%{reason: reason}, index} ->
+      %{candidate_index: index, mode: "signal_gate_skip", reasoning: reason}
+    end)
   end
 
   defp morning_todo_candidate(todo, brief_input) when is_map(todo) do

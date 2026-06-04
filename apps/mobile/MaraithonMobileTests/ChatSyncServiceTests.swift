@@ -484,6 +484,13 @@ private final class MockChatAPI: MobileChatAPI {
         .init(id: createdThreadID, title: title, updatedAt: Date())
     }
 
+    func getOrCreateTodoChatThread(
+        sessionToken: String,
+        todoID: UUID
+    ) async throws -> MobileAPIClient.RemoteChatThread {
+        .init(id: createdThreadID, title: "Work item", updatedAt: Date())
+    }
+
     func getChatThread(sessionToken: String, id: UUID) async throws -> MobileAPIClient.RemoteChatThread {
         remoteThreads.first { $0.id == id } ?? .init(id: id, title: "Remote thread")
     }

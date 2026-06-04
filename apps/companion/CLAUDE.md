@@ -18,14 +18,15 @@ repo:
 
 ```sh
 swift build
-swift test
 swift run Maraithon
 ```
+
+Current mode: do not run `swift test` by default. Kent is testing live in production until he explicitly says to harden the app again.
 
 ## When working on a feature
 
 1. Read the spec for the relevant section.
 2. Read the existing code in the area you're touching.
 3. Make the smallest change that satisfies the ticket.
-4. Add tests where the ticket calls for them.
-5. Run `swift test`.
+4. Keep changes structured so tests can be added when hardening resumes.
+5. Run `swift build` for compile sanity.

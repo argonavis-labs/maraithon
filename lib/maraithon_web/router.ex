@@ -139,6 +139,7 @@ defmodule MaraithonWeb.Router do
     get "/todos", MobileTodoController, :index
     post "/todos", MobileTodoController, :create
     get "/todos/:id", MobileTodoController, :show
+    post "/todos/:id/chat", MobileTodoController, :chat_thread
     patch "/todos/:id", MobileTodoController, :update
     delete "/todos/:id", MobileTodoController, :delete
     post "/todos/:id/actions/:action", MobileTodoController, :perform_action
@@ -182,6 +183,9 @@ defmodule MaraithonWeb.Router do
     get "/admin/gmail/recent", AdminController, :gmail_recent
     get "/admin/todos", AdminController, :todos
     post "/admin/todos/dismiss", AdminController, :dismiss_todos
+    post "/admin/open-work/rebuild", AdminController, :rebuild_open_work
+    get "/admin/open-work/rebuild/:job_id", AdminController, :open_work_rebuild_status
+    post "/admin/open-work/restore-recent", AdminController, :restore_recent_open_work
     post "/admin/operator-state/reset", AdminController, :reset_operator_state
     post "/admin/telegram/push", AdminController, :push_telegram
     post "/admin/insights/refresh", AdminController, :refresh_insights
