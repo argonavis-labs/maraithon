@@ -99,14 +99,14 @@ jobs:
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
         run: make testflight-mobile
 
-      - name: Resolve TestFlight group name
-        id: tf_group
+      - name: Resolve TestFlight group names
+        id: tf_groups
         run: |
           set -euo pipefail
           if [ "$MOBILE_ENV" = "production" ]; then
-            echo "name=Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "names=Internal Testers" >> "$GITHUB_OUTPUT"
           else
-            echo "name=Staging" >> "$GITHUB_OUTPUT"
+            echo "names=Staging,Internal Testers" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Read app version
@@ -121,7 +121,8 @@ jobs:
           ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
           ASC_VERSION_STRING: ${{ steps.app_version.outputs.version }}
           ASC_BUILD_NUMBER: ${{ env.MARAITHON_MOBILE_BUILD_NUMBER }}
-          TESTFLIGHT_GROUP_NAME: ${{ steps.tf_group.outputs.name }}
+          TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.names }}
+          REQUIRED_INTERNAL_TESTER_EMAILS: kent.fenwick@gmail.com
         run: node scripts/ci/assign-testflight-group.mjs
 
       - name: Publish summary
@@ -132,6 +133,7 @@ jobs:
             echo "- Environment: \`${MOBILE_ENV}\`"
             echo "- Version: \`${{ steps.app_version.outputs.version }}\`"
             echo "- Build: \`${MARAITHON_MOBILE_BUILD_NUMBER}\`"
-            echo "- TestFlight group: \`${{ steps.tf_group.outputs.name }}\`"
+            echo "- TestFlight groups: \`${{ steps.tf_groups.outputs.names }}\`"
+            echo "- Required internal tester: \`kent.fenwick@gmail.com\`"
             echo "- Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
