@@ -1085,11 +1085,13 @@ defmodule Maraithon.Todos do
     statuses = normalize_status_filters(Keyword.get(opts, :statuses))
     query_text = normalize_query_text(Keyword.get(opts, :query))
     open_due_only? = Keyword.get(opts, :open_due_only, false)
+    exclude_unsurfaceable? = Keyword.get(opts, :exclude_unsurfaceable?, true)
 
     Todo
     |> where([todo], todo.user_id == ^user_id)
     |> maybe_filter_statuses(statuses)
     |> maybe_filter_open_due_only(open_due_only?)
+    |> maybe_exclude_unsurfaceable_open_work(exclude_unsurfaceable?)
     |> maybe_filter_source(source)
     |> maybe_filter_source_account_id(source_account_id)
     |> maybe_filter_kind(kind)
@@ -1124,6 +1126,20 @@ defmodule Maraithon.Todos do
 
   defp maybe_filter_statuses(query, statuses) when is_list(statuses) do
     where(query, [todo], todo.status in ^statuses)
+  end
+
+  defp maybe_exclude_unsurfaceable_open_work(query, false), do: query
+
+  defp maybe_exclude_unsurfaceable_open_work(query, true) do
+    where(
+      query,
+      [todo],
+      todo.status not in ^@open_statuses or
+        fragment(
+          "coalesce(? #>> '{surface_quality,surfaceable}', 'true') != 'false'",
+          todo.metadata
+        )
+    )
   end
 
   defp maybe_filter_open_due_only(query, false), do: query

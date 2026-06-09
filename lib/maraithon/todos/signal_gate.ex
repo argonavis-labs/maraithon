@@ -138,6 +138,10 @@ defmodule Maraithon.Todos.SignalGate do
         {:skip,
          "Skipped by executive signal gate: source reconciliation says this loop is already done or closed."}
 
+      explicitly_unsurfaceable?(attrs) ->
+        {:skip,
+         "Skipped by executive signal gate: surface-quality check says this item lacks enough human, source, or action context to be useful."}
+
       requires_completion_check?(attrs) and not completion_verified_open?(attrs) ->
         {:skip,
          "Skipped by executive signal gate: no explicit source reconciliation proves this loop is still open."}
@@ -217,6 +221,16 @@ defmodule Maraithon.Todos.SignalGate do
     ]
     |> Enum.find(&present?/1)
     |> normalize_status()
+  end
+
+  defp explicitly_unsurfaceable?(attrs) do
+    attrs
+    |> read_map("metadata")
+    |> read_map("surface_quality")
+    |> case do
+      quality when quality == %{} -> false
+      quality -> read_value(quality, "surfaceable") == false
+    end
   end
 
   defp requires_completion_check?(attrs) do

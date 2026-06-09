@@ -174,6 +174,29 @@ defmodule Maraithon.TodosTest do
     assert done_todo.status == "done"
   end
 
+  test "open lists exclude todos explicitly scored not surfaceable" do
+    user_id = unique_user_email("todos-surface-quality")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    metadata = %{
+      "surface_quality" => %{
+        "surfaceable" => false,
+        "missing" => ["human_context", "specific_context"]
+      }
+    }
+
+    {:ok, [todo]} =
+      Todos.upsert_many(user_id, [
+        gmail_todo_attrs("thread-unsurfaceable", "Approve vague invoice reminder",
+          metadata: metadata
+        )
+      ])
+
+    assert Todos.list_open_for_user(user_id) == []
+    assert [unfiltered] = Todos.list_open_for_user(user_id, exclude_unsurfaceable?: false)
+    assert unfiltered.id == todo.id
+  end
+
   test "source filters distinguish local Calendar from Google Calendar" do
     user_id = unique_user_email("todos-source")
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

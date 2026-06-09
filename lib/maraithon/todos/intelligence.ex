@@ -767,7 +767,19 @@ defmodule Maraithon.Todos.Intelligence do
       |> UserFacingCopy.polish_attrs()
       |> SurfaceQuality.annotate_attrs()
 
+    signal_gate_skip_reason = SignalGate.skip_reason(candidate, todo_attrs)
+
     cond do
+      is_binary(signal_gate_skip_reason) ->
+        {:ok,
+         %{
+           action: "skip",
+           candidate_index: candidate_index,
+           existing_todo_id: nil,
+           reasoning: signal_gate_skip_reason,
+           todo_attrs: nil
+         }}
+
       action == "update" and is_nil(existing_todo) ->
         {:error, :todo_intelligence_existing_todo_not_found}
 
