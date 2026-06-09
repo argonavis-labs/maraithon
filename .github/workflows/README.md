@@ -17,11 +17,8 @@ Mirrors the gigamono pattern: `main` is the staging track, tags are the producti
 | `APP_STORE_CONNECT_API_KEY_ID` | ASC API key ID (e.g. `2XG664G4GG`) | App Store Connect → Users and Access → Integrations → App Store Connect API |
 | `APP_STORE_CONNECT_API_ISSUER_ID` | ASC issuer ID (e.g. `69a6de6e-…`) | Same screen as above |
 | `APP_STORE_CONNECT_API_KEY_P8` | Full contents of `AuthKey_<ID>.p8` (PEM, multi-line, **no base64**) | The `.p8` Apple gives you when the key is created |
-| `IOS_DISTRIBUTION_CERT_P12` | Base64-encoded `.p12` export of the Apple Distribution certificate | Keychain Access → export certificate as `.p12`, then `base64 -i cert.p12 \| pbcopy` |
-| `IOS_DISTRIBUTION_CERT_PASSWORD` | Password used when exporting the `.p12` | You choose it during export |
-| `IOS_PROVISIONING_PROFILE` | Base64-encoded App Store distribution provisioning profile (`.mobileprovision`) | Apple Developer portal → Profiles → download → `base64 -i profile.mobileprovision \| pbcopy` |
 
-The runner is `macos-latest`. The workflow expects Xcode 26 to be selectable; GitHub-hosted macOS runners ship with multiple Xcodes — adjust the `Select Xcode` step if a different version is needed.
+The runner is `macos-latest`. The workflow expects Xcode 26 to be selectable; GitHub-hosted macOS runners ship with multiple Xcodes — adjust the `Select Xcode` step if a different version is needed. Xcode uses the App Store Connect API key for automatic signing and provisioning.
 
 ### TestFlight groups
 
@@ -34,7 +31,7 @@ Create them under TestFlight → Internal Testing in App Store Connect. The grou
 
 ### Local equivalents
 
-The CI workflow ultimately runs `make testflight-mobile`, which is the same command you can run from your Mac. The CI variant just sets `MARAITHON_MOBILE_BUILD_NUMBER`, materializes the API key + signing assets, and attaches the resulting build to a TestFlight group.
+The CI workflow ultimately runs `make testflight-mobile`, which is the same command you can run from your Mac. The CI variant sets `MARAITHON_MOBILE_BUILD_NUMBER`, materializes the API key for upload and automatic signing, and attaches the resulting build to TestFlight groups.
 
 ### Cutting a production release
 

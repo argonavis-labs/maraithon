@@ -56,35 +56,27 @@ jobs:
         with:
           node-version: '22.x'
 
+      - name: Check required secrets
+        env:
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in ASC_KEY_ID ASC_ISSUER_ID APP_STORE_CONNECT_API_KEY_P8; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error title=Missing GitHub secret::${key} is required for mobile TestFlight releases"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Materialize App Store Connect API key
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
-          printf '%s' "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-
-      - name: Materialize signing assets
-        env:
-          DIST_CERT_P12: ${{ secrets.IOS_DISTRIBUTION_CERT_P12 }}
-          DIST_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
-          PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
-        run: |
-          set -euo pipefail
-          KEYCHAIN_PATH="$RUNNER_TEMP/maraithon-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(uuidgen)"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"' | tr -d ' ')
-
-          CERT_PATH="$RUNNER_TEMP/dist-cert.p12"
-          printf '%s' "$DIST_CERT_P12" | base64 --decode > "$CERT_PATH"
-          security import "$CERT_PATH" -P "$DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$PROFILE_DIR"
-          PROFILE_PATH="$PROFILE_DIR/maraithon-mobile.mobileprovision"
-          printf '%s' "$PROVISIONING_PROFILE" | base64 --decode > "$PROFILE_PATH"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "APP_STORE_CONNECT_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Set build number from GitHub run
         working-directory: apps/mobile
