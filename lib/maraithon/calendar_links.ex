@@ -132,7 +132,16 @@ defmodule Maraithon.CalendarLinks do
 
   def best_link_for(_user_id, _todo, _body, _opts), do: nil
 
-  def display_label(%CalendarLink{} = link) do
+  def display_label(%CalendarLink{label: label} = link) when is_binary(label) do
+    case String.trim(label) do
+      "" -> default_display_label(link)
+      value -> value
+    end
+  end
+
+  def display_label(%CalendarLink{} = link), do: default_display_label(link)
+
+  defp default_display_label(%CalendarLink{} = link) do
     duration =
       case link.duration_minutes do
         minutes when is_integer(minutes) -> "#{minutes}-minute"
@@ -143,6 +152,8 @@ defmodule Maraithon.CalendarLinks do
     |> Enum.reject(&blank?/1)
     |> Enum.join(" ")
   end
+
+  defp default_display_label(_link), do: "calendar link"
 
   def changeset_error_message(%Changeset{} = changeset) do
     changeset

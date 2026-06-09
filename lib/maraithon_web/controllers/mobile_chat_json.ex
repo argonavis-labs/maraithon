@@ -887,9 +887,12 @@ defmodule MaraithonWeb.MobileChatJSON do
        when is_binary(user_id) and is_binary(body) do
     if fallback_scheduling_reply?(linked_todo, body) do
       calendar_link = fallback_calendly_link_for(user_id, linked_todo, body)
-      slot_minutes = fallback_calendar_link_duration_minutes(calendar_link)
 
-      updated_body =
+      if fallback_calendly_link?(calendar_link) do
+        fallback_calendly_scheduling_body(linked_todo, body, calendar_link)
+      else
+        slot_minutes = fallback_calendar_link_duration_minutes(calendar_link)
+
         case fallback_calendar_slot_labels(user_id, 2, slot_minutes) do
           [_slot | _] = labels ->
             cond do
@@ -908,8 +911,7 @@ defmodule MaraithonWeb.MobileChatJSON do
           [] ->
             body
         end
-
-      fallback_maybe_add_calendly_link(updated_body, calendar_link)
+      end
     else
       body
     end
@@ -943,12 +945,25 @@ defmodule MaraithonWeb.MobileChatJSON do
         "chat"
       ])
 
-    slot_request_or_draft? =
+    scheduling_followup? =
       String.contains?(text, ["[day]", "[time]", "time slots", "few time", "available"]) or
-        fallback_calendar_time_like?(text)
+        fallback_calendar_time_like?(text) or fallback_setup_meeting_request?(text)
 
-    scheduling_intent? and slot_request_or_draft?
+    scheduling_intent? and scheduling_followup?
   end
+
+  defp fallback_setup_meeting_request?(text) when is_binary(text) do
+    Regex.match?(
+      ~r/\b(?:set\s*up|setup|schedule|book|arrange|coordinate|pick|choose|find)\b.{0,80}\b(?:meeting|call|chat|time|slot|availability|calendar|calendly|meet)\b/i,
+      text
+    ) or
+      Regex.match?(
+        ~r/\b(?:meeting|call|chat|time|slot|availability|calendar|calendly|meet)\b.{0,80}\b(?:set\s*up|setup|schedule|book|arrange|coordinate|pick|choose|find)\b/i,
+        text
+      )
+  end
+
+  defp fallback_setup_meeting_request?(_text), do: false
 
   defp fallback_calendar_time_like?(text) when is_binary(text) do
     Regex.match?(
@@ -996,6 +1011,52 @@ defmodule MaraithonWeb.MobileChatJSON do
       end
 
     [greeting, "#{availability} #{closing}"]
+    |> Enum.reject(&blank_public_value?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp fallback_calendly_scheduling_body(linked_todo, body, link) do
+    cond do
+      String.contains?(String.downcase(body), "calendly.com") ->
+        body
+
+      fallback_simple_availability_reply?(body) or
+        String.contains?(String.downcase(body), ["[day]", "[time]"]) or
+          fallback_calendar_time_like?(body) ->
+        fallback_generated_calendly_body(linked_todo, body, link)
+
+      true ->
+        fallback_maybe_add_primary_calendly_link(body, link)
+    end
+  end
+
+  defp fallback_generated_calendly_body(linked_todo, body, link) do
+    draft = read_map(linked_todo, "action_draft")
+    metadata = read_map(linked_todo, "metadata")
+
+    greeting =
+      linked_todo
+      |> gmail_recipient_name_candidates(draft, metadata, body)
+      |> Enum.find_value(fn name ->
+        name
+        |> String.split(~r/\s+/, parts: 2)
+        |> List.first()
+        |> read_public_text()
+      end)
+      |> case do
+        nil -> nil
+        first_name -> "Hi #{first_name},"
+      end
+
+    scheduling = fallback_calendly_link_sentence(link)
+
+    closing =
+      case fallback_meeting_person_name(linked_todo, body) do
+        nil -> "Looking forward to speaking."
+        name -> "Looking forward to speaking with #{name}."
+      end
+
+    [greeting, scheduling, closing]
     |> Enum.reject(&blank_public_value?/1)
     |> Enum.join("\n\n")
   end
@@ -1075,7 +1136,10 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp fallback_calendar_link_duration_minutes(_link), do: @availability_slot_minutes
 
-  defp fallback_maybe_add_calendly_link(body, %{url: url} = link)
+  defp fallback_calendly_link?(%{url: url}) when is_binary(url), do: String.trim(url) != ""
+  defp fallback_calendly_link?(_link), do: false
+
+  defp fallback_maybe_add_primary_calendly_link(body, %{url: url} = link)
        when is_binary(body) and is_binary(url) do
     if String.contains?(String.downcase(body), "calendly.com") do
       body
@@ -1086,10 +1150,10 @@ defmodule MaraithonWeb.MobileChatJSON do
     end
   end
 
-  defp fallback_maybe_add_calendly_link(body, _link), do: body
+  defp fallback_maybe_add_primary_calendly_link(body, _link), do: body
 
   defp fallback_calendly_link_sentence(link) do
-    "If easier, use my #{CalendarLinks.display_label(link)}: #{link.url}"
+    "Please use my #{CalendarLinks.display_label(link)} link to grab a time that works for you: #{link.url}"
   end
 
   defp fallback_calendar_slot_labels(user_id, limit, slot_minutes) do

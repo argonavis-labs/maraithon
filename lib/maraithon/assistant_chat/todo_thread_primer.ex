@@ -25,7 +25,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
   alias Maraithon.Todos
   alias Maraithon.Todos.{ActionDrafts, Todo}
 
-  @primer_version 9
+  @primer_version 10
   @availability_timezone "America/Toronto"
   @availability_offset_hours -5
   @availability_slot_minutes 30
@@ -891,9 +891,12 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
        when is_binary(user_id) and is_binary(body) do
     if scheduling_reply?(todo, body) do
       calendar_link = calendly_link_for(user_id, todo, source_message, body)
-      slot_minutes = calendar_link_duration_minutes(calendar_link)
 
-      updated_body =
+      if calendly_link?(calendar_link) do
+        calendly_scheduling_body(todo, source_message, body, calendar_link)
+      else
+        slot_minutes = calendar_link_duration_minutes(calendar_link)
+
         case suggested_calendar_slot_labels(user_id, 2, slot_minutes) do
           [_slot | _] = labels ->
             cond do
@@ -912,8 +915,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
           [] ->
             body
         end
-
-      maybe_add_calendly_link(updated_body, calendar_link)
+      end
     else
       body
     end
@@ -947,12 +949,25 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
         "chat"
       ])
 
-    slot_request_or_draft? =
+    scheduling_followup? =
       String.contains?(text, ["[day]", "[time]", "time slots", "few time", "available"]) or
-        calendar_time_like?(text)
+        calendar_time_like?(text) or setup_meeting_request?(text)
 
-    scheduling_intent? and slot_request_or_draft?
+    scheduling_intent? and scheduling_followup?
   end
+
+  defp setup_meeting_request?(text) when is_binary(text) do
+    Regex.match?(
+      ~r/\b(?:set\s*up|setup|schedule|book|arrange|coordinate|pick|choose|find)\b.{0,80}\b(?:meeting|call|chat|time|slot|availability|calendar|calendly|meet)\b/i,
+      text
+    ) or
+      Regex.match?(
+        ~r/\b(?:meeting|call|chat|time|slot|availability|calendar|calendly|meet)\b.{0,80}\b(?:set\s*up|setup|schedule|book|arrange|coordinate|pick|choose|find)\b/i,
+        text
+      )
+  end
+
+  defp setup_meeting_request?(_text), do: false
 
   defp calendar_time_like?(text) when is_binary(text) do
     Regex.match?(
@@ -995,6 +1010,40 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       end
 
     [greeting, "#{availability} #{closing}"]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp calendly_scheduling_body(%Todo{} = todo, source_message, body, link) do
+    cond do
+      String.contains?(String.downcase(body), "calendly.com") ->
+        body
+
+      simple_availability_reply?(body) or has_availability_placeholders?(body) or
+        calendar_time_like?(body) or instruction_text?(body) ->
+        generated_calendly_body(todo, source_message, body, link)
+
+      true ->
+        maybe_add_primary_calendly_link(body, link)
+    end
+  end
+
+  defp generated_calendly_body(%Todo{} = todo, source_message, body, link) do
+    greeting =
+      case gmail_recipient_first_name(todo, source_message, body) do
+        nil -> nil
+        first_name -> "Hi #{first_name},"
+      end
+
+    scheduling = calendly_link_sentence(link)
+
+    closing =
+      case meeting_person_name(todo, body) do
+        nil -> "Looking forward to speaking."
+        name -> "Looking forward to speaking with #{name}."
+      end
+
+    [greeting, scheduling, closing]
     |> Enum.reject(&blank?/1)
     |> Enum.join("\n\n")
   end
@@ -1116,7 +1165,10 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
 
   defp calendar_link_duration_minutes(_link), do: @availability_slot_minutes
 
-  defp maybe_add_calendly_link(body, %{url: url} = link)
+  defp calendly_link?(%{url: url}) when is_binary(url), do: String.trim(url) != ""
+  defp calendly_link?(_link), do: false
+
+  defp maybe_add_primary_calendly_link(body, %{url: url} = link)
        when is_binary(body) and is_binary(url) do
     if String.contains?(String.downcase(body), "calendly.com") do
       body
@@ -1127,10 +1179,10 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
     end
   end
 
-  defp maybe_add_calendly_link(body, _link), do: body
+  defp maybe_add_primary_calendly_link(body, _link), do: body
 
   defp calendly_link_sentence(link) do
-    "If easier, use my #{CalendarLinks.display_label(link)}: #{link.url}"
+    "Please use my #{CalendarLinks.display_label(link)} link to grab a time that works for you: #{link.url}"
   end
 
   defp suggested_calendar_slot_labels(user_id, limit, slot_minutes) do
