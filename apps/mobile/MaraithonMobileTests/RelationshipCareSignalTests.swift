@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MaraithonMobile
 
-@Suite("Relationship Care Insight")
-struct RelationshipCareInsightTests {
+@Suite("Relationship Care Signal")
+struct RelationshipCareSignalTests {
     @Test
     func summaryPrioritizesArchivedAtRiskNewDueAndWarmStates() {
         var calendar = Calendar(identifier: .gregorian)
@@ -40,11 +40,11 @@ struct RelationshipCareInsightTests {
             lastContactedAt: calendar.date(byAdding: .day, value: -2, to: now)
         )
 
-        #expect(RelationshipCareInsight.summary(for: archived, now: now, calendar: calendar).level == .archived)
-        #expect(RelationshipCareInsight.summary(for: atRisk, now: now, calendar: calendar).level == .needsCare)
-        #expect(RelationshipCareInsight.summary(for: new, now: now, calendar: calendar).level == .new)
-        #expect(RelationshipCareInsight.summary(for: due, now: now, calendar: calendar).level == .due)
-        #expect(RelationshipCareInsight.summary(for: warm, now: now, calendar: calendar).level == .warm)
+        #expect(RelationshipCareSignal.summary(for: archived, now: now, calendar: calendar).level == .archived)
+        #expect(RelationshipCareSignal.summary(for: atRisk, now: now, calendar: calendar).level == .needsCare)
+        #expect(RelationshipCareSignal.summary(for: new, now: now, calendar: calendar).level == .new)
+        #expect(RelationshipCareSignal.summary(for: due, now: now, calendar: calendar).level == .due)
+        #expect(RelationshipCareSignal.summary(for: warm, now: now, calendar: calendar).level == .warm)
     }
 
     @Test
@@ -60,7 +60,7 @@ struct RelationshipCareInsightTests {
             lastContactedAt: calendar.date(byAdding: .day, value: -15, to: now)
         )
 
-        let summary = RelationshipCareInsight.summary(for: stale, now: now, calendar: calendar)
+        let summary = RelationshipCareSignal.summary(for: stale, now: now, calendar: calendar)
 
         #expect(summary.level == .needsCare)
         #expect(summary.actionTitle == "Follow up")
@@ -81,8 +81,8 @@ struct RelationshipCareInsightTests {
             lastContactedAt: calendar.date(byAdding: .day, value: -8, to: now)
         )
 
-        let newSummary = RelationshipCareInsight.summary(for: new, now: now, calendar: calendar)
-        let dueSummary = RelationshipCareInsight.summary(for: due, now: now, calendar: calendar)
+        let newSummary = RelationshipCareSignal.summary(for: new, now: now, calendar: calendar)
+        let dueSummary = RelationshipCareSignal.summary(for: due, now: now, calendar: calendar)
 
         #expect(newSummary.actionTitle == "Log contact")
         #expect(dueSummary.title == "Check-in due")

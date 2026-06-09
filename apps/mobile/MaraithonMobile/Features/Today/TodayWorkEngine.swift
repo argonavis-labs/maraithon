@@ -44,7 +44,7 @@ private struct TodayFocusCandidate {
     let item: () -> TodayFocusItem
 }
 
-enum TodayInsightEngine {
+enum TodayWorkEngine {
     static func metrics(
         todos: [TodoItem],
         now: Date = Date(),

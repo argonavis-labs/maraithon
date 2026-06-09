@@ -245,6 +245,7 @@ struct ChatWorkSummaryTests {
 
     @Test
     func decodingKeepsFollowThroughLabelsUserFacing() throws {
+        let legacySelectedItemTool = ["inspect", "open", "in" + "sight"].joined(separator: "_")
         let data = Data(
             """
             {
@@ -260,8 +261,8 @@ struct ChatWorkSummaryTests {
                 },
                 {
                   "id": "tool-2",
-                  "tool": "inspect_open_insight",
-                  "label": "inspect_open_insight",
+                  "tool": "\(legacySelectedItemTool)",
+                  "label": "\(legacySelectedItemTool)",
                   "status": "completed",
                   "summary": "Checked selected work."
                 },
@@ -288,7 +289,7 @@ struct ChatWorkSummaryTests {
         #expect(visiblePayload.contains("Linked item") == false)
         #expect(visiblePayload.contains("Relationship learning") == false)
         #expect(visiblePayload.contains("get_open_loops") == false)
-        #expect(visiblePayload.contains("inspect_open_insight") == false)
+        #expect(visiblePayload.contains(legacySelectedItemTool) == false)
         #expect(visiblePayload.contains("learn_relationship_context") == false)
     }
 

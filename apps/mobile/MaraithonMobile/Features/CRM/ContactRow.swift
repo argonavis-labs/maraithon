@@ -38,7 +38,7 @@ struct ContactRow: View {
     }
 
     private var careSummary: RelationshipCareSummary {
-        RelationshipCareInsight.summary(for: contact)
+        RelationshipCareSignal.summary(for: contact)
     }
 
     private var careTint: Color {

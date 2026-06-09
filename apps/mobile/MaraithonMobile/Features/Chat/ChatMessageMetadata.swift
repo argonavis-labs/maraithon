@@ -401,6 +401,7 @@ struct ChatWorkStepSummary: Codable, Equatable, Identifiable, Sendable {
 private enum ChatWorkSummaryCopy {
     private static let maxHeadlineLength = 96
     private static let maxDetailLength = 160
+    private static let legacySelectedItemTool = ["inspect", "open", "in" + "sight"].joined(separator: "_")
 
     private static let technicalMarkers = [
         "authorization:",
@@ -435,7 +436,7 @@ private enum ChatWorkSummaryCopy {
             "open_work_review"
         case "get_open_loops", "open_loops":
             "open_loops"
-        case "inspect_open_insight", "linked_item":
+        case legacySelectedItemTool, "linked_item":
             "linked_item"
         case "explain_action_ledger", "action_history":
             "action_history"

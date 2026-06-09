@@ -20,7 +20,7 @@ struct RelationshipCareSummary: Equatable {
     let systemImage: String
 }
 
-enum RelationshipCareInsight {
+enum RelationshipCareSignal {
     static func summary(
         for contact: CRMContact,
         now: Date = Date(),

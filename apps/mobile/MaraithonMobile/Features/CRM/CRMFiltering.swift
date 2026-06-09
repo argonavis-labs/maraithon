@@ -154,7 +154,7 @@ enum CRMFiltering {
         calendar: Calendar = .current
     ) -> Bool {
         guard !isArchived(contact) else { return false }
-        let level = RelationshipCareInsight.summary(for: contact, now: now, calendar: calendar).level
+        let level = RelationshipCareSignal.summary(for: contact, now: now, calendar: calendar).level
         return level == .due || level == .needsCare
     }
 

@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import MaraithonMobile
 
-@Suite("Today Insight Engine")
-struct TodayInsightEngineTests {
+@Suite("Today Work Engine")
+struct TodayWorkEngineTests {
     @Test
     func metricsTrackTodoWorkOnly() {
         var calendar = Calendar(identifier: .gregorian)
@@ -14,7 +14,7 @@ struct TodayInsightEngineTests {
         let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
         let completed = TodoItem(title: "Completed", dueDate: now, isCompleted: true)
 
-        let metrics = TodayInsightEngine.metrics(
+        let metrics = TodayWorkEngine.metrics(
             todos: [overdue, today, completed],
             now: now,
             calendar: calendar
@@ -43,7 +43,7 @@ struct TodayInsightEngineTests {
 
         var metrics: TodayMetrics?
         let elapsed = ContinuousClock().measure {
-            metrics = TodayInsightEngine.metrics(
+            metrics = TodayWorkEngine.metrics(
                 todos: todos,
                 now: now,
                 calendar: calendar
@@ -67,7 +67,7 @@ struct TodayInsightEngineTests {
         )
         let highPriority = TodoItem(title: "Book prep call", priority: .high)
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [highPriority, overdue],
             now: now,
             calendar: calendar
@@ -83,7 +83,7 @@ struct TodayInsightEngineTests {
         let high = TodoItem(title: "Book prep call", priority: .high)
         let normal = TodoItem(title: "Draft recap", priority: .medium)
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [normal, high, critical]
         )
 
@@ -124,7 +124,7 @@ struct TodayInsightEngineTests {
             priority: .critical
         )
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [critical, today, overdue],
             now: now,
             calendar: calendar
@@ -155,7 +155,7 @@ struct TodayInsightEngineTests {
             sourceContext: "Checked Gmail"
         )
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [todo],
             now: now,
             calendar: calendar
@@ -188,7 +188,7 @@ struct TodayInsightEngineTests {
             dueDate: now.addingTimeInterval(120)
         )
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [dueToday, decision],
             now: now,
             calendar: calendar
@@ -215,7 +215,7 @@ struct TodayInsightEngineTests {
             sourceContext: "source_context: Checked Gmail\ntelegram_fit_score: 0.94"
         )
 
-        let queue = TodayInsightEngine.focusQueue(
+        let queue = TodayWorkEngine.focusQueue(
             todos: [todo],
             now: now,
             calendar: calendar
@@ -241,31 +241,31 @@ struct TodayInsightEngineTests {
         let today = TodoItem(title: "Today", dueDate: now.addingTimeInterval(60))
         let open = TodoItem(title: "Undated follow-up")
 
-        #expect(TodayInsightEngine.brief(
+        #expect(TodayWorkEngine.brief(
             todos: [overdue, today],
             now: now,
             calendar: calendar
         ).destination == .todos(.overdue))
 
-        #expect(TodayInsightEngine.brief(
+        #expect(TodayWorkEngine.brief(
             todos: [today, decision],
             now: now,
             calendar: calendar
         ).destination == .todos(.decisions))
 
-        #expect(TodayInsightEngine.brief(
+        #expect(TodayWorkEngine.brief(
             todos: [today],
             now: now,
             calendar: calendar
         ).destination == .todos(.today))
 
-        #expect(TodayInsightEngine.brief(
+        #expect(TodayWorkEngine.brief(
             todos: [open],
             now: now,
             calendar: calendar
         ).destination == .todos(.open))
 
-        #expect(TodayInsightEngine.brief(
+        #expect(TodayWorkEngine.brief(
             todos: [],
             now: now,
             calendar: calendar
@@ -281,7 +281,7 @@ struct TodayInsightEngineTests {
             whyNow: "The investor is waiting on your decision."
         )
 
-        let brief = TodayInsightEngine.brief(todos: [decision])
+        let brief = TodayWorkEngine.brief(todos: [decision])
 
         #expect(brief.title == "Make the calls waiting on you")
         #expect(brief.subtitle == "Decision needed: Approve investor reply. Send the revised terms and confirm the review window.")
@@ -299,14 +299,14 @@ struct TodayInsightEngineTests {
             nextBestAction: "Approve the short reply with campaign timing."
         )
 
-        let brief = TodayInsightEngine.brief(todos: [decision])
+        let brief = TodayWorkEngine.brief(todos: [decision])
 
         #expect(brief.subtitle == "Decision needed: Reply to Michael. Approve the short reply with campaign timing.")
     }
 
     @Test
     func clearDayBriefUsesMaraithonProductLanguage() {
-        let brief = TodayInsightEngine.brief(todos: [])
+        let brief = TodayWorkEngine.brief(todos: [])
 
         #expect(brief.title == "Nothing needs your review right now")
         #expect(brief.subtitle == "No saved decision, deadline, or open work item is waiting. Ask Maraithon for a fresh priority call, draft, or summary when you need one.")
@@ -322,7 +322,7 @@ struct TodayInsightEngineTests {
         let open = TodoItem(title: "Send partner recap")
         let completed = TodoItem(title: "Completed", isCompleted: true)
 
-        let brief = TodayInsightEngine.brief(todos: [completed, open])
+        let brief = TodayWorkEngine.brief(todos: [completed, open])
 
         #expect(brief.title == "Triage open work")
         #expect(brief.subtitle == "Send partner recap needs a date, next action, or close decision.")
@@ -347,7 +347,7 @@ struct TodayInsightEngineTests {
             dueDate: now.addingTimeInterval(-5 * 24 * 60 * 60)
         )
 
-        let brief = TodayInsightEngine.brief(
+        let brief = TodayWorkEngine.brief(
             todos: [vendorRenewal, investorReply],
             now: now,
             calendar: calendar
@@ -367,7 +367,7 @@ struct TodayInsightEngineTests {
             dueDate: now.addingTimeInterval(60)
         )
 
-        let brief = TodayInsightEngine.brief(
+        let brief = TodayWorkEngine.brief(
             todos: [today],
             now: now,
             calendar: calendar
@@ -382,7 +382,7 @@ struct TodayInsightEngineTests {
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-        let lateBrief = TodayInsightEngine.brief(
+        let lateBrief = TodayWorkEngine.brief(
             todos: [TodoItem(title: "Overdue", dueDate: now.addingTimeInterval(-2 * 24 * 60 * 60))],
             now: now,
             calendar: calendar
@@ -391,7 +391,7 @@ struct TodayInsightEngineTests {
         #expect(lateBrief.subtitle == "Overdue is past due. Handle, move, or dismiss it.")
         #expect(lateBrief.actionTitle == "Review past-due work")
 
-        let todayBrief = TodayInsightEngine.brief(
+        let todayBrief = TodayWorkEngine.brief(
             todos: [TodoItem(title: "Board packet", dueDate: now.addingTimeInterval(60))],
             now: now,
             calendar: calendar

@@ -13,15 +13,15 @@ struct TodayView: View {
     @State private var isRefreshing = false
 
     private var metrics: TodayMetrics {
-        TodayInsightEngine.metrics(todos: todos)
+        TodayWorkEngine.metrics(todos: todos)
     }
 
     private var brief: TodayBrief {
-        TodayInsightEngine.brief(todos: todos)
+        TodayWorkEngine.brief(todos: todos)
     }
 
     private var focusItems: [TodayFocusItem] {
-        TodayInsightEngine.focusQueue(todos: todos)
+        TodayWorkEngine.focusQueue(todos: todos)
     }
 
     private var recentThreads: [ChatThread] {
@@ -215,12 +215,11 @@ struct TodayView: View {
         switch item.kind {
         case .todo:
             if let todo = todo(for: item) {
-                Button {
-                    editingTodo = todo
+                NavigationLink {
+                    TodoDetailView(todo: todo)
                 } label: {
                     TodayFocusRow(item: item)
                 }
-                .buttonStyle(.plain)
                 .swipeActions(edge: .leading) {
                     Button {
                         completeFocusTodo(todo)
