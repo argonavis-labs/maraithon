@@ -22,7 +22,7 @@ struct TodoDetailView: View {
                     quickPrompts: todoQuickPrompts
                 )
             } else {
-                loadingView
+                progressiveDetailView
             }
         }
         .navigationTitle(TodoDetailCopy.navigationTitle)
@@ -44,31 +44,61 @@ struct TodoDetailView: View {
         }
     }
 
-    private var loadingView: some View {
-        VStack(spacing: 16) {
-            Spacer()
+    private var progressiveDetailView: some View {
+        ZStack {
+            Color(uiColor: .systemGroupedBackground)
+                .ignoresSafeArea()
 
-            if isLoadingThread {
-                ProgressView(TodoDetailCopy.loadingTitle)
-            } else if let loadErrorMessage {
-                ContentUnavailableView {
-                    Label(TodoDetailCopy.loadingFailedTitle, systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(loadErrorMessage)
-                } actions: {
-                    Button(TodoDetailCopy.retryButtonTitle) {
-                        Task { await loadThread() }
-                    }
-                    .buttonStyle(.borderedProminent)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ChatContextHeaderView(header: todoContextHeader)
+                    chatLoadingCard
                 }
-            } else {
-                ProgressView(TodoDetailCopy.loadingTitle)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 24)
             }
-
-            Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .accessibilityIdentifier("todo-progressive-detail")
+    }
+
+    @ViewBuilder
+    private var chatLoadingCard: some View {
+        if let loadErrorMessage {
+            VStack(alignment: .leading, spacing: 10) {
+                Label(TodoDetailCopy.loadingFailedTitle, systemImage: "exclamationmark.triangle")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+
+                Text(loadErrorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button(TodoDetailCopy.retryButtonTitle) {
+                    Task { await loadThread() }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+
+                Text(isLoadingThread ? TodoDetailCopy.loadingDetailsTitle : TodoDetailCopy.loadingQueuedTitle)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
     }
 
     private var todoContextHeader: ChatContextHeader {
@@ -188,7 +218,8 @@ struct TodoDetailView: View {
 enum TodoDetailCopy {
     static let navigationTitle = "Work"
     static let editButtonTitle = "Edit"
-    static let loadingTitle = "Opening work chat"
+    static let loadingDetailsTitle = "Loading details"
+    static let loadingQueuedTitle = "Preparing details"
     static let loadingFailedTitle = "Could not open work chat"
     static let retryButtonTitle = "Try again"
 }
