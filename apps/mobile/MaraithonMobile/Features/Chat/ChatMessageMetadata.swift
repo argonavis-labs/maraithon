@@ -135,6 +135,20 @@ struct ChatDraftCard: Codable, Equatable, Sendable {
         primaryAction != nil || openURL != nil
     }
 
+    var normalizedStatus: String {
+        (status ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    var isSent: Bool {
+        normalizedStatus == "sent"
+    }
+
+    var isTerminal: Bool {
+        ["sent", "cancelled", "expired", "could not send"].contains(normalizedStatus)
+    }
+
     private static func clean(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed

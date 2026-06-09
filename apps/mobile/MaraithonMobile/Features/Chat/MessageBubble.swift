@@ -179,16 +179,20 @@ private struct ChatDraftCardView: View {
             Divider()
 
             Group {
-                switch card.providerKey {
-                case "gmail":
-                    emailDraft
-                default:
-                    messageDraft
+                if card.isTerminal {
+                    completedDraft
+                } else {
+                    switch card.providerKey {
+                    case "gmail":
+                        emailDraft
+                    default:
+                        messageDraft
+                    }
                 }
             }
             .padding(12)
 
-            if card.hasAction {
+            if card.hasAction && !card.isTerminal {
                 Divider()
 
                 HStack(spacing: 8) {
@@ -227,10 +231,10 @@ private struct ChatDraftCardView: View {
                 .padding(.vertical, 10)
             }
         }
-        .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(cardBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color(uiColor: .separator).opacity(0.38), lineWidth: 1)
+                .stroke(cardBorderColor, lineWidth: 1)
         )
         .onChange(of: card) { _, newCard in
             resetEdits(from: newCard)
@@ -253,14 +257,24 @@ private struct ChatDraftCardView: View {
                 if let status = card.status {
                     Text(status)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(statusColor)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 8)
 
-            if card.primaryAction != nil {
+            if card.isSent {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Sent")
+            } else if card.normalizedStatus == "could not send" {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("Could not send")
+            } else if card.primaryAction != nil {
                 Image(systemName: "paperplane.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
@@ -320,6 +334,104 @@ private struct ChatDraftCardView: View {
         }
     }
 
+    private var completedDraft: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: card.isSent ? "checkmark.circle.fill" : "info.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .accessibilityHidden(true)
+
+                Text(completedSummary)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                if let from = card.from {
+                    draftRow("From", from)
+                }
+
+                if let recipient = card.recipient {
+                    draftRow("To", recipient)
+                }
+
+                if let workspace = card.workspace {
+                    draftRow("Workspace", workspace)
+                }
+
+                if let subject = card.subject {
+                    draftRow("Subject", subject)
+                }
+            }
+
+            if let body = card.body {
+                readOnlyBody(body)
+            }
+        }
+    }
+
+    private var completedSummary: String {
+        switch card.normalizedStatus {
+        case "sent":
+            if let recipient = card.recipient {
+                return "Sent to \(recipient)"
+            }
+
+            return "Sent"
+
+        case "could not send":
+            return "Could not send"
+
+        case "cancelled":
+            return "Cancelled"
+
+        case "expired":
+            return "Expired"
+
+        default:
+            return card.status ?? "Done"
+        }
+    }
+
+    private var statusColor: Color {
+        switch card.normalizedStatus {
+        case "sent":
+            return .green
+        case "could not send":
+            return .red
+        case "cancelled", "expired":
+            return .secondary
+        default:
+            return .secondary
+        }
+    }
+
+    private var cardBackground: Color {
+        if card.isSent {
+            return Color.green.opacity(0.08)
+        }
+
+        if card.normalizedStatus == "could not send" {
+            return Color.red.opacity(0.08)
+        }
+
+        return Color(uiColor: .systemBackground)
+    }
+
+    private var cardBorderColor: Color {
+        if card.isSent {
+            return Color.green.opacity(0.38)
+        }
+
+        if card.normalizedStatus == "could not send" {
+            return Color.red.opacity(0.36)
+        }
+
+        return Color(uiColor: .separator).opacity(0.38)
+    }
+
     private func draftRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(label)
@@ -370,6 +482,24 @@ private struct ChatDraftCardView: View {
                     .stroke(Color(uiColor: .separator).opacity(0.22), lineWidth: 1)
             )
             .accessibilityIdentifier("chat-draft-body")
+    }
+
+    private func readOnlyBody(_ body: String) -> some View {
+        Text(body)
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .lineSpacing(2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(
+                Color(uiColor: .secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color(uiColor: .separator).opacity(0.18), lineWidth: 1)
+            )
+            .accessibilityIdentifier("chat-draft-body-readonly")
     }
 
     private var draftEdits: [String: JSONValue] {

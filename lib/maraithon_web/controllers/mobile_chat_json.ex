@@ -178,7 +178,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       structured_data
       |> public_structured_data()
       |> maybe_put_public_draft_card(
-        draft_card_for_turn(conversation, structured_data, prepared_action_id)
+        draft_card_for_turn(conversation, turn, structured_data, prepared_action_id)
       )
 
     %{
@@ -390,10 +390,14 @@ defmodule MaraithonWeb.MobileChatJSON do
 
   defp draft_card_for_turn(
          %Conversation{} = conversation,
+         %Turn{} = turn,
          structured_data,
          prepared_action_id
        ) do
     cond do
+      turn.turn_kind in ["action_result", "system_notice"] ->
+        nil
+
       is_binary(prepared_action_id) ->
         PreparedAction
         |> Repo.get(prepared_action_id)
@@ -418,7 +422,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       "gmail_draft_send" ->
         %{
           "provider" => "gmail",
-          "title" => "Gmail draft ready",
+          "title" => prepared_action_card_title(prepared_action),
           "draft_id" => read_string(payload, "draft_id") || read_string(payload, "id"),
           "from" => email_from_field(payload),
           "recipient" => email_recipient_field(payload),
@@ -433,7 +437,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       "gmail_send" ->
         %{
           "provider" => "gmail",
-          "title" => "Gmail message ready",
+          "title" => prepared_action_card_title(prepared_action),
           "from" => email_from_field(payload),
           "recipient" => email_recipient_field(payload),
           "cc" => email_display_field(payload, ["cc"]),
@@ -447,7 +451,7 @@ defmodule MaraithonWeb.MobileChatJSON do
       "slack_post" ->
         %{
           "provider" => "slack",
-          "title" => "Slack message ready",
+          "title" => prepared_action_card_title(prepared_action),
           "from" =>
             public_display_value(payload, ["from", "sender", "account", "source_account_label"]),
           "recipient" => slack_conversation_label(payload),
@@ -463,6 +467,36 @@ defmodule MaraithonWeb.MobileChatJSON do
   end
 
   defp prepared_action_draft_card(_prepared_action), do: nil
+
+  defp prepared_action_card_title(
+         %PreparedAction{action_type: "gmail_draft_send"} = prepared_action
+       ),
+       do: prepared_action_state_title(prepared_action, "Gmail draft")
+
+  defp prepared_action_card_title(%PreparedAction{action_type: "gmail_send"} = prepared_action),
+    do: prepared_action_state_title(prepared_action, "Gmail message")
+
+  defp prepared_action_card_title(%PreparedAction{action_type: "slack_post"} = prepared_action),
+    do: prepared_action_state_title(prepared_action, "Slack message")
+
+  defp prepared_action_card_title(%PreparedAction{}), do: "Prepared action"
+
+  defp prepared_action_state_title(%PreparedAction{status: "executed"}, label),
+    do: "#{label} sent"
+
+  defp prepared_action_state_title(%PreparedAction{status: "confirmed"}, label),
+    do: "#{label} sending"
+
+  defp prepared_action_state_title(%PreparedAction{status: "failed"}, label),
+    do: "#{label} failed"
+
+  defp prepared_action_state_title(%PreparedAction{status: "rejected"}, label),
+    do: "#{label} cancelled"
+
+  defp prepared_action_state_title(%PreparedAction{status: "expired"}, label),
+    do: "#{label} expired"
+
+  defp prepared_action_state_title(%PreparedAction{}, label), do: "#{label} ready"
 
   defp maybe_put_action(base, %PreparedAction{} = prepared_action) do
     if prepared_action_sendable?(prepared_action) do
