@@ -43,6 +43,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
   alias Maraithon.LocalCalendar.LocalEvent
   alias Maraithon.LocalFiles
   alias Maraithon.LocalFiles.LocalFile
+  alias Maraithon.LocalContacts.LocalContact
   alias Maraithon.LocalMessages
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.LocalNotes
@@ -263,7 +264,8 @@ defmodule Maraithon.Proactive.LocalPatterns do
         user_id
         |> LocalMessages.recent_for_user(limit: 200)
         |> Enum.filter(fn msg ->
-          is_struct(msg.sent_at, DateTime) and
+          msg.is_from_me == false and
+            is_struct(msg.sent_at, DateTime) and
             DateTime.compare(
               msg.sent_at,
               DateTime.add(now, -@recent_message_lookback_seconds, :second)
@@ -272,7 +274,7 @@ defmodule Maraithon.Proactive.LocalPatterns do
         end)
 
       Enum.flat_map(overdue, fn reminder ->
-        case match_reminder_against_messages(reminder, recent_message_texts) do
+        case match_reminder_against_messages(user_id, reminder, recent_message_texts) do
           nil -> []
           %{} = match -> [dropped_commitment_insight(user_id, now, reminder, match)]
         end
@@ -280,11 +282,11 @@ defmodule Maraithon.Proactive.LocalPatterns do
     end
   end
 
-  defp match_reminder_against_messages(%LocalReminder{title: title}, _msgs)
+  defp match_reminder_against_messages(_user_id, %LocalReminder{title: title}, _msgs)
        when not is_binary(title),
        do: nil
 
-  defp match_reminder_against_messages(%LocalReminder{title: title} = reminder, msgs) do
+  defp match_reminder_against_messages(user_id, %LocalReminder{title: title} = reminder, msgs) do
     title_tokens =
       title
       |> String.downcase()
@@ -305,7 +307,18 @@ defmodule Maraithon.Proactive.LocalPatterns do
         # message so we don't trip on a single common word like
         # "follow" or "send".
         if matched >= min(2, length(title_tokens)) do
-          %{message: msg, matched_tokens: matched, reminder_id: reminder.guid || reminder.id}
+          case sender_identity_for(user_id, msg) do
+            %{display: person} = identity when is_binary(person) ->
+              %{
+                message: msg,
+                sender_identity: identity,
+                matched_tokens: matched,
+                reminder_id: reminder.guid || reminder.id
+              }
+
+            _ ->
+              nil
+          end
         else
           nil
         end
@@ -313,20 +326,26 @@ defmodule Maraithon.Proactive.LocalPatterns do
     end
   end
 
-  defp dropped_commitment_insight(_user_id, now, %LocalReminder{} = reminder, match) do
+  defp dropped_commitment_insight(
+         _user_id,
+         now,
+         %LocalReminder{} = reminder,
+         %{
+           sender_identity: %{display: person} = identity
+         } = match
+       ) do
     days_overdue = days_overdue(now, reminder.due_at)
     title = reminder.title || "this commitment"
-    person = sender_label(match.message)
+    snippet = message_snippet(match.message)
 
     %{
       "source" => "local_patterns",
       "category" => "commitment_unresolved",
-      "title" => "Dropped commitment: #{title}",
+      "title" => "Close loop with #{person}: #{title}",
       "summary" =>
-        "Your reminder \"#{title}\" is #{days_overdue} day(s) overdue and matches a recent " <>
-          "message from #{person}.",
+        "Your reminder \"#{title}\" is #{days_overdue} day(s) overdue and lines up with a recent message from #{person}.",
       "recommended_action" =>
-        "Either send #{person} an update or close the reminder once you've followed through.",
+        "Reply to #{person} with the status of \"#{title}\", or close the reminder if it is already handled.",
       "priority" => priority_for(:dropped_commitment, days_overdue),
       "confidence" => 0.7,
       "attention_mode" => "act_now",
@@ -334,16 +353,23 @@ defmodule Maraithon.Proactive.LocalPatterns do
       "source_occurred_at" => reminder.due_at,
       "tracking_key" => tracking_key(:dropped_commitment, reminder.guid || reminder.id),
       "dedupe_key" => dedupe_key(:dropped_commitment, reminder.guid || reminder.id, now),
-      "metadata" => %{
-        "detector" => "dropped_commitment",
-        "reminder_guid" => reminder.guid,
-        "reminder_title" => title,
-        "days_overdue" => days_overdue,
-        "matching_message_guid" => match.message.guid,
-        "matching_person" => person
-      }
+      "metadata" =>
+        %{
+          "detector" => "dropped_commitment",
+          "reminder_guid" => reminder.guid,
+          "reminder_title" => title,
+          "days_overdue" => days_overdue,
+          "matching_message_guid" => match.message.guid,
+          "matching_message_excerpt" => snippet,
+          "matching_person" => person,
+          "crm_person_id" => Map.get(identity, :person_id),
+          "contact_source" => Map.get(identity, :source)
+        }
+        |> compact_map()
     }
   end
+
+  defp dropped_commitment_insight(_user_id, _now, %LocalReminder{}, _match), do: nil
 
   # ---------------------------------------------------------------------
   # 3. Untranscribed memo
@@ -544,8 +570,14 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
       Enum.flat_map(recent_files, fn file ->
         case match_file_in_messages(file, recent_messages) do
-          nil -> []
-          %{} = match -> [file_mention_insight(user_id, now, file, match)]
+          nil ->
+            []
+
+          %{} = match ->
+            case file_mention_insight(user_id, now, file, match) do
+              nil -> []
+              insight -> [insight]
+            end
         end
       end)
     end
@@ -588,35 +620,40 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   defp filename_base(_), do: ""
 
-  defp file_mention_insight(_user_id, now, %LocalFile{} = file, match) do
-    person = sender_label(match.message)
-    filename = file.filename || "the file"
+  defp file_mention_insight(user_id, now, %LocalFile{} = file, match) do
+    with %{display: person} = identity <- sender_identity_for(user_id, match.message) do
+      filename = file.filename || "the file"
 
-    %{
-      "source" => "local_patterns",
-      "category" => "commitment_unresolved",
-      "title" => "Did you send #{person} the file you mentioned?",
-      "summary" =>
-        "You created `#{filename}` recently and texted #{person} something that referenced it.",
-      "recommended_action" => "Check whether you actually sent #{filename} to #{person}.",
-      "priority" => 60,
-      "confidence" => 0.65,
-      "attention_mode" => "act_now",
-      "source_id" => file.guid || file.id,
-      "source_occurred_at" => file.created_at,
-      "tracking_key" =>
-        tracking_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}"),
-      "dedupe_key" =>
-        dedupe_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}", now),
-      "metadata" => %{
-        "detector" => "file_mention",
-        "file_guid" => file.guid,
-        "file_name" => filename,
-        "file_path" => file.path,
-        "message_guid" => match.message.guid,
-        "person" => person
+      %{
+        "source" => "local_patterns",
+        "category" => "commitment_unresolved",
+        "title" => "Did you send #{person} the file you mentioned?",
+        "summary" =>
+          "You created `#{filename}` recently and texted #{person} something that referenced it.",
+        "recommended_action" => "Check whether you actually sent #{filename} to #{person}.",
+        "priority" => 60,
+        "confidence" => 0.65,
+        "attention_mode" => "act_now",
+        "source_id" => file.guid || file.id,
+        "source_occurred_at" => file.created_at,
+        "tracking_key" =>
+          tracking_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}"),
+        "dedupe_key" =>
+          dedupe_key(:file_mention, "#{file.guid || file.id}:#{match.message.guid}", now),
+        "metadata" =>
+          %{
+            "detector" => "file_mention",
+            "file_guid" => file.guid,
+            "file_name" => filename,
+            "file_path" => file.path,
+            "message_guid" => match.message.guid,
+            "person" => person,
+            "crm_person_id" => Map.get(identity, :person_id),
+            "contact_source" => Map.get(identity, :source)
+          }
+          |> compact_map()
       }
-    }
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -835,6 +872,66 @@ defmodule Maraithon.Proactive.LocalPatterns do
     "Send #{labels.prose} a quick check-in message."
   end
 
+  defp sender_identity_for(user_id, %LocalMessage{} = message) do
+    identifiers = message_identifiers(message)
+
+    cond do
+      person = Enum.find_value(identifiers, &crm_person_for_identifier(user_id, &1)) ->
+        %{
+          display: person.display_name,
+          person_id: person.id,
+          relationship: normalize_optional_text(person.relationship),
+          source: "crm"
+        }
+
+      contact = Enum.find_value(identifiers, &local_contact_for_identifier(user_id, &1)) ->
+        %{
+          display: local_contact_display_name(contact),
+          person_id: contact.crm_person_id,
+          relationship: nil,
+          source: "apple_contacts"
+        }
+
+      display = usable_contact_label(message.chat_display_name) ->
+        %{display: display, person_id: nil, relationship: nil, source: "message_display_name"}
+
+      display = usable_contact_label(message.sender_handle) ->
+        %{display: display, person_id: nil, relationship: nil, source: "message_sender_handle"}
+
+      true ->
+        nil
+    end
+  end
+
+  defp sender_identity_for(_user_id, _message), do: nil
+
+  defp message_identifiers(%LocalMessage{} = message) do
+    [
+      message.sender_handle,
+      message.chat_key,
+      message.chat_display_name
+    ]
+    |> Enum.flat_map(fn
+      value when is_binary(value) -> String.split(value, ",")
+      _ -> []
+    end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&blank?/1)
+    |> Enum.uniq()
+  end
+
+  defp usable_contact_label(value) when is_binary(value) do
+    value = String.trim(value)
+
+    cond do
+      value == "" -> nil
+      raw_contact_identifier?(value) -> nil
+      true -> value
+    end
+  end
+
+  defp usable_contact_label(_value), do: nil
+
   defp chat_identity_for(user_id, chat_key) do
     person = crm_person_for_chat(user_id, chat_key)
 
@@ -919,35 +1016,123 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   defp crm_person_for_identifier(user_id, identifier) do
     with kind when kind in [:email, :phone] <- identifier_kind(identifier) do
-      identifier
-      |> identifier_search_values(kind)
-      |> Enum.find_value(fn search_value ->
-        pattern = "%#{search_value}%"
-        contact_key = crm_contact_key(kind)
+      query_match = crm_person_for_identifier_query(user_id, identifier, kind)
 
-        Repo.one(
-          from person in Person,
-            where:
-              person.user_id == ^user_id and person.status == "active" and
-                (fragment(
-                   "(? -> ?)::text ILIKE ?",
-                   person.contact_details,
-                   ^contact_key,
-                   ^pattern
-                 ) or
-                   fragment("?::text ILIKE ?", person.contact_details, ^pattern)),
-            order_by: [
-              desc: person.relationship_strength,
-              desc: person.affinity_score,
-              desc_nulls_last: person.last_interaction_at,
-              desc: person.updated_at
-            ],
-            limit: 1
-        )
-      end)
+      case {kind, query_match} do
+        {:phone, nil} -> crm_person_for_phone_scan(user_id, identifier)
+        {_kind, person} -> person
+      end
     else
       _ -> nil
     end
+  end
+
+  defp crm_person_for_identifier_query(user_id, identifier, kind) do
+    identifier
+    |> identifier_search_values(kind)
+    |> Enum.find_value(fn search_value ->
+      pattern = "%#{search_value}%"
+      contact_key = crm_contact_key(kind)
+
+      Repo.one(
+        from person in Person,
+          where:
+            person.user_id == ^user_id and person.status == "active" and
+              (fragment(
+                 "(? -> ?)::text ILIKE ?",
+                 person.contact_details,
+                 ^contact_key,
+                 ^pattern
+               ) or
+                 fragment("?::text ILIKE ?", person.contact_details, ^pattern)),
+          order_by: [
+            desc: person.relationship_strength,
+            desc: person.affinity_score,
+            desc_nulls_last: person.last_interaction_at,
+            desc: person.updated_at
+          ],
+          limit: 1
+      )
+    end)
+  end
+
+  defp crm_person_for_phone_scan(user_id, identifier) do
+    Person
+    |> where([person], person.user_id == ^user_id and person.status == "active")
+    |> order_by([person],
+      desc: person.relationship_strength,
+      desc: person.affinity_score,
+      desc_nulls_last: person.last_interaction_at,
+      desc: person.updated_at
+    )
+    |> limit(300)
+    |> Repo.all()
+    |> Enum.find(&person_has_phone?(&1, identifier))
+  end
+
+  defp person_has_phone?(%Person{contact_details: contact_details}, identifier)
+       when is_map(contact_details) do
+    contact_details
+    |> Map.get("phones", [])
+    |> List.wrap()
+    |> Enum.any?(&same_phone?(&1, identifier))
+  end
+
+  defp person_has_phone?(_person, _identifier), do: false
+
+  defp local_contact_for_identifier(user_id, identifier) do
+    case identifier_kind(identifier) do
+      :email -> local_contact_for_email(user_id, identifier)
+      :phone -> local_contact_for_phone(user_id, identifier)
+      _ -> nil
+    end
+  end
+
+  defp local_contact_for_email(user_id, identifier) do
+    email = String.downcase(String.trim(identifier))
+    pattern = "%#{email}%"
+
+    LocalContact
+    |> where([contact], contact.user_id == ^user_id)
+    |> where([contact], fragment("?::text ILIKE ?", contact.emails, ^pattern))
+    |> order_by([contact], desc: contact.updated_at)
+    |> limit(1)
+    |> Repo.one()
+    |> usable_local_contact()
+  end
+
+  defp local_contact_for_phone(user_id, identifier) do
+    LocalContact
+    |> where([contact], contact.user_id == ^user_id)
+    |> order_by([contact], desc: contact.updated_at)
+    |> limit(500)
+    |> Repo.all()
+    |> Enum.find(fn contact ->
+      contact
+      |> Map.get(:phones, [])
+      |> List.wrap()
+      |> Enum.any?(&same_phone?(&1, identifier))
+    end)
+    |> usable_local_contact()
+  end
+
+  defp usable_local_contact(%LocalContact{} = contact) do
+    case local_contact_display_name(contact) do
+      name when is_binary(name) -> contact
+      _ -> nil
+    end
+  end
+
+  defp usable_local_contact(_contact), do: nil
+
+  defp local_contact_display_name(%LocalContact{} = contact) do
+    [
+      contact.display_name,
+      [contact.first_name, contact.last_name] |> Enum.reject(&blank?/1) |> Enum.join(" "),
+      contact.nickname,
+      contact.organization_name
+    ]
+    |> Enum.find_value(&usable_contact_label/1)
   end
 
   defp identifier_kind(identifier) when is_binary(identifier) do
@@ -959,6 +1144,12 @@ defmodule Maraithon.Proactive.LocalPatterns do
   end
 
   defp identifier_kind(_identifier), do: nil
+
+  defp raw_contact_identifier?(value) when is_binary(value) do
+    String.contains?(value, "@") or phone_identifier?(value)
+  end
+
+  defp raw_contact_identifier?(_value), do: false
 
   defp identifier_search_values(identifier, :email) do
     identifier
@@ -987,6 +1178,27 @@ defmodule Maraithon.Proactive.LocalPatterns do
 
   defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D/u, "")
   defp phone_digits(_value), do: ""
+
+  defp same_phone?(left, right) when is_binary(left) and is_binary(right) do
+    left_digits = phone_digits(left)
+    right_digits = phone_digits(right)
+
+    cond do
+      byte_size(left_digits) < 7 or byte_size(right_digits) < 7 ->
+        false
+
+      left_digits == right_digits ->
+        true
+
+      byte_size(left_digits) >= 10 and byte_size(right_digits) >= 10 ->
+        String.slice(left_digits, -10, 10) == String.slice(right_digits, -10, 10)
+
+      true ->
+        false
+    end
+  end
+
+  defp same_phone?(_left, _right), do: false
 
   defp phone_suffix(value) do
     value
@@ -1028,16 +1240,6 @@ defmodule Maraithon.Proactive.LocalPatterns do
         end
     end
   end
-
-  defp sender_label(%LocalMessage{sender_handle: handle, chat_display_name: display}) do
-    cond do
-      is_binary(display) and display != "" -> display
-      is_binary(handle) and handle != "" -> handle
-      true -> "them"
-    end
-  end
-
-  defp sender_label(_), do: "them"
 
   defp normalize_optional_text(value) when is_binary(value) do
     value = String.trim(value)

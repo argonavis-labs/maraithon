@@ -5,6 +5,7 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
   alias Maraithon.Agents
   alias Maraithon.Insights
   alias Maraithon.LocalCalendar
+  alias Maraithon.LocalContacts
   alias Maraithon.LocalFiles
   alias Maraithon.LocalMessages
   alias Maraithon.LocalNotes
@@ -266,6 +267,91 @@ defmodule Maraithon.Proactive.LocalPatternsTest do
       assert insight.metadata["detector"] == "dropped_commitment"
       assert insight.metadata["reminder_guid"] == "rem-1"
       assert insight.metadata["days_overdue"] >= 0
+      assert insight.title == "Close loop with Alex: Send investor deck to Alex"
+      assert insight.recommended_action =~ "Reply to Alex"
+    end
+
+    test "does not emit raw phone-number dropped commitments without a contact" do
+      user_id = unique_user!()
+      agent = system_agent!(user_id)
+      now = DateTime.utc_now()
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-phone-only",
+            "sender_handle" => "+16476998084",
+            "chat_handles" => ["+16476998084"],
+            "chat_display_name" => "+16476998084",
+            "is_from_me" => false,
+            "text" => "please turn on email capture across the board after tests",
+            "sent_at" => iso(seconds_ago(now, 2 * 86_400))
+          }
+        ])
+
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "rem-phone-only",
+            "title" => "Turn on email capture across the board after tests",
+            "due_at" => iso(seconds_ago(now, 37 * 86_400)),
+            "is_completed" => false
+          }
+        ])
+
+      open = emit_and_fetch(:dropped_commitment, user_id, agent.id, now)
+      assert open == []
+    end
+
+    test "uses synced Apple contact names for raw message phone handles" do
+      user_id = unique_user!()
+      agent = system_agent!(user_id)
+      now = DateTime.utc_now()
+      device_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        LocalContacts.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "contact-jamie",
+            "display_name" => "Jamie Lee",
+            "phones" => ["(647) 699-8084"]
+          }
+        ])
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-phone-contact",
+            "sender_handle" => "+16476998084",
+            "chat_handles" => ["+16476998084"],
+            "chat_display_name" => "+16476998084",
+            "is_from_me" => false,
+            "text" => "please turn on email capture across the board after tests",
+            "sent_at" => iso(seconds_ago(now, 2 * 86_400))
+          }
+        ])
+
+      {:ok, _} =
+        LocalReminders.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "rem-phone-contact",
+            "title" => "Turn on email capture across the board after tests",
+            "due_at" => iso(seconds_ago(now, 37 * 86_400)),
+            "is_completed" => false
+          }
+        ])
+
+      open = emit_and_fetch(:dropped_commitment, user_id, agent.id, now)
+      assert [insight] = open
+
+      assert insight.title ==
+               "Close loop with Jamie Lee: Turn on email capture across the board after tests"
+
+      assert insight.summary =~ "recent message from Jamie Lee"
+      assert insight.recommended_action =~ "Reply to Jamie Lee"
+      refute insight.summary =~ "+16476998084"
+      refute insight.recommended_action =~ "+16476998084"
     end
 
     test "does not emit when the reminder doesn't match any message" do
