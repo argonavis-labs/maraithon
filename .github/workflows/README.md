@@ -4,7 +4,7 @@
 Push to `main` → deploys the Phoenix backend to Fly.
 
 ## `mobile-release.yml`
-- Push to `main` → builds the iOS app and uploads to TestFlight, then attaches it to the **Staging** and **Internal Testers** beta groups.
+- Push to `main` → builds the iOS app and uploads to TestFlight, then attaches it to **Internal Testers**. If a **Staging** beta group exists, CI attaches the build there too.
 - Tag `v*` (e.g. `v1.0.4`) → builds and uploads to TestFlight, then attaches to the **Internal Testers** (production) beta group.
 - Manual `workflow_dispatch` → choose `staging` or `production`.
 
@@ -24,10 +24,10 @@ The runner is `macos-latest`. The workflow expects Xcode 26 to be selectable; Gi
 
 The workflow looks up beta groups by display name via the ASC API. Make sure both groups exist on the Maraithon app:
 
-- `Internal Testers` — internal track, populated by every mobile build. Must include `kent.fenwick@gmail.com`.
-- `Staging` — staging track, populated by every push to `main`.
+- `Internal Testers` — required internal track, populated by every mobile build. Must include `kent.fenwick@gmail.com`.
+- `Staging` — optional staging track, populated by every push to `main` when the group exists.
 
-Create them under TestFlight → Internal Testing in App Store Connect. The groups must be on the **same app record** (Maraithon, ASC app ID `6773374784`).
+Create them under TestFlight → Internal Testing in App Store Connect. The groups must be on the **same app record** (Maraithon, ASC app ID `6773374784`). A missing **Internal Testers** group fails CI; a missing **Staging** group is skipped.
 
 ### Local equivalents
 

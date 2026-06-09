@@ -97,8 +97,10 @@ jobs:
           set -euo pipefail
           if [ "$MOBILE_ENV" = "production" ]; then
             echo "names=Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "optional_names=" >> "$GITHUB_OUTPUT"
           else
-            echo "names=Staging,Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "names=Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "optional_names=Staging" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Read app version
@@ -114,6 +116,7 @@ jobs:
           ASC_VERSION_STRING: ${{ steps.app_version.outputs.version }}
           ASC_BUILD_NUMBER: ${{ env.MARAITHON_MOBILE_BUILD_NUMBER }}
           TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.names }}
+          OPTIONAL_TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.optional_names }}
           REQUIRED_INTERNAL_TESTER_EMAILS: kent.fenwick@gmail.com
         run: node scripts/ci/assign-testflight-group.mjs
 
@@ -126,6 +129,7 @@ jobs:
             echo "- Version: \`${{ steps.app_version.outputs.version }}\`"
             echo "- Build: \`${MARAITHON_MOBILE_BUILD_NUMBER}\`"
             echo "- TestFlight groups: \`${{ steps.tf_groups.outputs.names }}\`"
+            echo "- Optional TestFlight groups: \`${{ steps.tf_groups.outputs.optional_names }}\`"
             echo "- Required internal tester: \`kent.fenwick@gmail.com\`"
             echo "- Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -10,10 +10,12 @@
 //   ASC_VERSION_STRING      Marketing version (e.g. "1.0")
 //   ASC_BUILD_NUMBER        Build number to match (e.g. "202606090100")
 //   TESTFLIGHT_GROUP_NAMES  Comma-separated beta group display names
-//                           (e.g. "Staging,Internal Testers")
+//                           (e.g. "Internal Testers")
 //                           TESTFLIGHT_GROUP_NAME is accepted as a legacy fallback.
 //
 // Optional env:
+//   OPTIONAL_TESTFLIGHT_GROUP_NAMES  Comma-separated beta groups to attach when
+//                                    they exist. Missing optional groups are skipped.
 //   REQUIRED_INTERNAL_TESTER_EMAILS  Comma-separated emails that must be present
 //                                    in the Internal Testers group.
 //
@@ -46,6 +48,7 @@ const BUILD_NUMBER = process.env.ASC_BUILD_NUMBER;
 const GROUP_NAMES = parseList(
   process.env.TESTFLIGHT_GROUP_NAMES || process.env.TESTFLIGHT_GROUP_NAME
 );
+const OPTIONAL_GROUP_NAMES = parseList(process.env.OPTIONAL_TESTFLIGHT_GROUP_NAMES);
 const REQUIRED_INTERNAL_TESTER_EMAILS = parseList(
   process.env.REQUIRED_INTERNAL_TESTER_EMAILS
 ).map((email) => email.toLowerCase());
@@ -57,6 +60,13 @@ if (GROUP_NAMES.length === 0) {
   console.error('Missing required env: TESTFLIGHT_GROUP_NAMES');
   process.exit(1);
 }
+
+const GROUP_REQUESTS = [
+  ...GROUP_NAMES.map((name) => ({ name, required: true })),
+  ...OPTIONAL_GROUP_NAMES.filter((name) => !GROUP_NAMES.includes(name)).map(
+    (name) => ({ name, required: false })
+  ),
+];
 
 function parseList(value) {
   return [
@@ -138,7 +148,7 @@ async function findBuild() {
   return data?.data?.[0] || null;
 }
 
-async function findGroup(groupName) {
+async function findGroup(groupName, required = true) {
   const params = new URLSearchParams({
     'filter[app]': APP_ID,
     'filter[name]': groupName,
@@ -147,6 +157,10 @@ async function findGroup(groupName) {
   const data = await asc(`/v1/betaGroups?${params}`);
   const group = data?.data?.[0];
   if (!group) {
+    if (!required) {
+      console.log(`Optional beta group "${groupName}" was not found; skipping`);
+      return null;
+    }
     throw new Error(`No beta group named "${groupName}" found on app ${APP_ID}`);
   }
   return group;
@@ -230,14 +244,16 @@ async function waitForProcessed() {
 
 async function main() {
   console.log(
-    `Attaching build ${VERSION} (${BUILD_NUMBER}) to ${GROUP_NAMES.map((name) => `"${name}"`).join(', ')}`
+    `Attaching build ${VERSION} (${BUILD_NUMBER}) to ${GROUP_REQUESTS.map((group) => group.required ? `"${group.name}"` : `"${group.name}" (optional)`).join(', ')}`
   );
   const [build, groups] = await Promise.all([
     waitForProcessed(),
-    Promise.all(GROUP_NAMES.map((name) => findGroup(name))),
+    Promise.all(
+      GROUP_REQUESTS.map((group) => findGroup(group.name, group.required))
+    ),
   ]);
 
-  for (const group of groups) {
+  for (const group of groups.filter(Boolean)) {
     await verifyRequiredInternalTesters(group);
     const result = await attachBuild(group.id, build.id);
     if (result === 'already-attached') {
