@@ -16,8 +16,10 @@
 // Optional env:
 //   OPTIONAL_TESTFLIGHT_GROUP_NAMES  Comma-separated beta groups to attach when
 //                                    they exist. Missing optional groups are skipped.
-//   REQUIRED_INTERNAL_TESTER_EMAILS  Comma-separated emails that must be present
-//                                    in the Internal Testers group.
+//   REQUIRED_TESTER_EMAILS           Comma-separated emails that must be present
+//                                    in every required TestFlight group.
+//                                    REQUIRED_INTERNAL_TESTER_EMAILS is accepted
+//                                    as a legacy fallback.
 //
 // Polls until the build is processed, then attaches it to the group.
 
@@ -49,8 +51,8 @@ const GROUP_NAMES = parseList(
   process.env.TESTFLIGHT_GROUP_NAMES || process.env.TESTFLIGHT_GROUP_NAME
 );
 const OPTIONAL_GROUP_NAMES = parseList(process.env.OPTIONAL_TESTFLIGHT_GROUP_NAMES);
-const REQUIRED_INTERNAL_TESTER_EMAILS = parseList(
-  process.env.REQUIRED_INTERNAL_TESTER_EMAILS
+const REQUIRED_TESTER_EMAILS = parseList(
+  process.env.REQUIRED_TESTER_EMAILS || process.env.REQUIRED_INTERNAL_TESTER_EMAILS
 ).map((email) => email.toLowerCase());
 
 const POLL_INTERVAL_SECONDS = Number(process.env.ASC_POLL_INTERVAL_SECONDS || 60);
@@ -152,6 +154,7 @@ async function findGroup(groupName, required = true) {
   const params = new URLSearchParams({
     'filter[app]': APP_ID,
     'filter[name]': groupName,
+    'fields[betaGroups]': 'name,isInternalGroup,hasAccessToAllBuilds',
     limit: '1',
   });
   const data = await asc(`/v1/betaGroups?${params}`);
@@ -189,11 +192,8 @@ async function listBetaTestersForGroup(groupId) {
   return testers;
 }
 
-async function verifyRequiredInternalTesters(group) {
-  if (
-    group.attributes?.name !== 'Internal Testers' ||
-    REQUIRED_INTERNAL_TESTER_EMAILS.length === 0
-  ) {
+async function verifyRequiredTesters(group, required) {
+  if (!required || REQUIRED_TESTER_EMAILS.length === 0) {
     return;
   }
 
@@ -203,20 +203,18 @@ async function verifyRequiredInternalTesters(group) {
       .map((tester) => tester.attributes?.email?.toLowerCase())
       .filter(Boolean)
   );
-  const missing = REQUIRED_INTERNAL_TESTER_EMAILS.filter(
-    (email) => !presentEmails.has(email)
-  );
+  const missing = REQUIRED_TESTER_EMAILS.filter((email) => !presentEmails.has(email));
 
   if (missing.length > 0) {
     throw new Error(
-      `Internal Testers is missing required tester email(s): ${missing.join(
+      `Required TestFlight group "${group.attributes.name}" is missing tester email(s): ${missing.join(
         ', '
-      )}. Add them in App Store Connect → TestFlight → Internal Testing → Internal Testers.`
+      )}. Add them in App Store Connect → TestFlight → Internal Testing.`
     );
   }
 
   console.log(
-    `Verified Internal Testers includes ${REQUIRED_INTERNAL_TESTER_EMAILS.join(', ')}`
+    `Verified "${group.attributes.name}" includes ${REQUIRED_TESTER_EMAILS.join(', ')}`
   );
 }
 
@@ -254,7 +252,16 @@ async function main() {
   ]);
 
   for (const group of groups.filter(Boolean)) {
-    await verifyRequiredInternalTesters(group);
+    const request = GROUP_REQUESTS.find((item) => item.name === group.attributes.name);
+    const required = request?.required ?? true;
+    await verifyRequiredTesters(group, required);
+    if (group.attributes?.hasAccessToAllBuilds) {
+      console.log(
+        `Group ${group.id} ("${group.attributes.name}") already has access to all builds`
+      );
+      continue;
+    }
+
     const result = await attachBuild(group.id, build.id);
     if (result === 'already-attached') {
       console.log(

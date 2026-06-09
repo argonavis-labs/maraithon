@@ -82,7 +82,7 @@ jobs:
         working-directory: apps/mobile
         run: |
           set -euo pipefail
-          BUILD_NUMBER="$(date -u +%Y%m%d)${GITHUB_RUN_NUMBER}"
+          BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
           echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Build and upload to TestFlight
@@ -96,10 +96,10 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$MOBILE_ENV" = "production" ]; then
-            echo "names=Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "names=Founders" >> "$GITHUB_OUTPUT"
             echo "optional_names=" >> "$GITHUB_OUTPUT"
           else
-            echo "names=Internal Testers" >> "$GITHUB_OUTPUT"
+            echo "names=Founders" >> "$GITHUB_OUTPUT"
             echo "optional_names=Staging" >> "$GITHUB_OUTPUT"
           fi
 
@@ -108,16 +108,18 @@ jobs:
         working-directory: apps/mobile
         run: |
           VERSION="$(awk '/MARKETING_VERSION:/ {print $2; exit}' project.yml)"
+          BUILD="$(awk '/CURRENT_PROJECT_VERSION:/ {print $2; exit}' project.yml)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "build=${BUILD}" >> "$GITHUB_OUTPUT"
 
       - name: Assign build to TestFlight group
         env:
           ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
           ASC_VERSION_STRING: ${{ steps.app_version.outputs.version }}
-          ASC_BUILD_NUMBER: ${{ env.MARAITHON_MOBILE_BUILD_NUMBER }}
+          ASC_BUILD_NUMBER: ${{ steps.app_version.outputs.build }}
           TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.names }}
           OPTIONAL_TESTFLIGHT_GROUP_NAMES: ${{ steps.tf_groups.outputs.optional_names }}
-          REQUIRED_INTERNAL_TESTER_EMAILS: kent.fenwick@gmail.com
+          REQUIRED_TESTER_EMAILS: kent.fenwick@gmail.com
         run: node scripts/ci/assign-testflight-group.mjs
 
       - name: Publish summary
@@ -127,9 +129,9 @@ jobs:
             echo ""
             echo "- Environment: \`${MOBILE_ENV}\`"
             echo "- Version: \`${{ steps.app_version.outputs.version }}\`"
-            echo "- Build: \`${MARAITHON_MOBILE_BUILD_NUMBER}\`"
+            echo "- Build: \`${{ steps.app_version.outputs.build }}\`"
             echo "- TestFlight groups: \`${{ steps.tf_groups.outputs.names }}\`"
             echo "- Optional TestFlight groups: \`${{ steps.tf_groups.outputs.optional_names }}\`"
-            echo "- Required internal tester: \`kent.fenwick@gmail.com\`"
+            echo "- Required tester: \`kent.fenwick@gmail.com\`"
             echo "- Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
