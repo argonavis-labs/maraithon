@@ -1,15 +1,75 @@
 defmodule MaraithonWeb.SettingsController do
   use MaraithonWeb, :controller
 
+  alias Maraithon.Accounts
+  alias Maraithon.CalendarLinks
+
   def index(conn, _params) do
-    render(conn, :index,
-      page_title: "Settings",
-      current_path: ~p"/settings",
-      current_user: conn.assigns.current_user,
-      runtime_items: runtime_items(),
-      security_items: security_items(),
-      oauth_items: oauth_items()
+    render_settings(conn)
+  end
+
+  def update_calendar_links(conn, %{"calendar_links" => %{"links" => links}}) do
+    case settings_user(conn) do
+      %{id: user_id} ->
+        case CalendarLinks.replace_user_links(user_id, links) do
+          {:ok, _links} ->
+            conn
+            |> put_flash(:info, "Calendar links saved.")
+            |> redirect(to: ~p"/settings#calendar-links")
+
+          {:error, reason} ->
+            conn
+            |> put_flash(:error, CalendarLinks.changeset_error_message(reason))
+            |> render_settings(calendar_link_rows: CalendarLinks.settings_rows_from_params(links))
+        end
+
+      nil ->
+        conn
+        |> put_flash(:error, "Sign in as a workspace user before saving calendar links.")
+        |> redirect(to: ~p"/settings#calendar-links")
+    end
+  end
+
+  def update_calendar_links(conn, _params) do
+    conn
+    |> put_flash(:error, "Calendar links could not be saved.")
+    |> redirect(to: ~p"/settings#calendar-links")
+  end
+
+  defp render_settings(conn, extra_assigns \\ []) do
+    current_user = conn.assigns.current_user
+    settings_user = settings_user(conn)
+
+    render(
+      conn,
+      :index,
+      [
+        page_title: "Settings",
+        current_path: ~p"/settings",
+        current_user: current_user,
+        runtime_items: runtime_items(),
+        security_items: security_items(),
+        oauth_items: oauth_items(),
+        settings_user: settings_user,
+        calendar_link_rows:
+          Keyword.get_lazy(extra_assigns, :calendar_link_rows, fn ->
+            if settings_user do
+              CalendarLinks.settings_rows(settings_user.id)
+            else
+              []
+            end
+          end)
+      ] ++ extra_assigns
     )
+  end
+
+  defp settings_user(conn), do: conn.assigns[:current_user] || primary_admin_user()
+
+  defp primary_admin_user do
+    case Accounts.primary_admin_email() do
+      nil -> nil
+      email -> Accounts.get_user_by_email(email)
+    end
   end
 
   defp runtime_items do

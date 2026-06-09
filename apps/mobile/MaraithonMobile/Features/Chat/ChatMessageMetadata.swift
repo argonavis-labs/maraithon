@@ -2,15 +2,211 @@ import Foundation
 
 struct ChatMessageStoredMetadata: Codable, Equatable, Sendable {
     var actions: [ChatMessageAction] = []
+    var draftCard: ChatDraftCard?
     var linkedTodo: JSONValue?
     var workSummary: ChatWorkSummary?
     var structuredData: [String: JSONValue] = [:]
 
     enum CodingKeys: String, CodingKey {
         case actions
+        case draftCard = "draft_card"
         case linkedTodo = "linked_todo"
         case workSummary = "work_summary"
         case structuredData = "structured_data"
+    }
+}
+
+struct ChatDraftCard: Codable, Equatable, Sendable {
+    var provider: String
+    var title: String
+    var status: String?
+    var from: String?
+    var recipient: String?
+    var cc: String?
+    var bcc: String?
+    var workspace: String?
+    var subject: String?
+    var body: String?
+    var draftID: String?
+    var preparedActionID: UUID?
+    var sendLabel: String?
+    var openLabel: String?
+    var openURL: URL?
+
+    enum CodingKeys: String, CodingKey {
+        case provider
+        case title
+        case status
+        case from
+        case recipient
+        case cc
+        case bcc
+        case workspace
+        case subject
+        case body
+        case draftID = "draft_id"
+        case preparedActionID = "prepared_action_id"
+        case sendLabel = "send_label"
+        case openLabel = "open_label"
+        case openURL = "open_url"
+    }
+
+    init?(_ value: JSONValue?) {
+        guard let object = value?.object,
+              let provider = Self.clean(object["provider"]?.string),
+              let title = Self.clean(object["title"]?.string)
+        else {
+            return nil
+        }
+
+        self.provider = provider
+        self.title = title
+        status = Self.clean(object["status"]?.string)
+        from = Self.displayClean(object["from"]?.string)
+        recipient = Self.displayClean(object["recipient"]?.string)
+        cc = Self.displayClean(object["cc"]?.string)
+        bcc = Self.displayClean(object["bcc"]?.string)
+        workspace = Self.displayClean(object["workspace"]?.string)
+        subject = Self.clean(object["subject"]?.string)
+        body = Self.clean(object["body"]?.string)
+        draftID = Self.clean(object["draft_id"]?.string)
+        sendLabel = Self.clean(object["send_label"]?.string)
+        openLabel = Self.clean(object["open_label"]?.string)
+
+        if let idText = Self.clean(object["prepared_action_id"]?.string) {
+            preparedActionID = UUID(uuidString: idText)
+        }
+
+        if let urlText = Self.clean(object["open_url"]?.string) {
+            openURL = URL(string: urlText)
+        }
+    }
+
+    init(
+        provider: String,
+        title: String,
+        status: String? = nil,
+        from: String? = nil,
+        recipient: String? = nil,
+        cc: String? = nil,
+        bcc: String? = nil,
+        workspace: String? = nil,
+        subject: String? = nil,
+        body: String? = nil,
+        draftID: String? = nil,
+        preparedActionID: UUID? = nil,
+        sendLabel: String? = nil,
+        openLabel: String? = nil,
+        openURL: URL? = nil
+    ) {
+        self.provider = provider
+        self.title = title
+        self.status = status
+        self.from = Self.displayClean(from)
+        self.recipient = Self.displayClean(recipient)
+        self.cc = Self.displayClean(cc)
+        self.bcc = Self.displayClean(bcc)
+        self.workspace = Self.displayClean(workspace)
+        self.subject = subject
+        self.body = body
+        self.draftID = draftID
+        self.preparedActionID = preparedActionID
+        self.sendLabel = sendLabel
+        self.openLabel = openLabel
+        self.openURL = openURL
+    }
+
+    var providerKey: String {
+        provider.lowercased()
+    }
+
+    var primaryAction: ChatMessageAction? {
+        guard let preparedActionID else { return nil }
+        return ChatMessageAction(
+            actionID: preparedActionID,
+            kind: "prepared_action_decision",
+            label: sendLabel ?? "Send",
+            decisionRawValue: ChatActionDecision.confirm.rawValue,
+            style: "primary"
+        )
+    }
+
+    var hasAction: Bool {
+        primaryAction != nil || openURL != nil
+    }
+
+    private static func clean(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func displayClean(_ value: String?) -> String? {
+        guard let cleaned = clean(value) else { return nil }
+
+        if let email = prefixedEmail(in: cleaned) {
+            return email
+        }
+
+        let lowercased = cleaned.lowercased()
+
+        if ["imessage", "message", "messages", "sms"].contains(lowercased) {
+            return "Messages"
+        }
+
+        if lowercased == "whatsapp" {
+            return "WhatsApp"
+        }
+
+        if ["google", "gmail", "email"].contains(lowercased) {
+            return nil
+        }
+
+        if lowercased.hasPrefix("slack:") ||
+            lowercased.hasPrefix("whatsapp:") ||
+            lowercased.hasPrefix("google:") ||
+            lowercased.hasPrefix("gmail:") ||
+            lowercased.hasPrefix("email:")
+        {
+            return nil
+        }
+
+        if isIdentifierLike(cleaned) {
+            return nil
+        }
+
+        return cleaned
+    }
+
+    private static func prefixedEmail(in value: String) -> String? {
+        let lowercased = value.lowercased()
+
+        for prefix in ["google:", "gmail:", "email:"] where lowercased.hasPrefix(prefix) {
+            let rest = String(value.dropFirst(prefix.count))
+            return emailAddress(in: rest)
+        }
+
+        return nil
+    }
+
+    private static func emailAddress(in value: String) -> String? {
+        let pattern = #"[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}"#
+
+        guard let range = value.range(
+            of: pattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) else {
+            return nil
+        }
+
+        return String(value[range]).lowercased()
+    }
+
+    private static func isIdentifierLike(_ value: String) -> Bool {
+        if value.range(of: #"^[A-Z][A-Z0-9]{6,}$"#, options: .regularExpression) != nil {
+            return true
+        }
+
+        return value.range(of: #"^[-_a-z0-9]{18,}$"#, options: [.regularExpression, .caseInsensitive]) != nil
     }
 }
 
@@ -800,6 +996,7 @@ struct ChatMessageAction: Codable, Equatable, Identifiable, Sendable {
     let label: String
     let decisionRawValue: String
     let style: String
+    let draftEdits: [String: JSONValue]?
 
     var id: String {
         "\(actionID.uuidString)-\(decisionRawValue)"
@@ -809,11 +1006,39 @@ struct ChatMessageAction: Codable, Equatable, Identifiable, Sendable {
         ChatActionDecision(rawValue: decisionRawValue)
     }
 
+    init(
+        actionID: UUID,
+        kind: String,
+        label: String,
+        decisionRawValue: String,
+        style: String,
+        draftEdits: [String: JSONValue]? = nil
+    ) {
+        self.actionID = actionID
+        self.kind = kind
+        self.label = label
+        self.decisionRawValue = decisionRawValue
+        self.style = style
+        self.draftEdits = draftEdits
+    }
+
     enum CodingKeys: String, CodingKey {
         case actionID = "id"
         case kind
         case label
         case decisionRawValue = "decision"
         case style
+        case draftEdits = "draft_edits"
+    }
+
+    func withDraftEdits(_ draftEdits: [String: JSONValue]) -> ChatMessageAction {
+        ChatMessageAction(
+            actionID: actionID,
+            kind: kind,
+            label: label,
+            decisionRawValue: decisionRawValue,
+            style: style,
+            draftEdits: draftEdits
+        )
     }
 }

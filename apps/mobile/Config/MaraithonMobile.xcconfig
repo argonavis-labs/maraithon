@@ -1,1 +1,1 @@
-MARAITHON_MOBILE_API_BASE_URL = https:/$()/maraithon.com/api/mobile
+MARAITHON_MOBILE_API_BASE_URL = https:/$()/maraithon.fly.dev/api/mobile

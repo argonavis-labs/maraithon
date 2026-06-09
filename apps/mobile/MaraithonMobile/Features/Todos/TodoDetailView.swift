@@ -123,7 +123,7 @@ struct TodoDetailView: View {
                 id: "todo-draft-reply",
                 title: "Draft reply",
                 subtitle: "Prepare the message.",
-                message: "Draft the best reply or outbound message for this selected work item. If it is ready to send by email or Slack, prepare the action for my approval.",
+                message: "Create the real connected draft for this selected work item. If it is Gmail or email, save a Gmail draft and prepare the saved draft for my approval. If it is Slack, prepare the Slack message for my approval. If it is iMessage or Messages, use the drafted wording and open Messages with the recipient and body instead of pretending to send from the server.",
                 systemImage: "square.and.pencil",
                 tint: .indigo
             ),
@@ -131,7 +131,7 @@ struct TodoDetailView: View {
                 id: "todo-take-action",
                 title: "Take action",
                 subtitle: "Draft and prepare.",
-                message: "Help me take action on this selected work item. Draft the email or Slack message and prepare it for my approval if you have enough context.",
+                message: "Help me take action on this selected work item. Create the real provider draft or prepared send action: saved Gmail draft for email, Slack prepared message for Slack, or Messages opener for iMessage. If you have enough context, make it ready for me to send.",
                 systemImage: "paperplane",
                 tint: .purple
             ),

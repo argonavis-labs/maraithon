@@ -203,7 +203,8 @@ struct TodoEditorView: View {
             priority: priority,
             dueDate: hasDueDate ? dueDate : nil,
             isCompleted: todo?.isCompleted ?? false,
-            nextAction: nextAction
+            nextAction: nextAction,
+            relatedPersonID: selectedContactID
         )
 
         do {

@@ -102,6 +102,7 @@ defmodule MaraithonWeb.Router do
     get "/admin", AdminPageController, :index
     get "/admin/companion-devices", AdminPageController, :companion_devices
     get "/settings", SettingsController, :index
+    post "/settings/calendar-links", SettingsController, :update_calendar_links
   end
 
   scope "/", MaraithonWeb do
@@ -216,6 +217,7 @@ defmodule MaraithonWeb.Router do
     post "/voice-memos", CompanionController, :ingest_voice_memos
     post "/calendar-events", CompanionController, :ingest_calendar_events
     post "/reminders", CompanionController, :ingest_reminders
+    post "/contacts", CompanionController, :ingest_contacts
     post "/files", CompanionController, :ingest_files
     post "/browser-history", CompanionController, :ingest_browser_history
     post "/recall", CompanionController, :recall

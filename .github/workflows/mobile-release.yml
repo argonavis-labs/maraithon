@@ -1,0 +1,137 @@
+name: Mobile Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_environment:
+        description: "Which TestFlight track to publish"
+        required: true
+        default: staging
+        type: choice
+        options:
+          - staging
+          - production
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build & Upload to TestFlight
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      MOBILE_ENV: ${{ github.event_name == 'workflow_dispatch' && inputs.release_environment || (startsWith(github.ref, 'refs/tags/v') && 'production') || 'staging' }}
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      ASC_APP_ID: '6773374784'
+      APPLE_TEAM_ID: PS5W7BFTQ2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # We only build the iOS app; subtree only.
+          sparse-checkout: |
+            apps/mobile
+            scripts/ci
+            Makefile
+          fetch-depth: 1
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.0.app
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      - name: Materialize App Store Connect API key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Materialize signing assets
+        env:
+          DIST_CERT_P12: ${{ secrets.IOS_DISTRIBUTION_CERT_P12 }}
+          DIST_CERT_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERT_PASSWORD }}
+          PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/maraithon-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"' | tr -d ' ')
+
+          CERT_PATH="$RUNNER_TEMP/dist-cert.p12"
+          printf '%s' "$DIST_CERT_P12" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" -P "$DIST_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          PROFILE_PATH="$PROFILE_DIR/maraithon-mobile.mobileprovision"
+          printf '%s' "$PROVISIONING_PROFILE" | base64 --decode > "$PROFILE_PATH"
+
+      - name: Set build number from GitHub run
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          BUILD_NUMBER="$(date -u +%Y%m%d)${GITHUB_RUN_NUMBER}"
+          echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
+
+      - name: Build and upload to TestFlight
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+        run: make testflight-mobile
+
+      - name: Resolve TestFlight group name
+        id: tf_group
+        run: |
+          set -euo pipefail
+          if [ "$MOBILE_ENV" = "production" ]; then
+            echo "name=Internal Testers" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=Staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read app version
+        id: app_version
+        working-directory: apps/mobile
+        run: |
+          VERSION="$(awk '/MARKETING_VERSION:/ {print $2; exit}' project.yml)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Assign build to TestFlight group
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          ASC_VERSION_STRING: ${{ steps.app_version.outputs.version }}
+          ASC_BUILD_NUMBER: ${{ env.MARAITHON_MOBILE_BUILD_NUMBER }}
+          TESTFLIGHT_GROUP_NAME: ${{ steps.tf_group.outputs.name }}
+        run: node scripts/ci/assign-testflight-group.mjs
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## Mobile Release"
+            echo ""
+            echo "- Environment: \`${MOBILE_ENV}\`"
+            echo "- Version: \`${{ steps.app_version.outputs.version }}\`"
+            echo "- Build: \`${MARAITHON_MOBILE_BUILD_NUMBER}\`"
+            echo "- TestFlight group: \`${{ steps.tf_group.outputs.name }}\`"
+            echo "- Trigger: \`${{ github.event_name }}\` on \`${{ github.ref }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -54,6 +54,69 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTrackerTest do
     assert input["timezone_offset_hours"] == -4
   end
 
+  test "tracker input resolves iMessage sender phone numbers from People", %{user_id: user_id} do
+    now = ~U[2026-05-09 15:00:00Z]
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Charlie Smith",
+        "phone" => "+1 (416) 526-1454",
+        "relationship" => "Customer sponsor"
+      })
+
+    source_bundle =
+      %{trigger: %{type: :wakeup}, timestamp: now}
+      |> SourceBundle.empty(%{})
+      |> SourceBundle.put_imessage(%{
+        "messages" => [
+          %{
+            "guid" => "msg-charlie",
+            "source" => "imessage",
+            "sender_handle" => "+14165261454",
+            "text" => "Can you send the pricing answer?",
+            "sent_at" => now,
+            "source_item_id" => "msg-charlie"
+          }
+        ],
+        "chats" => [
+          %{
+            "chat_key" => "+14165261454",
+            "latest_sender" => "+14165261454",
+            "latest_snippet" => "Can you send the pricing answer?",
+            "latest_sent_at" => DateTime.to_iso8601(now)
+          }
+        ],
+        "status" => "ready",
+        "fetched_at" => now
+      })
+
+    state =
+      CommitmentTracker.init(%{
+        "user_id" => user_id,
+        "timezone" => "America/Toronto",
+        "timezone_offset_hours" => -4
+      })
+
+    input =
+      CommitmentTracker.build_tracker_input(
+        user_id,
+        now,
+        state,
+        %{source_bundle: source_bundle}
+      )
+
+    [message] = get_in(input, ["imessage", "recent_messages"])
+    assert message["sender_handle"] == "+14165261454"
+    assert message["sender_display_name"] == "Charlie Smith"
+    assert message["sender_person_id"] == person.id
+    assert message["sender_relationship"] == "Customer sponsor"
+
+    [chat] = get_in(input, ["imessage", "chats"])
+    assert chat["latest_sender"] == "+14165261454"
+    assert chat["latest_sender_display_name"] == "Charlie Smith"
+    assert chat["latest_sender_person_id"] == person.id
+  end
+
   test "builds a checked prompt and persists model-emitted commitment work items", %{
     user_id: user_id,
     agent: agent

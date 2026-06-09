@@ -1,7 +1,7 @@
 defmodule MaraithonWeb.MobileTodoController do
   use MaraithonWeb, :controller
 
-  alias Maraithon.{AssistantChat, SourceFreshness, Todos}
+  alias Maraithon.{AssistantChat, Crm, SourceFreshness, Todos}
   alias MaraithonWeb.MobileChatJSON
   alias MaraithonWeb.MobileJSON
   alias MaraithonWeb.MobileParams
@@ -9,7 +9,7 @@ defmodule MaraithonWeb.MobileTodoController do
   @todo_param_keys ~w(
     source source_account_label kind attention_mode title todo summary next_action due_at due_date
     notes action_plan action_draft draft owner_label priority status snoozed_until source_item_id
-    source_occurred_at dedupe_key metadata replace_metadata
+    source_occurred_at dedupe_key metadata replace_metadata person_id related_person_id
   )
 
   def index(conn, params) do
@@ -45,10 +45,13 @@ defmodule MaraithonWeb.MobileTodoController do
   def create(conn, params) do
     user_id = conn.assigns.current_user.id
     attrs = todo_params(params)
+    {person_id, attrs} = pop_person_id(attrs)
     json_opts = json_opts(params, user_id)
 
     case Todos.upsert_many(user_id, [attrs], user_actor_opts(user_id)) do
       {:ok, [todo]} ->
+        attach_todo_person(user_id, todo.id, person_id)
+
         conn
         |> put_status(:created)
         |> json(%{todo: MobileJSON.todo(todo, json_opts)})
@@ -97,9 +100,12 @@ defmodule MaraithonWeb.MobileTodoController do
   def update(conn, %{"id" => todo_id} = params) do
     user_id = conn.assigns.current_user.id
     json_opts = json_opts(params, user_id)
+    attrs = todo_params(params)
+    {person_id, attrs} = pop_person_id(attrs)
 
-    case Todos.update_for_user(user_id, todo_id, todo_params(params), user_actor_opts(user_id)) do
+    case Todos.update_for_user(user_id, todo_id, attrs, user_actor_opts(user_id)) do
       {:ok, todo} ->
+        attach_todo_person(user_id, todo.id, person_id)
         json(conn, %{todo: MobileJSON.todo(todo, json_opts)})
 
       {:error, :not_found} ->
@@ -235,6 +241,29 @@ defmodule MaraithonWeb.MobileTodoController do
     do: MobileParams.sanitize(todo, @todo_param_keys)
 
   defp todo_params(params), do: MobileParams.sanitize(params, @todo_param_keys)
+
+  defp pop_person_id(attrs) do
+    {person_id, attrs} = Map.pop(attrs, "person_id")
+    {person_id || Map.get(attrs, "related_person_id"), Map.delete(attrs, "related_person_id")}
+  end
+
+  defp attach_todo_person(_user_id, _todo_id, nil), do: :ok
+  defp attach_todo_person(_user_id, _todo_id, ""), do: :ok
+
+  defp attach_todo_person(user_id, todo_id, person_id)
+       when is_binary(user_id) and is_binary(todo_id) and is_binary(person_id) do
+    _ =
+      Crm.attach_resource(user_id, person_id, %{
+        "resource_type" => "todo",
+        "resource_id" => todo_id,
+        "resource_source" => "mobile",
+        "source_system" => "mobile",
+        "source_ref" => todo_id,
+        "role" => "related_person"
+      })
+
+    :ok
+  end
 
   defp status_filter(%{"status" => "all"}), do: nil
   defp status_filter(%{"status" => "active"}), do: ["open", "snoozed"]

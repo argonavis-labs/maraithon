@@ -384,15 +384,14 @@ struct ChatDetailView: View {
     }
 
     private func decide(_ action: ChatMessageAction) {
-        guard let decision = action.decision else { return }
+        guard action.decision != nil else { return }
 
         errorMessage = nil
         sendTask?.cancel()
         sendTask = Task {
             do {
                 try await chatSyncService.decidePreparedAction(
-                    action.actionID,
-                    decision: decision,
+                    action,
                     in: thread,
                     modelContext: modelContext,
                     sessionStore: sessionStore

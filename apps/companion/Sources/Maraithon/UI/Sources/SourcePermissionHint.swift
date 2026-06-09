@@ -53,6 +53,14 @@ struct SourcePermissionHint: Equatable {
                 settingsButtonTitle: "Open Calendar Settings",
                 followUpNote: "After enabling Maraithon, return here and click Check again to recheck Calendar. If Maraithon is already listed, toggle it off and back on."
             )
+        case "contacts_not_authorized":
+            return SourcePermissionHint(
+                title: "Contacts access needed",
+                body: "Contacts access is separate from Full Disk Access. Maraithon needs permission to read contacts on this Mac. Open System Settings → Privacy & Security → Contacts, then enable Maraithon.",
+                settingsURL: URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts"),
+                settingsButtonTitle: "Open Contacts Settings",
+                followUpNote: "After enabling Maraithon, return here and click Check again to recheck Contacts. If Maraithon is already listed, toggle it off and back on."
+            )
         case "reminders_not_authorized":
             return SourcePermissionHint(
                 title: "Reminders access needed",

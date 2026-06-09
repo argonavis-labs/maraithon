@@ -13,6 +13,7 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
   alias Maraithon.Crm.Ingest.Window
   alias Maraithon.Crm.Observation
   alias Maraithon.Insights.Refresh
+  alias Maraithon.LocalContacts
   alias Maraithon.OpenLoops
   alias Maraithon.OperatorEvents
   alias Maraithon.RelationshipIntelligence
@@ -128,6 +129,19 @@ defmodule Maraithon.Runtime.BackgroundJobHandler do
 
   def execute(%BackgroundJob{job_type: "local_files_embed"} = job) do
     dispatch_local_embed_job(job, Maraithon.LocalFiles.EmbedJob)
+  end
+
+  def execute(%BackgroundJob{job_type: "local_contacts_crm_merge"} = job) do
+    with {:ok, user_id} <- require_user_id(job),
+         contact_ids when is_list(contact_ids) and contact_ids != [] <-
+           get_in(job.payload || %{}, ["contact_ids"]) do
+      LocalContacts.merge_contacts_into_crm(user_id, contact_ids)
+    else
+      [] -> {:ok, %{source: "local_contacts_crm_merge", skipped: "no_contacts"}}
+      nil -> {:ok, %{source: "local_contacts_crm_merge", skipped: "no_contacts"}}
+      {:error, reason} -> {:error, reason}
+      _other -> {:error, :invalid_local_contact_ids}
+    end
   end
 
   def execute(%BackgroundJob{job_type: job_type}),

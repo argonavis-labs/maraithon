@@ -22,7 +22,7 @@ defmodule Maraithon.Tools.MessagesGet do
           {:ok,
            %{
              source: "local_messages",
-             message: LocalMessagesHelpers.serialize_full(message)
+             message: LocalMessagesHelpers.serialize_full(message, user_id)
            }}
       end
     end

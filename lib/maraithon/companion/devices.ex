@@ -13,6 +13,7 @@ defmodule Maraithon.Companion.Devices do
   alias Maraithon.Companion.Device
   alias Maraithon.LocalBrowserHistory.LocalVisit
   alias Maraithon.LocalCalendar.LocalEvent
+  alias Maraithon.LocalContacts.LocalContact
   alias Maraithon.LocalFiles.LocalFile
   alias Maraithon.LocalMessages.LocalMessage
   alias Maraithon.LocalNotes.LocalNote
@@ -45,6 +46,12 @@ defmodule Maraithon.Companion.Devices do
       stat_key: :reminders_count,
       table_key: :reminders,
       aliases: ~w(reminders)
+    },
+    %{
+      schema: LocalContact,
+      stat_key: :contacts_count,
+      table_key: :contacts,
+      aliases: ~w(contacts apple_contacts apple-contacts)
     },
     %{schema: LocalFile, stat_key: :files_count, table_key: :files, aliases: ~w(files)},
     %{

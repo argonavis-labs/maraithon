@@ -696,6 +696,7 @@ defmodule Maraithon.TelegramAssistant do
   end
 
   defp prepared_action_label("gmail_send"), do: "the Gmail message"
+  defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"
   defp prepared_action_label("slack_post"), do: "the Slack message"
   defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
   defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
@@ -710,6 +711,7 @@ defmodule Maraithon.TelegramAssistant do
   defp prepared_action_label(_action_type), do: "that action"
 
   defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
+  defp prepared_action_failure_label("gmail_draft_send"), do: "send the Gmail draft"
   defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
   defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
   defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"

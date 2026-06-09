@@ -3,6 +3,7 @@ defmodule Maraithon.OpenLoopsTest do
 
   alias Maraithon.Accounts
   alias Maraithon.Crm
+  alias Maraithon.LocalMessages
   alias Maraithon.Memory
   alias Maraithon.OpenLoops
 
@@ -255,6 +256,101 @@ defmodule Maraithon.OpenLoopsTest do
     assert memory.source_ref_type == "todo"
   end
 
+  test "ingest_todos names known message senders instead of persisting phone-number copy" do
+    user_id = unique_user_email("open-loops-message-person")
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+    device_id = Ecto.UUID.generate()
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Charlie Smith",
+        "phone" => "+1 (416) 526-1454",
+        "relationship" => "Customer sponsor"
+      })
+
+    {:ok, _} =
+      LocalMessages.ingest_batch(user_id, device_id, [
+        %{
+          "guid" => "msg-charlie-pricing",
+          "local_id" => "p:charlie-pricing",
+          "service" => "iMessage",
+          "is_from_me" => false,
+          "sender_handle" => "+14165261454",
+          "chat_handles" => ["+14165261454"],
+          "chat_style" => "im",
+          "text" => "Can you send the pricing answer?",
+          "sent_at" => "2026-05-10T13:14:22Z"
+        }
+      ])
+
+    candidates = [
+      %{
+        "source" => "imessage",
+        "source_item_id" => "msg-charlie-pricing",
+        "title" => "Reply to 14165261454 about pricing",
+        "summary" => "14165261454 wants to know whether the pricing answer is ready.",
+        "next_action" => "Tell 14165261454 whether pricing is ready.",
+        "dedupe_key" => "imessage:charlie-pricing",
+        "metadata" => %{
+          "direct_ask" => true,
+          "quote" => "Can you send the pricing answer?"
+        }
+      }
+    ]
+
+    llm_complete = fn prompt ->
+      refute prompt =~ "14165261454 wants to know"
+      assert prompt =~ "Charlie Smith wants to know"
+      assert prompt =~ person.id
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "summary" => "Created one message follow-up.",
+             "decisions" => [
+               %{
+                 "candidate_index" => 0,
+                 "action" => "create",
+                 "dedupe_key" => "imessage:charlie-pricing",
+                 "reasoning" => "Charlie asked a direct pricing question.",
+                 "todo" => %{
+                   "source" => "imessage",
+                   "title" => "Reply to 14165261454 about pricing",
+                   "summary" => "14165261454 wants to know whether the pricing answer is ready.",
+                   "next_action" => "Tell 14165261454 whether pricing is ready.",
+                   "source_item_id" => "msg-charlie-pricing",
+                   "dedupe_key" => "imessage:charlie-pricing",
+                   "metadata" => %{
+                     "direct_ask" => true,
+                     "quote" => "Can you send the pricing answer?"
+                   },
+                   "action_draft" => %{
+                     "text" => "Hey 14165261454, pricing is ready."
+                   }
+                 }
+               }
+             ]
+           })
+       }}
+    end
+
+    assert {:ok, result} =
+             OpenLoops.ingest_todos(user_id, candidates,
+               source: "test_open_loops",
+               llm_complete: llm_complete
+             )
+
+    [todo] = result.todos
+    assert todo.title == "Reply to Charlie Smith about pricing"
+    assert todo.summary =~ "Charlie Smith wants to know"
+    assert todo.next_action == "Tell Charlie Smith whether pricing is ready."
+    assert todo.action_draft["text"] == "Hey Charlie Smith, pricing is ready."
+    refute todo.title =~ "14165261454"
+    refute todo.summary =~ "14165261454"
+    assert [%{person_name: "Charlie Smith"}] = result.enrichment.person_links
+  end
+
   describe "local_observations/2" do
     test "emits imessage_pending_reply observation for non-self message younger than 24h with a question" do
       user_id = unique_user_email("local-obs-imsg")
@@ -319,6 +415,42 @@ defmodule Maraithon.OpenLoopsTest do
       assert obs["source"] == "imessage"
       assert obs["excerpt"] =~ "confirm the price"
       assert get_in(obs, ["metadata", "open_loop_hint", "title"]) =~ "Reply to Charlie"
+    end
+
+    test "uses a CRM person name for an iMessage sender phone number" do
+      user_id = unique_user_email("local-obs-imsg-person")
+      {:ok, _} = Accounts.get_or_create_user_by_email(user_id)
+      device_id = Ecto.UUID.generate()
+      now = ~U[2026-05-10 12:00:00Z]
+
+      {:ok, _person} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Charlie Smith",
+          "phone" => "+1 (416) 526-1454"
+        })
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          %{
+            "guid" => "msg-known-phone",
+            "local_id" => "p:known-phone",
+            "service" => "iMessage",
+            "is_from_me" => false,
+            "sender_handle" => "+14165261454",
+            "chat_handles" => ["+14165261454"],
+            "chat_style" => "im",
+            "text" => "Can you confirm the price?",
+            "sent_at" => DateTime.to_iso8601(DateTime.add(now, -2 * 3_600, :second))
+          }
+        ])
+
+      [obs] =
+        user_id
+        |> OpenLoops.local_observations(now: now)
+        |> Enum.filter(&(&1["type"] == "imessage_pending_reply"))
+
+      assert get_in(obs, ["metadata", "open_loop_hint", "title"]) == "Reply to Charlie Smith"
+      assert [%{"display_name" => "Charlie Smith"}] = obs["participants"]
     end
 
     test "does not emit imessage_pending_reply after the user has replied in the same thread" do

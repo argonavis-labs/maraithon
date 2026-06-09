@@ -38,6 +38,12 @@ defmodule Maraithon.Connections do
       description: "Conversation context from Messages on the paired Mac."
     },
     %{
+      id: "apple_contacts",
+      stat_key: :contacts_count,
+      label: "Apple Contacts",
+      description: "People context from Contacts on the paired Mac."
+    },
+    %{
       id: "notes",
       stat_key: :notes_count,
       label: "Apple Notes",
@@ -773,6 +779,7 @@ defmodule Maraithon.Connections do
     do: count_label(count, "calendar event")
 
   defp desktop_count_label(:reminders_count, count), do: count_label(count, "reminder")
+  defp desktop_count_label(:contacts_count, count), do: count_label(count, "contact")
   defp desktop_count_label(:files_count, count), do: count_label(count, "file")
   defp desktop_count_label(:browser_visits_count, count), do: count_label(count, "browser visit")
 

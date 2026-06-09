@@ -121,6 +121,7 @@ struct MobileAPIClient: Sendable {
         let status: String
         let closedAt: Date?
         let actionCard: RemoteActionCard?
+        let relatedPeople: [RemoteRelatedPerson]
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -133,6 +134,22 @@ struct MobileAPIClient: Sendable {
             case status
             case closedAt = "closed_at"
             case actionCard = "action_card"
+            case relatedPeople = "related_people"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(String.self, forKey: .id)
+            title = try container.decode(String.self, forKey: .title)
+            summary = try container.decodeIfPresent(String.self, forKey: .summary)
+            nextAction = try container.decodeIfPresent(String.self, forKey: .nextAction)
+            dueAt = try container.decodeIfPresent(Date.self, forKey: .dueAt)
+            notes = try container.decodeIfPresent(String.self, forKey: .notes)
+            priority = try container.decodeIfPresent(Int.self, forKey: .priority)
+            status = try container.decode(String.self, forKey: .status)
+            closedAt = try container.decodeIfPresent(Date.self, forKey: .closedAt)
+            actionCard = try container.decodeIfPresent(RemoteActionCard.self, forKey: .actionCard)
+            relatedPeople = try container.decodeIfPresent([RemoteRelatedPerson].self, forKey: .relatedPeople) ?? []
         }
 
         init(
@@ -145,7 +162,8 @@ struct MobileAPIClient: Sendable {
             priority: Int?,
             status: String,
             closedAt: Date?,
-            actionCard: RemoteActionCard? = nil
+            actionCard: RemoteActionCard? = nil,
+            relatedPeople: [RemoteRelatedPerson] = []
         ) {
             self.id = id
             self.title = title
@@ -157,6 +175,19 @@ struct MobileAPIClient: Sendable {
             self.status = status
             self.closedAt = closedAt
             self.actionCard = actionCard
+            self.relatedPeople = relatedPeople
+        }
+    }
+
+    struct RemoteRelatedPerson: Decodable, Equatable, Sendable {
+        let id: String
+        let displayName: String?
+        let relationship: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case displayName = "display_name"
+            case relationship
         }
     }
 
@@ -431,7 +462,7 @@ struct MobileAPIClient: Sendable {
 
     func listTodos(sessionToken: String, includeCards: Bool = true) async throws -> [RemoteTodo] {
         let response: TodosResponse = try await send(
-            path: "/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
+            path: "/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=\(includeCards)",
             sessionToken: sessionToken,
             responseType: TodosResponse.self
         )
@@ -481,12 +512,25 @@ struct MobileAPIClient: Sendable {
     }
 
     func listPeople(sessionToken: String) async throws -> [RemotePerson] {
-        let response: PeopleResponse = try await send(
-            path: "/people?limit=200&status=all",
-            sessionToken: sessionToken,
-            responseType: PeopleResponse.self
-        )
-        return response.people
+        let pageSize = 500
+        var offset = 0
+        var people: [RemotePerson] = []
+
+        while true {
+            let response: PeopleResponse = try await send(
+                path: "/people?limit=\(pageSize)&offset=\(offset)&status=all",
+                sessionToken: sessionToken,
+                responseType: PeopleResponse.self
+            )
+
+            people.append(contentsOf: response.people)
+
+            if response.people.count < pageSize {
+                return people
+            }
+
+            offset += pageSize
+        }
     }
 
     func createPerson(sessionToken: String, payload: RequestBody) async throws -> RemotePerson {

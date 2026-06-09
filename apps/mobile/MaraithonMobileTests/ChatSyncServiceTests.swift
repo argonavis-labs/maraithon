@@ -564,7 +564,8 @@ private final class MockChatAPI: MobileChatAPI {
         sessionToken: String,
         id: UUID,
         decision: ChatActionDecision,
-        clientMessageID: UUID
+        clientMessageID: UUID,
+        draftEdits: MobileAPIClient.RequestBody?
     ) async throws -> MobileAPIClient.ChatActionResultResponse {
         .init(preparedAction: nil, thread: remoteThreads.first ?? .init(id: createdThreadID, title: "Remote thread"))
     }

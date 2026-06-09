@@ -33,7 +33,8 @@ protocol MobileChatAPI: Sendable {
         sessionToken: String,
         id: UUID,
         decision: ChatActionDecision,
-        clientMessageID: UUID
+        clientMessageID: UUID,
+        draftEdits: MobileAPIClient.RequestBody?
     ) async throws -> MobileAPIClient.ChatActionResultResponse
 }
 
@@ -404,16 +405,23 @@ extension MobileAPIClient: MobileChatAPI {
         sessionToken: String,
         id: UUID,
         decision: ChatActionDecision,
-        clientMessageID: UUID
+        clientMessageID: UUID,
+        draftEdits: RequestBody? = nil
     ) async throws -> ChatActionResultResponse {
-        try await send(
+        var body: RequestBody = [
+            "decision": .string(decision.rawValue),
+            "client_message_id": .string(clientMessageID.uuidString.lowercased())
+        ]
+
+        if let draftEdits {
+            body["draft_edits"] = .object(draftEdits)
+        }
+
+        return try await send(
             path: "/chat/prepared-actions/\(id.uuidString.lowercased())/decision",
             method: "POST",
             sessionToken: sessionToken,
-            body: [
-                "decision": .string(decision.rawValue),
-                "client_message_id": .string(clientMessageID.uuidString.lowercased())
-            ],
+            body: body,
             responseType: ChatActionResultResponse.self
         )
     }

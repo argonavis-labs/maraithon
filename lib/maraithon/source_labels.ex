@@ -17,6 +17,7 @@ defmodule Maraithon.SourceLabels do
     "chief_of_staff_weekend" => "Weekend review",
     "desktop" => "Mac companion",
     "files" => "Files",
+    "contacts" => "Contacts",
     "github" => "GitHub",
     "gmail" => "Gmail",
     "gmail_thread" => "Gmail",

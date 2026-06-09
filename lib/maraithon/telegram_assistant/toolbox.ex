@@ -67,6 +67,10 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       tool: "gmail_send_message",
       target_type: "gmail_thread"
     },
+    "gmail_draft_send" => %{
+      tool: "gmail_drafts",
+      target_type: "gmail_draft"
+    },
     "slack_post" => %{
       tool: "slack_post_message",
       target_type: "slack_channel"
@@ -1030,7 +1034,7 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
       ),
       tool_definition(
         "prepare_external_action",
-        "Prepare a Gmail, Slack, Linear, or Notaui write action for confirmation.",
+        "Prepare a Gmail, saved Gmail draft, Slack, Linear, or Notaui write action for confirmation.",
         %{
           "type" => "object",
           "required" => ["action_type", "payload"],
@@ -3152,6 +3156,15 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
     end
   end
 
+  defp external_action_preview("gmail_draft_send", payload) do
+    recipient = preview_value(payload, ["to", "recipient", "recipient_email"], "the recipient")
+
+    case preview_value(payload, ["subject"], nil) do
+      nil -> "Send the saved Gmail draft to #{recipient}."
+      subject -> "Send the saved Gmail draft to #{recipient} with subject \"#{subject}\"."
+    end
+  end
+
   defp external_action_preview("slack_post", payload) do
     workspace_suffix =
       case preview_value(payload, ["workspace_name", "team_name"], nil) do
@@ -3336,11 +3349,13 @@ defmodule Maraithon.TelegramAssistant.Toolbox do
   defp external_target_id(action_type, payload)
        when action_type in [
               "gmail_send",
+              "gmail_draft_send",
               "slack_post",
               "notaui_complete_task",
               "notaui_update_task"
             ] do
-    Map.get(payload, "thread_id") || Map.get(payload, "channel") || Map.get(payload, "task_id")
+    Map.get(payload, "draft_id") || Map.get(payload, "thread_id") || Map.get(payload, "channel") ||
+      Map.get(payload, "task_id")
   end
 
   defp external_target_id(_action_type, payload),

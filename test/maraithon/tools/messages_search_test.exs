@@ -1,7 +1,9 @@
 defmodule Maraithon.Tools.MessagesSearchTest do
   use Maraithon.DataCase, async: true
 
+  alias Maraithon.Accounts
   alias Maraithon.Capabilities
+  alias Maraithon.Crm
   alias Maraithon.LocalMessages
   alias Maraithon.Tools
 
@@ -97,6 +99,37 @@ defmodule Maraithon.Tools.MessagesSearchTest do
       assert result.count == 1
       [msg] = result.messages
       assert msg.sender_handle =~ "charlie"
+    end
+
+    test "includes resolved sender identity from People phone contacts" do
+      {user_id, device_id} = seed_user("resolved-sender")
+      {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+      {:ok, person} =
+        Crm.upsert_person(user_id, %{
+          "display_name" => "Charlie Smith",
+          "phone" => "+1 (416) 526-1454"
+        })
+
+      {:ok, _} =
+        LocalMessages.ingest_batch(user_id, device_id, [
+          sample_message("g-known-phone", %{
+            "text" => "Can you send the pricing answer?",
+            "sender_handle" => "+14165261454",
+            "chat_display_name" => nil
+          })
+        ])
+
+      assert {:ok, result} =
+               Tools.execute("messages_search", %{
+                 "user_id" => user_id,
+                 "query" => "pricing"
+               })
+
+      [msg] = result.messages
+      assert msg.sender_handle == "+14165261454"
+      assert msg.sender_display_name == "Charlie Smith"
+      assert msg.sender_person_id == person.id
     end
 
     test "filters by since and before window" do

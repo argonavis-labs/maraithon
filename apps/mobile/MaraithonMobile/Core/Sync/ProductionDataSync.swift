@@ -3,6 +3,8 @@ import SwiftData
 
 @MainActor
 enum ProductionDataSync {
+    private static let todoPageSize = 500
+
     static func refreshAll(
         sessionStore: SessionStore,
         modelContext: ModelContext,
@@ -28,9 +30,14 @@ enum ProductionDataSync {
         )
         let localTodos = try modelContext.fetch(FetchDescriptor<TodoItem>())
         let localByID = Dictionary(uniqueKeysWithValues: localTodos.map { ($0.id, $0) })
+        let localContacts = try modelContext.fetch(FetchDescriptor<CRMContact>())
+        let contactsByID = Dictionary(uniqueKeysWithValues: localContacts.map { ($0.id, $0) })
+        var seenRemoteIDs = Set<UUID>()
 
         for remoteTodo in remoteTodos {
             guard let id = UUID(uuidString: remoteTodo.id) else { continue }
+            seenRemoteIDs.insert(id)
+
             guard shouldKeepRemoteTodo(remoteTodo) else {
                 if let todo = localByID[id] {
                     modelContext.delete(todo)
@@ -39,9 +46,15 @@ enum ProductionDataSync {
             }
 
             if let todo = localByID[id] {
-                apply(remoteTodo, to: todo, includeCards: includeCards)
+                apply(remoteTodo, to: todo, includeCards: includeCards, contactsByID: contactsByID)
             } else {
-                modelContext.insert(todo(from: remoteTodo, id: id))
+                modelContext.insert(todo(from: remoteTodo, id: id, contactsByID: contactsByID))
+            }
+        }
+
+        if remoteTodos.count < todoPageSize {
+            for todo in localTodos where !seenRemoteIDs.contains(todo.id) {
+                modelContext.delete(todo)
             }
         }
 
@@ -69,7 +82,8 @@ enum ProductionDataSync {
     static func apply(
         _ remoteTodo: MobileAPIClient.RemoteTodo,
         to todo: TodoItem,
-        includeCards: Bool = true
+        includeCards: Bool = true,
+        contactsByID: [UUID: CRMContact]? = nil
     ) {
         todo.title = remoteTodo.title
         todo.notes = remoteTodo.notes ?? remoteTodo.summary ?? ""
@@ -78,6 +92,9 @@ enum ProductionDataSync {
         todo.dueDate = remoteTodo.dueAt
         todo.isCompleted = remoteTodo.status == "done"
         todo.completedAt = remoteTodo.closedAt
+        if let contactsByID {
+            todo.contact = relatedContact(for: remoteTodo, contactsByID: contactsByID)
+        }
         // A cards-omitted refresh must not wipe existing decision-card context; those
         // fields are filled by the background card pass.
         if includeCards {
@@ -103,7 +120,8 @@ enum ProductionDataSync {
         priority: TodoPriority,
         dueDate: Date?,
         isCompleted: Bool,
-        nextAction: String? = nil
+        nextAction: String? = nil,
+        relatedPersonID: UUID? = nil
     ) -> MobileAPIClient.RequestBody {
         let nextAction = cleanedText(nextAction) ?? cleanedText(title) ?? cleanedText(notes) ?? "Review this item."
 
@@ -120,6 +138,10 @@ enum ProductionDataSync {
 
         if let dueDate {
             payload["due_at"] = .string(isoString(for: dueDate))
+        }
+
+        if let relatedPersonID {
+            payload["person_id"] = .string(relatedPersonID.uuidString.lowercased())
         }
 
         return payload
@@ -199,7 +221,11 @@ enum ProductionDataSync {
         remoteTodo.status != "dismissed"
     }
 
-    static func todo(from remoteTodo: MobileAPIClient.RemoteTodo, id: UUID) -> TodoItem {
+    static func todo(
+        from remoteTodo: MobileAPIClient.RemoteTodo,
+        id: UUID,
+        contactsByID: [UUID: CRMContact]? = nil
+    ) -> TodoItem {
         TodoItem(
             id: id,
             title: remoteTodo.title,
@@ -215,7 +241,8 @@ enum ProductionDataSync {
             sourceContext: cleanedText(remoteTodo.actionCard?.sourceContext),
             nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
             draftPreview: cleanedText(remoteTodo.actionCard?.draftPreview),
-            evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt)
+            evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt),
+            contact: contactsByID.flatMap { relatedContact(for: remoteTodo, contactsByID: $0) }
         )
     }
 
@@ -293,6 +320,15 @@ enum ProductionDataSync {
 
     private static func firstContactValue(_ values: [String: [String]], key: String) -> String? {
         values[key]?.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private static func relatedContact(
+        for remoteTodo: MobileAPIClient.RemoteTodo,
+        contactsByID: [UUID: CRMContact]
+    ) -> CRMContact? {
+        remoteTodo.relatedPeople.lazy.compactMap { relatedPerson in
+            UUID(uuidString: relatedPerson.id).flatMap { contactsByID[$0] }
+        }.first
     }
 
     private static func isoString(for date: Date) -> String {

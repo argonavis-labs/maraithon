@@ -14,15 +14,26 @@ defmodule MaraithonWeb.MobilePeopleController do
 
   def index(conn, params) do
     user_id = conn.assigns.current_user.id
+    limit = limit(params)
+    offset = offset(params)
 
     people =
       Crm.list_people(user_id,
-        limit: limit(params),
+        limit: limit,
+        offset: offset,
         query: text_param(params, "q"),
         status: text_param(params, "status") || "active"
       )
 
-    json(conn, %{people: Enum.map(people, &MobileJSON.person/1)})
+    json(conn, %{
+      people: Enum.map(people, &MobileJSON.person/1),
+      pagination: %{
+        limit: limit,
+        offset: offset,
+        count: length(people),
+        next_offset: next_offset(people, limit, offset)
+      }
+    })
   end
 
   def create(conn, params) do
@@ -174,6 +185,17 @@ defmodule MaraithonWeb.MobilePeopleController do
       {value, ""} -> value |> max(1) |> min(500)
       _ -> 200
     end
+  end
+
+  defp offset(params) do
+    case Integer.parse(to_string(Map.get(params, "offset", "0"))) do
+      {value, ""} -> max(value, 0)
+      _ -> 0
+    end
+  end
+
+  defp next_offset(people, limit, offset) do
+    if length(people) == limit, do: offset + limit, else: nil
   end
 
   defp text_param(params, key) do

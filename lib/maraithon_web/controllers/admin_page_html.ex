@@ -46,6 +46,7 @@ defmodule MaraithonWeb.AdminPageHTML do
     {:voice_memos_count, "Voice memos"},
     {:calendar_events_count, "Calendar"},
     {:reminders_count, "Reminders"},
+    {:contacts_count, "Contacts"},
     {:files_count, "Files"},
     {:browser_visits_count, "Browser"}
   ]

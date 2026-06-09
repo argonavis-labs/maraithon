@@ -5,13 +5,10 @@ struct TodayMetrics: Equatable {
     let decisionTodos: Int
     let dueTodayTodos: Int
     let overdueTodos: Int
-    let peopleCount: Int
-    let atRiskContacts: Int
 }
 
 enum TodayDestination: Equatable {
     case todos(TodoFilter)
-    case people(CRMStatusFilter)
     case chat
 }
 
@@ -26,7 +23,6 @@ struct TodayBrief: Equatable {
 struct TodayFocusItem: Equatable, Identifiable {
     enum Kind: String, Equatable {
         case todo
-        case contact
     }
 
     let kind: Kind
@@ -51,7 +47,6 @@ private struct TodayFocusCandidate {
 enum TodayInsightEngine {
     static func metrics(
         todos: [TodoItem],
-        contacts: [CRMContact],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> TodayMetrics {
@@ -59,28 +54,19 @@ enum TodayInsightEngine {
             openTodos: todos.filter { !$0.isCompleted }.count,
             decisionTodos: TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar).count,
             dueTodayTodos: TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar).count,
-            overdueTodos: TodoFiltering.overdueCount(in: todos, now: now, calendar: calendar),
-            peopleCount: contacts.count,
-            atRiskContacts: CRMFiltering.filter(contacts, statusFilter: .atRisk, now: now, calendar: calendar).count
+            overdueTodos: TodoFiltering.overdueCount(in: todos, now: now, calendar: calendar)
         )
     }
 
     static func brief(
         todos: [TodoItem],
-        contacts: [CRMContact],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> TodayBrief {
-        let metrics = metrics(todos: todos, contacts: contacts, now: now, calendar: calendar)
+        let metrics = metrics(todos: todos, now: now, calendar: calendar)
         let overdueTodos = TodoFiltering.filter(todos, by: .overdue, now: now, calendar: calendar)
         let decisionTodos = TodoFiltering.filter(todos, by: .decisions, now: now, calendar: calendar)
         let dueTodayTodos = TodoFiltering.filter(todos, by: .today, now: now, calendar: calendar)
-        let atRiskContacts = CRMFiltering.filter(
-            contacts,
-            statusFilter: .atRisk,
-            now: now,
-            calendar: calendar
-        )
         let openTodos = TodoFiltering.filter(todos, by: .open, now: now, calendar: calendar)
 
         if metrics.overdueTodos > 0 {
@@ -122,19 +108,6 @@ enum TodayInsightEngine {
             )
         }
 
-        if metrics.atRiskContacts > 0 {
-            return TodayBrief(
-                title: "Relationship follow-ups",
-                subtitle: relationshipBriefSubtitle(
-                    count: metrics.atRiskContacts,
-                    lead: topRelationship(atRiskContacts)
-                ),
-                actionTitle: "Review people",
-                systemImage: "person.crop.circle.badge.exclamationmark",
-                destination: .people(.atRisk)
-            )
-        }
-
         if metrics.openTodos > 0 {
             return TodayBrief(
                 title: "Triage open work",
@@ -150,7 +123,7 @@ enum TodayInsightEngine {
 
         return TodayBrief(
             title: "Nothing needs your review right now",
-            subtitle: "No saved decision, deadline, or relationship follow-up is waiting. Ask Maraithon for a fresh priority call, draft, or summary when you need one.",
+            subtitle: "No saved decision, deadline, or open work item is waiting. Ask Maraithon for a fresh priority call, draft, or summary when you need one.",
             actionTitle: "Start a review",
             systemImage: "sparkles",
             destination: .chat
@@ -159,7 +132,6 @@ enum TodayInsightEngine {
 
     static func focusQueue(
         todos: [TodoItem],
-        contacts: [CRMContact],
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> [TodayFocusItem] {
@@ -247,45 +219,24 @@ enum TodayInsightEngine {
                 }
             }
 
-            return nil
+            let priority = 40 + priorityWeight(for: todo.priority)
+            return TodayFocusCandidate(title: todo.title, priority: priority) {
+                TodayFocusItem(
+                    kind: .todo,
+                    referenceID: todo.id,
+                    title: todo.title,
+                    subtitle: todoFocusSubtitle(
+                        for: todo,
+                        fallbackAction: "Choose the next move, schedule it, or dismiss it."
+                    ),
+                    detail: todoFocusDetail(for: todo, context: "Open work"),
+                    systemImage: todo.priority.symbolName,
+                    priority: priority
+                )
+            }
         }
 
-        let contactItems = contacts.compactMap { contact -> TodayFocusCandidate? in
-            guard !CRMFiltering.isArchived(contact) else { return nil }
-
-            if isAtRisk(contact, now: now, calendar: calendar) {
-                return TodayFocusCandidate(title: contact.name, priority: 75) {
-                    TodayFocusItem(
-                        kind: .contact,
-                        referenceID: contact.id,
-                        title: contact.name,
-                        subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
-                        detail: relationshipDetail(for: contact, now: now),
-                        systemImage: "person.crop.circle.badge.exclamationmark",
-                        priority: 75
-                    )
-                }
-            }
-
-            if contact.dealStage == .proposal,
-               isStale(contact, now: now, calendar: calendar) {
-                return TodayFocusCandidate(title: contact.name, priority: 60) {
-                    TodayFocusItem(
-                        kind: .contact,
-                        referenceID: contact.id,
-                        title: contact.name,
-                        subtitle: "Next: Follow up with \(relationshipContext(for: contact))",
-                        detail: relationshipDetail(for: contact, now: now),
-                        systemImage: "person.wave.2",
-                        priority: 60
-                    )
-                }
-            }
-
-            return nil
-        }
-
-        return (todoItems + contactItems)
+        return todoItems
             .sorted {
                 if $0.priority == $1.priority {
                     $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
@@ -295,26 +246,6 @@ enum TodayInsightEngine {
             }
             .prefix(6)
             .map { $0.item() }
-    }
-
-    static func isAtRisk(
-        _ contact: CRMContact,
-        now: Date = Date(),
-        calendar: Calendar = .current
-    ) -> Bool {
-        CRMFiltering.needsCare(contact, now: now, calendar: calendar)
-    }
-
-    static func isStale(
-        _ contact: CRMContact,
-        now: Date = Date(),
-        calendar: Calendar = .current
-    ) -> Bool {
-        guard let lastContactedAt = contact.lastContactedAt else { return true }
-        guard let threshold = calendar.date(byAdding: .day, value: -7, to: now) else {
-            return false
-        }
-        return lastContactedAt < threshold
     }
 
     private static func priorityWeight(for priority: TodoPriority) -> Int {
@@ -374,18 +305,6 @@ enum TodayInsightEngine {
         return "\(count) decisions are waiting. Start with \(title)."
     }
 
-    private static func relationshipBriefSubtitle(count: Int, lead: CRMContact?) -> String {
-        guard let subject = relationshipBriefSubject(for: lead) else {
-            return "\(count) \(plural("person", count, plural: "people")) \(needsVerb(count)) a follow-up or status update."
-        }
-
-        if count == 1 {
-            return "\(subject) needs a follow-up or status update."
-        }
-
-        return "\(count) relationships need attention. Start with \(subject)."
-    }
-
     private static func openWorkBriefSubtitle(count: Int, lead: TodoItem?) -> String {
         guard let title = briefTitle(for: lead) else {
             return "\(count) open \(plural("work item", count)) \(needsVerb(count)) a date, next action, or close decision."
@@ -421,21 +340,6 @@ enum TodayInsightEngine {
         }.first
     }
 
-    private static func topRelationship(_ contacts: [CRMContact]) -> CRMContact? {
-        contacts.sorted {
-            switch ($0.lastContactedAt, $1.lastContactedAt) {
-            case (.none, .some):
-                return true
-            case (.some, .none):
-                return false
-            case (.some(let lhs), .some(let rhs)) where lhs != rhs:
-                return lhs < rhs
-            default:
-                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-            }
-        }.first
-    }
-
     private static func briefTitle(for todo: TodoItem?) -> String? {
         cleanedText(todo?.title)
     }
@@ -447,23 +351,6 @@ enum TodayInsightEngine {
             cleanedText(todo?.decisionPrompt)
 
         return move.map(sentence)
-    }
-
-    private static func relationshipBriefSubject(for contact: CRMContact?) -> String? {
-        guard let contact else { return nil }
-        let name = cleanedText(contact.name)
-        let company = cleanedText(contact.company)
-
-        switch (name, company) {
-        case (.some(let name), .some(let company)):
-            return "\(name) at \(company)"
-        case (.some(let name), .none):
-            return name
-        case (.none, .some(let company)):
-            return company
-        default:
-            return nil
-        }
     }
 
     private static func todoFocusSubtitle(
@@ -535,36 +422,8 @@ enum TodayInsightEngine {
         return context.preparedMove != nil && context.evidence != nil
     }
 
-    private static func relationshipDetail(
-        for contact: CRMContact,
-        now: Date
-    ) -> String? {
-        let recency: String
-        if let lastContactedAt = contact.lastContactedAt {
-            recency = "Last reached out \(AppFormatters.relativeString(for: lastContactedAt, relativeTo: now))"
-        } else {
-            recency = "No recent contact logged"
-        }
-
-        if let notes = cleanedText(contact.notes) {
-            return "\(recency). \(notes)"
-        }
-
-        return recency
-    }
-
     private static func dueSubtitle(for dueDate: Date, now: Date) -> String {
         "Due \(AppFormatters.relativeString(for: dueDate, relativeTo: now))"
-    }
-
-    private static func relationshipContext(for contact: CRMContact) -> String {
-        let context = contact.company.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !context.isEmpty {
-            return context
-        }
-
-        let name = contact.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? "this person" : name
     }
 
     private static func plural(_ singular: String, _ count: Int, plural: String? = nil) -> String {

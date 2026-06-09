@@ -30,6 +30,10 @@ final class ChatMessage {
         storedMetadata?.actions ?? []
     }
 
+    var draftCard: ChatDraftCard? {
+        storedMetadata?.draftCard
+    }
+
     var linkedTodo: JSONValue? {
         storedMetadata?.linkedTodo
     }

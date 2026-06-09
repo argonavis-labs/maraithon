@@ -115,7 +115,7 @@ struct MobileAPIClientTodoTests {
         let card = try #require(todos.first?.actionCard)
 
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=true")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=true")
         #expect(card.decisionPrompt == "Decide whether to send the campaign owner and ETA.")
         #expect(card.contextItems.compactMap(\.value) == ["Michael", "UGC campaign"])
         #expect(card.whyNow == "Michael is waiting and no later reply was found.")
@@ -138,7 +138,7 @@ struct MobileAPIClientTodoTests {
         let request = try #require(recorder.requests.first)
 
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=200&status=all&sort=updated&dir=desc&include_cards=false")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/todos?limit=500&status=all&sort=updated&dir=desc&include_cards=false")
     }
 
     @Test
@@ -231,7 +231,7 @@ struct MobileAPIClientTodoTests {
     }
 
     @Test
-    func listPeopleRequestsAllRelationshipStates() async throws {
+    func listPeopleRequestsAllRelationshipStatesInPages() async throws {
         let recorder = HTTPRequestRecorder()
         let client = MobileAPIClient(
             baseURL: URL(string: "https://mobile.example.test/api/mobile")!,
@@ -245,7 +245,7 @@ struct MobileAPIClientTodoTests {
         let request = try #require(recorder.requests.first)
 
         #expect(request.httpMethod == "GET")
-        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/people?limit=200&status=all")
+        #expect(request.url?.absoluteString == "https://mobile.example.test/api/mobile/people?limit=500&offset=0&status=all")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer session-token")
         #expect(people.isEmpty)
     }

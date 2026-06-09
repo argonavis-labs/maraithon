@@ -99,6 +99,8 @@ struct RootWindow: View {
             RecallView()
         case .source(let id) where id == "imessage":
             IMessageDetailView()
+        case .source(let id) where id == "contacts":
+            ContactsDetailView()
         case .source(let id) where id == "notes":
             NotesDetailView()
         case .source(let id) where id == "voice_memos":

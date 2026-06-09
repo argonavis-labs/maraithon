@@ -589,11 +589,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "imessage" => %{
         "recent_messages" =>
           imessage_messages
-          |> Enum.map(&imessage_message_for_prompt/1)
+          |> Enum.map(&imessage_message_for_prompt(user_id, &1))
           |> Enum.take(state.local_message_scan_limit),
         "chats" =>
           imessage_chats
-          |> Enum.map(&imessage_chat_for_prompt/1)
+          |> Enum.map(&imessage_chat_for_prompt(user_id, &1))
           |> Enum.take(state.local_chat_scan_limit),
         "counts" => %{
           "recent_messages" => length(imessage_messages),
@@ -750,6 +750,11 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
        - Every work item title, summary, next_action, notes, and action_plan must
          answer: who is involved, what the commitment is about, why it matters,
          and the best next step.
+       - For iMessage/Messages source rows, when `sender_display_name` or a
+         matching People record is present, use that person's name in all
+         user-facing work-item copy. Never write that a raw phone number or
+         handle "wants", "needs", or "is asking" when the supplied context
+         identifies the person.
        - Before returning any work item, reconcile the original ask/promise against
          later evidence in every available supplied source: Gmail inbox and sent,
          Calendar, Slack, iMessage/Messages, voice notes, Notes, Reminders,
@@ -1512,6 +1517,15 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
+  defp imessage_message_for_prompt(user_id, message)
+       when is_binary(user_id) and is_map(message) do
+    message
+    |> imessage_message_for_prompt()
+    |> add_resolved_imessage_sender(user_id, read_string(message, "sender_handle", nil))
+  end
+
+  defp imessage_message_for_prompt(_user_id, message), do: imessage_message_for_prompt(message)
+
   defp imessage_message_for_prompt(message) when is_map(message) do
     %{
       "message_id" => read_string(message, "message_id", read_string(message, "guid", nil)),
@@ -1519,6 +1533,9 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "chat_key" => read_string(message, "chat_key", nil),
       "chat_display_name" => read_string(message, "chat_display_name", nil),
       "sender_handle" => read_string(message, "sender_handle", nil),
+      "sender_display_name" => read_string(message, "sender_display_name", nil),
+      "sender_person_id" => read_string(message, "sender_person_id", nil),
+      "sender_relationship" => read_string(message, "sender_relationship", nil),
       "is_from_me" => read_any(message, "is_from_me"),
       "sent_at" => prompt_time(read_any(message, "sent_at")),
       "text" => truncate(read_string(message, "text", ""), 2_000),
@@ -1529,6 +1546,14 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
     }
   end
 
+  defp imessage_chat_for_prompt(user_id, chat) when is_binary(user_id) and is_map(chat) do
+    chat
+    |> imessage_chat_for_prompt()
+    |> add_resolved_imessage_latest_sender(user_id, read_string(chat, "latest_sender", nil))
+  end
+
+  defp imessage_chat_for_prompt(_user_id, chat), do: imessage_chat_for_prompt(chat)
+
   defp imessage_chat_for_prompt(chat) when is_map(chat) do
     %{
       "chat_key" => read_string(chat, "chat_key", nil),
@@ -1536,10 +1561,41 @@ defmodule Maraithon.ChiefOfStaff.Skills.CommitmentTracker do
       "message_count_last_7d" => read_any(chat, "message_count_last_7d"),
       "latest_snippet" => truncate(read_string(chat, "latest_snippet", ""), 800),
       "latest_sender" => read_string(chat, "latest_sender", nil),
+      "latest_sender_display_name" => read_string(chat, "latest_sender_display_name", nil),
+      "latest_sender_person_id" => read_string(chat, "latest_sender_person_id", nil),
       "latest_is_from_me" => read_any(chat, "latest_is_from_me"),
       "latest_sent_at" => read_string(chat, "latest_sent_at", nil)
     }
   end
+
+  defp add_resolved_imessage_sender(message, user_id, handle) when is_binary(handle) do
+    case Crm.find_person_by_contact(user_id, handle) do
+      %Maraithon.Crm.Person{} = person ->
+        message
+        |> Map.put("sender_display_name", person.display_name)
+        |> Map.put("sender_person_id", person.id)
+        |> maybe_put("sender_relationship", person.relationship)
+
+      nil ->
+        message
+    end
+  end
+
+  defp add_resolved_imessage_sender(message, _user_id, _handle), do: message
+
+  defp add_resolved_imessage_latest_sender(chat, user_id, handle) when is_binary(handle) do
+    case Crm.find_person_by_contact(user_id, handle) do
+      %Maraithon.Crm.Person{} = person ->
+        chat
+        |> Map.put("latest_sender_display_name", person.display_name)
+        |> Map.put("latest_sender_person_id", person.id)
+
+      nil ->
+        chat
+    end
+  end
+
+  defp add_resolved_imessage_latest_sender(chat, _user_id, _handle), do: chat
 
   defp voice_memo_for_prompt(memo) when is_map(memo) do
     %{

@@ -1602,6 +1602,10 @@ defmodule Maraithon.TelegramAssistant.Runner do
       "gmail_send" ->
         execute_tool_action("gmail_send_message", payload, "Sent via Gmail.", prepared_action)
 
+      "gmail_draft_send" ->
+        payload = Map.put(payload || %{}, "action", "send")
+        execute_tool_action("gmail_drafts", payload, "Sent the Gmail draft.", prepared_action)
+
       "slack_post" ->
         execute_tool_action(
           "slack_post_message",

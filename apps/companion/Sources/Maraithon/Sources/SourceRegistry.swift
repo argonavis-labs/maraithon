@@ -15,12 +15,13 @@ final class SourceRegistry {
     private let eventLog: EventLog
     private static let sourceOrder = [
         "imessage": 0,
-        "notes": 1,
-        "voice_memos": 2,
-        "reminders": 3,
-        "calendar": 4,
-        "files": 5,
-        "browser_history": 6
+        "contacts": 1,
+        "notes": 2,
+        "voice_memos": 3,
+        "reminders": 4,
+        "calendar": 5,
+        "files": 6,
+        "browser_history": 7
     ]
 
     init(eventLog: EventLog) {
@@ -419,6 +420,7 @@ enum SourceState: Hashable, Sendable {
     static func isUserRecoverablePermissionReason(_ reason: String) -> Bool {
         switch reason {
         case "calendar_not_authorized",
+             "contacts_not_authorized",
              "reminders_not_authorized",
              "imessage_full_disk_access_required",
              "notes_full_disk_access_required",

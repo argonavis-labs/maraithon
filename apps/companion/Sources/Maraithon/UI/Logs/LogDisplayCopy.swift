@@ -28,6 +28,7 @@ enum LogDisplayCopy {
         case .voiceMemos: "Voice Memos"
         case .reminders: "Reminders"
         case .calendar: "Calendar"
+        case .contacts: "Contacts"
         case .browser: "Browser"
         case .files: "Files"
         case .sync: "Sync"

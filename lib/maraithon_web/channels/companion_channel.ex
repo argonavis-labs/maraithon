@@ -20,6 +20,7 @@ defmodule MaraithonWeb.CompanionChannel do
     * `"ingest:voice_memos"`
     * `"ingest:calendar_events"`
     * `"ingest:reminders"`
+    * `"ingest:contacts"`
     * `"ingest:files"`
     * `"ingest:browser_history"`
 
@@ -34,6 +35,7 @@ defmodule MaraithonWeb.CompanionChannel do
 
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
+  alias Maraithon.LocalContacts
   alias Maraithon.LocalFiles
   alias Maraithon.LocalMessages
   alias Maraithon.LocalNotes
@@ -50,6 +52,7 @@ defmodule MaraithonWeb.CompanionChannel do
     "voice_memos" => :voice_memos,
     "calendar_events" => :calendar_events,
     "reminders" => :reminders,
+    "contacts" => :contacts,
     "files" => :files,
     "visits" => :visits
   }
@@ -127,6 +130,11 @@ defmodule MaraithonWeb.CompanionChannel do
   @impl true
   def handle_in("ingest:reminders", payload, socket) do
     handle_collection(socket, payload, "reminders", "reminders", &LocalReminders.ingest_batch/3)
+  end
+
+  @impl true
+  def handle_in("ingest:contacts", payload, socket) do
+    handle_collection(socket, payload, "contacts", "contacts", &LocalContacts.ingest_batch/3)
   end
 
   @impl true

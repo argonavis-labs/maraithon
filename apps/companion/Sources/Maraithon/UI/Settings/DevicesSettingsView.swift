@@ -172,6 +172,7 @@ private struct DeviceRow: View {
             countFragment(device.counts.voiceMemos, "voice memos"),
             countFragment(device.counts.calendarEvents, "events"),
             countFragment(device.counts.reminders, "reminders"),
+            countFragment(device.counts.contacts, "contacts"),
             countFragment(device.counts.files, "files"),
             countFragment(device.counts.browserVisits, "visits")
         ]

@@ -5,6 +5,7 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   alias Maraithon.ChiefOfStaff.{Skills, SourceBundle, SourceScope}
   alias Maraithon.ConnectedAccounts
+  alias Maraithon.Crm
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
   alias Maraithon.LocalFiles
@@ -257,12 +258,12 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
         messages =
           user_id
           |> LocalMessages.recent_for_user(limit: plan.local_message_limit)
-          |> Enum.map(&local_message_for_bundle/1)
+          |> Enum.map(&local_message_for_bundle(user_id, &1))
 
         chats =
           user_id
           |> LocalMessages.chats_recent(limit: plan.local_chat_limit, now: now)
-          |> Enum.map(&local_chat_for_bundle/1)
+          |> Enum.map(&local_chat_for_bundle(user_id, &1))
 
         {:ok,
          &SourceBundle.put_imessage(&1, %{
@@ -1395,6 +1396,15 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp local_calendar_event_for_bundle(event) when is_map(event), do: stringify_keys(event)
 
+  defp local_message_for_bundle(user_id, %Maraithon.LocalMessages.LocalMessage{} = message)
+       when is_binary(user_id) do
+    user_id
+    |> maybe_resolve_message_person(message.sender_handle)
+    |> add_resolved_message_person(local_message_for_bundle(message))
+  end
+
+  defp local_message_for_bundle(_user_id, message), do: local_message_for_bundle(message)
+
   defp local_message_for_bundle(%Maraithon.LocalMessages.LocalMessage{} = message) do
     %{
       "message_id" => message.guid || message.id,
@@ -1417,6 +1427,14 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
 
   defp local_message_for_bundle(message) when is_map(message), do: stringify_keys(message)
 
+  defp local_chat_for_bundle(user_id, %{chat_key: _chat_key} = chat) when is_binary(user_id) do
+    chat
+    |> local_chat_for_bundle()
+    |> add_resolved_latest_sender(user_id)
+  end
+
+  defp local_chat_for_bundle(_user_id, chat), do: local_chat_for_bundle(chat)
+
   defp local_chat_for_bundle(%{chat_key: chat_key} = chat) do
     latest = Map.get(chat, :latest_message) || Map.get(chat, "latest_message")
     latest_message = if latest, do: local_message_for_bundle(latest), else: nil
@@ -1436,6 +1454,35 @@ defmodule Maraithon.ChiefOfStaff.Acquisition do
   end
 
   defp local_chat_for_bundle(chat) when is_map(chat), do: stringify_keys(chat)
+
+  defp maybe_resolve_message_person(user_id, handle) when is_binary(handle) do
+    Crm.find_person_by_contact(user_id, handle)
+  end
+
+  defp maybe_resolve_message_person(_user_id, _handle), do: nil
+
+  defp add_resolved_message_person(nil, message), do: message
+
+  defp add_resolved_message_person(%Maraithon.Crm.Person{} = person, message) do
+    message
+    |> Map.put("sender_display_name", person.display_name)
+    |> Map.put("sender_person_id", person.id)
+    |> maybe_put("sender_relationship", person.relationship)
+  end
+
+  defp add_resolved_latest_sender(chat, user_id) when is_map(chat) and is_binary(user_id) do
+    case maybe_resolve_message_person(user_id, Map.get(chat, "latest_sender")) do
+      %Maraithon.Crm.Person{} = person ->
+        chat
+        |> Map.put("latest_sender_display_name", person.display_name)
+        |> Map.put("latest_sender_person_id", person.id)
+
+      nil ->
+        chat
+    end
+  end
+
+  defp add_resolved_latest_sender(chat, _user_id), do: chat
 
   defp voice_memo_for_bundle(%Maraithon.LocalVoiceMemos.LocalVoiceMemo{} = memo) do
     %{

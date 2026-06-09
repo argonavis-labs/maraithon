@@ -48,6 +48,28 @@ extension SourceDetailCopy {
                 )
             ]
 
+        case "contacts":
+            return [
+                SourceCapability(
+                    id: "person_resolution",
+                    title: "Person resolution",
+                    description: "Matches Apple contact emails and phone numbers to existing CRM people.",
+                    systemImage: "person.crop.circle.badge.checkmark"
+                ),
+                SourceCapability(
+                    id: "crm_merge",
+                    title: "CRM merge",
+                    description: "Folds names, companies, job titles, emails, phones, URLs, and addresses into the people layer.",
+                    systemImage: "person.text.rectangle"
+                ),
+                SourceCapability(
+                    id: "cross_source_context",
+                    title: "Cross-source context",
+                    description: "Helps messages, email drafts, Slack, and meetings resolve to the same person.",
+                    systemImage: "arrow.triangle.merge"
+                )
+            ]
+
         case "notes":
             return [
                 SourceCapability(
@@ -190,6 +212,28 @@ extension SourceDetailCopy {
                     id: "device_control",
                     title: "Device control",
                     description: "Revoke this Mac or delete Maraithon's copy of Messages data without changing Messages on this Mac.",
+                    systemImage: "macbook.and.iphone"
+                )
+            ]
+
+        case "contacts":
+            return [
+                SourceCapability(
+                    id: "permission_gated",
+                    title: "Permission-gated",
+                    description: "macOS asks for Contacts access before Maraithon reads any contact rows.",
+                    systemImage: "hand.raised"
+                ),
+                SourceCapability(
+                    id: "crm_merge",
+                    title: "Merged people",
+                    description: "Contacts merge into CRM people by Apple contact id, email, or phone so the people layer stays unified.",
+                    systemImage: "person.2"
+                ),
+                SourceCapability(
+                    id: "device_control",
+                    title: "Device control",
+                    description: "Revoke this Mac or delete synced Contacts rows without changing Contacts.app on this Mac.",
                     systemImage: "macbook.and.iphone"
                 )
             ]

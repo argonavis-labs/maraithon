@@ -3,6 +3,7 @@ defmodule MaraithonWeb.MobileJSON do
 
   alias Maraithon.ActionCards
   alias Maraithon.Accounts.{User, UserSession}
+  alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
   alias Maraithon.Todos.{ActivityEvent, PublicMetadata, Todo, UserFacingCopy}
@@ -49,6 +50,7 @@ defmodule MaraithonWeb.MobileJSON do
       closed_at: json_value(todo.closed_at),
       source_occurred_at: json_value(todo.source_occurred_at),
       metadata: public_todo_metadata(todo.metadata || %{}),
+      related_people: related_people(todo),
       inserted_at: json_value(todo.inserted_at),
       updated_at: json_value(todo.updated_at)
     }
@@ -164,6 +166,21 @@ defmodule MaraithonWeb.MobileJSON do
   defp source_context(_card), do: nil
 
   def public_todo_metadata(metadata), do: PublicMetadata.todo(metadata)
+
+  defp related_people(%Todo{user_id: user_id, id: todo_id})
+       when is_binary(user_id) and is_binary(todo_id) do
+    user_id
+    |> Crm.people_for_resource("todo", todo_id, limit: 5)
+    |> Enum.map(fn %Person{} = person ->
+      %{
+        id: person.id,
+        display_name: person.display_name,
+        relationship: person.relationship
+      }
+    end)
+  end
+
+  defp related_people(_todo), do: []
 
   defp json_value(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp json_value(%NaiveDateTime{} = value), do: NaiveDateTime.to_iso8601(value)

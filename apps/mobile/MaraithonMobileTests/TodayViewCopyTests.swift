@@ -18,14 +18,12 @@ struct TodayViewCopyTests {
         #expect(TodayViewCopy.openWorkTitle == "Open work")
         #expect(TodayViewCopy.overdueTitle == "Past due")
         #expect(TodayViewCopy.overdueSubtitle == "Needs action")
-        #expect(TodayViewCopy.followUpTitle == "Needs follow-up")
-        #expect(TodayViewCopy.followUpSubtitle == "Relationships need attention")
     }
 
     @Test
     func emptyStatesReadLikeExecutiveBriefs() {
         #expect(TodayViewCopy.emptyFocusTitle == "Nothing needs your review right now")
-        #expect(TodayViewCopy.emptyFocusDescription == "No saved decision, deadline, or relationship follow-up is waiting. Maraithon will surface the next concrete move when one appears.")
+        #expect(TodayViewCopy.emptyFocusDescription == "No saved decision, deadline, or open work item is waiting. Maraithon will surface the next concrete move when one appears.")
         #expect(TodayViewCopy.emptyRecentChatsTitle == "No recent chats")
         #expect(TodayViewCopy.emptyRecentChatsDescription == "Start a chat when you need a draft, summary, or prioritization pass.")
 
@@ -58,6 +56,8 @@ struct TodayViewCopyTests {
         #expect(!copy.contains("command center"))
         #expect(!copy.contains("needs a decision"))
         #expect(!copy.contains("outstanding work"))
+        #expect(!copy.contains("relationship follow-up"))
+        #expect(!copy.contains("relationships need attention"))
         #expect(!copy.contains("stale active relationships"))
         #expect(!copy.contains("relationships tracked"))
         #expect(!copy.contains("queue"))

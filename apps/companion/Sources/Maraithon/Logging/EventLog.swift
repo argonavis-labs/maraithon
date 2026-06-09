@@ -21,6 +21,7 @@ enum LogSource: String, Codable, CaseIterable, Sendable {
     case voiceMemos = "voice_memos"
     case reminders
     case calendar
+    case contacts
     case browser
     case files
     case sync

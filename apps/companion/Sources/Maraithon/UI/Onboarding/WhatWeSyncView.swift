@@ -119,6 +119,7 @@ enum ContextScopeCopy {
 
     static let includedItems: [String] = [
         "Messages",
+        "Contacts",
         "Notes",
         "Voice Memos and transcripts",
         "Calendar",

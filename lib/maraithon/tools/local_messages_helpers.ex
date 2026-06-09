@@ -5,6 +5,8 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
   `messages_chats_recent`).
   """
 
+  alias Maraithon.Crm
+  alias Maraithon.Crm.Person
   alias Maraithon.LocalMessages.LocalMessage
 
   @snippet_limit 200
@@ -13,6 +15,10 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
   Compact summary for list/search results.
   """
   def serialize_summary(%LocalMessage{} = msg) do
+    serialize_summary(msg, nil)
+  end
+
+  def serialize_summary(%LocalMessage{} = msg, user_id) do
     %{
       message_id: msg.guid,
       guid: msg.guid,
@@ -23,12 +29,17 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
       sent_at: iso8601(msg.sent_at),
       is_from_me: msg.is_from_me
     }
+    |> add_resolved_sender(user_id, msg)
   end
 
   @doc """
   Full record returned by `messages_get`.
   """
   def serialize_full(%LocalMessage{} = msg) do
+    serialize_full(msg, nil)
+  end
+
+  def serialize_full(%LocalMessage{} = msg, user_id) do
     %{
       message_id: msg.guid,
       guid: msg.guid,
@@ -43,17 +54,23 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
       attachments: msg.attachments,
       sent_at: iso8601(msg.sent_at)
     }
+    |> add_resolved_sender(user_id, msg)
   end
 
   @doc """
   Compact chat summary for `messages_chats_recent`.
   """
-  def serialize_chat_summary(%{
-        chat_key: chat_key,
-        chat_display_name: chat_display_name,
-        latest_message: %LocalMessage{} = latest,
-        message_count_last_7d: count
-      }) do
+  def serialize_chat_summary(summary), do: serialize_chat_summary(summary, nil)
+
+  def serialize_chat_summary(
+        %{
+          chat_key: chat_key,
+          chat_display_name: chat_display_name,
+          latest_message: %LocalMessage{} = latest,
+          message_count_last_7d: count
+        },
+        user_id
+      ) do
     %{
       chat_key: chat_key,
       chat_display_name: chat_display_name,
@@ -61,14 +78,18 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
       latest_sent_at: iso8601(latest.sent_at),
       message_count_last_7d: count
     }
+    |> add_resolved_latest_sender(user_id, latest)
   end
 
-  def serialize_chat_summary(%{
-        chat_key: chat_key,
-        chat_display_name: chat_display_name,
-        latest_message: nil,
-        message_count_last_7d: count
-      }) do
+  def serialize_chat_summary(
+        %{
+          chat_key: chat_key,
+          chat_display_name: chat_display_name,
+          latest_message: nil,
+          message_count_last_7d: count
+        },
+        _user_id
+      ) do
     %{
       chat_key: chat_key,
       chat_display_name: chat_display_name,
@@ -97,6 +118,41 @@ defmodule Maraithon.Tools.LocalMessagesHelpers do
       _ -> default
     end
   end
+
+  defp add_resolved_sender(summary, user_id, %LocalMessage{sender_handle: handle})
+       when is_binary(user_id) and is_binary(handle) do
+    case Crm.find_person_by_contact(user_id, handle) do
+      %Person{} = person ->
+        summary
+        |> Map.put(:sender_display_name, person.display_name)
+        |> Map.put(:sender_person_id, person.id)
+        |> maybe_put(:sender_relationship, person.relationship)
+
+      nil ->
+        summary
+    end
+  end
+
+  defp add_resolved_sender(summary, _user_id, _msg), do: summary
+
+  defp add_resolved_latest_sender(summary, user_id, %LocalMessage{sender_handle: handle})
+       when is_binary(user_id) and is_binary(handle) do
+    case Crm.find_person_by_contact(user_id, handle) do
+      %Person{} = person ->
+        summary
+        |> Map.put(:latest_sender_display_name, person.display_name)
+        |> Map.put(:latest_sender_person_id, person.id)
+
+      nil ->
+        summary
+    end
+  end
+
+  defp add_resolved_latest_sender(summary, _user_id, _latest), do: summary
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp truncate_snippet(nil), do: nil
 

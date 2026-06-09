@@ -16,6 +16,8 @@ struct SourceIssueCopy {
         switch normalized {
         case "calendar_not_authorized":
             return "Calendar permission is off."
+        case "contacts_not_authorized":
+            return "Contacts permission is off."
         case "reminders_not_authorized":
             return "Reminders permission is off."
         case "imessage_full_disk_access_required",
@@ -30,7 +32,9 @@ struct SourceIssueCopy {
             return "Some items could not finish. Maraithon will keep the last successful context until the next check."
         case "messages_required", "notes_required", "voice_memos_required",
              "calendar_events_required", "reminders_required", "files_required",
-             "visits_required":
+             "contacts_required", "visits_required":
+            return "Some items could not finish. Maraithon will keep the last successful context until the next check."
+        case "contacts_invalid":
             return "Some items could not finish. Maraithon will keep the last successful context until the next check."
         case "unknown_event":
             return "This companion app needs an update before it can check this source. Update Maraithon, then check again."

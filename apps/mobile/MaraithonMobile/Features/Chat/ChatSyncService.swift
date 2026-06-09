@@ -244,7 +244,31 @@ struct ChatSyncService {
             sessionToken: sessionToken,
             id: actionID,
             decision: decision,
-            clientMessageID: UUID()
+            clientMessageID: UUID(),
+            draftEdits: nil
+        )
+        try merge(
+            response.thread,
+            modelContext: modelContext,
+            preferredThread: thread,
+            reconcileMessages: true
+        )
+        try modelContext.save()
+    }
+
+    func decidePreparedAction(
+        _ action: ChatMessageAction,
+        in thread: ChatThread,
+        modelContext: ModelContext,
+        sessionStore: SessionStore
+    ) async throws {
+        let sessionToken = try sessionToken(from: sessionStore)
+        let response = try await api.decidePreparedAction(
+            sessionToken: sessionToken,
+            id: action.actionID,
+            decision: action.decision ?? .confirm,
+            clientMessageID: UUID(),
+            draftEdits: action.draftEdits
         )
         try merge(
             response.thread,
@@ -550,6 +574,7 @@ struct ChatSyncService {
                     style: $0.style
                 )
             },
+            draftCard: ChatDraftCard(remoteMessage.structuredData["draft_card"]),
             linkedTodo: remoteMessage.linkedTodo,
             workSummary: remoteMessage.workSummary,
             structuredData: publicStructuredData(remoteMessage.structuredData)
@@ -559,7 +584,7 @@ struct ChatSyncService {
 
     private func publicStructuredData(_ structuredData: [String: JSONValue]) -> [String: JSONValue] {
         structuredData.filter { key, _ in
-            key == "calculation"
+            key == "calculation" || key == "draft_card"
         }
     }
 
@@ -574,7 +599,8 @@ struct ChatSyncService {
         guard let todo = todos.first(where: { $0.id == id }) else { return }
 
         if todoData["status"]?.string == "dismissed" {
-            modelContext.delete(todo)
+            todo.isCompleted = true
+            todo.completedAt = date(from: todoData["closed_at"]) ?? now()
             return
         }
 

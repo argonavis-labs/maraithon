@@ -44,6 +44,25 @@ defmodule Maraithon.CrmTest do
     assert listed.id == person.id
   end
 
+  test "finds people by phone contact across formatting differences" do
+    user_id = "crm-phone-#{System.unique_integer([:positive])}@example.com"
+    {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)
+
+    {:ok, person} =
+      Crm.upsert_person(user_id, %{
+        "display_name" => "Charlie Smith",
+        "phone" => "+1 (416) 526-1454"
+      })
+
+    assert %Crm.Person{id: id} = Crm.find_person_by_contact(user_id, "14165261454")
+    assert id == person.id
+
+    assert %Crm.Person{id: id} =
+             Crm.find_person_by_contact(user_id, "4165261454", contact_kind: :phone)
+
+    assert id == person.id
+  end
+
   test "lists family context and preserves family metadata in prompt summaries" do
     user_id = "crm-family-#{System.unique_integer([:positive])}@example.com"
     {:ok, _user} = Accounts.get_or_create_user_by_email(user_id)

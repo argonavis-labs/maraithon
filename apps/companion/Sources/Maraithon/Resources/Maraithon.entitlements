@@ -17,5 +17,9 @@
     <!-- Outbound network for /api/v1/companion/messages, whoami, etc. -->
     <key>com.apple.security.network.client</key>
     <true/>
+
+    <!-- Contacts.framework read access for CRM identity merging. -->
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
 </dict>
 </plist>

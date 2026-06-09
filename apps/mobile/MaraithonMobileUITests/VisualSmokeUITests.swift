@@ -33,13 +33,13 @@ final class VisualSmokeUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["Today"].waitForExistence(timeout: 60), app.debugDescription)
 
         try capture("today", in: snapshotDirectory)
-        try tapTab("Todos", app: app)
-        try capture("todos", in: snapshotDirectory)
+        try tapTab("Work", app: app)
+        try capture("work", in: snapshotDirectory)
         try tapTab("People", app: app)
         try capture("people", in: snapshotDirectory)
         try tapTab("Chat", app: app)
         try capture("chat", in: snapshotDirectory)
-        app.buttons["New Chat"].firstMatch.tap()
+        app.buttons["New chat"].firstMatch.tap()
         sleep(1)
         try capture("chat-detail", in: snapshotDirectory)
     }

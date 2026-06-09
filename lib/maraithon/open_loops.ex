@@ -110,9 +110,11 @@ defmodule Maraithon.OpenLoops do
       candidates
       |> Enum.filter(&is_map/1)
       |> Enum.map(&stringify_top_level_keys/1)
+      |> Enum.map(&name_message_sender_in_candidate(user_id, &1))
 
     case ingest_todos_with_busy_retry(user_id, normalized_candidates, opts) do
       {:ok, result} ->
+        result = repair_message_sender_copy(user_id, normalized_candidates, result)
         enrichment = enrich_persisted_todos(user_id, normalized_candidates, result, opts)
         {:ok, Map.put(result, :enrichment, enrichment)}
 
@@ -123,10 +125,265 @@ defmodule Maraithon.OpenLoops do
 
   def ingest_todos(_user_id, _candidates, _opts), do: {:error, :invalid_todo_candidates}
 
+  defp name_message_sender_in_candidate(user_id, candidate)
+       when is_binary(user_id) and is_map(candidate) do
+    with source_item_id when is_binary(source_item_id) <- candidate_source_item_id(candidate),
+         %Maraithon.LocalMessages.LocalMessage{} = message <-
+           LocalMessages.get_by_guid(user_id, source_item_id),
+         %Person{} = person <- message_sender_person(user_id, message) do
+      candidate
+      |> replace_message_sender_handle(message.sender_handle, person.display_name)
+      |> add_message_sender_person(person, message)
+    else
+      _other -> candidate
+    end
+  end
+
+  defp name_message_sender_in_candidate(_user_id, candidate), do: candidate
+
+  defp candidate_source_item_id(candidate) when is_map(candidate) do
+    metadata = read_map(candidate, "metadata")
+
+    read_string(candidate, "source_item_id", nil) ||
+      read_string(candidate, "message_id", nil) ||
+      read_string(candidate, "source_ref", nil) ||
+      read_string(metadata, "source_item_id", nil) ||
+      read_string(metadata, "message_id", nil) ||
+      read_string(metadata, "source_ref", nil)
+  end
+
+  defp replace_message_sender_handle(candidate, handle, display_name)
+       when is_map(candidate) and is_binary(handle) and is_binary(display_name) do
+    candidate =
+      ~w(title summary next_action notes action_plan evidence rationale)
+      |> Enum.reduce(candidate, fn key, acc ->
+        replace_candidate_text_field(acc, key, handle, display_name)
+      end)
+
+    replace_action_draft_sender(candidate, handle, display_name)
+  end
+
+  defp replace_message_sender_handle(candidate, _handle, _display_name), do: candidate
+
+  defp replace_candidate_text_field(candidate, key, handle, display_name) do
+    case fetch_attr(candidate, key) do
+      value when is_binary(value) ->
+        Map.put(candidate, key, replace_sender_handle_text(value, handle, display_name))
+
+      _other ->
+        candidate
+    end
+  end
+
+  defp replace_action_draft_sender(candidate, handle, display_name) do
+    case fetch_attr(candidate, "action_draft") do
+      draft when is_map(draft) ->
+        draft =
+          draft
+          |> stringify_top_level_keys()
+          |> replace_candidate_text_field("text", handle, display_name)
+
+        Map.put(candidate, "action_draft", draft)
+
+      _other ->
+        candidate
+    end
+  end
+
+  defp replace_sender_handle_text(text, handle, display_name) do
+    variants =
+      [handle, String.trim_leading(handle, "+"), phone_digits(handle)]
+      |> Enum.map(&normalize_text/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    text =
+      Enum.reduce(variants, text, fn variant, acc ->
+        String.replace(acc, variant, display_name)
+      end)
+
+    case phone_digits_regex(handle) do
+      %Regex{} = regex -> Regex.replace(regex, text, display_name)
+      nil -> text
+    end
+  end
+
+  defp phone_digits_regex(handle) when is_binary(handle) do
+    digits = phone_digits(handle)
+
+    if byte_size(digits) >= 7 do
+      patterns =
+        digits
+        |> phone_digit_variants()
+        |> Enum.map(&digit_sequence_pattern/1)
+        |> Enum.reject(&(&1 == ""))
+
+      Regex.compile!("(?<!\\d)(?:#{Enum.join(patterns, "|")})(?!\\d)")
+    end
+  end
+
+  defp phone_digits_regex(_handle), do: nil
+
+  defp phone_digit_variants(digits) do
+    local_digits =
+      if byte_size(digits) == 11 and String.starts_with?(digits, "1") do
+        binary_part(digits, 1, 10)
+      end
+
+    [digits, local_digits]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp digit_sequence_pattern(digits) when is_binary(digits) do
+    digits
+    |> String.graphemes()
+    |> Enum.map(&Regex.escape/1)
+    |> Enum.join("\\D*")
+  end
+
+  defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D+/, "")
+  defp phone_digits(_value), do: ""
+
+  defp add_message_sender_person(candidate, %Person{} = person, message) do
+    person_attrs =
+      %{
+        "person_id" => person.id,
+        "display_name" => person.display_name,
+        "phone" => message.sender_handle,
+        "preferred_communication_method" => "messages"
+      }
+      |> compact_map()
+
+    existing_people =
+      candidate
+      |> fetch_attr("people")
+      |> listify()
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(&stringify_top_level_keys/1)
+
+    if Enum.any?(existing_people, &same_person_hint?(&1, person)) do
+      candidate
+    else
+      Map.put(candidate, "people", existing_people ++ [person_attrs])
+    end
+  end
+
+  defp same_person_hint?(hint, %Person{} = person) when is_map(hint) do
+    read_string(hint, "person_id", nil) == person.id or
+      read_string(hint, "id", nil) == person.id or
+      read_string(hint, "display_name", nil) == person.display_name
+  end
+
   defp ingest_todos_with_busy_retry(user_id, candidates, opts) do
     retry_delays = Keyword.get(opts, :llm_busy_retry_delays_ms, @todo_ingest_busy_retry_delays_ms)
     do_ingest_todos_with_busy_retry(user_id, candidates, opts, retry_delays)
   end
+
+  defp repair_message_sender_copy(user_id, candidates, result)
+       when is_binary(user_id) and is_list(candidates) and is_map(result) do
+    todos_by_id = Map.new(Map.get(result, :todos, []), &{&1.id, &1})
+
+    updated_by_id =
+      result
+      |> Map.get(:decisions, [])
+      |> Enum.reduce(todos_by_id, fn decision, acc ->
+        todo_id = Map.get(decision, :persisted_todo_id) || Map.get(decision, "persisted_todo_id")
+
+        candidate_index =
+          Map.get(decision, :candidate_index) || Map.get(decision, "candidate_index")
+
+        todo = todo_id && Map.get(acc, todo_id)
+        candidate = if is_integer(candidate_index), do: Enum.at(candidates, candidate_index)
+
+        case {todo, candidate} do
+          {%Todo{} = todo, candidate} when is_map(candidate) ->
+            case message_sender_update_attrs(user_id, candidate, todo) do
+              attrs when map_size(attrs) > 0 ->
+                case Todos.update_for_user(user_id, todo.id, attrs) do
+                  {:ok, %Todo{} = updated} -> Map.put(acc, todo.id, updated)
+                  _error -> acc
+                end
+
+              _empty ->
+                acc
+            end
+
+          _other ->
+            acc
+        end
+      end)
+
+    Map.update(result, :todos, [], fn todos ->
+      Enum.map(todos, &Map.get(updated_by_id, &1.id, &1))
+    end)
+  end
+
+  defp repair_message_sender_copy(_user_id, _candidates, result), do: result
+
+  defp message_sender_update_attrs(user_id, candidate, %Todo{} = todo) do
+    with source_item_id when is_binary(source_item_id) <- candidate_source_item_id(candidate),
+         %Maraithon.LocalMessages.LocalMessage{} = message <-
+           LocalMessages.get_by_guid(user_id, source_item_id),
+         %Person{} = person <- message_sender_person(user_id, message) do
+      todo_sender_update_attrs(todo, message.sender_handle, person.display_name)
+    else
+      _other -> %{}
+    end
+  end
+
+  defp todo_sender_update_attrs(%Todo{} = todo, handle, display_name)
+       when is_binary(handle) and is_binary(display_name) do
+    %{}
+    |> maybe_put_replaced_todo_text(todo, :title, handle, display_name)
+    |> maybe_put_replaced_todo_text(todo, :summary, handle, display_name)
+    |> maybe_put_replaced_todo_text(todo, :next_action, handle, display_name)
+    |> maybe_put_replaced_todo_text(todo, :notes, handle, display_name)
+    |> maybe_put_replaced_todo_text(todo, :action_plan, handle, display_name)
+    |> maybe_put_replaced_action_draft(todo, handle, display_name)
+  end
+
+  defp todo_sender_update_attrs(_todo, _handle, _display_name), do: %{}
+
+  defp maybe_put_replaced_todo_text(attrs, %Todo{} = todo, field, handle, display_name) do
+    case Map.get(todo, field) do
+      value when is_binary(value) ->
+        replaced = replace_sender_handle_text(value, handle, display_name)
+
+        if replaced == value do
+          attrs
+        else
+          Map.put(attrs, Atom.to_string(field), replaced)
+        end
+
+      _other ->
+        attrs
+    end
+  end
+
+  defp maybe_put_replaced_action_draft(attrs, %Todo{action_draft: draft}, handle, display_name)
+       when is_map(draft) do
+    text = fetch_attr(draft, "text")
+
+    if is_binary(text) do
+      replaced = replace_sender_handle_text(text, handle, display_name)
+
+      if replaced == text do
+        attrs
+      else
+        draft =
+          draft
+          |> stringify_top_level_keys()
+          |> Map.put("text", replaced)
+
+        Map.put(attrs, "action_draft", draft)
+      end
+    else
+      attrs
+    end
+  end
+
+  defp maybe_put_replaced_action_draft(attrs, _todo, _handle, _display_name), do: attrs
 
   defp do_ingest_todos_with_busy_retry(user_id, candidates, opts, retry_delays) do
     case Todos.ingest_many(user_id, candidates, opts) do
@@ -283,6 +540,8 @@ defmodule Maraithon.OpenLoops do
         not imessage_replied_after?(recent_messages, msg)
     end)
     |> Enum.map(fn msg ->
+      sender_person = message_sender_person(user_id, msg)
+
       %{
         "type" => "imessage_pending_reply",
         "source" => "imessage",
@@ -290,7 +549,7 @@ defmodule Maraithon.OpenLoops do
         "source_item_id" => msg.guid || msg.local_id,
         "occurred_at" => format_datetime(msg.sent_at),
         "direction" => "incoming",
-        "participants" => imessage_participants(msg),
+        "participants" => imessage_participants(msg, sender_person),
         "subject" => msg.chat_display_name || "iMessage chat",
         "excerpt" => msg.text,
         "metadata" => %{
@@ -298,7 +557,7 @@ defmodule Maraithon.OpenLoops do
           "chat_display_name" => msg.chat_display_name,
           "is_from_me" => msg.is_from_me,
           "open_loop_hint" => %{
-            "title" => "Reply to #{display_name_for_message(msg)}",
+            "title" => "Reply to #{display_name_for_message(msg, sender_person)}",
             "rule" => "imessage_pending_reply"
           }
         }
@@ -404,20 +663,40 @@ defmodule Maraithon.OpenLoops do
 
   defp normalized_imessage_thread_key(_), do: nil
 
-  defp imessage_participants(%{sender_handle: handle, chat_display_name: name})
+  defp imessage_participants(%{sender_handle: handle} = msg, sender_person)
        when is_binary(handle) and handle != "" do
-    [%{"handle" => handle, "display_name" => name}]
+    [
+      %{
+        "handle" => handle,
+        "display_name" => display_name_for_message(msg, sender_person),
+        "person_id" => sender_person && sender_person.id
+      }
+      |> compact_map()
+    ]
   end
 
-  defp imessage_participants(_), do: []
+  defp imessage_participants(_msg, _sender_person), do: []
 
-  defp display_name_for_message(%{chat_display_name: name}) when is_binary(name) and name != "",
-    do: name
+  defp display_name_for_message(_msg, %Person{display_name: name})
+       when is_binary(name) and name != "",
+       do: name
 
-  defp display_name_for_message(%{sender_handle: handle}) when is_binary(handle) and handle != "",
-    do: handle
+  defp display_name_for_message(%{chat_display_name: name}, _sender_person)
+       when is_binary(name) and name != "",
+       do: name
 
-  defp display_name_for_message(_), do: "someone"
+  defp display_name_for_message(%{sender_handle: handle}, _sender_person)
+       when is_binary(handle) and handle != "",
+       do: handle
+
+  defp display_name_for_message(_msg, _sender_person), do: "someone"
+
+  defp message_sender_person(user_id, %{sender_handle: handle})
+       when is_binary(user_id) and is_binary(handle) do
+    Crm.find_person_by_contact(user_id, handle)
+  end
+
+  defp message_sender_person(_user_id, _message), do: nil
 
   defp reconcile_llm_params(user_id, observations, opts) do
     now = Keyword.get(opts, :now, DateTime.utc_now())

@@ -15,7 +15,8 @@ defmodule Maraithon.Crm do
   def list_people(user_id, opts \\ [])
 
   def list_people(user_id, opts) when is_binary(user_id) do
-    limit = opts |> Keyword.get(:limit, @default_people_limit) |> clamp_limit(1, 100)
+    limit = opts |> Keyword.get(:limit, @default_people_limit) |> clamp_limit(1, 500)
+    page_offset = opts |> Keyword.get(:offset, 0) |> clamp_offset()
     query_text = normalize_string(Keyword.get(opts, :query))
     relationship = normalize_string(Keyword.get(opts, :relationship))
     method = normalize_string(Keyword.get(opts, :preferred_communication_method))
@@ -33,11 +34,37 @@ defmodule Maraithon.Crm do
     |> maybe_filter_text(:communication_frequency, frequency)
     |> maybe_filter_contact(contact_kind, contact_value)
     |> order_people(query_text)
+    |> offset(^page_offset)
     |> limit(^limit)
     |> Repo.all()
   end
 
   def list_people(_user_id, _opts), do: []
+
+  def people_for_resource(user_id, resource_type, resource_id, opts \\ [])
+
+  def people_for_resource(user_id, resource_type, resource_id, opts)
+      when is_binary(user_id) and is_binary(resource_type) and is_binary(resource_id) do
+    limit = opts |> Keyword.get(:limit, @default_people_limit) |> clamp_limit(1, 25)
+
+    Person
+    |> join(:inner, [person], link in PersonLink,
+      on:
+        link.user_id == ^user_id and link.person_id == person.id and
+          link.resource_type == ^resource_type and link.resource_id == ^resource_id
+    )
+    |> where([person, _link], person.user_id == ^user_id and person.status == "active")
+    |> order_by([person, link],
+      asc: link.role,
+      desc: link.updated_at,
+      desc: link.inserted_at,
+      asc: fragment("lower(?)", person.display_name)
+    )
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  def people_for_resource(_user_id, _resource_type, _resource_id, _opts), do: []
 
   def list_family_context(user_id, opts \\ [])
 
@@ -233,6 +260,25 @@ defmodule Maraithon.Crm do
   end
 
   def resolve_contact(_user_id, _identifier, _opts), do: {:error, :invalid_identifier}
+
+  @doc """
+  Resolve an active person by a contact value, including phone numbers that may
+  be formatted differently between source data and CRM contact details.
+  """
+  def find_person_by_contact(user_id, contact_value, opts \\ [])
+
+  def find_person_by_contact(user_id, contact_value, opts)
+      when is_binary(user_id) and is_binary(contact_value) and is_list(opts) do
+    with value when is_binary(value) <- normalize_string(contact_value) do
+      kind = opts |> Keyword.get(:contact_kind) |> normalize_contact_lookup_kind()
+
+      user_id
+      |> people_for_contact_scan()
+      |> Enum.find(&person_contact_matches?(&1, kind, value))
+    end
+  end
+
+  def find_person_by_contact(_user_id, _contact_value, _opts), do: nil
 
   @doc """
   Atomically increment `interaction_count` and advance `last_interaction_at`
@@ -1097,6 +1143,96 @@ defmodule Maraithon.Crm do
   defp normalize_contact_kind("telegram_id"), do: "telegram_ids"
   defp normalize_contact_kind(kind), do: kind
 
+  defp normalize_contact_lookup_kind(nil), do: nil
+
+  defp normalize_contact_lookup_kind(kind) when is_atom(kind) do
+    kind
+    |> Atom.to_string()
+    |> normalize_contact_lookup_kind()
+  end
+
+  defp normalize_contact_lookup_kind(kind) when is_binary(kind) do
+    kind
+    |> normalize_string()
+    |> normalize_contact_kind()
+  end
+
+  defp normalize_contact_lookup_kind(_kind), do: nil
+
+  defp people_for_contact_scan(user_id) do
+    Person
+    |> where([person], person.user_id == ^user_id and person.status == "active")
+    |> order_people(nil)
+    |> Repo.all()
+  end
+
+  defp person_contact_matches?(%Person{contact_details: contact_details}, kind, value)
+       when is_map(contact_details) do
+    kind
+    |> contact_lookup_keys()
+    |> Enum.any?(fn key ->
+      contact_details
+      |> Map.get(key)
+      |> List.wrap()
+      |> Enum.any?(&contact_value_matches?(key, &1, value))
+    end)
+  end
+
+  defp person_contact_matches?(_person, _kind, _value), do: false
+
+  defp contact_lookup_keys(nil), do: ~w(emails phones slack_ids telegram_ids)
+  defp contact_lookup_keys("emails"), do: ["emails"]
+  defp contact_lookup_keys("phones"), do: ["phones"]
+  defp contact_lookup_keys("slack_ids"), do: ["slack_ids"]
+  defp contact_lookup_keys("telegram_ids"), do: ["telegram_ids"]
+  defp contact_lookup_keys(kind) when is_binary(kind), do: [kind]
+  defp contact_lookup_keys(_kind), do: []
+
+  defp contact_value_matches?("phones", stored, value) when is_binary(stored) do
+    stored_digits = phone_digits(stored)
+    value_digits = phone_digits(value)
+
+    cond do
+      stored_digits == "" or value_digits == "" ->
+        text_contact_matches?(stored, value)
+
+      stored_digits == value_digits ->
+        true
+
+      byte_size(stored_digits) >= 10 and byte_size(value_digits) >= 10 ->
+        last_digits(stored_digits, 10) == last_digits(value_digits, 10)
+
+      min(byte_size(stored_digits), byte_size(value_digits)) >= 7 ->
+        String.ends_with?(stored_digits, value_digits) or
+          String.ends_with?(value_digits, stored_digits)
+
+      true ->
+        false
+    end
+  end
+
+  defp contact_value_matches?(_kind, stored, value) when is_binary(stored),
+    do: text_contact_matches?(stored, value)
+
+  defp contact_value_matches?(_kind, _stored, _value), do: false
+
+  defp text_contact_matches?(stored, value) when is_binary(stored) and is_binary(value) do
+    stored = stored |> String.trim() |> String.downcase()
+    value = value |> String.trim() |> String.downcase()
+
+    stored != "" and value != "" and
+      (stored == value or String.contains?(stored, value) or String.contains?(value, stored))
+  end
+
+  defp phone_digits(value) when is_binary(value), do: String.replace(value, ~r/\D+/, "")
+  defp phone_digits(_value), do: ""
+
+  defp last_digits(value, count) when is_binary(value) and byte_size(value) > count do
+    binary_part(value, byte_size(value) - count, count)
+  end
+
+  defp last_digits(value, _count), do: value
+
   defp compact_contact_details(contact_details) when is_map(contact_details) do
     Map.take(contact_details, ~w(emails phones slack_ids telegram_ids))
   end
@@ -1156,6 +1292,17 @@ defmodule Maraithon.Crm do
   end
 
   defp clamp_limit(_value, min_value, _max_value), do: min_value
+
+  defp clamp_offset(value) when is_integer(value), do: max(value, 0)
+
+  defp clamp_offset(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> clamp_offset(parsed)
+      _ -> 0
+    end
+  end
+
+  defp clamp_offset(_value), do: 0
 
   defp identifier_to_person_attrs(identifier, override_display_name) do
     {kind, value} = pick_identifier(identifier)

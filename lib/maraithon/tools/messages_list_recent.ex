@@ -31,7 +31,7 @@ defmodule Maraithon.Tools.MessagesListRecent do
          source: "local_messages",
          count: length(messages),
          chat_key: chat_key,
-         messages: Enum.map(messages, &LocalMessagesHelpers.serialize_summary/1)
+         messages: Enum.map(messages, &LocalMessagesHelpers.serialize_summary(&1, user_id))
        }}
     end
   end

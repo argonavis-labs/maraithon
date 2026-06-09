@@ -333,6 +333,7 @@ struct SourceCounts: Codable, Sendable, Hashable {
     let voiceMemos: Int
     let calendarEvents: Int
     let reminders: Int
+    let contacts: Int
     let files: Int
     let browserVisits: Int
 
@@ -342,12 +343,25 @@ struct SourceCounts: Codable, Sendable, Hashable {
         case voiceMemos = "voice_memos_count"
         case calendarEvents = "calendar_events_count"
         case reminders = "reminders_count"
+        case contacts = "contacts_count"
         case files = "files_count"
         case browserVisits = "browser_visits_count"
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        messages = try container.decodeIfPresent(Int.self, forKey: .messages) ?? 0
+        notes = try container.decodeIfPresent(Int.self, forKey: .notes) ?? 0
+        voiceMemos = try container.decodeIfPresent(Int.self, forKey: .voiceMemos) ?? 0
+        calendarEvents = try container.decodeIfPresent(Int.self, forKey: .calendarEvents) ?? 0
+        reminders = try container.decodeIfPresent(Int.self, forKey: .reminders) ?? 0
+        contacts = try container.decodeIfPresent(Int.self, forKey: .contacts) ?? 0
+        files = try container.decodeIfPresent(Int.self, forKey: .files) ?? 0
+        browserVisits = try container.decodeIfPresent(Int.self, forKey: .browserVisits) ?? 0
+    }
+
     var total: Int {
-        messages + notes + voiceMemos + calendarEvents + reminders + files + browserVisits
+        messages + notes + voiceMemos + calendarEvents + reminders + contacts + files + browserVisits
     }
 }
 

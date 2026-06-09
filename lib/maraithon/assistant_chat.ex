@@ -10,6 +10,7 @@ defmodule Maraithon.AssistantChat do
   alias Maraithon.TelegramAssistant.{PreparedAction, Run, Runner}
   alias Maraithon.TelegramConversations
   alias Maraithon.TelegramConversations.{Conversation, Turn}
+  alias Maraithon.Tools
   alias Maraithon.Todos
 
   @max_message_bytes 16_384
@@ -161,7 +162,25 @@ defmodule Maraithon.AssistantChat do
         {:ok, expired_action} = TelegramAssistant.expire_prepared_action(prepared_action)
         {:error, :prepared_action_expired, expired_action, reload_thread(conversation)}
       else
-        apply_prepared_action_decision(prepared_action, conversation, decision, client_message_id)
+        prepared_action =
+          if decision == :confirm do
+            apply_prepared_action_draft_edits(prepared_action, attrs)
+          else
+            {:ok, prepared_action}
+          end
+
+        case prepared_action do
+          {:ok, prepared_action} ->
+            apply_prepared_action_decision(
+              prepared_action,
+              conversation,
+              decision,
+              client_message_id
+            )
+
+          {:error, reason} ->
+            {:error, reason}
+        end
       end
     else
       :invalid -> {:error, :invalid_decision}
@@ -468,6 +487,109 @@ defmodule Maraithon.AssistantChat do
     end
   end
 
+  defp apply_prepared_action_draft_edits(%PreparedAction{} = prepared_action, attrs) do
+    case draft_edits(attrs) do
+      edits when map_size(edits) > 0 ->
+        update_prepared_action_from_draft_edits(prepared_action, edits)
+
+      _empty ->
+        {:ok, prepared_action}
+    end
+  end
+
+  defp draft_edits(attrs) when is_map(attrs) do
+    case Map.get(attrs, "draft_edits") || Map.get(attrs, :draft_edits) || Map.get(attrs, "draft") do
+      edits when is_map(edits) -> stringify_map(edits)
+      _other -> %{}
+    end
+  end
+
+  defp update_prepared_action_from_draft_edits(
+         %PreparedAction{action_type: "slack_post"} = prepared_action,
+         edits
+       ) do
+    payload =
+      prepared_action.payload || %{}
+
+    body = read_string(edits, "body") || read_string(edits, "text")
+
+    payload =
+      payload
+      |> maybe_put_payload("text", body)
+
+    TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+  end
+
+  defp update_prepared_action_from_draft_edits(
+         %PreparedAction{action_type: "gmail_send"} = prepared_action,
+         edits
+       ) do
+    payload = gmail_payload_with_edits(prepared_action.payload || %{}, edits)
+    TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+  end
+
+  defp update_prepared_action_from_draft_edits(
+         %PreparedAction{action_type: "gmail_draft_send"} = prepared_action,
+         edits
+       ) do
+    payload = gmail_payload_with_edits(prepared_action.payload || %{}, edits)
+
+    case maybe_update_provider_gmail_draft(payload) do
+      :ok -> TelegramAssistant.update_prepared_action(prepared_action, %{payload: payload})
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp update_prepared_action_from_draft_edits(prepared_action, _edits),
+    do: {:ok, prepared_action}
+
+  defp gmail_payload_with_edits(payload, edits) do
+    payload
+    |> maybe_put_payload("to", read_string(edits, "to") || read_string(edits, "recipient"))
+    |> maybe_put_payload("recipient", read_string(edits, "to") || read_string(edits, "recipient"))
+    |> maybe_put_payload("cc", read_string(edits, "cc"))
+    |> maybe_put_payload("bcc", read_string(edits, "bcc"))
+    |> maybe_put_payload("subject", read_string(edits, "subject"))
+    |> maybe_put_payload("body", read_string(edits, "body") || read_string(edits, "text"))
+  end
+
+  defp maybe_update_provider_gmail_draft(payload) do
+    with draft_id when is_binary(draft_id) <- read_string(payload, "draft_id"),
+         to when is_binary(to) <- read_string(payload, "to"),
+         subject when is_binary(subject) <- read_string(payload, "subject"),
+         body when is_binary(body) <- read_string(payload, "body"),
+         user_id when is_binary(user_id) <- read_string(payload, "user_id") do
+      args =
+        %{
+          "user_id" => user_id,
+          "action" => "update",
+          "draft_id" => draft_id,
+          "to" => to,
+          "subject" => subject,
+          "body" => body,
+          "cc" => read_string(payload, "cc"),
+          "bcc" => read_string(payload, "bcc"),
+          "thread_id" => read_string(payload, "thread_id"),
+          "in_reply_to" => read_string(payload, "in_reply_to"),
+          "references" => read_string(payload, "references"),
+          "account" => read_string(payload, "account"),
+          "provider" => read_string(payload, "provider")
+        }
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+
+      case Tools.execute("gmail_drafts", args, %{surface: "internal", user_id: user_id}) do
+        {:ok, _result} -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_put_payload(payload, _key, nil), do: payload
+  defp maybe_put_payload(payload, key, value), do: Map.put(payload, key, value)
+
   defp message_body(attrs) do
     body =
       attrs
@@ -628,6 +750,7 @@ defmodule Maraithon.AssistantChat do
   end
 
   defp prepared_action_label("gmail_send"), do: "the Gmail message"
+  defp prepared_action_label("gmail_draft_send"), do: "the Gmail draft"
   defp prepared_action_label("slack_post"), do: "the Slack message"
   defp prepared_action_label("linear_create_issue"), do: "the Linear issue"
   defp prepared_action_label("linear_create_comment"), do: "the Linear comment"
@@ -642,6 +765,7 @@ defmodule Maraithon.AssistantChat do
   defp prepared_action_label(_action_type), do: "that action"
 
   defp prepared_action_failure_label("gmail_send"), do: "send the Gmail message"
+  defp prepared_action_failure_label("gmail_draft_send"), do: "send the Gmail draft"
   defp prepared_action_failure_label("slack_post"), do: "send the Slack message"
   defp prepared_action_failure_label("linear_create_issue"), do: "create the Linear issue"
   defp prepared_action_failure_label("linear_create_comment"), do: "add the Linear comment"

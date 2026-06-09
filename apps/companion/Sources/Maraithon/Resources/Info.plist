@@ -41,6 +41,8 @@
 	<string>https://maraithon.com</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Maraithon mirrors your Mac calendar so the assistant can answer scheduling questions and prep you for meetings. Calendar data stays in your account and is never shared.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Maraithon mirrors your Mac contacts so the assistant can merge people context and identify who messages, emails, and meetings involve. Contacts stay in your account and are never shared.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSRemindersFullAccessUsageDescription</key>

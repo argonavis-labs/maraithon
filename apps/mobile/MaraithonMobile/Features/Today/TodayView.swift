@@ -6,7 +6,6 @@ struct TodayView: View {
     @Environment(SessionStore.self) private var sessionStore
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \TodoItem.createdAt, order: .reverse) private var todos: [TodoItem]
-    @Query(sort: \CRMContact.name) private var contacts: [CRMContact]
     @Query(sort: \ChatThread.updatedAt, order: .reverse) private var threads: [ChatThread]
     @State private var editingTodo: TodoItem?
     @State private var refreshErrorMessage: String?
@@ -14,15 +13,15 @@ struct TodayView: View {
     @State private var isRefreshing = false
 
     private var metrics: TodayMetrics {
-        TodayInsightEngine.metrics(todos: todos, contacts: contacts)
+        TodayInsightEngine.metrics(todos: todos)
     }
 
     private var brief: TodayBrief {
-        TodayInsightEngine.brief(todos: todos, contacts: contacts)
+        TodayInsightEngine.brief(todos: todos)
     }
 
     private var focusItems: [TodayFocusItem] {
-        TodayInsightEngine.focusQueue(todos: todos, contacts: contacts)
+        TodayInsightEngine.focusQueue(todos: todos)
     }
 
     private var recentThreads: [ChatThread] {
@@ -121,16 +120,6 @@ struct TodayView: View {
                         ) {
                             appNavigation.showTodos(.today)
                         }
-                        Divider().padding(.leading, 48)
-                        CommandRow(
-                            title: TodayViewCopy.followUpTitle,
-                            subtitle: TodayViewCopy.followUpSubtitle,
-                            value: "\(metrics.atRiskContacts)",
-                            systemImage: "person.crop.circle.badge.exclamationmark",
-                            tint: .red
-                        ) {
-                            appNavigation.showPeople(.atRisk)
-                        }
                     }
                     .background(.background, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
@@ -216,8 +205,6 @@ struct TodayView: View {
         switch destination {
         case .todos(let filter):
             appNavigation.showTodos(filter)
-        case .people(let filter):
-            appNavigation.showPeople(filter)
         case .chat:
             appNavigation.showChat()
         }
@@ -255,16 +242,6 @@ struct TodayView: View {
                         Label(TodayViewCopy.editFocusActionLabel, systemImage: "pencil")
                     }
                     .tint(.blue)
-                }
-            } else {
-                TodayFocusRow(item: item)
-            }
-        case .contact:
-            if let contact = contact(for: item) {
-                NavigationLink {
-                    ContactDetailView(contact: contact)
-                } label: {
-                    TodayFocusRow(item: item)
                 }
             } else {
                 TodayFocusRow(item: item)
@@ -347,10 +324,6 @@ struct TodayView: View {
         }
     }
 
-    private func contact(for item: TodayFocusItem) -> CRMContact? {
-        contacts.first { $0.id == item.referenceID }
-    }
-
     private var greeting: String {
         let name = sessionStore.user?.email
             .split(separator: "@")
@@ -395,10 +368,8 @@ enum TodayViewCopy {
     static let overdueSubtitle = "Needs action"
     static let dueTodayTitle = "Due today"
     static let dueTodaySubtitle = "Before tomorrow"
-    static let followUpTitle = "Needs follow-up"
-    static let followUpSubtitle = "Relationships need attention"
     static let emptyFocusTitle = "Nothing needs your review right now"
-    static let emptyFocusDescription = "No saved decision, deadline, or relationship follow-up is waiting. Maraithon will surface the next concrete move when one appears."
+    static let emptyFocusDescription = "No saved decision, deadline, or open work item is waiting. Maraithon will surface the next concrete move when one appears."
     static let emptyRecentChatsTitle = "No recent chats"
     static let emptyRecentChatsDescription = "Start a chat when you need a draft, summary, or prioritization pass."
     static let completeFocusActionLabel = "Done"
@@ -429,8 +400,6 @@ enum TodayViewCopy {
             overdueSubtitle,
             dueTodayTitle,
             dueTodaySubtitle,
-            followUpTitle,
-            followUpSubtitle,
             emptyFocusTitle,
             emptyFocusDescription,
             emptyRecentChatsTitle,
@@ -534,7 +503,6 @@ private struct TodayFocusRow: View {
     private var tint: Color {
         switch item.kind {
         case .todo: .orange
-        case .contact: .red
         }
     }
 }

@@ -14,6 +14,7 @@ defmodule MaraithonWeb.CompanionController do
   alias Maraithon.Companion.Devices
   alias Maraithon.LocalBrowserHistory
   alias Maraithon.LocalCalendar
+  alias Maraithon.LocalContacts
   alias Maraithon.LocalFiles
   alias Maraithon.LocalMessages
   alias Maraithon.LocalNotes
@@ -143,6 +144,23 @@ defmodule MaraithonWeb.CompanionController do
       "reminders",
       "reminders",
       &LocalReminders.ingest_batch/3
+    )
+  end
+
+  @doc """
+  POST /api/v1/companion/contacts
+
+  Accepts a batch of macOS Contacts.app records from a paired device.
+  The server mirrors them for audit/purge and merges each row into CRM
+  people by Apple contact id, email, or phone.
+  """
+  def ingest_contacts(conn, params) do
+    ingest_collection(
+      conn,
+      params,
+      "contacts",
+      "contacts",
+      &LocalContacts.ingest_batch/3
     )
   end
 

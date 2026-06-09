@@ -68,6 +68,19 @@ final class AppEnvironment {
         )
         registry.register(imessage)
 
+        let contactsIngest = ContactsIngest(
+            tokenProvider: { [weak deviceAuth] in
+                await MainActor.run { [deviceAuth] in deviceAuth?.currentToken }
+            },
+            realtime: realtimeChannel
+        )
+        let contacts = ContactsSource(
+            eventLog: log,
+            ingest: contactsIngest,
+            deviceIdProvider: { [weak deviceAuth] in deviceAuth?.deviceId ?? UUID() }
+        )
+        registry.register(contacts)
+
         let notesIngest = NotesIngest(
             tokenProvider: { [weak deviceAuth] in
                 await MainActor.run { [deviceAuth] in deviceAuth?.currentToken }
