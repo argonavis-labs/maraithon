@@ -370,6 +370,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       payload =
         %{
           "user_id" => conversation.user_id,
+          "todo_id" => todo.id,
           "draft_id" => draft_id,
           "to" => to,
           "recipient" => to,
@@ -553,6 +554,7 @@ defmodule Maraithon.AssistantChat.TodoThreadPrimer do
       payload =
         %{
           "user_id" => conversation.user_id,
+          "todo_id" => todo.id,
           "team_id" => team_id,
           "channel" => channel,
           "text" => body,

@@ -440,8 +440,19 @@ defmodule Maraithon.AssistantChat do
   defp apply_prepared_action_decision(prepared_action, conversation, :confirm, client_message_id) do
     case TelegramAssistant.confirm_and_execute(prepared_action) do
       {:ok, updated_action, result} ->
+        todo_completion = maybe_mark_linked_todo_done(updated_action, conversation)
+
         _ = TelegramConversations.reopen(conversation)
         _ = TelegramAssistant.clear_prepared_action_pointer(conversation)
+
+        structured_data =
+          %{
+            "surface" => "mobile",
+            "prepared_action_id" => updated_action.id,
+            "decision" => "confirm",
+            "result" => serialize_result(result)
+          }
+          |> Map.merge(todo_completion_structured_data(todo_completion))
 
         {:ok, _conversation, _turn, _delivery} =
           Maraithon.AssistantChat.MobileDelivery.deliver_turn(
@@ -452,12 +463,7 @@ defmodule Maraithon.AssistantChat do
             turn_kind: "action_result",
             origin_type: "prepared_action",
             origin_id: updated_action.id,
-            structured_data: %{
-              "surface" => "mobile",
-              "prepared_action_id" => updated_action.id,
-              "decision" => "confirm",
-              "result" => serialize_result(result)
-            }
+            structured_data: structured_data
           )
 
         {:ok, %{prepared_action: updated_action, thread: reload_thread(conversation)}}
@@ -731,6 +737,62 @@ defmodule Maraithon.AssistantChat do
     Map.put(structured_data, "linked_todo", Todos.serialize_for_prompt(todo))
   end
 
+  defp maybe_mark_linked_todo_done(
+         %PreparedAction{} = prepared_action,
+         %Conversation{} = conversation
+       ) do
+    with todo_id when is_binary(todo_id) <- linked_todo_id(prepared_action, conversation) do
+      case Todos.mark_done(prepared_action.user_id, todo_id,
+             actor_type: "user",
+             actor_id: prepared_action.user_id,
+             actor_label: "User",
+             note: prepared_action_completion_note(prepared_action)
+           ) do
+        {:ok, todo} -> {:ok, todo}
+        {:error, reason} -> {:error, todo_id, reason}
+      end
+    else
+      _ -> :skip
+    end
+  end
+
+  defp linked_todo_id(%PreparedAction{} = prepared_action, %Conversation{} = conversation) do
+    first_present([
+      read_string(prepared_action.payload || %{}, "todo_id"),
+      linked_todo_id(conversation)
+    ])
+  end
+
+  defp todo_completion_structured_data({:ok, todo}) do
+    %{
+      "linked_todo_id" => todo.id,
+      "linked_todo_status" => todo.status,
+      "linked_todo_completed" => true
+    }
+  end
+
+  defp todo_completion_structured_data({:error, todo_id, reason}) do
+    %{
+      "linked_todo_id" => todo_id,
+      "linked_todo_completed" => false,
+      "linked_todo_completion_error" => normalize_error(reason)
+    }
+  end
+
+  defp todo_completion_structured_data(:skip), do: %{}
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "gmail_draft_send"}),
+    do: "Completed from mobile todo chat after sending the Gmail draft."
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "gmail_send"}),
+    do: "Completed from mobile todo chat after sending the Gmail message."
+
+  defp prepared_action_completion_note(%PreparedAction{action_type: "slack_post"}),
+    do: "Completed from mobile todo chat after sending the Slack message."
+
+  defp prepared_action_completion_note(_prepared_action),
+    do: "Completed from mobile todo chat after running the prepared action."
+
   defp normalize_decision("confirm"), do: :confirm
   defp normalize_decision("reject"), do: :reject
   defp normalize_decision(:confirm), do: :confirm
@@ -852,6 +914,11 @@ defmodule Maraithon.AssistantChat do
 
   defp serialize_result(%{} = result), do: stringify_map(result)
   defp serialize_result(result), do: %{"value" => inspect(result)}
+
+  defp first_present(values), do: Enum.find(values, &present?/1)
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(value), do: not is_nil(value)
 
   defp stringify_map(map) when is_map(map) do
     Enum.reduce(map, %{}, fn {key, value}, acc ->
