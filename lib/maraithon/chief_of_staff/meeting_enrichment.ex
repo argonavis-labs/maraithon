@@ -881,17 +881,31 @@ defmodule Maraithon.ChiefOfStaff.MeetingEnrichment do
 
   defp compact_web_result(_result), do: %{}
 
+  # One malformed page must never take down the briefing (or the agent
+  # process running it) — enrichment is garnish, not load-bearing.
   defp fetch_page_contexts(candidate, results, page_fetch_fun, page_opts) do
     candidate
     |> page_urls_for_candidate(results)
     |> Enum.map(fn url ->
-      case page_fetch_fun.(url, page_opts) do
-        {:ok, %{} = page} ->
-          page
-          |> Map.put_new("source_url", url)
-          |> compact_page_context()
+      try do
+        case page_fetch_fun.(url, page_opts) do
+          {:ok, %{} = page} ->
+            page
+            |> Map.put_new("source_url", url)
+            |> compact_page_context()
 
-        {:error, _reason} ->
+          {:error, _reason} ->
+            %{}
+        end
+      rescue
+        exception ->
+          require Logger
+
+          Logger.warning("Meeting enrichment page fetch crashed",
+            url: url,
+            reason: Exception.message(exception)
+          )
+
           %{}
       end
     end)

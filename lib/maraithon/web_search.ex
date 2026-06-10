@@ -369,11 +369,27 @@ defmodule Maraithon.WebSearch do
 
   defp truncate(nil, _limit), do: nil
 
+  # Fetched pages can contain invalid UTF-8; String.length/String.slice
+  # raise on such bytes (this crashed the whole agent process mid-briefing),
+  # so scrub before any grapheme walking.
   defp truncate(value, limit) when is_binary(value) do
+    value = scrub_utf8(value)
+
     if String.length(value) > limit do
       String.slice(value, 0, limit) <> "..."
     else
       value
+    end
+  end
+
+  defp scrub_utf8(value) do
+    if String.valid?(value) do
+      value
+    else
+      value
+      |> String.chunk(:valid)
+      |> Enum.filter(&String.valid?/1)
+      |> Enum.join()
     end
   end
 
