@@ -85,6 +85,14 @@ jobs:
           BUILD_NUMBER="$(date -u +%Y%m%d%H%M%S)"
           echo "MARAITHON_MOBILE_BUILD_NUMBER=${BUILD_NUMBER}" >> "$GITHUB_ENV"
 
+      # Each ephemeral runner mints a fresh development certificate via
+      # cloud signing; without pruning, the account cert cap eventually
+      # blocks archiving (broke the 2026-06-10 release).
+      - name: Prune stale CI development certificates
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+        run: node scripts/ci/cleanup-dev-certificates.mjs
+
       - name: Build and upload to TestFlight
         env:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
