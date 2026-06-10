@@ -10,7 +10,6 @@ defmodule Maraithon.Runtime.BriefingCron do
   use GenServer
 
   alias Maraithon.BriefingSchedules
-  alias Maraithon.ConnectedAccounts
   alias Maraithon.Runtime.Config
   alias Maraithon.Runtime.Scheduler
 
@@ -52,11 +51,12 @@ defmodule Maraithon.Runtime.BriefingCron do
       {:noreply, state}
   end
 
+  # Briefings deliver by email and Telegram; generation must never be
+  # gated on any single channel being healthy.
   def schedule_due_morning_briefings(%DateTime{} = now) do
     now = DateTime.truncate(now, :second)
 
     BriefingSchedules.list_due_morning_agents(now)
-    |> Enum.filter(&telegram_deliverable?/1)
     |> Enum.reduce(%{scheduled: 0, skipped: 0}, fn due, acc ->
       timezone_name = Map.get(due, :timezone_name)
 
@@ -72,7 +72,8 @@ defmodule Maraithon.Runtime.BriefingCron do
         "morning_brief_minute_local" => due.morning_brief_minute_local
       }
 
-      if Scheduler.pending_payload?(due.agent_id, "wakeup", "dedupe_key", due.dedupe_key) do
+      if Scheduler.pending_payload?(due.agent_id, "wakeup", "dedupe_key", due.dedupe_key) or
+           recently_attempted?(due.agent_id, due.dedupe_key, now) do
         %{acc | skipped: acc.skipped + 1}
       else
         case Scheduler.schedule_at(due.agent_id, "wakeup", now, payload) do
@@ -96,9 +97,24 @@ defmodule Maraithon.Runtime.BriefingCron do
     Process.send_after(self(), :tick, delay_ms)
   end
 
-  defp telegram_deliverable?(%{user_id: user_id}) when is_binary(user_id) do
-    ConnectedAccounts.telegram_destination(user_id) != nil
-  end
+  # A briefing run can legitimately take many minutes (large prompt, long
+  # LLM call). Without this guard the cron re-fired the same briefing every
+  # minute while a run was still in flight — burning model spend and
+  # stacking concurrent runs whenever a run was slow or died silently.
+  @retry_after_seconds 30 * 60
 
-  defp telegram_deliverable?(_due), do: false
+  defp recently_attempted?(agent_id, dedupe_key, now) do
+    cutoff = DateTime.add(now, -@retry_after_seconds, :second)
+
+    import Ecto.Query
+
+    Maraithon.Repo.exists?(
+      from(j in Maraithon.Runtime.ScheduledJob,
+        where:
+          j.agent_id == ^agent_id and j.job_type == "wakeup" and
+            fragment("?->>? = ?", j.payload, "dedupe_key", ^dedupe_key) and
+            j.inserted_at >= ^cutoff
+      )
+    )
+  end
 end

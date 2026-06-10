@@ -141,14 +141,20 @@ defmodule Maraithon.Briefs do
     end
   end
 
+  # Failed briefs wait before retrying — without the backoff a dead
+  # Telegram destination meant a retry (and a warning log) every minute,
+  # indefinitely.
+  @failed_retry_after_seconds 15 * 60
+
   def list_pending(limit \\ 20) when is_integer(limit) and limit > 0 do
     terminal_delivery_errors = DeliveryErrorCopy.terminal_storage_messages()
+    retry_cutoff = DateTime.add(DateTime.utc_now(), -@failed_retry_after_seconds, :second)
 
     Brief
     |> where(
       [b],
       b.status == "pending" or
-        (b.status == "failed" and
+        (b.status == "failed" and b.updated_at < ^retry_cutoff and
            (is_nil(b.error_message) or b.error_message not in ^terminal_delivery_errors))
     )
     |> order_by([b], asc: b.scheduled_for, asc: b.inserted_at)
