@@ -113,6 +113,7 @@ defmodule MaraithonWeb.Router do
       live "/agents/library/:behavior", AgentLibraryLive, :show
       live "/agents/new", AgentBuilderLive, :new
       live "/agents", AgentsLive, :index
+      live "/briefing", BriefingLive, :index
       live "/dashboard", DashboardLive, :index
       live "/insights", InsightsLive, :index
       live "/todos", TodosLive, :index
@@ -137,6 +138,8 @@ defmodule MaraithonWeb.Router do
     get "/me", MobileAuthController, :me
     delete "/session", MobileAuthController, :delete
     get "/todo-activity", MobileTodoController, :activity
+    get "/briefs", MobileBriefController, :index
+    get "/briefs/:id", MobileBriefController, :show
     get "/todos", MobileTodoController, :index
     post "/todos", MobileTodoController, :create
     get "/todos/:id", MobileTodoController, :show

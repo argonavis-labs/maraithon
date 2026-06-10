@@ -3,6 +3,7 @@ defmodule MaraithonWeb.MobileJSON do
 
   alias Maraithon.ActionCards
   alias Maraithon.Accounts.{User, UserSession}
+  alias Maraithon.Briefs.Brief
   alias Maraithon.Crm
   alias Maraithon.Crm.Person
   alias Maraithon.Crm.RelationshipPresentation
@@ -61,6 +62,27 @@ defmodule MaraithonWeb.MobileJSON do
       base
     end
   end
+
+  def brief(%Brief{} = brief) do
+    %{
+      id: brief.id,
+      cadence: brief.cadence,
+      title: brief.title,
+      summary: brief.summary,
+      body: brief.body,
+      status: brief.status,
+      scheduled_for: json_value(brief.scheduled_for),
+      sent_at: json_value(brief.sent_at),
+      linked_todo_ids: brief_linked_todo_ids(brief),
+      inserted_at: json_value(brief.inserted_at)
+    }
+  end
+
+  defp brief_linked_todo_ids(%Brief{metadata: %{"linked_todo_ids" => ids}}) when is_list(ids) do
+    Enum.filter(ids, &is_binary/1)
+  end
+
+  defp brief_linked_todo_ids(_brief), do: []
 
   def todo_activity_event(%ActivityEvent{} = event) do
     %{

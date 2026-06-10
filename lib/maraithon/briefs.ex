@@ -166,6 +166,15 @@ defmodule Maraithon.Briefs do
     |> Repo.all()
   end
 
+  def get_for_user(user_id, brief_id) when is_binary(user_id) and is_binary(brief_id) do
+    case Ecto.UUID.cast(brief_id) do
+      {:ok, _uuid} -> Repo.get_by(Brief, id: brief_id, user_id: user_id)
+      :error -> nil
+    end
+  end
+
+  def get_for_user(_user_id, _brief_id), do: nil
+
   def exists?(user_id, dedupe_key) when is_binary(user_id) and is_binary(dedupe_key) do
     Brief
     |> where([b], b.user_id == ^user_id and b.dedupe_key == ^dedupe_key)
@@ -195,10 +204,16 @@ defmodule Maraithon.Briefs do
   end
 
   def dispatch_telegram_batch(opts \\ []) do
-    if telegram_module().configured?() do
-      batch_size = Keyword.get(opts, :batch_size, 10)
+    batch_size = Keyword.get(opts, :batch_size, 10)
+    pending = list_pending(batch_size)
 
-      list_pending(batch_size)
+    # Morning briefs also go to the user's inbox. Email delivery is
+    # idempotent per brief and independent of the Telegram state machine,
+    # so a Telegram outage cannot block the daily ritual.
+    Enum.each(pending, &Maraithon.Briefs.Email.maybe_deliver/1)
+
+    if telegram_module().configured?() do
+      pending
       |> Enum.reduce(%{sent: 0, failed: 0, skipped: 0}, fn brief, acc ->
         case send_brief(brief) do
           :ok -> %{acc | sent: acc.sent + 1}
