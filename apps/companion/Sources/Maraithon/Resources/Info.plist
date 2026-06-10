@@ -38,7 +38,7 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>MaraithonBaseURL</key>
-	<string>https://maraithon.com</string>
+	<string>https://maraithon.fly.dev</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Maraithon mirrors your Mac calendar so the assistant can answer scheduling questions and prep you for meetings. Calendar data stays in your account and is never shared.</string>
 	<key>NSContactsUsageDescription</key>
@@ -50,7 +50,7 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Maraithon transcribes your Voice Memos locally on this Mac so you can search them by content. Audio never leaves your device for transcription.</string>
 	<key>SUFeedURL</key>
-	<string>https://maraithon.com/companion/appcast.xml</string>
+	<string>https://maraithon.fly.dev/companion/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>$(SUPublicEDKey)</string>
 </dict>

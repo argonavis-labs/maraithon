@@ -11,7 +11,7 @@ defmodule Maraithon.Companion.Release do
       by Sparkle as `sparkle:version` (the canonical comparison key).
     * `url`               — fully-qualified URL where the signed,
       notarized, stapled DMG is hosted. Today this is a Fly.io volume
-      served by the Phoenix app (e.g. `https://maraithon.com/releases/Maraithon-0.1.1.dmg`),
+      served by the Phoenix app (e.g. `https://maraithon.fly.dev/releases/Maraithon-0.1.1.dmg`),
       but it can equally point at S3 / a CDN in the future.
     * `signature`         — Sparkle EdDSA signature emitted by
       `bin/sign_update` against the DMG bytes.

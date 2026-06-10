@@ -290,7 +290,7 @@ final class DeviceAuth {
         if let configured, let url = URL(string: configured) {
             return url
         }
-        return URL(string: "https://maraithon.com")!
+        return URL(string: "https://maraithon.fly.dev")!
     }
 
     nonisolated static let defaultClientFactory: ClientFactory = { @MainActor auth in
