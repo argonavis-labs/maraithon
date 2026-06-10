@@ -71,7 +71,7 @@ defmodule MaraithonWeb.ChatLive do
 
     with {:ok, thread} <- AssistantChat.create_thread(user_id, %{"title" => title}),
          {:ok, %{thread: thread}} <-
-           AssistantChat.send_message(user_id, thread.id, %{"body" => body}) do
+           AssistantChat.send_message(user_id, thread.id, %{"body" => body, "client_message_id" => Ecto.UUID.generate()}) do
       {:noreply,
        socket
        |> assign(:thread, thread)
@@ -88,7 +88,7 @@ defmodule MaraithonWeb.ChatLive do
   end
 
   defp send_to_thread(socket, thread_id, body) do
-    case AssistantChat.send_message(socket.assigns.current_user.id, thread_id, %{"body" => body}) do
+    case AssistantChat.send_message(socket.assigns.current_user.id, thread_id, %{"body" => body, "client_message_id" => Ecto.UUID.generate()}) do
       {:ok, %{thread: thread}} ->
         {:noreply,
          socket
