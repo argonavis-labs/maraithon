@@ -6,7 +6,7 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
   use GenServer
 
   alias Maraithon.Runtime.Config
-  alias Maraithon.Todos.CompletionSweep
+  alias Maraithon.Todos.{CompletionSweep, CrossSourceCompletion}
 
   require Logger
 
@@ -69,6 +69,8 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       )
     end
 
+    run_cross_source_pass(state.user_limit)
+
     schedule_tick(state.interval_ms)
     {:noreply, state}
   rescue
@@ -76,6 +78,27 @@ defmodule Maraithon.Runtime.TodoCompletionSweep do
       Logger.warning("Todo completion sweep cycle failed", reason: Exception.message(error))
       schedule_tick(state.interval_ms)
       {:noreply, state}
+  end
+
+  # Cross-channel LLM pass after the deterministic sweep. Failures here must
+  # never break the sweep cadence, so everything is rescued.
+  defp run_cross_source_pass(user_limit) do
+    summary = CrossSourceCompletion.run_for_all_users(user_limit: user_limit)
+
+    if summary.completed > 0 or summary.errors > 0 do
+      Logger.info("Cross-source completion cycle",
+        users: summary.users,
+        checked: summary.checked,
+        completed: summary.completed,
+        skipped: summary.skipped,
+        errors: summary.errors
+      )
+    end
+  rescue
+    error ->
+      Logger.warning("Cross-source completion cycle failed",
+        reason: Exception.message(error)
+      )
   end
 
   defp schedule_tick(delay_ms) when is_integer(delay_ms) and delay_ms > 0 do
