@@ -28,18 +28,21 @@ defmodule Maraithon.Todos.SignalGate do
     account_risk security_risk production_risk customer_risk compliance_risk
     app_review_blocker payment_blocker launch_blocker
   )
+  # Unambiguous consumption vocabulary only. Bare "report"/"video"/
+  # "course"/"article" vetoed real deliverable work ("prepare the board
+  # report", "edit the launch video", "of course", "Article 5").
   @content_terms [
-    "article",
-    "course",
+    "blog post",
     "digest",
     "educational",
     "essay",
     "learning material",
     "market commentary",
     "newsletter",
+    "online course",
     "podcast",
-    "report",
-    "video",
+    "read this article",
+    "watch this video",
     "webinar"
   ]
   @passive_status_terms [
@@ -263,14 +266,18 @@ defmodule Maraithon.Todos.SignalGate do
 
   defp content_consumption?(attrs) do
     text = text_blob(attrs)
-    Enum.any?(@content_terms, &String.contains?(text, &1))
+    Enum.any?(@content_terms, &gate_term_present?(text, &1))
   end
 
   defp passive_status_monitor?(attrs) do
     text = text_blob(attrs)
 
-    Enum.any?(@passive_status_terms, &String.contains?(text, &1)) and
-      Enum.any?(@passive_monitor_terms, &String.contains?(text, &1))
+    Enum.any?(@passive_status_terms, &gate_term_present?(text, &1)) and
+      Enum.any?(@passive_monitor_terms, &gate_term_present?(text, &1))
+  end
+
+  defp gate_term_present?(text, term) do
+    Regex.match?(~r/(?<![\p{L}\p{N}])#{Regex.escape(term)}(?![\p{L}\p{N}])/iu, text)
   end
 
   defp concrete_status_action?(attrs) do

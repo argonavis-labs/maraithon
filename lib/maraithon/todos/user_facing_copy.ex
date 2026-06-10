@@ -22,17 +22,27 @@ defmodule Maraithon.Todos.UserFacingCopy do
                     ])
 
   @product_user_contexts ~w(
-    account accounts dashboard dashboards data email emails event events experience feedback
-    flow flows interface journey journeys list lists login message messages name names
-    onboarding page pages permission permissions persona personas plan plans preference
-    preferences profile profiles record records research role roles screen screens segment
-    segments session sessions setting settings sign-up signup story stories test tests
+    account accounts base cohort cohorts community count dashboard dashboards data email emails
+    event events experience feedback flow flows funnel growth guide guides interface interview
+    interviews journey journeys list lists login manual manuals message messages metric metrics
+    name names onboarding page pages permission permissions persona personas plan plans
+    preference preferences profile profiles record records research role roles screen screens
+    segment segments session sessions setting settings sign-up signup story stories test tests
     testing
   )
   @product_user_context_pattern Enum.join(@product_user_contexts, "|")
+  # Bare "the user" only becomes "you" when it reads as the subject of an
+  # internal status sentence; rewriting every occurrence mangled product
+  # copy like "the user manual" or "the user base".
+  @user_subject_verbs ~w(
+    is was has had hasn't needs wants should must owes owed asked committed
+    promised replied responded said sent will can cannot does doesn't didn't
+  )
+  @user_subject_verb_pattern Enum.join(@user_subject_verbs, "|")
   @the_user_possessive_reference ~r/\bthe user's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
-  @the_user_reference ~r/\bthe user\b(?!'s)(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+  @the_user_reference ~r/\bthe user\b(?=\s+(?:#{@user_subject_verb_pattern})\b|\s*[.,;:!?)]|\s*$)/i
   @user_possessive_reference ~r/\buser's\b(?![-\s]+(?:#{@product_user_context_pattern})\b)/i
+  @the_operator_reference ~r/\bthe operator\b(?=\s+(?:#{@user_subject_verb_pattern})\b|\s*[.,;:!?)]|\s*$)/i
   @safe_label_prefix ~r/^\s*(?:source[_ ]context|context[_ ]brief|context|why[_ ]now|why[_ ]it[_ ]matters|next[_ ]best[_ ]action|next[_ ]action|decision[_ ]prompt|decision|evidence[_ ]excerpt|evidence|summary)\s*[:=-]\s*/i
 
   def polish_attrs(attrs) when is_map(attrs) do
@@ -199,9 +209,7 @@ defmodule Maraithon.Todos.UserFacingCopy do
     |> String.replace(~r/^\s*The operator's\b/i, "Your")
     |> String.replace(~r/\bthe operator's\b/i, "your")
     |> String.replace(~r/^\s*Operator's\b/i, "Your")
-    |> String.replace(~r/\boperator's\b/i, "your")
-    |> String.replace(~r/^\s*The operator\b/i, "You")
-    |> String.replace(~r/\bthe operator\b/i, "you")
+    |> String.replace(@the_operator_reference, "you")
     |> String.replace(~r/\bKent's attention\b/i, "your attention")
     |> String.replace(~r/^\s*Kent needs\b/i, "You need")
     |> String.replace(~r/\bKent needs\b/i, "you need")
@@ -527,9 +535,9 @@ defmodule Maraithon.Todos.UserFacingCopy do
 
     String.contains?(text, "exact artifact or update you committed to") or
       String.contains?(text, "promised update, current status, and timing you can stand behind") or
-      String.contains?(text, "owner, eta") or
-      String.contains?(text, "owner and eta") or
-      String.contains?(text, "owner, next step") or
+      String.contains?(text, "with owner, eta, and") or
+      String.contains?(text, "with owner and eta.") or
+      String.contains?(text, "with owner, next step") or
       String.contains?(text, "current status, exact artifact") or
       String.contains?(text, "promised follow-through now") or
       String.contains?(text, "review and decide the next step") or

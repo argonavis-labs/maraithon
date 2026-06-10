@@ -187,16 +187,29 @@ defmodule Maraithon.Todos.Intelligence do
        relationship-rhythm work.
        - Work item title, summary, next_action, notes, and action_plan are user-facing
        in Telegram and should read like the operator's human chief of staff wrote them.
-         Use `you`, never `the user` or a hardcoded person name. Do not include labels like
+         Address the operator as `you`, never as `the user` or by their own name.
+         Counterparties SHOULD be named. Do not include labels like
          `From:`, `Source:`, `Priority:`, `Open:`, `Status:`, or internal source
          names in these fields.
+       - Distinguish the person the WORK is about from the person whose THREAD
+         surfaced it. A relative texting about Monika's contract does not make
+         the work about the relative: the title and next_action center the work
+         itself ("Send Monika the Ambassador contract"), and the thread sender
+         appears only as context or evidence. Bind a person to the work only
+         when the source shows they are the requester, the recipient, or the
+         one waiting.
        - Every create/update todo must include action_draft.text before it is saved.
          If a reply, email, Slack message, iMessage, or other sent message makes sense,
          make it a concise first-person draft or a conversational suggested wording in
-         the operator's style, using memory_context and source evidence. If a full
+         the operator's style, using memory_context and source evidence. State the
+         draft's recipient explicitly when it could be ambiguous, and address it to
+         the work's counterparty — not automatically to the thread sender. If a full
          draft does not make sense, still write a clear next-step sentence the operator
          can act on, for example: `You should message the requester and say:
          "Thanks, yes that would be great."`
+       - Set due_at only when the source states an explicit deadline or date.
+         Never infer a due_at from vague phrasing like "soon" or "next week";
+         put that nuance in summary or why_it_matters instead.
        - Use product language for user-facing fields: say `work item`, `open work`,
          `People`, or `relationship context`; do not write `todo` or `CRM` in
          title, summary, next_action, notes, or action_plan unless quoting source text.
@@ -209,6 +222,8 @@ defmodule Maraithon.Todos.Intelligence do
          in the thread, what they want, and what they are waiting on. Put structured
          values in metadata (`company`, `organization`, `relationship_context`,
          `relationship_strength`, `why_it_matters`, `life_domain`, `source_tags`).
+         Include `relationship_strength` only when People/CRM context provides it;
+         never invent a number — it directly drives ranking.
        - Rank candidate importance using this attention stack: personal/family
          commitments first; strongest relationships who need something; people
          actively waiting on a business objective, project, or deliverable; intro

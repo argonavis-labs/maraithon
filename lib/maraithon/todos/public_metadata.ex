@@ -169,11 +169,23 @@ defmodule Maraithon.Todos.PublicMetadata do
     )
   end
 
+  # Values are human copy, so this must only catch machine artifacts —
+  # JSON-shaped text, internal label lines, and unambiguous system tokens.
+  # Substring-matching the key blocklist here vetoed normal business
+  # language ("400-agent brokerage", "credit score", "20% discount").
+  @internal_value_terms ~w(llm stacktrace source_backed source_health dedupe_key tracking_key)
+
+  @internal_label_pattern ~r/\b(?:confidence|score|reasoning|rationale|model|prompt|metadata|threshold|heuristic)\s*[:=]\s*\S/iu
+
   defp internal_value?(value) do
     normalized = String.downcase(value)
 
-    Regex.match?(~r/^\s*[\{\[]/u, normalized) or
-      Regex.match?(~r/\b\d{1,3}%/u, normalized) or
-      Enum.any?(@internal_terms, &String.contains?(normalized, &1))
+    Regex.match?(~r/^\s*[\{\[]\s*"/u, normalized) or
+      Regex.match?(@internal_label_pattern, value) or
+      Enum.any?(@internal_value_terms, &value_term_present?(normalized, &1))
+  end
+
+  defp value_term_present?(text, term) do
+    Regex.match?(~r/(?<![\p{L}\p{N}_])#{Regex.escape(term)}(?![\p{L}\p{N}_])/iu, text)
   end
 end

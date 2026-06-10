@@ -8,17 +8,23 @@ defmodule Maraithon.Todos.AttentionRanker do
   obligations, intros, meetings, then everything else.
   """
 
-  @family_terms ~w(
-    family personal home household school child children kid kids daughter son spouse wife
-    husband parent teacher camp health doctor dentist medication birthday anniversary
+  # A single strong term is enough; weak terms are everyday business words
+  # ("the parent company", "service health", "drive home the point") and
+  # need a second corroborating hit before claiming the top-ranked bucket.
+  @family_terms_strong ~w(
+    family household child children kid kids daughter son spouse wife husband
+    dentist medication birthday
+  )
+  @family_terms_weak ~w(
+    personal home school teacher camp health doctor parent anniversary
   )
   @waiting_terms ~w(
     waiting blocked unblock owe owes owed committed promise promised follow-up followup
     reply respond response delivery deliver eta deadline due customer client project
-    objective decision approve approval pricing status artifact
+    objective decision approve approval pricing artifact
   )
-  @intro_terms ~w(intro introduction introduce connect)
-  @meeting_terms ~w(meeting meet call schedule scheduling book booking calendar time availability)
+  @intro_terms ~w(intro introduction introduce)
+  @meeting_terms ~w(meeting meet call schedule scheduling calendar availability)
   @company_keys ~w(company organization org employer workplace account customer customer_company)
   @relationship_keys ~w(relationship relationship_context relationship_note role title)
   @why_keys ~w(why_it_matters context context_brief project project_name)
@@ -183,7 +189,9 @@ defmodule Maraithon.Todos.AttentionRanker do
       |> String.downcase()
 
     String.contains?(domain, "personal") or String.contains?(domain, "home") or
-      String.contains?(domain, "family") or contains_any?(text, @family_terms)
+      String.contains?(domain, "family") or
+      contains_any?(text, @family_terms_strong) or
+      Enum.count(@family_terms_weak, &term_present?(text, &1)) >= 2
   end
 
   defp waiting?(text, metadata) do

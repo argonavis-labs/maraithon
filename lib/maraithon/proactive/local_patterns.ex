@@ -78,7 +78,9 @@ defmodule Maraithon.Proactive.LocalPatterns do
   @file_recent_seconds 7 * 24 * 60 * 60
   @file_message_lookback_seconds 7 * 24 * 60 * 60
 
-  @note_follow_up_markers ~w(todo later remember follow up follow-up)
+  # ~w would split "follow up" into the markers "follow" and "up", and bare
+  # "up" substring-matches almost every note ("update", "pickup", ...).
+  @note_follow_up_markers ["todo", "remember to", "follow up", "follow-up", "don't forget", "do not forget"]
 
   # ---------------------------------------------------------------------
   # Public API
@@ -301,12 +303,17 @@ defmodule Maraithon.Proactive.LocalPatterns do
         text = String.downcase(msg.text || "")
 
         matched =
-          Enum.count(title_tokens, fn token -> String.contains?(text, token) end)
+          Enum.count(title_tokens, fn token ->
+            Regex.match?(
+              ~r/(?<![\p{L}\p{N}])#{Regex.escape(token)}(?![\p{L}\p{N}])/u,
+              text
+            )
+          end)
 
-        # Require at least two distinct title tokens to appear in the
-        # message so we don't trip on a single common word like
-        # "follow" or "send".
-        if matched >= min(2, length(title_tokens)) do
+        # Two distinct whole-word title tokens, no exceptions: substring
+        # matches ("parents" containing "rent") and one-token titles
+        # produced fabricated commitments to whoever happened to text.
+        if matched >= 2 do
           case sender_identity_for(user_id, msg) do
             %{display: person} = identity when is_binary(person) ->
               %{
@@ -338,14 +345,18 @@ defmodule Maraithon.Proactive.LocalPatterns do
     title = reminder.title || "this commitment"
     snippet = message_snippet(match.message)
 
+    # The work is the reminder itself. #{person} is whoever's thread
+    # mentioned it — often a relayer, not the counterparty — so they are
+    # context, never the headline or the action.
     %{
       "source" => "local_patterns",
       "category" => "commitment_unresolved",
-      "title" => "Close loop with #{person}: #{title}",
+      "title" => title,
       "summary" =>
-        "Your reminder \"#{title}\" is #{days_overdue} day(s) overdue and lines up with a recent message from #{person}.",
+        "Your reminder \"#{title}\" is #{days_overdue} day(s) overdue. " <>
+          "A recent message from #{person} mentions it.",
       "recommended_action" =>
-        "Reply to #{person} with the status of \"#{title}\", or close the reminder if it is already handled.",
+        "Handle \"#{title}\", then mark the reminder done — or close it if it is already handled.",
       "priority" => priority_for(:dropped_commitment, days_overdue),
       "confidence" => 0.7,
       "attention_mode" => "act_now",
@@ -356,12 +367,18 @@ defmodule Maraithon.Proactive.LocalPatterns do
       "metadata" =>
         %{
           "detector" => "dropped_commitment",
+          # The overdue reminder is the user's own commitment — that, not
+          # copy phrasing, is what should carry it through the signal gate.
+          "commitment_direction" => "i_owe",
           "reminder_guid" => reminder.guid,
           "reminder_title" => title,
           "days_overdue" => days_overdue,
           "matching_message_guid" => match.message.guid,
           "matching_message_excerpt" => snippet,
           "matching_person" => person,
+          "chat_key" => match.message.chat_key,
+          "sender_handle" => match.message.sender_handle,
+          "chat_display_name" => match.message.chat_display_name,
           "crm_person_id" => Map.get(identity, :person_id),
           "contact_source" => Map.get(identity, :source)
         }
@@ -438,7 +455,12 @@ defmodule Maraithon.Proactive.LocalPatterns do
       |> Enum.map(&String.downcase/1)
       |> Enum.join(" ")
 
-    Enum.any?(@note_follow_up_markers, &String.contains?(haystack, &1))
+    Enum.any?(@note_follow_up_markers, fn marker ->
+      Regex.match?(
+        ~r/(?<![\p{L}\p{N}])#{Regex.escape(marker)}(?![\p{L}\p{N}])/iu,
+        haystack
+      )
+    end)
   end
 
   defp note_follow_up_insight(_user_id, now, %LocalNote{} = note) do
@@ -559,11 +581,14 @@ defmodule Maraithon.Proactive.LocalPatterns do
     if recent_files == [] do
       []
     else
+      # Only the user's own outgoing messages can back the "you texted
+      # someone about this file" claim.
       recent_messages =
         user_id
         |> LocalMessages.recent_for_user(limit: 200)
         |> Enum.filter(fn msg ->
-          is_struct(msg.sent_at, DateTime) and
+          msg.is_from_me == true and
+            is_struct(msg.sent_at, DateTime) and
             DateTime.compare(msg.sent_at, msg_cutoff) != :lt and
             is_binary(msg.text)
         end)
@@ -596,12 +621,15 @@ defmodule Maraithon.Proactive.LocalPatterns do
     if String.length(base) < 4 do
       nil
     else
-      needle = String.downcase(base)
+      # Whole-word match only: "Resume.pdf" must not match "let's resume
+      # tomorrow" via substring.
+      needle =
+        ~r/(?<![\p{L}\p{N}])#{Regex.escape(String.downcase(base))}(?![\p{L}\p{N}])/u
 
       Enum.find_value(messages, fn msg ->
         text = String.downcase(msg.text || "")
 
-        if String.contains?(text, needle) do
+        if Regex.match?(needle, text) do
           %{message: msg, file_id: file.guid || file.id, matched_term: base}
         else
           nil
@@ -647,6 +675,9 @@ defmodule Maraithon.Proactive.LocalPatterns do
             "file_name" => filename,
             "file_path" => file.path,
             "message_guid" => match.message.guid,
+            "chat_key" => match.message.chat_key,
+            "sender_handle" => match.message.sender_handle,
+            "chat_display_name" => match.message.chat_display_name,
             "person" => person,
             "crm_person_id" => Map.get(identity, :person_id),
             "contact_source" => Map.get(identity, :source)
