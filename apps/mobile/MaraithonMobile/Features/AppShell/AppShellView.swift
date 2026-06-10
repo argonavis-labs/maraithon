@@ -3,6 +3,7 @@ import SwiftUI
 enum AppTab: Hashable {
     case today
     case todos
+    case stream
     case crm
     case chat
 }
@@ -21,6 +22,10 @@ struct AppShellView: View {
 
             Tab("Work", systemImage: "checklist", value: .todos) {
                 TodosView()
+            }
+
+            Tab("Stream", systemImage: "wave.3.right", value: .stream) {
+                StreamView()
             }
 
             Tab("People", systemImage: "person.2.crop.square.stack", value: .crm) {
