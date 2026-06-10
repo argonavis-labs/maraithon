@@ -11,12 +11,14 @@ defmodule Maraithon.SourceFreshness do
   import Ecto.Query
 
   alias Maraithon.Accounts.ConnectedAccount
+  alias Maraithon.Companion.Devices
   alias Maraithon.Normalization
   alias Maraithon.Repo
   alias Maraithon.SourceErrorCopy
   alias Maraithon.SourceLabels
 
   @default_stale_after_hours 24
+  @desktop_stale_after_hours 24
   @provider_stale_after_hours %{
     "telegram" => 24 * 7,
     "github" => 24 * 3,
@@ -28,11 +30,14 @@ defmodule Maraithon.SourceFreshness do
   def for_user(user_id, opts \\ [])
 
   def for_user(user_id, opts) when is_binary(user_id) and is_list(opts) do
-    ConnectedAccount
-    |> where([account], account.user_id == ^user_id)
-    |> order_by([account], asc: account.provider, asc: account.external_account_id)
-    |> Repo.all()
-    |> Enum.map(&for_account(&1, opts))
+    accounts =
+      ConnectedAccount
+      |> where([account], account.user_id == ^user_id)
+      |> order_by([account], asc: account.provider, asc: account.external_account_id)
+      |> Repo.all()
+      |> Enum.map(&for_account(&1, opts))
+
+    accounts ++ desktop_snapshots(user_id, opts)
   end
 
   def for_user(_user_id, _opts), do: []
@@ -75,6 +80,65 @@ defmodule Maraithon.SourceFreshness do
   end
 
   def for_account(_account, _opts), do: nil
+
+  # The Mac companion has no ConnectedAccount row; ingest requests bump
+  # Companion.Device.last_seen_at, so that timestamp is the durable freshness
+  # signal for all desktop sources (iMessage, Notes, voice memos, files, ...).
+  defp desktop_snapshots(user_id, opts) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+
+    devices =
+      user_id
+      |> Devices.list_for_user()
+      |> Enum.reject(& &1.revoked_at)
+
+    case devices do
+      [] ->
+        []
+
+      devices ->
+        last_seen =
+          devices
+          |> Enum.map(& &1.last_seen_at)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.max(DateTime, fn -> nil end)
+
+        status =
+          cond do
+            is_nil(last_seen) -> "never_synced"
+            DateTime.diff(now, last_seen, :hour) >= @desktop_stale_after_hours -> "stale"
+            true -> "fresh"
+          end
+
+        [
+          %{
+            user_id: user_id,
+            provider: "desktop",
+            account_id: nil,
+            account_label: "Mac companion",
+            status: status,
+            last_successful_sync: last_seen && DateTime.to_iso8601(last_seen),
+            last_webhook: nil,
+            last_full_scan: nil,
+            last_error: nil,
+            stale_reason: desktop_stale_reason(status, last_seen),
+            updated_at: DateTime.to_iso8601(last_seen || now)
+          }
+        ]
+    end
+  rescue
+    _exception -> []
+  end
+
+  defp desktop_stale_reason("stale", %DateTime{} = last_seen) do
+    "Mac companion last synced #{Calendar.strftime(last_seen, "%b %-d")}; open the Maraithon app on the Mac to resume local context."
+  end
+
+  defp desktop_stale_reason("never_synced", _last_seen) do
+    "Mac companion is paired but has not synced local context yet."
+  end
+
+  defp desktop_stale_reason(_status, _last_seen), do: nil
 
   def compact_for_prompt(user_id, opts \\ []) do
     user_id
