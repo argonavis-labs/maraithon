@@ -19,6 +19,7 @@ struct TodoDetailView: View {
                 ChatDetailView(
                     thread: chatThread,
                     contextHeader: todoContextHeader,
+                    sourceAction: todo.sourceAction,
                     quickPrompts: todoQuickPrompts
                 )
             } else {
@@ -52,6 +53,11 @@ struct TodoDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ChatContextHeaderView(header: todoContextHeader)
+
+                    if let sourceAction = todo.sourceAction {
+                        SourceActionCardView(action: sourceAction)
+                    }
+
                     chatLoadingCard
                 }
                 .padding(.horizontal, 12)
@@ -110,7 +116,12 @@ struct TodoDetailView: View {
         appendItem("why-now", "Why now", context.whyNow, "clock.badge.exclamationmark", to: &items)
         appendItem("source", "Source", context.sourceContext, "tray.full", to: &items)
         appendItem("next", "Next move", context.rowMove, "arrow.turn.down.right", to: &items)
-        appendItem("draft", "Draft", context.draftPreview, "square.and.pencil", to: &items)
+
+        // The interactive source action card owns the draft when present.
+        if todo.sourceAction?.hasDraft != true {
+            appendItem("draft", "Draft", context.draftPreview, "square.and.pencil", to: &items)
+        }
+
         appendItem("evidence", "Evidence", context.evidence, "quote.bubble", to: &items)
 
         return ChatContextHeader(

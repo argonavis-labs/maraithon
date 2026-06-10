@@ -11,6 +11,7 @@ struct ChatDetailView: View {
     var autoSendInitialPrompt = false
     var onInitialPromptConsumed: () -> Void = {}
     var contextHeader: ChatContextHeader?
+    var sourceAction: TodoSourceAction?
     var quickPrompts: [ChiefOfStaffPrompt]
     @State private var draft = ""
     @State private var errorMessage: String?
@@ -34,6 +35,7 @@ struct ChatDetailView: View {
         autoSendInitialPrompt: Bool = false,
         onInitialPromptConsumed: @escaping () -> Void = {},
         contextHeader: ChatContextHeader? = nil,
+        sourceAction: TodoSourceAction? = nil,
         quickPrompts: [ChiefOfStaffPrompt] = ChiefOfStaffPrompt.chat
     ) {
         self.thread = thread
@@ -42,6 +44,7 @@ struct ChatDetailView: View {
         self.autoSendInitialPrompt = autoSendInitialPrompt
         self.onInitialPromptConsumed = onInitialPromptConsumed
         self.contextHeader = contextHeader
+        self.sourceAction = sourceAction
         self.quickPrompts = quickPrompts
     }
 
@@ -59,6 +62,11 @@ struct ChatDetailView: View {
                     LazyVStack(spacing: 0) {
                         if let contextHeader {
                             ChatContextHeaderView(header: contextHeader)
+                                .padding(.bottom, 12)
+                        }
+
+                        if let sourceAction {
+                            SourceActionCardView(action: sourceAction)
                                 .padding(.bottom, 12)
                         }
 

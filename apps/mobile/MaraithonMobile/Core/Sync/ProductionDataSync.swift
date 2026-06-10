@@ -242,6 +242,14 @@ enum ProductionDataSync {
             nextBestAction: cleanedText(remoteTodo.actionCard?.nextBestAction),
             draftPreview: cleanedText(remoteTodo.actionCard?.draftPreview),
             evidenceExcerpt: cleanedText(remoteTodo.actionCard?.evidenceExcerpt),
+            sourceProvider: cleanedText(remoteTodo.actionCard?.sourceAction?.provider),
+            sourceProviderLabel: cleanedText(remoteTodo.actionCard?.sourceAction?.providerLabel),
+            sourceOpenURLString: cleanedText(remoteTodo.actionCard?.sourceAction?.openURL),
+            sourceOpenLabel: cleanedText(remoteTodo.actionCard?.sourceAction?.openLabel),
+            draftText: cleanedText(remoteTodo.actionCard?.sourceAction?.draftText),
+            draftKind: cleanedText(remoteTodo.actionCard?.sourceAction?.draftKind),
+            draftRecipient: cleanedText(remoteTodo.actionCard?.sourceAction?.recipient),
+            draftRecipientHandle: cleanedText(remoteTodo.actionCard?.sourceAction?.recipientHandle),
             contact: contactsByID.flatMap { relatedContact(for: remoteTodo, contactsByID: $0) }
         )
     }
@@ -254,6 +262,14 @@ enum ProductionDataSync {
         todo.nextBestAction = cleanedText(actionCard?.nextBestAction)
         todo.draftPreview = cleanedText(actionCard?.draftPreview)
         todo.evidenceExcerpt = cleanedText(actionCard?.evidenceExcerpt)
+        todo.sourceProvider = cleanedText(actionCard?.sourceAction?.provider)
+        todo.sourceProviderLabel = cleanedText(actionCard?.sourceAction?.providerLabel)
+        todo.sourceOpenURLString = cleanedText(actionCard?.sourceAction?.openURL)
+        todo.sourceOpenLabel = cleanedText(actionCard?.sourceAction?.openLabel)
+        todo.draftText = cleanedText(actionCard?.sourceAction?.draftText)
+        todo.draftKind = cleanedText(actionCard?.sourceAction?.draftKind)
+        todo.draftRecipient = cleanedText(actionCard?.sourceAction?.recipient)
+        todo.draftRecipientHandle = cleanedText(actionCard?.sourceAction?.recipientHandle)
     }
 
     static func contact(from remotePerson: MobileAPIClient.RemotePerson, id: UUID) -> CRMContact {

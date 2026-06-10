@@ -261,6 +261,28 @@ struct MobileAPIClient: Sendable {
             let value: String?
         }
 
+        struct SourceAction: Decodable, Equatable, Sendable {
+            let provider: String?
+            let providerLabel: String?
+            let openURL: String?
+            let openLabel: String?
+            let draftText: String?
+            let draftKind: String?
+            let recipient: String?
+            let recipientHandle: String?
+
+            enum CodingKeys: String, CodingKey {
+                case provider
+                case providerLabel = "provider_label"
+                case openURL = "open_url"
+                case openLabel = "open_label"
+                case draftText = "draft_text"
+                case draftKind = "draft_kind"
+                case recipient
+                case recipientHandle = "recipient_handle"
+            }
+        }
+
         let decisionPrompt: String?
         let contextItems: [ContextItem]
         let whyNow: String?
@@ -268,6 +290,7 @@ struct MobileAPIClient: Sendable {
         let nextBestAction: String?
         let draftPreview: String?
         let evidenceExcerpt: String?
+        let sourceAction: SourceAction?
 
         enum CodingKeys: String, CodingKey {
             case decisionPrompt = "decision_prompt"
@@ -277,6 +300,7 @@ struct MobileAPIClient: Sendable {
             case nextBestAction = "next_best_action"
             case draftPreview = "draft_preview"
             case evidenceExcerpt = "evidence_excerpt"
+            case sourceAction = "source_action"
         }
 
         init(from decoder: Decoder) throws {
@@ -288,6 +312,7 @@ struct MobileAPIClient: Sendable {
             nextBestAction = try container.decodeIfPresent(String.self, forKey: .nextBestAction)
             draftPreview = try container.decodeIfPresent(String.self, forKey: .draftPreview)
             evidenceExcerpt = try container.decodeIfPresent(String.self, forKey: .evidenceExcerpt)
+            sourceAction = try container.decodeIfPresent(SourceAction.self, forKey: .sourceAction)
         }
 
         init(
@@ -297,7 +322,8 @@ struct MobileAPIClient: Sendable {
             sourceContext: String? = nil,
             nextBestAction: String? = nil,
             draftPreview: String? = nil,
-            evidenceExcerpt: String? = nil
+            evidenceExcerpt: String? = nil,
+            sourceAction: SourceAction? = nil
         ) {
             self.decisionPrompt = decisionPrompt
             self.contextItems = contextItems
@@ -306,6 +332,7 @@ struct MobileAPIClient: Sendable {
             self.nextBestAction = nextBestAction
             self.draftPreview = draftPreview
             self.evidenceExcerpt = evidenceExcerpt
+            self.sourceAction = sourceAction
         }
     }
 
